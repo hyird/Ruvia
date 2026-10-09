@@ -10,29 +10,29 @@
 #include <string>
 #include <vector>
 
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/http/Http3ServerRequestAdmission.h"
-#include "ruvia/http/Http3StreamFrames.h"
-#include "ruvia/http/Http3VarInt.h"
-#include "ruvia/http/HttpDatagram.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http3_server_request_admission.h"
+#include "ruvia/http/http3_stream_frames.h"
+#include "ruvia/http/http3_var_int.h"
+#include "ruvia/http/http_datagram.h"
 
-#include "http3/Http3CriticalStreamDriver.h"
-#include "http3/Http3QuicWireOwner.h"
-#include "http3/Http3ServerStreamOutput.h"
 #include "http3/http3_connection_state.h"
+#include "http3/http3_critical_stream_driver.h"
+#include "http3/http3_quic_wire_owner.h"
+#include "http3/http3_server_stream_output.h"
 #include "http3/http3_stream_buffer.h"
 
 namespace ruvia::detail {
 
 struct http3_connection_driver_config final {
-    std::size_t max_requests_per_connection{};
-    std::uint32_t buffer_capacity{};
-    std::optional<std::chrono::milliseconds> request_header_timeout;
-    std::optional<std::chrono::milliseconds> request_body_timeout;
-    std::optional<std::chrono::milliseconds> write_timeout;
-    std::chrono::milliseconds drain_timeout{};
-    std::chrono::milliseconds handshake_timeout{};
-    Http3Settings local_settings{};
+    std::size_t max_requests_per_connection_{};
+    std::uint32_t buffer_capacity_{};
+    std::optional<std::chrono::milliseconds> request_header_timeout_;
+    std::optional<std::chrono::milliseconds> request_body_timeout_;
+    std::optional<std::chrono::milliseconds> write_timeout_;
+    std::chrono::milliseconds drain_timeout_{};
+    std::chrono::milliseconds handshake_timeout_{};
+    http3_settings local_settings_{};
 };
 
 // One generation's network/resource authority. Shared lifecycle facts stay in
@@ -41,8 +41,8 @@ struct http3_connection_driver_config final {
 class http3_connection_driver final {
 public:
     http3_connection_driver(std::pmr::memory_resource* resource,
-        http3_connection_state& state, http3_stream_buffer& request_buffer,
-        Http3QuicWireOwner& wire, http3_connection_driver_config config);
+        http3_connection_state& state_value, http3_stream_buffer& request_buffer,
+        http3_quic_wire_owner& wire, http3_connection_driver_config config);
     http3_connection_driver(const http3_connection_driver&) = delete;
     http3_connection_driver& operator=(const http3_connection_driver&) = delete;
     // Only cold, uninstalled storage may move. install_executor pins this address
@@ -64,7 +64,7 @@ public:
     [[nodiscard]] ruvia::quic_packet_result write_packet(std::span<std::byte> bytes, std::chrono::steady_clock::time_point now);
     [[nodiscard]] bool accept_response_control(const http3_stream_control& control) noexcept;
     [[nodiscard]] bool accept_response_data(http3_stream_buffer::borrowed_block& block) noexcept;
-    [[nodiscard]] http3_connection_state::intent_execution_result execute_intent(const Http3ServerConnection::TransportIntent& intent) noexcept;
+    [[nodiscard]] http3_connection_state::intent_execution_result execute_intent(const http3_server_connection::transport_intent_type& intent) noexcept;
 
 private:
     friend struct http3_connection_driver_test_access;
@@ -77,72 +77,72 @@ private:
 
     struct stream_state final {
         explicit stream_state(std::pmr::memory_resource* resource)
-            : frame_tracker(nullptr, PmrObjectDeleter<Http3StreamFrames>{resource}) {}
+            : frame_tracker_(nullptr, pmr_object_deleter<http3_stream_frames>{resource}) {}
 
         enum class receive_phase : std::uint8_t { headers,
             body };
 
-        std::uint64_t id{};
-        std::uint64_t received_bytes{};
-        std::optional<http3_stream_control> pending_control;
-        std::unique_ptr<Http3StreamFrames, PmrObjectDeleter<Http3StreamFrames>> frame_tracker;
-        std::chrono::steady_clock::time_point last_input_activity{};
-        std::optional<std::uint64_t> tunnel_established_barrier{};
-        receive_phase input_phase{receive_phase::headers};
-        bool received_early_data{};
-        bool request_stream{};
-        bool input_terminal{};
-        bool input_fin{};
-        bool input_reset{};
-        bool write_timeout_notified{};
-        bool tunnel_established{};
+        std::uint64_t id_{};
+        std::uint64_t received_bytes_{};
+        std::optional<http3_stream_control> pending_control_;
+        std::unique_ptr<http3_stream_frames, pmr_object_deleter<http3_stream_frames>> frame_tracker_;
+        std::chrono::steady_clock::time_point last_input_activity_{};
+        std::optional<std::uint64_t> tunnel_established_barrier_{};
+        receive_phase input_phase_{receive_phase::headers};
+        bool received_early_data_{};
+        bool request_stream_{};
+        bool input_terminal_{};
+        bool input_fin_{};
+        bool input_reset_{};
+        bool write_timeout_notified_{};
+        bool tunnel_established_{};
 
         [[nodiscard]] tunnel_established_result accept_tunnel_established(
             const http3_stream_control& control,
             http3_connection_identity identity,
             std::uint64_t accepted_wire_bytes) noexcept {
-            if (control.kind != http3_stream_control::kind::tunnel_established ||
-                control.id.epoch != identity.epoch ||
-                control.id.connection_generation != identity.connection_generation ||
-                control.id.stream_id != id || !request_stream || control.value == 0 ||
-                control.value > kHttp3VarIntMax) {
+            if (control.kind_ != http3_stream_control::kind::tunnel_established ||
+                control.id_.epoch_ != identity.epoch_ ||
+                control.id_.connection_generation_ != identity.connection_generation_ ||
+                control.id_.stream_id_ != id_ || !request_stream_ || control.value_ == 0 ||
+                control.value_ > http3_var_int_max) {
                 return tunnel_established_result::protocol_failure;
             }
-            if (input_reset || (input_terminal && !input_fin)) {
+            if (input_reset_ || (input_terminal_ && !input_fin_)) {
                 return tunnel_established_result::ignored_terminal;
             }
-            if (input_phase != receive_phase::body || tunnel_established ||
-                tunnel_established_barrier) {
+            if (input_phase_ != receive_phase::body || tunnel_established_ ||
+                tunnel_established_barrier_) {
                 return tunnel_established_result::protocol_failure;
             }
-            tunnel_established_barrier = control.value;
+            tunnel_established_barrier_ = control.value_;
             (void)confirm_tunnel_established(accepted_wire_bytes);
             return tunnel_established_result::accepted;
         }
 
         [[nodiscard]] bool confirm_tunnel_established(
             std::uint64_t accepted_wire_bytes) noexcept {
-            if (!tunnel_established_barrier ||
-                accepted_wire_bytes < *tunnel_established_barrier) {
+            if (!tunnel_established_barrier_ ||
+                accepted_wire_bytes < *tunnel_established_barrier_) {
                 return false;
             }
-            tunnel_established_barrier.reset();
-            tunnel_established = true;
+            tunnel_established_barrier_.reset();
+            tunnel_established_ = true;
             return true;
         }
 
         [[nodiscard]] bool body_timeout_applies() const noexcept {
-            return request_stream && input_phase == receive_phase::body &&
-                   !input_fin && !input_reset && !input_terminal && !tunnel_established;
+            return request_stream_ && input_phase_ == receive_phase::body &&
+                   !input_fin_ && !input_reset_ && !input_terminal_ && !tunnel_established_;
         }
     };
 
     struct push_stream final {
-        std::uint64_t stream_id{};
-        std::uint64_t push_id{};
+        std::uint64_t stream_id_{};
+        std::uint64_t push_id_{};
     };
     [[nodiscard]] bool has_generation() const noexcept {
-        return identity_.epoch != 0;
+        return identity_.epoch_ != 0;
     }
     [[nodiscard]] bool bound() const noexcept {
         return state_->binding().has_value();
@@ -158,7 +158,7 @@ private:
     [[nodiscard]] bool pump_input();
     [[nodiscard]] bool pump_output(bool transport_activity);
     [[nodiscard]] bool pump_datagrams();
-    [[nodiscard]] Http3DatagramReceiveStatus plan_datagram_receive(const Http3DatagramView& datagram) const noexcept;
+    [[nodiscard]] http3_datagram_receive_status plan_datagram_receive(const http3_datagram_view& datagram) const noexcept;
     [[nodiscard]] tunnel_established_result accept_tunnel_established(const http3_stream_control& control, std::uint64_t accepted_wire_bytes) noexcept;
     [[nodiscard]] bool confirm_tunnel_established(std::uint64_t stream_id, std::uint64_t accepted_wire_bytes) noexcept;
     void note_peer_fin(std::uint64_t stream_id) noexcept;
@@ -169,12 +169,12 @@ private:
     [[nodiscard]] bool announce_goaway() noexcept;
     [[nodiscard]] bool seal_admission() noexcept;
     [[nodiscard]] bool reject_request_stream(std::uint64_t stream_id);
-    void close_connection(Http3ConnectionErrorCode reason) noexcept;
+    void close_connection(http3_connection_error_code reason) noexcept;
 
     std::pmr::memory_resource* resource_;
     http3_connection_state* state_;
     http3_stream_buffer* request_buffer_;
-    Http3QuicWireOwner* wire_;
+    http3_quic_wire_owner* wire_;
     http3_connection_driver_config config_;
     http3_connection_identity identity_{};
     std::optional<ruvia::quic_connection_token> transport_id_;
@@ -189,13 +189,13 @@ private:
     std::size_t tunnel_handshake_scan_remaining_{};
     std::size_t pending_tunnel_handshakes_{};
     bool tunnel_handshake_scan_dirty_{};
-    std::unique_ptr<Http3ServerStreamOutput,
-        PmrObjectDeleter<Http3ServerStreamOutput>>
+    std::unique_ptr<http3_server_stream_output,
+        pmr_object_deleter<http3_server_stream_output>>
         output_;
-    std::unique_ptr<Http3CriticalStreamDriver,
-        PmrObjectDeleter<Http3CriticalStreamDriver>>
+    std::unique_ptr<http3_critical_stream_driver,
+        pmr_object_deleter<http3_critical_stream_driver>>
         critical_;
-    std::optional<Http3ServerRequestAdmissionPlanner> admission_planner_;
+    std::optional<http3_server_request_admission_planner> admission_planner_;
     std::optional<std::chrono::steady_clock::time_point> drain_deadline_;
     std::size_t admitted_request_count_{};
     std::size_t peer_unidirectional_stream_count_{};
@@ -204,7 +204,7 @@ private:
     bool goaway_bytes_accepted_{};
     bool graceful_close_started_{};
     bool graceful_close_abandoned_{};
-    std::optional<Http3ConnectionErrorCode> close_error_code_;
+    std::optional<http3_connection_error_code> close_error_code_;
     // close_started_ denotes the rapid, no-flush forced path only.
     bool close_started_{};
 

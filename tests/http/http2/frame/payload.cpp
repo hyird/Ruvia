@@ -2,28 +2,28 @@
 #include <string>
 #include <string_view>
 
-#include "http2/Http2FramePayload.h"
-#include "http2/Http2FrameTypes.h"
+#include "http2/http2_frame_payload.h"
+#include "http2/http2_frame_types.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::http2DecodeDataPayload;
-using ruvia::detail::http2DecodeHeadersPayload;
-using ruvia::detail::Http2FrameHeader;
-using ruvia::detail::Http2FramePayloadStatus;
-using ruvia::detail::http2HeadersPriorityDependency;
-using ruvia::detail::http2StripPadAndPriority;
-using ruvia::detail::kHttp2FlagPadded;
-using ruvia::detail::kHttp2FlagPriority;
+using ruvia::detail::http2_decode_data_payload;
+using ruvia::detail::http2_decode_headers_payload;
+using ruvia::detail::http2_flag_padded;
+using ruvia::detail::http2_flag_priority;
+using ruvia::detail::http2_frame_header;
+using ruvia::detail::http2_frame_payload_status;
+using ruvia::detail::http2_headers_priority_dependency;
+using ruvia::detail::http2_strip_pad_and_priority;
 
-Http2FrameHeader headerWithFlags(std::uint8_t flags) noexcept {
-    Http2FrameHeader header;
-    header.flags = flags;
+http2_frame_header header_with_flags(std::uint8_t flags) noexcept {
+    http2_frame_header header;
+    header.flags_ = flags;
     return header;
 }
 
-std::string withByte(int prefix, std::string_view rest) {
+std::string with_byte(int prefix, std::string_view rest) {
     std::string out;
     out.push_back(static_cast<char>(prefix));
     out.append(rest.data(), rest.size());
@@ -33,56 +33,56 @@ std::string withByte(int prefix, std::string_view rest) {
 }  // namespace
 
 RUVIA_TEST(frame_data_no_padding) {
-    auto header = headerWithFlags(0);
+    auto header_value = header_with_flags(0);
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, "hello", data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, "hello", data));
     RUVIA_CHECK_EQ(data, std::string_view("hello"));
 }
 
 RUVIA_TEST(frame_data_with_padding_strips_prefix_and_trailer) {
     // pad length 3, data "DD", then 3 padding bytes.
-    auto header = headerWithFlags(kHttp2FlagPadded);
-    std::string payload = withByte(0x03, "DDPPP");
+    auto header_value = header_with_flags(http2_flag_padded);
+    std::string payload_value = with_byte(0x03, "DDPPP");
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, payload, data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, payload_value, data));
     RUVIA_CHECK_EQ(data, std::string_view("DD"));
 }
 
 RUVIA_TEST(frame_data_pad_length_zero_keeps_all) {
-    auto header = headerWithFlags(kHttp2FlagPadded);
-    std::string payload = withByte(0x00, "hello");
+    auto header_value = header_with_flags(http2_flag_padded);
+    std::string payload_value = with_byte(0x00, "hello");
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, payload, data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, payload_value, data));
     RUVIA_CHECK_EQ(data, std::string_view("hello"));
 }
 
 RUVIA_TEST(frame_data_padding_consumes_all_yields_empty) {
     // pad length 2, no data, two padding bytes.
-    auto header = headerWithFlags(kHttp2FlagPadded);
-    std::string payload = withByte(0x02, "PP");
+    auto header_value = header_with_flags(http2_flag_padded);
+    std::string payload_value = with_byte(0x02, "PP");
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, payload, data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, payload_value, data));
     RUVIA_CHECK(data.empty());
 }
 
 RUVIA_TEST(frame_data_padding_underflow_rejected) {
     // pad length 255 but only two bytes follow: must be rejected, no underflow.
-    auto header = headerWithFlags(kHttp2FlagPadded);
-    std::string payload = withByte(0xFF, "ab");
+    auto header_value = header_with_flags(http2_flag_padded);
+    std::string payload_value = with_byte(0xFF, "ab");
     std::string_view data;
-    RUVIA_CHECK(!http2DecodeDataPayload(header, payload, data));
+    RUVIA_CHECK(!http2_decode_data_payload(header_value, payload_value, data));
 }
 
 RUVIA_TEST(frame_padded_flag_but_empty_payload_rejected) {
-    auto header = headerWithFlags(kHttp2FlagPadded);
+    auto header_value = header_with_flags(http2_flag_padded);
     std::string_view data;
-    RUVIA_CHECK(!http2DecodeDataPayload(header, "", data));
+    RUVIA_CHECK(!http2_decode_data_payload(header_value, "", data));
 }
 
 RUVIA_TEST(frame_headers_priority_skipped_and_dependency_masked) {
     // 5-byte priority field: stream dependency with the E bit set (must be
     // masked off), weight byte, then the header-block fragment.
-    auto header = headerWithFlags(kHttp2FlagPriority);
+    auto header_value = header_with_flags(http2_flag_priority);
     std::string payload;
     payload.push_back(static_cast<char>(0x80));  // E bit + high dependency byte
     payload.push_back(0x00);
@@ -93,25 +93,25 @@ RUVIA_TEST(frame_headers_priority_skipped_and_dependency_masked) {
 
     std::string_view fragment;
     RUVIA_CHECK(
-        http2DecodeHeadersPayload(header, payload, fragment) == Http2FramePayloadStatus::kDecoded);
+        http2_decode_headers_payload(header_value, payload, fragment) == http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("frag"));
 
     std::uint32_t dependency = 0xffffffffU;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, payload, dependency) ==
-                Http2FramePayloadStatus::kDecoded);
+    RUVIA_CHECK(http2_headers_priority_dependency(header_value, payload, dependency) ==
+                http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{5});  // E bit stripped
 }
 
 RUVIA_TEST(frame_headers_priority_too_short_rejected) {
-    auto header = headerWithFlags(kHttp2FlagPriority);
+    auto header_value = header_with_flags(http2_flag_priority);
     std::string_view fragment;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, "abc", fragment) ==
-                Http2FramePayloadStatus::kMissingPriorityFields);
+    RUVIA_CHECK(http2_decode_headers_payload(header_value, "abc", fragment) ==
+                http2_frame_payload_status::missing_priority_fields);
 }
 
 RUVIA_TEST(frame_headers_padded_and_priority_combined) {
     // pad length 2, 5-byte priority (dependency 7), fragment "hdr", 2 padding.
-    auto header = headerWithFlags(static_cast<std::uint8_t>(kHttp2FlagPadded | kHttp2FlagPriority));
+    auto header_value = header_with_flags(static_cast<std::uint8_t>(http2_flag_padded | http2_flag_priority));
     std::string payload;
     payload.push_back(0x02);  // pad length
     payload.push_back(0x00);
@@ -124,67 +124,67 @@ RUVIA_TEST(frame_headers_padded_and_priority_combined) {
 
     std::string_view content;
     std::uint32_t dependency = 0;
-    RUVIA_CHECK(http2StripPadAndPriority(header, payload, true, content, &dependency) ==
-                Http2FramePayloadStatus::kDecoded);
+    RUVIA_CHECK(http2_strip_pad_and_priority(header_value, payload, true, content, &dependency) ==
+                http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(content, std::string_view("hdr"));
     RUVIA_CHECK_EQ(dependency, std::uint32_t{7});
 }
 
 RUVIA_TEST(frame_headers_plain_keeps_all_and_default_dependency) {
-    auto header = headerWithFlags(0);
+    auto header_value = header_with_flags(0);
     std::string_view fragment;
     RUVIA_CHECK(
-        http2DecodeHeadersPayload(header, "block", fragment) == Http2FramePayloadStatus::kDecoded);
+        http2_decode_headers_payload(header_value, "block", fragment) == http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("block"));
 
     // No PRIORITY flag -> dependency defaults to 0.
     std::uint32_t dependency = 0xffffffffU;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, "block", dependency) ==
-                Http2FramePayloadStatus::kDecoded);
+    RUVIA_CHECK(http2_headers_priority_dependency(header_value, "block", dependency) ==
+                http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{0});
 }
 
 RUVIA_TEST(frame_data_ignores_priority_flag) {
-    // A DATA frame never interprets the priority bit (allowPriority=false), so
+    // A DATA frame never interprets the priority bit (allow_priority=false), so
     // the whole payload after any padding is data.
-    auto header = headerWithFlags(kHttp2FlagPriority);
+    auto header_value = header_with_flags(http2_flag_priority);
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, "raw", data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, "raw", data));
     RUVIA_CHECK_EQ(data, std::string_view("raw"));
 }
 
 RUVIA_TEST(http2_data_payload_unpadded) {
-    const auto header = headerWithFlags(0);
+    const auto header_value = header_with_flags(0);
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, "hello world", data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, "hello world", data));
     RUVIA_CHECK_EQ(data, std::string_view("hello world"));
 }
 
 RUVIA_TEST(http2_data_payload_padded) {
-    const auto header = headerWithFlags(kHttp2FlagPadded);
+    const auto header_value = header_with_flags(http2_flag_padded);
     // [pad length = 3]["data"][3 padding bytes]
     std::string payload;
     payload += static_cast<char>(3);
     payload += "data";
     payload += std::string(3, '\0');
     std::string_view data;
-    RUVIA_CHECK(http2DecodeDataPayload(header, payload, data));
+    RUVIA_CHECK(http2_decode_data_payload(header_value, payload, data));
     RUVIA_CHECK_EQ(data, std::string_view("data"));
 
     // A pad length >= the payload length is a protocol error (RFC 7540 6.1).
-    std::string tooMuch;
-    tooMuch += static_cast<char>(5);  // claims 5 padding bytes...
-    tooMuch += "ab";                  // ...but the whole payload is only 3 bytes
+    std::string too_much;
+    too_much += static_cast<char>(5);  // claims 5 padding bytes...
+    too_much += "ab";                  // ...but the whole payload is only 3 bytes
     std::string_view rejected;
-    RUVIA_CHECK(!http2DecodeDataPayload(header, tooMuch, rejected));
+    RUVIA_CHECK(!http2_decode_data_payload(header_value, too_much, rejected));
 
     // The PADDED flag with an empty payload (no pad-length byte) is rejected.
     std::string_view empty;
-    RUVIA_CHECK(!http2DecodeDataPayload(header, std::string_view(), empty));
+    RUVIA_CHECK(!http2_decode_data_payload(header_value, std::string_view(), empty));
 }
 
 RUVIA_TEST(http2_headers_payload_priority) {
-    const auto header = headerWithFlags(kHttp2FlagPriority);
+    const auto header_value = header_with_flags(http2_flag_priority);
     // Priority field: 4-byte stream dependency (7) + 1-byte weight, then the block.
     std::string payload;
     payload += static_cast<char>(0);
@@ -195,23 +195,23 @@ RUVIA_TEST(http2_headers_payload_priority) {
     payload += "hpack-fragment";
 
     std::uint32_t dependency = 999;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, payload, dependency) ==
-                Http2FramePayloadStatus::kDecoded);
+    RUVIA_CHECK(http2_headers_priority_dependency(header_value, payload, dependency) ==
+                http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{7});
 
     std::string_view fragment;
     RUVIA_CHECK(
-        http2DecodeHeadersPayload(header, payload, fragment) == Http2FramePayloadStatus::kDecoded);
+        http2_decode_headers_payload(header_value, payload, fragment) == http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("hpack-fragment"));
 
     // The PRIORITY flag with fewer than 5 bytes is rejected.
     std::string_view rejected;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, std::string_view("\0\0", 2), rejected) ==
-                Http2FramePayloadStatus::kMissingPriorityFields);
+    RUVIA_CHECK(http2_decode_headers_payload(header_value, std::string_view("\0\0", 2), rejected) ==
+                http2_frame_payload_status::missing_priority_fields);
 }
 
 RUVIA_TEST(http2_headers_payload_padded_and_priority) {
-    const auto header = headerWithFlags(kHttp2FlagPadded | kHttp2FlagPriority);
+    const auto header_value = header_with_flags(http2_flag_padded | http2_flag_priority);
     // [pad length = 2][priority 5 bytes][block][2 padding bytes]
     std::string payload;
     payload += static_cast<char>(2);
@@ -221,6 +221,6 @@ RUVIA_TEST(http2_headers_payload_padded_and_priority) {
     payload += std::string(2, '\0');
     std::string_view fragment;
     RUVIA_CHECK(
-        http2DecodeHeadersPayload(header, payload, fragment) == Http2FramePayloadStatus::kDecoded);
+        http2_decode_headers_payload(header_value, payload, fragment) == http2_frame_payload_status::decoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("blk"));
 }

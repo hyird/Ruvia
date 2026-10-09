@@ -2,32 +2,32 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/http_parse_error.h"
 
-#include "parser/HttpChunkParser.h"
+#include "parser/http_chunk_parser.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::HttpParseError;
-using ruvia::httpParseProtocolError;
-using ruvia::detail::HttpChunkScanError;
-using ruvia::detail::HttpChunkTrailerParser;
-using ruvia::detail::validateHttpChunkTrailers;
+using ruvia::http_parse_error;
+using ruvia::http_parse_protocol_error;
+using ruvia::detail::http_chunk_scan_error;
+using ruvia::detail::http_chunk_trailer_parser;
+using ruvia::detail::validate_http_chunk_trailers;
 
 }  // namespace
 
 // Which fields a chunked trailer section may carry, and what it must reject.
 
 RUVIA_TEST(chunk_trailers_accept_valid) {
-    RUVIA_CHECK(!validateHttpChunkTrailers("").has_value());
-    RUVIA_CHECK(!validateHttpChunkTrailers("X-Checksum: abc123\r\n").has_value());
+    RUVIA_CHECK(!validate_http_chunk_trailers("").has_value());
+    RUVIA_CHECK(!validate_http_chunk_trailers("X-Checksum: abc123\r\n").has_value());
     // A final line without a trailing CRLF is still complete.
-    RUVIA_CHECK(!validateHttpChunkTrailers("X-Trace: v").has_value());
+    RUVIA_CHECK(!validate_http_chunk_trailers("X-Trace: v").has_value());
 }
 
 RUVIA_TEST(chunk_trailer_parser_exposes_validated_borrowed_fields) {
-    HttpChunkTrailerParser parser("X-Trace: first\r\nServer-Timing:\tdb;dur=4  ");
+    http_chunk_trailer_parser parser("X-Trace: first\r\nServer-Timing:\tdb;dur=4  ");
     const auto first = parser.next();
     RUVIA_CHECK(first.field() != nullptr);
     if (const auto* field = first.field()) {
@@ -60,24 +60,24 @@ RUVIA_TEST(chunk_trailer_names_require_tokens_before_the_separator) {
                 std::string name(length, 'x');
                 name[position] = character;
                 const std::string wire = name + ": \tvalue:with:colons\t \r\nX-Next: done\r\n";
-                HttpChunkTrailerParser parser(wire);
-                const auto result = parser.next();
-                RUVIA_CHECK_EQ(result.field() != nullptr, valid);
-                if (valid && result.field()) {
-                    RUVIA_CHECK_EQ(result.field()->name(), std::string_view(name));
-                    RUVIA_CHECK_EQ(result.field()->name().data(), wire.data());
-                    RUVIA_CHECK_EQ(result.field()->value(), std::string_view("value:with:colons"));
-                    const auto next = parser.next();
-                    RUVIA_CHECK(next.field() != nullptr);
-                    if (next.field()) {
-                        RUVIA_CHECK_EQ(next.field()->name(), std::string_view("X-Next"));
+                http_chunk_trailer_parser parser(wire);
+                const auto result_value = parser.next();
+                RUVIA_CHECK_EQ(result_value.field() != nullptr, valid);
+                if (valid && result_value.field()) {
+                    RUVIA_CHECK_EQ(result_value.field()->name(), std::string_view(name));
+                    RUVIA_CHECK_EQ(result_value.field()->name().data(), wire.data());
+                    RUVIA_CHECK_EQ(result_value.field()->value(), std::string_view("value:with:colons"));
+                    const auto next_value = parser.next();
+                    RUVIA_CHECK(next_value.field() != nullptr);
+                    if (next_value.field()) {
+                        RUVIA_CHECK_EQ(next_value.field()->name(), std::string_view("X-Next"));
                     }
                     const auto end = parser.next();
                     RUVIA_CHECK(end.end() != nullptr);
                 } else {
-                    RUVIA_CHECK(result.failure() != nullptr);
-                    if (result.failure()) {
-                        RUVIA_CHECK(result.failure()->error() == HttpChunkScanError::kInvalidTrailer);
+                    RUVIA_CHECK(result_value.failure() != nullptr);
+                    if (result_value.failure()) {
+                        RUVIA_CHECK(result_value.failure()->error() == http_chunk_scan_error::invalid_trailer);
                     }
                     const auto repeated = parser.next();
                     RUVIA_CHECK(repeated.failure() != nullptr);
@@ -95,45 +95,45 @@ RUVIA_TEST(chunk_trailer_values_trim_ows_and_preserve_accepted_bytes) {
                 std::string value(length, 'x');
                 value[position] = static_cast<char>(byte);
                 const std::string wire = "X-Value: \t" + value + "\t \r\n";
-                HttpChunkTrailerParser parser(wire);
-                const auto result = parser.next();
-                RUVIA_CHECK_EQ(result.field() != nullptr, valid);
-                if (valid && result.field()) {
+                http_chunk_trailer_parser parser(wire);
+                const auto result_value = parser.next();
+                RUVIA_CHECK_EQ(result_value.field() != nullptr, valid);
+                if (valid && result_value.field()) {
                     const auto first = value.find_first_not_of(" \t");
                     const auto last = value.find_last_not_of(" \t");
                     const auto expected = first == std::string::npos ? std::string_view{} : std::string_view(value).substr(first, last - first + 1);
-                    RUVIA_CHECK_EQ(result.field()->value(), expected);
+                    RUVIA_CHECK_EQ(result_value.field()->value(), expected);
                 } else {
-                    RUVIA_CHECK(result.failure() != nullptr);
-                    if (result.failure()) {
-                        RUVIA_CHECK(result.failure()->error() == HttpChunkScanError::kInvalidTrailer);
+                    RUVIA_CHECK(result_value.failure() != nullptr);
+                    if (result_value.failure()) {
+                        RUVIA_CHECK(result_value.failure()->error() == http_chunk_scan_error::invalid_trailer);
                     }
                 }
             }
         }
     }
-    RUVIA_CHECK(!validateHttpChunkTrailers("X-Empty:\r\nX-Ows: \t \r\n").has_value());
+    RUVIA_CHECK(!validate_http_chunk_trailers("X-Empty:\r\nX-Ows: \t \r\n").has_value());
 }
 
 RUVIA_TEST(chunk_trailers_reject_malformed) {
     // Leading whitespace (obs-fold), missing colon, and an empty name are invalid.
-    RUVIA_CHECK(validateHttpChunkTrailers(" X: y\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("no-colon\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers(":value\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validate_http_chunk_trailers(" X: y\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("no-colon\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers(":value\r\n") == http_chunk_scan_error::invalid_trailer);
     // A control byte in the value is rejected.
-    RUVIA_CHECK(validateHttpChunkTrailers("X: a\x01"
-                                          "b\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("X: a\x01"
+                                             "b\r\n") == http_chunk_scan_error::invalid_trailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_forbidden_fields) {
     // Fields that govern framing/state must not appear in a trailer section.
     RUVIA_CHECK(
-        validateHttpChunkTrailers("TE: trailers\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Trailer: X\r\n") == HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("TE: trailers\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Trailer: X\r\n") == http_chunk_scan_error::invalid_trailer);
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Set-Cookie: a=b\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Content-Encoding: gzip\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Set-Cookie: a=b\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Content-Encoding: gzip\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
@@ -143,26 +143,26 @@ RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
     // classified-header path (distinct from the name-length switch exercised
     // above), so pin them explicitly -- dropping one reopens trailer smuggling.
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Content-Length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Transfer-Encoding: chunked\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Content-Length: 10\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Transfer-Encoding: chunked\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Host: evil.example\r\n") == HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Host: evil.example\r\n") == http_chunk_scan_error::invalid_trailer);
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Connection: close\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Authorization: Bearer x\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Origin: https://app.example\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Method: POST\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Headers: X-One\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Cookie: sid=1\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Origin: https://app.example\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Access-Control-Request-Method: POST\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Access-Control-Request-Headers: X-One\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
     // The classification is case-insensitive, so a lowercase spelling is caught too.
     RUVIA_CHECK(
-        validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("content-length: 10\r\n") == http_chunk_scan_error::invalid_trailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
@@ -174,28 +174,28 @@ RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
     // All protocols share this trailer policy. HTTP/2 and HTTP/3 also reject
     // Upgrade as a connection-specific field before applying trailer policy.
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Upgrade: websocket\r\n") == HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Upgrade: websocket\r\n") == http_chunk_scan_error::invalid_trailer);
     // Proxy-Connection is forbidden both as a binary-protocol connection field
     // and by the shared trailer policy.
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Connection: keep-alive\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Proxy-Connection: keep-alive\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
 
     // The name-length switch tier (each an RFC 7230 §4.1.2 / 7231 control or
     // routing/auth field that must not be delivered late in a trailer).
-    RUVIA_CHECK(validateHttpChunkTrailers("Keep-Alive: timeout=5\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Keep-Alive: timeout=5\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
     RUVIA_CHECK(
-        validateHttpChunkTrailers("Max-Forwards: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Cache-Control: no-cache\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Accept-Ranges: bytes\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Content-Range: bytes 0-1/2\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authenticate: Basic\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authorization: Basic eA==\r\n") ==
-                HttpChunkScanError::kInvalidTrailer);
+        validate_http_chunk_trailers("Max-Forwards: 10\r\n") == http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Cache-Control: no-cache\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Accept-Ranges: bytes\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Content-Range: bytes 0-1/2\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Proxy-Authenticate: Basic\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
+    RUVIA_CHECK(validate_http_chunk_trailers("Proxy-Authorization: Basic eA==\r\n") ==
+                http_chunk_scan_error::invalid_trailer);
     // A genuinely trailer-safe field is still accepted (negative control).
-    RUVIA_CHECK(!validateHttpChunkTrailers("X-Checksum: abc\r\n").has_value());
+    RUVIA_CHECK(!validate_http_chunk_trailers("X-Checksum: abc\r\n").has_value());
 }

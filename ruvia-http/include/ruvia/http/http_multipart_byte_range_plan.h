@@ -10,8 +10,8 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/HttpByteRange.h"
-#include "ruvia/http/detail/util/HttpPmrObject.h"
+#include "ruvia/http/detail/util/http_pmr_object.h"
+#include "ruvia/http/http_byte_range.h"
 
 namespace ruvia {
 
@@ -26,11 +26,11 @@ public:
     };
 
     struct segment final {
-        segment_kind kind{};
-        std::size_t metadata_offset{};
-        std::size_t metadata_length{};
-        std::uint64_t file_offset{};
-        std::uint64_t file_length{};
+        segment_kind kind_{};
+        std::size_t metadata_offset_{};
+        std::size_t metadata_length_{};
+        std::uint64_t file_offset_{};
+        std::uint64_t file_length_{};
     };
 
     http_multipart_byte_range_plan(const http_multipart_byte_range_plan&) = delete;
@@ -54,7 +54,7 @@ public:
         return state_->content_length_;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return state_.get_deleter().resource;
+        return state_.get_deleter().resource_;
     }
     [[nodiscard]] http_multipart_byte_range_plan clone(
         std::pmr::memory_resource* resource) const;
@@ -77,9 +77,9 @@ private:
     };
 
     explicit http_multipart_byte_range_plan(std::pmr::memory_resource* resource)
-        : state_(detail::makeHttpPmrObject<storage>(resource, resource)) {}
+        : state_(detail::make_http_pmr_object<storage>(resource, resource)) {}
 
-    std::unique_ptr<storage, detail::HttpPmrObjectDeleter<storage>> state_;
+    std::unique_ptr<storage, detail::http_pmr_object_deleter<storage>> state_;
 };
 
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(

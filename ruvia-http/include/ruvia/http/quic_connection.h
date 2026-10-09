@@ -13,7 +13,7 @@ namespace ruvia::detail {
 class quic_connection_state;
 struct quic_cid_registry_view;
 struct quic_connection_state_deleter {
-    std::pmr::memory_resource* resource{};
+    std::pmr::memory_resource* resource_{};
     void operator()(quic_connection_state* state) const noexcept;
 };
 }  // namespace ruvia::detail
@@ -21,8 +21,8 @@ struct quic_connection_state_deleter {
 namespace ruvia {
 
 struct quic_stream_open_result {
-    quic_operation_status status{quic_operation_status::would_block};
-    std::uint64_t stream_id{};
+    quic_operation_status status_{quic_operation_status::would_block};
+    std::uint64_t stream_id_{};
 };
 
 // One owner-thread connection. It is address-stable and non-movable for the full

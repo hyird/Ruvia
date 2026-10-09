@@ -8,48 +8,48 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/Controller.h"
-#include "ruvia/web/Error.h"
-#include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/context/RequestBindings.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/detail/http/context/request_bindings.h"
+#include "ruvia/web/error.h"
+#include "ruvia/web/validation.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::Validator;
-using ruvia::test::CountingMemoryResource;
+using ruvia::validator;
+using ruvia::test::counting_memory_resource;
 
-RUVIA_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
+RUVIA_MODEL(required_optional_model, RUVIA_REQUIRED_FIELD_NAME("requiredValue", required_value, ruvia::string),
+    RUVIA_OPTIONAL_FIELD_NAME("optionalValue", optional_value, ruvia::string));
 
-RUVIA_MODEL(RequiredRulesModel,
-    RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is too short"),
+RUVIA_MODEL(required_rules_model,
+    RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is too short"),
         RUVIA_MAX(64, "id is too long")),
-    RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is too short"),
+    RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is too short"),
         RUVIA_MAX(120, "name is too long")),
-    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
+    RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_MODEL(OptionalRulesModel,
-    RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_MIN(1, "value is empty")));
+RUVIA_MODEL(optional_rules_model,
+    RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_MIN(1, "value is empty")));
 
-[[nodiscard]] std::exception_ptr captureValidationException(
-    std::pmr::memory_resource* resource, bool moveValidator) {
-    Validator validator({.resource = resource});
-    validator.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+[[nodiscard]] std::exception_ptr capture_validation_exception(
+    std::pmr::memory_resource* resource, bool move_validator) {
+    validator validator_value({.resource_ = resource});
+    validator_value.add(std::string(128, 'f'), "required", std::string(256, 'm'));
     try {
-        if (moveValidator) {
-            std::move(validator).throwIfInvalid({
-                .status = ruvia::http_status::kUnprocessableContent,
-                .code = "invalid_payload",
-                .message = "payload failed validation",
+        if (move_validator) {
+            std::move(validator_value).throw_if_invalid({
+                .status_ = ruvia::http_status::unprocessable_content,
+                .code_ = "invalid_payload",
+                .message_ = "payload failed validation",
             });
         } else {
-            validator.throwIfInvalid({
-                .status = ruvia::http_status::kUnprocessableContent,
-                .code = "invalid_payload",
-                .message = "payload failed validation",
+            validator_value.throw_if_invalid({
+                .status_ = ruvia::http_status::unprocessable_content,
+                .code_ = "invalid_payload",
+                .message_ = "payload failed validation",
             });
         }
     } catch (...) {
@@ -58,14 +58,14 @@ RUVIA_MODEL(OptionalRulesModel,
     return {};
 }
 
-[[nodiscard]] std::exception_ptr captureValidationExceptionFromShortLivedArena(
+[[nodiscard]] std::exception_ptr capture_validation_exception_from_short_lived_arena(
     std::pmr::memory_resource* upstream) {
-    alignas(std::max_align_t) std::array<std::byte, 64> initial{};
-    std::pmr::monotonic_buffer_resource arena(initial.data(), initial.size(), upstream);
-    Validator validator({.resource = &arena});
-    validator.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+    alignas(std::max_align_t) std::array<std::byte, 64> initial_value{};
+    std::pmr::monotonic_buffer_resource arena(initial_value.data(), initial_value.size(), upstream);
+    validator validator_value({.resource_ = &arena});
+    validator_value.add(std::string(128, 'f'), "required", std::string(256, 'm'));
     try {
-        validator.throwIfInvalid();
+        validator_value.throw_if_invalid();
     } catch (...) {
         return std::current_exception();
     }
@@ -75,48 +75,48 @@ RUVIA_MODEL(OptionalRulesModel,
 }  // namespace
 
 RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
-    const auto valid = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
+    const auto valid = ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_rules_model>(
         R"({"id":"u-1","name":"Alice","age":32})", std::pmr::get_default_resource());
     RUVIA_CHECK(valid.has_value());
     if (!valid) {
         return;
     }
-    Validator validValidator;
-    ruvia::detail::ModelValidationAccess::validateModel(*valid, validValidator);
-    RUVIA_CHECK(validValidator.ok());
+    validator valid_validator;
+    ruvia::detail::model_validation_access::validate_model(*valid, valid_validator);
+    RUVIA_CHECK(valid_validator.ok());
 
-    const auto invalidType =
-        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
+    const auto invalid_type =
+        ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_rules_model>(
             R"({"id":42,"name":"Alice","age":32})", std::pmr::get_default_resource());
-    RUVIA_CHECK(invalidType.has_value());
-    if (invalidType) {
-        Validator validator;
-        ruvia::detail::ModelValidationAccess::validateModel(*invalidType, validator);
+    RUVIA_CHECK(invalid_type.has_value());
+    if (invalid_type) {
+        validator validator;
+        ruvia::detail::model_validation_access::validate_model(*invalid_type, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("invalid_type"));
     }
 
     const auto duplicate =
-        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
+        ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_rules_model>(
             R"({"id":"first","id":"second","name":"Alice","age":32})",
             std::pmr::get_default_resource());
     RUVIA_CHECK(duplicate.has_value());
     if (duplicate) {
-        Validator validator;
-        ruvia::detail::ModelValidationAccess::validateModel(*duplicate, validator);
+        validator validator;
+        ruvia::detail::model_validation_access::validate_model(*duplicate, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("duplicate"));
     }
 
     const auto missing =
-        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
+        ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_rules_model>(
             R"({"name":"Alice","age":32})", std::pmr::get_default_resource());
     RUVIA_CHECK(missing.has_value());
     if (missing) {
-        Validator validator;
-        ruvia::detail::ModelValidationAccess::validateModel(*missing, validator);
+        validator validator;
+        ruvia::detail::model_validation_access::validate_model(*missing, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("required"));
@@ -124,36 +124,36 @@ RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
 }
 
 RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
-    auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredOptionalModel>(
+    auto parsed_value = ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_optional_model>(
         "{}", std::pmr::get_default_resource());
-    RUVIA_CHECK(parsed.has_value());
-    if (!parsed) {
+    RUVIA_CHECK(parsed_value.has_value());
+    if (!parsed_value) {
         return;
     }
 
-    Validator validator;
-    ruvia::detail::ModelValidationAccess::validateStructure(*parsed, {}, validator);
+    validator validator;
+    ruvia::detail::model_validation_access::validate_structure(*parsed_value, {}, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
-    RUVIA_CHECK(!ruvia::fromJson<RequiredOptionalModel>("{}").has_value());
+    RUVIA_CHECK(!ruvia::from_json<required_optional_model>("{}").has_value());
 
     RUVIA_CHECK(
-        !ruvia::fromForm<RequiredOptionalModel>("", {.resource = std::pmr::get_default_resource()})
+        !ruvia::from_form<required_optional_model>("", {.resource_ = std::pmr::get_default_resource()})
             .has_value());
-    auto partialForm =
-        ruvia::detail::ModelParseAccess::parseFormBorrowedPartial<RequiredOptionalModel>(
+    auto partial_form =
+        ruvia::detail::model_parse_access::parse_form_borrowed_partial<required_optional_model>(
             "", std::pmr::get_default_resource());
-    RUVIA_CHECK(partialForm.has_value());
-    if (partialForm) {
-        Validator formValidator;
-        ruvia::detail::ModelValidationAccess::validateStructure(*partialForm, {}, formValidator);
-        RUVIA_CHECK_EQ(formValidator.issues().size(), std::size_t{1});
-        RUVIA_CHECK_EQ(formValidator.issues()[0].field(), std::string_view("requiredValue"));
+    RUVIA_CHECK(partial_form.has_value());
+    if (partial_form) {
+        ruvia::validator form_validator;
+        ruvia::detail::model_validation_access::validate_structure(*partial_form, {}, form_validator);
+        RUVIA_CHECK_EQ(form_validator.issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(form_validator.issues()[0].field(), std::string_view("requiredValue"));
     }
 }
 
 RUVIA_TEST(validator_required_flags_absent_values) {
-    Validator v;
+    validator v;
     std::optional<std::string> present = std::string("x");
     std::optional<std::string> absent;
     v.required(present, "present");
@@ -167,17 +167,17 @@ RUVIA_TEST(validator_required_flags_absent_values) {
 }
 
 RUVIA_TEST(validator_length_bounds_and_absent_skips) {
-    Validator v;
+    validator v;
     std::optional<std::string> value = std::string("abc");
-    v.minLength(value, "f", 2);  // 3 >= 2, ok
-    v.maxLength(value, "f", 5);  // 3 <= 5, ok
+    v.min_length(value, "f", 2);  // 3 >= 2, ok
+    v.max_length(value, "f", 5);  // 3 <= 5, ok
     RUVIA_CHECK(v.ok());
 
-    v.minLength(value, "f", 5);  // 3 < 5 -> too_small
-    v.maxLength(value, "f", 2);  // 3 > 2 -> too_big
+    v.min_length(value, "f", 5);  // 3 < 5 -> too_small
+    v.max_length(value, "f", 2);  // 3 > 2 -> too_big
     // An absent value is never checked.
     std::optional<std::string> absent;
-    v.minLength(absent, "g", 100);
+    v.min_length(absent, "g", 100);
 
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_small"));
@@ -185,15 +185,15 @@ RUVIA_TEST(validator_length_bounds_and_absent_skips) {
 }
 
 RUVIA_TEST(validator_range_and_one_of) {
-    Validator v;
+    validator v;
     std::optional<int> n = 5;
     v.range(n, "n", 1, 10);  // in range, ok
     RUVIA_CHECK(v.ok());
     v.range(n, "n", 6, 10);  // 5 < 6 -> too_small
 
     std::optional<std::string> s = std::string("b");
-    v.oneOf(s, "s", {"a", "b", "c"});  // allowed, ok
-    v.oneOf(s, "s", {"x", "y"});       // not allowed -> one_of
+    v.one_of(s, "s", {"a", "b", "c"});  // allowed, ok
+    v.one_of(s, "s", {"x", "y"});       // not allowed -> one_of
 
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_small"));
@@ -201,17 +201,17 @@ RUVIA_TEST(validator_range_and_one_of) {
 }
 
 RUVIA_TEST(validator_range_upper_bound_inclusive_and_absent_skips) {
-    Validator v;
+    validator v;
     // The upper bound is enforced independently of the lower bound.
     std::optional<int> high = 5;
     v.range(high, "high", 1, 3);  // 5 > 3 -> too_big
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
     RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_big"));
     // Both bounds are inclusive: values exactly at min or max are accepted.
-    std::optional<int> atMin = 1;
-    std::optional<int> atMax = 10;
-    v.range(atMin, "atMin", 1, 10);
-    v.range(atMax, "atMax", 1, 10);
+    std::optional<int> at_min = 1;
+    std::optional<int> at_max = 10;
+    v.range(at_min, "atMin", 1, 10);
+    v.range(at_max, "atMax", 1, 10);
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
     // An absent value skips range validation entirely.
     std::optional<int> absent;
@@ -220,17 +220,17 @@ RUVIA_TEST(validator_range_upper_bound_inclusive_and_absent_skips) {
 }
 
 RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
-    Validator v;
-    // oneOf on an absent optional is skipped -- the one rule whose absent-skip branch
-    // the other tests don't exercise (required/minLength/range already cover theirs).
+    validator v;
+    // one_of on an absent optional is skipped -- the one rule whose absent-skip branch
+    // the other tests don't exercise (required/min_length/range already cover theirs).
     std::optional<std::string> absent;
-    v.oneOf(absent, "a", {"x", "y"});
+    v.one_of(absent, "a", {"x", "y"});
     RUVIA_CHECK(v.ok());
 
     // range validates floating-point values, not just integers (a distinct template
     // instantiation and comparison path from the int cases above).
-    std::optional<double> inRange = 0.5;
-    v.range(inRange, "d", 0.0, 1.0);  // 0.0 <= 0.5 <= 1.0, ok
+    std::optional<double> in_range = 0.5;
+    v.range(in_range, "d", 0.0, 1.0);  // 0.0 <= 0.5 <= 1.0, ok
     RUVIA_CHECK(v.ok());
     std::optional<double> low = -0.1;
     v.range(low, "d", 0.0, 1.0);  // -0.1 < 0.0 -> too_small
@@ -241,25 +241,25 @@ RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
     RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("too_big"));
 
     // Both floating bounds are inclusive: a value exactly at min or max is accepted.
-    std::optional<double> atMin = 0.0;
-    std::optional<double> atMax = 1.0;
-    v.range(atMin, "d", 0.0, 1.0);
-    v.range(atMax, "d", 0.0, 1.0);
+    std::optional<double> at_min = 0.0;
+    std::optional<double> at_max = 1.0;
+    v.range(at_min, "d", 0.0, 1.0);
+    v.range(at_max, "d", 0.0, 1.0);
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});  // unchanged
 }
 
 RUVIA_TEST(validation_error_exposes_typed_issues) {
-    Validator v;
+    validator v;
     std::optional<std::string> absent;
     v.required(absent, "email", "email is required");
-    std::optional<std::string> shortName = std::string("a");
-    v.minLength(shortName, "name", 3, "too short");
+    std::optional<std::string> short_name = std::string("a");
+    v.min_length(short_name, "name", 3, "too short");
 
     try {
-        v.throwIfInvalid();
+        v.throw_if_invalid();
         RUVIA_CHECK(false);  // must have thrown
-    } catch (const ruvia::ValidationError& error) {
-        const auto issues = error.info().validationIssues();
+    } catch (const ruvia::validation_error& error) {
+        const auto issues = error.info().validation_issues();
         RUVIA_CHECK_EQ(issues.size(), std::size_t{2});
         RUVIA_CHECK_EQ(issues[0].field(), std::string_view("email"));
         RUVIA_CHECK_EQ(issues[0].code(), std::string_view("required"));
@@ -271,13 +271,13 @@ RUVIA_TEST(validation_error_exposes_typed_issues) {
 }
 
 RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
-    Validator v;
+    validator v;
     v.add("f\"x", "code", "a\"b\\c");
     try {
-        v.throwIfInvalid();
+        v.throw_if_invalid();
         RUVIA_CHECK(false);
-    } catch (const ruvia::ValidationError& error) {
-        const auto issues = error.info().validationIssues();
+    } catch (const ruvia::validation_error& error) {
+        const auto issues = error.info().validation_issues();
         RUVIA_CHECK_EQ(issues.size(), std::size_t{1});
         RUVIA_CHECK_EQ(issues[0].field(), std::string_view("f\"x"));
         RUVIA_CHECK_EQ(issues[0].message(), std::string_view("a\"b\\c"));
@@ -285,42 +285,42 @@ RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
 }
 
 RUVIA_TEST(validation_error_options_control_reported_error_info) {
-    Validator v;
+    validator v;
     v.add("field", "required", "missing");
 
     try {
-        v.throwIfInvalid({
-            .status = ruvia::http_status::kUnprocessableContent,
-            .code = "invalid_payload",
-            .message = "payload failed validation",
+        v.throw_if_invalid({
+            .status_ = ruvia::http_status::unprocessable_content,
+            .code_ = "invalid_payload",
+            .message_ = "payload failed validation",
         });
         RUVIA_CHECK(false);
-    } catch (const ruvia::ValidationError& error) {
+    } catch (const ruvia::validation_error& error) {
         const auto info = error.info();
-        RUVIA_CHECK_EQ(info.status(), ruvia::http_status::kUnprocessableContent);
+        RUVIA_CHECK_EQ(info.status(), ruvia::http_status::unprocessable_content);
         RUVIA_CHECK_EQ(info.code(), std::string_view("invalid_payload"));
         RUVIA_CHECK_EQ(info.message(), std::string_view("payload failed validation"));
-        RUVIA_CHECK_EQ(info.validationIssues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(info.validation_issues().size(), std::size_t{1});
     }
 }
 
 RUVIA_TEST(validation_error_lvalue_and_rvalue_throws_release_validator_resource) {
-    for (const bool moveValidator : {false, true}) {
-        CountingMemoryResource resource;
-        const auto exception = captureValidationException(&resource, moveValidator);
+    for (const bool move_validator : {false, true}) {
+        counting_memory_resource resource;
+        const auto exception = capture_validation_exception(&resource, move_validator);
 
         RUVIA_CHECK(exception != nullptr);
-        RUVIA_CHECK(resource.allocationCount() > 0);
-        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+        RUVIA_CHECK(resource.allocation_count() > 0);
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 
         try {
             std::rethrow_exception(exception);
-        } catch (const ruvia::ValidationError& error) {
+        } catch (const ruvia::validation_error& error) {
             RUVIA_CHECK_EQ(std::string_view(error.what()),
                 std::string_view("payload failed validation"));
             RUVIA_CHECK_EQ(error.issues().get_allocator().resource(),
-                ruvia::detail::processResource());
+                ruvia::detail::process_resource());
             RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
             RUVIA_CHECK_EQ(error.issues()[0].field().size(), std::size_t{128});
             RUVIA_CHECK_EQ(error.issues()[0].message().size(), std::size_t{256});
@@ -329,18 +329,18 @@ RUVIA_TEST(validation_error_lvalue_and_rvalue_throws_release_validator_resource)
 }
 
 RUVIA_TEST(validation_error_survives_short_lived_arena_and_exception_ptr) {
-    CountingMemoryResource upstream;
-    const auto exception = captureValidationExceptionFromShortLivedArena(&upstream);
+    counting_memory_resource upstream;
+    const auto exception = capture_validation_exception_from_short_lived_arena(&upstream);
 
     // The arena, its initial buffer, and the Validator have all gone away before
     // the exception is inspected. The exception owns process-lifetime copies.
     RUVIA_CHECK(exception != nullptr);
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 
     try {
         std::rethrow_exception(exception);
-    } catch (const ruvia::ValidationError& error) {
+    } catch (const ruvia::validation_error& error) {
         RUVIA_CHECK_EQ(std::string_view(error.what()),
             std::string_view("request validation failed"));
         RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
@@ -350,22 +350,22 @@ RUVIA_TEST(validation_error_survives_short_lived_arena_and_exception_ptr) {
 }
 
 RUVIA_TEST(validation_error_copy_move_and_assignment_preserve_owned_data) {
-    CountingMemoryResource resource;
-    const auto exception = captureValidationException(&resource, false);
+    counting_memory_resource resource;
+    const auto exception = capture_validation_exception(&resource, false);
 
     try {
         std::rethrow_exception(exception);
-    } catch (const ruvia::ValidationError& original) {
-        ruvia::ValidationError copied(original);
-        ruvia::ValidationError::IssueList emptyIssues;
-        ruvia::ValidationError copyAssigned(emptyIssues);
-        copyAssigned = original;
+    } catch (const ruvia::validation_error& original) {
+        ruvia::validation_error copied(original);
+        ruvia::validation_error::issue_list_type empty_issues;
+        ruvia::validation_error copy_assigned(empty_issues);
+        copy_assigned = original;
 
-        ruvia::ValidationError moved(std::move(copied));
-        ruvia::ValidationError moveAssigned(emptyIssues);
-        moveAssigned = std::move(moved);
+        ruvia::validation_error moved(std::move(copied));
+        ruvia::validation_error move_assigned(empty_issues);
+        move_assigned = std::move(moved);
 
-        for (const auto* error : {&copyAssigned, &moveAssigned}) {
+        for (const auto* error : {&copy_assigned, &move_assigned}) {
             RUVIA_CHECK_EQ(error->issues().size(), std::size_t{1});
             RUVIA_CHECK_EQ(error->issues()[0].field().size(), std::size_t{128});
             RUVIA_CHECK_EQ(error->issues()[0].message().size(), std::size_t{256});
@@ -376,85 +376,85 @@ RUVIA_TEST(validation_error_copy_move_and_assignment_preserve_owned_data) {
         RUVIA_CHECK_EQ(moved.issues().size(), std::size_t{0});
     }
 
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
-    Validator ok;
-    ok.throwIfInvalid();  // no issues -> no throw
+    validator ok;
+    ok.throw_if_invalid();  // no issues -> no throw
 
-    Validator bad;
+    validator bad;
     std::optional<std::string> absent;
     bad.required(absent, "x");
     bool threw = false;
     try {
-        bad.throwIfInvalid();
-    } catch (const ruvia::ValidationError&) {
+        bad.throw_if_invalid();
+    } catch (const ruvia::validation_error&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(validated_model_bindings_are_nested_scoped_borrows) {
-    ruvia::detail::RequestBindings values;
+    ruvia::detail::request_bindings values;
     int number = 42;
     {
-        auto numberBinding = values.bindValidated(number);
-        RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
+        auto number_binding = values.bind_validated(number);
+        RUVIA_CHECK_EQ(values.get_validated<int>(), 42);
 
         {
             std::string text = "nested";
-            auto textBinding = values.bindValidated(text);
-            RUVIA_CHECK_EQ(values.getValidated<std::string>(), std::string("nested"));
-            RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
+            auto text_binding = values.bind_validated(text);
+            RUVIA_CHECK_EQ(values.get_validated<std::string>(), std::string("nested"));
+            RUVIA_CHECK_EQ(values.get_validated<int>(), 42);
         }
 
         // The inner borrow must unbind on its own and leave the outer one live.
-        bool nestedReleased = false;
+        bool nested_released = false;
         try {
-            (void)values.getValidated<std::string>();
+            (void)values.get_validated<std::string>();
         } catch (const std::logic_error&) {
-            nestedReleased = true;
+            nested_released = true;
         }
-        RUVIA_CHECK(nestedReleased);
-        RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
+        RUVIA_CHECK(nested_released);
+        RUVIA_CHECK_EQ(values.get_validated<int>(), 42);
     }
 
-    bool missingRejected = false;
+    bool missing_rejected = false;
     try {
-        (void)values.getValidated<int>();
+        (void)values.get_validated<int>();
     } catch (const std::logic_error&) {
-        missingRejected = true;
+        missing_rejected = true;
     }
-    RUVIA_CHECK(missingRejected);
+    RUVIA_CHECK(missing_rejected);
 }
 
 RUVIA_TEST(validated_json_binding_exposes_typed_value_and_exact_raw_body) {
-    ruvia::detail::RequestBindings values;
+    ruvia::detail::request_bindings values;
     int number = 42;
     constexpr std::string_view raw = R"( {"value":42} )";
-    auto binding = values.bindValidated(number, raw);
-    const auto json = values.getValidatedJson<int>();
+    auto binding = values.bind_validated(number, raw);
+    const auto json = values.get_validated_json<int>();
     RUVIA_CHECK_EQ(json.value(), 42);
     RUVIA_CHECK_EQ(json.raw(), raw);
 }
 
 RUVIA_TEST(validated_model_binding_unwinds_on_exception) {
-    ruvia::detail::RequestBindings values;
+    ruvia::detail::request_bindings values;
     try {
         int number = 7;
-        auto binding = values.bindValidated(number);
+        auto binding = values.bind_validated(number);
         throw std::runtime_error("leave validation scope");
     } catch (const std::runtime_error&) {
     }
 
-    bool missingRejected = false;
+    bool missing_rejected = false;
     try {
-        (void)values.getValidated<int>();
+        (void)values.get_validated<int>();
     } catch (const std::logic_error&) {
-        missingRejected = true;
+        missing_rejected = true;
     }
-    RUVIA_CHECK(missingRejected);
+    RUVIA_CHECK(missing_rejected);
 }
 
 // Request state shares the intrusive stack with validated models but must never
@@ -462,65 +462,65 @@ RUVIA_TEST(validated_model_binding_unwinds_on_exception) {
 // hand-bound state impersonating it would silently void that promise.
 
 RUVIA_TEST(request_state_and_validated_model_do_not_answer_each_other) {
-    ruvia::detail::RequestBindings values;
+    ruvia::detail::request_bindings values;
     int number = 42;
 
-    auto stateBinding = values.bindState(number);
-    RUVIA_CHECK_EQ(values.getState<int>(), 42);
+    auto state_binding = values.bind_state(number);
+    RUVIA_CHECK_EQ(values.get_state<int>(), 42);
 
     // Bound as state, so the validated lookup must not find it.
-    bool validatedRejected = false;
+    bool validated_rejected = false;
     try {
-        (void)values.getValidated<int>();
+        (void)values.get_validated<int>();
     } catch (const std::logic_error&) {
-        validatedRejected = true;
+        validated_rejected = true;
     }
-    RUVIA_CHECK(validatedRejected);
+    RUVIA_CHECK(validated_rejected);
 
     // ...and symmetrically for a validated binding of the same type.
-    int validatedNumber = 7;
-    auto validatedBinding = values.bindValidated(validatedNumber);
-    RUVIA_CHECK_EQ(values.getValidated<int>(), 7);
-    RUVIA_CHECK_EQ(values.getState<int>(), 42);
+    int validated_number = 7;
+    auto validated_binding = values.bind_validated(validated_number);
+    RUVIA_CHECK_EQ(values.get_validated<int>(), 7);
+    RUVIA_CHECK_EQ(values.get_state<int>(), 42);
 }
 
 RUVIA_TEST(request_state_try_lookup_reports_absence_without_throwing) {
-    ruvia::detail::RequestBindings values;
-    RUVIA_CHECK(values.tryGetState<int>() == nullptr);
+    ruvia::detail::request_bindings values;
+    RUVIA_CHECK(values.try_get_state<int>() == nullptr);
 
     int number = 5;
     {
-        auto binding = values.bindState(number);
-        const auto* found = values.tryGetState<int>();
+        auto binding = values.bind_state(number);
+        const auto* found = values.try_get_state<int>();
         RUVIA_CHECK(found != nullptr);
         RUVIA_CHECK_EQ(*found, 5);
         // Bound by address, never copied.
         RUVIA_CHECK(found == &number);
     }
-    RUVIA_CHECK(values.tryGetState<int>() == nullptr);
+    RUVIA_CHECK(values.try_get_state<int>() == nullptr);
 }
 
 RUVIA_TEST(request_state_nested_binding_shadows_then_restores) {
-    ruvia::detail::RequestBindings values;
+    ruvia::detail::request_bindings values;
     int outer = 1;
-    auto outerBinding = values.bindState(outer);
+    auto outer_binding = values.bind_state(outer);
     {
         int inner = 2;
-        auto innerBinding = values.bindState(inner);
-        RUVIA_CHECK_EQ(values.getState<int>(), 2);
+        auto inner_binding = values.bind_state(inner);
+        RUVIA_CHECK_EQ(values.get_state<int>(), 2);
     }
-    RUVIA_CHECK_EQ(values.getState<int>(), 1);
+    RUVIA_CHECK_EQ(values.get_state<int>(), 1);
 }
 
 RUVIA_TEST(model_rules_enforce_bounds_on_required_values) {
-    const auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
+    const auto parsed_value = ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_rules_model>(
         R"({"id":"","name":"Alice","age":131})", std::pmr::get_default_resource());
-    RUVIA_CHECK(parsed.has_value());
-    if (!parsed) {
+    RUVIA_CHECK(parsed_value.has_value());
+    if (!parsed_value) {
         return;
     }
-    Validator validator;
-    ruvia::detail::ModelValidationAccess::validateModel(*parsed, validator);
+    validator validator;
+    ruvia::detail::model_validation_access::validate_model(*parsed_value, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
     RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("too_small"));
@@ -538,14 +538,14 @@ RUVIA_TEST(model_rules_require_optional_fields_without_duplicate_parse_errors) {
         {R"({"value":"valid"})", ""},
     };
     for (const auto& [body, expected] : cases) {
-        const auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<OptionalRulesModel>(
+        const auto parsed_value = ruvia::detail::model_parse_access::parse_json_borrowed_partial<optional_rules_model>(
             body, std::pmr::get_default_resource());
-        RUVIA_CHECK(parsed.has_value());
-        if (!parsed) {
+        RUVIA_CHECK(parsed_value.has_value());
+        if (!parsed_value) {
             continue;
         }
-        Validator validator;
-        ruvia::detail::ModelValidationAccess::validateModel(*parsed, validator);
+        validator validator;
+        ruvia::detail::model_validation_access::validate_model(*parsed_value, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), expected.empty() ? std::size_t{0} : std::size_t{1});
         if (!expected.empty() && !validator.issues().empty()) {
             RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("value"));
@@ -556,14 +556,14 @@ RUVIA_TEST(model_rules_require_optional_fields_without_duplicate_parse_errors) {
 
 namespace {
 std::size_t bounded_rule_calls = 0;
-bool bounded_invalid_rule(const ruvia::String&) {
+bool bounded_invalid_rule(const ruvia::string&) {
     ++bounded_rule_calls;
     return false;
 }
 RUVIA_MODEL(bounded_validation_item,
-    RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_CUSTOM("invalid value", bounded_invalid_rule)));
+    RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_CUSTOM("invalid value", bounded_invalid_rule)));
 RUVIA_MODEL(bounded_validation_model,
-    RUVIA_REQUIRED_FIELD(items, ruvia::Array<bounded_validation_item>));
+    RUVIA_REQUIRED_FIELD(items, ruvia::array<bounded_validation_item>));
 }  // namespace
 
 RUVIA_TEST(validation_diagnostics_stop_at_the_document_limit) {
@@ -573,22 +573,22 @@ RUVIA_TEST(validation_diagnostics_stop_at_the_document_limit) {
         items.emplace_back().set<"value">("invalid");
     }
     bounded_rule_calls = 0;
-    ruvia::Validator validator;
-    ruvia::detail::ModelValidationAccess::validateModel(model, validator);
+    ruvia::validator validator;
+    ruvia::detail::model_validation_access::validate_model(model, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), ruvia::max_validation_issues);
     RUVIA_CHECK_EQ(bounded_rule_calls, ruvia::max_validation_issues);
     RUVIA_CHECK(validator.full());
     RUVIA_CHECK_EQ(validator.issues().front().field(), std::string_view("items[0].value"));
     try {
-        validator.throwIfInvalid();
+        validator.throw_if_invalid();
         RUVIA_CHECK(false);
-    } catch (const ruvia::ValidationError& error) {
+    } catch (const ruvia::validation_error& error) {
         RUVIA_CHECK_EQ(error.issues().size(), ruvia::max_validation_issues);
     }
 }
 
 RUVIA_TEST(validation_diagnostic_text_preserves_complete_utf8_within_limit) {
-    ruvia::Validator validator;
+    ruvia::validator validator;
     std::string message(ruvia::max_validation_text_bytes - 1, 'x');
     message += "中文";
     validator.add("field", "code", message);

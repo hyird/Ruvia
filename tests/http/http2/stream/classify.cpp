@@ -2,32 +2,32 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "http2/Http2HeaderContinuation.h"
-#include "http2/Http2HeaderDecode.h"
-#include "http2/Http2Hpack.h"
+#include "http2/http2_header_continuation.h"
+#include "http2/http2_header_decode.h"
+#include "http2/http2_hpack.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::HeaderDecodeStatus;
-using ruvia::detail::HpackDecoder;
-using ruvia::detail::http2ClassifyHeaderDecodeResult;
+using ruvia::detail::header_decode_status;
+using ruvia::detail::hpack_decoder;
+using ruvia::detail::http2_classify_header_decode_result;
 
-bool rejectHeader(void*, std::string_view, std::string_view) {
+bool reject_header(void*, std::string_view, std::string_view) {
     return false;
 }
 
 }  // namespace
 
 RUVIA_TEST(classify_header_decode_result) {
-    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+    hpack_decoder decoder({.resource_ = std::pmr::get_default_resource()});
     // A clean decode is OK.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode({}, nullptr, nullptr)) ==
-                HeaderDecodeStatus::kOk);
+    RUVIA_CHECK(http2_classify_header_decode_result(decoder.decode({}, nullptr, nullptr)) ==
+                header_decode_status::ok);
     // A header-validation callback rejection is a protocol error.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x82", 1), nullptr,
-                    &rejectHeader)) == HeaderDecodeStatus::kProtocolError);
+    RUVIA_CHECK(http2_classify_header_decode_result(decoder.decode(std::string_view("\x82", 1), nullptr,
+                    &reject_header)) == header_decode_status::protocol_error);
     // Any HPACK decoding fault is a compression error (RFC 7541 4.1).
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x80", 1), nullptr,
-                    nullptr)) == HeaderDecodeStatus::kCompressionError);
+    RUVIA_CHECK(http2_classify_header_decode_result(decoder.decode(std::string_view("\x80", 1), nullptr,
+                    nullptr)) == header_decode_status::compression_error);
 }

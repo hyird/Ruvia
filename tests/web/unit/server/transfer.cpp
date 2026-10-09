@@ -6,35 +6,35 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "router/RouteTable.h"
-#include "server/HttpServerOptionsValidation.h"
-#include "server/WebWorkerRuntime.h"
+#include "router/route_table.h"
+#include "server/http_server_options_validation.h"
+#include "server/web_worker_runtime.h"
 #include "test_harness.h"
 
 RUVIA_TEST(validated_web_worker_runs_without_binding_listeners) {
-    using Listener = ruvia::detail::HttpServerListenerDefinition;
-    asio::io_context reservationContext;
-    asio::ip::tcp::acceptor reservation(reservationContext, asio::ip::tcp::v4());
+    using listener_definition = ruvia::detail::http_server_listener_definition;
+    asio::io_context reservation_context;
+    asio::ip::tcp::acceptor reservation(reservation_context, asio::ip::tcp::v4());
     reservation.bind({asio::ip::address_v4::loopback(), 0});
     const auto endpoint = reservation.local_endpoint();
     reservation.close();
 
-    Listener listener(endpoint);
-    ruvia::detail::HttpServerOptions options;
-    auto configuration = ruvia::detail::validateHttpServerConfiguration(
-        std::span<const Listener>(&listener, 1), std::move(options));
-    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-    ruvia::detail::WebWorkerRuntime runtime(configuration, routes, {});
+    listener_definition listener(endpoint);
+    ruvia::detail::http_server_options options;
+    auto configuration = ruvia::detail::validate_http_server_configuration(
+        std::span<const listener_definition>(&listener, 1), std::move(options));
+    ruvia::detail::route_table routes(std::pmr::get_default_resource());
+    ruvia::detail::web_worker_runtime runtime(configuration, routes, {});
     runtime.prepare();
 
-    asio::ip::tcp::acceptor probe(runtime.workerExecutor());
-    probe.open(endpoint.protocol());
-    probe.bind(endpoint);
+    asio::ip::tcp::acceptor probe_value(runtime.worker_executor());
+    probe_value.open(endpoint.protocol());
+    probe_value.bind(endpoint);
 
     runtime.launch();
-    runtime.waitUntilReady();
-    runtime.requestServe();
-    RUVIA_CHECK(runtime.waitUntilServing());
+    runtime.wait_until_ready();
+    runtime.request_serve();
+    RUVIA_CHECK(runtime.wait_until_serving());
     runtime.stop();
     runtime.join();
 }
@@ -42,25 +42,25 @@ RUVIA_TEST(validated_web_worker_runs_without_binding_listeners) {
 RUVIA_TEST(web_worker_records_transferred_socket_assignment_failure) {
     using namespace std::chrono_literals;
 
-    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-    ruvia::detail::WebWorkerRuntime runtime(
+    ruvia::detail::route_table routes(std::pmr::get_default_resource());
+    ruvia::detail::web_worker_runtime runtime(
         asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes, {});
     runtime.start();
 
-    auto ticket = ruvia::detail::NativeAcceptedSocketTicket(asio::ip::tcp::v4(), 0,
-        ruvia::detail::NativeAcceptedSocketTicket::invalidNative());
-    auto post = runtime.networkSubmission().post([&runtime, ticket = std::move(ticket)]() mutable {
-        runtime.acceptTransferredConnection(std::move(ticket));
+    auto ticket = ruvia::detail::native_accepted_socket_ticket(asio::ip::tcp::v4(), 0,
+        ruvia::detail::native_accepted_socket_ticket::invalid_native());
+    auto post = runtime.network_submission().post([&runtime, ticket = std::move(ticket)]() mutable {
+        runtime.accept_transferred_connection(std::move(ticket));
     });
     RUVIA_CHECK(post.accepted());
 
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (runtime.stats().acceptFailures == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+    while (runtime.stats().accept_failures_ == 0 &&
+           std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::sleep_for(1ms);
     }
-    RUVIA_CHECK(runtime.stats().acceptFailures == 1U);
-    RUVIA_CHECK(runtime.stats().workerFailures == 0U);
+    RUVIA_CHECK(runtime.stats().accept_failures_ == 1U);
+    RUVIA_CHECK(runtime.stats().worker_failures_ == 0U);
     runtime.stop();
     runtime.join();
 }
@@ -68,58 +68,58 @@ RUVIA_TEST(web_worker_records_transferred_socket_assignment_failure) {
 RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
     using namespace std::chrono_literals;
 
-    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-    ruvia::detail::HttpServerOptions options;
-    options.maxConnections = 1;
-    ruvia::detail::WebWorkerRuntime runtime(
+    ruvia::detail::route_table routes(std::pmr::get_default_resource());
+    ruvia::detail::http_server_options options;
+    options.max_connections_ = 1;
+    ruvia::detail::web_worker_runtime runtime(
         asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes, {}, options);
     runtime.start();
-    RUVIA_CHECK(runtime.availableForNetworkDispatch());
+    RUVIA_CHECK(runtime.available_for_network_dispatch());
 
-    asio::ip::tcp::acceptor source(runtime.workerExecutor(),
+    asio::ip::tcp::acceptor source_value(runtime.worker_executor(),
         asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
-    asio::ip::tcp::socket firstClient(runtime.workerExecutor());
-    firstClient.connect(source.local_endpoint());
-    asio::ip::tcp::socket first(runtime.workerExecutor());
-    source.accept(first);
-    asio::error_code releaseError;
-    auto firstNative = first.release(releaseError);
-    RUVIA_CHECK(!releaseError);
-    auto firstTicket = ruvia::detail::NativeAcceptedSocketTicket(
-        asio::ip::tcp::v4(), 0, firstNative);
-    auto firstPost = runtime.networkSubmission().post([&runtime, firstTicket = std::move(firstTicket)]() mutable {
-        runtime.acceptTransferredConnection(std::move(firstTicket));
+    asio::ip::tcp::socket first_client(runtime.worker_executor());
+    first_client.connect(source_value.local_endpoint());
+    asio::ip::tcp::socket first(runtime.worker_executor());
+    source_value.accept(first);
+    asio::error_code release_error;
+    auto first_native = first.release(release_error);
+    RUVIA_CHECK(!release_error);
+    auto first_ticket = ruvia::detail::native_accepted_socket_ticket(
+        asio::ip::tcp::v4(), 0, first_native);
+    auto first_post = runtime.network_submission().post([&runtime, first_ticket = std::move(first_ticket)]() mutable {
+        runtime.accept_transferred_connection(std::move(first_ticket));
     });
-    RUVIA_CHECK(firstPost.accepted());
+    RUVIA_CHECK(first_post.accepted());
 
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (runtime.stats().activeConnections == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+    while (runtime.stats().active_connections_ == 0 &&
+           std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::sleep_for(1ms);
     }
-    RUVIA_CHECK(runtime.stats().activeConnections == 1U);
-    RUVIA_CHECK(!runtime.availableForNetworkDispatch());
+    RUVIA_CHECK(runtime.stats().active_connections_ == 1U);
+    RUVIA_CHECK(!runtime.available_for_network_dispatch());
 
-    asio::ip::tcp::socket secondClient(runtime.workerExecutor());
-    secondClient.connect(source.local_endpoint());
-    asio::ip::tcp::socket second(runtime.workerExecutor());
-    source.accept(second);
-    auto secondNative = second.release(releaseError);
-    RUVIA_CHECK(!releaseError);
-    auto secondTicket = ruvia::detail::NativeAcceptedSocketTicket(
-        asio::ip::tcp::v4(), 0, secondNative);
-    auto secondPost = runtime.networkSubmission().post([&runtime, secondTicket = std::move(secondTicket)]() mutable {
-        runtime.acceptTransferredConnection(std::move(secondTicket));
+    asio::ip::tcp::socket second_client(runtime.worker_executor());
+    second_client.connect(source_value.local_endpoint());
+    asio::ip::tcp::socket second(runtime.worker_executor());
+    source_value.accept(second);
+    auto second_native = second.release(release_error);
+    RUVIA_CHECK(!release_error);
+    auto second_ticket = ruvia::detail::native_accepted_socket_ticket(
+        asio::ip::tcp::v4(), 0, second_native);
+    auto second_post = runtime.network_submission().post([&runtime, second_ticket = std::move(second_ticket)]() mutable {
+        runtime.accept_transferred_connection(std::move(second_ticket));
     });
-    RUVIA_CHECK(secondPost.accepted());
-    while (runtime.stats().connectionsRefused == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
+    RUVIA_CHECK(second_post.accepted());
+    while (runtime.stats().connections_refused_ == 0 &&
+           std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::sleep_for(1ms);
     }
-    RUVIA_CHECK(runtime.stats().connectionsRefused >= 1U);
+    RUVIA_CHECK(runtime.stats().connections_refused_ >= 1U);
     runtime.stop();
     runtime.join();
 
-    RUVIA_CHECK(runtime.networkSubmission().post([] {}).status() ==
-                ruvia::PostStatus::kWorkerStopping);
+    RUVIA_CHECK(runtime.network_submission().post([] {}).status() ==
+                ruvia::post_status::worker_stopping);
 }

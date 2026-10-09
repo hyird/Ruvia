@@ -1,38 +1,38 @@
-// WebSocket: upgrade routes, subprotocol options, lifecycle timeouts,
+// websocket: upgrade routes, subprotocol options, lifecycle timeouts,
 // text/binary echo and the RFC close handshake.
 // Run ruvia_example_websocket, then connect to ws://localhost:8084/ws/echo.
-// /ws/chat requires one of chatOptions()'s advertised subprotocols.
+// /ws/chat requires one of chat_options()'s advertised subprotocols.
 // Read until close; join the close handshake before releasing the connection.
 
 #include <chrono>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 
-class WebSocketController final : public ruvia::Controller<WebSocketController> {
+class websocket_controller final : public ruvia::controller<websocket_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/ws")
 
     RUVIA_ROUTES_BEGIN
-    const auto chatOptions = ruvia::WebSocketRouteConfig{
-        .subprotocols = {"chat.v1"},
-        .lifecycle =
+    const auto chat_options = ruvia::websocket_route_config{
+        .subprotocols_ = {"chat.v1"},
+        .lifecycle_ =
             {
-                .heartbeat =
+                .heartbeat_ =
                     {
-                        .pingInterval = std::chrono::seconds(30),
-                        .pongTimeout = std::chrono::seconds(10),
+                        .ping_interval_ = std::chrono::seconds(30),
+                        .pong_timeout_ = std::chrono::seconds(10),
                     },
-                .closeHandshakeTimeout = std::chrono::seconds(5),
+                .close_handshake_timeout_ = std::chrono::seconds(5),
             },
     };
     RUVIA_GET_WS("/echo", echo);
-    RUVIA_GET_WS_OPTIONS("/chat", chat, chatOptions);
+    RUVIA_GET_WS_OPTIONS("/chat", chat, chat_options);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<void> echo(ruvia::Context& c) {
-        auto& ws = c.webSocket();
+    ruvia::task<void> echo(ruvia::context& c) {
+        auto& ws = c.get_websocket();
         while (auto message = co_await ws.read()) {
             if (message->text()) {
                 co_await ws.text(message->payload());
@@ -42,25 +42,25 @@ private:
         }
     }
 
-    ruvia::Task<void> chat(ruvia::Context& c) {
-        auto& ws = c.webSocket();
+    ruvia::task<void> chat(ruvia::context& c) {
+        auto& ws = c.get_websocket();
         co_await ws.text("welcome");
         while (auto message = co_await ws.read()) {
             if (message->text()) {
                 co_await ws.text(message->payload());
             }
         }
-        co_await ws.close({.code = 1000, .reason = "bye"});
+        co_await ws.close({.code_ = 1000, .reason_ = "bye"});
     }
 };
 
 int main() {
     ruvia::app()
-        .listen({.address = "0.0.0.0", .http = 8084})
+        .listen({.address_ = "0.0.0.0", .http_ = 8084})
         .server({
-            .worker_count = 2,
-            .process_signal_handlers = ruvia::process_signal_handler_policy::install,
-            .max_web_socket_message_bytes = 16 * 1024 * 1024,
+            .worker_count_ = 2,
+            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            .max_websocket_message_bytes_ = 16 * 1024 * 1024,
         })
         .run();
 }

@@ -4,45 +4,45 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/model_types.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::test::CountingMemoryResource;
+using ruvia::test::counting_memory_resource;
 
 }  // namespace
 
 RUVIA_TEST(model_string_public_construction_owns_input) {
-    CountingMemoryResource resource;
+    counting_memory_resource resource;
     std::string input(128, 'a');
-    ruvia::String value(input, {.resource = &resource});
+    ruvia::string value(input, {.resource_ = &resource});
     input.assign(input.size(), 'b');
     const std::string expected(128, 'a');
 
     RUVIA_CHECK_EQ(value.view(), std::string_view(expected));
     RUVIA_CHECK_EQ(value.resource(), &resource);
-    RUVIA_CHECK(resource.liveAllocations() > 0);
+    RUVIA_CHECK(resource.live_allocations() > 0);
 }
 
 RUVIA_TEST(model_string_parser_factory_can_borrow_input) {
-    CountingMemoryResource resource;
+    counting_memory_resource resource;
     const std::string input(128, 'c');
-    const auto value = ruvia::detail::ModelValueFactory::makeString(input, &resource);
+    const auto value = ruvia::detail::model_value_factory::make_string(input, &resource);
 
     RUVIA_CHECK_EQ(value.view(), std::string_view(input));
     RUVIA_CHECK_EQ(value.data(), input.data());
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(model_string_owned_assignment_is_alias_safe) {
-    CountingMemoryResource resource;
-    ruvia::String value(std::string(128, 'd'), {.resource = &resource});
+    counting_memory_resource resource;
+    ruvia::string value(std::string(128, 'd'), {.resource_ = &resource});
     const auto alias = value.view().substr(31, 64);
 
-    value.assignOwned(alias);
+    value.assign_owned(alias);
     const std::string expected(64, 'd');
 
     RUVIA_CHECK_EQ(value.view(), std::string_view(expected));
@@ -50,38 +50,38 @@ RUVIA_TEST(model_string_owned_assignment_is_alias_safe) {
 }
 
 RUVIA_TEST(model_string_move_assignment_keeps_target_resource) {
-    CountingMemoryResource sourceResource;
-    CountingMemoryResource targetResource;
+    counting_memory_resource source_resource;
+    counting_memory_resource target_resource;
     {
-        const std::string sourceText(128, 's');
-        const std::string targetText(128, 't');
-        ruvia::String source(sourceText, {.resource = &sourceResource});
-        ruvia::String target(targetText, {.resource = &targetResource});
+        const std::string source_text(128, 's');
+        const std::string target_text(128, 't');
+        ruvia::string source_value(source_text, {.resource_ = &source_resource});
+        ruvia::string target(target_text, {.resource_ = &target_resource});
 
-        target = std::move(source);
-        RUVIA_CHECK_EQ(target.resource(), &targetResource);
-        RUVIA_CHECK_EQ(target.view(), std::string_view(sourceText));
-        RUVIA_CHECK(targetResource.liveAllocations() > 0);
-        RUVIA_CHECK_EQ(source.resource(), &sourceResource);
-        RUVIA_CHECK_EQ(source.view(), std::string_view(sourceText));
+        target = std::move(source_value);
+        RUVIA_CHECK_EQ(target.resource(), &target_resource);
+        RUVIA_CHECK_EQ(target.view(), std::string_view(source_text));
+        RUVIA_CHECK(target_resource.live_allocations() > 0);
+        RUVIA_CHECK_EQ(source_value.resource(), &source_resource);
+        RUVIA_CHECK_EQ(source_value.view(), std::string_view(source_text));
 
-        source.assignOwned(std::string(128, 'm'));
-        const std::string movedFromText(128, 'm');
-        RUVIA_CHECK_EQ(source.resource(), &sourceResource);
-        RUVIA_CHECK_EQ(source.view(), std::string_view(movedFromText));
+        source_value.assign_owned(std::string(128, 'm'));
+        const std::string moved_from_text(128, 'm');
+        RUVIA_CHECK_EQ(source_value.resource(), &source_resource);
+        RUVIA_CHECK_EQ(source_value.view(), std::string_view(moved_from_text));
     }
 
-    RUVIA_CHECK_EQ(sourceResource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(model_array_public_insertion_owns_borrowed_string) {
-    CountingMemoryResource resource;
+    counting_memory_resource resource;
     std::string input(128, 'a');
     const std::string expected(128, 'a');
-    const auto borrowed = ruvia::detail::ModelValueFactory::makeString(input, &resource);
+    const auto borrowed = ruvia::detail::model_value_factory::make_string(input, &resource);
 
-    ruvia::Array<ruvia::String> values({.resource = &resource});
+    ruvia::array<ruvia::string> values({.resource_ = &resource});
     values.emplace_back(borrowed);
     values.emplace_back("direct");
 

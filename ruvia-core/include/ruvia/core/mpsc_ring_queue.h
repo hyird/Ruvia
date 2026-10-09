@@ -77,9 +77,9 @@ public:
         }
 
     private:
-        explicit locked_access(mpsc_ring_queue& owner)
-            : owner_(owner),
-              lock_(owner.mutex_) {}
+        explicit locked_access(mpsc_ring_queue& owner_value)
+            : owner_(owner_value),
+              lock_(owner_value.mutex_) {}
         mpsc_ring_queue& owner_;
         std::unique_lock<std::mutex> lock_;
         friend class mpsc_ring_queue;

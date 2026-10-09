@@ -20,76 +20,76 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/Http1ChunkedBodyDecoder.h"
-#include "ruvia/http/Http1RequestBodyPlan.h"
-#include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpRequestBodyFailure.h"
-#include "ruvia/http/HttpRequestContentDecoding.h"
-#include "ruvia/http/HttpTransferCodingDecoder.h"
-#include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/http1/http1_server_request_parser.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
+#include "ruvia/http/http1_request_body_plan.h"
+#include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_body_failure.h"
+#include "ruvia/http/http_request_content_decoding.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
+#include "ruvia/http/protocol_byte_limit.h"
 
 #include "test_harness.h"
 
 namespace content_decoding_test {
 
-using ruvia::decodeHttpContent;
-using ruvia::decodeHttpRequestContent;
-using ruvia::encodeHttpContent;
-using ruvia::Http1ChunkedBodyDecoder;
-using ruvia::Http1RequestBodyPlan;
+using ruvia::decode_http_content;
+using ruvia::decode_http_request_content;
+using ruvia::encode_http_content;
+using ruvia::http1_chunked_body_decoder;
+using ruvia::http1_request_body_plan;
+using ruvia::http_content_coding;
+using ruvia::http_content_decode_error;
+using ruvia::http_content_decode_failure;
+using ruvia::http_content_decode_options;
+using ruvia::http_content_decode_result;
+using ruvia::http_content_encode_error;
+using ruvia::http_content_encode_failure;
+using ruvia::http_content_encode_options;
+using ruvia::http_content_encode_result;
+using ruvia::http_decoded_content;
+using ruvia::http_encoded_content;
+using ruvia::http_request_content_decode_protocol_failure;
+using ruvia::http_request_content_decode_result;
+using ruvia::http_request_content_decoder_failure;
+using ruvia::http_transfer_coding;
+using ruvia::http_transfer_coding_decode_failure;
+using ruvia::http_transfer_coding_decode_need_input;
+using ruvia::http_transfer_coding_decode_output_view;
+using ruvia::http_transfer_coding_decode_result;
+using ruvia::http_transfer_coding_decoder_failure;
 using ruvia::http_transfer_coding_stack_decoder;
-using ruvia::HttpContentCoding;
-using ruvia::HttpContentDecodeError;
-using ruvia::HttpContentDecodeFailure;
-using ruvia::HttpContentDecodeOptions;
-using ruvia::HttpContentDecodeResult;
-using ruvia::HttpContentEncodeError;
-using ruvia::HttpContentEncodeFailure;
-using ruvia::HttpContentEncodeOptions;
-using ruvia::HttpContentEncodeResult;
-using ruvia::HttpDecodedContent;
-using ruvia::HttpEncodedContent;
-using ruvia::HttpRequestContentDecodeProtocolFailure;
-using ruvia::HttpRequestContentDecodeResult;
-using ruvia::HttpRequestContentDecoderFailure;
-using ruvia::HttpTransferCoding;
-using ruvia::HttpTransferCodingDecodeFailure;
-using ruvia::HttpTransferCodingDecodeNeedInput;
-using ruvia::HttpTransferCodingDecodeOutputView;
-using ruvia::HttpTransferCodingDecodeResult;
-using ruvia::HttpTransferCodingDecoderFailure;
-using ruvia::HttpTransferCodings;
-using ruvia::HttpUnsupportedExpectationPolicy;
-using ruvia::parseHttpContentCoding;
-using ruvia::ProtocolByteLimit;
-using ruvia::detail::Http1ServerRequestParser;
+using ruvia::http_transfer_codings;
+using ruvia::http_unsupported_expectation_policy;
+using ruvia::parse_http_content_coding;
+using ruvia::protocol_byte_limit;
+using ruvia::detail::http1_server_request_parser;
 
-inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
+inline constexpr std::size_t decoded_body_limit = 16 * 1024 * 1024;
 
-class RejectLargeAllocationResource final : public std::pmr::memory_resource {
+class reject_large_allocation_resource final : public std::pmr::memory_resource {
 public:
-    explicit RejectLargeAllocationResource(std::size_t maximumBlockBytes)
-        : maximumBlockBytes_(maximumBlockBytes) {}
+    explicit reject_large_allocation_resource(std::size_t maximum_block_bytes)
+        : maximum_block_bytes_(maximum_block_bytes) {}
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (bytes > maximumBlockBytes_) {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (bytes_value > maximum_block_bytes_) {
             throw std::bad_alloc();
         }
-        return std::pmr::get_default_resource()->allocate(bytes, alignment);
+        return std::pmr::get_default_resource()->allocate(bytes_value, alignment);
     }
 
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::get_default_resource()->deallocate(pointer, bytes, alignment);
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
+        std::pmr::get_default_resource()->deallocate(pointer, bytes_value, alignment);
     }
 
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
-    std::size_t maximumBlockBytes_;
+    std::size_t maximum_block_bytes_;
 };
 
 inline std::string zlib_deflate_compress(std::string_view data) {
@@ -112,7 +112,7 @@ inline std::string zlib_deflate_compress(std::string_view data) {
     return output;
 }
 
-inline std::string gzipCompress(std::string_view data) {
+inline std::string gzip_compress(std::string_view data) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
         Z_OK) {
@@ -133,48 +133,48 @@ inline std::string gzipCompress(std::string_view data) {
     return out;
 }
 
-struct TransferDecodeObservation final {
-    bool failed{false};
-    std::optional<ruvia::HttpProtocolError> protocolError;
+struct transfer_decode_observation final {
+    bool failed_{false};
+    std::optional<ruvia::http_protocol_error> protocol_error_;
 };
 
-inline TransferDecodeObservation appendTransferDecoded(
+inline transfer_decode_observation append_transfer_decoded(
     http_transfer_coding_stack_decoder& decoder, std::string_view input, std::pmr::string& output) {
     std::array<char, std::size_t{8} * 1024> window{};
     for (;;) {
-        const auto result = decoder.decode(input, window);
-        input.remove_prefix(std::min(input.size(), result.consumedBytes()));
-        if (const auto* decoded = result.output()) {
+        const auto result_value = decoder.decode(input, window);
+        input.remove_prefix(std::min(input.size(), result_value.consumed_bytes()));
+        if (const auto* decoded = result_value.output()) {
             output.append(decoded->bytes());
             continue;
         }
-        if (const auto* failure = result.failure()) {
-            return {true, ruvia::httpRequestTransferCodingError(failure->error())};
+        if (const auto* failure = result_value.failure()) {
+            return {true, ruvia::http_request_transfer_coding_error(failure->error())};
         }
-        if (result.decoderFailure() != nullptr) {
+        if (result_value.decoder_failure() != nullptr) {
             return {true, std::nullopt};
         }
         return {};
     }
 }
 
-inline std::string brotliCompress(std::string_view data) {
+inline std::string brotli_compress(std::string_view data) {
     std::size_t bound = BrotliEncoderMaxCompressedSize(data.size());
     if (bound == 0) {
         bound = data.size() + 1024;
     }
     std::string out(bound, '\0');
-    std::size_t outSize = bound;
+    std::size_t out_size = bound;
     if (BrotliEncoderCompress(BROTLI_DEFAULT_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE,
-            data.size(), reinterpret_cast<const std::uint8_t*>(data.data()), &outSize,
+            data.size(), reinterpret_cast<const std::uint8_t*>(data.data()), &out_size,
             reinterpret_cast<std::uint8_t*>(out.data())) != BROTLI_TRUE) {
         return {};
     }
-    out.resize(outSize);
+    out.resize(out_size);
     return out;
 }
 
-inline std::string zstdCompress(std::string_view data) {
+inline std::string zstd_compress(std::string_view data) {
     const std::size_t bound = ZSTD_compressBound(data.size());
     std::string out(bound, '\0');
     const std::size_t size = ZSTD_compress(out.data(), bound, data.data(), data.size(), 3);
@@ -185,24 +185,24 @@ inline std::string zstdCompress(std::string_view data) {
     return out;
 }
 
-inline std::string zstdCompressWithWindow(std::string_view data, int windowLog) {
-    auto* context = ZSTD_createCCtx();
-    if (context == nullptr) {
+inline std::string zstd_compress_with_window(std::string_view data, int window_log) {
+    auto* context_value = ZSTD_createCCtx();
+    if (context_value == nullptr) {
         return {};
     }
-    struct Guard final {
-        ZSTD_CCtx* context;
-        ~Guard() {
-            ZSTD_freeCCtx(context);
+    struct guard final {
+        ZSTD_CCtx* context_;
+        ~guard() {
+            ZSTD_freeCCtx(context_);
         }
-    } guard{context};
-    if (ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_windowLog, windowLog)) != 0 ||
-        ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_contentSizeFlag, 0)) != 0) {
+    } guard_value{context_value};
+    if (ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_windowLog, window_log)) != 0 ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_contentSizeFlag, 0)) != 0) {
         return {};
     }
     std::string output(ZSTD_compressBound(data.size()), '\0');
     const auto size =
-        ZSTD_compress2(context, output.data(), output.size(), data.data(), data.size());
+        ZSTD_compress2(context_value, output.data(), output.size(), data.data(), data.size());
     if (ZSTD_isError(size) != 0) {
         return {};
     }
@@ -210,21 +210,21 @@ inline std::string zstdCompressWithWindow(std::string_view data, int windowLog) 
     return output;
 }
 
-inline std::string decoded(HttpContentCoding coding, std::string_view input, std::size_t maxBytes) {
-    auto result = decodeHttpContent(
-        coding, input, {.maxDecodedBytes = maxBytes, .resource = std::pmr::get_default_resource()});
-    const auto* content = result.decoded();
+inline std::string decoded(http_content_coding coding, std::string_view input, std::size_t max_bytes) {
+    auto result_value = decode_http_content(
+        coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
+    const auto* content = result_value.decoded();
     if (content == nullptr) {
         throw std::runtime_error("test content decode failed");
     }
     return std::string(content->bytes());
 }
 
-inline HttpContentDecodeError decodeError(
-    HttpContentCoding coding, std::string_view input, std::size_t maxBytes = kDecodedBodyLimit) {
-    const auto result = decodeHttpContent(
-        coding, input, {.maxDecodedBytes = maxBytes, .resource = std::pmr::get_default_resource()});
-    const auto* failure = result.failure();
+inline http_content_decode_error decode_error(
+    http_content_coding coding, std::string_view input, std::size_t max_bytes = decoded_body_limit) {
+    const auto result_value = decode_http_content(
+        coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
+    const auto* failure = result_value.failure();
     if (failure == nullptr) {
         throw std::runtime_error("test content decode unexpectedly succeeded");
     }
@@ -244,20 +244,20 @@ inline std::string chunked(std::string_view body) {
     return wire;
 }
 
-inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
+inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::size_t truncate_by) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
     std::string compressed(bound, '\0');
     const std::size_t written =
         ZSTD_compress(compressed.data(), compressed.size(), plain.data(), plain.size(), 3);
-    if (ZSTD_isError(written) != 0 || written <= truncateBy) {
+    if (ZSTD_isError(written) != 0 || written <= truncate_by) {
         return std::nullopt;
     }
-    compressed.resize(written - truncateBy);
+    compressed.resize(written - truncate_by);
 
-    const auto result = ruvia::decodeHttpContent(HttpContentCoding::kZstd, compressed,
-        {.maxDecodedBytes = ruvia::kDefaultMaxBufferedBodyBytes,
-            .resource = std::pmr::get_default_resource()});
-    const auto* decoded = result.decoded();
+    const auto result_value = ruvia::decode_http_content(http_content_coding::zstd, compressed,
+        {.max_decoded_bytes_ = ruvia::default_max_buffered_body_bytes,
+            .resource_ = std::pmr::get_default_resource()});
+    const auto* decoded = result_value.decoded();
     if (decoded == nullptr) {
         return std::nullopt;
     }

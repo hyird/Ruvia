@@ -1,18 +1,18 @@
+#include "ruvia/http/url_encoding.h"
+
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/UrlEncoding.h"
-
 #include "test_harness.h"
 
 namespace {
 
-std::optional<std::string> urlDecode(std::string_view in, ruvia::UrlDecodeMode mode) {
-    auto decoded = ruvia::decodeUrlComponent(
-        in, {.mode = mode, .resource = std::pmr::get_default_resource()});
+std::optional<std::string> url_decode(std::string_view in, ruvia::url_decode_mode mode) {
+    auto decoded = ruvia::decode_url_component(
+        in, {.mode_ = mode, .resource_ = std::pmr::get_default_resource()});
     if (!decoded.has_value()) {
         return std::nullopt;
     }
@@ -25,25 +25,25 @@ std::optional<std::string> urlDecode(std::string_view in, ruvia::UrlDecodeMode m
 // pairs.
 
 RUVIA_TEST(url_decode_percent) {
-    using M = ruvia::UrlDecodeMode;
-    RUVIA_CHECK_EQ(urlDecode("hello", M::kPercent).value(), std::string("hello"));
-    RUVIA_CHECK_EQ(urlDecode("%41%42%43", M::kPercent).value(), std::string("ABC"));
-    RUVIA_CHECK_EQ(urlDecode("a%2Fb", M::kPercent).value(), std::string("a/b"));
-    RUVIA_CHECK_EQ(urlDecode("%00", M::kPercent).value(), std::string(1, '\0'));
+    using m_type = ruvia::url_decode_mode;
+    RUVIA_CHECK_EQ(url_decode("hello", m_type::percent).value(), std::string("hello"));
+    RUVIA_CHECK_EQ(url_decode("%41%42%43", m_type::percent).value(), std::string("ABC"));
+    RUVIA_CHECK_EQ(url_decode("a%2Fb", m_type::percent).value(), std::string("a/b"));
+    RUVIA_CHECK_EQ(url_decode("%00", m_type::percent).value(), std::string(1, '\0'));
     // '+' is literal in percent mode
-    RUVIA_CHECK_EQ(urlDecode("a+b", M::kPercent).value(), std::string("a+b"));
+    RUVIA_CHECK_EQ(url_decode("a+b", m_type::percent).value(), std::string("a+b"));
 }
 
 RUVIA_TEST(url_decode_form) {
-    using M = ruvia::UrlDecodeMode;
-    RUVIA_CHECK_EQ(urlDecode("a+b", M::kForm).value(), std::string("a b"));
-    RUVIA_CHECK_EQ(urlDecode("a+b%20c", M::kForm).value(), std::string("a b c"));
+    using m_type = ruvia::url_decode_mode;
+    RUVIA_CHECK_EQ(url_decode("a+b", m_type::form).value(), std::string("a b"));
+    RUVIA_CHECK_EQ(url_decode("a+b%20c", m_type::form).value(), std::string("a b c"));
 }
 
 RUVIA_TEST(url_decode_uses_requested_resource_and_preserves_results) {
     std::pmr::monotonic_buffer_resource resource;
-    auto first = ruvia::decodeUrlComponent("value%20one", {.resource = &resource});
-    auto second = ruvia::decodeUrlComponent("value%20two", {.resource = &resource});
+    auto first = ruvia::decode_url_component("value%20one", {.resource_ = &resource});
+    auto second = ruvia::decode_url_component("value%20two", {.resource_ = &resource});
     RUVIA_CHECK(first.has_value());
     RUVIA_CHECK(second.has_value());
     if (first && second) {
@@ -54,16 +54,16 @@ RUVIA_TEST(url_decode_uses_requested_resource_and_preserves_results) {
 }
 
 RUVIA_TEST(url_decode_invalid) {
-    using M = ruvia::UrlDecodeMode;
-    RUVIA_CHECK(!urlDecode("%", M::kPercent).has_value());
-    RUVIA_CHECK(!urlDecode("%4", M::kPercent).has_value());
-    RUVIA_CHECK(!urlDecode("%zz", M::kPercent).has_value());
-    RUVIA_CHECK(!urlDecode("ab%2", M::kPercent).has_value());
-    RUVIA_CHECK(!urlDecode("%g0", M::kPercent).has_value());
+    using m_type = ruvia::url_decode_mode;
+    RUVIA_CHECK(!url_decode("%", m_type::percent).has_value());
+    RUVIA_CHECK(!url_decode("%4", m_type::percent).has_value());
+    RUVIA_CHECK(!url_decode("%zz", m_type::percent).has_value());
+    RUVIA_CHECK(!url_decode("ab%2", m_type::percent).has_value());
+    RUVIA_CHECK(!url_decode("%g0", m_type::percent).has_value());
 }
 
 RUVIA_TEST(url_decode_all_bytes_and_malformed_suffix) {
-    using M = ruvia::UrlDecodeMode;
+    using m_type = ruvia::url_decode_mode;
     constexpr std::string_view hex = "0123456789aBcDeF";
     std::string encoded;
     std::string expected;
@@ -73,54 +73,54 @@ RUVIA_TEST(url_decode_all_bytes_and_malformed_suffix) {
         encoded.push_back(hex[byte & 15]);
         expected.push_back(static_cast<char>(byte));
     }
-    for (const auto mode : {M::kPercent, M::kForm}) {
-        const auto result = urlDecode(encoded, mode);
-        RUVIA_CHECK(result.has_value());
-        if (result) {
-            RUVIA_CHECK_EQ(*result, expected);
+    for (const auto mode : {m_type::percent, m_type::form}) {
+        const auto result_value = url_decode(encoded, mode);
+        RUVIA_CHECK(result_value.has_value());
+        if (result_value) {
+            RUVIA_CHECK_EQ(*result_value, expected);
         }
-        RUVIA_CHECK(!urlDecode(encoded + "%", mode).has_value());
-        RUVIA_CHECK(!urlDecode(encoded + "%0", mode).has_value());
-        RUVIA_CHECK(!urlDecode(encoded + "%xz", mode).has_value());
+        RUVIA_CHECK(!url_decode(encoded + "%", mode).has_value());
+        RUVIA_CHECK(!url_decode(encoded + "%0", mode).has_value());
+        RUVIA_CHECK(!url_decode(encoded + "%xz", mode).has_value());
     }
 }
 
 RUVIA_TEST(url_validate_encoding) {
-    using ruvia::validateUrlEncoding;
-    RUVIA_CHECK(validateUrlEncoding("plain"));
-    RUVIA_CHECK(validateUrlEncoding("%41%42"));
-    RUVIA_CHECK(!validateUrlEncoding("%4"));
-    RUVIA_CHECK(!validateUrlEncoding("%zz"));
-    RUVIA_CHECK(validateUrlEncoding(""));
+    using ruvia::validate_url_encoding;
+    RUVIA_CHECK(validate_url_encoding("plain"));
+    RUVIA_CHECK(validate_url_encoding("%41%42"));
+    RUVIA_CHECK(!validate_url_encoding("%4"));
+    RUVIA_CHECK(!validate_url_encoding("%zz"));
+    RUVIA_CHECK(validate_url_encoding(""));
 }
 
 RUVIA_TEST(url_component_equals) {
-    using M = ruvia::UrlDecodeMode;
-    using ruvia::urlComponentEquals;
-    RUVIA_CHECK(urlComponentEquals("%41bc", "Abc", M::kPercent));
-    RUVIA_CHECK(urlComponentEquals("a+b", "a b", M::kForm));
-    RUVIA_CHECK(!urlComponentEquals("a+b", "a b", M::kPercent));  // '+' literal
-    RUVIA_CHECK(!urlComponentEquals("abc", "abcd", M::kPercent));
-    RUVIA_CHECK(!urlComponentEquals("abcd", "abc", M::kPercent));
-    RUVIA_CHECK(!urlComponentEquals("%2", "x", M::kPercent));  // truncated escape
+    using m_type = ruvia::url_decode_mode;
+    using ruvia::url_component_equals;
+    RUVIA_CHECK(url_component_equals("%41bc", "Abc", m_type::percent));
+    RUVIA_CHECK(url_component_equals("a+b", "a b", m_type::form));
+    RUVIA_CHECK(!url_component_equals("a+b", "a b", m_type::percent));  // '+' literal
+    RUVIA_CHECK(!url_component_equals("abc", "abcd", m_type::percent));
+    RUVIA_CHECK(!url_component_equals("abcd", "abc", m_type::percent));
+    RUVIA_CHECK(!url_component_equals("%2", "x", m_type::percent));  // truncated escape
 }
 
 RUVIA_TEST(url_find_pair_value) {
-    using M = ruvia::UrlDecodeMode;
-    using ruvia::findUrlEncodedValue;
+    using m_type = ruvia::url_decode_mode;
+    using ruvia::find_url_encoded_value;
     const std::string_view q = "a=1&b=two&flag&c=%41";
-    RUVIA_CHECK_EQ(findUrlEncodedValue(q, "a", M::kPercent).value_or("?"), std::string_view("1"));
-    RUVIA_CHECK_EQ(findUrlEncodedValue(q, "b", M::kPercent).value_or("?"), std::string_view("two"));
-    RUVIA_CHECK_EQ(findUrlEncodedValue(q, "c", M::kPercent).value_or("?"), std::string_view("%41"));
+    RUVIA_CHECK_EQ(find_url_encoded_value(q, "a", m_type::percent).value_or("?"), std::string_view("1"));
+    RUVIA_CHECK_EQ(find_url_encoded_value(q, "b", m_type::percent).value_or("?"), std::string_view("two"));
+    RUVIA_CHECK_EQ(find_url_encoded_value(q, "c", m_type::percent).value_or("?"), std::string_view("%41"));
     // key present with no '=' yields empty value, not missing
-    RUVIA_CHECK(findUrlEncodedValue(q, "flag", M::kPercent).has_value());
-    RUVIA_CHECK_EQ(findUrlEncodedValue(q, "flag", M::kPercent).value(), std::string_view(""));
-    RUVIA_CHECK(!findUrlEncodedValue(q, "missing", M::kPercent).has_value());
+    RUVIA_CHECK(find_url_encoded_value(q, "flag", m_type::percent).has_value());
+    RUVIA_CHECK_EQ(find_url_encoded_value(q, "flag", m_type::percent).value(), std::string_view(""));
+    RUVIA_CHECK(!find_url_encoded_value(q, "missing", m_type::percent).has_value());
 }
 
 RUVIA_TEST(url_visit_pairs_count) {
     std::vector<std::pair<std::string, std::string>> pairs;
-    (void)ruvia::visitUrlEncodedPairs(
+    (void)ruvia::visit_url_encoded_pairs(
         "x=1&y=2&z=3", [&](std::string_view n, std::string_view v) {
             pairs.emplace_back(std::string(n), std::string(v));
         });
@@ -132,15 +132,15 @@ RUVIA_TEST(url_visit_pairs_count) {
 }
 
 RUVIA_TEST(url_find_pair_value_uses_last_duplicate) {
-    const auto value = ruvia::findUrlEncodedValue("item=first&%69tem=last", "item",
-        ruvia::UrlDecodeMode::kPercent);
+    const auto value = ruvia::find_url_encoded_value("item=first&%69tem=last", "item",
+        ruvia::url_decode_mode::percent);
     RUVIA_CHECK(value.has_value());
     RUVIA_CHECK_EQ(*value, std::string_view("last"));
 }
 
 RUVIA_TEST(url_visit_pairs_stops_early) {
     std::size_t visited = 0;
-    const bool completed = ruvia::visitUrlEncodedPairs("a=1&b=2&c=3",
+    const bool completed = ruvia::visit_url_encoded_pairs("a=1&b=2&c=3",
         [&visited](std::string_view, std::string_view) {
             return ++visited < 2;
         });
@@ -151,7 +151,7 @@ RUVIA_TEST(url_visit_pairs_stops_early) {
 RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
     std::vector<std::pair<std::string, std::string>> pairs;
     // Leading, doubled, and trailing '&' produce empty segments that must NOT yield ("","") pairs.
-    (void)ruvia::visitUrlEncodedPairs(
+    (void)ruvia::visit_url_encoded_pairs(
         "&a=1&&b=2&", [&](std::string_view n, std::string_view v) {
             pairs.emplace_back(std::string(n), std::string(v));
         });
@@ -162,7 +162,7 @@ RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
     }
     // A key with an empty value ("k=") is still a real field and must be kept.
     std::vector<std::pair<std::string, std::string>> kept;
-    (void)ruvia::visitUrlEncodedPairs("k=&=v", [&](std::string_view n, std::string_view v) {
+    (void)ruvia::visit_url_encoded_pairs("k=&=v", [&](std::string_view n, std::string_view v) {
         kept.emplace_back(std::string(n), std::string(v));
     });
     RUVIA_CHECK_EQ(

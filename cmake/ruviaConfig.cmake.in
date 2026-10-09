@@ -18,7 +18,7 @@ if(NOT ruvia_FIND_COMPONENTS)
     return()
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/RuviaDependencies.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ruvia_dependencies.cmake")
 set(requested ${ruvia_FIND_COMPONENTS})
 if(web IN_LIST requested AND web IN_LIST ruvia_AVAILABLE_COMPONENTS)
     list(APPEND requested core http)

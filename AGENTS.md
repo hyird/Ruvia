@@ -2,7 +2,7 @@
 
 默认中文回复。
 本文件只记录规范、边界与核心设计。
-README 说明用法，STYLE.md 规定代码风格。
+README.md 是使用入口，内容遵守下述规范；STYLE.md 规定代码风格。
 
 ## 工程原则
 
@@ -18,6 +18,17 @@ README 说明用法，STYLE.md 规定代码风格。
 - 清除相关技术债务与历史遗留。不留旧实现、兼容旁路或临时 TODO。
 - 接口明确所有权、生命周期和错误语义。用类型表达不变量。
 - 遵守协议标准和 STYLE.md。避免过度设计。
+
+## README 内容规范
+
+- 面向库的使用者，保持简洁。内容围绕项目定位、公开能力、构建与接入、最小上手、示例和许可证入口组织。
+- 说明三个库的职责、公开 CMake target、构建前置条件、平台要求及可选功能边界。所有权、生命周期和协议限制只写影响正确使用的公开契约。
+- 快速开始给出可执行的最短路径。命令注明适用平台、shell 和必要前置条件，不混用不同环境的语法或省略关键步骤。
+- 具体用法以仓库内可运行示例为准。README 只保留必要的最小示例并链接到对应文件，不复制完整示例或展开逐项 API 手册。
+- 只描述当前已实现且可验证的公开行为。不得把规划、推测或未经验证的兼容性、性能结论写成现有能力。
+- 不收录内部实现细节、工程规范、设计讨论、变更流水、排障过程或临时验证记录。规范分别归 AGENTS.md 和 STYLE.md；构建与使用必需的说明除外。
+- 构建选项、依赖版本、默认值、target 和路径以当前代码及构建配置为准。避免重复清单和重复说明；需要列出时必须保持一致。
+- 修改公开 API、构建方式、依赖要求、默认行为或示例入口时，同步更新 README 及其引用内容。提交前核对命令、相对链接和说明的一致性。
 
 ## 分层与目录
 
@@ -59,29 +70,29 @@ ruvia-web  -> ruvia-core + ruvia-http
 
 ## 运行时与生命周期
 
-- 生产 App 是进程级单例，通过 `ruvia::app()` 获取。
-- App 不可自行构造、复制或移动。
-- App 的配置与生命周期入口唯一。
+- 生产 application 是进程级单例，通过 `ruvia::app()` 获取。
+- application 不可自行构造、复制或移动。
+- application 的配置与生命周期入口唯一。
 - 每个业务 worker 独占一个 standalone Asio 事件循环。
-- N 个业务 worker 另配一个网络接入线程。
+- n 个业务 worker 另配一个网络接入线程。
 - 阻塞池和信号线程另计。
-- 网络接入线程只由 Acceptor 承载：接受 TCP、一次性交接连接，并按目标 CID 分流 QUIC UDP 数据报。
+- 网络接入线程只由 acceptor 承载：接受 TCP、一次性交接连接，并按目标 CID 分流 QUIC UDP 数据报。
 - TCP 连接只交接一次，后续 I/O 由所属业务 worker 驱动。
 - 每条 TCP 或 QUIC 连接固定绑定一个业务 worker。
 - 同一连接的全部请求交给同一 worker。绑定关系保持至连接结束。
 - TCP I/O 与 TLS、QUIC/TLS、HTTP/3 状态、协议定时器及连接生命周期由所属 worker 管理。
 - 初始 CID 选定 worker 分区；服务端初始及轮换 CID 保持同一分区。容量不足不得改绑 worker。
-- Acceptor 与 worker 通过有界数据报 channel 交互；停机等待 worker 最终 ACK 及 UDP 输出借用归还后才能销毁 channel。
-- 独立 Web worker 组合复用同一个 Acceptor，不维护 worker-local accept 旁路。
+- acceptor 与 worker 通过有界数据报 channel 交互；停机等待 worker 最终 ACK 及 UDP 输出借用归还后才能销毁 channel。
+- 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一承载 owner。
-- EventLoopPool 与 Web 组合复用同一承载。Web 不另建线程、事件循环或通用启停主链。
+- event_loop_pool 与 Web 组合复用同一承载。Web 不另建线程、事件循环或通用启停主链。
 - Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确生命周期扩展点接入 core。
 - worker 资源由统一 owner 管理。实例保持 worker-local。
 - 跨线程交互走有界队列。禁止直接操作连接状态。
 - 调度入口与事件循环同属一个 owner。入口先于上下文退役。
 - 请求期只借用稳定 worker 句柄。显式卸载可复制一次。
 - 协程保持 lazy 和 structured ownership。
-- 公开协程统一使用 `ruvia::Task<T>`。
+- 公开协程统一使用 `ruvia::task<t_type>`。
 - 未启动任务可丢弃。已启动任务必须完成。
 - 取消后必须 await/join。禁止销毁挂起帧或静默 detach。
 - teardown 先终止 I/O，再 join 全部后台操作。
@@ -104,7 +115,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 - worker 路由契约必须一致。路由和中间件链启动前构建。
 - 路由冲突启动即报错。中间件继续调用为 single-shot。
 - 上下文只暴露 typed capability。callback 由应用拥有。
-- Model 使用编译期 schema。解析、校验和序列化职责分开。
+- model_type 使用编译期 schema。解析、校验和序列化职责分开。
 - ORM 与直接访问保持独立路线。
 - client 可独立绑定事件循环。应用上下文只提供便捷入口。
 - outbound origin 启动前固定。请求期不建池。

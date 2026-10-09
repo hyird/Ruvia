@@ -25,30 +25,30 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/EventLoopPool.h"
-#include "ruvia/core/RuntimeLifecycle.h"
-#include "ruvia/core/StopToken.h"
-#include "ruvia/core/TaskScope.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/core/WorkerSignal.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/asio_await.h"
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/runtime_lifecycle.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
+#include "ruvia/core/worker_runtime_context.h"
+#include "ruvia/core/worker_signal.h"
 
-#include "WorkerSelection.h"
+#include "worker_selection.h"
 
 namespace {
 
-class CountingResource final : public std::pmr::memory_resource {
+class counting_resource final : public std::pmr::memory_resource {
 public:
-    std::size_t allocations{};
-    std::size_t deallocations{};
+    std::size_t allocations_{};
+    std::size_t deallocations_{};
 
-    [[nodiscard]] bool owns(const void* pointer, std::size_t bytes) const noexcept {
+    [[nodiscard]] bool owns(const void* pointer, std::size_t bytes_value) const noexcept {
         const auto block_record = live_blocks_.find(const_cast<void*>(pointer));
-        return block_record != live_blocks_.end() && block_record->second >= bytes;
+        return block_record != live_blocks_.end() && block_record->second >= bytes_value;
     }
 
     [[nodiscard]] std::size_t live_allocations() const noexcept {
@@ -56,21 +56,21 @@ public:
     }
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        auto* const block = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        auto* const block = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
         try {
-            live_blocks_.emplace(block, bytes);
+            live_blocks_.emplace(block, bytes_value);
         } catch (...) {
-            std::pmr::new_delete_resource()->deallocate(block, bytes, alignment);
+            std::pmr::new_delete_resource()->deallocate(block, bytes_value, alignment);
             throw;
         }
-        ++allocations;
+        ++allocations_;
         return block;
     }
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
         live_blocks_.erase(pointer);
-        ++deallocations;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+        ++deallocations_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
@@ -79,247 +79,247 @@ private:
     std::pmr::unordered_map<void*, std::size_t> live_blocks_{std::pmr::new_delete_resource()};
 };
 
-struct PostPayload final {
-    explicit PostPayload(std::pmr::memory_resource* resource)
-        : bytes(resource) {
-        bytes.resize(4096, 'x');
+struct post_payload final {
+    explicit post_payload(std::pmr::memory_resource* resource)
+        : bytes_(resource) {
+        bytes_.resize(4096, 'x');
     }
-    PostPayload(PostPayload&&) noexcept = default;
-    PostPayload(const PostPayload&) = delete;
-    std::pmr::vector<char> bytes;
+    post_payload(post_payload&&) noexcept = default;
+    post_payload(const post_payload&) = delete;
+    std::pmr::vector<char> bytes_;
 };
 
-struct ReentrantPostState final {
-    ruvia::EventLoop* loop;
-    std::unique_ptr<ruvia::EventLoopPool>* pool;
-    std::promise<void>* completion;
-    std::atomic_bool* payloadValid;
+struct reentrant_post_state final {
+    ruvia::event_loop* loop_;
+    std::unique_ptr<ruvia::event_loop_pool>* pool_;
+    std::promise<void>* completion_;
+    std::atomic_bool* payload_valid_;
 
-    void shutDownLoop() noexcept {
-        *loop = ruvia::EventLoop{};
-        pool->reset();
+    void shut_down_loop() noexcept {
+        *loop_ = ruvia::event_loop{};
+        pool_->reset();
     }
 };
 
-struct InlineReentrantPostCallable final {
-    explicit InlineReentrantPostCallable(ReentrantPostState& state) noexcept
-        : state(&state) {
-        payload.fill('x');
+struct inline_reentrant_post_callable final {
+    explicit inline_reentrant_post_callable(reentrant_post_state& state_value) noexcept
+        : state_(&state_value) {
+        payload_.fill('x');
     }
-    InlineReentrantPostCallable(const InlineReentrantPostCallable& other) noexcept
-        : state(other.state),
-          payload(other.payload) {
-        state->shutDownLoop();
+    inline_reentrant_post_callable(const inline_reentrant_post_callable& other) noexcept
+        : state_(other.state_),
+          payload_(other.payload_) {
+        state_->shut_down_loop();
     }
-    InlineReentrantPostCallable(InlineReentrantPostCallable&& other) noexcept
-        : state(other.state),
-          payload(other.payload) {
-        state->shutDownLoop();
+    inline_reentrant_post_callable(inline_reentrant_post_callable&& other) noexcept
+        : state_(other.state_),
+          payload_(other.payload_) {
+        state_->shut_down_loop();
     }
-    ~InlineReentrantPostCallable() {
-        payload.fill('\0');
+    ~inline_reentrant_post_callable() {
+        payload_.fill('\0');
     }
 
     void operator()() {
-        state->payloadValid->store(payload.size() == 16 && payload.front() == 'x' &&
-                                       payload.back() == 'x',
+        state_->payload_valid_->store(payload_.size() == 16 && payload_.front() == 'x' &&
+                                          payload_.back() == 'x',
             std::memory_order_release);
-        state->completion->set_value();
+        state_->completion_->set_value();
     }
 
-    ReentrantPostState* state;
-    std::array<char, 16> payload{};
+    reentrant_post_state* state_;
+    std::array<char, 16> payload_{};
 };
 
-struct HeapReentrantPostCallable final {
-    explicit HeapReentrantPostCallable(ReentrantPostState& state,
+struct heap_reentrant_post_callable final {
+    explicit heap_reentrant_post_callable(reentrant_post_state& state_value,
         std::pmr::memory_resource* resource)
-        : state(&state),
-          payload(resource) {
-        payload.resize(4096, 'x');
+        : state_(&state_value),
+          payload_(resource) {
+        payload_.resize(4096, 'x');
     }
-    HeapReentrantPostCallable(const HeapReentrantPostCallable& other)
-        : state(other.state),
-          payload(other.payload, other.payload.get_allocator().resource()) {
-        state->shutDownLoop();
+    heap_reentrant_post_callable(const heap_reentrant_post_callable& other)
+        : state_(other.state_),
+          payload_(other.payload_, other.payload_.get_allocator().resource()) {
+        state_->shut_down_loop();
     }
-    HeapReentrantPostCallable(HeapReentrantPostCallable&& other) noexcept
-        : state(other.state),
-          payload(std::move(other.payload)) {
-        state->shutDownLoop();
+    heap_reentrant_post_callable(heap_reentrant_post_callable&& other) noexcept
+        : state_(other.state_),
+          payload_(std::move(other.payload_)) {
+        state_->shut_down_loop();
     }
-    ~HeapReentrantPostCallable() = default;
+    ~heap_reentrant_post_callable() = default;
 
     void operator()() {
-        state->payloadValid->store(payload.size() == 4096 && payload.front() == 'x' &&
-                                       payload.back() == 'x',
+        state_->payload_valid_->store(payload_.size() == 4096 && payload_.front() == 'x' &&
+                                          payload_.back() == 'x',
             std::memory_order_release);
-        state->completion->set_value();
+        state_->completion_->set_value();
     }
 
-    ReentrantPostState* state;
-    std::pmr::vector<char> payload;
+    reentrant_post_state* state_;
+    std::pmr::vector<char> payload_;
 };
 
-struct ReentrantWorkerPostState final {
-    std::optional<ruvia::WorkerHandle> worker;
-    std::unique_ptr<ruvia::EventLoopPool> pool;
-    bool retired{false};
-    bool payloadValid{false};
-    bool eraseOnDestroy{false};
+struct reentrant_worker_post_state final {
+    std::optional<ruvia::worker_handle> worker_;
+    std::unique_ptr<ruvia::event_loop_pool> pool_;
+    bool retired_{false};
+    bool payload_valid_{false};
+    bool erase_on_destroy_{false};
 
     void retire() noexcept {
-        if (retired) {
+        if (retired_) {
             return;
         }
-        retired = true;
-        worker.reset();
-        pool.reset();
+        retired_ = true;
+        worker_.reset();
+        pool_.reset();
     }
 };
 
-struct InlineWorkerCallable final {
-    explicit InlineWorkerCallable(ReentrantWorkerPostState& state) noexcept
-        : state(&state) {
-        payload.fill('i');
+struct inline_worker_callable final {
+    explicit inline_worker_callable(reentrant_worker_post_state& state_value) noexcept
+        : state_(&state_value) {
+        payload_.fill('i');
     }
-    InlineWorkerCallable(const InlineWorkerCallable&) = delete;
-    InlineWorkerCallable(InlineWorkerCallable&& other) noexcept
-        : state(other.state),
-          payload(other.payload) {
-        state->retire();
+    inline_worker_callable(const inline_worker_callable&) = delete;
+    inline_worker_callable(inline_worker_callable&& other) noexcept
+        : state_(other.state_),
+          payload_(other.payload_) {
+        state_->retire();
     }
     void operator()() {
-        state->payloadValid = payload.front() == 'i' && payload.back() == 'i';
+        state_->payload_valid_ = payload_.front() == 'i' && payload_.back() == 'i';
     }
-    ReentrantWorkerPostState* state;
-    std::array<char, 16> payload{};
+    reentrant_worker_post_state* state_;
+    std::array<char, 16> payload_{};
 };
 
-struct HeapWorkerCallable final {
-    explicit HeapWorkerCallable(ReentrantWorkerPostState& state, std::pmr::memory_resource* resource)
-        : state(&state),
-          payload(resource) {
-        payload.resize(4096, 'h');
+struct heap_worker_callable final {
+    explicit heap_worker_callable(reentrant_worker_post_state& state_value, std::pmr::memory_resource* resource)
+        : state_(&state_value),
+          payload_(resource) {
+        payload_.resize(4096, 'h');
     }
-    HeapWorkerCallable(const HeapWorkerCallable& other)
-        : state(other.state),
-          payload(other.payload, other.payload.get_allocator().resource()) {
-        state->retire();
+    heap_worker_callable(const heap_worker_callable& other)
+        : state_(other.state_),
+          payload_(other.payload_, other.payload_.get_allocator().resource()) {
+        state_->retire();
     }
-    HeapWorkerCallable(HeapWorkerCallable&&) noexcept = default;
+    heap_worker_callable(heap_worker_callable&&) noexcept = default;
     void operator()() {
-        state->payloadValid = payload.size() == 4096 && payload.front() == 'h' &&
-                              payload.back() == 'h';
+        state_->payload_valid_ = payload_.size() == 4096 && payload_.front() == 'h' &&
+                                 payload_.back() == 'h';
     }
-    ReentrantWorkerPostState* state;
-    std::pmr::vector<char> payload;
+    reentrant_worker_post_state* state_;
+    std::pmr::vector<char> payload_;
 };
 
-struct ErasedWorkerCallable final {
-    explicit ErasedWorkerCallable(ReentrantWorkerPostState& state) noexcept
-        : state(&state) {
-        payload.fill('e');
+struct erased_worker_callable final {
+    explicit erased_worker_callable(reentrant_worker_post_state& state_value) noexcept
+        : state_(&state_value) {
+        payload_.fill('e');
     }
-    ErasedWorkerCallable(const ErasedWorkerCallable&) = delete;
-    ErasedWorkerCallable(ErasedWorkerCallable&& other) noexcept
-        : state(other.state),
-          payload(other.payload) {}
-    ~ErasedWorkerCallable() {
-        if (state->eraseOnDestroy) {
-            state->retire();
+    erased_worker_callable(const erased_worker_callable&) = delete;
+    erased_worker_callable(erased_worker_callable&& other) noexcept
+        : state_(other.state_),
+          payload_(other.payload_) {}
+    ~erased_worker_callable() {
+        if (state_->erase_on_destroy_) {
+            state_->retire();
         }
     }
     void operator()() {
-        state->payloadValid = payload.front() == 'e' && payload.back() == 'e';
+        state_->payload_valid_ = payload_.front() == 'e' && payload_.back() == 'e';
     }
-    ReentrantWorkerPostState* state;
-    std::array<char, 16> payload{};
+    reentrant_worker_post_state* state_;
+    std::array<char, 16> payload_{};
 };
 
-bool testWorkerHandleCallableLifetime() {
-    const auto runRejected = [](ruvia::PostResult rejected, bool& payloadValid) {
-        if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr) {
+bool test_worker_handle_callable_lifetime() {
+    const auto run_rejected = [](ruvia::post_result_type rejected, bool& payload_valid) {
+        if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr) {
             return false;
         }
-        auto task = std::move(rejected).takeRejected();
-        ruvia::EventLoopPool recovery({.loopCount = 1, .queue_capacity = 1});
-        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+        auto task_value = std::move(rejected).take_rejected();
+        ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+        if (recovery.loop(0).post(std::move(task_value)) != ruvia::post_status::accepted) {
             return false;
         }
         recovery.start();
         recovery.join();
-        return payloadValid;
+        return payload_valid;
     };
 
     {
-        ReentrantWorkerPostState state;
-        state.pool = std::make_unique<ruvia::EventLoopPool>(
-            ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
-        state.worker.emplace(state.pool->loop(0).handle());
-        std::optional<InlineWorkerCallable> input;
+        reentrant_worker_post_state state;
+        state.pool_ = std::make_unique<ruvia::event_loop_pool>(
+            ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
+        state.worker_.emplace(state.pool_->loop(0).handle());
+        std::optional<inline_worker_callable> input;
         input.emplace(state);
-        auto rejected = state.worker->post(std::move(*input));
-        if (!state.retired || state.worker || state.pool || !runRejected(std::move(rejected), state.payloadValid)) {
+        auto rejected = state.worker_->post(std::move(*input));
+        if (!state.retired_ || state.worker_ || state.pool_ || !run_rejected(std::move(rejected), state.payload_valid_)) {
             return false;
         }
     }
 
-    CountingResource resource;
+    counting_resource resource;
     {
-        ReentrantWorkerPostState state;
-        state.pool = std::make_unique<ruvia::EventLoopPool>(
-            ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
-        state.worker.emplace(state.pool->loop(0).handle());
-        std::optional<HeapWorkerCallable> input;
+        reentrant_worker_post_state state;
+        state.pool_ = std::make_unique<ruvia::event_loop_pool>(
+            ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
+        state.worker_.emplace(state.pool_->loop(0).handle());
+        std::optional<heap_worker_callable> input;
         input.emplace(state, &resource);
-        auto rejected = state.worker->post(*input);
+        auto rejected = state.worker_->post(*input);
         input.reset();
-        if (!state.retired || state.worker || state.pool ||
-            !runRejected(std::move(rejected), state.payloadValid) ||
-            resource.allocations != resource.deallocations) {
+        if (!state.retired_ || state.worker_ || state.pool_ ||
+            !run_rejected(std::move(rejected), state.payload_valid_) ||
+            resource.allocations_ != resource.deallocations_) {
             return false;
         }
     }
 
     {
-        ReentrantWorkerPostState state;
-        state.pool = std::make_unique<ruvia::EventLoopPool>(
-            ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
-        state.worker.emplace(state.pool->loop(0).handle());
-        ruvia::MoveOnlyFunction<void()> input{ErasedWorkerCallable(state)};
-        state.eraseOnDestroy = true;
-        auto rejected = state.worker->post(std::move(input));
-        if (!state.retired || state.worker || state.pool ||
-            !runRejected(std::move(rejected), state.payloadValid)) {
+        reentrant_worker_post_state state;
+        state.pool_ = std::make_unique<ruvia::event_loop_pool>(
+            ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
+        state.worker_.emplace(state.pool_->loop(0).handle());
+        ruvia::move_only_function<void()> input{erased_worker_callable(state)};
+        state.erase_on_destroy_ = true;
+        auto rejected = state.worker_->post(std::move(input));
+        if (!state.retired_ || state.worker_ || state.pool_ ||
+            !run_rejected(std::move(rejected), state.payload_valid_)) {
             return false;
         }
     }
-    return resource.allocations == resource.deallocations;
+    return resource.allocations_ == resource.deallocations_;
 }
 
 struct queue_destructor_state final {
-    const ruvia::WorkerHandle* worker{nullptr};
-    ruvia::EventLoopAttachment* attachment{nullptr};
-    int destroyed{0};
-    bool ran{false};
+    const ruvia::worker_handle* worker_{nullptr};
+    ruvia::event_loop_attachment* attachment_{nullptr};
+    int destroyed_{0};
+    bool ran_{false};
 };
 
 class queue_destructor_callback final {
 public:
-    explicit queue_destructor_callback(queue_destructor_state& state) noexcept
-        : state_(&state) {}
+    explicit queue_destructor_callback(queue_destructor_state& state_value) noexcept
+        : state_(&state_value) {}
     queue_destructor_callback(const queue_destructor_callback&) = delete;
     queue_destructor_callback(queue_destructor_callback&&) noexcept = default;
 
     ~queue_destructor_callback() {
-        static_cast<void>(state_->worker->post([] {}));
-        ++state_->destroyed;
+        static_cast<void>(state_->worker_->post([] {}));
+        ++state_->destroyed_;
     }
 
     void operator()() const {
-        state_->ran = true;
-        state_->attachment->stop();
+        state_->ran_ = true;
+        state_->attachment_->stop();
     }
 
 private:
@@ -327,35 +327,35 @@ private:
 };
 
 struct cancellation_observation final {
-    unsigned calls{0};
-    std::uint64_t operation_id{0};
-    bool on_worker{false};
-    bool owner_destroyed{false};
+    unsigned calls_{0};
+    std::uint64_t operation_id_{0};
+    bool on_worker_{false};
+    bool owner_destroyed_{false};
 };
 
 struct cancellation_owner final {
-    const ruvia::WorkerHandle& worker;
-    cancellation_observation& observed;
+    const ruvia::worker_handle& worker_;
+    cancellation_observation& observed_;
 
     ~cancellation_owner() {
-        observed.owner_destroyed = true;
+        observed_.owner_destroyed_ = true;
     }
 
-    void cancelOperationById(std::uint64_t operation_id) noexcept {
-        ++observed.calls;
-        observed.operation_id = operation_id;
-        observed.on_worker = worker.isCurrent();
+    void cancel_operation_by_id(std::uint64_t operation_id) noexcept {
+        ++observed_.calls_;
+        observed_.operation_id_ = operation_id;
+        observed_.on_worker_ = worker_.is_current();
     }
 };
 
 bool test_cancellation_reaches_worker_with_saturated_or_closed_queue(bool close) {
     asio::io_context context;
-    ruvia::WorkerRuntimeContext runtime(context, 1);
+    ruvia::worker_runtime_context runtime(context, 1);
     cancellation_observation observed;
-    cancellation_owner owner{runtime.handle(), observed};
-    auto queue = ruvia::make_worker_cancellation_target(owner, runtime.handle());
-    ruvia::StopSource source;
-    auto registration = source.token().registerCallback(
+    cancellation_owner owner_value{runtime.handle(), observed};
+    auto queue = ruvia::make_worker_cancellation_target(owner_value, runtime.handle());
+    ruvia::stop_source source;
+    auto registration = source.token().register_callback(
         ruvia::worker_cancellation_post(queue, 7));
     unsigned normal_calls = 0;
     const auto accepted = runtime.handle().post([&normal_calls] { ++normal_calls; });
@@ -366,99 +366,99 @@ bool test_cancellation_reaches_worker_with_saturated_or_closed_queue(bool close)
         runtime.close();
     }
     const auto rejected = runtime.handle().post([] {});
-    if (rejected.status() != (close ? ruvia::PostStatus::kWorkerStopping : ruvia::PostStatus::kQueueFull)) {
+    if (rejected.status() != (close ? ruvia::post_status::worker_stopping : ruvia::post_status::queue_full)) {
         return false;
     }
-    source.requestStop();
-    if (observed.calls != 0) {
+    source.request_stop();
+    if (observed.calls_ != 0) {
         return false;
     }
     runtime.run();
-    queue->detach(owner);
-    return observed.calls == 1 && observed.operation_id == 7 && observed.on_worker &&
+    queue->detach(owner_value);
+    return observed.calls_ == 1 && observed.operation_id_ == 7 && observed.on_worker_ &&
            normal_calls == 1;
 }
 
 bool test_queued_cancellation_releases_queue_after_owner_retirement() {
     asio::io_context context;
-    ruvia::WorkerRuntimeContext runtime(context, 1);
+    ruvia::worker_runtime_context runtime(context, 1);
     cancellation_observation observed;
-    auto owner = std::make_unique<cancellation_owner>(runtime.handle(), observed);
-    auto queue = ruvia::make_worker_cancellation_target(*owner, runtime.handle());
+    auto owner_value = std::make_unique<cancellation_owner>(runtime.handle(), observed);
+    auto queue = ruvia::make_worker_cancellation_target(*owner_value, runtime.handle());
     std::weak_ptr weak_queue(queue);
-    ruvia::StopSource source;
-    auto registration = source.token().registerCallback(
+    ruvia::stop_source source;
+    auto registration = source.token().register_callback(
         ruvia::worker_cancellation_post(queue, 9));
-    source.requestStop();
+    source.request_stop();
     registration.reset();
-    queue->detach(*owner);
-    owner.reset();
+    queue->detach(*owner_value);
+    owner_value.reset();
     queue.reset();
     const bool retained_by_post = !weak_queue.expired();
     runtime.detach();
     context.run();
-    return retained_by_post && observed.owner_destroyed && observed.calls == 0 &&
+    return retained_by_post && observed.owner_destroyed_ && observed.calls_ == 0 &&
            weak_queue.expired();
 }
 
 bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
     asio::io_context context;
-    ruvia::WorkerRuntimeContext runtime(context, 1);
+    ruvia::worker_runtime_context runtime(context, 1);
     cancellation_observation observed;
-    auto owner = std::make_unique<cancellation_owner>(runtime.handle(), observed);
-    auto queue = ruvia::make_worker_cancellation_target(*owner, runtime.handle());
-    ruvia::StopSource source;
-    auto registration = source.token().registerCallback(
+    auto owner_value = std::make_unique<cancellation_owner>(runtime.handle(), observed);
+    auto queue = ruvia::make_worker_cancellation_target(*owner_value, runtime.handle());
+    ruvia::stop_source source;
+    auto registration = source.token().register_callback(
         ruvia::worker_cancellation_post(queue, 11));
-    queue->detach(*owner);
-    owner.reset();
+    queue->detach(*owner_value);
+    owner_value.reset();
     runtime.detach();
-    source.requestStop();
-    return observed.owner_destroyed && observed.calls == 0 && context.run() == 0 &&
+    source.request_stop();
+    return observed.owner_destroyed_ && observed.calls_ == 0 && context.run() == 0 &&
            queue.use_count() == 1;
 }
 
-bool testWorkerRuntimeContextOwnsStableDetachedEndpoint() {
+bool test_worker_runtime_context_owns_stable_detached_endpoint() {
     asio::io_context context;
-    std::optional<ruvia::WorkerHandle> escapedHandle;
+    std::optional<ruvia::worker_handle> escaped_handle;
     {
-        ruvia::WorkerRuntimeContext runtime(context, 8);
-        const auto* handleAddress = &runtime.handle();
-        if (&runtime.ioContext() != &context || handleAddress != &runtime.handle() ||
+        ruvia::worker_runtime_context runtime(context, 8);
+        const auto* handle_address = &runtime.handle();
+        if (&runtime.io_context() != &context || handle_address != &runtime.handle() ||
             !runtime.handle().valid()) {
             return false;
         }
-        escapedHandle.emplace(runtime.handle());
+        escaped_handle.emplace(runtime.handle());
         runtime.detach();
-        if (runtime.handle().valid() || escapedHandle->valid()) {
+        if (runtime.handle().valid() || escaped_handle->valid()) {
             return false;
         }
     }
     asio::post(context, [] {});
     context.run();
-    return escapedHandle && !escapedHandle->valid();
+    return escaped_handle && !escaped_handle->valid();
 }
 
 bool test_queue_callable_destruction_can_inspect_worker() {
     asio::io_context context;
-    auto attachment = ruvia::attachEventLoop(context);
-    const auto worker = attachment.loop().handle();
-    queue_destructor_state state{.worker = &worker, .attachment = &attachment};
-    const auto submitted = worker.post(queue_destructor_callback(state));
+    auto attachment = ruvia::attach_event_loop(context);
+    const auto worker_value = attachment.loop().handle();
+    queue_destructor_state state_value{.worker_ = &worker_value, .attachment_ = &attachment};
+    const auto submitted = worker_value.post(queue_destructor_callback(state_value));
     if (!submitted.accepted()) {
         return false;
     }
     attachment.run();
-    return state.ran && state.destroyed > 0;
+    return state_value.ran_ && state_value.destroyed_ > 0;
 }
 
 bool test_queue_factory_rollback_and_detach() {
     asio::io_context context;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
+    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
     bool thrown = false;
     try {
-        static_cast<void>((worker).post_factory([]() -> ruvia::MoveOnlyFunction<void()> {
+        static_cast<void>((worker_value).post_factory([]() -> ruvia::move_only_function<void()> {
             throw std::runtime_error("factory failed");
         }));
     } catch (const std::runtime_error&) {
@@ -466,126 +466,126 @@ bool test_queue_factory_rollback_and_detach() {
     }
     bool empty = false;
     try {
-        static_cast<void>((worker).post_factory([] { return ruvia::MoveOnlyFunction<void()>(); }));
+        static_cast<void>((worker_value).post_factory([] { return ruvia::move_only_function<void()>(); }));
     } catch (const std::invalid_argument&) {
         empty = true;
     }
-    bool recovered = (worker).post_factory([] { return ruvia::MoveOnlyFunction<void()>([] {}); }) ==
-                     ruvia::PostStatus::kAccepted;
+    bool recovered = (worker_value).post_factory([] { return ruvia::move_only_function<void()>([] {}); }) ==
+                     ruvia::post_status::accepted;
     context.run();
 
-    bool rawStackRejected = false;
-    ruvia::detail::WorkerDispatcher rawStack(context, 1);
+    bool raw_stack_rejected = false;
+    ruvia::detail::worker_dispatcher raw_stack(context, 1);
     try {
-        static_cast<void>(rawStack.post([] {}));
+        static_cast<void>(raw_stack.post([] {}));
     } catch (const std::bad_weak_ptr&) {
-        rawStackRejected = true;
+        raw_stack_rejected = true;
     }
 
-    bool abandonedRan = false;
-    bool abandonedDestroyed = false;
-    struct Probe final {
-        bool* ran;
-        bool* destroyed;
-        Probe(bool& ranValue, bool& destroyedValue)
-            : ran(&ranValue),
-              destroyed(&destroyedValue) {}
-        Probe(Probe&& other) noexcept
-            : ran(other.ran),
-              destroyed(std::exchange(other.destroyed, nullptr)) {}
-        ~Probe() {
-            if (destroyed != nullptr) {
-                *destroyed = true;
+    bool abandoned_ran = false;
+    bool abandoned_destroyed = false;
+    struct probe final {
+        bool* ran_;
+        bool* destroyed_;
+        probe(bool& ran_value, bool& destroyed_value)
+            : ran_(&ran_value),
+              destroyed_(&destroyed_value) {}
+        probe(probe&& other) noexcept
+            : ran_(other.ran_),
+              destroyed_(std::exchange(other.destroyed_, nullptr)) {}
+        ~probe() {
+            if (destroyed_ != nullptr) {
+                *destroyed_ = true;
             }
         }
         void operator()() {
-            *ran = true;
+            *ran_ = true;
         }
     };
-    const auto detached = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
-    const auto detachedWorker = ruvia::detail::WorkerHandleAccess::make(detached);
-    const auto status = (detachedWorker).post_factory([detached, &abandonedRan, &abandonedDestroyed] {
-        detached->detachContext();
-        return ruvia::MoveOnlyFunction<void()>(
-            Probe{abandonedRan, abandonedDestroyed});
+    const auto detached = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
+    const auto detached_worker = ruvia::detail::worker_handle_access::make(detached);
+    const auto status = (detached_worker).post_factory([detached, &abandoned_ran, &abandoned_destroyed] {
+        detached->detach_context();
+        return ruvia::move_only_function<void()>(
+            probe{abandoned_ran, abandoned_destroyed});
     });
-    return thrown && empty && recovered && rawStackRejected &&
-           status == ruvia::PostStatus::kAccepted && !abandonedRan && abandonedDestroyed;
+    return thrown && empty && recovered && raw_stack_rejected &&
+           status == ruvia::post_status::accepted && !abandoned_ran && abandoned_destroyed;
 }
 
 bool test_queue_factory_can_finish_after_detach() {
     asio::io_context context;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
+    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
     std::promise<void> entered;
     std::promise<void> resume;
     auto resumed = resume.get_future();
     std::atomic_int destroyed{0};
     bool ran = false;
-    auto status = ruvia::PostStatus::kWorkerStopping;
-    struct Payload final {
-        std::atomic_int* destroyed;
-        ~Payload() {
-            destroyed->fetch_add(1);
+    auto status = ruvia::post_status::worker_stopping;
+    struct payload final {
+        std::atomic_int* destroyed_;
+        ~payload() {
+            destroyed_->fetch_add(1);
         }
     };
-    std::jthread producer([&] {
-        status = (worker).post_factory([&] {
-            auto payload = std::make_unique<Payload>(&destroyed);
+    std::jthread producer_value([&] {
+        status = (worker_value).post_factory([&] {
+            auto payload_value = std::make_unique<payload>(&destroyed);
             entered.set_value();
             resumed.wait();
-            return ruvia::MoveOnlyFunction<void()>(
-                [payload = std::move(payload), &ran] { ran = true; });
+            return ruvia::move_only_function<void()>(
+                [payload_value = std::move(payload_value), &ran] { ran = true; });
         });
     });
     entered.get_future().wait();
-    dispatcher->detachContext();
-    const bool retainedWhileReserved = destroyed.load() == 0;
+    dispatcher->detach_context();
+    const bool retained_while_reserved = destroyed.load() == 0;
     resume.set_value();
-    producer.join();
+    producer_value.join();
     context.run();
-    return retainedWhileReserved && status == ruvia::PostStatus::kAccepted && !ran &&
+    return retained_while_reserved && status == ruvia::post_status::accepted && !ran &&
            destroyed.load() == 1;
 }
 
-bool testEventLoopPostBorrowAndRejectedCallableOwnership() {
-    constexpr std::size_t kRepeatedPosts = 64;
-    CountingResource resource;
-    std::atomic_bool invalidPayloadValid{false};
-    std::atomic_size_t repeatedValid{0};
-    std::atomic_size_t repeatedInvalid{0};
-    std::promise<void> repeatedCompleted;
-    auto repeatedCompletion = repeatedCompleted.get_future();
-    ruvia::EventLoopPool accepting({.loopCount = 1, .queue_capacity = kRepeatedPosts + 1});
+bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
+    constexpr std::size_t repeated_posts = 64;
+    counting_resource resource;
+    std::atomic_bool invalid_payload_valid{false};
+    std::atomic_size_t repeated_valid{0};
+    std::atomic_size_t repeated_invalid{0};
+    std::promise<void> repeated_completed;
+    auto repeated_completion = repeated_completed.get_future();
+    ruvia::event_loop_pool accepting({.loop_count_ = 1, .queue_capacity_ = repeated_posts + 1});
     const auto loop = accepting.loop(0);
 
-    auto invalid = ruvia::EventLoop{}.post(
-        [payload = PostPayload(&resource), &invalidPayloadValid]() mutable {
-            invalidPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
-                                          payload.bytes.back() == 'x',
+    auto invalid = ruvia::event_loop{}.post(
+        [payload = post_payload(&resource), &invalid_payload_valid]() mutable {
+            invalid_payload_valid.store(payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                            payload.bytes_.back() == 'x',
                 std::memory_order_release);
         });
-    if (invalid != ruvia::PostStatus::kWorkerStopping || invalid.rejected() == nullptr ||
-        resource.allocations == resource.deallocations) {
+    if (invalid != ruvia::post_status::worker_stopping || invalid.rejected() == nullptr ||
+        resource.allocations_ == resource.deallocations_) {
         return false;
     }
-    auto invalidTask = std::move(invalid).takeRejected();
-    if (resource.allocations == resource.deallocations ||
-        loop.post(std::move(invalidTask)) != ruvia::PostStatus::kAccepted) {
+    auto invalid_task = std::move(invalid).take_rejected();
+    if (resource.allocations_ == resource.deallocations_ ||
+        loop.post(std::move(invalid_task)) != ruvia::post_status::accepted) {
         return false;
     }
 
-    for (std::size_t i = 0; i < kRepeatedPosts; ++i) {
-        auto posted = accepting.loop(0).post([payload = PostPayload(&resource), i, &repeatedValid,
-                                                 &repeatedInvalid, &repeatedCompleted]() mutable {
-            if (payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
-                payload.bytes.back() == 'x') {
-                repeatedValid.fetch_add(1, std::memory_order_relaxed);
+    for (std::size_t i = 0; i < repeated_posts; ++i) {
+        auto posted = accepting.loop(0).post([payload = post_payload(&resource), i, &repeated_valid,
+                                                 &repeated_invalid, &repeated_completed]() mutable {
+            if (payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                payload.bytes_.back() == 'x') {
+                repeated_valid.fetch_add(1, std::memory_order_relaxed);
             } else {
-                repeatedInvalid.fetch_add(1, std::memory_order_relaxed);
+                repeated_invalid.fetch_add(1, std::memory_order_relaxed);
             }
-            if (i + 1 == kRepeatedPosts) {
-                repeatedCompleted.set_value();
+            if (i + 1 == repeated_posts) {
+                repeated_completed.set_value();
             }
         });
         if (!posted.accepted()) {
@@ -593,79 +593,79 @@ bool testEventLoopPostBorrowAndRejectedCallableOwnership() {
         }
     }
     accepting.start();
-    repeatedCompletion.wait();
+    repeated_completion.wait();
     accepting.stop();
     accepting.join();
-    if (!invalidPayloadValid.load(std::memory_order_acquire) ||
-        repeatedValid.load(std::memory_order_relaxed) != kRepeatedPosts ||
-        repeatedInvalid.load(std::memory_order_relaxed) != 0 ||
-        resource.allocations != resource.deallocations) {
+    if (!invalid_payload_valid.load(std::memory_order_acquire) ||
+        repeated_valid.load(std::memory_order_relaxed) != repeated_posts ||
+        repeated_invalid.load(std::memory_order_relaxed) != 0 ||
+        resource.allocations_ != resource.deallocations_) {
         return false;
     }
 
-    ruvia::EventLoop closed;
+    ruvia::event_loop closed;
     {
-        ruvia::EventLoopPool stopped({.loopCount = 1, .queue_capacity = 1});
+        ruvia::event_loop_pool stopped({.loop_count_ = 1, .queue_capacity_ = 1});
         closed = stopped.loop(0);
         stopped.join();
     }
-    std::atomic_bool closedPayloadValid{false};
+    std::atomic_bool closed_payload_valid{false};
     auto rejected = closed.post(
-        [payload = PostPayload(&resource), &closedPayloadValid]() mutable {
-            closedPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
-                                         payload.bytes.back() == 'x',
+        [payload = post_payload(&resource), &closed_payload_valid]() mutable {
+            closed_payload_valid.store(payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                           payload.bytes_.back() == 'x',
                 std::memory_order_release);
         });
-    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
-        resource.allocations == resource.deallocations) {
+    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr ||
+        resource.allocations_ == resource.deallocations_) {
         return false;
     }
-    auto retry = std::move(rejected).takeRejected();
-    if (resource.allocations == resource.deallocations) {
+    auto retry = std::move(rejected).take_rejected();
+    if (resource.allocations_ == resource.deallocations_) {
         return false;
     }
     std::promise<void> recovered;
-    auto recoveredFuture = recovered.get_future();
-    ruvia::EventLoopPool recovery({.loopCount = 1, .queue_capacity = 1});
-    auto recoveredPost = recovery.loop(0).post(
+    auto recovered_future = recovered.get_future();
+    ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+    auto recovered_post = recovery.loop(0).post(
         [task = std::move(retry), &recovered]() mutable {
             task();
             recovered.set_value();
         });
-    if (!recoveredPost.accepted()) {
+    if (!recovered_post.accepted()) {
         return false;
     }
     recovery.start();
-    recoveredFuture.wait();
+    recovered_future.wait();
     recovery.stop();
     recovery.join();
-    return closedPayloadValid.load(std::memory_order_acquire) &&
-           resource.allocations == resource.deallocations;
+    return closed_payload_valid.load(std::memory_order_acquire) &&
+           resource.allocations_ == resource.deallocations_;
 }
 
-bool testEventLoopPostProtectsReentrantInlineMove() {
+bool test_event_loop_post_protects_reentrant_inline_move() {
     std::promise<void> completed;
     auto completion = completed.get_future();
-    std::atomic_bool payloadValid{false};
-    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
-        ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
-    auto loop = originalPool->loop(0);
-    ReentrantPostState state{.loop = &loop,
-        .pool = &originalPool,
-        .completion = &completed,
-        .payloadValid = &payloadValid};
-    std::optional<InlineReentrantPostCallable> input;
-    input.emplace(state);
+    std::atomic_bool payload_valid{false};
+    auto original_pool = std::make_unique<ruvia::event_loop_pool>(
+        ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
+    auto loop = original_pool->loop(0);
+    reentrant_post_state state_value{.loop_ = &loop,
+        .pool_ = &original_pool,
+        .completion_ = &completed,
+        .payload_valid_ = &payload_valid};
+    std::optional<inline_reentrant_post_callable> input;
+    input.emplace(state_value);
 
     auto rejected = loop.post(std::move(*input));
-    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
-        originalPool != nullptr || loop.valid()) {
+    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr ||
+        original_pool != nullptr || loop.valid()) {
         return false;
     }
-    auto retry = std::move(rejected).takeRejected();
+    auto retry = std::move(rejected).take_rejected();
     input.reset();
-    ruvia::EventLoopPool recovery({.loopCount = 1, .queue_capacity = 1});
-    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+    ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::post_status::accepted) {
         return false;
     }
     recovery.start();
@@ -676,43 +676,43 @@ bool testEventLoopPostProtectsReentrantInlineMove() {
     }
     recovery.stop();
     recovery.join();
-    return payloadValid.load(std::memory_order_acquire);
+    return payload_valid.load(std::memory_order_acquire);
 }
 
-bool testEventLoopPostProtectsReentrantHeapCopy() {
-    CountingResource resource;
+bool test_event_loop_post_protects_reentrant_heap_copy() {
+    counting_resource resource;
     std::promise<void> completed;
     auto completion = completed.get_future();
-    std::atomic_bool payloadValid{false};
-    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
-        ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
-    auto loop = originalPool->loop(0);
-    ReentrantPostState state{.loop = &loop,
-        .pool = &originalPool,
-        .completion = &completed,
-        .payloadValid = &payloadValid};
-    std::optional<HeapReentrantPostCallable> input;
-    input.emplace(state, &resource);
-    const auto callable_storage = resource.allocations - resource.deallocations;
+    std::atomic_bool payload_valid{false};
+    auto original_pool = std::make_unique<ruvia::event_loop_pool>(
+        ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
+    auto loop = original_pool->loop(0);
+    reentrant_post_state state_value{.loop_ = &loop,
+        .pool_ = &original_pool,
+        .completion_ = &completed,
+        .payload_valid_ = &payload_valid};
+    std::optional<heap_reentrant_post_callable> input;
+    input.emplace(state_value, &resource);
+    const auto callable_storage = resource.allocations_ - resource.deallocations_;
     if (callable_storage == 0) {
         return false;
     }
 
     auto rejected = loop.post(*input);
-    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
-        originalPool != nullptr || loop.valid()) {
+    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr ||
+        original_pool != nullptr || loop.valid()) {
         return false;
     }
     input.reset();
-    if (resource.allocations - resource.deallocations != callable_storage) {
+    if (resource.allocations_ - resource.deallocations_ != callable_storage) {
         return false;
     }
-    auto retry = std::move(rejected).takeRejected();
-    if (resource.allocations - resource.deallocations != callable_storage) {
+    auto retry = std::move(rejected).take_rejected();
+    if (resource.allocations_ - resource.deallocations_ != callable_storage) {
         return false;
     }
-    ruvia::EventLoopPool recovery({.loopCount = 1, .queue_capacity = 1});
-    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+    ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::post_status::accepted) {
         return false;
     }
     recovery.start();
@@ -723,230 +723,230 @@ bool testEventLoopPostProtectsReentrantHeapCopy() {
     }
     recovery.stop();
     recovery.join();
-    return payloadValid.load(std::memory_order_acquire) &&
-           resource.allocations == resource.deallocations;
+    return payload_valid.load(std::memory_order_acquire) &&
+           resource.allocations_ == resource.deallocations_;
 }
 
-bool testWorkerSubmissionViewLifecycleAndRejection() {
-    struct ThrowOnCopy final {
-        explicit ThrowOnCopy(std::pmr::memory_resource* resource)
-            : bytes(resource) {
-            bytes.resize(4096, 'c');
+bool test_worker_submission_view_lifecycle_and_rejection() {
+    struct throw_on_copy final {
+        explicit throw_on_copy(std::pmr::memory_resource* resource)
+            : bytes_(resource) {
+            bytes_.resize(4096, 'c');
         }
-        ThrowOnCopy(const ThrowOnCopy& other)
-            : bytes(other.bytes, other.bytes.get_allocator().resource()) {
+        throw_on_copy(const throw_on_copy& other)
+            : bytes_(other.bytes_, other.bytes_.get_allocator().resource()) {
             throw std::runtime_error("copy failed");
         }
-        ThrowOnCopy(ThrowOnCopy&&) noexcept = default;
+        throw_on_copy(throw_on_copy&&) noexcept = default;
         void operator()() const {}
-        std::pmr::vector<char> bytes;
+        std::pmr::vector<char> bytes_;
     };
-    struct ThrowOnMove final {
-        explicit ThrowOnMove(std::pmr::memory_resource* resource)
-            : bytes(resource) {
-            bytes.resize(4096, 'm');
+    struct throw_on_move final {
+        explicit throw_on_move(std::pmr::memory_resource* resource)
+            : bytes_(resource) {
+            bytes_.resize(4096, 'm');
         }
-        ThrowOnMove(ThrowOnMove&& other)
-            : bytes(std::move(other.bytes)) {
+        throw_on_move(throw_on_move&& other)
+            : bytes_(std::move(other.bytes_)) {
             throw std::runtime_error("move failed");
         }
         void operator()() const {}
-        std::pmr::vector<char> bytes;
+        std::pmr::vector<char> bytes_;
     };
 
-    asio::io_context exceptionContext;
-    ruvia::WorkerRuntimeContext exceptionRuntime(exceptionContext, 1);
-    const auto exceptionView = exceptionRuntime.submission();
-    CountingResource exceptionResource;
+    asio::io_context exception_context;
+    ruvia::worker_runtime_context exception_runtime(exception_context, 1);
+    const auto exception_view = exception_runtime.submission();
+    counting_resource exception_resource;
     {
-        ThrowOnCopy copyInput(&exceptionResource);
-        ThrowOnMove moveInput(&exceptionResource);
-        bool copyThrew = false;
-        bool moveThrew = false;
+        throw_on_copy copy_input(&exception_resource);
+        throw_on_move move_input(&exception_resource);
+        bool copy_threw = false;
+        bool move_threw = false;
         try {
-            static_cast<void>(exceptionView.post(copyInput));
+            static_cast<void>(exception_view.post(copy_input));
         } catch (const std::runtime_error&) {
-            copyThrew = true;
+            copy_threw = true;
         }
         try {
-            static_cast<void>(exceptionView.post(std::move(moveInput)));
+            static_cast<void>(exception_view.post(std::move(move_input)));
         } catch (const std::runtime_error&) {
-            moveThrew = true;
+            move_threw = true;
         }
-        const auto afterException = exceptionView.post([] {});
-        if (!copyThrew || !moveThrew || !exceptionView.valid() || !exceptionView.accepting() ||
-            afterException != ruvia::PostStatus::kAccepted) {
+        const auto after_exception = exception_view.post([] {});
+        if (!copy_threw || !move_threw || !exception_view.valid() || !exception_view.accepting() ||
+            after_exception != ruvia::post_status::accepted) {
             return false;
         }
     }
-    if (exceptionResource.allocations != exceptionResource.deallocations) {
+    if (exception_resource.allocations_ != exception_resource.deallocations_) {
         return false;
     }
 
-    struct ViewReentryState final {
-        std::optional<ruvia::WorkerSubmissionView>* source;
-        ruvia::WorkerRuntimeContext* runtime;
-        bool detach;
-        bool retired{false};
-        bool payloadValid{false};
-        CountingResource* resource;
+    struct view_reentry_state final {
+        std::optional<ruvia::worker_submission_view>* source_;
+        ruvia::worker_runtime_context* runtime_;
+        bool detach_;
+        bool retired_{false};
+        bool payload_valid_{false};
+        counting_resource* resource_;
 
         void retire() noexcept {
-            if (retired) {
+            if (retired_) {
                 return;
             }
-            retired = true;
-            source->reset();
-            if (detach) {
-                runtime->detach();
+            retired_ = true;
+            source_->reset();
+            if (detach_) {
+                runtime_->detach();
             } else {
-                runtime->close();
+                runtime_->close();
             }
         }
     };
-    struct ReentrantViewCallable final {
-        explicit ReentrantViewCallable(ViewReentryState& state)
-            : state(&state),
-              payload(state.resource) {
-            payload.resize(4096, 'v');
+    struct reentrant_view_callable final {
+        explicit reentrant_view_callable(view_reentry_state& state_value)
+            : state_(&state_value),
+              payload_(state_value.resource_) {
+            payload_.resize(4096, 'v');
         }
-        ReentrantViewCallable(const ReentrantViewCallable& other)
-            : state(other.state),
-              payload(other.payload, other.payload.get_allocator().resource()) {
-            state->retire();
+        reentrant_view_callable(const reentrant_view_callable& other)
+            : state_(other.state_),
+              payload_(other.payload_, other.payload_.get_allocator().resource()) {
+            state_->retire();
         }
-        ReentrantViewCallable(ReentrantViewCallable&& other) noexcept
-            : state(other.state),
-              payload(std::move(other.payload)) {
-            state->retire();
+        reentrant_view_callable(reentrant_view_callable&& other) noexcept
+            : state_(other.state_),
+              payload_(std::move(other.payload_)) {
+            state_->retire();
         }
         void operator()() {
-            state->payloadValid = payload.size() == 4096 && payload.front() == 'v' &&
-                                  payload.back() == 'v';
+            state_->payload_valid_ = payload_.size() == 4096 && payload_.front() == 'v' &&
+                                     payload_.back() == 'v';
         }
-        ViewReentryState* state;
-        std::pmr::vector<char> payload;
+        view_reentry_state* state_;
+        std::pmr::vector<char> payload_;
     };
 
-    const auto exerciseReentry = [](bool detach, bool useCopy) {
-        CountingResource resource;
+    const auto exercise_reentry = [](bool detach, bool use_copy) {
+        counting_resource resource;
         asio::io_context context;
-        ruvia::WorkerRuntimeContext runtime(context, 1);
-        std::optional<ruvia::WorkerSubmissionView> source;
+        ruvia::worker_runtime_context runtime(context, 1);
+        std::optional<ruvia::worker_submission_view> source;
         source.emplace(runtime.submission());
-        ViewReentryState state{.source = &source, .runtime = &runtime, .detach = detach, .resource = &resource};
-        std::optional<ReentrantViewCallable> input;
-        input.emplace(state);
-        auto rejected = useCopy ? source->post(*input) : source->post(std::move(*input));
-        if (!state.retired || source || !runtime.submission().valid() ||
-            runtime.submission().accepting() || rejected != ruvia::PostStatus::kWorkerStopping ||
+        view_reentry_state state_value{.source_ = &source, .runtime_ = &runtime, .detach_ = detach, .resource_ = &resource};
+        std::optional<reentrant_view_callable> input;
+        input.emplace(state_value);
+        auto rejected = use_copy ? source->post(*input) : source->post(std::move(*input));
+        if (!state_value.retired_ || source || !runtime.submission().valid() ||
+            runtime.submission().accepting() || rejected != ruvia::post_status::worker_stopping ||
             rejected.rejected() == nullptr) {
             return false;
         }
-        auto task = std::move(rejected).takeRejected();
-        ruvia::EventLoopPool recovery({.loopCount = 1, .queue_capacity = 1});
-        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+        auto task_value = std::move(rejected).take_rejected();
+        ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+        if (recovery.loop(0).post(std::move(task_value)) != ruvia::post_status::accepted) {
             return false;
         }
         recovery.start();
         recovery.join();
         input.reset();
-        return state.payloadValid && resource.allocations == resource.deallocations;
+        return state_value.payload_valid_ && resource.allocations_ == resource.deallocations_;
     };
-    if (!exerciseReentry(false, true) || !exerciseReentry(true, false)) {
+    if (!exercise_reentry(false, true) || !exercise_reentry(true, false)) {
         return false;
     }
 
-    struct ReservedMoveState final {
-        ruvia::WorkerRuntimeContext* runtime;
-        CountingResource* resource;
-        bool detach;
-        int moves{0};
-        bool reservationObserved{false};
-        bool ran{false};
+    struct reserved_move_state final {
+        ruvia::worker_runtime_context* runtime_;
+        counting_resource* resource_;
+        bool detach_;
+        int moves_{0};
+        bool reservation_observed_{false};
+        bool ran_{false};
     };
-    struct InlineReservedMoveCallable final {
-        explicit InlineReservedMoveCallable(ReservedMoveState& state)
-            : state(&state),
-              payload(static_cast<char*>(state.resource->allocate(16, alignof(char)))) {
-            std::fill_n(payload, 16, 'r');
+    struct inline_reserved_move_callable final {
+        explicit inline_reserved_move_callable(reserved_move_state& state_value)
+            : state_(&state_value),
+              payload_(static_cast<char*>(state_value.resource_->allocate(16, alignof(char)))) {
+            std::fill_n(payload_, 16, 'r');
         }
-        InlineReservedMoveCallable(InlineReservedMoveCallable&& other) noexcept
-            : state(other.state),
-              payload(std::exchange(other.payload, nullptr)) {
+        inline_reserved_move_callable(inline_reserved_move_callable&& other) noexcept
+            : state_(other.state_),
+              payload_(std::exchange(other.payload_, nullptr)) {
             // This move transfers the callable into its already reserved node;
             // detach may cause additional cleanup moves after this point.
-            if (++state->moves == 3) {
-                state->reservationObserved =
-                    state->runtime->submission().post([] {}) == ruvia::PostStatus::kQueueFull;
-                if (state->detach) {
-                    state->runtime->detach();
+            if (++state_->moves_ == 3) {
+                state_->reservation_observed_ =
+                    state_->runtime_->submission().post([] {}) == ruvia::post_status::queue_full;
+                if (state_->detach_) {
+                    state_->runtime_->detach();
                 } else {
-                    state->runtime->close();
+                    state_->runtime_->close();
                 }
             }
         }
-        ~InlineReservedMoveCallable() {
-            if (payload != nullptr) {
-                state->resource->deallocate(payload, 16, alignof(char));
+        ~inline_reserved_move_callable() {
+            if (payload_ != nullptr) {
+                state_->resource_->deallocate(payload_, 16, alignof(char));
             }
         }
         void operator()() {
-            state->ran = payload != nullptr && payload[0] == 'r' && payload[15] == 'r';
+            state_->ran_ = payload_ != nullptr && payload_[0] == 'r' && payload_[15] == 'r';
         }
 
-        ReservedMoveState* state;
-        char* payload;
+        reserved_move_state* state_;
+        char* payload_;
     };
-    static_assert(sizeof(InlineReservedMoveCallable) <= 3 * sizeof(void*));
-    static_assert(std::is_nothrow_move_constructible_v<InlineReservedMoveCallable>);
+    static_assert(sizeof(inline_reserved_move_callable) <= 3 * sizeof(void*));
+    static_assert(std::is_nothrow_move_constructible_v<inline_reserved_move_callable>);
 
-    const auto exerciseReservedMove = [](bool detach) {
-        CountingResource resource;
+    const auto exercise_reserved_move = [](bool detach) {
+        counting_resource resource;
         asio::io_context context;
-        ruvia::WorkerRuntimeContext runtime(context, 1);
-        ReservedMoveState state{.runtime = &runtime, .resource = &resource, .detach = detach};
-        InlineReservedMoveCallable input(state);
+        ruvia::worker_runtime_context runtime(context, 1);
+        reserved_move_state state_value{.runtime_ = &runtime, .resource_ = &resource, .detach_ = detach};
+        inline_reserved_move_callable input(state_value);
         const auto submitted = runtime.submission().post(std::move(input));
-        if (submitted != ruvia::PostStatus::kAccepted || !state.reservationObserved ||
-            resource.allocations != 1) {
+        if (submitted != ruvia::post_status::accepted || !state_value.reservation_observed_ ||
+            resource.allocations_ != 1) {
             return false;
         }
         if (detach) {
-            if (state.ran || resource.deallocations != 1) {
+            if (state_value.ran_ || resource.deallocations_ != 1) {
                 return false;
             }
         } else {
             context.run();
-            if (!state.ran || resource.deallocations != 1) {
+            if (!state_value.ran_ || resource.deallocations_ != 1) {
                 return false;
             }
         }
-        return resource.allocations == resource.deallocations;
+        return resource.allocations_ == resource.deallocations_;
     };
-    if (!exerciseReservedMove(false) || !exerciseReservedMove(true)) {
+    if (!exercise_reserved_move(false) || !exercise_reserved_move(true)) {
         return false;
     }
 
-    constexpr std::size_t kRepeatedPosts = 64;
-    CountingResource resource;
+    constexpr std::size_t repeated_posts = 64;
+    counting_resource resource;
     asio::io_context context;
-    ruvia::WorkerRuntimeContext runtime(context, kRepeatedPosts + 2);
+    ruvia::worker_runtime_context runtime(context, repeated_posts + 2);
     const auto view = runtime.submission();
-    bool acceptedPayloadValid = false;
-    if (!view.valid() || !view.accepting() || view.post([] {}) != ruvia::PostStatus::kAccepted) {
+    bool accepted_payload_valid = false;
+    if (!view.valid() || !view.accepting() || view.post([] {}) != ruvia::post_status::accepted) {
         return false;
     }
-    auto accepted = view.post([payload = PostPayload(&resource), &acceptedPayloadValid]() mutable {
-        acceptedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
-                               payload.bytes.back() == 'x';
+    auto accepted = view.post([payload = post_payload(&resource), &accepted_payload_valid]() mutable {
+        accepted_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                 payload.bytes_.back() == 'x';
     });
-    if (accepted != ruvia::PostStatus::kAccepted) {
+    if (accepted != ruvia::post_status::accepted) {
         return false;
     }
-    for (std::size_t index = 0; index < kRepeatedPosts; ++index) {
-        auto posted = view.post([payload = PostPayload(&resource)]() mutable {
-            if (payload.bytes.size() != 4096 || payload.bytes.front() != 'x') {
+    for (std::size_t index = 0; index < repeated_posts; ++index) {
+        auto posted = view.post([payload = post_payload(&resource)]() mutable {
+            if (payload.bytes_.size() != 4096 || payload.bytes_.front() != 'x') {
                 std::terminate();
             }
         });
@@ -955,111 +955,111 @@ bool testWorkerSubmissionViewLifecycleAndRejection() {
         }
     }
     context.run();
-    if (!acceptedPayloadValid || resource.allocations != resource.deallocations) {
+    if (!accepted_payload_valid || resource.allocations_ != resource.deallocations_) {
         return false;
     }
 
-    asio::io_context fullContext;
-    ruvia::WorkerRuntimeContext fullRuntime(fullContext, 1);
-    const auto fullView = fullRuntime.submission();
-    CountingResource rejectedResource;
-    bool retainedPayloadValid = false;
-    if (fullView.post([] {}) != ruvia::PostStatus::kAccepted) {
+    asio::io_context full_context;
+    ruvia::worker_runtime_context full_runtime(full_context, 1);
+    const auto full_view = full_runtime.submission();
+    counting_resource rejected_resource;
+    bool retained_payload_valid = false;
+    if (full_view.post([] {}) != ruvia::post_status::accepted) {
         return false;
     }
-    auto full = fullView.post([payload = PostPayload(&rejectedResource), &retainedPayloadValid]() mutable {
-        retainedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
-                               payload.bytes.back() == 'x';
+    auto full = full_view.post([payload = post_payload(&rejected_resource), &retained_payload_valid]() mutable {
+        retained_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                 payload.bytes_.back() == 'x';
     });
-    if (full != ruvia::PostStatus::kQueueFull || full.rejected() == nullptr) {
+    if (full != ruvia::post_status::queue_full || full.rejected() == nullptr) {
         return false;
     }
-    auto retained = std::move(full).takeRejected();
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        auto again = fullView.post(std::move(retained));
-        if (again != ruvia::PostStatus::kQueueFull || again.rejected() == nullptr ||
-            rejectedResource.allocations == rejectedResource.deallocations) {
+    auto retained = std::move(full).take_rejected();
+    for (int attempt_value = 0; attempt_value < 3; ++attempt_value) {
+        auto again = full_view.post(std::move(retained));
+        if (again != ruvia::post_status::queue_full || again.rejected() == nullptr ||
+            rejected_resource.allocations_ == rejected_resource.deallocations_) {
             return false;
         }
-        retained = std::move(again).takeRejected();
+        retained = std::move(again).take_rejected();
     }
-    fullContext.run();
-    fullContext.restart();
-    const auto retried = fullView.post(std::move(retained));
-    if (retried != ruvia::PostStatus::kAccepted) {
+    full_context.run();
+    full_context.restart();
+    const auto retried = full_view.post(std::move(retained));
+    if (retried != ruvia::post_status::accepted) {
         return false;
     }
-    fullContext.run();
-    if (!retainedPayloadValid || rejectedResource.allocations != rejectedResource.deallocations) {
+    full_context.run();
+    if (!retained_payload_valid || rejected_resource.allocations_ != rejected_resource.deallocations_) {
         return false;
     }
 
-    asio::io_context closedContext;
-    ruvia::WorkerRuntimeContext closedRuntime(closedContext, 1);
-    auto closedView = closedRuntime.submission();
-    closedRuntime.close();
-    if (!closedView.valid() || closedView.accepting() ||
-        closedView.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+    asio::io_context closed_context;
+    ruvia::worker_runtime_context closed_runtime(closed_context, 1);
+    auto closed_view = closed_runtime.submission();
+    closed_runtime.close();
+    if (!closed_view.valid() || closed_view.accepting() ||
+        closed_view.post([] {}) != ruvia::post_status::worker_stopping) {
         return false;
     }
-    closedRuntime.detach();
-    if (!closedView.valid() || closedView.accepting()) {
+    closed_runtime.detach();
+    if (!closed_view.valid() || closed_view.accepting()) {
         return false;
     }
-    ruvia::WorkerSubmissionView invalid;
+    ruvia::worker_submission_view invalid;
     return !invalid.valid() && !invalid.accepting() &&
-           invalid.post([] {}) == ruvia::PostStatus::kWorkerStopping && resource.allocations > 0 &&
-           resource.allocations == resource.deallocations;
+           invalid.post([] {}) == ruvia::post_status::worker_stopping && resource.allocations_ > 0 &&
+           resource.allocations_ == resource.deallocations_;
 }
 
-bool testPostOutcomeInvariantsAndEmptyCallbacks() {
-    bool acceptedTakeRejected = false;
+bool test_post_outcome_invariants_and_empty_callbacks() {
+    bool accepted_take_rejected = false;
     try {
-        static_cast<void>(std::move(ruvia::PostResult::accept()).takeRejected());
+        static_cast<void>(std::move(ruvia::post_result_type::accept()).take_rejected());
     } catch (const std::logic_error&) {
-        acceptedTakeRejected = true;
+        accepted_take_rejected = true;
     }
 
-    bool acceptedRejectionStatus = false;
+    bool accepted_rejection_status = false;
     try {
-        static_cast<void>(ruvia::PostResult::reject(ruvia::PostStatus::kAccepted, [] {}));
+        static_cast<void>(ruvia::post_result_type::reject(ruvia::post_status::accepted, [] {}));
     } catch (const std::invalid_argument&) {
-        acceptedRejectionStatus = true;
+        accepted_rejection_status = true;
     }
 
-    bool emptyRejectedTask = false;
+    bool empty_rejected_task = false;
     try {
-        static_cast<void>(ruvia::PostResult::reject(ruvia::PostStatus::kQueueFull, {}));
+        static_cast<void>(ruvia::post_result_type::reject(ruvia::post_status::queue_full, {}));
     } catch (const std::invalid_argument&) {
-        emptyRejectedTask = true;
+        empty_rejected_task = true;
     }
 
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
-    bool emptyPost = false;
-    using NullCallback = void (*)();
+    bool empty_post = false;
+    using null_callback_type = void (*)();
     try {
-        static_cast<void>(loop.post(static_cast<NullCallback>(nullptr)));
+        static_cast<void>(loop.post(static_cast<null_callback_type>(nullptr)));
     } catch (const std::invalid_argument&) {
-        emptyPost = true;
+        empty_post = true;
     }
-    bool emptyStopCallback = false;
-    using NullStopCallback = ruvia::MoveOnlyFunction<ruvia::Task<void>()>;
+    bool empty_stop_callback = false;
+    using null_stop_callback_type = ruvia::move_only_function<ruvia::task<void>()>;
     try {
-        static_cast<void>(loop.onStop(NullStopCallback{}));
+        static_cast<void>(loop.on_stop(null_stop_callback_type{}));
     } catch (const std::invalid_argument&) {
-        emptyStopCallback = true;
+        empty_stop_callback = true;
     }
     loops.join();
-    return acceptedTakeRejected && acceptedRejectionStatus && emptyRejectedTask && emptyPost &&
-           emptyStopCallback;
+    return accepted_take_rejected && accepted_rejection_status && empty_rejected_task && empty_post &&
+           empty_stop_callback;
 }
 
-ruvia::Task<void> waitForSignal(ruvia::WorkerSignal& signal, bool& resumed,
-    std::size_t& remaining, ruvia::EventLoopAttachment& attachment) {
+ruvia::task<void> wait_for_signal(ruvia::worker_signal& signal, bool& resumed,
+    std::size_t& remaining, ruvia::event_loop_attachment& attachment) {
     {
-        auto discardedColdWait = signal.wait();
-        static_cast<void>(discardedColdWait);
+        auto discarded_cold_wait = signal.wait();
+        static_cast<void>(discarded_cold_wait);
     }
     co_await signal.wait();
     resumed = true;
@@ -1068,53 +1068,53 @@ ruvia::Task<void> waitForSignal(ruvia::WorkerSignal& signal, bool& resumed,
     }
 }
 
-bool testWorkerSignalIsWorkerAffine() {
-    bool invalidWorkerRejected = false;
-    ruvia::WorkerHandle invalidWorker;
+bool test_worker_signal_is_worker_affine() {
+    bool invalid_worker_rejected = false;
+    ruvia::worker_handle invalid_worker;
     try {
-        ruvia::WorkerSignal invalid(invalidWorker);
+        ruvia::worker_signal invalid(invalid_worker);
     } catch (const std::invalid_argument&) {
-        invalidWorkerRejected = true;
+        invalid_worker_rejected = true;
     }
 
-    asio::io_context ioContext;
-    auto attachment = ruvia::attachEventLoop(ioContext);
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::WorkerSignal firstSignal(workerHandle);
-    ruvia::WorkerSignal secondSignal(workerHandle);
-    const bool workerBorrowed = &firstSignal.worker() == &workerHandle;
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::worker_signal first_signal(worker_handle_value);
+    ruvia::worker_signal second_signal(worker_handle_value);
+    const bool worker_borrowed = &first_signal.worker() == &worker_handle_value;
     bool wait_creation_rejected = false;
     try {
-        static_cast<void>(firstSignal.wait());
+        static_cast<void>(first_signal.wait());
     } catch (const std::logic_error&) {
         wait_creation_rejected = true;
     }
-    bool firstResumed = false;
-    bool secondResumed = false;
+    bool first_resumed = false;
+    bool second_resumed = false;
     std::size_t remaining = 2;
-    asio::co_spawn(ioContext,
-        ruvia::detail::taskAsAwaitable(
-            waitForSignal(firstSignal, firstResumed, remaining, attachment)),
+    asio::co_spawn(io_context,
+        ruvia::detail::task_as_awaitable(
+            wait_for_signal(first_signal, first_resumed, remaining, attachment)),
         asio::detached);
-    asio::co_spawn(ioContext,
-        ruvia::detail::taskAsAwaitable(
-            waitForSignal(secondSignal, secondResumed, remaining, attachment)),
+    asio::co_spawn(io_context,
+        ruvia::detail::task_as_awaitable(
+            wait_for_signal(second_signal, second_resumed, remaining, attachment)),
         asio::detached);
-    asio::post(ioContext, [&] {
-        firstSignal.notify();
-        secondSignal.notify();
+    asio::post(io_context, [&] {
+        first_signal.notify();
+        second_signal.notify();
     });
-    ioContext.run();
-    return invalidWorkerRejected && workerBorrowed && wait_creation_rejected && firstResumed && secondResumed;
+    io_context.run();
+    return invalid_worker_rejected && worker_borrowed && wait_creation_rejected && first_resumed && second_resumed;
 }
 
-ruvia::Task<void> wait_signal_once(ruvia::WorkerSignal& signal, bool& resumed) {
+ruvia::task<void> wait_signal_once(ruvia::worker_signal& signal, bool& resumed) {
     co_await signal.wait();
     resumed = true;
 }
 
-ruvia::Task<void> exercise_signal_pending_latch(
-    ruvia::WorkerSignal& signal, ruvia::EventLoopAttachment& attachment, bool& success) {
+ruvia::task<void> exercise_signal_pending_latch(
+    ruvia::worker_signal& signal, ruvia::event_loop_attachment& attachment, bool& success) {
     signal.notify();
     signal.notify();
     {
@@ -1124,7 +1124,7 @@ ruvia::Task<void> exercise_signal_pending_latch(
     co_await signal.wait();
 
     bool resumed = false;
-    ruvia::TaskScope scope(signal.worker());
+    ruvia::task_scope scope(signal.worker());
     scope.spawn(wait_signal_once(signal, resumed));
     const bool second_wait_suspended = !resumed;
     signal.notify();
@@ -1137,34 +1137,34 @@ ruvia::Task<void> exercise_signal_pending_latch(
 
 bool test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake() {
     asio::io_context context;
-    auto attachment = ruvia::attachEventLoop(context);
-    const auto worker = attachment.loop().handle();
-    ruvia::WorkerSignal signal(worker);
+    auto attachment = ruvia::attach_event_loop(context);
+    const auto worker_value = attachment.loop().handle();
+    ruvia::worker_signal signal(worker_value);
     bool success = false;
     asio::co_spawn(context,
-        ruvia::detail::taskAsAwaitable(exercise_signal_pending_latch(signal, attachment, success)),
+        ruvia::detail::task_as_awaitable(exercise_signal_pending_latch(signal, attachment, success)),
         asio::detached);
     context.run();
     return success;
 }
 
-bool testWorkerSignalHasNoArbitraryWaiterLimit() {
-    constexpr std::size_t kWaiterCount = 16;
-    asio::io_context ioContext;
-    auto attachment = ruvia::attachEventLoop(ioContext);
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::WorkerSignal signal(workerHandle);
-    std::array<bool, kWaiterCount> resumed{};
-    std::size_t remaining = kWaiterCount;
+bool test_worker_signal_has_no_arbitrary_waiter_limit() {
+    constexpr std::size_t waiter_count = 16;
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::worker_signal signal(worker_handle_value);
+    std::array<bool, waiter_count> resumed{};
+    std::size_t remaining = waiter_count;
     for (std::size_t index = 0; index < resumed.size(); ++index) {
-        asio::co_spawn(ioContext,
-            ruvia::detail::taskAsAwaitable(
-                waitForSignal(signal, resumed[index], remaining, attachment)),
+        asio::co_spawn(io_context,
+            ruvia::detail::task_as_awaitable(
+                wait_for_signal(signal, resumed[index], remaining, attachment)),
             asio::detached);
     }
 
-    asio::post(ioContext, [&] { signal.notify(); });
-    ioContext.run();
+    asio::post(io_context, [&] { signal.notify(); });
+    io_context.run();
     for (const bool value : resumed) {
         if (!value) {
             return false;
@@ -1173,280 +1173,280 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     return true;
 }
 
-ruvia::Task<void> startColdSignalWait(ruvia::Task<void> coldWait, bool& rejected) {
+ruvia::task<void> start_cold_signal_wait(ruvia::task<void> cold_wait, bool& rejected) {
     try {
-        co_await std::move(coldWait);
+        co_await std::move(cold_wait);
     } catch (const std::logic_error&) {
         rejected = true;
     }
 }
 
-bool testWorkerSignalRechecksAffinityWhenColdWaitStarts() {
-    asio::io_context ownerContext;
-    asio::io_context otherContext;
-    auto ownerAttachment = ruvia::attachEventLoop(ownerContext);
-    auto otherAttachment = ruvia::attachEventLoop(otherContext);
-    const auto ownerHandle = ownerAttachment.loop().handle();
-    ruvia::WorkerSignal signal(ownerHandle);
-    std::optional<ruvia::Task<void>> coldWait;
+bool test_worker_signal_rechecks_affinity_when_cold_wait_starts() {
+    asio::io_context owner_context;
+    asio::io_context other_context;
+    auto owner_attachment = ruvia::attach_event_loop(owner_context);
+    auto other_attachment = ruvia::attach_event_loop(other_context);
+    const auto owner_handle = owner_attachment.loop().handle();
+    ruvia::worker_signal signal(owner_handle);
+    std::optional<ruvia::task<void>> cold_wait;
 
-    asio::post(ownerContext, [&] {
-        coldWait.emplace(signal.wait());
-        ownerAttachment.stop();
+    asio::post(owner_context, [&] {
+        cold_wait.emplace(signal.wait());
+        owner_attachment.stop();
     });
-    ownerContext.run();
-    if (!coldWait.has_value()) {
+    owner_context.run();
+    if (!cold_wait.has_value()) {
         return false;
     }
 
     bool rejected = false;
-    asio::co_spawn(otherContext,
-        ruvia::detail::taskAsAwaitable(startColdSignalWait(std::move(*coldWait), rejected)),
+    asio::co_spawn(other_context,
+        ruvia::detail::task_as_awaitable(start_cold_signal_wait(std::move(*cold_wait), rejected)),
         asio::detached);
-    asio::post(otherContext, [&] { otherAttachment.stop(); });
-    otherContext.run();
-    coldWait.reset();
+    asio::post(other_context, [&] { other_attachment.stop(); });
+    other_context.run();
+    cold_wait.reset();
     return rejected;
 }
 
-bool testDispatchAndAffinity() {
-    ruvia::EventLoopPool loops({.loopCount = 2, .queue_capacity = 4});
+bool test_dispatch_and_affinity() {
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 4});
     const auto first = loops.loop(0);
     const auto second = loops.loop(1);
-    if (!first.valid() || first.id() == 0 || first.id() == second.id() || first.isCurrent()) {
+    if (!first.valid() || first.id() == 0 || first.id() == second.id() || first.is_current()) {
         return false;
     }
     constexpr std::string_view key = "device-42";
-    if (loops.loopFor(key).id() != loops.loopFor(ruvia::detail::workerSelectionHash(key)).id()) {
+    if (loops.loop_for(key).id() != loops.loop_for(ruvia::detail::worker_selection_hash(key)).id()) {
         return false;
     }
-    if (&first.ioContext() != &first.executor().context() || first.handle().id() != first.id()) {
+    if (&first.io_context() != &first.executor().context() || first.handle().id() != first.id()) {
         return false;
     }
-    asio::ip::tcp::socket tcp(first.ioContext());
-    asio::ip::udp::socket udp(first.ioContext());
-    if (&tcp.get_executor().context() != &first.ioContext() ||
-        &udp.get_executor().context() != &first.ioContext()) {
+    asio::ip::tcp::socket tcp(first.io_context());
+    asio::ip::udp::socket udp(first.io_context());
+    if (&tcp.get_executor().context() != &first.io_context() ||
+        &udp.get_executor().context() != &first.io_context()) {
         return false;
     }
 
     std::promise<bool> completed;
-    auto result = completed.get_future();
-    std::atomic_bool stopCallbackRan{false};
-    std::atomic_bool stopCallbackOnLoop{false};
-    auto stopRegistration = first.onStop([&]() -> ruvia::Task<void> {
-        stopCallbackOnLoop = first.isCurrent();
-        stopCallbackRan = true;
+    auto result_value = completed.get_future();
+    std::atomic_bool stop_callback_ran{false};
+    std::atomic_bool stop_callback_on_loop{false};
+    auto stop_registration_value = first.on_stop([&]() -> ruvia::task<void> {
+        stop_callback_on_loop = first.is_current();
+        stop_callback_ran = true;
         co_return;
     });
-    auto moveOnly = std::make_unique<int>(42);
-    if (first.post([worker = first, value = std::move(moveOnly),
+    auto move_only = std::make_unique<int>(42);
+    if (first.post([worker = first, value = std::move(move_only),
                        completed = std::move(completed)]() mutable {
-            completed.set_value(worker.isCurrent() && *value == 42);
-        }) != ruvia::PostStatus::kAccepted) {
+            completed.set_value(worker.is_current() && *value == 42);
+        }) != ruvia::post_status::accepted) {
         return false;
     }
 
     loops.start();
-    const bool success = result.get();
+    const bool success = result_value.get();
     loops.stop();
     loops.join();
-    return success && stopRegistration.valid() && stopCallbackRan && stopCallbackOnLoop &&
-           first.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return success && stop_registration_value.valid() && stop_callback_ran && stop_callback_on_loop &&
+           first.post([] {}) == ruvia::post_status::worker_stopping;
 }
 
 bool test_bounded_queue() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 2});
-    const auto worker = loops.loop(0);
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 2});
+    const auto worker_value = loops.loop(0);
     std::atomic<int> calls{0};
     std::promise<void> completed;
-    auto result = completed.get_future();
+    auto result_value = completed.get_future();
     std::promise<void> retried;
-    auto retriedResult = retried.get_future();
+    auto retried_result = retried.get_future();
 
-    if (worker.post([&] { ++calls; }) != ruvia::PostStatus::kAccepted || worker.post([&] {
+    if (worker_value.post([&] { ++calls; }) != ruvia::post_status::accepted || worker_value.post([&] {
             ++calls;
             completed.set_value();
-        }) != ruvia::PostStatus::kAccepted) {
+        }) != ruvia::post_status::accepted) {
         return false;
     }
-    auto rejected = worker.post([value = std::make_unique<int>(9), &calls, &retried] {
+    auto rejected = worker_value.post([value = std::make_unique<int>(9), &calls, &retried] {
         calls.fetch_add(*value);
         retried.set_value();
     });
-    if (rejected != ruvia::PostStatus::kQueueFull || rejected.rejected() == nullptr) {
+    if (rejected != ruvia::post_status::queue_full || rejected.rejected() == nullptr) {
         return false;
     }
 
     loops.start();
-    result.get();
-    if (worker.post(std::move(rejected).takeRejected()) != ruvia::PostStatus::kAccepted) {
+    result_value.get();
+    if (worker_value.post(std::move(rejected).take_rejected()) != ruvia::post_status::accepted) {
         return false;
     }
-    retriedResult.get();
+    retried_result.get();
     loops.stop();
     loops.join();
-    bool recoveredAfterStop = false;
-    auto stopped = worker.post([&recoveredAfterStop] { recoveredAfterStop = true; });
-    if (stopped != ruvia::PostStatus::kWorkerStopping || stopped.rejected() == nullptr) {
+    bool recovered_after_stop = false;
+    auto stopped = worker_value.post([&recovered_after_stop] { recovered_after_stop = true; });
+    if (stopped != ruvia::post_status::worker_stopping || stopped.rejected() == nullptr) {
         return false;
     }
-    auto stoppedTask = std::move(stopped).takeRejected();
-    stoppedTask();
-    return calls.load() == 11 && recoveredAfterStop;
+    auto stopped_task = std::move(stopped).take_rejected();
+    stopped_task();
+    return calls.load() == 11 && recovered_after_stop;
 }
 
-bool testExternalEventLoopAttachment() {
-    asio::io_context ioContext;
+bool test_external_event_loop_attachment() {
+    asio::io_context io_context;
     {
-        auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 4});
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
         const auto loop = attachment.loop();
-        if (!attachment.valid() || !loop.valid() || &loop.ioContext() != &ioContext) {
+        if (!attachment.valid() || !loop.valid() || &loop.io_context() != &io_context) {
             return false;
         }
 
         asio::ip::tcp::socket tcp(loop.executor());
         asio::ip::udp::socket udp(loop.executor());
-        if (&tcp.get_executor().context() != &ioContext ||
-            &udp.get_executor().context() != &ioContext) {
+        if (&tcp.get_executor().context() != &io_context ||
+            &udp.get_executor().context() != &io_context) {
             return false;
         }
 
-        bool duplicateRejected = false;
+        bool duplicate_rejected = false;
         try {
-            auto duplicate = ruvia::attachEventLoop(ioContext);
+            auto duplicate = ruvia::attach_event_loop(io_context);
         } catch (const std::invalid_argument&) {
-            duplicateRejected = true;
+            duplicate_rejected = true;
         }
-        if (!duplicateRejected) {
+        if (!duplicate_rejected) {
             return false;
         }
 
         std::promise<bool> completed;
-        auto result = completed.get_future();
-        std::atomic_bool stopCallbackRan{false};
-        std::atomic_bool stopCallbackOnLoop{false};
-        auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
-            stopCallbackOnLoop = loop.isCurrent();
-            stopCallbackRan = true;
+        auto result_value = completed.get_future();
+        std::atomic_bool stop_callback_ran{false};
+        std::atomic_bool stop_callback_on_loop{false};
+        auto stop_registration_value = loop.on_stop([&]() -> ruvia::task<void> {
+            stop_callback_on_loop = loop.is_current();
+            stop_callback_ran = true;
             co_return;
         });
         if (loop.post([loop, completed = std::move(completed)]() mutable {
-                completed.set_value(loop.isCurrent());
-            }) != ruvia::PostStatus::kAccepted) {
+                completed.set_value(loop.is_current());
+            }) != ruvia::post_status::accepted) {
             return false;
         }
 
-        std::thread externalThread([&] { attachment.run(); });
-        bool dispatchedOnExternalThread = false;
+        std::thread external_thread([&] { attachment.run(); });
+        bool dispatched_on_external_thread = false;
         try {
-            dispatchedOnExternalThread = result.get();
+            dispatched_on_external_thread = result_value.get();
             attachment.stop();
-            externalThread.join();
+            external_thread.join();
         } catch (...) {
             attachment.stop();
-            if (externalThread.joinable()) {
-                externalThread.join();
+            if (external_thread.joinable()) {
+                external_thread.join();
             }
             throw;
         }
-        if (!dispatchedOnExternalThread || !stopRegistration.valid() || !stopCallbackRan ||
-            !stopCallbackOnLoop || loop.valid() ||
-            loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+        if (!dispatched_on_external_thread || !stop_registration_value.valid() || !stop_callback_ran ||
+            !stop_callback_on_loop || loop.valid() ||
+            loop.post([] {}) != ruvia::post_status::worker_stopping) {
             return false;
         }
     }
 
-    ioContext.restart();
+    io_context.restart();
     {
-        auto attachment = ruvia::attachEventLoop(ioContext);
+        auto attachment = ruvia::attach_event_loop(io_context);
         attachment.stop();
         attachment.run();
     }
 
-    ioContext.restart();
+    io_context.restart();
     try {
-        auto invalid = ruvia::attachEventLoop(ioContext, {.queue_capacity = 0});
+        auto invalid = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 0});
     } catch (const std::invalid_argument&) {
         return true;
     }
     return false;
 }
 
-ruvia::Task<void> finishShutdownCleanup(
-    ruvia::WorkerHandle worker, std::atomic_bool& finished) {
-    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
+ruvia::task<void> finish_shutdown_cleanup(
+    ruvia::worker_handle worker_value, std::atomic_bool& finished) {
+    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
     finished.store(true, std::memory_order_release);
     co_return;
 }
 
-bool testPoolReportedFailureStopsEveryLoopAndJoinRethrows() {
-    ruvia::EventLoopPool loops({.loopCount = 2, .queue_capacity = 4});
+bool test_pool_reported_failure_stops_every_loop_and_join_rethrows() {
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 4});
     const auto first = loops.loop(0);
     const auto second = loops.loop(1);
-    std::atomic_bool firstCleanupFinished{false};
-    std::atomic_bool secondCleanupFinished{false};
-    auto firstCleanup = first.onStop([&]() -> ruvia::Task<void> {
-        co_await finishShutdownCleanup(first.handle(), firstCleanupFinished);
+    std::atomic_bool first_cleanup_finished{false};
+    std::atomic_bool second_cleanup_finished{false};
+    auto first_cleanup = first.on_stop([&]() -> ruvia::task<void> {
+        co_await finish_shutdown_cleanup(first.handle(), first_cleanup_finished);
     });
-    auto secondCleanup = second.onStop([&]() -> ruvia::Task<void> {
-        co_await finishShutdownCleanup(second.handle(), secondCleanupFinished);
+    auto second_cleanup = second.on_stop([&]() -> ruvia::task<void> {
+        co_await finish_shutdown_cleanup(second.handle(), second_cleanup_finished);
     });
     std::promise<void> reported;
-    auto reportedResult = reported.get_future();
+    auto reported_result = reported.get_future();
     if (first.post([first, &reported] {
-            first.reportFailure(std::make_exception_ptr(std::runtime_error("reported runtime failure")));
+            first.report_failure(std::make_exception_ptr(std::runtime_error("reported runtime failure")));
             reported.set_value();
-        }) != ruvia::PostStatus::kAccepted) {
+        }) != ruvia::post_status::accepted) {
         return false;
     }
     loops.start();
-    if (reportedResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    if (reported_result.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
         loops.stop();
         loops.join();
         return false;
     }
-    const bool allClosed = !first.accepting() && !second.accepting();
-    bool originalFailureRethrown = false;
+    const bool all_closed = !first.accepting() && !second.accepting();
+    bool original_failure_rethrown = false;
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        originalFailureRethrown = std::string_view(error.what()) == "reported runtime failure";
+        original_failure_rethrown = std::string_view(error.what()) == "reported runtime failure";
     }
-    return firstCleanup.valid() && secondCleanup.valid() && allClosed &&
-           firstCleanupFinished.load(std::memory_order_acquire) &&
-           secondCleanupFinished.load(std::memory_order_acquire) && originalFailureRethrown;
+    return first_cleanup.valid() && second_cleanup.valid() && all_closed &&
+           first_cleanup_finished.load(std::memory_order_acquire) &&
+           second_cleanup_finished.load(std::memory_order_acquire) && original_failure_rethrown;
 }
 
-struct FailureReportGate final {
-    std::mutex mutex;
-    std::condition_variable changed;
-    bool entered{false};
-    bool released{false};
-    std::atomic_size_t calls{0};
+struct failure_report_gate final {
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    bool entered_{false};
+    bool released_{false};
+    std::atomic_size_t calls_{0};
 };
 
-class GatedFailure final : public std::exception {
+class gated_failure final : public std::exception {
 public:
-    explicit GatedFailure(FailureReportGate& gate) noexcept
-        : gate_(gate) {}
+    explicit gated_failure(failure_report_gate& gate_value) noexcept
+        : gate_(gate_value) {}
 
     const char* what() const noexcept override {
-        gate_.calls.fetch_add(1, std::memory_order_relaxed);
-        std::unique_lock lock(gate_.mutex);
-        gate_.entered = true;
-        gate_.changed.notify_all();
-        gate_.changed.wait(lock, [this] { return gate_.released; });
+        gate_.calls_.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock lock(gate_.mutex_);
+        gate_.entered_ = true;
+        gate_.changed_.notify_all();
+        gate_.changed_.wait(lock, [this] { return gate_.released_; });
         return "gated first pool failure";
     }
 
 private:
-    FailureReportGate& gate_;
+    failure_report_gate& gate_;
 };
 
-class CountedFailure final : public std::exception {
+class counted_failure final : public std::exception {
 public:
-    explicit CountedFailure(std::shared_ptr<std::atomic_size_t> calls) noexcept
+    explicit counted_failure(std::shared_ptr<std::atomic_size_t> calls) noexcept
         : calls_(std::move(calls)) {}
 
     const char* what() const noexcept override {
@@ -1458,347 +1458,347 @@ private:
     std::shared_ptr<std::atomic_size_t> calls_;
 };
 
-ruvia::Task<void> reportPoolRootFailure(ruvia::EventLoop loop, FailureReportGate& gate) {
+ruvia::task<void> report_pool_root_failure(ruvia::event_loop loop, failure_report_gate& gate_value) {
     std::exception_ptr failure;
     try {
-        throw GatedFailure(gate);
+        throw gated_failure(gate_value);
     } catch (...) {
         failure = std::current_exception();
     }
-    loop.reportFailure(std::move(failure));
+    loop.report_failure(std::move(failure));
     co_return;
 }
 
-bool testPoolFailureHandoffDuringDestructorReport() {
-    FailureReportGate gate;
-    auto secondFailureCalls = std::make_shared<std::atomic_size_t>(0);
-    std::exception_ptr secondFailure;
+bool test_pool_failure_handoff_during_destructor_report() {
+    failure_report_gate gate;
+    auto second_failure_calls = std::make_shared<std::atomic_size_t>(0);
+    std::exception_ptr second_failure;
     try {
-        throw CountedFailure(secondFailureCalls);
+        throw counted_failure(second_failure_calls);
     } catch (...) {
-        secondFailure = std::current_exception();
+        second_failure = std::current_exception();
     }
-    auto pool = std::make_unique<ruvia::EventLoopPool>(
-        ruvia::EventLoopPoolOptions{.loopCount = 1, .queue_capacity = 1});
+    auto pool = std::make_unique<ruvia::event_loop_pool>(
+        ruvia::event_loop_pool_options{.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = pool->loop(0);
-    auto root = loop.start(reportPoolRootFailure(loop, gate));
+    auto root = loop.start(report_pool_root_failure(loop, gate));
     pool->start();
     root.wait();
     root.get();
 
     std::thread destroyer([&] { pool.reset(); });
-    bool firstReportEntered = false;
+    bool first_report_entered = false;
     {
-        std::unique_lock lock(gate.mutex);
-        firstReportEntered = gate.changed.wait_for(
-            lock, std::chrono::seconds(5), [&] { return gate.entered; });
+        std::unique_lock lock(gate.mutex_);
+        first_report_entered = gate.changed_.wait_for(
+            lock, std::chrono::seconds(5), [&] { return gate.entered_; });
     }
-    if (firstReportEntered) {
+    if (first_report_entered) {
         std::thread reporter([&] {
-            loop.reportFailure(secondFailure);
+            loop.report_failure(second_failure);
         });
         reporter.join();
     }
     {
-        const std::lock_guard lock(gate.mutex);
-        gate.released = true;
+        const std::lock_guard lock(gate.mutex_);
+        gate.released_ = true;
     }
-    gate.changed.notify_all();
+    gate.changed_.notify_all();
     destroyer.join();
 
-    return firstReportEntered && !pool && gate.calls.load(std::memory_order_relaxed) == 1 &&
-           secondFailureCalls->load(std::memory_order_relaxed) == 1;
+    return first_report_entered && !pool && gate.calls_.load(std::memory_order_relaxed) == 1 &&
+           second_failure_calls->load(std::memory_order_relaxed) == 1;
 }
 
 bool test_pool_failure_report_works_after_queue_closure() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
-    std::atomic_bool queuedWorkRan{false};
-    if (loop.post([&] { queuedWorkRan.store(true, std::memory_order_release); }) !=
-        ruvia::PostStatus::kAccepted) {
+    std::atomic_bool queued_work_ran{false};
+    if (loop.post([&] { queued_work_ran.store(true, std::memory_order_release); }) !=
+        ruvia::post_status::accepted) {
         return false;
     }
     loops.stop();
-    loop.reportFailure(std::make_exception_ptr(std::runtime_error("late runtime failure")));
-    bool failureRethrown = false;
+    loop.report_failure(std::make_exception_ptr(std::runtime_error("late runtime failure")));
+    bool failure_rethrown = false;
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        failureRethrown = std::string_view(error.what()) == "late runtime failure";
+        failure_rethrown = std::string_view(error.what()) == "late runtime failure";
     }
-    return failureRethrown && queuedWorkRan.load(std::memory_order_acquire) && !loop.valid();
+    return failure_rethrown && queued_work_ran.load(std::memory_order_acquire) && !loop.valid();
 }
 
-bool testAttachmentReportFailureKeepsNativeRunOwnership() {
-    const auto run = [](bool wrappedRun) {
-        asio::io_context ioContext;
-        auto attachment = ruvia::attachEventLoop(ioContext);
+bool test_attachment_report_failure_keeps_native_run_ownership() {
+    const auto run = [](bool wrapped_run) {
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context);
         const auto loop = attachment.loop();
-        std::atomic_bool cleanupFinished{false};
-        auto cleanup = loop.onStop([&]() -> ruvia::Task<void> {
-            co_await finishShutdownCleanup(loop.handle(), cleanupFinished);
+        std::atomic_bool cleanup_finished{false};
+        auto cleanup = loop.on_stop([&]() -> ruvia::task<void> {
+            co_await finish_shutdown_cleanup(loop.handle(), cleanup_finished);
         });
-        bool reportReturned = false;
-        bool unrelatedWorkRan = false;
-        asio::post(ioContext, [&] {
-            loop.reportFailure(std::make_exception_ptr(std::runtime_error("attached report")));
-            reportReturned = true;
-            asio::post(ioContext, [&] { unrelatedWorkRan = true; });
+        bool report_returned = false;
+        bool unrelated_work_ran = false;
+        asio::post(io_context, [&] {
+            loop.report_failure(std::make_exception_ptr(std::runtime_error("attached report")));
+            report_returned = true;
+            asio::post(io_context, [&] { unrelated_work_ran = true; });
         });
-        bool nativeRunThrew = false;
+        bool native_run_threw = false;
         try {
-            if (wrappedRun) {
+            if (wrapped_run) {
                 attachment.run();
             } else {
-                ioContext.run();
+                io_context.run();
             }
         } catch (...) {
-            nativeRunThrew = true;
+            native_run_threw = true;
         }
-        return cleanup.valid() && reportReturned && unrelatedWorkRan &&
-               cleanupFinished.load(std::memory_order_acquire) && !nativeRunThrew && !loop.valid();
+        return cleanup.valid() && report_returned && unrelated_work_ran &&
+               cleanup_finished.load(std::memory_order_acquire) && !native_run_threw && !loop.valid();
     };
     return run(true) && run(false);
 }
 
-ruvia::Task<void> failedAbandonedAttachmentRoot() {
+ruvia::task<void> failed_abandoned_attachment_root() {
     throw std::runtime_error("abandoned attachment root failed");
     co_return;
 }
 
-bool testAbandonedAttachmentRootFailureRetires(bool wrappedRun) {
-    asio::io_context ioContext;
-    auto attachment = ruvia::attachEventLoop(ioContext);
+bool test_abandoned_attachment_root_failure_retires(bool wrapped_run) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
     const auto loop = attachment.loop();
-    std::atomic_bool unrelatedWorkRan{false};
-    asio::post(ioContext, [&] { unrelatedWorkRan.store(true, std::memory_order_release); });
+    std::atomic_bool unrelated_work_ran{false};
+    asio::post(io_context, [&] { unrelated_work_ran.store(true, std::memory_order_release); });
     {
-        auto root = loop.start(failedAbandonedAttachmentRoot());
+        auto root = loop.start(failed_abandoned_attachment_root());
     }
 
-    if (wrappedRun) {
+    if (wrapped_run) {
         attachment.run();
     } else {
-        ioContext.run();
+        io_context.run();
     }
 
-    bool contextAccessRejected = false;
+    bool context_access_rejected = false;
     try {
-        static_cast<void>(loop.ioContext());
+        static_cast<void>(loop.io_context());
     } catch (const std::logic_error&) {
-        contextAccessRejected = true;
+        context_access_rejected = true;
     }
-    return unrelatedWorkRan.load(std::memory_order_acquire) && !attachment.valid() &&
-           !loop.valid() && contextAccessRejected;
+    return unrelated_work_ran.load(std::memory_order_acquire) && !attachment.valid() &&
+           !loop.valid() && context_access_rejected;
 }
 
-bool testAttachmentRunFailureRetiresThroughAsyncCleanup() {
-    asio::io_context ioContext;
-    auto attachment = ruvia::attachEventLoop(ioContext);
+bool test_attachment_run_failure_retires_through_async_cleanup() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
     const auto loop = attachment.loop();
-    bool cleanupRan = false;
-    auto cleanup = loop.onStop([&]() -> ruvia::Task<void> {
-        cleanupRan = true;
+    bool cleanup_ran = false;
+    auto cleanup = loop.on_stop([&]() -> ruvia::task<void> {
+        cleanup_ran = true;
         co_return;
     });
-    asio::post(ioContext, [] { throw std::runtime_error("attached handler failed"); });
-    bool failurePropagated = false;
+    asio::post(io_context, [] { throw std::runtime_error("attached handler failed"); });
+    bool failure_propagated = false;
     try {
         attachment.run();
     } catch (const std::runtime_error& error) {
-        failurePropagated = std::string_view(error.what()) == "attached handler failed";
+        failure_propagated = std::string_view(error.what()) == "attached handler failed";
     }
-    return cleanup.valid() && cleanupRan && failurePropagated && !loop.valid();
+    return cleanup.valid() && cleanup_ran && failure_propagated && !loop.valid();
 }
 
-bool testExternalAttachmentRetainsStateUntilContextCleanup() {
-    asio::io_context ioContext;
-    std::mutex gateMutex;
-    std::condition_variable gateChanged;
+bool test_external_attachment_retains_state_until_context_cleanup() {
+    asio::io_context io_context;
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
     bool entered = false;
     bool release = false;
-    std::atomic_bool stopCallbackRan{false};
-    ruvia::EventLoopStopRegistration stopRegistration;
-    std::thread externalThread;
+    std::atomic_bool stop_callback_ran{false};
+    ruvia::event_loop_stop_registration stop_registration;
+    std::thread external_thread;
 
     {
-        auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 4});
-        stopRegistration = attachment.loop().onStop([&]() -> ruvia::Task<void> {
-            stopCallbackRan.store(true, std::memory_order_release);
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
+        stop_registration = attachment.loop().on_stop([&]() -> ruvia::task<void> {
+            stop_callback_ran.store(true, std::memory_order_release);
             co_return;
         });
-        asio::post(ioContext, [&] {
+        asio::post(io_context, [&] {
             {
-                const std::lock_guard lock(gateMutex);
+                const std::lock_guard lock(gate_mutex);
                 entered = true;
             }
-            gateChanged.notify_one();
-            std::unique_lock lock(gateMutex);
-            gateChanged.wait(lock, [&] { return release; });
+            gate_changed.notify_one();
+            std::unique_lock lock(gate_mutex);
+            gate_changed.wait(lock, [&] { return release; });
         });
-        externalThread = std::thread([&] { ioContext.run(); });
+        external_thread = std::thread([&] { io_context.run(); });
         {
-            std::unique_lock lock(gateMutex);
-            gateChanged.wait(lock, [&] { return entered; });
+            std::unique_lock lock(gate_mutex);
+            gate_changed.wait(lock, [&] { return entered; });
         }
     }
 
-    bool duplicateRejectedWhileCleanupIsPending = false;
+    bool duplicate_rejected_while_cleanup_is_pending = false;
     try {
-        auto duplicate = ruvia::attachEventLoop(ioContext);
+        auto duplicate = ruvia::attach_event_loop(io_context);
     } catch (const std::invalid_argument&) {
-        duplicateRejectedWhileCleanupIsPending = true;
+        duplicate_rejected_while_cleanup_is_pending = true;
     }
 
     {
-        const std::lock_guard lock(gateMutex);
+        const std::lock_guard lock(gate_mutex);
         release = true;
     }
-    gateChanged.notify_one();
-    externalThread.join();
-    stopRegistration.reset();
+    gate_changed.notify_one();
+    external_thread.join();
+    stop_registration.reset();
 
-    bool reattachedAfterCleanup = false;
+    bool reattached_after_cleanup = false;
     try {
-        ioContext.restart();
-        auto replacement = ruvia::attachEventLoop(ioContext);
+        io_context.restart();
+        auto replacement = ruvia::attach_event_loop(io_context);
         replacement.stop();
         replacement.run();
-        reattachedAfterCleanup = true;
+        reattached_after_cleanup = true;
     } catch (...) {
     }
-    return duplicateRejectedWhileCleanupIsPending &&
-           stopCallbackRan.load(std::memory_order_acquire) && reattachedAfterCleanup;
+    return duplicate_rejected_while_cleanup_is_pending &&
+           stop_callback_ran.load(std::memory_order_acquire) && reattached_after_cleanup;
 }
 
-bool testExternalAttachmentHandlesContextDestruction() {
-    auto ioContext = std::make_unique<asio::io_context>();
+bool test_external_attachment_handles_context_destruction() {
+    auto io_context = std::make_unique<asio::io_context>();
     {
         // Register the timer service before Ruvia's external-context service;
         // shutdown must remain safe regardless of Asio service registration
         // order.
-        asio::steady_timer timer(*ioContext);
+        asio::steady_timer timer(*io_context);
     }
-    auto attachment = ruvia::attachEventLoop(*ioContext);
+    auto attachment = ruvia::attach_event_loop(*io_context);
     const auto loop = attachment.loop();
-    ioContext.reset();
+    io_context.reset();
 
-    bool ioContextRejected = false;
+    bool io_context_rejected = false;
     try {
-        static_cast<void>(loop.ioContext());
+        static_cast<void>(loop.io_context());
     } catch (const std::logic_error&) {
-        ioContextRejected = true;
+        io_context_rejected = true;
     }
-    bool executorRejected = false;
+    bool executor_rejected = false;
     try {
         static_cast<void>(loop.executor());
     } catch (const std::logic_error&) {
-        executorRejected = true;
+        executor_rejected = true;
     }
-    const bool postRejected = loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    const bool post_rejected = loop.post([] {}) == ruvia::post_status::worker_stopping;
     attachment.stop();
-    return ioContextRejected && executorRejected && postRejected && !attachment.valid() &&
+    return io_context_rejected && executor_rejected && post_rejected && !attachment.valid() &&
            !loop.valid();
 }
 
-bool testJoinStopsRunningPool() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+bool test_join_stops_running_pool() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
     loops.start();
     loops.join();
-    return !loop.accepting() && loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return !loop.accepting() && loop.post([] {}) == ruvia::post_status::worker_stopping;
 }
 
-bool testFailurePropagation() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+bool test_failure_propagation() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
-    std::atomic_bool stopCallbackRan{false};
-    std::atomic_bool stopCallbackOnLoop{false};
-    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
-        stopCallbackOnLoop = loop.isCurrent();
-        stopCallbackRan = true;
+    std::atomic_bool stop_callback_ran{false};
+    std::atomic_bool stop_callback_on_loop{false};
+    auto stop_registration_value = loop.on_stop([&]() -> ruvia::task<void> {
+        stop_callback_on_loop = loop.is_current();
+        stop_callback_ran = true;
         co_return;
     });
-    struct Listener final : ruvia::detail::WorkerShutdownListener {
-        void workerStopping() noexcept override {
-            notified = true;
+    struct listener final : ruvia::detail::worker_shutdown_listener {
+        void worker_stopping() noexcept override {
+            notified_ = true;
         }
-        bool notified{false};
+        bool notified_{false};
     };
-    const auto listener = std::make_shared<Listener>();
-    ruvia::detail::WorkerHandleAccess::registerShutdownListener(loop.handle(), listener);
+    const auto listener_value = std::make_shared<listener>();
+    ruvia::detail::worker_handle_access::register_shutdown_listener(loop.handle(), listener_value);
     if (loop.post([] { throw std::runtime_error("posted task failed"); }) !=
-        ruvia::PostStatus::kAccepted) {
+        ruvia::post_status::accepted) {
         return false;
     }
     loops.start();
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return stopRegistration.valid() && stopCallbackRan && stopCallbackOnLoop &&
-               listener->notified && std::string_view(error.what()) == "posted task failed";
+        return stop_registration_value.valid() && stop_callback_ran && stop_callback_on_loop &&
+               listener_value->notified_ && std::string_view(error.what()) == "posted task failed";
     }
     return false;
 }
 
-bool testJoinBeforeStartDrainsOnOwners() {
-    ruvia::EventLoopPool loops({.loopCount = 2, .queue_capacity = 1});
+bool test_join_before_start_drains_on_owners() {
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 1});
     const auto first = loops.loop(0);
     const auto second = loops.loop(1);
-    std::atomic<unsigned> taskCalls{0};
-    std::atomic<unsigned> stopCalls{0};
-    std::atomic_bool tasksOnOwners{true};
-    std::atomic_bool stopsOnOwners{true};
+    std::atomic<unsigned> task_calls{0};
+    std::atomic<unsigned> stop_calls{0};
+    std::atomic_bool tasks_on_owners{true};
+    std::atomic_bool stops_on_owners{true};
 
-    auto firstStop = first.onStop([&]() -> ruvia::Task<void> {
-        if (!first.isCurrent()) {
-            stopsOnOwners.store(false, std::memory_order_relaxed);
+    auto first_stop = first.on_stop([&]() -> ruvia::task<void> {
+        if (!first.is_current()) {
+            stops_on_owners.store(false, std::memory_order_relaxed);
         }
-        stopCalls.fetch_add(1, std::memory_order_relaxed);
+        stop_calls.fetch_add(1, std::memory_order_relaxed);
         co_return;
     });
-    auto secondStop = second.onStop([&]() -> ruvia::Task<void> {
-        if (!second.isCurrent()) {
-            stopsOnOwners.store(false, std::memory_order_relaxed);
+    auto second_stop = second.on_stop([&]() -> ruvia::task<void> {
+        if (!second.is_current()) {
+            stops_on_owners.store(false, std::memory_order_relaxed);
         }
-        stopCalls.fetch_add(1, std::memory_order_relaxed);
+        stop_calls.fetch_add(1, std::memory_order_relaxed);
         co_return;
     });
     if (first.post([&] {
-            if (!first.isCurrent()) {
-                tasksOnOwners.store(false, std::memory_order_relaxed);
+            if (!first.is_current()) {
+                tasks_on_owners.store(false, std::memory_order_relaxed);
             }
-            taskCalls.fetch_add(1, std::memory_order_relaxed);
-        }) != ruvia::PostStatus::kAccepted ||
+            task_calls.fetch_add(1, std::memory_order_relaxed);
+        }) != ruvia::post_status::accepted ||
         second.post([&] {
-            if (!second.isCurrent()) {
-                tasksOnOwners.store(false, std::memory_order_relaxed);
+            if (!second.is_current()) {
+                tasks_on_owners.store(false, std::memory_order_relaxed);
             }
-            taskCalls.fetch_add(1, std::memory_order_relaxed);
-        }) != ruvia::PostStatus::kAccepted) {
+            task_calls.fetch_add(1, std::memory_order_relaxed);
+        }) != ruvia::post_status::accepted) {
         return false;
     }
 
     loops.join();
-    const bool rejectedAfterJoin = first.post([] {}) == ruvia::PostStatus::kWorkerStopping &&
-                                   second.post([] {}) == ruvia::PostStatus::kWorkerStopping;
-    return firstStop.valid() && secondStop.valid() && rejectedAfterJoin &&
-           taskCalls.load(std::memory_order_relaxed) == 2 &&
-           stopCalls.load(std::memory_order_relaxed) == 2 &&
-           tasksOnOwners.load(std::memory_order_relaxed) &&
-           stopsOnOwners.load(std::memory_order_relaxed);
+    const bool rejected_after_join = first.post([] {}) == ruvia::post_status::worker_stopping &&
+                                     second.post([] {}) == ruvia::post_status::worker_stopping;
+    return first_stop.valid() && second_stop.valid() && rejected_after_join &&
+           task_calls.load(std::memory_order_relaxed) == 2 &&
+           stop_calls.load(std::memory_order_relaxed) == 2 &&
+           tasks_on_owners.load(std::memory_order_relaxed) &&
+           stops_on_owners.load(std::memory_order_relaxed);
 }
 
-bool testStopBeforeStartPropagatesFailure() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+bool test_stop_before_start_propagates_failure() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
-    std::atomic_bool stopOnOwner{false};
-    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
-        stopOnOwner.store(loop.isCurrent(), std::memory_order_release);
+    std::atomic_bool stop_on_owner{false};
+    auto stop_registration_value = loop.on_stop([&]() -> ruvia::task<void> {
+        stop_on_owner.store(loop.is_current(), std::memory_order_release);
         co_return;
     });
     if (loop.post([] { throw std::runtime_error("pre-start task failed"); }) !=
-        ruvia::PostStatus::kAccepted) {
+        ruvia::post_status::accepted) {
         return false;
     }
 
@@ -1806,17 +1806,17 @@ bool testStopBeforeStartPropagatesFailure() {
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return stopRegistration.valid() && stopOnOwner.load(std::memory_order_acquire) &&
+        return stop_registration_value.valid() && stop_on_owner.load(std::memory_order_acquire) &&
                std::string_view(error.what()) == "pre-start task failed";
     }
     return false;
 }
 
-bool testJoinRejectsPoolWorker() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+bool test_join_rejects_pool_worker() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
     std::promise<bool> completed;
-    auto result = completed.get_future();
+    auto result_value = completed.get_future();
     if (loop.post([&] {
             bool rejected = false;
             try {
@@ -1825,60 +1825,60 @@ bool testJoinRejectsPoolWorker() {
                 rejected = std::string_view(error.what()) ==
                            "cannot join an event loop pool from one of its workers";
             }
-            completed.set_value(rejected && loop.isCurrent());
-        }) != ruvia::PostStatus::kAccepted) {
+            completed.set_value(rejected && loop.is_current());
+        }) != ruvia::post_status::accepted) {
         return false;
     }
 
     loops.start();
-    const bool rejected = result.get();
+    const bool rejected = result_value.get();
     loops.stop();
     loops.join();
     return rejected;
 }
 
-bool testExecutorFailureDrainsShutdownOnOwners() {
-    struct AbandonProbe final {
-        explicit AbandonProbe(std::atomic_bool& destroyed) noexcept
+bool test_executor_failure_drains_shutdown_on_owners() {
+    struct abandon_probe final {
+        explicit abandon_probe(std::atomic_bool& destroyed) noexcept
             : destroyed_(&destroyed) {}
-        ~AbandonProbe() {
+        ~abandon_probe() {
             destroyed_->store(true, std::memory_order_release);
         }
         std::atomic_bool* destroyed_;
     };
 
-    ruvia::EventLoopPool loops({.loopCount = 2, .queue_capacity = 2});
-    const auto failedLoop = loops.loop(0);
-    const auto peerLoop = loops.loop(1);
-    std::atomic<unsigned> failedStopCalls{0};
-    std::atomic<unsigned> peerStopCalls{0};
-    std::atomic_bool failedStopOnOwner{false};
-    std::atomic_bool peerStopOnOwner{false};
-    std::atomic_bool shutdownContinuationDrained{false};
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 2});
+    const auto failed_loop = loops.loop(0);
+    const auto peer_loop = loops.loop(1);
+    std::atomic<unsigned> failed_stop_calls{0};
+    std::atomic<unsigned> peer_stop_calls{0};
+    std::atomic_bool failed_stop_on_owner{false};
+    std::atomic_bool peer_stop_on_owner{false};
+    std::atomic_bool shutdown_continuation_drained{false};
     std::atomic_bool abandoned_queue_ran{false};
     std::atomic_bool abandoned_queue_destroyed{false};
 
-    auto failedStop = failedLoop.onStop([&]() -> ruvia::Task<void> {
-        failedStopOnOwner.store(failedLoop.isCurrent(), std::memory_order_release);
-        failedStopCalls.fetch_add(1, std::memory_order_relaxed);
-        asio::post(failedLoop.ioContext(),
+    auto failed_stop = failed_loop.on_stop([&]() -> ruvia::task<void> {
+        failed_stop_on_owner.store(failed_loop.is_current(), std::memory_order_release);
+        failed_stop_calls.fetch_add(1, std::memory_order_relaxed);
+        asio::post(failed_loop.io_context(),
             [] { throw std::runtime_error("secondary shutdown handler failed"); });
-        asio::post(failedLoop.ioContext(), [&] {
-            shutdownContinuationDrained.store(failedLoop.isCurrent(), std::memory_order_release);
+        asio::post(failed_loop.io_context(), [&] {
+            shutdown_continuation_drained.store(failed_loop.is_current(), std::memory_order_release);
         });
         co_return;
     });
-    auto peerStop = peerLoop.onStop([&]() -> ruvia::Task<void> {
-        peerStopOnOwner.store(peerLoop.isCurrent(), std::memory_order_release);
-        peerStopCalls.fetch_add(1, std::memory_order_relaxed);
+    auto peer_stop = peer_loop.on_stop([&]() -> ruvia::task<void> {
+        peer_stop_on_owner.store(peer_loop.is_current(), std::memory_order_release);
+        peer_stop_calls.fetch_add(1, std::memory_order_relaxed);
         co_return;
     });
 
-    asio::post(failedLoop.ioContext(), [] { throw std::runtime_error("executor handler failed"); });
-    if (failedLoop.post([probe = std::make_unique<AbandonProbe>(abandoned_queue_destroyed),
-                            &abandoned_queue_ran] {
+    asio::post(failed_loop.io_context(), [] { throw std::runtime_error("executor handler failed"); });
+    if (failed_loop.post([probe = std::make_unique<abandon_probe>(abandoned_queue_destroyed),
+                             &abandoned_queue_ran] {
             abandoned_queue_ran.store(true, std::memory_order_release);
-        }) != ruvia::PostStatus::kAccepted) {
+        }) != ruvia::post_status::accepted) {
         return false;
     }
 
@@ -1886,106 +1886,106 @@ bool testExecutorFailureDrainsShutdownOnOwners() {
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return failedStop.valid() && peerStop.valid() &&
+        return failed_stop.valid() && peer_stop.valid() &&
                std::string_view(error.what()) == "executor handler failed" &&
-               failedStopCalls.load(std::memory_order_relaxed) == 1 &&
-               peerStopCalls.load(std::memory_order_relaxed) == 1 &&
-               failedStopOnOwner.load(std::memory_order_acquire) &&
-               peerStopOnOwner.load(std::memory_order_acquire) &&
-               shutdownContinuationDrained.load(std::memory_order_acquire) &&
+               failed_stop_calls.load(std::memory_order_relaxed) == 1 &&
+               peer_stop_calls.load(std::memory_order_relaxed) == 1 &&
+               failed_stop_on_owner.load(std::memory_order_acquire) &&
+               peer_stop_on_owner.load(std::memory_order_acquire) &&
+               shutdown_continuation_drained.load(std::memory_order_acquire) &&
                !abandoned_queue_ran.load(std::memory_order_acquire) &&
                abandoned_queue_destroyed.load(std::memory_order_acquire);
     }
     return false;
 }
 
-bool testExpiredHandle() {
-    ruvia::EventLoop loop;
+bool test_expired_handle() {
+    ruvia::event_loop loop;
     {
-        ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
         loop = loops.loop(0);
     }
-    bool contextRejected = false;
+    bool context_rejected = false;
     try {
-        static_cast<void>(loop.ioContext());
+        static_cast<void>(loop.io_context());
     } catch (const std::logic_error&) {
-        contextRejected = true;
+        context_rejected = true;
     }
-    return !loop.valid() && !loop.accepting() && contextRejected &&
-           loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return !loop.valid() && !loop.accepting() && context_rejected &&
+           loop.post([] {}) == ruvia::post_status::worker_stopping;
 }
 
-bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
-    ruvia::WorkerHandle worker;
-    ruvia::WorkerId liveId = 0;
+bool test_escaped_worker_handle_becomes_detached_endpoint() {
+    ruvia::worker_handle worker;
+    ruvia::worker_id_type live_id = 0;
     {
-        ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
         worker = loops.loop(0).handle();
-        liveId = worker.id();
-        if (!worker.valid() || liveId == 0) {
+        live_id = worker.id();
+        if (!worker.valid() || live_id == 0) {
             return false;
         }
     }
 
-    bool internalDeferRejected = false;
+    bool internal_defer_rejected = false;
     try {
-        ruvia::detail::WorkerHandleAccess::defer(worker, [] {});
+        ruvia::detail::worker_handle_access::defer(worker, [] {});
     } catch (const std::runtime_error&) {
-        internalDeferRejected = true;
+        internal_defer_rejected = true;
     }
-    return !worker.valid() && !worker.accepting() && !worker.isCurrent() && worker.id() == 0 &&
-           worker.post([] {}) == ruvia::PostStatus::kWorkerStopping && internalDeferRejected;
+    return !worker.valid() && !worker.accepting() && !worker.is_current() && worker.id() == 0 &&
+           worker.post([] {}) == ruvia::post_status::worker_stopping && internal_defer_rejected;
 }
 
 bool test_failure_destroys_abandoned_queue_tasks() {
-    struct DestructionProbe final {
-        explicit DestructionProbe(bool& value) noexcept
-            : destroyed(&value) {}
-        bool* destroyed;
-        ~DestructionProbe() {
-            *destroyed = true;
+    struct destruction_probe final {
+        explicit destruction_probe(bool& value) noexcept
+            : destroyed_(&value) {}
+        bool* destroyed_;
+        ~destruction_probe() {
+            *destroyed_ = true;
         }
     };
 
-    asio::io_context ioContext;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-    bool queuedTaskDestroyed = false;
-    if (worker.post([] { throw std::runtime_error("stop queue drain"); }) !=
-            ruvia::PostStatus::kAccepted ||
-        worker.post([probe = std::make_unique<DestructionProbe>(queuedTaskDestroyed)] {}) !=
-            ruvia::PostStatus::kAccepted) {
+    asio::io_context io_context;
+    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 2);
+    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+    bool queued_task_destroyed = false;
+    if (worker_value.post([] { throw std::runtime_error("stop queue drain"); }) !=
+            ruvia::post_status::accepted ||
+        worker_value.post([probe = std::make_unique<destruction_probe>(queued_task_destroyed)] {}) !=
+            ruvia::post_status::accepted) {
         return false;
     }
     try {
-        ioContext.run();
+        io_context.run();
     } catch (const std::runtime_error&) {
     }
-    if (!queuedTaskDestroyed) {
+    if (!queued_task_destroyed) {
         return false;
     }
-    dispatcher->detachContext();
-    return queuedTaskDestroyed && !worker.valid();
+    dispatcher->detach_context();
+    return queued_task_destroyed && !worker_value.valid();
 }
 
 bool test_abandoned_root_task_completes_when_queue_drain_fails() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 8});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
     const auto loop = loops.loop(0);
-    if (loop.post([] { throw std::runtime_error("boom"); }) != ruvia::PostStatus::kAccepted) {
+    if (loop.post([] { throw std::runtime_error("boom"); }) != ruvia::post_status::accepted) {
         return false;
     }
 
-    auto root = loop.start([]() -> ruvia::Task<int> { co_return 42; }());
+    auto root = loop.start([]() -> ruvia::task<int> { co_return 42; }());
     loops.start();
 
-    bool joinThrew = false;
+    bool join_threw = false;
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        joinThrew = std::string_view(error.what()) == "boom";
+        join_threw = std::string_view(error.what()) == "boom";
     } catch (...) {
     }
-    if (!joinThrew) {
+    if (!join_threw) {
         return false;
     }
 
@@ -1999,46 +1999,46 @@ bool test_abandoned_root_task_completes_when_queue_drain_fails() {
     }
 }
 
-bool testDispatcherLifecycleHooksAreWorkerAffine() {
-    asio::io_context ioContext;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-    bool startupOnWorker = false;
-    bool failureOnWorker = false;
-    bool shutdownOnWorker = false;
-    bool receivedStartupFailure = false;
+bool test_dispatcher_lifecycle_hooks_are_worker_affine() {
+    asio::io_context io_context;
+    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 1);
+    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+    bool startup_on_worker = false;
+    bool failure_on_worker = false;
+    bool shutdown_on_worker = false;
+    bool received_startup_failure = false;
 
-    dispatcher->runContext(
+    dispatcher->run_context(
         [&] {
-            startupOnWorker = worker.isCurrent();
+            startup_on_worker = worker_value.is_current();
             throw std::runtime_error("worker startup failed");
         },
         [&](std::exception_ptr failure) noexcept {
-            failureOnWorker = worker.isCurrent();
+            failure_on_worker = worker_value.is_current();
             try {
                 std::rethrow_exception(failure);
             } catch (const std::runtime_error& error) {
-                receivedStartupFailure = std::string_view(error.what()) == "worker startup failed";
+                received_startup_failure = std::string_view(error.what()) == "worker startup failed";
             } catch (...) {
             }
         },
-        [&]() noexcept { shutdownOnWorker = worker.isCurrent(); });
-    dispatcher->detachContext();
-    return startupOnWorker && failureOnWorker && shutdownOnWorker && receivedStartupFailure;
+        [&]() noexcept { shutdown_on_worker = worker_value.is_current(); });
+    dispatcher->detach_context();
+    return startup_on_worker && failure_on_worker && shutdown_on_worker && received_startup_failure;
 }
 
 // A stop callback runs after every caller that could have received its
 // exception is gone. Dropping it would make a failed cleanup invisible, so the
 // pool records it as its first failure and join() rethrows it.
-bool testStopCallbackFactoryFailureDoesNotSkipOtherCallbacks() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 4});
+bool test_stop_callback_factory_failure_does_not_skip_other_callbacks() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
     const auto loop = loops.loop(0);
-    std::atomic_bool coroutineCallbackRan{false};
-    auto factoryFailure = loop.onStop([]() -> ruvia::Task<void> {
+    std::atomic_bool coroutine_callback_ran{false};
+    auto factory_failure = loop.on_stop([]() -> ruvia::task<void> {
         throw std::runtime_error("stop factory failed");
     });
-    auto coroutineCallback = loop.onStop([&]() -> ruvia::Task<void> {
-        coroutineCallbackRan.store(true, std::memory_order_release);
+    auto coroutine_callback = loop.on_stop([&]() -> ruvia::task<void> {
+        coroutine_callback_ran.store(true, std::memory_order_release);
         co_return;
     });
 
@@ -2051,16 +2051,16 @@ bool testStopCallbackFactoryFailureDoesNotSkipOtherCallbacks() {
         rethrown = std::string_view(error.what()) == "stop factory failed";
     } catch (...) {
     }
-    return rethrown && coroutineCallbackRan.load(std::memory_order_acquire) &&
-           factoryFailure.valid() && coroutineCallback.valid();
+    return rethrown && coroutine_callback_ran.load(std::memory_order_acquire) &&
+           factory_failure.valid() && coroutine_callback.valid();
 }
 
-bool testStopCallbackFailureReachesJoin() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 2});
+bool test_stop_callback_failure_reaches_join() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 2});
     const auto loop = loops.loop(0);
-    std::atomic<unsigned> stopCalls{0};
-    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
-        stopCalls.fetch_add(1, std::memory_order_relaxed);
+    std::atomic<unsigned> stop_calls{0};
+    auto stop_registration_value = loop.on_stop([&]() -> ruvia::task<void> {
+        stop_calls.fetch_add(1, std::memory_order_relaxed);
         throw std::runtime_error("stop callback failed");
         co_return;
     });
@@ -2075,217 +2075,217 @@ bool testStopCallbackFailureReachesJoin() {
         rethrown = std::string_view(error.what()) == "stop callback failed";
     } catch (...) {
     }
-    return rethrown && stopCalls.load(std::memory_order_relaxed) == 1;
+    return rethrown && stop_calls.load(std::memory_order_relaxed) == 1;
 }
 
-bool testStopListenerArrivalDuringShutdownNotificationBatch() {
-    struct BlockingListener final : ruvia::detail::WorkerShutdownListener {
-        BlockingListener(std::promise<void>& enteredPromise,
-            std::shared_future<void> releaseSignal) noexcept
-            : entered(&enteredPromise),
-              release(std::move(releaseSignal)) {}
+bool test_stop_listener_arrival_during_shutdown_notification_batch() {
+    struct blocking_listener final : ruvia::detail::worker_shutdown_listener {
+        blocking_listener(std::promise<void>& entered_promise,
+            std::shared_future<void> release_signal) noexcept
+            : entered_(&entered_promise),
+              release_(std::move(release_signal)) {}
 
-        std::promise<void>* entered;
-        std::shared_future<void> release;
+        std::promise<void>* entered_;
+        std::shared_future<void> release_;
 
-        void workerStopping() noexcept override {
-            entered->set_value();
-            release.wait();
+        void worker_stopping() noexcept override {
+            entered_->set_value();
+            release_.wait();
         }
     };
 
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 4});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
     const auto loop = loops.loop(0);
-    std::promise<void> listenerEntered;
-    auto listenerEnteredResult = listenerEntered.get_future();
-    std::promise<void> releaseListener;
-    auto blockingListener = std::make_shared<BlockingListener>(
-        listenerEntered, releaseListener.get_future().share());
-    ruvia::detail::WorkerHandleAccess::registerShutdownListener(loop.handle(), blockingListener);
+    std::promise<void> listener_entered;
+    auto listener_entered_result = listener_entered.get_future();
+    std::promise<void> release_listener;
+    auto blocking_listener_value = std::make_shared<blocking_listener>(
+        listener_entered, release_listener.get_future().share());
+    ruvia::detail::worker_handle_access::register_shutdown_listener(loop.handle(), blocking_listener_value);
 
-    std::atomic_bool stopCallbackRan{false};
-    auto stopCallback = loop.onStop([&]() -> ruvia::Task<void> {
-        stopCallbackRan.store(true, std::memory_order_release);
+    std::atomic_bool stop_callback_ran{false};
+    auto stop_callback_value = loop.on_stop([&]() -> ruvia::task<void> {
+        stop_callback_ran.store(true, std::memory_order_release);
         co_return;
     });
-    asio::post(loop.ioContext(), [] { throw std::runtime_error("first shutdown trigger"); });
+    asio::post(loop.io_context(), [] { throw std::runtime_error("first shutdown trigger"); });
     loops.start();
-    if (listenerEnteredResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    if (listener_entered_result.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
         loops.stop();
-        releaseListener.set_value();
+        release_listener.set_value();
         loops.join();
         return false;
     }
 
     loops.stop();
-    const bool loopStillAttachedDuringBatch = loop.valid();
-    bool rootAdmissionClosed = false;
+    const bool loop_still_attached_during_batch = loop.valid();
+    bool root_admission_closed = false;
     try {
-        static_cast<void>(loop.start(failedAbandonedAttachmentRoot()));
+        static_cast<void>(loop.start(failed_abandoned_attachment_root()));
     } catch (const std::runtime_error&) {
-        rootAdmissionClosed = true;
+        root_admission_closed = true;
     }
-    releaseListener.set_value();
-    bool failureRethrown = false;
+    release_listener.set_value();
+    bool failure_rethrown = false;
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        failureRethrown = std::string_view(error.what()) == "first shutdown trigger";
+        failure_rethrown = std::string_view(error.what()) == "first shutdown trigger";
     } catch (...) {
     }
-    return loopStillAttachedDuringBatch && rootAdmissionClosed && failureRethrown &&
-           stopCallbackRan.load(std::memory_order_acquire) && stopCallback.valid() && !loop.valid();
+    return loop_still_attached_during_batch && root_admission_closed && failure_rethrown &&
+           stop_callback_ran.load(std::memory_order_acquire) && stop_callback_value.valid() && !loop.valid();
 }
 
-bool testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive() {
-    struct Callback final {
-        std::atomic<unsigned>* started;
-        std::atomic<unsigned>* finished;
-        ruvia::WorkerSignal* signal;
-        bool notifier;
-        int value;
-        int* observed;
+bool test_async_stop_callbacks_start_together_and_keep_captures_alive() {
+    struct callback final {
+        std::atomic<unsigned>* started_;
+        std::atomic<unsigned>* finished_;
+        ruvia::worker_signal* signal_;
+        bool notifier_;
+        int value_;
+        int* observed_;
 
-        ruvia::Task<void> operator()() {
-            started->fetch_add(1, std::memory_order_release);
-            if (notifier) {
-                signal->notify();
+        ruvia::task<void> operator()() {
+            started_->fetch_add(1, std::memory_order_release);
+            if (notifier_) {
+                signal_->notify();
             } else {
-                co_await signal->wait();
+                co_await signal_->wait();
             }
-            *observed += value;
-            finished->fetch_add(1, std::memory_order_release);
+            *observed_ += value_;
+            finished_->fetch_add(1, std::memory_order_release);
             co_return;
         }
     };
 
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 4});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
     const auto loop = loops.loop(0);
-    const auto worker = loop.handle();
+    const auto worker_value = loop.handle();
     std::atomic<unsigned> started{0};
     std::atomic<unsigned> finished{0};
-    ruvia::WorkerSignal signal(worker);
-    int observed = 0;
-    auto first = loop.onStop(Callback{&started, &finished, &signal, false, 1, &observed});
-    auto second = loop.onStop(Callback{&started, &finished, &signal, true, 2, &observed});
+    ruvia::worker_signal signal(worker_value);
+    int observed_value = 0;
+    auto first = loop.on_stop(callback{&started, &finished, &signal, false, 1, &observed_value});
+    auto second = loop.on_stop(callback{&started, &finished, &signal, true, 2, &observed_value});
     loops.start();
     loops.stop();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto deadline_value = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (started.load(std::memory_order_acquire) != 2 &&
-           std::chrono::steady_clock::now() < deadline) {
+           std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::yield();
     }
     first.reset();
     second.reset();
     loops.join();
     return started.load(std::memory_order_acquire) == 2 &&
-           finished.load(std::memory_order_acquire) == 2 && observed == 3;
+           finished.load(std::memory_order_acquire) == 2 && observed_value == 3;
 }
 
-ruvia::Task<void> waitForShutdownTimer(const ruvia::WorkerHandle& worker, bool& childDone) {
-    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::hours(1)));
-    childDone = true;
+ruvia::task<void> wait_for_shutdown_timer(const ruvia::worker_handle& worker_value, bool& child_done) {
+    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)));
+    child_done = true;
     co_return;
 }
 
-ruvia::Task<void> nestedShutdownScope(const ruvia::WorkerHandle& worker, bool& childDone,
-    bool& middleDone) {
-    ruvia::TaskScope scope(worker);
-    scope.spawn(waitForShutdownTimer(worker, childDone));
+ruvia::task<void> nested_shutdown_scope(const ruvia::worker_handle& worker_value, bool& child_done,
+    bool& middle_done) {
+    ruvia::task_scope scope(worker_value);
+    scope.spawn(wait_for_shutdown_timer(worker_value, child_done));
     co_await scope.join();
-    middleDone = true;
+    middle_done = true;
 }
 
-ruvia::Task<void> rootShutdownScope(const ruvia::WorkerHandle& worker,
-    std::promise<void>& started, bool& childDone, bool& middleDone, bool& rootDone) {
-    ruvia::TaskScope scope(worker);
-    scope.spawn(nestedShutdownScope(worker, childDone, middleDone));
+ruvia::task<void> root_shutdown_scope(const ruvia::worker_handle& worker_value,
+    std::promise<void>& started, bool& child_done, bool& middle_done, bool& root_done) {
+    ruvia::task_scope scope(worker_value);
+    scope.spawn(nested_shutdown_scope(worker_value, child_done, middle_done));
     started.set_value();
     co_await scope.join();
-    rootDone = true;
+    root_done = true;
 }
 
-struct RootGetMoveProbe final {
-    std::optional<ruvia::RootTask<RootGetMoveProbe>>* owner{};
-    std::optional<ruvia::RootTask<RootGetMoveProbe>>* replacement{};
-    std::atomic_bool* trigger{};
-    bool* validDuringMove{};
+struct root_get_move_probe final {
+    std::optional<ruvia::root_task<root_get_move_probe>>* owner_{};
+    std::optional<ruvia::root_task<root_get_move_probe>>* replacement_{};
+    std::atomic_bool* trigger_{};
+    bool* valid_during_move_{};
 
-    RootGetMoveProbe() = default;
-    RootGetMoveProbe(std::optional<ruvia::RootTask<RootGetMoveProbe>>* rootOwner,
-        std::optional<ruvia::RootTask<RootGetMoveProbe>>* rootReplacement,
-        std::atomic_bool* moveTrigger, bool* observedValidity)
-        : owner(rootOwner),
-          replacement(rootReplacement),
-          trigger(moveTrigger),
-          validDuringMove(observedValidity) {}
-    RootGetMoveProbe(RootGetMoveProbe&& other) noexcept
-        : owner(other.owner),
-          replacement(other.replacement),
-          trigger(other.trigger),
-          validDuringMove(other.validDuringMove) {
-        if (trigger != nullptr && trigger->exchange(false, std::memory_order_acq_rel)) {
-            *validDuringMove = owner->value().valid();
-            if (replacement != nullptr) {
-                *owner = std::move(*replacement);
+    root_get_move_probe() = default;
+    root_get_move_probe(std::optional<ruvia::root_task<root_get_move_probe>>* root_owner,
+        std::optional<ruvia::root_task<root_get_move_probe>>* root_replacement,
+        std::atomic_bool* move_trigger, bool* observed_validity)
+        : owner_(root_owner),
+          replacement_(root_replacement),
+          trigger_(move_trigger),
+          valid_during_move_(observed_validity) {}
+    root_get_move_probe(root_get_move_probe&& other) noexcept
+        : owner_(other.owner_),
+          replacement_(other.replacement_),
+          trigger_(other.trigger_),
+          valid_during_move_(other.valid_during_move_) {
+        if (trigger_ != nullptr && trigger_->exchange(false, std::memory_order_acq_rel)) {
+            *valid_during_move_ = owner_->value().valid();
+            if (replacement_ != nullptr) {
+                *owner_ = std::move(*replacement_);
             }
         }
     }
-    RootGetMoveProbe& operator=(RootGetMoveProbe&&) = delete;
-    RootGetMoveProbe(const RootGetMoveProbe&) = delete;
-    RootGetMoveProbe& operator=(const RootGetMoveProbe&) = delete;
+    root_get_move_probe& operator=(root_get_move_probe&&) = delete;
+    root_get_move_probe(const root_get_move_probe&) = delete;
+    root_get_move_probe& operator=(const root_get_move_probe&) = delete;
 };
 
-ruvia::Task<RootGetMoveProbe> returnRootGetMoveProbe(RootGetMoveProbe value) {
+ruvia::task<root_get_move_probe> return_root_get_move_probe(root_get_move_probe value) {
     co_return std::move(value);
 }
 
-struct RootPmrResult final {
-    explicit RootPmrResult(std::pmr::memory_resource* resource)
-        : values(resource) {
-        values.resize(32, 42);
+struct root_pmr_result final {
+    explicit root_pmr_result(std::pmr::memory_resource* resource)
+        : values_(resource) {
+        values_.resize(32, 42);
     }
-    RootPmrResult(RootPmrResult&&) noexcept = default;
-    RootPmrResult(const RootPmrResult&) = delete;
-    std::pmr::vector<int> values;
+    root_pmr_result(root_pmr_result&&) noexcept = default;
+    root_pmr_result(const root_pmr_result&) = delete;
+    std::pmr::vector<int> values_;
 };
 
-ruvia::Task<RootPmrResult> makeRootPmrResult(std::pmr::memory_resource* resource) {
-    co_return RootPmrResult(resource);
+ruvia::task<root_pmr_result> make_root_pmr_result(std::pmr::memory_resource* resource) {
+    co_return root_pmr_result(resource);
 }
 
-bool testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 8});
+bool test_root_task_result_moves_outside_lock_and_preserves_reentrant_owner() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
     const auto loop = loops.loop(0);
-    std::optional<ruvia::RootTask<RootGetMoveProbe>> root;
-    std::optional<ruvia::RootTask<RootGetMoveProbe>> replacement;
+    std::optional<ruvia::root_task<root_get_move_probe>> root;
+    std::optional<ruvia::root_task<root_get_move_probe>> replacement;
     std::atomic_bool trigger{false};
-    bool validDuringMove = true;
-    root.emplace(loop.start(returnRootGetMoveProbe(
-        RootGetMoveProbe{&root, &replacement, &trigger, &validDuringMove})));
-    replacement.emplace(loop.start(returnRootGetMoveProbe(
-        RootGetMoveProbe{&root, nullptr, &trigger, &validDuringMove})));
+    bool valid_during_move = true;
+    root.emplace(loop.start(return_root_get_move_probe(
+        root_get_move_probe{&root, &replacement, &trigger, &valid_during_move})));
+    replacement.emplace(loop.start(return_root_get_move_probe(
+        root_get_move_probe{&root, nullptr, &trigger, &valid_during_move})));
     loops.start();
     root->wait();
     replacement->wait();
     trigger.store(true, std::memory_order_release);
     static_cast<void>(root->get());
-    const bool replacementSurvived = root->valid();
-    if (replacementSurvived) {
+    const bool replacement_survived = root->valid();
+    if (replacement_survived) {
         static_cast<void>(root->get());
     }
     loops.join();
-    return !validDuringMove && replacementSurvived && !root->valid();
+    return !valid_during_move && replacement_survived && !root->valid();
 }
 
-ruvia::Task<const int> immutable_root_result(const ruvia::WorkerHandle& worker) {
-    co_return worker.isCurrent() ? 17 : -1;
+ruvia::task<const int> immutable_root_result(const ruvia::worker_handle& worker_value) {
+    co_return worker_value.is_current() ? 17 : -1;
 }
 
 bool test_root_task_delivers_const_result() {
-    ruvia::EventLoopPool loops({.loopCount = 1});
-    const auto worker = loops.loop(0).handle();
-    auto root = loops.loop(0).start(immutable_root_result(worker));
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto worker_value = loops.loop(0).handle();
+    auto root = loops.loop(0).start(immutable_root_result(worker_value));
     loops.start();
     const auto value = root.get();
     loops.stop();
@@ -2293,43 +2293,43 @@ bool test_root_task_delivers_const_result() {
     return value == 17 && !root.valid();
 }
 
-bool testRootTaskResultOwnsPmrStoragePastPoolRetirement() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 4});
+bool test_root_task_result_owns_pmr_storage_past_pool_retirement() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
     const auto loop = loops.loop(0);
-    CountingResource resource;
-    auto root = loop.start(makeRootPmrResult(&resource));
+    counting_resource resource;
+    auto root = loop.start(make_root_pmr_result(&resource));
     loops.start();
     root.wait();
     loops.stop();
     loops.join();
     bool retained = false;
     {
-        auto result = root.get();
-        const auto payload_bytes = result.values.capacity() * sizeof(int);
-        const bool payload_retained = resource.owns(result.values.data(), payload_bytes);
-        const bool values_valid = result.values.size() == 32 &&
-                                  std::all_of(result.values.begin(), result.values.end(),
+        auto result_value = root.get();
+        const auto payload_bytes = result_value.values_.capacity() * sizeof(int);
+        const bool payload_retained = resource.owns(result_value.values_.data(), payload_bytes);
+        const bool values_valid = result_value.values_.size() == 32 &&
+                                  std::all_of(result_value.values_.begin(), result_value.values_.end(),
                                       [](int value) { return value == 42; });
-        retained = values_valid && result.values.get_allocator().resource() == &resource &&
+        retained = values_valid && result_value.values_.get_allocator().resource() == &resource &&
                    payload_retained && resource.live_allocations() > 0;
     }
     return retained && resource.live_allocations() == 0 &&
-           resource.allocations == resource.deallocations;
+           resource.allocations_ == resource.deallocations_;
 }
 
-bool testRootTasksJoinNestedScopesDuringStop() {
-    ruvia::EventLoopPool loops({.loopCount = 1, .queue_capacity = 8});
+bool test_root_tasks_join_nested_scopes_during_stop() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
     const auto loop = loops.loop(0);
-    const auto worker = loop.handle();
+    const auto worker_value = loop.handle();
     std::promise<void> started;
-    auto startedResult = started.get_future();
-    bool childDone = false;
-    bool middleDone = false;
-    bool rootDone = false;
-    auto root = loop.start(rootShutdownScope(
-        worker, started, childDone, middleDone, rootDone));
+    auto started_result = started.get_future();
+    bool child_done = false;
+    bool middle_done = false;
+    bool root_done = false;
+    auto root = loop.start(root_shutdown_scope(
+        worker_value, started, child_done, middle_done, root_done));
     loops.start();
-    if (startedResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    if (started_result.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
         loops.stop();
         loops.join();
         return false;
@@ -2341,60 +2341,60 @@ bool testRootTasksJoinNestedScopesDuringStop() {
     } catch (...) {
         return false;
     }
-    return childDone && middleDone && rootDone;
+    return child_done && middle_done && root_done;
 }
 
-bool testLifecycleTransitionsAreMonotonic() {
-    using Lifecycle = ruvia::RuntimeLifecycle;
-    Lifecycle lifecycle;
-    lifecycle.completeStop();
-    if (lifecycle.state() != Lifecycle::State::kReady || !lifecycle.start()) {
+bool test_lifecycle_transitions_are_monotonic() {
+    using lifecycle_type = ruvia::runtime_lifecycle;
+    lifecycle_type lifecycle;
+    lifecycle.complete_stop();
+    if (lifecycle.state() != lifecycle_type::state_type::ready || !lifecycle.start()) {
         return false;
     }
-    lifecycle.completeStop();
-    if (lifecycle.state() != Lifecycle::State::kRunning || lifecycle.start() ||
-        !lifecycle.requestStop() || lifecycle.state() != Lifecycle::State::kStopping ||
-        lifecycle.requestStop()) {
+    lifecycle.complete_stop();
+    if (lifecycle.state() != lifecycle_type::state_type::running || lifecycle.start() ||
+        !lifecycle.request_stop() || lifecycle.state() != lifecycle_type::state_type::stopping ||
+        lifecycle.request_stop()) {
         return false;
     }
 
-    lifecycle.completeStop();
-    return lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.requestStop() &&
-           lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.start();
+    lifecycle.complete_stop();
+    return lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.request_stop() &&
+           lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.start();
 }
 
-bool testConcurrentStopHasOneInitiator() {
-    using Lifecycle = ruvia::RuntimeLifecycle;
-    constexpr std::size_t kThreadCount = 16;
-    Lifecycle lifecycle;
+bool test_concurrent_stop_has_one_initiator() {
+    using lifecycle_type = ruvia::runtime_lifecycle;
+    constexpr std::size_t thread_count = 16;
+    lifecycle_type lifecycle;
     if (!lifecycle.start()) {
         return false;
     }
 
     std::atomic<std::size_t> initiators{0};
-    std::mutex gateMutex;
-    std::condition_variable gateChanged;
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
     bool start = false;
     std::vector<std::thread> threads;
-    threads.reserve(kThreadCount);
+    threads.reserve(thread_count);
     try {
-        for (std::size_t i = 0; i < kThreadCount; ++i) {
+        for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back([&] {
                 {
-                    std::unique_lock lock(gateMutex);
-                    gateChanged.wait(lock, [&] { return start; });
+                    std::unique_lock lock(gate_mutex);
+                    gate_changed.wait(lock, [&] { return start; });
                 }
-                if (lifecycle.requestStop()) {
+                if (lifecycle.request_stop()) {
                     initiators.fetch_add(1, std::memory_order_relaxed);
                 }
             });
         }
     } catch (...) {
         {
-            std::lock_guard lock(gateMutex);
+            std::lock_guard lock(gate_mutex);
             start = true;
         }
-        gateChanged.notify_all();
+        gate_changed.notify_all();
         for (auto& thread : threads) {
             if (thread.joinable()) {
                 thread.join();
@@ -2403,17 +2403,17 @@ bool testConcurrentStopHasOneInitiator() {
         throw;
     }
     {
-        std::lock_guard lock(gateMutex);
+        std::lock_guard lock(gate_mutex);
         start = true;
     }
-    gateChanged.notify_all();
+    gate_changed.notify_all();
     for (auto& thread : threads) {
         thread.join();
     }
 
-    lifecycle.completeStop();
+    lifecycle.complete_stop();
     return initiators.load(std::memory_order_relaxed) == 1 &&
-           lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.requestStop();
+           lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.request_stop();
 }
 
 }  // namespace
@@ -2428,91 +2428,91 @@ int main() {
         return passed;
     };
     return run("event_loop_post_borrow_and_rejected_callable_ownership",
-               testEventLoopPostBorrowAndRejectedCallableOwnership) &&
+               test_event_loop_post_borrow_and_rejected_callable_ownership) &&
                    run("event_loop_post_protects_reentrant_inline_move",
-                       testEventLoopPostProtectsReentrantInlineMove) &&
+                       test_event_loop_post_protects_reentrant_inline_move) &&
                    run("event_loop_post_protects_reentrant_heap_copy",
-                       testEventLoopPostProtectsReentrantHeapCopy) &&
-                   run("worker_handle_callable_lifetime", testWorkerHandleCallableLifetime) &&
+                       test_event_loop_post_protects_reentrant_heap_copy) &&
+                   run("worker_handle_callable_lifetime", test_worker_handle_callable_lifetime) &&
                    run("worker_submission_view_lifecycle_and_rejection",
-                       testWorkerSubmissionViewLifecycleAndRejection) &&
+                       test_worker_submission_view_lifecycle_and_rejection) &&
                    run("post_outcome_invariants_and_empty_callbacks",
-                       testPostOutcomeInvariantsAndEmptyCallbacks) &&
+                       test_post_outcome_invariants_and_empty_callbacks) &&
                    run("worker_runtime_context_owns_stable_detached_endpoint",
-                       testWorkerRuntimeContextOwnsStableDetachedEndpoint) &&
+                       test_worker_runtime_context_owns_stable_detached_endpoint) &&
                    run("queue_callable_destruction_can_inspect_worker",
                        test_queue_callable_destruction_can_inspect_worker) &&
                    run("queue_factory_rollback_and_detach",
                        test_queue_factory_rollback_and_detach) &&
                    run("queue_factory_can_finish_after_detach",
                        test_queue_factory_can_finish_after_detach) &&
-                   run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) &&
+                   run("worker_signal_is_worker_affine", test_worker_signal_is_worker_affine) &&
                    run("worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake",
                        test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake) &&
                    run("worker_signal_has_no_waiter_limit",
-                       testWorkerSignalHasNoArbitraryWaiterLimit) &&
+                       test_worker_signal_has_no_arbitrary_waiter_limit) &&
                    run("worker_signal_rechecks_cold_wait_affinity",
-                       testWorkerSignalRechecksAffinityWhenColdWaitStarts) &&
-                   run("dispatch_and_affinity", testDispatchAndAffinity) &&
+                       test_worker_signal_rechecks_affinity_when_cold_wait_starts) &&
+                   run("dispatch_and_affinity", test_dispatch_and_affinity) &&
                    run("bounded_queue", test_bounded_queue) &&
                    run("cancellation_with_full_queue", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_queue(false); }) &&
                    run("cancellation_with_closed_queue", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_queue(true); }) &&
                    run("queued_cancellation_after_owner_retirement", test_queued_cancellation_releases_queue_after_owner_retirement) &&
                    run("cancellation_after_endpoint_detach", test_cancellation_after_endpoint_detach_does_not_touch_retired_owner) &&
-                   run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
+                   run("external_event_loop_attachment", test_external_event_loop_attachment) &&
                    run("attachment_run_failure_retires_through_async_cleanup",
-                       testAttachmentRunFailureRetiresThroughAsyncCleanup) &&
+                       test_attachment_run_failure_retires_through_async_cleanup) &&
                    run("abandoned_attachment_root_failure_retires_native_run",
-                       [] { return testAbandonedAttachmentRootFailureRetires(false); }) &&
+                       [] { return test_abandoned_attachment_root_failure_retires(false); }) &&
                    run("abandoned_attachment_root_failure_retires_attachment_run",
-                       [] { return testAbandonedAttachmentRootFailureRetires(true); }) &&
+                       [] { return test_abandoned_attachment_root_failure_retires(true); }) &&
                    run("pool_reported_failure_stops_every_loop_and_join_rethrows",
-                       testPoolReportedFailureStopsEveryLoopAndJoinRethrows) &&
+                       test_pool_reported_failure_stops_every_loop_and_join_rethrows) &&
                    run("pool_failure_handoff_during_destructor_report",
-                       testPoolFailureHandoffDuringDestructorReport) &&
+                       test_pool_failure_handoff_during_destructor_report) &&
                    run("pool_failure_report_works_after_queue_closure",
                        test_pool_failure_report_works_after_queue_closure) &&
                    run("attachment_report_failure_preserves_native_run_ownership",
-                       testAttachmentReportFailureKeepsNativeRunOwnership) &&
+                       test_attachment_report_failure_keeps_native_run_ownership) &&
                    run("external_attachment_retains_state_until_cleanup",
-                       testExternalAttachmentRetainsStateUntilContextCleanup) &&
+                       test_external_attachment_retains_state_until_context_cleanup) &&
                    run("external_attachment_handles_context_destruction",
-                       testExternalAttachmentHandlesContextDestruction) &&
-                   run("join_stops_running_pool", testJoinStopsRunningPool) &&
-                   run("failure_propagation", testFailurePropagation) &&
-                   run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) &&
+                       test_external_attachment_handles_context_destruction) &&
+                   run("join_stops_running_pool", test_join_stops_running_pool) &&
+                   run("failure_propagation", test_failure_propagation) &&
+                   run("join_before_start_drains_on_owners", test_join_before_start_drains_on_owners) &&
                    run("stop_before_start_propagates_failure",
-                       testStopBeforeStartPropagatesFailure) &&
-                   run("join_rejects_pool_worker", testJoinRejectsPoolWorker) &&
+                       test_stop_before_start_propagates_failure) &&
+                   run("join_rejects_pool_worker", test_join_rejects_pool_worker) &&
                    run("executor_failure_drains_shutdown_on_owners",
-                       testExecutorFailureDrainsShutdownOnOwners) &&
-                   run("expired_handle", testExpiredHandle) &&
+                       test_executor_failure_drains_shutdown_on_owners) &&
+                   run("expired_handle", test_expired_handle) &&
                    run("escaped_worker_handle_detaches",
-                       testEscapedWorkerHandleBecomesDetachedEndpoint) &&
+                       test_escaped_worker_handle_becomes_detached_endpoint) &&
                    run("failure_destroys_abandoned_queue_tasks",
                        test_failure_destroys_abandoned_queue_tasks) &&
                    run("abandoned_root_task_completes_when_queue_drain_fails",
                        test_abandoned_root_task_completes_when_queue_drain_fails) &&
                    run("dispatcher_lifecycle_hooks_are_worker_affine",
-                       testDispatcherLifecycleHooksAreWorkerAffine) &&
-                   run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) &&
+                       test_dispatcher_lifecycle_hooks_are_worker_affine) &&
+                   run("stop_callback_failure_reaches_join", test_stop_callback_failure_reaches_join) &&
                    run("stop_callback_factory_failure_keeps_other_callbacks_running",
-                       testStopCallbackFactoryFailureDoesNotSkipOtherCallbacks) &&
+                       test_stop_callback_factory_failure_does_not_skip_other_callbacks) &&
                    run("stop_listener_arrival_waits_for_shutdown_notification_batch",
-                       testStopListenerArrivalDuringShutdownNotificationBatch) &&
+                       test_stop_listener_arrival_during_shutdown_notification_batch) &&
                    run("async_stop_callbacks_start_together_and_keep_captures_alive",
-                       testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive) &&
+                       test_async_stop_callbacks_start_together_and_keep_captures_alive) &&
                    run("root_tasks_join_nested_scopes_during_stop",
-                       testRootTasksJoinNestedScopesDuringStop) &&
+                       test_root_tasks_join_nested_scopes_during_stop) &&
                    run("root_result_moves_are_reentrant_and_preserve_owner",
-                       testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner) &&
+                       test_root_task_result_moves_outside_lock_and_preserves_reentrant_owner) &&
                    run("root_result_owns_pmr_storage_past_pool_retirement",
-                       testRootTaskResultOwnsPmrStoragePastPoolRetirement) &&
+                       test_root_task_result_owns_pmr_storage_past_pool_retirement) &&
                    run("root_task_delivers_const_result",
                        test_root_task_delivers_const_result) &&
                    run("lifecycle_transitions_are_monotonic",
-                       testLifecycleTransitionsAreMonotonic) &&
-                   run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator)
+                       test_lifecycle_transitions_are_monotonic) &&
+                   run("concurrent_stop_has_one_initiator", test_concurrent_stop_has_one_initiator)
                ? 0
                : 1;
 }

@@ -1,3 +1,5 @@
+#include "ruvia/core/task_scope.h"
+
 #include <chrono>
 #include <concepts>
 #include <memory>
@@ -10,107 +12,106 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/TaskScope.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/asio_await.h"
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/timer.h"
 
 namespace {
 
-ruvia::Task<void> increment(ruvia::WorkerHandle worker, int& value) {
-    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
+ruvia::task<void> increment(ruvia::worker_handle worker_value, int& value) {
+    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
     ++value;
     co_return;
 }
 
-ruvia::Task<void> fail() {
+ruvia::task<void> fail() {
     throw std::runtime_error("child failed");
     co_return;
 }
 
-ruvia::Task<void> noOp() {
+ruvia::task<void> no_op() {
     co_return;
 }
 
-ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
+ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     {
-        ruvia::TaskScope emptyScope(worker);
+        ruvia::task_scope empty_scope(worker_value);
         {
-            auto discardedColdJoin = emptyScope.join();
-            static_cast<void>(discardedColdJoin);
+            auto discarded_cold_join = empty_scope.join();
+            static_cast<void>(discarded_cold_join);
         }
-        co_await emptyScope.join();
-        bool secondJoinRejected = false;
+        co_await empty_scope.join();
+        bool second_join_rejected = false;
         try {
-            co_await emptyScope.join();
+            co_await empty_scope.join();
         } catch (const std::logic_error&) {
-            secondJoinRejected = true;
+            second_join_rejected = true;
         }
-        bool spawnAfterJoinRejected = false;
+        bool spawn_after_join_rejected = false;
         try {
-            emptyScope.spawn(noOp());
+            empty_scope.spawn(no_op());
         } catch (const std::logic_error&) {
-            spawnAfterJoinRejected = true;
+            spawn_after_join_rejected = true;
         }
-        if (!secondJoinRejected || !spawnAfterJoinRejected) {
+        if (!second_join_rejected || !spawn_after_join_rejected) {
             co_return;
         }
     }
 
     {
-        ruvia::TaskScope emptyTaskScope(worker);
-        auto movedFrom = noOp();
-        auto retained = std::move(movedFrom);
+        ruvia::task_scope empty_task_scope(worker_value);
+        auto moved_from = no_op();
+        auto retained = std::move(moved_from);
         static_cast<void>(retained);
-        bool emptyTaskRejected = false;
+        bool empty_task_rejected = false;
         try {
-            emptyTaskScope.spawn(std::move(movedFrom));
+            empty_task_scope.spawn(std::move(moved_from));
         } catch (const std::logic_error&) {
-            emptyTaskRejected = true;
+            empty_task_rejected = true;
         }
-        if (!emptyTaskRejected || emptyTaskScope.size() != 0) {
+        if (!empty_task_rejected || empty_task_scope.size() != 0) {
             co_return;
         }
-        co_await emptyTaskScope.join();
+        co_await empty_task_scope.join();
     }
 
     {
-        ruvia::TaskScope reservedJoinScope(worker);
-        reservedJoinScope.spawn(noOp());
-        auto reservedJoin = reservedJoinScope.join();
-        bool spawnAfterReservationRejected = false;
+        ruvia::task_scope reserved_join_scope(worker_value);
+        reserved_join_scope.spawn(no_op());
+        auto reserved_join = reserved_join_scope.join();
+        bool spawn_after_reservation_rejected = false;
         try {
-            reservedJoinScope.spawn(noOp());
+            reserved_join_scope.spawn(no_op());
         } catch (const std::logic_error&) {
-            spawnAfterReservationRejected = true;
+            spawn_after_reservation_rejected = true;
         }
-        if (!spawnAfterReservationRejected) {
+        if (!spawn_after_reservation_rejected) {
             co_return;
         }
-        co_await std::move(reservedJoin);
+        co_await std::move(reserved_join);
     }
 
     {
-        ruvia::TaskScope completedFailureScope(worker);
-        completedFailureScope.spawn(fail());
-        static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
-        if (completedFailureScope.size() != 0) {
+        ruvia::task_scope completed_failure_scope(worker_value);
+        completed_failure_scope.spawn(fail());
+        static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+        if (completed_failure_scope.size() != 0) {
             co_return;
         }
-        bool completedFailureObserved = false;
+        bool completed_failure_observed = false;
         try {
-            co_await completedFailureScope.join();
+            co_await completed_failure_scope.join();
         } catch (const std::runtime_error& error) {
-            completedFailureObserved = std::string_view(error.what()) == "child failed";
+            completed_failure_observed = std::string_view(error.what()) == "child failed";
         }
-        if (!completedFailureObserved) {
+        if (!completed_failure_observed) {
             co_return;
         }
     }
 
     int calls = 0;
-    ruvia::TaskScope scope(worker);
-    scope.spawn(increment(worker, calls));
+    ruvia::task_scope scope(worker_value);
+    scope.spawn(increment(worker_value, calls));
     scope.spawn(fail());
     if (scope.size() != 2) {
         co_return;
@@ -119,7 +120,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && scope.stopRequested() &&
+        success = calls == 1 && scope.size() == 0 && scope.stop_requested() &&
                   std::string_view(error.what()) == "child failed";
     }
 }
@@ -127,24 +128,24 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 }  // namespace
 
 int main() {
-    ruvia::StopToken retainedToken;
+    ruvia::stop_token retained_token;
     {
-        ruvia::StopSource source;
-        retainedToken = source.token();
-        source.requestStop();
+        ruvia::stop_source source;
+        retained_token = source.token();
+        source.request_stop();
     }
-    if (!retainedToken.stopRequested()) {
+    if (!retained_token.stop_requested()) {
         return 1;
     }
 
-    asio::io_context ioContext;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    asio::io_context io_context;
+    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 8);
+    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
     bool success = false;
 
     asio::co_spawn(
-        ioContext, ruvia::detail::taskAsAwaitable(exercise(worker, success)), asio::detached);
-    ioContext.run();
+        io_context, ruvia::detail::task_as_awaitable(exercise(worker_value, success)), asio::detached);
+    io_context.run();
     dispatcher->close();
     return success ? 0 : 1;
 }

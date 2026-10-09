@@ -17,8 +17,8 @@ class operation_deadline final {
 public:
     using clock = std::chrono::steady_clock;
 
-    void arm(clock::time_point deadline, kind_type kind) noexcept {
-        state_.template emplace<active>(deadline, std::move(kind));
+    void arm(clock::time_point deadline_value, kind_type kind) noexcept {
+        state_.template emplace<active>(deadline_value, std::move(kind));
     }
 
     void reset() noexcept {
@@ -31,10 +31,10 @@ public:
 
     [[nodiscard]] const kind_type* kind() const& noexcept {
         if (const auto* armed = std::get_if<active>(&state_)) {
-            return &armed->kind;
+            return &armed->kind_;
         }
         if (const auto* expired_value = std::get_if<expired_state>(&state_)) {
-            return &expired_value->kind;
+            return &expired_value->kind_;
         }
         return nullptr;
     }
@@ -42,10 +42,10 @@ public:
 
     [[nodiscard]] std::optional<kind_type> expire(clock::time_point now) noexcept {
         const auto* armed = std::get_if<active>(&state_);
-        if (armed == nullptr || armed->deadline > now) {
+        if (armed == nullptr || armed->deadline_ > now) {
             return std::nullopt;
         }
-        auto kind = armed->kind;
+        auto kind = armed->kind_;
         state_.template emplace<expired_state>(kind);
         return kind;
     }
@@ -61,18 +61,18 @@ private:
 
     struct active final {
         active(clock::time_point armed_deadline, kind_type armed_kind) noexcept
-            : deadline(armed_deadline),
-              kind(std::move(armed_kind)) {}
+            : deadline_(armed_deadline),
+              kind_(std::move(armed_kind)) {}
 
-        clock::time_point deadline;
-        kind_type kind;
+        clock::time_point deadline_;
+        kind_type kind_;
     };
 
     struct expired_state final {
         explicit expired_state(kind_type expired_kind) noexcept
-            : kind(std::move(expired_kind)) {}
+            : kind_(std::move(expired_kind)) {}
 
-        kind_type kind;
+        kind_type kind_;
     };
 
     using state = std::variant<inactive, active, expired_state>;

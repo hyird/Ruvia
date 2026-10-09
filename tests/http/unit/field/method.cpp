@@ -1,23 +1,23 @@
 #include <string_view>
 
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpParseError.h"
-#include "ruvia/http/HttpRequestContentSemantics.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_request_content_semantics.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::classifyHttpMethod;
-using ruvia::HttpKnownMethod;
-using ruvia::HttpParseError;
-using ruvia::httpParseProtocolError;
-using ruvia::isValidHttpHeaderName;
-using ruvia::isValidHttpHeaderValue;
-using ruvia::isValidHttpMethodToken;
-using ruvia::isValidHttpStatusText;
-using ruvia::knownHttpMethodToken;
+using ruvia::classify_http_method;
+using ruvia::http_known_method;
+using ruvia::http_parse_error;
+using ruvia::http_parse_protocol_error;
+using ruvia::is_valid_http_header_name;
+using ruvia::is_valid_http_header_value;
+using ruvia::is_valid_http_method_token;
+using ruvia::is_valid_http_status_text;
+using ruvia::known_http_method_token;
 
 }  // namespace
 
@@ -25,68 +25,68 @@ using ruvia::knownHttpMethodToken;
 // safe and idempotent properties a recipient acts on.
 
 RUVIA_TEST(http_request_method_content_semantics_are_shared_by_client_and_server) {
-    using ruvia::HttpRequestContentSemantics;
-    RUVIA_CHECK(ruvia::httpRequestContentSemantics("CONNECT") ==
-                HttpRequestContentSemantics::kForbidden);
-    RUVIA_CHECK(ruvia::httpRequestContentSemantics("TRACE") ==
-                HttpRequestContentSemantics::kForbidden);
-    RUVIA_CHECK(ruvia::httpRequestContentSemantics("OPTIONS") ==
-                HttpRequestContentSemantics::kContentTypeRequired);
-    RUVIA_CHECK(ruvia::httpRequestContentSemantics("POST") ==
-                HttpRequestContentSemantics::kNoAdditionalRequirements);
+    using ruvia::http_request_content_semantics;
+    RUVIA_CHECK(ruvia::http_request_content_semantics("CONNECT") ==
+                http_request_content_semantics::forbidden);
+    RUVIA_CHECK(ruvia::http_request_content_semantics("TRACE") ==
+                http_request_content_semantics::forbidden);
+    RUVIA_CHECK(ruvia::http_request_content_semantics("OPTIONS") ==
+                http_request_content_semantics::content_type_required);
+    RUVIA_CHECK(ruvia::http_request_content_semantics("POST") ==
+                http_request_content_semantics::no_additional_requirements);
 }
 
 RUVIA_TEST(http_method_parsing_is_exact_and_case_sensitive) {
-    RUVIA_CHECK(classifyHttpMethod("GET") == HttpKnownMethod::kGet);
-    RUVIA_CHECK(classifyHttpMethod("POST") == HttpKnownMethod::kPost);
-    RUVIA_CHECK(classifyHttpMethod("PUT") == HttpKnownMethod::kPut);
-    RUVIA_CHECK(classifyHttpMethod("DELETE") == HttpKnownMethod::kDelete);
-    RUVIA_CHECK(classifyHttpMethod("PATCH") == HttpKnownMethod::kPatch);
-    RUVIA_CHECK(classifyHttpMethod("HEAD") == HttpKnownMethod::kHead);
-    RUVIA_CHECK(classifyHttpMethod("OPTIONS") == HttpKnownMethod::kOptions);
-    RUVIA_CHECK(classifyHttpMethod("CONNECT") == HttpKnownMethod::kConnect);
+    RUVIA_CHECK(classify_http_method("GET") == http_known_method::get);
+    RUVIA_CHECK(classify_http_method("POST") == http_known_method::post);
+    RUVIA_CHECK(classify_http_method("PUT") == http_known_method::put);
+    RUVIA_CHECK(classify_http_method("DELETE") == http_known_method::delete_value);
+    RUVIA_CHECK(classify_http_method("PATCH") == http_known_method::patch);
+    RUVIA_CHECK(classify_http_method("HEAD") == http_known_method::head);
+    RUVIA_CHECK(classify_http_method("OPTIONS") == http_known_method::options);
+    RUVIA_CHECK(classify_http_method("CONNECT") == http_known_method::connect);
     // Methods are case-sensitive (RFC 9110 section 9.1); anything outside the
     // framework's fixed semantic set remains an unknown classification.
-    RUVIA_CHECK(classifyHttpMethod("get") == HttpKnownMethod::kUnknown);
-    RUVIA_CHECK(classifyHttpMethod("Get") == HttpKnownMethod::kUnknown);
-    RUVIA_CHECK(classifyHttpMethod("FOO") == HttpKnownMethod::kUnknown);
-    RUVIA_CHECK(classifyHttpMethod("") == HttpKnownMethod::kUnknown);
-    RUVIA_CHECK(classifyHttpMethod("GETX") == HttpKnownMethod::kUnknown);
+    RUVIA_CHECK(classify_http_method("get") == http_known_method::unknown);
+    RUVIA_CHECK(classify_http_method("Get") == http_known_method::unknown);
+    RUVIA_CHECK(classify_http_method("FOO") == http_known_method::unknown);
+    RUVIA_CHECK(classify_http_method("") == http_known_method::unknown);
+    RUVIA_CHECK(classify_http_method("GETX") == http_known_method::unknown);
 }
 
 RUVIA_TEST(http_method_token_validation_is_separate_from_classification) {
-    RUVIA_CHECK(isValidHttpMethodToken("PROPFIND"));
-    RUVIA_CHECK(isValidHttpMethodToken("get"));
-    RUVIA_CHECK(isValidHttpMethodToken("M-SEARCH"));
-    RUVIA_CHECK(!isValidHttpMethodToken(""));
-    RUVIA_CHECK(!isValidHttpMethodToken("BAD METHOD"));
-    RUVIA_CHECK(!isValidHttpMethodToken("BAD(METHOD"));
-    RUVIA_CHECK(!isValidHttpMethodToken(std::string_view("BAD\x01METHOD", 10)));
+    RUVIA_CHECK(is_valid_http_method_token("PROPFIND"));
+    RUVIA_CHECK(is_valid_http_method_token("get"));
+    RUVIA_CHECK(is_valid_http_method_token("M-SEARCH"));
+    RUVIA_CHECK(!is_valid_http_method_token(""));
+    RUVIA_CHECK(!is_valid_http_method_token("BAD METHOD"));
+    RUVIA_CHECK(!is_valid_http_method_token("BAD(METHOD"));
+    RUVIA_CHECK(!is_valid_http_method_token(std::string_view("BAD\x01METHOD", 10)));
 }
 
 RUVIA_TEST(http_method_safety_and_idempotency_follow_wire_semantics) {
     for (const std::string_view method : {"GET", "HEAD", "OPTIONS", "TRACE"}) {
-        RUVIA_CHECK(ruvia::isHttpMethodSafe(method));
-        RUVIA_CHECK(ruvia::isHttpMethodIdempotent(method));
+        RUVIA_CHECK(ruvia::is_http_method_safe(method));
+        RUVIA_CHECK(ruvia::is_http_method_idempotent(method));
     }
     for (const std::string_view method : {"PUT", "DELETE"}) {
-        RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
-        RUVIA_CHECK(ruvia::isHttpMethodIdempotent(method));
+        RUVIA_CHECK(!ruvia::is_http_method_safe(method));
+        RUVIA_CHECK(ruvia::is_http_method_idempotent(method));
     }
     for (const std::string_view method : {"POST", "PATCH", "CONNECT", "CUSTOM", "get"}) {
-        RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
-        RUVIA_CHECK(!ruvia::isHttpMethodIdempotent(method));
+        RUVIA_CHECK(!ruvia::is_http_method_safe(method));
+        RUVIA_CHECK(!ruvia::is_http_method_idempotent(method));
     }
 }
 
 RUVIA_TEST(http_known_method_token_round_trips) {
-    const HttpKnownMethod methods[] = {HttpKnownMethod::kGet, HttpKnownMethod::kPost,
-        HttpKnownMethod::kPut, HttpKnownMethod::kDelete, HttpKnownMethod::kPatch,
-        HttpKnownMethod::kHead, HttpKnownMethod::kOptions, HttpKnownMethod::kConnect};
+    const http_known_method methods[] = {http_known_method::get, http_known_method::post,
+        http_known_method::put, http_known_method::delete_value, http_known_method::patch,
+        http_known_method::head, http_known_method::options, http_known_method::connect};
     for (const auto method : methods) {
-        RUVIA_CHECK(classifyHttpMethod(knownHttpMethodToken(method)) == method);
+        RUVIA_CHECK(classify_http_method(known_http_method_token(method)) == method);
     }
     // An unknown classification has no canonical wire spelling. Callers that
     // need it must retain the exact token instead of manufacturing "UNKNOWN".
-    RUVIA_CHECK(knownHttpMethodToken(HttpKnownMethod::kUnknown).empty());
+    RUVIA_CHECK(known_http_method_token(http_known_method::unknown).empty());
 }

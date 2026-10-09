@@ -1,3 +1,5 @@
+#include "http/static_file_metadata.h"
+
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -8,22 +10,21 @@
 #include <string_view>
 #include <utility>
 
-#include "http/StaticFileMetadata.h"
-#include "server/HttpNativeFile.h"
+#include "server/http_native_file.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::guessStaticFileContentType;
+using ruvia::detail::guess_static_file_content_type;
 
 std::string_view guess(const char* name) {
-    return guessStaticFileContentType(std::filesystem::path(name));
+    return guess_static_file_content_type(std::filesystem::path(name));
 }
 
-std::string fileEtag(
-    std::uint64_t size, std::uint64_t modifiedToken, ruvia::HttpResponseFileIdentity identity) {
-    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
-        std::pmr::get_default_resource(), size, modifiedToken, identity);
+std::string file_etag(
+    std::uint64_t size, std::uint64_t modified_token, ruvia::http_response_file_identity identity) {
+    const auto out = ruvia::detail::make_static_file_snapshot_etag(
+        std::pmr::get_default_resource(), size, modified_token, identity);
     return std::string(out.data(), out.size());
 }
 
@@ -59,61 +60,61 @@ RUVIA_TEST(content_type_guessing) {
 }
 
 RUVIA_TEST(http_extension_equals_is_case_insensitive) {
-    using ruvia::detail::staticFileExtensionEquals;
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("html"), "html"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("HTML"), "html"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("Json"), "json"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view(""), ""));
-    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("htm"), "html"));
-    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("jpeg"), "json"));
+    using ruvia::detail::static_file_extension_equals;
+    RUVIA_CHECK(static_file_extension_equals(std::string_view("html"), "html"));
+    RUVIA_CHECK(static_file_extension_equals(std::string_view("HTML"), "html"));
+    RUVIA_CHECK(static_file_extension_equals(std::string_view("Json"), "json"));
+    RUVIA_CHECK(static_file_extension_equals(std::string_view(""), ""));
+    RUVIA_CHECK(!static_file_extension_equals(std::string_view("htm"), "html"));
+    RUVIA_CHECK(!static_file_extension_equals(std::string_view("jpeg"), "json"));
 }
 
 RUVIA_TEST(static_file_append_unsigned_decimal) {
-    using ruvia::detail::appendStaticFileUnsigned;
+    using ruvia::detail::append_static_file_unsigned;
     std::pmr::string output(std::pmr::get_default_resource());
-    appendStaticFileUnsigned(output, 0);
+    append_static_file_unsigned(output, 0);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("0"));
     output.clear();
-    appendStaticFileUnsigned(output, 12345);
+    append_static_file_unsigned(output, 12345);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("12345"));
     // Appends onto existing content rather than replacing it.
-    appendStaticFileUnsigned(output, 67);
+    append_static_file_unsigned(output, 67);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("1234567"));
     // The 64-bit maximum.
     output.clear();
-    appendStaticFileUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
+    append_static_file_unsigned(output, (std::numeric_limits<std::uint64_t>::max)());
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("18446744073709551615"));
 }
 
 RUVIA_TEST(static_file_etag_deterministic_and_sensitive) {
-    const auto identity = ruvia::HttpResponseFileIdentity::checked({1, 2, 3, 4});
-    const auto replacement = ruvia::HttpResponseFileIdentity::checked({1, 2, 3, 5});
-    const auto base = fileEtag(100, 123456, identity);
+    const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});
+    const auto replacement = ruvia::http_response_file_identity::checked({1, 2, 3, 5});
+    const auto base = file_etag(100, 123456, identity);
     // The strong validator binds framing metadata and the exact indexed file.
     RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));
-    RUVIA_CHECK_EQ(base, fileEtag(100, 123456, identity));
-    RUVIA_CHECK(base != fileEtag(101, 123456, identity));
-    RUVIA_CHECK(base != fileEtag(100, 123457, identity));
-    RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
+    RUVIA_CHECK_EQ(base, file_etag(100, 123456, identity));
+    RUVIA_CHECK(base != file_etag(101, 123456, identity));
+    RUVIA_CHECK(base != file_etag(100, 123457, identity));
+    RUVIA_CHECK(base != file_etag(100, 123456, replacement));
     RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }
 
 RUVIA_TEST(windows_file_time_ticks_floor_to_unix_seconds) {
-    using ruvia::detail::kWindowsFileTimeTicksPerSecond;
-    using ruvia::detail::kWindowsToUnixEpoch100ns;
-    using ruvia::detail::unixSecondsFromWindowsFileTimeTicks;
-    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns), std::time_t{0});
+    using ruvia::detail::unix_seconds_from_windows_file_time_ticks;
+    using ruvia::detail::windows_file_time_ticks_per_second;
+    using ruvia::detail::windows_to_unix_epoch100ns;
+    RUVIA_CHECK_EQ(unix_seconds_from_windows_file_time_ticks(windows_to_unix_epoch100ns), std::time_t{0});
     RUVIA_CHECK_EQ(
-        unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns + kWindowsFileTimeTicksPerSecond),
+        unix_seconds_from_windows_file_time_ticks(windows_to_unix_epoch100ns + windows_file_time_ticks_per_second),
         std::time_t{1});
-    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns - 1), std::time_t{-1});
+    RUVIA_CHECK_EQ(unix_seconds_from_windows_file_time_ticks(windows_to_unix_epoch100ns - 1), std::time_t{-1});
     RUVIA_CHECK_EQ(
-        unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns - kWindowsFileTimeTicksPerSecond),
+        unix_seconds_from_windows_file_time_ticks(windows_to_unix_epoch100ns - windows_file_time_ticks_per_second),
         std::time_t{-1});
-    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(
-                       kWindowsToUnixEpoch100ns - kWindowsFileTimeTicksPerSecond - 1),
+    RUVIA_CHECK_EQ(unix_seconds_from_windows_file_time_ticks(
+                       windows_to_unix_epoch100ns - windows_file_time_ticks_per_second - 1),
         std::time_t{-2});
     if (std::in_range<std::time_t>(-11644473600LL)) {
-        RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(0), std::time_t{-11644473600LL});
+        RUVIA_CHECK_EQ(unix_seconds_from_windows_file_time_ticks(0), std::time_t{-11644473600LL});
     }
 }

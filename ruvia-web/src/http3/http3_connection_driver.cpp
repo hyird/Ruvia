@@ -7,16 +7,16 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/Http3LocalCriticalStreams.h"
-#include "ruvia/http/Http3PeerStreams.h"
+#include "ruvia/http/http3_local_critical_streams.h"
+#include "ruvia/http/http3_peer_streams.h"
 
-#include "http3/Http3QuicSocketAddress.h"
-#include "server/HttpServerOptionsValidation.h"
+#include "http3/http3_quic_socket_address.h"
+#include "server/http_server_options_validation.h"
 
 namespace ruvia::detail {
 namespace {
-constexpr auto server_shutdown_code = Http3ConnectionErrorCode::kNoError;
-constexpr auto protocol_failure_code = Http3ConnectionErrorCode::kInternalError;
+constexpr auto server_shutdown_code = http3_connection_error_code::no_error;
+constexpr auto protocol_failure_code = http3_connection_error_code::internal_error;
 constexpr std::size_t input_stream_pump_budget = 64;
 bool phase_timeout_expired(std::optional<std::chrono::milliseconds> timeout,
     std::chrono::steady_clock::time_point last_activity,
@@ -33,14 +33,14 @@ http3_connection_driver::http3_connection_driver(std::pmr::memory_resource* reso
       remote_address_(resource),
       streams_(resource),
       push_streams_(resource),
-      output_(nullptr, PmrObjectDeleter<Http3ServerStreamOutput>{resource}),
-      critical_(nullptr, PmrObjectDeleter<Http3CriticalStreamDriver>{resource}) {}
+      output_(nullptr, pmr_object_deleter<http3_server_stream_output>{resource}),
+      critical_(nullptr, pmr_object_deleter<http3_critical_stream_driver>{resource}) {}
 
 http3_connection_driver::http3_connection_driver(std::pmr::memory_resource* resource,
-    http3_connection_state& state, http3_stream_buffer& request_buffer,
-    Http3QuicWireOwner& wire, http3_connection_driver_config config)
+    http3_connection_state& state_value, http3_stream_buffer& request_buffer,
+    http3_quic_wire_owner& wire, http3_connection_driver_config config)
     : http3_connection_driver(resource) {
-    state_ = &state;
+    state_ = &state_value;
     request_buffer_ = &request_buffer;
     wire_ = &wire;
     config_ = config;
@@ -67,11 +67,11 @@ http3_connection_driver::http3_connection_driver(http3_connection_driver&& other
 }
 
 void http3_connection_driver::install_executor() noexcept {
-    state_->set_transport_executor({this, [](void* context, http3_connection_identity identity,
-                                              const Http3ServerConnection::TransportIntent& intent) noexcept {
-                                        auto& self = *static_cast<http3_connection_driver*>(context);
+    state_->set_transport_executor({this, [](void* context_value, http3_connection_identity identity,
+                                              const http3_server_connection::transport_intent_type& intent) noexcept {
+                                        auto& self = *static_cast<http3_connection_driver*>(context_value);
                                         return self.matches(identity) ? self.execute_intent(intent)
-                                                                      : http3_connection_state::intent_execution_result{.outcome = http3_connection_state::execution_outcome::stale};
+                                                                      : http3_connection_state::intent_execution_result{.outcome_ = http3_connection_state::execution_outcome::stale};
                                     }});
     executor_installed_ = true;
 }
@@ -119,7 +119,7 @@ bool http3_connection_driver::pump_admission(std::pmr::vector<ruvia::quic_initia
         }
         return true;
     }
-    bool progress{};
+    bool progress_value{};
     if (!has_generation()) {
         // The handler can reserve a generation before transport startup throws.
         // Stop closes admission, not ownership of that existing reservation.
@@ -128,21 +128,21 @@ bool http3_connection_driver::pump_admission(std::pmr::vector<ruvia::quic_initia
                                   : state_->available_identity();
         if (identity) {
             identity_ = *identity;
-            progress = true;
+            progress_value = true;
         }
     }
     if (has_generation() && !bound()) {
-        progress = (stopping_ ? retire_unbound() : admit(offers)) || progress;
+        progress_value = (stopping_ ? retire_unbound() : admit(offers)) || progress_value;
     }
     if (bound() && !protocol_ready() && !close_started_) {
         if (state_->admission() == http3_connection_state::admission_phase::handler_attached) {
-            progress = prepare_protocol() || progress;
+            progress_value = prepare_protocol() || progress_value;
         } else if (state_->admission() == http3_connection_state::admission_phase::rejected) {
             close_connection(protocol_failure_code);
-            progress = true;
+            progress_value = true;
         }
     }
-    return progress;
+    return progress_value;
 }
 
 void http3_connection_driver::request_stop() noexcept {
@@ -170,8 +170,8 @@ void http3_connection_driver::observe_transport(std::chrono::steady_clock::time_
     }
     try {
         const auto info = wire_->transport()->server().connection(*transport_id_).info();
-        if ((handshake_deadline_ && now >= *handshake_deadline_ && !info.quic_handshake_complete) ||
-            info.state == ruvia::quic_connection_state::failed || info.state == ruvia::quic_connection_state::retired) {
+        if ((handshake_deadline_ && now >= *handshake_deadline_ && !info.quic_handshake_complete_) ||
+            info.state_ == ruvia::quic_connection_state::failed || info.state_ == ruvia::quic_connection_state::retired) {
             transport_failure();
         }
     } catch (const ruvia::quic_error&) {
@@ -179,15 +179,15 @@ void http3_connection_driver::observe_transport(std::chrono::steady_clock::time_
     }
 }
 
-ruvia::quic_packet_result http3_connection_driver::write_packet(std::span<std::byte> bytes,
+ruvia::quic_packet_result http3_connection_driver::write_packet(std::span<std::byte> bytes_value,
     std::chrono::steady_clock::time_point now) {
     // The bounded acceptance scan must finish before any queued HEAD can become
     // peer-visible, even when the response was accepted late in this turn.
     if (pending_tunnel_handshakes_ != 0 && tunnel_handshake_scan_remaining_ != 0 &&
         !close_started_ && !graceful_close_started_) {
-        return {.status = ruvia::quic_operation_status::would_block};
+        return {.status_ = ruvia::quic_operation_status::would_block};
     }
-    return wire_->transport()->server().connection(*transport_id_).write_packet(bytes, now);
+    return wire_->transport()->server().connection(*transport_id_).write_packet(bytes_value, now);
 }
 
 bool http3_connection_driver::pump_local(bool transport_activity) {
@@ -199,18 +199,18 @@ bool http3_connection_driver::pump_local(bool transport_activity) {
         return true;
     }
     try {
-        const auto state = wire_->transport()->server().connection(*transport_id_).info().state;
-        if (state == ruvia::quic_connection_state::failed || state == ruvia::quic_connection_state::retired ||
-            state == ruvia::quic_connection_state::closing || state == ruvia::quic_connection_state::draining) {
+        const auto state_value = wire_->transport()->server().connection(*transport_id_).info().state_;
+        if (state_value == ruvia::quic_connection_state::failed || state_value == ruvia::quic_connection_state::retired ||
+            state_value == ruvia::quic_connection_state::closing || state_value == ruvia::quic_connection_state::draining) {
             close_connection(server_shutdown_code);
             return true;
         }
-        bool progress = pump_input();
+        bool progress_value = pump_input();
         if (close_started_) {
-            return progress;
+            return progress_value;
         }
-        progress = pump_datagrams() || progress;
-        return pump_output(transport_activity) || progress;
+        progress_value = pump_datagrams() || progress_value;
+        return pump_output(transport_activity) || progress_value;
     } catch (const ruvia::quic_error&) {
         transport_failure();
         return true;
@@ -224,23 +224,23 @@ bool http3_connection_driver::accept_response_control(const http3_stream_control
     if (!output_) {
         return true;
     }
-    if (control.kind == http3_stream_control::kind::tunnel_established) {
-        const auto info = output_->streamInfo(control.id.stream_id);
-        if (accept_tunnel_established(control, info ? info->acceptedWireBytes : 0) ==
+    if (control.kind_ == http3_stream_control::kind::tunnel_established) {
+        const auto info = output_->stream_info(control.id_.stream_id_);
+        if (accept_tunnel_established(control, info ? info->accepted_wire_bytes_ : 0) ==
             tunnel_established_result::protocol_failure) {
             close_connection(protocol_failure_code);
         }
         return true;
     }
-    const auto result = output_->acceptControl(control);
-    if (result.status == Http3ServerStreamOutput::Status::kBackpressured) {
+    const auto result_value = output_->accept_control(control);
+    if (result_value.status_ == http3_server_stream_output::status_type::backpressured) {
         return false;
     }
-    if (result.status != Http3ServerStreamOutput::Status::kAccepted &&
-        result.status != Http3ServerStreamOutput::Status::kFinDeferred &&
-        result.status != Http3ServerStreamOutput::Status::kFinished &&
-        result.status != Http3ServerStreamOutput::Status::kDuplicateFin &&
-        result.status != Http3ServerStreamOutput::Status::kClosedStream) {
+    if (result_value.status_ != http3_server_stream_output::status_type::accepted &&
+        result_value.status_ != http3_server_stream_output::status_type::fin_deferred &&
+        result_value.status_ != http3_server_stream_output::status_type::finished &&
+        result_value.status_ != http3_server_stream_output::status_type::duplicate_fin &&
+        result_value.status_ != http3_server_stream_output::status_type::closed_stream) {
         close_connection(protocol_failure_code);
     }
     return true;
@@ -252,15 +252,15 @@ bool http3_connection_driver::accept_response_data(http3_stream_buffer::borrowed
         return true;
     }
     const auto* critical = block.critical();
-    const auto critical_stream = critical && critical_ ? critical_->streamId(critical->kind) : std::nullopt;
+    const auto critical_stream = critical && critical_ ? critical_->stream_id(critical->kind_) : std::nullopt;
     if (critical && !critical_stream) {
         return false;
     }
-    const auto result = critical ? output_->acceptCriticalData(block, *critical_stream) : output_->acceptData(block);
-    if (result.status == Http3ServerStreamOutput::Status::kBackpressured) {
+    const auto result_value = critical ? output_->accept_critical_data(block, *critical_stream) : output_->accept_data(block);
+    if (result_value.status_ == http3_server_stream_output::status_type::backpressured) {
         return false;
     }
-    if (result.status != Http3ServerStreamOutput::Status::kAccepted && result.status != Http3ServerStreamOutput::Status::kClosedStream) {
+    if (result_value.status_ != http3_server_stream_output::status_type::accepted && result_value.status_ != http3_server_stream_output::status_type::closed_stream) {
         block.release();
         close_connection(protocol_failure_code);
     }
@@ -274,49 +274,49 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
         return false;
     }
 
-    bool progress = false;
+    bool progress_value = false;
     try {
         if (!transport_id_.has_value()) {
             if (offers.empty()) {
                 return false;
             }
-            streams_.reserve(ruvia::quic_limits{}.max_streams);
-            push_streams_.reserve(kHttp3ServerPushAllowance);
+            streams_.reserve(ruvia::quic_limits{}.max_streams_);
+            push_streams_.reserve(http3_server_push_allowance);
             const auto admitted = transport->admit_initial(
                 offers.front(), std::chrono::steady_clock::now());
-            if (admitted.status == ruvia::quic_operation_status::would_block ||
-                admitted.status == ruvia::quic_operation_status::need_input) {
+            if (admitted.status_ == ruvia::quic_operation_status::would_block ||
+                admitted.status_ == ruvia::quic_operation_status::need_input) {
                 return false;
             }
             offers.erase(offers.begin());
-            if (admitted.status != ruvia::quic_operation_status::accepted) {
+            if (admitted.status_ != ruvia::quic_operation_status::accepted) {
                 return true;
             }
-            transport_id_ = admitted.connection;
+            transport_id_ = admitted.connection_;
 
             handshake_deadline_ =
-                std::chrono::steady_clock::now() + config_.handshake_timeout;
-            progress = true;
+                std::chrono::steady_clock::now() + config_.handshake_timeout_;
+            progress_value = true;
         }
 
         auto& quic = wire_->transport()->server().connection(*transport_id_);
         const auto info = quic.info();
-        if (info.state == ruvia::quic_connection_state::failed ||
-            info.state == ruvia::quic_connection_state::retired) {
+        if (info.state_ == ruvia::quic_connection_state::failed ||
+            info.state_ == ruvia::quic_connection_state::retired) {
             transport->retire(*transport_id_);
             transport_id_.reset();
             handshake_deadline_.reset();
-            return revoke_reservation() || progress;
+            return revoke_reservation() || progress_value;
         }
         const auto tls_info = quic.tls_handshake().info();
-        const bool negotiated_h3 = tls_info.negotiated_alpn.size() == 2 &&
-                                   tls_info.negotiated_alpn[0] == std::byte{static_cast<unsigned char>('h')} &&
-                                   tls_info.negotiated_alpn[1] == std::byte{static_cast<unsigned char>('3')};
-        if (!info.tls_handshake_complete || !info.quic_handshake_complete ||
-            !info.confirmed || !negotiated_h3) {
-            return progress;
+        const bool negotiated_h3 = tls_info.negotiated_alpn_.size() == 2 &&
+                                   tls_info.negotiated_alpn_[0] == std::byte{static_cast<unsigned char>('h')} &&
+                                   tls_info.negotiated_alpn_[1] == std::byte{static_cast<unsigned char>('3')};
+        if (!info.tls_handshake_complete_ || !info.quic_handshake_complete_ ||
+            !info.confirmed_ || !negotiated_h3) {
+            return progress_value;
         }
-        const auto peer = to_udp_endpoint(from_quic_address(info.peer_address));
+        const auto peer = to_udp_endpoint(from_quic_address(info.peer_address_));
         if ((peer.index() != 0)) {
             transport->retire(*transport_id_);
             transport_id_.reset();
@@ -326,10 +326,10 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
         }
         remote_address_ = std::get<0>(peer).address().to_string();
         const auto committed = state_->bind(identity_,
-            {.remote_address = remote_address_,
-                .client_certificate_subject = {},
-                .remote_port = std::get<0>(peer).port()},
-            config_.local_settings, quic.max_datagram_payload_size());
+            {.remote_address_ = remote_address_,
+                .client_certificate_subject_ = {},
+                .remote_port_ = std::get<0>(peer).port()},
+            config_.local_settings_, quic.max_datagram_payload_size());
         if (committed != http3_connection_state::status::changed) {
             throw std::runtime_error("HTTP/3 accepted connection could not publish its binding");
         }
@@ -342,7 +342,7 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
             transport_id_.reset();
         }
         handshake_deadline_.reset();
-        return revoke_reservation() || progress;
+        return revoke_reservation() || progress_value;
     }
 }
 
@@ -350,7 +350,7 @@ bool http3_connection_driver::retire_unbound() noexcept {
     if (!has_generation() || bound()) {
         return false;
     }
-    bool progress = false;
+    bool progress_value = false;
     if (transport_id_.has_value()) {
         auto* transport = wire_->transport();
         if (transport == nullptr) {
@@ -359,18 +359,18 @@ bool http3_connection_driver::retire_unbound() noexcept {
         transport->retire(*transport_id_);
         transport_id_.reset();
         handshake_deadline_.reset();
-        progress = true;
+        progress_value = true;
     }
-    return revoke_reservation() || progress;
+    return revoke_reservation() || progress_value;
 }
 
 bool http3_connection_driver::revoke_reservation() noexcept {
     if (!has_generation() || bound() || state_->transport_retired()) {
         return false;
     }
-    auto& state = *state_;
-    if (state.revoke(identity_) != http3_connection_state::status::changed ||
-        state.mark_transport_retired(identity_) != http3_connection_state::status::changed) {
+    auto& state_value = *state_;
+    if (state_value.revoke(identity_) != http3_connection_state::status::changed ||
+        state_value.mark_transport_retired(identity_) != http3_connection_state::status::changed) {
         std::terminate();
     }
 
@@ -383,22 +383,22 @@ bool http3_connection_driver::prepare_protocol() noexcept {
         return false;
     }
     try {
-        const auto prefixes = Http3LocalCriticalStreams::create(config_.local_settings);
+        const auto prefixes = http3_local_critical_streams::create(config_.local_settings_);
         auto* transport = wire_->transport();
-        auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = static_cast<std::uint64_t>(config_.max_requests_per_connection)});
+        auto planner = http3_server_request_admission_planner::create({.max_requests_per_connection_ = static_cast<std::uint64_t>(config_.max_requests_per_connection_)});
         if ((prefixes.index() != 0) || (planner.index() != 0) || !transport || !transport_id_) {
             close_connection(protocol_failure_code);
             return true;
         }
-        auto critical = makePmrObject<Http3CriticalStreamDriver>(resource_, std::get<0>(prefixes));
+        auto critical = make_pmr_object<http3_critical_stream_driver>(resource_, std::get<0>(prefixes));
         auto& quic = wire_->transport()->server().connection(*transport_id_);
-        auto output = makePmrObject<Http3ServerStreamOutput>(resource_, quic, resource_,
-            identity_.epoch, identity_.connection_generation,
-            Http3ServerStreamOutputConfig{
-                .maxTrackedStreams = config_.max_requests_per_connection,
-                .maxQueuedBlocks = config_.buffer_capacity,
-                .maxDriveWorkItems = 16,
-                .write_timeout = config_.write_timeout});
+        auto output = make_pmr_object<http3_server_stream_output>(resource_, quic, resource_,
+            identity_.epoch_, identity_.connection_generation_,
+            http3_server_stream_output_config{
+                .max_tracked_streams_ = config_.max_requests_per_connection_,
+                .max_queued_blocks_ = config_.buffer_capacity_,
+                .max_drive_work_items_ = 16,
+                .write_timeout_ = config_.write_timeout_});
         admission_planner_.emplace(std::move(std::get<0>(planner)));
         critical_ = std::move(critical);
         output_ = std::move(output);
@@ -411,84 +411,84 @@ bool http3_connection_driver::prepare_protocol() noexcept {
 bool http3_connection_driver::pump_input() {
     auto& transport = *wire_->transport();
     auto& quic = transport.server().connection(*transport_id_);
-    bool progress = false;
+    bool progress_value = false;
 
     const auto critical = critical_->drive(
-        [&quic](Http3CriticalStreamDriver::Kind) {
+        [&quic](http3_critical_stream_driver::kind_type) {
             return quic.open_stream(true);
         },
-        [&quic](std::uint64_t id, std::span<const char> bytes) {
-            return quic.write_stream(id, std::as_bytes(bytes));
+        [&quic](std::uint64_t id, std::span<const char> bytes_value) {
+            return quic.write_stream(id, std::as_bytes(bytes_value));
         });
-    if (critical == Http3CriticalStreamDriver::Result::kFatal) {
+    if (critical == http3_critical_stream_driver::result_type::fatal) {
         close_connection(protocol_failure_code);
         return true;
     }
-    progress = critical == Http3CriticalStreamDriver::Result::kProgress;
-    if (goaway_queued_ && critical == Http3CriticalStreamDriver::Result::kReady) {
+    progress_value = critical == http3_critical_stream_driver::result_type::progress;
+    if (goaway_queued_ && critical == http3_critical_stream_driver::result_type::ready) {
         goaway_bytes_accepted_ = true;
     }
 
     const auto accepted = quic.accept_streams();
-    if (accepted.status != ruvia::quic_operation_status::accepted &&
-        accepted.status != ruvia::quic_operation_status::need_input &&
-        accepted.status != ruvia::quic_operation_status::would_block) {
+    if (accepted.status_ != ruvia::quic_operation_status::accepted &&
+        accepted.status_ != ruvia::quic_operation_status::need_input &&
+        accepted.status_ != ruvia::quic_operation_status::would_block) {
         close_connection(protocol_failure_code);
         return true;
     }
-    for (std::size_t i = 0; i < accepted.size; ++i) {
-        const auto stream_id = accepted.streams[i].stream_id;
-        if (!accepted.streams[i].readable ||
+    for (std::size_t i = 0; i < accepted.size_; ++i) {
+        const auto stream_id = accepted.streams_[i].stream_id_;
+        if (!accepted.streams_[i].readable_ ||
             streams_.size() >= streams_.capacity()) {
-            close_connection(Http3ConnectionErrorCode::kExcessiveLoad);
+            close_connection(http3_connection_error_code::excessive_load);
             return true;
         }
-        if (isHttp3RequestStreamId(stream_id)) {
+        if (is_http3_request_stream_id(stream_id)) {
             if (!admission_planner_) {
                 close_connection(protocol_failure_code);
                 return true;
             }
             const auto decision = admission_planner_->admit(stream_id);
-            if (decision.action != Http3ServerRequestAdmissionAction::kAdmit) {
+            if (decision.action_ != http3_server_request_admission_action::admit) {
                 if (!goaway_queued_ && !announce_goaway()) {
                     return true;
                 }
                 if (!reject_request_stream(stream_id)) {
                     return true;
                 }
-                progress = true;
+                progress_value = true;
                 continue;
             }
             ++admitted_request_count_;
-        } else if (isHttp3ClientUnidirectionalStreamId(stream_id)) {
+        } else if (is_http3_client_unidirectional_stream_id(stream_id)) {
             if (peer_unidirectional_stream_count_ >=
-                kHttp3PeerUnidirectionalStreamAllowance) {
-                close_connection(Http3ConnectionErrorCode::kExcessiveLoad);
+                http3_peer_unidirectional_stream_allowance) {
+                close_connection(http3_connection_error_code::excessive_load);
                 return true;
             }
             ++peer_unidirectional_stream_count_;
         } else {
-            close_connection(Http3ConnectionErrorCode::kStreamCreationError);
+            close_connection(http3_connection_error_code::stream_creation_error);
             return true;
         }
 
         streams_.emplace_back(resource_);
         auto& stream = streams_.back();
-        stream.id = stream_id;
-        stream.request_stream = isHttp3RequestStreamId(stream_id);
-        stream.last_input_activity = std::chrono::steady_clock::now();
-        if (stream.request_stream) {
+        stream.id_ = stream_id;
+        stream.request_stream_ = is_http3_request_stream_id(stream_id);
+        stream.last_input_activity_ = std::chrono::steady_clock::now();
+        if (stream.request_stream_) {
             // Duplicate only the frame-boundary state needed to observe when
             // request-header timeout should transition to body timeout.
-            stream.frame_tracker = makePmrObject<Http3StreamFrames>(resource_,
-                Http3StreamKind::kRequest, resource_);
-            if (admitted_request_count_ == config_.max_requests_per_connection) {
+            stream.frame_tracker_ = make_pmr_object<http3_stream_frames>(resource_,
+                http3_stream_kind::request, resource_);
+            if (admitted_request_count_ == config_.max_requests_per_connection_) {
                 if (!announce_goaway() || !seal_admission()) {
                     return true;
                 }
             }
         }
-        progress = true;
+        progress_value = true;
     }
 
     const auto stream_count = streams_.size();
@@ -502,9 +502,9 @@ bool http3_connection_driver::pump_input() {
         auto& stream = streams_[stream_index];
         // Terminal input can still need one final worker notification (notably
         // write-timeout cancellation after FIN was already delivered).
-        if (stream.pending_control) {
-            if (stream.request_stream) {
-                const auto sent = request_buffer_->try_send_control(*stream.pending_control);
+        if (stream.pending_control_) {
+            if (stream.request_stream_) {
+                const auto sent = request_buffer_->try_send_control(*stream.pending_control_);
                 if (sent == http3_stream_buffer::control_result::full) {
                     continue;
                 }
@@ -513,22 +513,22 @@ bool http3_connection_driver::pump_input() {
                     return true;
                 }
             } else {
-                const auto result = state_->accept_peer_stream_control(*stream.pending_control);
-                if (!result) {
+                const auto result_value = state_->accept_peer_stream_control(*stream.pending_control_);
+                if (!result_value) {
                     close_connection(protocol_failure_code);
                     return true;
                 }
-                if (result->connectionCloseRequired) {
+                if (result_value->connection_close_required_) {
                     // Keep the real parser's error code in the worker close intent.
                     return true;
                 }
             }
-            stream.pending_control.reset();
-            if (!stream.request_stream) {
+            stream.pending_control_.reset();
+            if (!stream.request_stream_) {
                 auto* stream_transport = wire_->transport();
                 const auto closed = stream_transport == nullptr
                                         ? ruvia::quic_operation_status::retired
-                                        : stream_transport->server().connection(*transport_id_).close_stream(stream.id);
+                                        : stream_transport->server().connection(*transport_id_).close_stream(stream.id_);
                 if (closed != ruvia::quic_operation_status::accepted &&
                     closed != ruvia::quic_operation_status::completed &&
                     closed != ruvia::quic_operation_status::retired) {
@@ -536,49 +536,49 @@ bool http3_connection_driver::pump_input() {
                     return true;
                 }
             }
-            complete_input_terminal(stream.id);
-            progress = true;
+            complete_input_terminal(stream.id_);
+            progress_value = true;
             continue;
         }
-        if (stream.input_terminal) {
+        if (stream.input_terminal_) {
             continue;
         }
 
-        if (stream.request_stream) {
-            const auto timeout = stream.input_phase == stream_state::receive_phase::headers
-                                     ? config_.request_header_timeout
+        if (stream.request_stream_) {
+            const auto timeout = stream.input_phase_ == stream_state::receive_phase::headers
+                                     ? config_.request_header_timeout_
                                  : stream.body_timeout_applies()
-                                     ? config_.request_body_timeout
+                                     ? config_.request_body_timeout_
                                      : std::nullopt;
-            if (phase_timeout_expired(timeout, stream.last_input_activity,
+            if (phase_timeout_expired(timeout, stream.last_input_activity_,
                     std::chrono::steady_clock::now())) {
-                note_input_reset(stream.id);
-                terminate_request_stream(stream.id,
-                    static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
-                stream.frame_tracker.reset();
-                stream.pending_control = http3_stream_control{
-                    .kind = http3_stream_control::kind::stream_reset,
-                    .id = {identity_.epoch,
-                        identity_.connection_generation, stream.id},
-                    .value = stream.received_bytes,
-                    .stream_reset_error_code = Http3ConnectionErrorCode::kRequestCancelled,
+                note_input_reset(stream.id_);
+                terminate_request_stream(stream.id_,
+                    static_cast<std::uint64_t>(http3_connection_error_code::request_cancelled));
+                stream.frame_tracker_.reset();
+                stream.pending_control_ = http3_stream_control{
+                    .kind_ = http3_stream_control::kind::stream_reset,
+                    .id_ = {identity_.epoch_,
+                        identity_.connection_generation_, stream.id_},
+                    .value_ = stream.received_bytes_,
+                    .stream_reset_error_code_ = http3_connection_error_code::request_cancelled,
                 };
-                progress = true;
+                progress_value = true;
                 continue;
             }
         }
 
         http3_stream_buffer::data_reservation reservation;
-        stream.received_early_data = stream.received_early_data ||
-                                     quic.stream_info(stream.id).received_early_data;
-        const http3_stream_id message_id{identity_.epoch,
-            identity_.connection_generation, stream.id, {}, stream.received_early_data};
+        stream.received_early_data_ = stream.received_early_data_ ||
+                                      quic.stream_info(stream.id_).received_early_data_;
+        const http3_stream_id message_id{identity_.epoch_,
+            identity_.connection_generation_, stream.id_, {}, stream.received_early_data_};
         // Peer unidirectional input cannot wait for request DATA credits: those
         // credits can all be held by QPACK-blocked requests. The same HTTP parser
         // consumes this synchronous borrow and owns incomplete instructions.
         std::array<std::byte, http3_stream_buffer::max_block_bytes> peer_storage;
         auto writable_bytes = std::span<std::byte>(peer_storage);
-        if (stream.request_stream) {
+        if (stream.request_stream_) {
             const auto reserved = request_buffer_->reserve_data(message_id, reservation);
             if (reserved == http3_stream_buffer::reservation_result::full ||
                 reserved == http3_stream_buffer::reservation_result::no_block) {
@@ -592,59 +592,59 @@ bool http3_connection_driver::pump_input() {
         }
         auto writable = std::span<char>(reinterpret_cast<char*>(writable_bytes.data()),
             writable_bytes.size());
-        const auto read = quic.read_stream(stream.id, std::as_writable_bytes(writable));
-        switch (read.status) {
+        const auto read = quic.read_stream(stream.id_, std::as_writable_bytes(writable));
+        switch (read.status_) {
             case ruvia::quic_stream_read_status::data: {
-                if (read.size == 0 || read.size > writable.size() ||
-                    read.size > std::numeric_limits<std::uint64_t>::max() -
-                                    stream.received_bytes) {
+                if (read.size_ == 0 || read.size_ > writable.size() ||
+                    read.size_ > std::numeric_limits<std::uint64_t>::max() -
+                                     stream.received_bytes_) {
                     reservation.abort();
                     close_connection(protocol_failure_code);
                     return true;
                 }
-                if (stream.frame_tracker) {
+                if (stream.frame_tracker_) {
                     // This duplicate framer only observes the first request HEADERS
                     // boundary to select header/body timeout phase. The worker's
                     // protocol owner is authoritative for framing and errors.
                     try {
-                        const auto frame_status = stream.frame_tracker->feed(
-                            std::span<const char>(writable.data(), read.size), false,
-                            +[](void* context, Http3StreamFrameEvent event) {
-                                auto& tracked = *static_cast<stream_state*>(context);
-                                if (event.kind == Http3StreamFrameEventKind::kHeaders &&
-                                    !event.trailers && event.endFrame) {
-                                    tracked.input_phase = stream_state::receive_phase::body;
+                        const auto frame_status = stream.frame_tracker_->feed(
+                            std::span<const char>(writable.data(), read.size_), false,
+                            +[](void* context_value, http3_stream_frame_event event) {
+                                auto& tracked = *static_cast<stream_state*>(context_value);
+                                if (event.kind_ == http3_stream_frame_event_kind::headers &&
+                                    !event.trailers_ && event.end_frame_) {
+                                    tracked.input_phase_ = stream_state::receive_phase::body;
                                 }
                             },
                             &stream);
-                        if (frame_status != Http3StreamFrameStatus::kNeedMoreData ||
-                            stream.input_phase == stream_state::receive_phase::body) {
-                            stream.frame_tracker.reset();
+                        if (frame_status != http3_stream_frame_status::need_more_data ||
+                            stream.input_phase_ == stream_state::receive_phase::body) {
+                            stream.frame_tracker_.reset();
                         }
                     } catch (...) {
                         // Losing timeout-phase observation must not duplicate
                         // protocol validation or prevent forwarding bytes to the worker.
-                        stream.frame_tracker.reset();
+                        stream.frame_tracker_.reset();
                     }
                 }
-                if (stream.request_stream) {
-                    if (reservation.commit(read.size) != http3_stream_buffer::commit_result::sent) {
+                if (stream.request_stream_) {
+                    if (reservation.commit(read.size_) != http3_stream_buffer::commit_result::sent) {
                         close_connection(protocol_failure_code);
                         return true;
                     }
                 } else {
-                    const auto result = state_->accept_peer_stream_data(message_id, writable_bytes.first(read.size));
-                    if (!result) {
+                    const auto result_value = state_->accept_peer_stream_data(message_id, writable_bytes.first(read.size_));
+                    if (!result_value) {
                         close_connection(protocol_failure_code);
                         return true;
                     }
-                    if (result->connectionCloseRequired) {
+                    if (result_value->connection_close_required_) {
                         return true;
                     }
                 }
-                stream.received_bytes += read.size;
-                stream.last_input_activity = std::chrono::steady_clock::now();
-                progress = true;
+                stream.received_bytes_ += read.size_;
+                stream.last_input_activity_ = std::chrono::steady_clock::now();
+                progress_value = true;
                 break;
             }
             case ruvia::quic_stream_read_status::would_block:
@@ -652,46 +652,46 @@ bool http3_connection_driver::pump_input() {
                 break;
             case ruvia::quic_stream_read_status::fin:
                 reservation.abort();
-                if (stream.frame_tracker) {
+                if (stream.frame_tracker_) {
                     // FIN observation is only needed to retire this duplicate
                     // timeout-phase parser; the worker processes the real FIN.
                     try {
-                        static_cast<void>(stream.frame_tracker->feed({}, true, +[](void* context, Http3StreamFrameEvent event) {
-                                auto& tracked = *static_cast<stream_state*>(context);
-                                if (event.kind == Http3StreamFrameEventKind::kHeaders &&
-                                    !event.trailers && event.endFrame) {
-                                    tracked.input_phase = stream_state::receive_phase::body;
+                        static_cast<void>(stream.frame_tracker_->feed({}, true, +[](void* context_value, http3_stream_frame_event event) {
+                                auto& tracked = *static_cast<stream_state*>(context_value);
+                                if (event.kind_ == http3_stream_frame_event_kind::headers &&
+                                    !event.trailers_ && event.end_frame_) {
+                                    tracked.input_phase_ = stream_state::receive_phase::body;
                                 } }, &stream));
                     } catch (...) {
                         // Observation failure does not change protocol handling.
                     }
-                    stream.frame_tracker.reset();
+                    stream.frame_tracker_.reset();
                 }
-                note_peer_fin(stream.id);
-                stream.pending_control = http3_stream_control{
-                    .kind = http3_stream_control::kind::stream_fin,
-                    .id = message_id,
-                    .value = stream.received_bytes,
+                note_peer_fin(stream.id_);
+                stream.pending_control_ = http3_stream_control{
+                    .kind_ = http3_stream_control::kind::stream_fin,
+                    .id_ = message_id,
+                    .value_ = stream.received_bytes_,
                 };
-                progress = true;
+                progress_value = true;
                 break;
             case ruvia::quic_stream_read_status::reset:
                 reservation.abort();
-                note_input_reset(stream.id);
-                stream.frame_tracker.reset();
-                if (stream.request_stream) {
-                    terminate_request_stream(stream.id,
-                        static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
+                note_input_reset(stream.id_);
+                stream.frame_tracker_.reset();
+                if (stream.request_stream_) {
+                    terminate_request_stream(stream.id_,
+                        static_cast<std::uint64_t>(http3_connection_error_code::request_cancelled));
                 }
-                stream.pending_control = http3_stream_control{
-                    .kind = http3_stream_control::kind::stream_reset,
-                    .id = message_id,
-                    .value = stream.received_bytes,
-                    .stream_reset_error_code = static_cast<Http3ConnectionErrorCode>(
-                        read.peer_reset_error_code.value_or(static_cast<std::uint64_t>(
-                            Http3ConnectionErrorCode::kRequestCancelled))),
+                stream.pending_control_ = http3_stream_control{
+                    .kind_ = http3_stream_control::kind::stream_reset,
+                    .id_ = message_id,
+                    .value_ = stream.received_bytes_,
+                    .stream_reset_error_code_ = static_cast<http3_connection_error_code>(
+                        read.peer_reset_error_code_.value_or(static_cast<std::uint64_t>(
+                            http3_connection_error_code::request_cancelled))),
                 };
-                progress = true;
+                progress_value = true;
                 break;
             default:
                 reservation.abort();
@@ -702,8 +702,8 @@ bool http3_connection_driver::pump_input() {
     const auto stream_count_before_retirement = streams_.size();
     std::erase_if(streams_, [](const stream_state& stream) {
         // Keep request-stream identity through the connection lifetime: its
-        // deferred TunnelEstablished marker may be published after peer FIN.
-        return stream.input_terminal && !stream.request_stream;
+        // deferred tunnel_established marker may be published after peer FIN.
+        return stream.input_terminal_ && !stream.request_stream_;
     });
     if (streams_.size() != stream_count_before_retirement) {
         next_input_stream_index_ = 0;
@@ -716,24 +716,24 @@ bool http3_connection_driver::pump_input() {
         next_input_stream_index_ =
             (start_input_index + processed_streams) % stream_count;
     }
-    return progress || (processed_streams == stream_turn_budget &&
-                           stream_turn_budget < stream_count);
+    return progress_value || (processed_streams == stream_turn_budget &&
+                                 stream_turn_budget < stream_count);
 }
 
 void http3_connection_driver::terminate_request_stream(std::uint64_t stream_id, std::uint64_t error_code) {
     bool terminate_directly = output_ == nullptr;
     if (output_) {
-        const auto before_cancel = output_->streamInfo(stream_id);
-        if (before_cancel && before_cancel->sendFinAccepted) {
-            // cancelStream closes only the receive side when the real local FIN
+        const auto before_cancel = output_->stream_info(stream_id);
+        if (before_cancel && before_cancel->send_fin_accepted_) {
+            // cancel_stream closes only the receive side when the real local FIN
             // has already been accepted by QUIC. Never fall back to RESET_STREAM
             // based solely on the HTTP response's terminal state.
-            const auto result = output_->cancelStream(stream_id, error_code);
-            switch (result.status) {
-                case Http3ServerStreamOutput::Status::kCancelled:
-                case Http3ServerStreamOutput::Status::kClosedStream:
-                case Http3ServerStreamOutput::Status::kConnectionClosed:
-                case Http3ServerStreamOutput::Status::kStopped:
+            const auto result_value = output_->cancel_stream(stream_id, error_code);
+            switch (result_value.status_) {
+                case http3_server_stream_output::status_type::cancelled:
+                case http3_server_stream_output::status_type::closed_stream:
+                case http3_server_stream_output::status_type::connection_closed:
+                case http3_server_stream_output::status_type::stopped:
                     return;
                 default:
                     close_connection(protocol_failure_code);
@@ -741,15 +741,15 @@ void http3_connection_driver::terminate_request_stream(std::uint64_t stream_id, 
             }
         }
 
-        const auto result = output_->cancelStream(stream_id, error_code);
-        switch (result.status) {
-            case Http3ServerStreamOutput::Status::kCancelled:
-            case Http3ServerStreamOutput::Status::kConnectionClosed:
-            case Http3ServerStreamOutput::Status::kStopped:
+        const auto result_value = output_->cancel_stream(stream_id, error_code);
+        switch (result_value.status_) {
+            case http3_server_stream_output::status_type::cancelled:
+            case http3_server_stream_output::status_type::connection_closed:
+            case http3_server_stream_output::status_type::stopped:
                 return;
-            case Http3ServerStreamOutput::Status::kClosedStream: {
-                const auto info = output_->streamInfo(stream_id);
-                if (!info || info->state == Http3ServerStreamOutput::StreamState::kFinished) {
+            case http3_server_stream_output::status_type::closed_stream: {
+                const auto info = output_->stream_info(stream_id);
+                if (!info || info->state_ == http3_server_stream_output::stream_state_type::finished) {
                     terminate_directly = true;
                 } else {
                     return;
@@ -779,15 +779,15 @@ void http3_connection_driver::terminate_request_stream(std::uint64_t stream_id, 
 http3_connection_driver::tunnel_established_result http3_connection_driver::accept_tunnel_established(
     const http3_stream_control& control, std::uint64_t accepted_wire_bytes) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [&control](const stream_state& stream) { return stream.id == control.id.stream_id; });
+        [&control](const stream_state& stream) { return stream.id_ == control.id_.stream_id_; });
     if (found == streams_.end()) {
         return tunnel_established_result::protocol_failure;
     }
-    const auto result = found->accept_tunnel_established(control, identity_, accepted_wire_bytes);
-    if (result != tunnel_established_result::accepted) {
-        return result;
+    const auto result_value = found->accept_tunnel_established(control, identity_, accepted_wire_bytes);
+    if (result_value != tunnel_established_result::accepted) {
+        return result_value;
     }
-    if (found->tunnel_established_barrier) {
+    if (found->tunnel_established_barrier_) {
         if (pending_tunnel_handshakes_ == std::numeric_limits<std::size_t>::max()) {
             std::terminate();
         }
@@ -806,7 +806,7 @@ http3_connection_driver::tunnel_established_result http3_connection_driver::acce
 bool http3_connection_driver::confirm_tunnel_established(std::uint64_t stream_id,
     std::uint64_t accepted_wire_bytes) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [stream_id](const stream_state& stream) { return stream.id == stream_id; });
+        [stream_id](const stream_state& stream) { return stream.id_ == stream_id; });
     const bool confirmed = found != streams_.end() &&
                            found->confirm_tunnel_established(accepted_wire_bytes);
     if (!confirmed) {
@@ -825,26 +825,26 @@ bool http3_connection_driver::confirm_tunnel_established(std::uint64_t stream_id
 
 void http3_connection_driver::note_peer_fin(std::uint64_t stream_id) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [stream_id](const stream_state& stream) { return stream.id == stream_id; });
+        [stream_id](const stream_state& stream) { return stream.id_ == stream_id; });
     if (found != streams_.end()) {
-        found->input_fin = true;
+        found->input_fin_ = true;
     }
 }
 
 void http3_connection_driver::note_input_reset(std::uint64_t stream_id) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [stream_id](const stream_state& stream) { return stream.id == stream_id; });
+        [stream_id](const stream_state& stream) { return stream.id_ == stream_id; });
     if (found == streams_.end()) {
         return;
     }
-    found->input_reset = true;
-    found->frame_tracker.reset();
-    if (found->tunnel_established_barrier) {
+    found->input_reset_ = true;
+    found->frame_tracker_.reset();
+    if (found->tunnel_established_barrier_) {
         if (pending_tunnel_handshakes_ == 0) {
             std::terminate();
         }
         --pending_tunnel_handshakes_;
-        found->tunnel_established_barrier.reset();
+        found->tunnel_established_barrier_.reset();
     }
     if (pending_tunnel_handshakes_ == 0) {
         tunnel_handshake_scan_remaining_ = 0;
@@ -854,27 +854,27 @@ void http3_connection_driver::note_input_reset(std::uint64_t stream_id) noexcept
 
 void http3_connection_driver::complete_input_terminal(std::uint64_t stream_id) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [stream_id](const stream_state& stream) { return stream.id == stream_id; });
+        [stream_id](const stream_state& stream) { return stream.id_ == stream_id; });
     if (found == streams_.end()) {
         return;
     }
-    if (found->input_reset && found->tunnel_established_barrier) {
+    if (found->input_reset_ && found->tunnel_established_barrier_) {
         if (pending_tunnel_handshakes_ == 0) {
             std::terminate();
         }
         --pending_tunnel_handshakes_;
-        found->tunnel_established_barrier.reset();
+        found->tunnel_established_barrier_.reset();
     }
-    found->input_terminal = true;
+    found->input_terminal_ = true;
 }
 
 void http3_connection_driver::stop_request_input(std::uint64_t stream_id) noexcept {
     const auto found = std::ranges::find_if(streams_,
-        [stream_id](const stream_state& stream) { return stream.id == stream_id; });
+        [stream_id](const stream_state& stream) { return stream.id_ == stream_id; });
     if (found == streams_.end()) {
         return;
     }
-    found->pending_control.reset();
+    found->pending_control_.reset();
     note_input_reset(stream_id);
     complete_input_terminal(stream_id);
 }
@@ -887,14 +887,14 @@ bool http3_connection_driver::announce_goaway() noexcept {
         close_connection(protocol_failure_code);
         return false;
     }
-    (void)admission_planner_->announceGoaway();
-    if (!critical_->queueGoaway(admission_planner_->goawayId())) {
+    (void)admission_planner_->announce_goaway();
+    if (!critical_->queue_goaway(admission_planner_->goaway_id())) {
         close_connection(protocol_failure_code);
         return false;
     }
     const auto now = std::chrono::steady_clock::now();
     const auto timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-        config_.drain_timeout);
+        config_.drain_timeout_);
     drain_deadline_ = timeout > std::chrono::steady_clock::time_point::max() - now
                           ? std::chrono::steady_clock::time_point::max()
                           : now + timeout;
@@ -908,12 +908,12 @@ bool http3_connection_driver::seal_admission() noexcept {
         return true;
     }
     if (!goaway_queued_ || !admission_planner_ ||
-        admitted_request_count_ != config_.max_requests_per_connection) {
+        admitted_request_count_ != config_.max_requests_per_connection_) {
         close_connection(protocol_failure_code);
         return false;
     }
     const auto sealed = state_->seal_admission(identity_,
-        config_.max_requests_per_connection, admission_planner_->goawayId());
+        config_.max_requests_per_connection_, admission_planner_->goaway_id());
     if (sealed != http3_connection_state::status::changed) {
         close_connection(protocol_failure_code);
         return false;
@@ -923,8 +923,8 @@ bool http3_connection_driver::seal_admission() noexcept {
 }
 
 bool http3_connection_driver::reject_request_stream(std::uint64_t stream_id) {
-    if (rejected_request_count_ >= kHttp3PostGoawayRequestAllowance) {
-        close_connection(Http3ConnectionErrorCode::kExcessiveLoad);
+    if (rejected_request_count_ >= http3_post_goaway_request_allowance) {
+        close_connection(http3_connection_error_code::excessive_load);
         return false;
     }
     auto* transport = wire_->transport();
@@ -932,7 +932,7 @@ bool http3_connection_driver::reject_request_stream(std::uint64_t stream_id) {
         close_connection(protocol_failure_code);
         return false;
     }
-    const auto status = wire_->transport()->server().connection(*transport_id_).terminate_bidirectional_stream(stream_id, static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestRejected));
+    const auto status = wire_->transport()->server().connection(*transport_id_).terminate_bidirectional_stream(stream_id, static_cast<std::uint64_t>(http3_connection_error_code::request_rejected));
     if (status != ruvia::quic_operation_status::accepted &&
         status != ruvia::quic_operation_status::completed &&
         status != ruvia::quic_operation_status::retired) {
@@ -943,44 +943,44 @@ bool http3_connection_driver::reject_request_stream(std::uint64_t stream_id) {
     return true;
 }
 
-Http3DatagramReceiveStatus http3_connection_driver::plan_datagram_receive(
-    const Http3DatagramView& datagram) const noexcept {
-    const auto stream = std::ranges::find(streams_, datagram.streamId, &stream_state::id);
-    return planHttp3DatagramReceive(datagram,
-        {.localH3Datagram = config_.local_settings.h3Datagram,
-            .streamExists = stream != streams_.end(),
-            .receiveOpen = stream != streams_.end() && !stream->input_terminal && !stream->input_reset,
-            .supportsDatagrams = stream != streams_.end() && stream->tunnel_established});
+http3_datagram_receive_status http3_connection_driver::plan_datagram_receive(
+    const http3_datagram_view& datagram) const noexcept {
+    const auto stream = std::ranges::find(streams_, datagram.stream_id_, &stream_state::id_);
+    return plan_http3_datagram_receive(datagram,
+        {.local_h3_datagram_ = config_.local_settings_.h3_datagram_,
+            .stream_exists_ = stream != streams_.end(),
+            .receive_open_ = stream != streams_.end() && !stream->input_terminal_ && !stream->input_reset_,
+            .supports_datagrams_ = stream != streams_.end() && stream->tunnel_established_});
 }
 
 bool http3_connection_driver::pump_datagrams() {
     auto& quic = wire_->transport()->server().connection(*transport_id_);
     auto& channel = *state_;
-    bool progress{};
+    bool progress_value{};
     std::array<std::byte, http3_connection_state::max_datagram_bytes> input{};
     for (std::size_t count = 0; count < http3_connection_state::datagram_capacity; ++count) {
-        const auto result = quic.read_datagram(input);
-        if (result.status == ruvia::quic_datagram_status::would_block ||
-            result.status == ruvia::quic_datagram_status::unavailable) {
+        const auto result_value = quic.read_datagram(input);
+        if (result_value.status_ == ruvia::quic_datagram_status::would_block ||
+            result_value.status_ == ruvia::quic_datagram_status::unavailable) {
             break;
         }
-        progress = true;
-        if (result.status != ruvia::quic_datagram_status::received) {
+        progress_value = true;
+        if (result_value.status_ != ruvia::quic_datagram_status::received) {
             continue;
         }
-        const auto bytes = std::span<const std::byte>(input).first(result.size);
-        const auto decoded = decodeHttp3Datagram({reinterpret_cast<const char*>(bytes.data()), bytes.size()});
+        const auto bytes_value = std::span<const std::byte>(input).first(result_value.size_);
+        const auto decoded = decode_http3_datagram({reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()});
         if ((decoded.index() != 0)) {
-            close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
+            close_connection(static_cast<http3_connection_error_code>(http3_datagram_error_code));
             break;
         }
         const auto planned = plan_datagram_receive(std::get<0>(decoded));
-        if (planned == Http3DatagramReceiveStatus::kConnectionError) {
-            close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
+        if (planned == http3_datagram_receive_status::connection_error) {
+            close_connection(static_cast<http3_connection_error_code>(http3_datagram_error_code));
             break;
         }
-        if (planned == Http3DatagramReceiveStatus::kDeliver) {
-            (void)channel.publish_request_datagram(identity_, std::get<0>(decoded).streamId, bytes);
+        if (planned == http3_datagram_receive_status::deliver) {
+            (void)channel.publish_request_datagram(identity_, std::get<0>(decoded).stream_id_, bytes_value);
         }
     }
     for (std::size_t count = 0; count < http3_connection_state::datagram_capacity; ++count) {
@@ -988,14 +988,14 @@ bool http3_connection_driver::pump_datagrams() {
         if (channel.pop_response_datagram(output) != http3_connection_state::status::changed) {
             break;
         }
-        progress = true;
-        if (output.identity.epoch != identity_.epoch ||
-            output.identity.connection_generation != identity_.connection_generation) {
+        progress_value = true;
+        if (output.identity_.epoch_ != identity_.epoch_ ||
+            output.identity_.connection_generation_ != identity_.connection_generation_) {
             continue;
         }
         (void)quic.write_datagram(output.bytes());
     }
-    return progress;
+    return progress_value;
 }
 
 bool http3_connection_driver::pump_output(bool transport_activity) {
@@ -1003,36 +1003,36 @@ bool http3_connection_driver::pump_output(bool transport_activity) {
         return false;
     }
     if (transport_activity) {
-        output_->notifyTransportActivity();
+        output_->notify_transport_activity();
     }
-    const auto result = output_->drive();
-    if (result.status == Http3ServerStreamOutput::Status::kTransportError ||
-        result.status == Http3ServerStreamOutput::Status::kFinalSizeError ||
-        result.status == Http3ServerStreamOutput::Status::kCapacityExhausted ||
-        result.status == Http3ServerStreamOutput::Status::kUnsafeToRelease) {
+    const auto result_value = output_->drive();
+    if (result_value.status_ == http3_server_stream_output::status_type::transport_error ||
+        result_value.status_ == http3_server_stream_output::status_type::final_size_error ||
+        result_value.status_ == http3_server_stream_output::status_type::capacity_exhausted ||
+        result_value.status_ == http3_server_stream_output::status_type::unsafe_to_release) {
         close_connection(protocol_failure_code);
     }
     for (auto& stream : streams_) {
-        if (!stream.request_stream || stream.input_reset || stream.write_timeout_notified) {
+        if (!stream.request_stream_ || stream.input_reset_ || stream.write_timeout_notified_) {
             continue;
         }
-        const auto info = output_->streamInfo(stream.id);
-        if (info && info->timedOut) {
+        const auto info = output_->stream_info(stream.id_);
+        if (info && info->timed_out_) {
             // Reset takes precedence over a queued FIN; if FIN was already
             // delivered, input_terminal does not suppress this cancellation.
-            stream.write_timeout_notified = true;
-            note_input_reset(stream.id);
-            stream.frame_tracker.reset();
-            stream.pending_control = http3_stream_control{
-                .kind = http3_stream_control::kind::stream_reset,
-                .id = {identity_.epoch,
-                    identity_.connection_generation, stream.id},
-                .value = stream.received_bytes,
-                .stream_reset_error_code = Http3ConnectionErrorCode::kRequestCancelled,
+            stream.write_timeout_notified_ = true;
+            note_input_reset(stream.id_);
+            stream.frame_tracker_.reset();
+            stream.pending_control_ = http3_stream_control{
+                .kind_ = http3_stream_control::kind::stream_reset,
+                .id_ = {identity_.epoch_,
+                    identity_.connection_generation_, stream.id_},
+                .value_ = stream.received_bytes_,
+                .stream_reset_error_code_ = http3_connection_error_code::request_cancelled,
             };
         }
     }
-    if (result.acceptedBytes != 0 && pending_tunnel_handshakes_ != 0) {
+    if (result_value.accepted_bytes_ != 0 && pending_tunnel_handshakes_ != 0) {
         if (tunnel_handshake_scan_remaining_ == 0) {
             tunnel_handshake_scan_remaining_ = streams_.size();
             next_tunnel_handshake_stream_index_ = 0;
@@ -1056,12 +1056,12 @@ bool http3_connection_driver::pump_output(bool transport_activity) {
             next_tunnel_handshake_stream_index_ = (stream_index + 1) % stream_count;
             --tunnel_handshake_scan_remaining_;
             auto& stream = streams_[stream_index];
-            if (!stream.tunnel_established_barrier) {
+            if (!stream.tunnel_established_barrier_) {
                 continue;
             }
-            const auto info = output_->streamInfo(stream.id);
-            if (info && confirm_tunnel_established(stream.id,
-                            info->acceptedWireBytes)) {
+            const auto info = output_->stream_info(stream.id_);
+            if (info && confirm_tunnel_established(stream.id_,
+                            info->accepted_wire_bytes_)) {
                 handshake_progress = true;
             }
         }
@@ -1075,7 +1075,7 @@ bool http3_connection_driver::pump_output(bool transport_activity) {
             tunnel_handshake_scan_dirty_ = false;
         }
     }
-    return result.madeProgress || result.needsReschedule || handshake_progress ||
+    return result_value.made_progress_ || result_value.needs_reschedule_ || handshake_progress ||
            tunnel_handshake_scan_remaining_ != 0;
 }
 
@@ -1094,7 +1094,7 @@ bool http3_connection_driver::retire(bool response_drained) {
             close_connection(server_shutdown_code);
         } else if (state_->admission_seal().has_value() && goaway_bytes_accepted_ &&
                    state_->worker_drained() && response_drained &&
-                   output_ != nullptr && output_->liveStreamCount() == 0) {
+                   output_ != nullptr && output_->live_stream_count() == 0) {
             graceful_close_started_ = true;
         }
     }
@@ -1114,22 +1114,22 @@ bool http3_connection_driver::retire(bool response_drained) {
     bool force_local_retirement = stopping_ || graceful_close_abandoned_ ||
                                   (close_started_ && drain_deadline_ &&
                                       std::chrono::steady_clock::now() >= *drain_deadline_);
-    const auto state = quic.info().state;
-    if (state == ruvia::quic_connection_state::failed) {
+    const auto state_value = quic.info().state_;
+    if (state_value == ruvia::quic_connection_state::failed) {
         force_local_retirement = true;
     }
-    if (state != ruvia::quic_connection_state::retired &&
-        state != ruvia::quic_connection_state::closing &&
-        state != ruvia::quic_connection_state::draining) {
+    if (state_value != ruvia::quic_connection_state::retired &&
+        state_value != ruvia::quic_connection_state::closing &&
+        state_value != ruvia::quic_connection_state::draining) {
         static constexpr std::string_view graceful_reason = "HTTP/3 drain complete";
         static constexpr std::string_view close_reason = "HTTP/3 connection closed";
         const auto reason = graceful_close_started_ ? graceful_reason : close_reason;
         try {
             const auto close = quic.close({
-                .kind = ruvia::quic_close_kind::application,
-                .code = static_cast<std::uint64_t>(
+                .kind_ = ruvia::quic_close_kind::application,
+                .code_ = static_cast<std::uint64_t>(
                     close_error_code_.value_or(server_shutdown_code)),
-                .reason = {reason.data(), reason.size()},
+                .reason_ = {reason.data(), reason.size()},
             });
             if (close == ruvia::quic_operation_status::would_block ||
                 close == ruvia::quic_operation_status::need_input) {
@@ -1151,7 +1151,7 @@ bool http3_connection_driver::retire(bool response_drained) {
         }
     }
     if (!force_local_retirement &&
-        quic.info().state != ruvia::quic_connection_state::retired) {
+        quic.info().state_ != ruvia::quic_connection_state::retired) {
         return false;
     }
 
@@ -1159,7 +1159,7 @@ bool http3_connection_driver::retire(bool response_drained) {
     // buffer blocks are returned only after HTTP accepts or invalidates writes.
     if (output_ != nullptr) {
         const auto stopped = output_->stop();
-        if (stopped.status == Http3ServerStreamOutput::Status::kUnsafeToRelease) {
+        if (stopped.status_ == http3_server_stream_output::status_type::unsafe_to_release) {
             return false;
         }
         output_.reset();
@@ -1175,7 +1175,7 @@ bool http3_connection_driver::retire(bool response_drained) {
 
     return true;
 }
-void http3_connection_driver::close_connection(Http3ConnectionErrorCode reason) noexcept {
+void http3_connection_driver::close_connection(http3_connection_error_code reason) noexcept {
     if (!transport_id_ || close_started_) {
         return;
     }
@@ -1186,15 +1186,15 @@ void http3_connection_driver::close_connection(Http3ConnectionErrorCode reason) 
     close_started_ = true;
     close_error_code_ = reason;
     if (!drain_deadline_) {
-        drain_deadline_ = std::chrono::steady_clock::now() + config_.drain_timeout;
+        drain_deadline_ = std::chrono::steady_clock::now() + config_.drain_timeout_;
     }
     if (auto* transport = wire_->transport(); transport != nullptr) {
         static constexpr std::string_view close_reason = "HTTP/3 connection closing";
         try {
             (void)transport->server().connection(*transport_id_).close({
-                .kind = ruvia::quic_close_kind::application,
-                .code = static_cast<std::uint64_t>(reason),
-                .reason = {close_reason.data(), close_reason.size()},
+                .kind_ = ruvia::quic_close_kind::application,
+                .code_ = static_cast<std::uint64_t>(reason),
+                .reason_ = {close_reason.data(), close_reason.size()},
             });
         } catch (...) {
             graceful_close_abandoned_ = true;
@@ -1202,61 +1202,61 @@ void http3_connection_driver::close_connection(Http3ConnectionErrorCode reason) 
     }
 }
 
-http3_connection_state::intent_execution_result http3_connection_driver::execute_intent(const Http3ServerConnection::TransportIntent& intent) noexcept {
-    http3_connection_state::intent_execution_result result{
-        .outcome = state_->transport_retired()
-                       ? http3_connection_state::execution_outcome::transport_retired
-                       : http3_connection_state::execution_outcome::executed};
-    if (intent.token.kind == Http3ServerConnection::TransportIntentKind::kOpenPushStream) {
-        result.push_stream.emplace();
+http3_connection_state::intent_execution_result http3_connection_driver::execute_intent(const http3_server_connection::transport_intent_type& intent) noexcept {
+    http3_connection_state::intent_execution_result result_value{
+        .outcome_ = state_->transport_retired()
+                        ? http3_connection_state::execution_outcome::transport_retired
+                        : http3_connection_state::execution_outcome::executed};
+    if (intent.token_.kind_ == http3_server_connection::transport_intent_kind_type::open_push_stream) {
+        result_value.push_stream_.emplace();
         if (state_->transport_retired() || stopping_) {
-            result.push_stream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
-        } else if (intent.token.id.push_id && output_ &&
+            result_value.push_stream_->status_ = http3_server_connection::push_stream_open_result_type::status_type::stopped;
+        } else if (intent.token_.id_.push_id_ && output_ &&
                    push_streams_.size() < push_streams_.capacity()) {
             try {
                 auto* transport = wire_->transport();
                 if (!transport) {
-                    result.push_stream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                    result_value.push_stream_->status_ = http3_server_connection::push_stream_open_result_type::status_type::stopped;
                 } else {
                     auto& quic = wire_->transport()->server().connection(*transport_id_);
                     const auto opened = quic.open_stream(true);
-                    if (opened.status == ruvia::quic_operation_status::accepted) {
-                        const auto registered = output_->registerPushStream(opened.stream_id, *intent.token.id.push_id);
-                        if (registered.status == Http3ServerStreamOutput::Status::kAccepted) {
-                            *result.push_stream = {.status = Http3ServerConnection::PushStreamOpenResult::Status::kOpened,
-                                .streamId = opened.stream_id};
-                            push_streams_.push_back({opened.stream_id, *intent.token.id.push_id});
+                    if (opened.status_ == ruvia::quic_operation_status::accepted) {
+                        const auto registered = output_->register_push_stream(opened.stream_id_, *intent.token_.id_.push_id_);
+                        if (registered.status_ == http3_server_stream_output::status_type::accepted) {
+                            *result_value.push_stream_ = {.status_ = http3_server_connection::push_stream_open_result_type::status_type::opened,
+                                .stream_id_ = opened.stream_id_};
+                            push_streams_.push_back({opened.stream_id_, *intent.token_.id_.push_id_});
                         } else {
-                            (void)quic.close_stream(opened.stream_id);
+                            (void)quic.close_stream(opened.stream_id_);
                         }
-                    } else if (opened.status != ruvia::quic_operation_status::would_block &&
-                               opened.status != ruvia::quic_operation_status::need_input) {
+                    } else if (opened.status_ != ruvia::quic_operation_status::would_block &&
+                               opened.status_ != ruvia::quic_operation_status::need_input) {
                         close_connection(protocol_failure_code);
-                        result.push_stream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                        result_value.push_stream_->status_ = http3_server_connection::push_stream_open_result_type::status_type::stopped;
                     }
                 }
             } catch (...) {
                 close_connection(protocol_failure_code);
-                result.push_stream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                result_value.push_stream_->status_ = http3_server_connection::push_stream_open_result_type::status_type::stopped;
             }
         }
     }
     if (!state_->transport_retired()) {
-        if (intent.token.kind == Http3ServerConnection::TransportIntentKind::kConnectionClose) {
-            close_connection(intent.connectionErrorCode.value_or(protocol_failure_code));
-        } else if (intent.token.kind == Http3ServerConnection::TransportIntentKind::kStreamReset) {
+        if (intent.token_.kind_ == http3_server_connection::transport_intent_kind_type::connection_close) {
+            close_connection(intent.connection_error_code_.value_or(protocol_failure_code));
+        } else if (intent.token_.kind_ == http3_server_connection::transport_intent_kind_type::stream_reset) {
             try {
-                terminate_request_stream(intent.token.id.stream_id,
-                    static_cast<std::uint64_t>(intent.streamResetErrorCode));
+                terminate_request_stream(intent.token_.id_.stream_id_,
+                    static_cast<std::uint64_t>(intent.stream_reset_error_code_));
             } catch (...) {
                 close_connection(protocol_failure_code);
             }
-            if (!intent.token.id.push_id) {
-                stop_request_input(intent.token.id.stream_id);
+            if (!intent.token_.id_.push_id_) {
+                stop_request_input(intent.token_.id_.stream_id_);
             }
         }
     }
-    return result;
+    return result_value;
 }
 
 }  // namespace ruvia::detail

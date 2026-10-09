@@ -5,202 +5,202 @@
 #include <type_traits>
 #include <utility>
 
-#include "http2/Http2FrameCodec.h"
-#include "http2/Http2FrameTypes.h"
-#include "http2/Http2PeerSettings.h"
+#include "http2/http2_frame_codec.h"
+#include "http2/http2_frame_types.h"
+#include "http2/http2_peer_settings.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::Http2ErrorCode;
-using ruvia::detail::Http2PeerInitialWindowChange;
-using ruvia::detail::Http2PeerSettingApplied;
-using ruvia::detail::Http2PeerSettingApplyResult;
-using ruvia::detail::Http2PeerSettingError;
-using ruvia::detail::http2PeerSettingErrorCode;
-using ruvia::detail::http2PeerSettingErrorMessage;
-using ruvia::detail::Http2PeerSettingFailure;
-using ruvia::detail::Http2PeerSettings;
-using ruvia::detail::http2ReadSettingEntry;
-using ruvia::detail::Http2Role;
-using ruvia::detail::Http2SettingId;
-using ruvia::detail::http2SettingsPayloadSizeValid;
-using ruvia::detail::http2WriteSettingsEntry;
-using ruvia::detail::kHttp2DefaultInitialWindowSize;
-using ruvia::detail::kHttp2DefaultMaxFrameSize;
-using ruvia::detail::kHttp2MaxFrameSizeLimit;
+using ruvia::detail::http2_default_initial_window_size;
+using ruvia::detail::http2_default_max_frame_size;
+using ruvia::detail::http2_error_code;
+using ruvia::detail::http2_max_frame_size_limit;
+using ruvia::detail::http2_peer_initial_window_change;
+using ruvia::detail::http2_peer_setting_applied;
+using ruvia::detail::http2_peer_setting_apply_result;
+using ruvia::detail::http2_peer_setting_error;
+using ruvia::detail::http2_peer_setting_error_code;
+using ruvia::detail::http2_peer_setting_error_message;
+using ruvia::detail::http2_peer_setting_failure;
+using ruvia::detail::http2_peer_settings;
+using ruvia::detail::http2_read_setting_entry;
+using ruvia::detail::http2_role;
+using ruvia::detail::http2_setting_id;
+using ruvia::detail::http2_settings_payload_size_valid;
+using ruvia::detail::http2_write_settings_entry;
 
-constexpr std::uint32_t kInt32Max =
+constexpr std::uint32_t int32_max =
     static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
 
 }  // namespace
 
 RUVIA_TEST(peer_settings_payload_size_validity) {
     // A SETTINGS payload is a sequence of 6-byte entries (RFC 9113 Section 6.5).
-    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view("", 0)));
-    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view("aaaaaa", 6)));
-    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view("aaaaaaaaaaaa", 12)));
-    RUVIA_CHECK(!http2SettingsPayloadSizeValid(std::string_view("aaaaa", 5)));
-    RUVIA_CHECK(!http2SettingsPayloadSizeValid(std::string_view("aaaaaaa", 7)));
+    RUVIA_CHECK(http2_settings_payload_size_valid(std::string_view("", 0)));
+    RUVIA_CHECK(http2_settings_payload_size_valid(std::string_view("aaaaaa", 6)));
+    RUVIA_CHECK(http2_settings_payload_size_valid(std::string_view("aaaaaaaaaaaa", 12)));
+    RUVIA_CHECK(!http2_settings_payload_size_valid(std::string_view("aaaaa", 5)));
+    RUVIA_CHECK(!http2_settings_payload_size_valid(std::string_view("aaaaaaa", 7)));
 }
 
 RUVIA_TEST(peer_settings_read_entry_at_offset) {
     char buf[12];
-    http2WriteSettingsEntry(buf, Http2SettingId::kMaxFrameSize, 20000);
-    http2WriteSettingsEntry(buf + 6, Http2SettingId::kInitialWindowSize, 12345);
-    const std::string_view payload(buf, 12);
+    http2_write_settings_entry(buf, http2_setting_id::max_frame_size, 20000);
+    http2_write_settings_entry(buf + 6, http2_setting_id::initial_window_size, 12345);
+    const std::string_view payload_value(buf, 12);
 
-    const auto first = http2ReadSettingEntry(payload, 0);
-    RUVIA_CHECK(first.id == Http2SettingId::kMaxFrameSize);
-    RUVIA_CHECK_EQ(first.value, std::uint32_t{20000});
+    const auto first = http2_read_setting_entry(payload_value, 0);
+    RUVIA_CHECK(first.id_ == http2_setting_id::max_frame_size);
+    RUVIA_CHECK_EQ(first.value_, std::uint32_t{20000});
 
-    const auto second = http2ReadSettingEntry(payload, 6);
-    RUVIA_CHECK(second.id == Http2SettingId::kInitialWindowSize);
-    RUVIA_CHECK_EQ(second.value, std::uint32_t{12345});
+    const auto second = http2_read_setting_entry(payload_value, 6);
+    RUVIA_CHECK(second.id_ == http2_setting_id::initial_window_size);
+    RUVIA_CHECK_EQ(second.value_, std::uint32_t{12345});
 }
 
 RUVIA_TEST(peer_settings_defaults) {
-    Http2PeerSettings settings(Http2Role::kServer);
-    RUVIA_CHECK_EQ(settings.maxFrameSize(), kHttp2DefaultMaxFrameSize);
-    RUVIA_CHECK_EQ(settings.initialWindowSize(), kHttp2DefaultInitialWindowSize);
-    RUVIA_CHECK_EQ(settings.maxConcurrentStreams(), (std::numeric_limits<std::uint32_t>::max)());
-    RUVIA_CHECK(!settings.enableConnectProtocol());
+    http2_peer_settings settings(http2_role::server);
+    RUVIA_CHECK_EQ(settings.max_frame_size(), http2_default_max_frame_size);
+    RUVIA_CHECK_EQ(settings.initial_window_size(), http2_default_initial_window_size);
+    RUVIA_CHECK_EQ(settings.max_concurrent_streams(), (std::numeric_limits<std::uint32_t>::max)());
+    RUVIA_CHECK(!settings.enable_connect_protocol());
 }
 
 RUVIA_TEST(peer_setting_apply_result_is_discriminated) {
-    Http2PeerSettings settings(Http2Role::kServer);
+    http2_peer_settings settings(http2_role::server);
 
-    const auto applied = settings.apply(Http2SettingId::kHeaderTableSize, 8192);
+    const auto applied = settings.apply(http2_setting_id::header_table_size, 8192);
     RUVIA_CHECK(applied.applied() != nullptr);
-    RUVIA_CHECK(applied.initialWindowChange() == nullptr);
+    RUVIA_CHECK(applied.initial_window_change() == nullptr);
     RUVIA_CHECK(applied.failure() == nullptr);
 
     // Re-advertising the same value still requires stream propagation, with delta zero.
-    const auto changed = settings.apply(Http2SettingId::kInitialWindowSize,
-        static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
+    const auto changed = settings.apply(http2_setting_id::initial_window_size,
+        static_cast<std::uint32_t>(http2_default_initial_window_size));
     RUVIA_CHECK(changed.applied() == nullptr);
-    RUVIA_CHECK(changed.initialWindowChange() != nullptr);
-    RUVIA_CHECK_EQ(changed.initialWindowChange()->delta(), std::int64_t{0});
+    RUVIA_CHECK(changed.initial_window_change() != nullptr);
+    RUVIA_CHECK_EQ(changed.initial_window_change()->delta(), std::int64_t{0});
     RUVIA_CHECK(changed.failure() == nullptr);
 
-    const auto failed = settings.apply(Http2SettingId::kMaxFrameSize, 0);
+    const auto failed = settings.apply(http2_setting_id::max_frame_size, 0);
     RUVIA_CHECK(failed.applied() == nullptr);
-    RUVIA_CHECK(failed.initialWindowChange() == nullptr);
+    RUVIA_CHECK(failed.initial_window_change() == nullptr);
     RUVIA_CHECK(failed.failure() != nullptr);
-    RUVIA_CHECK(failed.failure()->error() == Http2PeerSettingError::kInvalidMaxFrameSize);
+    RUVIA_CHECK(failed.failure()->error() == http2_peer_setting_error::invalid_max_frame_size);
 }
 
 RUVIA_TEST(peer_settings_enable_push_is_directional) {
-    Http2PeerSettings server(Http2Role::kServer);
-    const auto serverDisabled = server.apply(Http2SettingId::kEnablePush, 0);
-    RUVIA_CHECK(serverDisabled.applied() != nullptr);
-    const auto serverEnabled = server.apply(Http2SettingId::kEnablePush, 1);
-    RUVIA_CHECK(serverEnabled.applied() != nullptr);
-    const auto invalidServerValue = server.apply(Http2SettingId::kEnablePush, 2);
-    RUVIA_CHECK(invalidServerValue.failure() != nullptr);
-    RUVIA_CHECK(invalidServerValue.failure()->error() == Http2PeerSettingError::kInvalidEnablePush);
+    http2_peer_settings server(http2_role::server);
+    const auto server_disabled = server.apply(http2_setting_id::enable_push, 0);
+    RUVIA_CHECK(server_disabled.applied() != nullptr);
+    const auto server_enabled = server.apply(http2_setting_id::enable_push, 1);
+    RUVIA_CHECK(server_enabled.applied() != nullptr);
+    const auto invalid_server_value = server.apply(http2_setting_id::enable_push, 2);
+    RUVIA_CHECK(invalid_server_value.failure() != nullptr);
+    RUVIA_CHECK(invalid_server_value.failure()->error() == http2_peer_setting_error::invalid_enable_push);
 
-    Http2PeerSettings client(Http2Role::kClient);
-    const auto clientDisabled = client.apply(Http2SettingId::kEnablePush, 0);
-    RUVIA_CHECK(clientDisabled.applied() != nullptr);
-    const auto invalidFromServer = client.apply(Http2SettingId::kEnablePush, 1);
-    RUVIA_CHECK(invalidFromServer.failure() != nullptr);
-    RUVIA_CHECK(invalidFromServer.failure()->error() == Http2PeerSettingError::kInvalidEnablePush);
+    http2_peer_settings client(http2_role::client);
+    const auto client_disabled = client.apply(http2_setting_id::enable_push, 0);
+    RUVIA_CHECK(client_disabled.applied() != nullptr);
+    const auto invalid_from_server = client.apply(http2_setting_id::enable_push, 1);
+    RUVIA_CHECK(invalid_from_server.failure() != nullptr);
+    RUVIA_CHECK(invalid_from_server.failure()->error() == http2_peer_setting_error::invalid_enable_push);
 }
 
 RUVIA_TEST(peer_settings_initial_window_size_and_delta) {
-    Http2PeerSettings settings(Http2Role::kServer);
-    const auto result = settings.apply(Http2SettingId::kInitialWindowSize, 100000);
-    RUVIA_CHECK(result.initialWindowChange() != nullptr);
-    RUVIA_CHECK_EQ(result.initialWindowChange()->delta(),
-        std::int64_t{100000} - kHttp2DefaultInitialWindowSize);
-    RUVIA_CHECK_EQ(settings.initialWindowSize(), std::int32_t{100000});
+    http2_peer_settings settings(http2_role::server);
+    const auto result_value = settings.apply(http2_setting_id::initial_window_size, 100000);
+    RUVIA_CHECK(result_value.initial_window_change() != nullptr);
+    RUVIA_CHECK_EQ(result_value.initial_window_change()->delta(),
+        std::int64_t{100000} - http2_default_initial_window_size);
+    RUVIA_CHECK_EQ(settings.initial_window_size(), std::int32_t{100000});
 
     // Exactly 2^31-1 is allowed and reports the signed difference.
-    Http2PeerSettings atMax(Http2Role::kServer);
-    const auto max = atMax.apply(Http2SettingId::kInitialWindowSize, kInt32Max);
-    RUVIA_CHECK(max.initialWindowChange() != nullptr);
-    RUVIA_CHECK_EQ(max.initialWindowChange()->delta(),
-        static_cast<std::int64_t>(kInt32Max) - kHttp2DefaultInitialWindowSize);
+    http2_peer_settings at_max(http2_role::server);
+    const auto max_value = at_max.apply(http2_setting_id::initial_window_size, int32_max);
+    RUVIA_CHECK(max_value.initial_window_change() != nullptr);
+    RUVIA_CHECK_EQ(max_value.initial_window_change()->delta(),
+        static_cast<std::int64_t>(int32_max) - http2_default_initial_window_size);
     // One above is a flow-control error (RFC 9113 Section 6.5.2).
-    Http2PeerSettings tooBig(Http2Role::kServer);
-    const auto invalid = tooBig.apply(Http2SettingId::kInitialWindowSize, kInt32Max + 1);
+    http2_peer_settings too_big(http2_role::server);
+    const auto invalid = too_big.apply(http2_setting_id::initial_window_size, int32_max + 1);
     RUVIA_CHECK(invalid.failure() != nullptr);
-    RUVIA_CHECK(invalid.failure()->error() == Http2PeerSettingError::kInvalidInitialWindow);
+    RUVIA_CHECK(invalid.failure()->error() == http2_peer_setting_error::invalid_initial_window);
 }
 
 RUVIA_TEST(peer_settings_max_frame_size_bounds) {
-    Http2PeerSettings settings(Http2Role::kServer);
-    const auto minimum = settings.apply(Http2SettingId::kMaxFrameSize, kHttp2DefaultMaxFrameSize);
+    http2_peer_settings settings(http2_role::server);
+    const auto minimum = settings.apply(http2_setting_id::max_frame_size, http2_default_max_frame_size);
     RUVIA_CHECK(minimum.applied() != nullptr);
-    RUVIA_CHECK_EQ(settings.maxFrameSize(), kHttp2DefaultMaxFrameSize);
-    const auto maximum = settings.apply(Http2SettingId::kMaxFrameSize, kHttp2MaxFrameSizeLimit);
+    RUVIA_CHECK_EQ(settings.max_frame_size(), http2_default_max_frame_size);
+    const auto maximum = settings.apply(http2_setting_id::max_frame_size, http2_max_frame_size_limit);
     RUVIA_CHECK(maximum.applied() != nullptr);
-    RUVIA_CHECK_EQ(settings.maxFrameSize(), kHttp2MaxFrameSizeLimit);
+    RUVIA_CHECK_EQ(settings.max_frame_size(), http2_max_frame_size_limit);
     // Below the 2^14 minimum and above the 2^24-1 maximum are rejected.
-    const auto below = settings.apply(Http2SettingId::kMaxFrameSize, kHttp2DefaultMaxFrameSize - 1);
+    const auto below = settings.apply(http2_setting_id::max_frame_size, http2_default_max_frame_size - 1);
     RUVIA_CHECK(below.failure() != nullptr);
-    RUVIA_CHECK(below.failure()->error() == Http2PeerSettingError::kInvalidMaxFrameSize);
-    const auto above = settings.apply(Http2SettingId::kMaxFrameSize, kHttp2MaxFrameSizeLimit + 1);
+    RUVIA_CHECK(below.failure()->error() == http2_peer_setting_error::invalid_max_frame_size);
+    const auto above = settings.apply(http2_setting_id::max_frame_size, http2_max_frame_size_limit + 1);
     RUVIA_CHECK(above.failure() != nullptr);
-    RUVIA_CHECK(above.failure()->error() == Http2PeerSettingError::kInvalidMaxFrameSize);
+    RUVIA_CHECK(above.failure()->error() == http2_peer_setting_error::invalid_max_frame_size);
 }
 
 RUVIA_TEST(peer_settings_enable_connect_protocol_cannot_be_disabled) {
-    Http2PeerSettings settings(Http2Role::kServer);
-    const auto enabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 1);
+    http2_peer_settings settings(http2_role::server);
+    const auto enabled = settings.apply(http2_setting_id::enable_connect_protocol, 1);
     RUVIA_CHECK(enabled.applied() != nullptr);
-    RUVIA_CHECK(settings.enableConnectProtocol());
+    RUVIA_CHECK(settings.enable_connect_protocol());
     // Once enabled it must never be turned off (RFC 8441).
-    const auto disabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 0);
+    const auto disabled = settings.apply(http2_setting_id::enable_connect_protocol, 0);
     RUVIA_CHECK(disabled.failure() != nullptr);
     RUVIA_CHECK(disabled.failure()->error() ==
-                Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
+                http2_peer_setting_error::invalid_enable_connect_protocol_transition);
     // A non-boolean value is invalid.
-    const auto invalid = settings.apply(Http2SettingId::kEnableConnectProtocol, 5);
+    const auto invalid = settings.apply(http2_setting_id::enable_connect_protocol, 5);
     RUVIA_CHECK(invalid.failure() != nullptr);
-    RUVIA_CHECK(invalid.failure()->error() == Http2PeerSettingError::kInvalidEnableConnectProtocol);
+    RUVIA_CHECK(invalid.failure()->error() == http2_peer_setting_error::invalid_enable_connect_protocol);
 
     // Setting 0 while already disabled is fine.
-    Http2PeerSettings fresh(Http2Role::kServer);
-    const auto remainsDisabled = fresh.apply(Http2SettingId::kEnableConnectProtocol, 0);
-    RUVIA_CHECK(remainsDisabled.applied() != nullptr);
-    RUVIA_CHECK(!fresh.enableConnectProtocol());
+    http2_peer_settings fresh(http2_role::server);
+    const auto remains_disabled = fresh.apply(http2_setting_id::enable_connect_protocol, 0);
+    RUVIA_CHECK(remains_disabled.applied() != nullptr);
+    RUVIA_CHECK(!fresh.enable_connect_protocol());
 }
 
 RUVIA_TEST(peer_settings_stored_values_and_unknown_ignored) {
-    Http2PeerSettings settings(Http2Role::kServer);
-    const auto maxConcurrent = settings.apply(Http2SettingId::kMaxConcurrentStreams, 250);
-    RUVIA_CHECK(maxConcurrent.applied() != nullptr);
-    RUVIA_CHECK_EQ(settings.maxConcurrentStreams(), std::uint32_t{250});
-    const auto headerTable = settings.apply(Http2SettingId::kHeaderTableSize, 8192);
-    RUVIA_CHECK(headerTable.applied() != nullptr);
-    const auto headerList = settings.apply(Http2SettingId::kMaxHeaderListSize, 1000);
-    RUVIA_CHECK(headerList.applied() != nullptr);
+    http2_peer_settings settings(http2_role::server);
+    const auto max_concurrent = settings.apply(http2_setting_id::max_concurrent_streams, 250);
+    RUVIA_CHECK(max_concurrent.applied() != nullptr);
+    RUVIA_CHECK_EQ(settings.max_concurrent_streams(), std::uint32_t{250});
+    const auto header_table = settings.apply(http2_setting_id::header_table_size, 8192);
+    RUVIA_CHECK(header_table.applied() != nullptr);
+    const auto header_list = settings.apply(http2_setting_id::max_header_list_size, 1000);
+    RUVIA_CHECK(header_list.applied() != nullptr);
     // An unregistered setting id is ignored (RFC 9113 Section 6.5.2).
-    const auto unknown = settings.apply(static_cast<Http2SettingId>(0x63), 999);
+    const auto unknown = settings.apply(static_cast<http2_setting_id>(0x63), 999);
     RUVIA_CHECK(unknown.applied() != nullptr);
 }
 
 RUVIA_TEST(peer_settings_error_code_and_message_mapping) {
     // Only an invalid initial window is a flow-control error; the rest are protocol errors.
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) ==
-                Http2ErrorCode::kFlowControlError);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) ==
-                Http2ErrorCode::kProtocolError);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidMaxFrameSize) ==
-                Http2ErrorCode::kProtocolError);
+    RUVIA_CHECK(http2_peer_setting_error_code(http2_peer_setting_error::invalid_initial_window) ==
+                http2_error_code::flow_control_error);
+    RUVIA_CHECK(http2_peer_setting_error_code(http2_peer_setting_error::invalid_enable_push) ==
+                http2_error_code::protocol_error);
+    RUVIA_CHECK(http2_peer_setting_error_code(http2_peer_setting_error::invalid_max_frame_size) ==
+                http2_error_code::protocol_error);
 
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnablePush),
+    RUVIA_CHECK_EQ(http2_peer_setting_error_message(http2_peer_setting_error::invalid_enable_push),
         std::string_view("invalid ENABLE_PUSH"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidInitialWindow),
+    RUVIA_CHECK_EQ(http2_peer_setting_error_message(http2_peer_setting_error::invalid_initial_window),
         std::string_view("invalid initial window"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidMaxFrameSize),
+    RUVIA_CHECK_EQ(http2_peer_setting_error_message(http2_peer_setting_error::invalid_max_frame_size),
         std::string_view("invalid max frame size"));
     RUVIA_CHECK_EQ(
-        http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnableConnectProtocol),
+        http2_peer_setting_error_message(http2_peer_setting_error::invalid_enable_connect_protocol),
         std::string_view("invalid ENABLE_CONNECT_PROTOCOL"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(
-                       Http2PeerSettingError::kInvalidEnableConnectProtocolTransition),
+    RUVIA_CHECK_EQ(http2_peer_setting_error_message(
+                       http2_peer_setting_error::invalid_enable_connect_protocol_transition),
         std::string_view("invalid ENABLE_CONNECT_PROTOCOL transition"));
 }

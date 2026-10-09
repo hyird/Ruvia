@@ -5,9 +5,9 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/event_loop_pool.h"
 
-#include "db/DbPoolOperations.h"
+#include "db/db_pool_operations.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
@@ -15,87 +15,87 @@ namespace {
 
 struct pool_backend final {
     struct config final {
-        ruvia::DbDriver driver;
-        std::chrono::milliseconds acquireTimeout{100};
+        ruvia::db_driver driver_;
+        std::chrono::milliseconds acquire_timeout_{100};
     } config_;
     struct slot final {
-        std::uint64_t cancellationId{};
-        ruvia::detail::DbSlotAbortReason abortReason{ruvia::detail::DbSlotAbortReason::kNone};
-        unsigned connects{};
-        unsigned closes{};
+        std::uint64_t cancellation_id_{};
+        ruvia::detail::db_slot_abort_reason abort_reason_{ruvia::detail::db_slot_abort_reason::none};
+        unsigned connects_{};
+        unsigned closes_{};
     };
 
-    pool_backend(const ruvia::WorkerHandle& worker, ruvia::DbDriver driver,
+    pool_backend(const ruvia::worker_handle& worker_value, ruvia::db_driver driver,
         std::pmr::memory_resource* resource)
         : config_{driver},
-          scheduler_(2, worker, resource),
+          scheduler_(2, worker_value, resource),
           lifecycle_(*this) {}
 
-    ruvia::Task<void> connectUnlocked(slot& connection, const ruvia::OperationTimeout&) {
-        ++connection.connects;
+    ruvia::task<void> connect_unlocked(slot& connection, const ruvia::operation_timeout&) {
+        ++connection.connects_;
         if (fail_connect_ && &connection == &slots_.back()) {
             throw std::runtime_error("backend startup failed");
         }
         co_return;
     }
 
-    void closeSlot(slot& connection) noexcept {
-        ++connection.closes;
+    void close_slot(slot& connection) noexcept {
+        ++connection.closes_;
     }
 
     std::array<slot, 2> slots_;
-    ruvia::PoolLeaseScheduler scheduler_;
+    ruvia::pool_lease_scheduler scheduler_;
     ruvia::detail::db_pool_lifecycle<pool_backend> lifecycle_;
     bool fail_connect_{};
 };
 
-ruvia::Task<void> exercise_pool(const ruvia::WorkerHandle& worker, ruvia::DbDriver driver,
-    std::pmr::memory_resource* resource, ruvia::testing::TestContext& ruvia_ctx) {
-    pool_backend backend(worker, driver, resource);
+ruvia::task<void> exercise_pool(const ruvia::worker_handle& worker_value, ruvia::db_driver driver,
+    std::pmr::memory_resource* resource, ruvia::testing::test_context& ruvia_ctx) {
+    pool_backend backend(worker_value, driver, resource);
     auto& lifecycle = backend.lifecycle_;
     co_await lifecycle.connect();
-    RUVIA_CHECK(backend.slots_[0].connects == 1 && backend.slots_[1].connects == 1);
-    const auto first = co_await lifecycle.acquireSlot(ruvia::OperationTimeout(std::nullopt), {});
-    const auto second = co_await lifecycle.acquireSlot(ruvia::OperationTimeout(std::nullopt), {});
+    RUVIA_CHECK(backend.slots_[0].connects_ == 1 && backend.slots_[1].connects_ == 1);
+    const auto first = co_await lifecycle.acquire_slot(ruvia::operation_timeout(std::nullopt), {});
+    const auto second = co_await lifecycle.acquire_slot(ruvia::operation_timeout(std::nullopt), {});
     RUVIA_CHECK(first != second);
 
-    ruvia::StopSource cancelled;
-    cancelled.requestStop();
+    ruvia::stop_source cancelled;
+    cancelled.request_stop();
     bool cancellation_observed{};
     try {
-        (void)co_await lifecycle.acquireSlot(ruvia::OperationTimeout(std::nullopt), cancelled.token());
-    } catch (const ruvia::DbError& error) {
-        cancellation_observed = error.code() == ruvia::DbError::Code::kCancelled;
+        (void)co_await lifecycle.acquire_slot(ruvia::operation_timeout(std::nullopt), cancelled.token());
+    } catch (const ruvia::db_error& error) {
+        cancellation_observed = error.code() == ruvia::db_error::code_type::cancelled;
     }
     RUVIA_CHECK(cancellation_observed);
 
     auto& active = backend.slots_[first];
-    active.cancellationId = 42;
-    lifecycle.cancelOperationById(43);
-    RUVIA_CHECK(active.closes == 0);
-    lifecycle.cancelOperationById(42);
-    RUVIA_CHECK(active.closes == 1);
+    active.cancellation_id_ = 42;
+    lifecycle.cancel_operation_by_id(43);
+    RUVIA_CHECK(active.closes_ == 0);
+    lifecycle.cancel_operation_by_id(42);
+    RUVIA_CHECK(active.closes_ == 1);
     bool operation_cancelled{};
     try {
-        lifecycle.throwIfCancelled(active);
-    } catch (const ruvia::DbError& error) {
-        operation_cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        lifecycle.throw_if_cancelled(active);
+    } catch (const ruvia::db_error& error) {
+        operation_cancelled = error.code() == ruvia::db_error::code_type::cancelled;
     }
     RUVIA_CHECK(operation_cancelled);
 
-    lifecycle.closeNow();
-    lifecycle.releaseSlot(first);
-    lifecycle.releaseSlot(second);
+    lifecycle.close_now();
+    lifecycle.release_slot(first);
+    lifecycle.release_slot(second);
     bool closing_observed{};
     try {
-        (void)co_await lifecycle.acquireSlot(ruvia::OperationTimeout(std::nullopt), {});
-    } catch (const ruvia::DbError& error) {
-        closing_observed = error.code() == ruvia::DbError::Code::kClosing;
+        (void)co_await lifecycle.acquire_slot(ruvia::operation_timeout(std::nullopt), {});
+    } catch (const ruvia::db_error& error) {
+        closing_observed = error.code() == ruvia::db_error::code_type::closing;
     }
     RUVIA_CHECK(closing_observed);
-    RUVIA_CHECK(backend.slots_[first].closes == 2 && backend.slots_[second].closes == 1);
+    RUVIA_CHECK(backend.slots_[first].closes_ == 2 && backend.slots_[second].closes_ == 1);
 
-    pool_backend failing(worker, driver, resource);
+    pool_backend failing(worker_value, driver, resource);
     failing.fail_connect_ = true;
     bool startup_failed{};
     try {
@@ -104,21 +104,21 @@ ruvia::Task<void> exercise_pool(const ruvia::WorkerHandle& worker, ruvia::DbDriv
         startup_failed = true;
     }
     RUVIA_CHECK(startup_failed);
-    failing.lifecycle_.closeNow();
-    RUVIA_CHECK(failing.slots_[0].closes == 1 && failing.slots_[1].closes == 1);
+    failing.lifecycle_.close_now();
+    RUVIA_CHECK(failing.slots_[0].closes_ == 1 && failing.slots_[1].closes_ == 1);
 }
 
 }  // namespace
 
 RUVIA_TEST(database_pool_lifecycle_schedules_cancels_and_closes_backend_slots) {
-    ruvia::test::CountingMemoryResource memory;
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    const auto worker = pool.loop(0).handle();
+    ruvia::test::counting_memory_resource memory;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    const auto worker_value = pool.loop(0).handle();
     pool.start();
-    for (auto driver : {ruvia::DbDriver::kMariaDb, ruvia::DbDriver::kPostgreSql}) {
-        pool.loop(0).start(exercise_pool(worker, driver, &memory, ruvia_ctx)).get();
+    for (auto driver : {ruvia::db_driver::mariadb, ruvia::db_driver::postgresql}) {
+        pool.loop(0).start(exercise_pool(worker_value, driver, &memory, ruvia_ctx)).get();
     }
     pool.stop();
     pool.join();
-    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
 }

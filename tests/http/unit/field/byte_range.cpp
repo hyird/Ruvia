@@ -2,7 +2,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/HttpByteRange.h"
+#include "ruvia/http/http_byte_range.h"
 
 #include "test_harness.h"
 

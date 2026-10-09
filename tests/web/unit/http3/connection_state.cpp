@@ -7,14 +7,14 @@
 #include <span>
 #include <utility>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/Context.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/web/context.h"
 
 #include "http3/http3_connection_state.h"
 #include "memory_resource_fixture.h"
-#include "router/Router.h"
-#include "router/RouterImpl.h"
+#include "router/router.h"
+#include "router/router_impl.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -22,368 +22,368 @@ namespace {
 
 using state_type = ruvia::detail::http3_connection_state;
 using identity_type = ruvia::detail::http3_connection_identity;
-using connection_type = ruvia::detail::Http3ServerConnection;
+using connection_type = ruvia::detail::http3_server_connection;
 using scheduler_type = ruvia::detail::http3_ready_scheduler;
-using status = state_type::status;
-using outcome = state_type::execution_outcome;
+using status_type = state_type::status;
+using outcome_type = state_type::execution_outcome;
 
-struct fixture final {
-    ruvia::detail::Router router;
-    ruvia::detail::RouterImpl& routes{ruvia::detail::RouterImpl::from(router)};
-    ruvia::test::CountingMemoryResource& resource;
-    ruvia::WorkerMemory memory;
-    ruvia::StopSource stop_source;
-    ruvia::StopToken stop_token;
-    ruvia::detail::ContextServices services;
-    ruvia::detail::HttpServerOptions options;
-    ruvia::detail::http3_stream_buffer outbound;
-    scheduler_type scheduler;
-    std::size_t changes{};
-    state_type state;
-    std::optional<connection_type> connection;
-    std::array<connection_type::TransportIntent, 16> executed{};
-    std::size_t executions{};
-    state_type::intent_execution_result execution_result{.outcome = outcome::executed};
-    bool retire_during_execution{};
+struct fixture_type final {
+    ruvia::detail::router router_;
+    ruvia::detail::router_impl& routes_{ruvia::detail::router_impl::from(router_)};
+    ruvia::test::counting_memory_resource& resource_;
+    ruvia::worker_memory memory_;
+    ruvia::stop_source stop_source_;
+    ruvia::stop_token stop_token_;
+    ruvia::detail::context_services services_;
+    ruvia::detail::http_server_options options_;
+    ruvia::detail::http3_stream_buffer outbound_;
+    scheduler_type scheduler_;
+    std::size_t changes_{};
+    state_type state_;
+    std::optional<connection_type> connection_;
+    std::array<connection_type::transport_intent_type, 16> executed_{};
+    std::size_t executions_{};
+    state_type::intent_execution_result execution_result_{.outcome_ = outcome_type::executed};
+    bool retire_during_execution_{};
 
-    fixture(const ruvia::WorkerHandle& worker, ruvia::test::CountingMemoryResource& resource)
-        : resource(resource),
-          memory(resource),
-          stop_token(stop_source.token()),
-          services(worker, stop_token),
-          outbound(8, 8, 8, memory.resource()),
-          scheduler(worker, 1, memory.resource()),
-          state({this, changed}, &resource) {
-        routes.finalize();
-        state.set_transport_executor({this, execute});
+    fixture_type(const ruvia::worker_handle& worker_value, ruvia::test::counting_memory_resource& resource)
+        : resource_(resource),
+          memory_(resource),
+          stop_token_(stop_source_.token()),
+          services_(worker_value, stop_token_),
+          outbound_(8, 8, 8, memory_.resource()),
+          scheduler_(worker_value, 1, memory_.resource()),
+          state_({this, changed}, &resource) {
+        routes_.finalize();
+        state_.set_transport_executor({this, execute});
     }
 
-    static void changed(void* context) noexcept {
-        ++static_cast<fixture*>(context)->changes;
+    static void changed(void* context_value) noexcept {
+        ++static_cast<fixture_type*>(context_value)->changes_;
     }
 
-    static state_type::intent_execution_result execute(void* context, identity_type identity, const connection_type::TransportIntent& intent) noexcept {
-        auto& self = *static_cast<fixture*>(context);
-        self.executed[self.executions++] = intent;
-        if (self.retire_during_execution) {
-            (void)self.state.mark_transport_retired(identity);
+    static state_type::intent_execution_result execute(void* context_value, identity_type identity, const connection_type::transport_intent_type& intent) noexcept {
+        auto& self = *static_cast<fixture_type*>(context_value);
+        self.executed_[self.executions_++] = intent;
+        if (self.retire_during_execution_) {
+            (void)self.state_.mark_transport_retired(identity);
         }
-        return self.execution_result;
+        return self.execution_result_;
     }
 
     identity_type reserve(std::uint64_t epoch = 41, std::uint64_t generation = 9) {
-        if (state.reserve(scheduler, epoch, generation) != status::changed) {
+        if (state_.reserve(scheduler_, epoch, generation) != status_type::changed) {
             std::terminate();
         }
-        return *state.identity();
+        return *state_.identity();
     }
 
     void attach(identity_type identity) {
-        if (state.bind(identity, {.remote_address = "127.0.0.1", .client_certificate_subject = "peer", .remote_port = 443}, {.enableConnectProtocol = true}, 1200) != status::changed) {
+        if (state_.bind(identity, {.remote_address_ = "127.0.0.1", .client_certificate_subject_ = "peer", .remote_port_ = 443}, {.enable_connect_protocol_ = true}, 1200) != status_type::changed) {
             std::terminate();
         }
-        const auto registration = *state.registration();
-        connection.emplace(routes.routeTable(), memory, services, options, outbound, registration.activation,
-            ruvia::detail::Http3ServerConnectionConfig{.epoch = identity.epoch, .connectionGeneration = identity.connection_generation, .maxTrackedStreams = 8});
-        if (state.attach_handler(identity, *connection) != status::changed) {
+        const auto registration = *state_.registration();
+        connection_.emplace(routes_.route_table(), memory_, services_, options_, outbound_, registration.activation_,
+            ruvia::detail::http3_server_connection_config{.epoch_ = identity.epoch_, .connection_generation_ = identity.connection_generation_, .max_tracked_streams_ = 8});
+        if (state_.attach_handler(identity, *connection_) != status_type::changed) {
             std::terminate();
         }
     }
 
-    ruvia::Task<void> finish(identity_type identity, bool transport_first = true) {
-        if (!connection->stopped()) {
-            (void)connection->requestStop();
+    ruvia::task<void> finish(identity_type identity, bool transport_first = true) {
+        if (!connection_->stopped()) {
+            (void)connection_->request_stop();
         }
-        if (state.start_worker_draining(identity) != status::changed) {
+        if (state_.start_worker_draining(identity) != status_type::changed) {
             std::terminate();
         }
-        if (transport_first && !state.transport_retired() && state.mark_transport_retired(identity) != status::changed) {
+        if (transport_first && !state_.transport_retired() && state_.mark_transport_retired(identity) != status_type::changed) {
             std::terminate();
         }
         for (;;) {
-            const auto step = scheduler.step();
-            if (step.kind == scheduler_type::step_kind::idle) {
+            const auto step = scheduler_.step();
+            if (step.kind_ == scheduler_type::step_kind::idle) {
                 break;
             }
-            if (step.kind == scheduler_type::step_kind::transport_intent) {
-                const auto result = state.execute_intent(identity, step.intent);
-                if (!result.completed() || !scheduler.acknowledge_intent(step.connection, step.intent.token, result.push_stream)) {
+            if (step.kind_ == scheduler_type::step_kind::transport_intent) {
+                const auto result_value = state_.execute_intent(identity, step.intent_);
+                if (!result_value.completed() || !scheduler_.acknowledge_intent(step.connection_, step.intent_.token_, result_value.push_stream_)) {
                     std::terminate();
                 }
             }
         }
-        co_await connection->join();
-        if (state.mark_worker_finalized(identity) != status::changed) {
+        co_await connection_->join();
+        if (state_.mark_worker_finalized(identity) != status_type::changed) {
             std::terminate();
         }
-        if (!state.transport_retired() && state.mark_transport_retired(identity) != status::changed) {
+        if (!state_.transport_retired() && state_.mark_transport_retired(identity) != status_type::changed) {
             std::terminate();
         }
-        if (state.retire(identity) != status::changed) {
+        if (state_.retire(identity) != status_type::changed) {
             std::terminate();
         }
-        connection.reset();
-        if (!outbound.stop()) {
+        connection_.reset();
+        if (!outbound_.stop()) {
             std::terminate();
         }
     }
 };
 
-connection_type::TransportIntent reset_intent(identity_type identity, std::uint64_t stream_id, std::uint64_t sequence, ruvia::Http3ConnectionErrorCode code) {
-    return {.token = {.kind = connection_type::TransportIntentKind::kStreamReset,
-                .id = {.epoch = identity.epoch, .connection_generation = identity.connection_generation, .stream_id = stream_id},
-                .sequence = sequence},
-        .streamResetErrorCode = code};
+connection_type::transport_intent_type reset_intent(identity_type identity, std::uint64_t stream_id, std::uint64_t sequence, ruvia::http3_connection_error_code code) {
+    return {.token_ = {.kind_ = connection_type::transport_intent_kind_type::stream_reset,
+                .id_ = {.epoch_ = identity.epoch_, .connection_generation_ = identity.connection_generation_, .stream_id_ = stream_id},
+                .sequence_ = sequence},
+        .stream_reset_error_code_ = code};
 }
 
-connection_type::TransportIntent push_intent(identity_type identity, std::uint64_t push_id, std::uint64_t sequence) {
-    return {.token = {.kind = connection_type::TransportIntentKind::kOpenPushStream,
-                .id = {.epoch = identity.epoch, .connection_generation = identity.connection_generation, .stream_id = 0, .push_id = push_id},
-                .sequence = sequence}};
+connection_type::transport_intent_type push_intent(identity_type identity, std::uint64_t push_id, std::uint64_t sequence) {
+    return {.token_ = {.kind_ = connection_type::transport_intent_kind_type::open_push_stream,
+                .id_ = {.epoch_ = identity.epoch_, .connection_generation_ = identity.connection_generation_, .stream_id_ = 0, .push_id_ = push_id},
+                .sequence_ = sequence}};
 }
 
-ruvia::Task<void> admission_and_generation(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const auto identity = fixture.reserve();
-    const auto token = fixture.state.registration()->token;
-    RUVIA_CHECK(fixture.state.available_identity() == identity);
-    RUVIA_CHECK(fixture.state.available_identity() == identity);
-    RUVIA_CHECK(fixture.state.admission() == state_type::admission_phase::reserved);
-    RUVIA_CHECK(fixture.scheduler.snapshot().free_connections == 0);
-    RUVIA_CHECK(fixture.state.reject(identity, state_type::reject_reason::capacity) == status::wrong_state);
-    fixture.attach(identity);
-    RUVIA_CHECK(!fixture.state.available_identity());
-    RUVIA_CHECK(fixture.state.admission() == state_type::admission_phase::handler_attached);
-    RUVIA_CHECK(fixture.scheduler.snapshot().attached_connections == 1);
-    const auto binding = *fixture.state.binding();
-    RUVIA_CHECK(binding.identity == identity);
-    RUVIA_CHECK(binding.metadata.remote_address == "127.0.0.1");
-    RUVIA_CHECK(binding.metadata.client_certificate_subject == "peer");
-    RUVIA_CHECK(binding.metadata.remote_port == 443);
-    RUVIA_CHECK(binding.settings.enableConnectProtocol);
-    RUVIA_CHECK(binding.max_quic_datagram_payload_bytes == 1200);
-    RUVIA_CHECK(fixture.state.attach_handler(identity, *fixture.connection) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.reject(identity, state_type::reject_reason::stopping) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.reset() == status::wrong_state);
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.seal_admission(identity, 0, 8) == status::changed);
-    RUVIA_CHECK(fixture.state.admission_seal()->identity == identity);
-    RUVIA_CHECK(fixture.state.admission_seal()->expected_admitted_requests == 0);
-    RUVIA_CHECK(fixture.state.admission_seal()->goaway_id == 8);
-    RUVIA_CHECK(fixture.state.seal_admission(identity, 1, 12) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.mark_worker_drained(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.worker_drained());
-    RUVIA_CHECK(!fixture.state.slot_reusable());
-    co_await fixture.finish(identity, false);
-    RUVIA_CHECK(fixture.state.worker_finalized());
-    RUVIA_CHECK(fixture.state.transport_retired());
-    RUVIA_CHECK(fixture.state.slot_reusable());
-    RUVIA_CHECK(fixture.state.ready_to_destroy());
-    RUVIA_CHECK(fixture.state.reset() == status::changed);
-    RUVIA_CHECK(fixture.state.reserve(fixture.scheduler, identity.epoch, identity.connection_generation) == status::stale);
-    RUVIA_CHECK(fixture.state.reserve(fixture.scheduler, identity.epoch - 1, 100) == status::stale);
-    const auto next = fixture.reserve(identity.epoch + 1, 1);
-    RUVIA_CHECK(fixture.state.registration()->token.slot_generation > token.slot_generation);
-    RUVIA_CHECK(fixture.state.bind(identity) == status::stale);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::stale);
-    RUVIA_CHECK(fixture.state.execute_intent(identity, reset_intent(identity, 4, 1, ruvia::Http3ConnectionErrorCode::kMessageError)).outcome == outcome::stale);
-    RUVIA_CHECK(!fixture.scheduler.abandon(token));
-    RUVIA_CHECK(fixture.state.revoke(next) == status::changed);
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(next) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(next) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(next) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(next) == status::changed);
+ruvia::task<void> admission_and_generation(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const auto identity = fixture_value.reserve();
+    const auto token = fixture_value.state_.registration()->token_;
+    RUVIA_CHECK(fixture_value.state_.available_identity() == identity);
+    RUVIA_CHECK(fixture_value.state_.available_identity() == identity);
+    RUVIA_CHECK(fixture_value.state_.admission() == state_type::admission_phase::reserved);
+    RUVIA_CHECK(fixture_value.scheduler_.snapshot().free_connections_ == 0);
+    RUVIA_CHECK(fixture_value.state_.reject(identity, state_type::reject_reason::capacity) == status_type::wrong_state);
+    fixture_value.attach(identity);
+    RUVIA_CHECK(!fixture_value.state_.available_identity());
+    RUVIA_CHECK(fixture_value.state_.admission() == state_type::admission_phase::handler_attached);
+    RUVIA_CHECK(fixture_value.scheduler_.snapshot().attached_connections_ == 1);
+    const auto binding = *fixture_value.state_.binding();
+    RUVIA_CHECK(binding.identity_ == identity);
+    RUVIA_CHECK(binding.metadata_.remote_address_ == "127.0.0.1");
+    RUVIA_CHECK(binding.metadata_.client_certificate_subject_ == "peer");
+    RUVIA_CHECK(binding.metadata_.remote_port_ == 443);
+    RUVIA_CHECK(binding.settings_.enable_connect_protocol_);
+    RUVIA_CHECK(binding.max_quic_datagram_payload_bytes_ == 1200);
+    RUVIA_CHECK(fixture_value.state_.attach_handler(identity, *fixture_value.connection_) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.reject(identity, state_type::reject_reason::stopping) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.reset() == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.seal_admission(identity, 0, 8) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.admission_seal()->identity_ == identity);
+    RUVIA_CHECK(fixture_value.state_.admission_seal()->expected_admitted_requests_ == 0);
+    RUVIA_CHECK(fixture_value.state_.admission_seal()->goaway_id_ == 8);
+    RUVIA_CHECK(fixture_value.state_.seal_admission(identity, 1, 12) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_drained(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.worker_drained());
+    RUVIA_CHECK(!fixture_value.state_.slot_reusable());
+    co_await fixture_value.finish(identity, false);
+    RUVIA_CHECK(fixture_value.state_.worker_finalized());
+    RUVIA_CHECK(fixture_value.state_.transport_retired());
+    RUVIA_CHECK(fixture_value.state_.slot_reusable());
+    RUVIA_CHECK(fixture_value.state_.ready_to_destroy());
+    RUVIA_CHECK(fixture_value.state_.reset() == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.reserve(fixture_value.scheduler_, identity.epoch_, identity.connection_generation_) == status_type::stale);
+    RUVIA_CHECK(fixture_value.state_.reserve(fixture_value.scheduler_, identity.epoch_ - 1, 100) == status_type::stale);
+    const auto next_value = fixture_value.reserve(identity.epoch_ + 1, 1);
+    RUVIA_CHECK(fixture_value.state_.registration()->token_.slot_generation_ > token.slot_generation_);
+    RUVIA_CHECK(fixture_value.state_.bind(identity) == status_type::stale);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::stale);
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, reset_intent(identity, 4, 1, ruvia::http3_connection_error_code::message_error)).outcome_ == outcome_type::stale);
+    RUVIA_CHECK(!fixture_value.scheduler_.abandon(token));
+    RUVIA_CHECK(fixture_value.state_.revoke(next_value) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(next_value) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(next_value) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(next_value) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(next_value) == status_type::changed);
 }
 
-ruvia::Task<void> reject_revoke_and_stop(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    auto identity = fixture.reserve();
-    RUVIA_CHECK(fixture.state.bind(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.binding().has_value());
-    RUVIA_CHECK(fixture.state.reject(identity, state_type::reject_reason::construction_failed) == status::changed);
-    RUVIA_CHECK(fixture.state.admission() == state_type::admission_phase::rejected);
-    RUVIA_CHECK(fixture.state.rejection() == state_type::reject_reason::construction_failed);
-    RUVIA_CHECK(fixture.scheduler.snapshot().free_connections == 1);
-    RUVIA_CHECK(!fixture.state.slot_reusable());
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.reset() == status::changed);
-    identity = fixture.reserve(42, 1);
-    const auto before_stop = fixture.changes;
-    fixture.state.stop_admission();
-    RUVIA_CHECK(fixture.changes == before_stop + 1);
-    fixture.state.stop_admission();
-    RUVIA_CHECK(fixture.changes == before_stop + 1);
-    RUVIA_CHECK(!fixture.state.available_identity());
-    RUVIA_CHECK(fixture.state.bind(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.revoke(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.revoke(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.admission() == state_type::admission_phase::revoked);
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.reset() == status::changed);
-    RUVIA_CHECK(fixture.state.reserve(fixture.scheduler, 43, 1) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.ready_to_destroy());
-    RUVIA_CHECK(fixture.outbound.stop());
+ruvia::task<void> reject_revoke_and_stop(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    auto identity = fixture_value.reserve();
+    RUVIA_CHECK(fixture_value.state_.bind(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.binding().has_value());
+    RUVIA_CHECK(fixture_value.state_.reject(identity, state_type::reject_reason::construction_failed) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.admission() == state_type::admission_phase::rejected);
+    RUVIA_CHECK(fixture_value.state_.rejection() == state_type::reject_reason::construction_failed);
+    RUVIA_CHECK(fixture_value.scheduler_.snapshot().free_connections_ == 1);
+    RUVIA_CHECK(!fixture_value.state_.slot_reusable());
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.reset() == status_type::changed);
+    identity = fixture_value.reserve(42, 1);
+    const auto before_stop = fixture_value.changes_;
+    fixture_value.state_.stop_admission();
+    RUVIA_CHECK(fixture_value.changes_ == before_stop + 1);
+    fixture_value.state_.stop_admission();
+    RUVIA_CHECK(fixture_value.changes_ == before_stop + 1);
+    RUVIA_CHECK(!fixture_value.state_.available_identity());
+    RUVIA_CHECK(fixture_value.state_.bind(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.revoke(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.revoke(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.admission() == state_type::admission_phase::revoked);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.reset() == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.reserve(fixture_value.scheduler_, 43, 1) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.ready_to_destroy());
+    RUVIA_CHECK(fixture_value.outbound_.stop());
     co_return;
 }
 
-ruvia::Task<void> direct_intents(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const auto identity = fixture.reserve();
-    fixture.attach(identity);
-    const std::array codes{ruvia::Http3ConnectionErrorCode::kMessageError, ruvia::Http3ConnectionErrorCode::kRequestCancelled, ruvia::Http3ConnectionErrorCode::kExcessiveLoad};
+ruvia::task<void> direct_intents(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const auto identity = fixture_value.reserve();
+    fixture_value.attach(identity);
+    const std::array codes{ruvia::http3_connection_error_code::message_error, ruvia::http3_connection_error_code::request_cancelled, ruvia::http3_connection_error_code::excessive_load};
     for (std::size_t i = 0; i < codes.size(); ++i) {
         const auto intent = reset_intent(identity, 4 * (i + 1), 101 * (i + 1), codes[i]);
-        RUVIA_CHECK(fixture.state.execute_intent(identity, intent).completed());
-        RUVIA_CHECK(fixture.executed[i].token == intent.token);
-        RUVIA_CHECK(fixture.executed[i].streamResetErrorCode == codes[i]);
-        RUVIA_CHECK(fixture.executed[i].closeReason == intent.closeReason);
-        RUVIA_CHECK(fixture.executed[i].connectionErrorCode == intent.connectionErrorCode);
+        RUVIA_CHECK(fixture_value.state_.execute_intent(identity, intent).completed());
+        RUVIA_CHECK(fixture_value.executed_[i].token_ == intent.token_);
+        RUVIA_CHECK(fixture_value.executed_[i].stream_reset_error_code_ == codes[i]);
+        RUVIA_CHECK(fixture_value.executed_[i].close_reason_ == intent.close_reason_);
+        RUVIA_CHECK(fixture_value.executed_[i].connection_error_code_ == intent.connection_error_code_);
     }
     const std::array results{
-        connection_type::PushStreamOpenResult{.status = connection_type::PushStreamOpenResult::Status::kOpened, .streamId = 31},
-        connection_type::PushStreamOpenResult{},
-        connection_type::PushStreamOpenResult{.status = connection_type::PushStreamOpenResult::Status::kStopped}};
+        connection_type::push_stream_open_result_type{.status_ = connection_type::push_stream_open_result_type::status_type::opened, .stream_id_ = 31},
+        connection_type::push_stream_open_result_type{},
+        connection_type::push_stream_open_result_type{.status_ = connection_type::push_stream_open_result_type::status_type::stopped}};
     for (std::size_t i = 0; i < results.size(); ++i) {
-        fixture.execution_result.push_stream = results[i];
+        fixture_value.execution_result_.push_stream_ = results[i];
         const auto intent = push_intent(identity, i, i + 1);
-        const auto result = fixture.state.execute_intent(identity, intent);
-        RUVIA_CHECK(result.completed());
-        RUVIA_CHECK(result.push_stream->status == results[i].status);
-        RUVIA_CHECK(result.push_stream->streamId == results[i].streamId);
-        RUVIA_CHECK(fixture.executed[3 + i].token == intent.token);
+        const auto result_value = fixture_value.state_.execute_intent(identity, intent);
+        RUVIA_CHECK(result_value.completed());
+        RUVIA_CHECK(result_value.push_stream_->status_ == results[i].status_);
+        RUVIA_CHECK(result_value.push_stream_->stream_id_ == results[i].stream_id_);
+        RUVIA_CHECK(fixture_value.executed_[3 + i].token_ == intent.token_);
     }
-    fixture.execution_result.push_stream = connection_type::PushStreamOpenResult{.status = connection_type::PushStreamOpenResult::Status::kOpened, .streamId = 0};
-    RUVIA_CHECK(fixture.state.execute_intent(identity, push_intent(identity, 3, 4)).outcome == outcome::invalid);
-    fixture.execution_result.push_stream.reset();
-    RUVIA_CHECK(fixture.state.execute_intent(identity, push_intent(identity, 3, 5)).outcome == outcome::invalid);
+    fixture_value.execution_result_.push_stream_ = connection_type::push_stream_open_result_type{.status_ = connection_type::push_stream_open_result_type::status_type::opened, .stream_id_ = 0};
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, push_intent(identity, 3, 4)).outcome_ == outcome_type::invalid);
+    fixture_value.execution_result_.push_stream_.reset();
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, push_intent(identity, 3, 5)).outcome_ == outcome_type::invalid);
     auto malformed = push_intent(identity, 0, 6);
-    malformed.token.id.push_id.reset();
-    const auto count = fixture.executions;
-    RUVIA_CHECK(fixture.state.execute_intent(identity, malformed).outcome == outcome::invalid);
-    RUVIA_CHECK(fixture.executions == count);
-    fixture.state.set_transport_executor({});
-    RUVIA_CHECK(fixture.state.execute_intent(identity, reset_intent(identity, 4, 7, codes[0])).outcome == outcome::unavailable);
-    fixture.state.set_transport_executor({&fixture, fixture::execute});
-    co_await fixture.finish(identity);
+    malformed.token_.id_.push_id_.reset();
+    const auto count = fixture_value.executions_;
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, malformed).outcome_ == outcome_type::invalid);
+    RUVIA_CHECK(fixture_value.executions_ == count);
+    fixture_value.state_.set_transport_executor({});
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, reset_intent(identity, 4, 7, codes[0])).outcome_ == outcome_type::unavailable);
+    fixture_value.state_.set_transport_executor({&fixture_value, fixture_type::execute});
+    co_await fixture_value.finish(identity);
 }
 
-ruvia::Task<void> offered_intent_survives_teardown(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const auto identity = fixture.reserve();
-    fixture.attach(identity);
-    RUVIA_CHECK(fixture.state.seal_admission(identity, 0, 0) == status::changed);
-    RUVIA_CHECK(fixture.state.mark_worker_drained(identity) == status::changed);
-    RUVIA_CHECK(fixture.connection->requestStop());
-    const auto offered = fixture.scheduler.step();
-    RUVIA_CHECK(offered.kind == scheduler_type::step_kind::transport_intent);
-    RUVIA_CHECK(fixture.state.start_worker_draining(identity) == status::changed);
-    fixture.retire_during_execution = true;
-    const auto result = fixture.state.execute_intent(identity, offered.intent);
-    RUVIA_CHECK(result.outcome == outcome::transport_retired);
-    RUVIA_CHECK(fixture.executions == 1);
-    RUVIA_CHECK(fixture.executed[0].token == offered.intent.token);
-    RUVIA_CHECK(fixture.executed[0].closeReason == offered.intent.closeReason);
-    RUVIA_CHECK(fixture.state.worker_drained());
-    RUVIA_CHECK(fixture.state.admission_seal()->goaway_id == 0);
-    co_await fixture.connection->join();
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::wrong_state);
-    RUVIA_CHECK(fixture.state.execute_intent(identity, offered.intent).outcome == outcome::transport_retired);
-    RUVIA_CHECK(fixture.executions == 1);
-    auto forged = offered.intent.token;
-    --forged.sequence;
-    RUVIA_CHECK(!fixture.scheduler.acknowledge_intent(offered.connection, forged));
-    RUVIA_CHECK(fixture.scheduler.acknowledge_intent(offered.connection, offered.intent.token, result.push_stream));
-    RUVIA_CHECK(!fixture.scheduler.acknowledge_intent(offered.connection, offered.intent.token));
-    RUVIA_CHECK(fixture.state.retire(identity) == status::changed);
-    fixture.connection.reset();
-    RUVIA_CHECK(fixture.outbound.stop());
+ruvia::task<void> offered_intent_survives_teardown(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const auto identity = fixture_value.reserve();
+    fixture_value.attach(identity);
+    RUVIA_CHECK(fixture_value.state_.seal_admission(identity, 0, 0) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.mark_worker_drained(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.connection_->request_stop());
+    const auto offered = fixture_value.scheduler_.step();
+    RUVIA_CHECK(offered.kind_ == scheduler_type::step_kind::transport_intent);
+    RUVIA_CHECK(fixture_value.state_.start_worker_draining(identity) == status_type::changed);
+    fixture_value.retire_during_execution_ = true;
+    const auto result_value = fixture_value.state_.execute_intent(identity, offered.intent_);
+    RUVIA_CHECK(result_value.outcome_ == outcome_type::transport_retired);
+    RUVIA_CHECK(fixture_value.executions_ == 1);
+    RUVIA_CHECK(fixture_value.executed_[0].token_ == offered.intent_.token_);
+    RUVIA_CHECK(fixture_value.executed_[0].close_reason_ == offered.intent_.close_reason_);
+    RUVIA_CHECK(fixture_value.state_.worker_drained());
+    RUVIA_CHECK(fixture_value.state_.admission_seal()->goaway_id_ == 0);
+    co_await fixture_value.connection_->join();
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.execute_intent(identity, offered.intent_).outcome_ == outcome_type::transport_retired);
+    RUVIA_CHECK(fixture_value.executions_ == 1);
+    auto forged = offered.intent_.token_;
+    --forged.sequence_;
+    RUVIA_CHECK(!fixture_value.scheduler_.acknowledge_intent(offered.connection_, forged));
+    RUVIA_CHECK(fixture_value.scheduler_.acknowledge_intent(offered.connection_, offered.intent_.token_, result_value.push_stream_));
+    RUVIA_CHECK(!fixture_value.scheduler_.acknowledge_intent(offered.connection_, offered.intent_.token_));
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::changed);
+    fixture_value.connection_.reset();
+    RUVIA_CHECK(fixture_value.outbound_.stop());
 }
 
-ruvia::Task<void> retired_intents(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const auto identity = fixture.reserve();
-    fixture.attach(identity);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::changed);
-    const auto count = fixture.executions;
-    const auto reset = fixture.state.execute_intent(identity, reset_intent(identity, 4, 10, ruvia::Http3ConnectionErrorCode::kMessageError));
-    const auto push = fixture.state.execute_intent(identity, push_intent(identity, 0, 11));
-    RUVIA_CHECK(reset.outcome == outcome::transport_retired);
-    RUVIA_CHECK(!reset.push_stream);
-    RUVIA_CHECK(push.outcome == outcome::transport_retired);
-    RUVIA_CHECK(push.push_stream->status == connection_type::PushStreamOpenResult::Status::kStopped);
-    RUVIA_CHECK(fixture.executions == count);
-    co_await fixture.finish(identity);
+ruvia::task<void> retired_intents(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const auto identity = fixture_value.reserve();
+    fixture_value.attach(identity);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::changed);
+    const auto count = fixture_value.executions_;
+    const auto reset = fixture_value.state_.execute_intent(identity, reset_intent(identity, 4, 10, ruvia::http3_connection_error_code::message_error));
+    const auto push = fixture_value.state_.execute_intent(identity, push_intent(identity, 0, 11));
+    RUVIA_CHECK(reset.outcome_ == outcome_type::transport_retired);
+    RUVIA_CHECK(!reset.push_stream_);
+    RUVIA_CHECK(push.outcome_ == outcome_type::transport_retired);
+    RUVIA_CHECK(push.push_stream_->status_ == connection_type::push_stream_open_result_type::status_type::stopped);
+    RUVIA_CHECK(fixture_value.executions_ == count);
+    co_await fixture_value.finish(identity);
 }
 
-ruvia::Task<void> datagram_boundaries_and_retirement(fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const auto identity = fixture.reserve();
-    fixture.attach(identity);
-    const std::array bytes{std::byte{1}, std::byte{2}, std::byte{3}};
-    const auto allocations = fixture.resource.allocationCount();
+ruvia::task<void> datagram_boundaries_and_retirement(fixture_type& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const auto identity = fixture_value.reserve();
+    fixture_value.attach(identity);
+    const std::array bytes_value{std::byte{1}, std::byte{2}, std::byte{3}};
+    const auto allocations = fixture_value.resource_.allocation_count();
     for (std::size_t i = 0; i < state_type::datagram_capacity; ++i) {
-        RUVIA_CHECK(fixture.state.publish_request_datagram(identity, 4, i == 0 ? std::span<const std::byte>{} : std::span(bytes)) == status::changed);
-        RUVIA_CHECK(fixture.state.publish_response_datagram(identity, 8, bytes) == status::changed);
+        RUVIA_CHECK(fixture_value.state_.publish_request_datagram(identity, 4, i == 0 ? std::span<const std::byte>{} : std::span(bytes_value)) == status_type::changed);
+        RUVIA_CHECK(fixture_value.state_.publish_response_datagram(identity, 8, bytes_value) == status_type::changed);
     }
-    RUVIA_CHECK(fixture.state.publish_request_datagram(identity, 4, bytes) == status::full);
-    RUVIA_CHECK(fixture.state.publish_response_datagram(identity, 8, bytes) == status::full);
+    RUVIA_CHECK(fixture_value.state_.publish_request_datagram(identity, 4, bytes_value) == status_type::full);
+    RUVIA_CHECK(fixture_value.state_.publish_response_datagram(identity, 8, bytes_value) == status_type::full);
     state_type::datagram request;
     state_type::datagram response;
-    RUVIA_CHECK(fixture.state.pop_request_datagram(request) == status::changed);
-    RUVIA_CHECK(request.identity == identity && request.stream_id == 4 && request.bytes().empty());
+    RUVIA_CHECK(fixture_value.state_.pop_request_datagram(request) == status_type::changed);
+    RUVIA_CHECK(request.identity_ == identity && request.stream_id_ == 4 && request.bytes().empty());
     // Queue capacity alone cannot reuse a block retained by a linear borrow.
-    RUVIA_CHECK(fixture.state.publish_request_datagram(identity, 12, bytes) == status::full);
-    request.storage.reset();
-    RUVIA_CHECK(fixture.state.publish_request_datagram(identity, 12, std::span(bytes).first(1)) == status::changed);
-    RUVIA_CHECK(fixture.state.pop_response_datagram(response) == status::changed);
-    RUVIA_CHECK(response.stream_id == 8 && std::equal(bytes.begin(), bytes.end(), response.bytes().begin()));
-    response.storage.reset();
-    RUVIA_CHECK(fixture.state.publish_response_datagram(identity, 16, {}) == status::changed);
+    RUVIA_CHECK(fixture_value.state_.publish_request_datagram(identity, 12, bytes_value) == status_type::full);
+    request.storage_.reset();
+    RUVIA_CHECK(fixture_value.state_.publish_request_datagram(identity, 12, std::span(bytes_value).first(1)) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.pop_response_datagram(response) == status_type::changed);
+    RUVIA_CHECK(response.stream_id_ == 8 && std::equal(bytes_value.begin(), bytes_value.end(), response.bytes().begin()));
+    response.storage_.reset();
+    RUVIA_CHECK(fixture_value.state_.publish_response_datagram(identity, 16, {}) == status_type::changed);
     for (std::size_t i = 1; i < state_type::datagram_capacity; ++i) {
-        RUVIA_CHECK(fixture.state.pop_request_datagram(request) == status::changed);
-        RUVIA_CHECK(request.stream_id == 4 && request.size == bytes.size());
-        RUVIA_CHECK(std::equal(bytes.begin(), bytes.end(), request.bytes().begin()));
-        request.storage.reset();
+        RUVIA_CHECK(fixture_value.state_.pop_request_datagram(request) == status_type::changed);
+        RUVIA_CHECK(request.stream_id_ == 4 && request.size_ == bytes_value.size());
+        RUVIA_CHECK(std::equal(bytes_value.begin(), bytes_value.end(), request.bytes().begin()));
+        request.storage_.reset();
     }
-    RUVIA_CHECK(fixture.state.pop_request_datagram(request) == status::changed);
-    RUVIA_CHECK(request.stream_id == 12 && request.bytes().size() == 1 && request.bytes()[0] == bytes[0]);
-    request.storage.reset();
-    RUVIA_CHECK(fixture.state.pop_request_datagram(request) == status::empty);
-    RUVIA_CHECK(fixture.state.publish_request_datagram(identity, 20, bytes) == status::changed);
-    RUVIA_CHECK_EQ(fixture.resource.allocationCount(), allocations);
-    RUVIA_CHECK(fixture.connection->requestStop());
-    RUVIA_CHECK(fixture.state.start_worker_draining(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.pop_response_datagram(response) == status::changed);
-    RUVIA_CHECK(fixture.state.mark_transport_retired(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.pop_request_datagram(request) == status::empty);
+    RUVIA_CHECK(fixture_value.state_.pop_request_datagram(request) == status_type::changed);
+    RUVIA_CHECK(request.stream_id_ == 12 && request.bytes().size() == 1 && request.bytes()[0] == bytes_value[0]);
+    request.storage_.reset();
+    RUVIA_CHECK(fixture_value.state_.pop_request_datagram(request) == status_type::empty);
+    RUVIA_CHECK(fixture_value.state_.publish_request_datagram(identity, 20, bytes_value) == status_type::changed);
+    RUVIA_CHECK_EQ(fixture_value.resource_.allocation_count(), allocations);
+    RUVIA_CHECK(fixture_value.connection_->request_stop());
+    RUVIA_CHECK(fixture_value.state_.start_worker_draining(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.pop_response_datagram(response) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.mark_transport_retired(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.pop_request_datagram(request) == status_type::empty);
     state_type::datagram discarded;
-    RUVIA_CHECK(fixture.state.pop_response_datagram(discarded) == status::empty);
-    RUVIA_CHECK(fixture.state.publish_response_datagram(identity, 8, bytes) == status::wrong_state);
+    RUVIA_CHECK(fixture_value.state_.pop_response_datagram(discarded) == status_type::empty);
+    RUVIA_CHECK(fixture_value.state_.publish_response_datagram(identity, 8, bytes_value) == status_type::wrong_state);
     for (;;) {
-        const auto step = fixture.scheduler.step();
-        if (step.kind == scheduler_type::step_kind::idle) {
+        const auto step = fixture_value.scheduler_.step();
+        if (step.kind_ == scheduler_type::step_kind::idle) {
             break;
         }
-        if (step.kind == scheduler_type::step_kind::transport_intent) {
-            const auto result = fixture.state.execute_intent(identity, step.intent);
-            RUVIA_CHECK(result.completed());
-            RUVIA_CHECK(fixture.scheduler.acknowledge_intent(step.connection, step.intent.token, result.push_stream));
+        if (step.kind_ == scheduler_type::step_kind::transport_intent) {
+            const auto result_value = fixture_value.state_.execute_intent(identity, step.intent_);
+            RUVIA_CHECK(result_value.completed());
+            RUVIA_CHECK(fixture_value.scheduler_.acknowledge_intent(step.connection_, step.intent_.token_, result_value.push_stream_));
         }
     }
-    co_await fixture.connection->join();
-    RUVIA_CHECK(fixture.state.mark_worker_finalized(identity) == status::changed);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::wrong_state);
-    const auto changes = fixture.changes;
-    response.storage.reset();
-    RUVIA_CHECK(fixture.changes == changes + 1);
-    RUVIA_CHECK(fixture.state.retire(identity) == status::changed);
-    fixture.connection.reset();
-    RUVIA_CHECK(fixture.state.ready_to_destroy());
-    RUVIA_CHECK(fixture.outbound.stop());
+    co_await fixture_value.connection_->join();
+    RUVIA_CHECK(fixture_value.state_.mark_worker_finalized(identity) == status_type::changed);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::wrong_state);
+    const auto changes = fixture_value.changes_;
+    response.storage_.reset();
+    RUVIA_CHECK(fixture_value.changes_ == changes + 1);
+    RUVIA_CHECK(fixture_value.state_.retire(identity) == status_type::changed);
+    fixture_value.connection_.reset();
+    RUVIA_CHECK(fixture_value.state_.ready_to_destroy());
+    RUVIA_CHECK(fixture_value.outbound_.stop());
 }
 
-ruvia::Task<void> stop_after(ruvia::EventLoopAttachment& attachment, ruvia::Task<void> operation) {
+ruvia::task<void> stop_after(ruvia::event_loop_attachment& attachment, ruvia::task<void> operation) {
     try {
         co_await std::move(operation);
     } catch (...) {
@@ -393,27 +393,27 @@ ruvia::Task<void> stop_after(ruvia::EventLoopAttachment& attachment, ruvia::Task
     attachment.stop();
 }
 
-using exercise = ruvia::Task<void> (*)(fixture&, ruvia::testing::TestContext&);
+using exercise_type = ruvia::task<void> (*)(fixture_type&, ruvia::testing::test_context&);
 
-ruvia::Task<void> exercise_on_worker(const ruvia::WorkerHandle& worker,
-    ruvia::test::CountingMemoryResource& upstream, exercise operation,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> exercise_on_worker(const ruvia::worker_handle& worker_value,
+    ruvia::test::counting_memory_resource& upstream, exercise_type operation,
+    ruvia::testing::test_context& ruvia_ctx) {
     // Construct and destroy all worker-affine state while the owner is running.
-    fixture fixture(worker, upstream);
-    co_await operation(fixture, ruvia_ctx);
+    fixture_type fixture_value(worker_value, upstream);
+    co_await operation(fixture_value, ruvia_ctx);
 }
 
-void run(exercise operation, ruvia::testing::TestContext& ruvia_ctx) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto worker = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
+void run(exercise_type operation, ruvia::testing::test_context& ruvia_ctx) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
     auto root = attachment.loop().start(stop_after(attachment,
-        exercise_on_worker(worker, upstream, operation, ruvia_ctx)));
+        exercise_on_worker(worker_value, upstream, operation, ruvia_ctx)));
     attachment.run();
     root.get();
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
 }  // namespace

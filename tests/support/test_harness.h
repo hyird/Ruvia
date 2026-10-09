@@ -12,29 +12,29 @@
 
 namespace ruvia::testing {
 
-struct TestCase {
-    const char* name;
-    void (*fn)(struct TestContext&);
+struct test_case {
+    const char* name_;
+    void (*fn_)(struct test_context&);
 };
 
-struct TestContext {
-    int failures = 0;
-    const char* current = "";
+struct test_context {
+    int failures_ = 0;
+    const char* current_ = "";
 };
 
-inline std::vector<TestCase>& registry() {
-    static std::vector<TestCase> cases;
+inline std::vector<test_case>& registry() {
+    static std::vector<test_case> cases;
     return cases;
 }
 
-struct Registrar {
-    Registrar(const char* name, void (*fn)(TestContext&)) {
-        registry().push_back(TestCase{name, fn});
+struct registrar {
+    registrar(const char* name, void (*fn)(test_context&)) {
+        registry().push_back(test_case{name, fn});
     }
 };
 
-template <typename Fn>
-[[nodiscard]] bool throwsOn(Fn&& fn) {
+template <typename fn_type>
+[[nodiscard]] bool throws_on(fn_type&& fn) {
     try {
         fn();
         return false;
@@ -43,28 +43,28 @@ template <typename Fn>
     }
 }
 
-inline void reportFailure(TestContext& ctx, const char* file, int line, std::string_view expr) {
-    ++ctx.failures;
-    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n", ctx.current, file, line,
+inline void report_failure(test_context& ctx, const char* file, int line, std::string_view expr) {
+    ++ctx.failures_;
+    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n", ctx.current_, file, line,
         static_cast<int>(expr.size()), expr.data());
 }
 
-inline void reportCheck(TestContext& ctx, bool failed, const char* file, int line,
+inline void report_check(test_context& ctx, bool failed, const char* file, int line,
     std::string_view expr) {
     if (failed) {
-        reportFailure(ctx, file, line, expr);
+        report_failure(ctx, file, line, expr);
     }
 }
 
 }  // namespace ruvia::testing
 
 #define RUVIA_TEST(name)                                                   \
-    static void name(ruvia::testing::TestContext&);                        \
-    static const ruvia::testing::Registrar ruvia_reg_##name{#name, &name}; \
-    static void name([[maybe_unused]] ruvia::testing::TestContext& ruvia_ctx)
+    static void name(ruvia::testing::test_context&);                       \
+    static const ruvia::testing::registrar ruvia_reg_##name{#name, &name}; \
+    static void name([[maybe_unused]] ruvia::testing::test_context& ruvia_ctx)
 
 #define RUVIA_CHECK(cond) \
-    ruvia::testing::reportCheck(ruvia_ctx, static_cast<bool>(!(cond)), __FILE__, __LINE__, #cond)
+    ruvia::testing::report_check(ruvia_ctx, static_cast<bool>(!(cond)), __FILE__, __LINE__, #cond)
 
 #define RUVIA_CHECK_EQ(a, b) \
-    ruvia::testing::reportCheck(ruvia_ctx, static_cast<bool>(!((a) == (b))), __FILE__, __LINE__, #a " == " #b)
+    ruvia::testing::report_check(ruvia_ctx, static_cast<bool>(!((a) == (b))), __FILE__, __LINE__, #a " == " #b)

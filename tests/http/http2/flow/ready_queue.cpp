@@ -1,31 +1,31 @@
 #include <cstdint>
 
-#include "http2/Http2ReadyQueue.h"
+#include "http2/http2_ready_queue.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::Http2LocalSettings;
-using ruvia::detail::Http2ReadyQueue;
+using ruvia::detail::http2_local_settings;
+using ruvia::detail::http2_ready_queue;
 
 }  // namespace
 
 RUVIA_TEST(ready_queue_fifo_order) {
-    Http2ReadyQueue queue;
-    RUVIA_CHECK(!queue.hasReady());
+    http2_ready_queue queue;
+    RUVIA_CHECK(!queue.has_ready());
     RUVIA_CHECK(queue.push(1));
     RUVIA_CHECK(queue.push(3));
     RUVIA_CHECK(queue.push(5));
-    RUVIA_CHECK(queue.hasReady());
+    RUVIA_CHECK(queue.has_ready());
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{1});  // first in, first out
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{3});
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{5});
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 }
 
 RUVIA_TEST(ready_queue_capacity_and_reuse) {
-    Http2ReadyQueue queue;
-    const std::uint32_t capacity = Http2LocalSettings::kMaxConcurrentStreams;
+    http2_ready_queue queue;
+    const std::uint32_t capacity = http2_local_settings::max_concurrent_streams;
     for (std::uint32_t id = 1; id <= capacity; ++id) {
         RUVIA_CHECK(queue.push(id));
     }
@@ -38,8 +38,8 @@ RUVIA_TEST(ready_queue_capacity_and_reuse) {
 }
 
 RUVIA_TEST(ready_queue_push_reclaims_prefix_when_physically_full) {
-    Http2ReadyQueue queue;
-    const std::uint32_t capacity = Http2LocalSettings::kMaxConcurrentStreams;
+    http2_ready_queue queue;
+    const std::uint32_t capacity = http2_local_settings::max_concurrent_streams;
     for (std::uint32_t id = 1; id <= capacity; ++id) {
         RUVIA_CHECK(queue.push(id));
     }
@@ -55,11 +55,11 @@ RUVIA_TEST(ready_queue_push_reclaims_prefix_when_physically_full) {
         RUVIA_CHECK_EQ(queue.pop(), id);
     }
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{9999});
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 }
 
 RUVIA_TEST(ready_queue_remove) {
-    Http2ReadyQueue queue;
+    http2_ready_queue queue;
     RUVIA_CHECK(queue.push(1));
     RUVIA_CHECK(queue.push(2));
     RUVIA_CHECK(queue.push(3));
@@ -67,14 +67,14 @@ RUVIA_TEST(ready_queue_remove) {
     queue.remove(2);             // both occurrences are removed
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{1});
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{3});
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 }
 
 RUVIA_TEST(ready_queue_remove_after_pop_discards_consumed_prefix) {
     // After some pops the queue has a consumed prefix (offset_ > 0). remove() compacts
     // the ACTIVE range to the front and drops that prefix -- an already-popped stream
     // must never resurface, or it would be dispatched twice.
-    Http2ReadyQueue queue;
+    http2_ready_queue queue;
     RUVIA_CHECK(queue.push(1));
     RUVIA_CHECK(queue.push(2));
     RUVIA_CHECK(queue.push(3));
@@ -85,7 +85,7 @@ RUVIA_TEST(ready_queue_remove_after_pop_discards_consumed_prefix) {
     queue.remove(3);  // remove a live entry while a consumed prefix exists
 
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{4});  // only 4 survives; 1 and 2 do not return
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 
     // Removing an id that is not present leaves the surviving order intact.
     RUVIA_CHECK(queue.push(5));
@@ -93,11 +93,11 @@ RUVIA_TEST(ready_queue_remove_after_pop_discards_consumed_prefix) {
     queue.remove(99);  // absent
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{5});
     RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{6});
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 }
 
 RUVIA_TEST(ready_queue_preserves_order_across_compaction) {
-    Http2ReadyQueue queue;
+    http2_ready_queue queue;
     for (std::uint32_t id = 1; id <= 70; ++id) {
         RUVIA_CHECK(queue.push(id));
     }
@@ -109,5 +109,5 @@ RUVIA_TEST(ready_queue_preserves_order_across_compaction) {
     for (std::uint32_t id = 66; id <= 70; ++id) {
         RUVIA_CHECK_EQ(queue.pop(), id);
     }
-    RUVIA_CHECK(!queue.hasReady());
+    RUVIA_CHECK(!queue.has_ready());
 }

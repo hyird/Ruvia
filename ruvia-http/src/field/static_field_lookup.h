@@ -11,8 +11,8 @@
 namespace ruvia::detail {
 
 struct static_field_match final {
-    std::uint8_t name_index;
-    std::optional<std::uint8_t> exact_index;
+    std::uint8_t name_index_;
+    std::optional<std::uint8_t> exact_index_;
 };
 
 // The wire table remains authoritative. This immutable index stores only its
@@ -24,8 +24,8 @@ class static_field_lookup final {
     static constexpr auto max_name_size = [] {
         std::size_t size = 0;
         for (const auto& entry : entries) {
-            if (entry.name.size() > size) {
-                size = entry.name.size();
+            if (entry.name_.size() > size) {
+                size = entry.name_.size();
             }
         }
         return size;
@@ -33,7 +33,7 @@ class static_field_lookup final {
     static_assert(!entries.empty() && entries.size() < no_index);
     static_assert([] {
         for (const auto& entry : entries) {
-            if (entry.name.empty()) {
+            if (entry.name_.empty()) {
                 return false;
             }
         }
@@ -45,9 +45,9 @@ public:
         buckets_.fill(no_index);
         next_.fill(no_index);
         for (std::size_t index = 0; index < entries.size(); ++index) {
-            const auto name = entries[index].name;
+            const auto name = entries[index].name_;
             auto bucket = name_bucket(name);
-            while (buckets_[bucket] != no_index && entries[buckets_[bucket]].name != name) {
+            while (buckets_[bucket] != no_index && entries[buckets_[bucket]].name_ != name) {
                 bucket = (bucket + 1) & (bucket_count - 1);
             }
             if (buckets_[bucket] == no_index) {
@@ -71,7 +71,7 @@ public:
             return std::nullopt;
         }
         auto bucket = name_bucket(name);
-        while (buckets_[bucket] != no_index && entries[buckets_[bucket]].name != name) {
+        while (buckets_[bucket] != no_index && entries[buckets_[bucket]].name_ != name) {
             bucket = (bucket + 1) & (bucket_count - 1);
         }
         const auto first = buckets_[bucket];
@@ -80,7 +80,7 @@ public:
         }
         if (value) {
             for (auto current = first; current != no_index; current = next_[current]) {
-                if (entries[current].value == *value) {
+                if (entries[current].value_ == *value) {
                     return static_field_match{first, current};
                 }
             }

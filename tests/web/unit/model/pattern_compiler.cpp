@@ -1,17 +1,17 @@
-#include <string_view>
+#include "ruvia/web/detail/model/pattern/pattern_compiler.h"
 
-#include "ruvia/web/detail/model/pattern/PatternCompiler.h"
+#include <string_view>
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::model::compilePatternPlan;
+using ruvia::detail::model::compile_pattern_plan;
 
 // The compiler requires an anchored ^...$ pattern and validates the atom grammar
 // (char classes, \d/\w/\s, '.', literals, and *,+,? quantifiers).
 [[nodiscard]] bool compiles(std::string_view pattern) noexcept {
-    return compilePatternPlan<32>(pattern).valid;
+    return compile_pattern_plan<32>(pattern).valid_;
 }
 
 }  // namespace

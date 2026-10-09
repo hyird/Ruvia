@@ -33,12 +33,12 @@ inline constexpr std::array<std::byte, 12> quic_v2_retry_integrity_nonce{
     std::byte{0xb0}, std::byte{0x4a}};
 
 struct quic_cipher_suite_parameters {
-    std::size_t hash_size{};
-    std::size_t key_size{};
-    std::size_t iv_size{};
-    std::size_t tag_size{};
-    std::uint64_t max_encryptions{};
-    std::uint64_t max_decryption_failures{};
+    std::size_t hash_size_{};
+    std::size_t key_size_{};
+    std::size_t iv_size_{};
+    std::size_t tag_size_{};
+    std::uint64_t max_encryptions_{};
+    std::uint64_t max_decryption_failures_{};
 };
 
 quic_cipher_suite_parameters quic_cipher_suite_parameters_for(quic_cipher_suite suite);
@@ -48,7 +48,7 @@ quic_cipher_suite_parameters quic_cipher_suite_parameters_for(quic_cipher_suite 
 class quic_secret final {
 public:
     quic_secret(quic_crypto_provider_view provider, std::pmr::memory_resource* resource,
-        std::span<const std::byte> bytes);
+        std::span<const std::byte> bytes_value);
     quic_secret(const quic_secret&) = delete;
     quic_secret& operator=(const quic_secret&) = delete;
     quic_secret(quic_secret&& other) noexcept;
@@ -67,8 +67,8 @@ private:
 };
 
 struct quic_initial_secrets final {
-    quic_secret client;
-    quic_secret server;
+    quic_secret client_;
+    quic_secret server_;
 
     quic_initial_secrets(quic_secret client_secret, quic_secret server_secret) noexcept;
     quic_initial_secrets(const quic_initial_secrets&) = delete;
@@ -85,7 +85,7 @@ quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provi
 // Encodes the complete TLS 1.3 HKDF-Expand-Label info and expands into caller-owned output.
 void hkdf_expand_label(quic_crypto_provider_view provider, quic_cipher_suite suite,
     std::span<const std::byte> secret, std::string_view label,
-    std::span<const std::byte> context, std::span<std::byte> output);
+    std::span<const std::byte> context_value, std::span<std::byte> output);
 
 class quic_packet_keys final {
 public:

@@ -1,26 +1,26 @@
 #include <string_view>
 
-#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/http_ascii.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::httpAsciiEqualsIgnoreCase;
+using ruvia::http_ascii_equals_ignore_case;
 
 }  // namespace
 
 RUVIA_TEST(http_ascii_equals_ignore_case_folds_only_letters) {
-    RUVIA_CHECK(httpAsciiEqualsIgnoreCase("Text/HTML", "text/html"));
-    RUVIA_CHECK(httpAsciiEqualsIgnoreCase("", ""));
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase("abc", "abcd"));
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase("abc", "abd"));
+    RUVIA_CHECK(http_ascii_equals_ignore_case("Text/HTML", "text/html"));
+    RUVIA_CHECK(http_ascii_equals_ignore_case("", ""));
+    RUVIA_CHECK(!http_ascii_equals_ignore_case("abc", "abcd"));
+    RUVIA_CHECK(!http_ascii_equals_ignore_case("abc", "abd"));
 
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase("[", "{"));
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase("@", "`"));
+    RUVIA_CHECK(!http_ascii_equals_ignore_case("[", "{"));
+    RUVIA_CHECK(!http_ascii_equals_ignore_case("@", "`"));
 
-    RUVIA_CHECK(httpAsciiEqualsIgnoreCase(
+    RUVIA_CHECK(http_ascii_equals_ignore_case(
         std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase(
+    RUVIA_CHECK(!http_ascii_equals_ignore_case(
         std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
 }

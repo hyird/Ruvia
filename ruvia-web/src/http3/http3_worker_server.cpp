@@ -9,13 +9,13 @@
 #include <asio/bind_allocator.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/Async.h"
+#include "ruvia/core/async.h"
 
-#include "context/ContextServices.h"
-#include "integration/WorkerCapabilities.h"
-#include "router/RouteTable.h"
-#include "server/HttpServerOptions.h"
-#include "server/HttpServerOptionsValidation.h"
+#include "context/context_services.h"
+#include "integration/worker_capabilities.h"
+#include "router/route_table.h"
+#include "server/http_server_options.h"
+#include "server/http_server_options_validation.h"
 
 namespace ruvia::detail {
 namespace {
@@ -24,27 +24,27 @@ constexpr std::size_t pump_budget = 256;
 constexpr std::size_t input_turn_budget = 64;
 }  // namespace
 
-http3_worker_server::http3_worker_server(const WorkerHandle& worker,
-    WorkerMemory& memory, const RouteTable& routes, WorkerCapabilities& capabilities,
-    ConnectionScanner& connection_scanner, asio::any_io_executor executor,
-    const HttpServerOptions& options, const StopToken& stop_token,
+http3_worker_server::http3_worker_server(const worker_handle& worker_value,
+    worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
+    connection_scanner& connection_scanner_value, asio::any_io_executor executor,
+    const http_server_options& options, const stop_token& stop_token_value,
     std::size_t max_connections, std::uint32_t buffer_capacity,
     std::atomic<std::size_t>& active_connections,
     std::atomic<std::size_t>& refused_connections)
-    : worker_(worker),
+    : worker_(worker_value),
       memory_(memory),
-      routes_(routes),
+      routes_(routes_value),
       capabilities_(capabilities),
-      connection_scanner_(connection_scanner),
+      connection_scanner_(connection_scanner_value),
       executor_(std::move(executor)),
       options_(options),
-      stop_token_(stop_token),
+      stop_token_(stop_token_value),
       active_connections_(active_connections),
       refused_connections_(refused_connections),
-      signal_(worker),
+      signal_(worker_value),
       response_buffer_(buffer_capacity, buffer_capacity, buffer_capacity, memory.resource()),
       body_budget_(body_budget_bytes),
-      retirement_tasks_(worker, {.resource = memory.resource()}),
+      retirement_tasks_(worker_value, {.resource_ = memory.resource()}),
       slots_(memory.resource()),
       pending_input_(memory.resource()),
       max_connections_(max_connections) {
@@ -66,39 +66,39 @@ void http3_worker_server::wake() noexcept {
 }
 
 bool http3_worker_server::stage_install(install_link link) noexcept {
-    if (staged_ || link.request_buffer == nullptr || link.connections.size() != slots_.size() ||
-        link.request_buffer->block_capacity() > pending_input_.size() || link.protocol_ready.notify == nullptr) {
+    if (staged_ || link.request_buffer_ == nullptr || link.connections_.size() != slots_.size() ||
+        link.request_buffer_->block_capacity() > pending_input_.size() || link.protocol_ready_.notify_ == nullptr) {
         return false;
     }
-    for (auto* state : link.connections) {
+    for (auto* state : link.connections_) {
         if (state == nullptr) {
             return false;
         }
     }
-    request_buffer_ = link.request_buffer;
+    request_buffer_ = link.request_buffer_;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
-        slots_[i].state = link.connections[i];
+        slots_[i].state_ = link.connections_[i];
     }
-    response_buffer_.set_local_notifications({.ready = link.protocol_ready,
-        .capacity = {this, [](void* context, std::uint8_t lanes) noexcept {
-                         auto& server = *static_cast<http3_worker_server*>(context);
-                         if (server.scheduler_) {
-                             server.scheduler_->receive_capacity(lanes);
-                         }
-                         server.wake();
-                     }}});
+    response_buffer_.set_local_notifications({.ready_ = link.protocol_ready_,
+        .capacity_ = {this, [](void* context_value, std::uint8_t lanes) noexcept {
+                          auto& server = *static_cast<http3_worker_server*>(context_value);
+                          if (server.scheduler_) {
+                              server.scheduler_->receive_capacity(lanes);
+                          }
+                          server.wake();
+                      }}});
     staged_ = true;
     return true;
 }
 
 bool http3_worker_server::install() noexcept {
-    if (!worker_.isCurrent() || !staged_ || installed_ || stopping_ || drained_) {
+    if (!worker_.is_current() || !staged_ || installed_ || stopping_ || drained_) {
         return false;
     }
     try {
         scheduler_.emplace(worker_, max_connections_, memory_.resource(),
-            http3_ready_scheduler::local_ready_callback{this, [](void* context) noexcept {
-                                                            static_cast<http3_worker_server*>(context)->wake();
+            http3_ready_scheduler::local_ready_callback{this, [](void* context_value) noexcept {
+                                                            static_cast<http3_worker_server*>(context_value)->wake();
                                                         }});
     } catch (...) {
         return false;
@@ -108,8 +108,8 @@ bool http3_worker_server::install() noexcept {
     return true;
 }
 
-Task<void> http3_worker_server::run() {
-    if (!worker_.isCurrent() || run_started_ || !installed_) {
+task<void> http3_worker_server::run() {
+    if (!worker_.is_current() || run_started_ || !installed_) {
         std::terminate();
     }
     run_started_ = true;
@@ -124,7 +124,7 @@ Task<void> http3_worker_server::run() {
         if (stopping_) {
             finish_stopped_slots();
             const bool live = std::ranges::any_of(slots_, [](const slot& target) {
-                return target.connection != nullptr || target.identity.epoch != 0;
+                return target.connection_ != nullptr || target.identity_.epoch_ != 0;
             });
             if (!live) {
                 (void)request_buffer_->stop();
@@ -136,14 +136,14 @@ Task<void> http3_worker_server::run() {
             }
         }
         if (exhausted) {
-            const auto yielded = co_await ruvia::asyncAsio([this](auto completion) {
+            const auto yielded = co_await ruvia::async_asio([this](auto completion) {
                 asio::post(executor_, asio::bind_allocator(
                                           std::pmr::polymorphic_allocator<std::byte>(memory_.resource()),
                                           [completion = std::move(completion)]() mutable {
                                               completion(asio::error_code{});
                                           }));
             });
-            if (yielded.errorCode()) {
+            if (yielded.error_code()) {
                 request_stop();
             }
         } else {
@@ -155,7 +155,7 @@ Task<void> http3_worker_server::run() {
 }
 
 void http3_worker_server::request_stop() noexcept {
-    if (!worker_.isCurrent()) {
+    if (!worker_.is_current()) {
         std::terminate();
     }
     if (stopping_) {
@@ -163,14 +163,14 @@ void http3_worker_server::request_stop() noexcept {
     }
     stopping_ = true;
     for (auto& pending : pending_input_) {
-        pending.block.release();
+        pending.block_.release();
     }
     pending_input_count_ = 0;
     for (auto& target : slots_) {
-        if (target.state) {
-            target.state->stop_admission();
+        if (target.state_) {
+            target.state_->stop_admission();
         }
-        if (target.connection) {
+        if (target.connection_) {
             begin_retirement(target);
         }
     }
@@ -185,7 +185,7 @@ void http3_worker_server::request_stop() noexcept {
 }
 
 void http3_worker_server::abandon_before_launch() noexcept {
-    if (run_started_ || (installed_ && !worker_.isCurrent())) {
+    if (run_started_ || (installed_ && !worker_.is_current())) {
         std::terminate();
     }
     if (drained_) {
@@ -193,8 +193,8 @@ void http3_worker_server::abandon_before_launch() noexcept {
     }
     stopping_ = true;
     for (auto& target : slots_) {
-        if (target.state) {
-            target.state->stop_admission();
+        if (target.state_) {
+            target.state_->stop_admission();
         }
     }
     if (request_buffer_) {
@@ -206,110 +206,110 @@ void http3_worker_server::abandon_before_launch() noexcept {
 }
 
 bool http3_worker_server::pump() noexcept {
-    if (!worker_.isCurrent() || !installed_ || !scheduler_) {
+    if (!worker_.is_current() || !installed_ || !scheduler_) {
         return false;
     }
-    bool progress = pump_states();
-    progress = pump_input() || progress;
+    bool progress_value = pump_states();
+    progress_value = pump_input() || progress_value;
     for (auto& target : slots_) {
-        if (!target.connection || target.retirement_started || !target.state) {
+        if (!target.connection_ || target.retirement_started_ || !target.state_) {
             continue;
         }
         http3_connection_state::datagram datagram;
         for (std::size_t pass = 0; pass < 16; ++pass) {
-            if (target.state->pop_request_datagram(datagram) != http3_connection_state::status::changed) {
+            if (target.state_->pop_request_datagram(datagram) != http3_connection_state::status::changed) {
                 break;
             }
-            target.connection->receiveDatagram(datagram.bytes());
-            datagram.storage.reset();
-            progress = true;
+            target.connection_->receive_datagram(datagram.bytes());
+            datagram.storage_.reset();
+            progress_value = true;
         }
-        progress = target.connection->resumeQpackInput() || progress;
+        progress_value = target.connection_->resume_qpack_input() || progress_value;
     }
-    progress = pump_scheduler() || progress;
-    progress = publish_drain_completions() || progress;
+    progress_value = pump_scheduler() || progress_value;
+    progress_value = publish_drain_completions() || progress_value;
     finish_stopped_slots();
-    return progress;
+    return progress_value;
 }
 
 bool http3_worker_server::pump_states() noexcept {
-    bool progress = false;
+    bool progress_value = false;
     for (auto& target : slots_) {
-        auto& state = *target.state;
-        if (target.identity.epoch != 0 && (state.slot_reusable() || state.identity() != target.identity)) {
-            if (target.connection) {
+        auto& state_value = *target.state_;
+        if (target.identity_.epoch_ != 0 && (state_value.slot_reusable() || state_value.identity() != target.identity_)) {
+            if (target.connection_) {
                 std::terminate();
             }
             clear_slot(target);
-            progress = true;
+            progress_value = true;
         }
-        if (!stopping_ && state.admission() == http3_connection_state::admission_phase::vacant) {
-            if (state.reserve(*scheduler_, epoch_, next_connection_generation_) == http3_connection_state::status::changed) {
+        if (!stopping_ && state_value.admission() == http3_connection_state::admission_phase::vacant) {
+            if (state_value.reserve(*scheduler_, epoch_, next_connection_generation_) == http3_connection_state::status::changed) {
                 if (++next_connection_generation_ == 0) {
                     std::terminate();
                 }
-                target.identity = *state.identity();
-                target.registration = *state.registration();
-                progress = true;
+                target.identity_ = *state_value.identity();
+                target.registration_ = *state_value.registration();
+                progress_value = true;
             }
         }
-        if (state.admission() == http3_connection_state::admission_phase::bound && !target.connection) {
-            const auto binding = state.binding();
+        if (state_value.admission() == http3_connection_state::admission_phase::bound && !target.connection_) {
+            const auto binding = state_value.binding();
             if (stopping_ || !binding || !construct_connection(target, *binding)) {
-                (void)state.reject(target.identity, stopping_
-                                                        ? http3_connection_state::reject_reason::stopping
-                                                        : http3_connection_state::reject_reason::construction_failed);
+                (void)state_value.reject(target.identity_, stopping_
+                                                               ? http3_connection_state::reject_reason::stopping
+                                                               : http3_connection_state::reject_reason::construction_failed);
                 refused_connections_.fetch_add(1, std::memory_order_relaxed);
             }
-            progress = true;
+            progress_value = true;
         }
-        if (target.connection && state.transport_retired() && !target.retirement_started) {
+        if (target.connection_ && state_value.transport_retired() && !target.retirement_started_) {
             begin_retirement(target);
-            progress = true;
+            progress_value = true;
         }
-        if (target.identity.epoch != 0 && state.transport_retired()) {
-            if (!target.connection && !state.worker_finalized()) {
-                progress = state.mark_worker_finalized(target.identity) ==
-                               http3_connection_state::status::changed ||
-                           progress;
+        if (target.identity_.epoch_ != 0 && state_value.transport_retired()) {
+            if (!target.connection_ && !state_value.worker_finalized()) {
+                progress_value = state_value.mark_worker_finalized(target.identity_) ==
+                                     http3_connection_state::status::changed ||
+                                 progress_value;
             }
-            if (state.worker_finalized() &&
-                state.retire(target.identity) == http3_connection_state::status::changed) {
-                if (target.connection) {
-                    target.connection.reset();
+            if (state_value.worker_finalized() &&
+                state_value.retire(target.identity_) == http3_connection_state::status::changed) {
+                if (target.connection_) {
+                    target.connection_.reset();
                     active_connections_.fetch_sub(1, std::memory_order_relaxed);
                 }
                 clear_slot(target);
-                progress = true;
+                progress_value = true;
             }
         }
     }
-    return progress;
+    return progress_value;
 }
 
 bool http3_worker_server::pump_input() noexcept {
     if (request_buffer_ == nullptr) {
         return false;
     }
-    bool progress = false;
-    const auto sameStream = [](const http3_stream_id& a, const http3_stream_id& b) noexcept {
-        return a.epoch == b.epoch && a.connection_generation == b.connection_generation && a.stream_id == b.stream_id;
+    bool progress_value = false;
+    const auto same_stream = [](const http3_stream_id& a, const http3_stream_id& b) noexcept {
+        return a.epoch_ == b.epoch_ && a.connection_generation_ == b.connection_generation_ && a.stream_id_ == b.stream_id_;
     };
-    const auto consume = [this, &progress](http3_stream_buffer::borrowed_block& block) noexcept {
+    const auto consume = [this, &progress_value](http3_stream_buffer::borrowed_block& block) noexcept {
         auto* slot = find_slot(block.id());
-        if (stopping_ || slot == nullptr || slot->connection == nullptr) {
+        if (stopping_ || slot == nullptr || slot->connection_ == nullptr) {
             block.release();
-            progress = true;
+            progress_value = true;
             return;
         }
-        if (!slot->connection->canAcceptInput(block.id().stream_id, block.bytes().size())) {
+        if (!slot->connection_->can_accept_input(block.id().stream_id_, block.bytes().size())) {
             return;
         }
-        const auto result = slot->connection->acceptData(block);
+        const auto result_value = slot->connection_->accept_data(block);
         block.release();
-        progress = true;
-        if (result.connectionCloseRequired) {
-            (void)slot->connection->requestStop();
+        progress_value = true;
+        if (result_value.connection_close_required_) {
+            (void)slot->connection_->request_stop();
             begin_retirement(*slot);
         }
     };
@@ -317,180 +317,180 @@ bool http3_worker_server::pump_input() noexcept {
         if (pending_input_count_ == 0) {
             break;
         }
-        if (!pending.block) {
+        if (!pending.block_) {
             continue;
         }
         const bool earlier = std::ranges::any_of(pending_input_, [&](const pending_input& other) {
-            return other.block && other.sequence < pending.sequence && sameStream(other.block.id(), pending.block.id());
+            return other.block_ && other.sequence_ < pending.sequence_ && same_stream(other.block_.id(), pending.block_.id());
         });
         if (!earlier) {
-            consume(pending.block);
-            if (!pending.block) {
+            consume(pending.block_);
+            if (!pending.block_) {
                 --pending_input_count_;
             }
         }
     }
     for (std::size_t count = 0; count < input_turn_budget;) {
-        bool received = false;
+        bool received_value = false;
         http3_stream_control control;
         if (request_buffer_->try_receive_control(control)) {
-            received = true;
-            progress = true;
+            received_value = true;
+            progress_value = true;
             ++count;
-            if (auto* slot = find_slot(control.id); slot != nullptr && slot->connection != nullptr) {
-                const auto result = slot->connection->acceptControl(control);
-                if (result.connectionCloseRequired) {
-                    (void)slot->connection->requestStop();
+            if (auto* slot = find_slot(control.id_); slot != nullptr && slot->connection_ != nullptr) {
+                const auto result_value = slot->connection_->accept_control(control);
+                if (result_value.connection_close_required_) {
+                    (void)slot->connection_->request_stop();
                     begin_retirement(*slot);
                 }
             }
         }
         http3_stream_buffer::borrowed_block block;
         if (count < input_turn_budget && request_buffer_->try_receive(block)) {
-            received = true;
-            progress = true;
+            received_value = true;
+            progress_value = true;
             ++count;
             const bool earlier = pending_input_count_ != 0 && std::ranges::any_of(pending_input_, [&](const pending_input& pending) {
-                return pending.block && sameStream(pending.block.id(), block.id());
+                return pending.block_ && same_stream(pending.block_.id(), block.id());
             });
             if (!earlier) {
                 consume(block);
             }
             if (block) {
-                auto free = std::ranges::find_if(pending_input_, [](const pending_input& pending) { return !pending.block; });
+                auto free = std::ranges::find_if(pending_input_, [](const pending_input& pending) { return !pending.block_; });
                 if (free == pending_input_.end() || next_input_sequence_ == (std::numeric_limits<std::uint64_t>::max)()) {
                     std::terminate();
                 }
-                free->block = std::move(block);
-                free->sequence = next_input_sequence_++;
+                free->block_ = std::move(block);
+                free->sequence_ = next_input_sequence_++;
                 ++pending_input_count_;
             }
         }
-        if (!received) {
+        if (!received_value) {
             break;
         }
     }
     // If the budget was exhausted, the run loop immediately takes another
     // bounded turn (and yields after its outer budget); queued work is not
     // dependent on a fresh producer notification.
-    return request_buffer_->has_pending() || progress;
+    return request_buffer_->has_pending() || progress_value;
 }
 
 bool http3_worker_server::pump_scheduler() noexcept {
-    bool progress = false;
+    bool progress_value = false;
     for (std::size_t count = 0; count < pump_budget; ++count) {
         const auto step = scheduler_->step();
-        if (step.kind == http3_ready_scheduler::step_kind::idle) {
+        if (step.kind_ == http3_ready_scheduler::step_kind::idle) {
             break;
         }
-        if (step.kind == http3_ready_scheduler::step_kind::wrong_worker) {
+        if (step.kind_ == http3_ready_scheduler::step_kind::wrong_worker) {
             std::terminate();
         }
-        progress = true;
-        if (step.kind != http3_ready_scheduler::step_kind::transport_intent) {
+        progress_value = true;
+        if (step.kind_ != http3_ready_scheduler::step_kind::transport_intent) {
             continue;
         }
         const auto found = std::ranges::find_if(slots_, [&step](const slot& target) {
-            return target.registration.token == step.connection;
+            return target.registration_.token_ == step.connection_;
         });
-        if (found == slots_.end() || !found->state) {
+        if (found == slots_.end() || !found->state_) {
             std::terminate();
         }
-        const auto executed = found->state->execute_intent(found->identity, step.intent);
-        if ((executed.outcome != http3_connection_state::execution_outcome::executed &&
-                executed.outcome != http3_connection_state::execution_outcome::transport_retired) ||
-            !scheduler_->acknowledge_intent(step.connection, step.intent.token, executed.push_stream)) {
+        const auto executed = found->state_->execute_intent(found->identity_, step.intent_);
+        if ((executed.outcome_ != http3_connection_state::execution_outcome::executed &&
+                executed.outcome_ != http3_connection_state::execution_outcome::transport_retired) ||
+            !scheduler_->acknowledge_intent(step.connection_, step.intent_.token_, executed.push_stream_)) {
             std::terminate();
         }
     }
-    return progress;
+    return progress_value;
 }
 
 bool http3_worker_server::publish_drain_completions() noexcept {
-    bool progress = false;
+    bool progress_value = false;
     for (auto& target : slots_) {
-        if (!target.connection || target.retirement_started || target.state->worker_drained()) {
+        if (!target.connection_ || target.retirement_started_ || target.state_->worker_drained()) {
             continue;
         }
-        const auto sealed = target.state->admission_seal();
-        if (sealed && target.connection->drainReady(sealed->expected_admitted_requests)) {
-            if (target.state->mark_worker_drained(target.identity) != http3_connection_state::status::changed) {
+        const auto sealed = target.state_->admission_seal();
+        if (sealed && target.connection_->drain_ready(sealed->expected_admitted_requests_)) {
+            if (target.state_->mark_worker_drained(target.identity_) != http3_connection_state::status::changed) {
                 std::terminate();
             }
-            progress = true;
+            progress_value = true;
         }
     }
-    return progress;
+    return progress_value;
 }
 
 http3_worker_server::slot* http3_worker_server::find_slot(http3_stream_id id) noexcept {
-    return find_slot(http3_connection_identity{id.epoch, id.connection_generation});
+    return find_slot(http3_connection_identity{id.epoch_, id.connection_generation_});
 }
 
 http3_worker_server::slot* http3_worker_server::find_slot(http3_connection_identity identity) noexcept {
     const auto found = std::ranges::find_if(slots_, [&identity](const slot& target) {
-        return target.connection && target.identity == identity;
+        return target.connection_ && target.identity_ == identity;
     });
     return found == slots_.end() ? nullptr : &*found;
 }
 
 bool http3_worker_server::construct_connection(slot& target,
     const http3_connection_state::binding_snapshot& binding) noexcept {
-    if (target.connection || binding.identity != target.identity ||
-        binding.metadata.remote_address.empty() || binding.metadata.remote_port == 0 ||
-        !options_.maxConnections ||
-        active_connections_.load(std::memory_order_relaxed) >= *options_.maxConnections) {
+    if (target.connection_ || binding.identity_ != target.identity_ ||
+        binding.metadata_.remote_address_.empty() || binding.metadata_.remote_port_ == 0 ||
+        !options_.max_connections_ ||
+        active_connections_.load(std::memory_order_relaxed) >= *options_.max_connections_) {
         return false;
     }
     try {
-        target.remote_address = binding.metadata.remote_address;
-        target.client_certificate_subject = binding.metadata.client_certificate_subject;
-        target.remote_port = binding.metadata.remote_port;
-        auto services = capabilities_.contextServices(stop_token_).withTlsTransport(target.remote_address, target.client_certificate_subject, target.remote_port);
-        const auto max_requests = options_.max_requests_per_connection.value_or(0);
+        target.remote_address_ = binding.metadata_.remote_address_;
+        target.client_certificate_subject_ = binding.metadata_.client_certificate_subject_;
+        target.remote_port_ = binding.metadata_.remote_port_;
+        auto services = capabilities_.make_context_services(stop_token_).with_tls_transport(target.remote_address_, target.client_certificate_subject_, target.remote_port_);
+        const auto max_requests = options_.max_requests_per_connection_.value_or(0);
         if (max_requests == 0) {
             return false;
         }
-        const auto tracked = http3WorkerTrackedStreamCapacity(max_requests);
-        Http3ServerConnectionConfig config{
-            .epoch = binding.identity.epoch,
-            .connectionGeneration = binding.identity.connection_generation,
-            .session = {
-                .max_buffered_body_bytes = options_.max_buffered_body_bytes,
-                .max_stream_body_bytes = options_.max_stream_body_bytes,
-                .maxLiveStreams = tracked,
-                .maxBufferedBytesInFlight = body_budget_bytes,
-                .connection = {.maxActiveStreams = tracked,
-                    .qpackMaxTableCapacity = static_cast<std::size_t>(binding.settings.qpackMaxTableCapacity),
-                    .qpackBlockedStreams = static_cast<std::size_t>(binding.settings.qpackBlockedStreams),
-                    .enableConnectProtocol = binding.settings.enableConnectProtocol,
-                    .enableDatagrams = binding.settings.h3Datagram},
-                .maxQuicDatagramPayloadBytes = binding.max_quic_datagram_payload_bytes,
-                .inbound_buffer_pool = options_.inbound_buffer_pool,
-                .max_inbound_buffer_bytes = options_.max_inbound_buffer_bytes_per_connection,
+        const auto tracked = http3_worker_tracked_stream_capacity(max_requests);
+        http3_server_connection_config config{
+            .epoch_ = binding.identity_.epoch_,
+            .connection_generation_ = binding.identity_.connection_generation_,
+            .session_ = {
+                .max_buffered_body_bytes_ = options_.max_buffered_body_bytes_,
+                .max_stream_body_bytes_ = options_.max_stream_body_bytes_,
+                .max_live_streams_ = tracked,
+                .max_buffered_bytes_in_flight_ = body_budget_bytes,
+                .connection_ = {.max_active_streams_ = tracked,
+                    .qpack_max_table_capacity_ = static_cast<std::size_t>(binding.settings_.qpack_max_table_capacity_),
+                    .qpack_blocked_streams_ = static_cast<std::size_t>(binding.settings_.qpack_blocked_streams_),
+                    .enable_connect_protocol_ = binding.settings_.enable_connect_protocol_,
+                    .enable_datagrams_ = binding.settings_.h3_datagram_},
+                .max_quic_datagram_payload_bytes_ = binding.max_quic_datagram_payload_bytes_,
+                .inbound_buffer_pool_ = options_.inbound_buffer_pool_,
+                .max_inbound_buffer_bytes_ = options_.max_inbound_buffer_bytes_per_connection_,
             },
-            .maxTrackedStreams = tracked,
-            .connectionScanner = &connection_scanner_,
-            .executor = executor_,
-            .datagramOutput = {.context = &target, .send = [](void* context, std::uint64_t stream_id, std::span<const std::byte> bytes) {
-                                   auto& output = *static_cast<slot*>(context);
-                                   if (!output.state || output.retirement_started || output.state->transport_retired()) {
-                                       throw std::runtime_error("HTTP Datagram connection is closed");
-                                   }
-                                   (void)output.state->publish_response_datagram(
-                                       output.identity, stream_id, bytes);
-                               }},
+            .max_tracked_streams_ = tracked,
+            .connection_scanner_ = &connection_scanner_,
+            .executor_ = executor_,
+            .datagram_output_ = {.context_ = &target, .send_ = [](void* context_value, std::uint64_t stream_id, std::span<const std::byte> bytes_value) {
+                                     auto& output = *static_cast<slot*>(context_value);
+                                     if (!output.state_ || output.retirement_started_ || output.state_->transport_retired()) {
+                                         throw std::runtime_error("HTTP Datagram connection is closed");
+                                     }
+                                     (void)output.state_->publish_response_datagram(
+                                         output.identity_, stream_id, bytes_value);
+                                 }},
         };
-        target.connection = makePmrObject<Http3ServerConnection>(memory_.resource(), routes_,
-            memory_, services, options_, response_buffer_, target.registration.activation,
+        target.connection_ = make_pmr_object<http3_server_connection>(memory_.resource(), routes_,
+            memory_, services, options_, response_buffer_, target.registration_.activation_,
             body_budget_, config);
-        if (target.state->attach_handler(target.identity, *target.connection) != http3_connection_state::status::changed) {
+        if (target.state_->attach_handler(target.identity_, *target.connection_) != http3_connection_state::status::changed) {
             std::terminate();
         }
         active_connections_.fetch_add(1, std::memory_order_relaxed);
         return true;
     } catch (...) {
-        if (target.connection) {
+        if (target.connection_) {
             std::terminate();
         }
         return false;
@@ -498,44 +498,44 @@ bool http3_worker_server::construct_connection(slot& target,
 }
 
 void http3_worker_server::begin_retirement(slot& target) noexcept {
-    if (!target.connection || target.retirement_started) {
+    if (!target.connection_ || target.retirement_started_) {
         return;
     }
-    target.retirement_started = true;
-    (void)target.connection->requestStop();
-    if (target.state->start_worker_draining(target.identity) != http3_connection_state::status::changed) {
+    target.retirement_started_ = true;
+    (void)target.connection_->request_stop();
+    if (target.state_->start_worker_draining(target.identity_) != http3_connection_state::status::changed) {
         std::terminate();
     }
 }
 
-Task<void> http3_worker_server::join_retired_slot(slot& target) {
-    co_await target.connection->join();
-    if (target.state->mark_worker_finalized(target.identity) != http3_connection_state::status::changed) {
+task<void> http3_worker_server::join_retired_slot(slot& target) {
+    co_await target.connection_->join();
+    if (target.state_->mark_worker_finalized(target.identity_) != http3_connection_state::status::changed) {
         std::terminate();
     }
     wake();
 }
 
 void http3_worker_server::clear_slot(slot& target) noexcept {
-    if (target.connection) {
+    if (target.connection_) {
         std::terminate();
     }
-    target.registration = {};
-    target.identity = {};
-    target.retirement_started = false;
-    target.join_started = false;
-    target.remote_address.clear();
-    target.client_certificate_subject.clear();
-    target.remote_port = 0;
+    target.registration_ = {};
+    target.identity_ = {};
+    target.retirement_started_ = false;
+    target.join_started_ = false;
+    target.remote_address_.clear();
+    target.client_certificate_subject_.clear();
+    target.remote_port_ = 0;
 }
 
 void http3_worker_server::finish_stopped_slots() noexcept {
     for (auto& target : slots_) {
-        if (!target.connection || !target.retirement_started || !target.state->transport_retired() ||
-            target.join_started || target.connection->pendingTransportIntentCount() != 0) {
+        if (!target.connection_ || !target.retirement_started_ || !target.state_->transport_retired() ||
+            target.join_started_ || target.connection_->pending_transport_intent_count() != 0) {
             continue;
         }
-        target.join_started = true;
+        target.join_started_ = true;
         try {
             retirement_tasks_.spawn(join_retired_slot(target));
         } catch (...) {

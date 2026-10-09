@@ -29,7 +29,7 @@ ngtcp2_encryption_level to_ngtcp2_level(quic_encryption_level level) {
 }  // namespace
 
 quic_operation_status quic_tls_handshake::submit_crypto(
-    quic_encryption_level level, std::span<const std::byte> bytes) {
+    quic_encryption_level level, std::span<const std::byte> bytes_value) {
     if (!state_->tls_driver_active_) {
         throw std::logic_error("TLS CRYPTO output is valid only during the synchronous TLS drive");
     }
@@ -37,14 +37,14 @@ quic_operation_status quic_tls_handshake::submit_crypto(
         throw std::logic_error("cannot submit TLS CRYPTO before ngtcp2 connection initialization");
     }
     const auto native_level = to_ngtcp2_level(level);
-    if (bytes.empty()) {
+    if (bytes_value.empty()) {
         return quic_operation_status::accepted;
     }
-    const int result = ngtcp2_conn_submit_crypto_data(state_->connection_, native_level,
-        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
-    if (result != 0) {
-        throw quic_error(result == NGTCP2_ERR_NOMEM ? quic_error_code::resource_limit
-                                                    : quic_error_code::protocol_failure,
+    const int result_value = ngtcp2_conn_submit_crypto_data(state_->connection_, native_level,
+        reinterpret_cast<const uint8_t*>(bytes_value.data()), bytes_value.size());
+    if (result_value != 0) {
+        throw quic_error(result_value == NGTCP2_ERR_NOMEM ? quic_error_code::resource_limit
+                                                          : quic_error_code::protocol_failure,
             "ngtcp2 rejected TLS CRYPTO output");
     }
     return quic_operation_status::accepted;
@@ -67,21 +67,21 @@ void quic_tls_handshake::submit_peer_transport_parameters(
     if (!state_->connection_) {
         throw std::logic_error("cannot validate peer transport parameters before connection initialization");
     }
-    const int result = ngtcp2_conn_decode_and_set_remote_transport_params(
+    const int result_value = ngtcp2_conn_decode_and_set_remote_transport_params(
         state_->connection_, reinterpret_cast<const uint8_t*>(encoded_parameters.data()),
         encoded_parameters.size());
-    if (result == 0) {
+    if (result_value == 0) {
         return;
     }
 
     constexpr std::string_view reason = "invalid peer QUIC transport parameters";
-    const auto transport_error = result == NGTCP2_ERR_VERSION_NEGOTIATION_FAILURE
+    const auto transport_error = result_value == NGTCP2_ERR_VERSION_NEGOTIATION_FAILURE
                                      ? NGTCP2_VERSION_NEGOTIATION_ERROR
                                      : NGTCP2_TRANSPORT_PARAMETER_ERROR;
-    state_->latch_close_reason({.kind = quic_close_kind::transport,
-        .code = transport_error,
-        .frame_type = 0,
-        .reason = std::span<const char>(reason.data(), reason.size())});
+    state_->latch_close_reason({.kind_ = quic_close_kind::transport,
+        .code_ = transport_error,
+        .frame_type_ = 0,
+        .reason_ = std::span<const char>(reason.data(), reason.size())});
     throw quic_error(quic_error_code::protocol_failure,
         "ngtcp2 rejected peer QUIC transport parameters");
 }

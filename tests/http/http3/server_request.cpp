@@ -6,173 +6,173 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/Http3Connection.h"
-#include "ruvia/http/Http3FieldSection.h"
-#include "ruvia/http/Http3Frames.h"
-#include "ruvia/http/Http3ServerRequest.h"
+#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http3_frames.h"
+#include "ruvia/http/http3_server_request.h"
 
 #include "test_harness.h"
 
 namespace {
 
-class FailingResource final : public std::pmr::memory_resource {
+class failing_resource final : public std::pmr::memory_resource {
 public:
-    bool reject{true};
-    std::size_t minimumRejectedBytes{64};
-    std::size_t live{};
+    bool reject_{true};
+    std::size_t minimum_rejected_bytes_{64};
+    std::size_t live_{};
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (reject && bytes >= minimumRejectedBytes) {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (reject_ && bytes_value >= minimum_rejected_bytes_) {
             throw std::bad_alloc();
         }
-        auto* value = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        ++live;
+        auto* value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        ++live_;
         return value;
     }
-    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
-        --live;
-        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
+    void do_deallocate(void* value, std::size_t bytes_value, std::size_t alignment) override {
+        --live_;
+        std::pmr::new_delete_resource()->deallocate(value, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 };
 
-class CountingResource final : public std::pmr::memory_resource {
+class counting_resource final : public std::pmr::memory_resource {
 public:
-    std::size_t outstanding{};
-    std::size_t allocations{};
-    std::size_t deallocations{};
+    std::size_t outstanding_{};
+    std::size_t allocations_{};
+    std::size_t deallocations_{};
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        outstanding += bytes;
-        ++allocations;
-        return result;
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        auto* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        outstanding_ += bytes_value;
+        ++allocations_;
+        return result_value;
     }
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        outstanding -= bytes;
-        ++deallocations;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
+        outstanding_ -= bytes_value;
+        ++deallocations_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 };
 
-struct RequestEvents final {
-    std::pmr::memory_resource* requestResource;
-    std::pmr::memory_resource* bodyPool;
-    std::optional<ruvia::Http3ServerRequest> owner;
+struct request_events final {
+    std::pmr::memory_resource* request_resource_;
+    std::pmr::memory_resource* body_pool_;
+    std::optional<ruvia::http3_server_request> owner_;
 };
 
-void receiveRequest(void* opaque, const ruvia::Http3ConnectionEvent& event) {
-    auto& state = *static_cast<RequestEvents*>(opaque);
-    switch (event.kind) {
-        case ruvia::Http3ConnectionEventKind::kRequestHead:
-            state.owner.emplace(*event.head, state.requestResource, state.bodyPool);
+void receive_request(void* opaque, const ruvia::http3_connection_event& event) {
+    auto& state_value = *static_cast<request_events*>(opaque);
+    switch (event.kind_) {
+        case ruvia::http3_connection_event_kind::request_head:
+            state_value.owner_.emplace(*event.head_, state_value.request_resource_, state_value.body_pool_);
             break;
-        case ruvia::Http3ConnectionEventKind::kBody:
-            state.owner->appendBody(std::as_bytes(std::span(event.body.data(), event.body.size())));
+        case ruvia::http3_connection_event_kind::body:
+            state_value.owner_->append_body(std::as_bytes(std::span(event.body_.data(), event.body_.size())));
             break;
-        case ruvia::Http3ConnectionEventKind::kMessageEnd:
-            state.owner->finishBody();
+        case ruvia::http3_connection_event_kind::message_end:
+            state_value.owner_->finish_body();
             break;
         default:
             break;
     }
 }
 
-ruvia::Http3MessageHead makeGet(std::pmr::memory_resource* resource) {
-    auto encoded = ruvia::encodeHttp3FieldSection(
-        std::array<ruvia::Http3FieldSectionFieldView, 7>{{{":method", "GET"}, {":scheme", "https"}, {":path", "/items?a=1"},
+ruvia::http3_message_head make_get(std::pmr::memory_resource* resource) {
+    auto encoded = ruvia::encode_http3_field_section(
+        std::array<ruvia::http3_field_section_field_view, 7>{{{":method", "GET"}, {":scheme", "https"}, {":path", "/items?a=1"},
             {":authority", "example.test"}, {"x-first", "1"}, {"cookie", "a=1"},
             {"cookie", "b=2"}}},
         std::pmr::get_default_resource());
-    auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(encoded), ruvia::Http3MessageHeadKind::kRequest, resource);
+    auto decoded = ruvia::decode_http3_message_head(std::get<0>(encoded), ruvia::http3_message_head_kind::request, resource);
     return std::move(std::get<0>(decoded));
 }
 
 }  // namespace
 
 RUVIA_TEST(http3_server_request_owns_connection_callback_head_until_message_end) {
-    CountingResource protocolResource;
-    CountingResource requestResource;
-    CountingResource bodyPool;
-    const std::array fields{
-        ruvia::Http3FieldSectionFieldView{":method", "POST"},
-        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
-        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
-        ruvia::Http3FieldSectionFieldView{":path", "/callback"},
-        ruvia::Http3FieldSectionFieldView{"content-length", "2"},
+    counting_resource protocol_resource;
+    counting_resource request_resource;
+    counting_resource body_pool;
+    const std::array fields_value{
+        ruvia::http3_field_section_field_view{":method", "POST"},
+        ruvia::http3_field_section_field_view{":scheme", "https"},
+        ruvia::http3_field_section_field_view{":authority", "example.test"},
+        ruvia::http3_field_section_field_view{":path", "/callback"},
+        ruvia::http3_field_section_field_view{"content-length", "2"},
     };
-    const auto section = ruvia::encodeHttp3FieldSection(fields, &protocolResource);
+    const auto section = ruvia::encode_http3_field_section(fields_value, &protocol_resource);
     RUVIA_CHECK((section.index() == 0));
     if ((section.index() != 0)) {
         return;
     }
-    std::array<char, 16> headPrefix{};
-    const auto prefixSize = ruvia::encodeHttp3FrameHeader(headPrefix, 1, std::get<0>(section).size());
-    RUVIA_CHECK((prefixSize.index() == 0));
-    if ((prefixSize.index() != 0)) {
+    std::array<char, 16> head_prefix{};
+    const auto prefix_size = ruvia::encode_http3_frame_header(head_prefix, 1, std::get<0>(section).size());
+    RUVIA_CHECK((prefix_size.index() == 0));
+    if ((prefix_size.index() != 0)) {
         return;
     }
-    std::pmr::vector<char> headWire(&protocolResource);
-    headWire.insert(headWire.end(), headPrefix.begin(), headPrefix.begin() + std::get<0>(prefixSize));
-    headWire.insert(headWire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
+    std::pmr::vector<char> head_wire(&protocol_resource);
+    head_wire.insert(head_wire.end(), head_prefix.begin(), head_prefix.begin() + std::get<0>(prefix_size));
+    head_wire.insert(head_wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
 
-    RequestEvents captured{&requestResource, &bodyPool, std::nullopt};
+    request_events captured_value{&request_resource, &body_pool, std::nullopt};
     {
-        ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &protocolResource);
-        const auto headResult = connection.feed(0, headWire, false, false, receiveRequest, &captured);
-        RUVIA_CHECK(headResult.status == ruvia::Http3ConnectionStatus::kNeedMoreData);
-        RUVIA_CHECK(captured.owner.has_value());
-        if (!captured.owner) {
+        ruvia::http3_connection connection(ruvia::http3_peer_role::server, &protocol_resource);
+        const auto head_result = connection.feed(0, head_wire, false, false, receive_request, &captured_value);
+        RUVIA_CHECK(head_result.status_ == ruvia::http3_connection_status::need_more_data);
+        RUVIA_CHECK(captured_value.owner_.has_value());
+        if (!captured_value.owner_) {
             return;
         }
-        RUVIA_CHECK_EQ(captured.owner->request().path(), "/callback");
-        RUVIA_CHECK(!captured.owner->bodyComplete());
-        RUVIA_CHECK(captured.owner->request().bodyBytes().empty());
-        std::array<char, 16> dataPrefix{};
-        const auto dataPrefixSize = ruvia::encodeHttp3FrameHeader(dataPrefix, 0, 2);
-        RUVIA_CHECK((dataPrefixSize.index() == 0));
-        if ((dataPrefixSize.index() != 0)) {
+        RUVIA_CHECK_EQ(captured_value.owner_->request().path(), "/callback");
+        RUVIA_CHECK(!captured_value.owner_->body_complete());
+        RUVIA_CHECK(captured_value.owner_->request().body_bytes().empty());
+        std::array<char, 16> data_prefix{};
+        const auto data_prefix_size = ruvia::encode_http3_frame_header(data_prefix, 0, 2);
+        RUVIA_CHECK((data_prefix_size.index() == 0));
+        if ((data_prefix_size.index() != 0)) {
             return;
         }
-        std::pmr::vector<char> dataWire(&protocolResource);
-        dataWire.insert(dataWire.end(), dataPrefix.begin(), dataPrefix.begin() + std::get<0>(dataPrefixSize));
-        dataWire.insert(dataWire.end(), {'o', 'k'});
-        RUVIA_CHECK(connection.feed(0, dataWire, true, false, receiveRequest, &captured).status ==
-                    ruvia::Http3ConnectionStatus::kMessageEnd);
-        RUVIA_CHECK(captured.owner->bodyComplete());
-        RUVIA_CHECK_EQ(captured.owner->request().bodyBytes().size(), 2U);
+        std::pmr::vector<char> data_wire(&protocol_resource);
+        data_wire.insert(data_wire.end(), data_prefix.begin(), data_prefix.begin() + std::get<0>(data_prefix_size));
+        data_wire.insert(data_wire.end(), {'o', 'k'});
+        RUVIA_CHECK(connection.feed(0, data_wire, true, false, receive_request, &captured_value).status_ ==
+                    ruvia::http3_connection_status::message_end);
+        RUVIA_CHECK(captured_value.owner_->body_complete());
+        RUVIA_CHECK_EQ(captured_value.owner_->request().body_bytes().size(), 2U);
     }
-    RUVIA_CHECK_EQ(captured.owner->request().method(), "POST");
-    RUVIA_CHECK_EQ(captured.owner->request().bodyBytes().front(), std::byte{'o'});
-    captured.owner.reset();
-    RUVIA_CHECK_EQ(requestResource.outstanding, 0U);
-    RUVIA_CHECK_EQ(bodyPool.outstanding, 0U);
+    RUVIA_CHECK_EQ(captured_value.owner_->request().method(), "POST");
+    RUVIA_CHECK_EQ(captured_value.owner_->request().body_bytes().front(), std::byte{'o'});
+    captured_value.owner_.reset();
+    RUVIA_CHECK_EQ(request_resource.outstanding_, 0U);
+    RUVIA_CHECK_EQ(body_pool.outstanding_, 0U);
 }
 
 RUVIA_TEST(http3_server_request_adapts_pseudo_fields_cookies_and_host) {
-    CountingResource resource;
-    const auto baseline = resource.outstanding;
+    counting_resource resource;
+    const auto baseline = resource.outstanding_;
     {
-        auto head = makeGet(&resource);
+        auto head = make_get(&resource);
         const std::array body{std::byte{'o'}, std::byte{'k'}};
-        ruvia::Http3ServerRequest owner(head, &resource, &resource);
-        RUVIA_CHECK(owner.request().bodyBytes().empty());
-        owner.appendBody(body);
-        owner.finishBody();
-        const auto& request = owner.request();
-        RUVIA_CHECK(request.protocolVersion() == ruvia::HttpProtocolVersion::kHttp3);
-        RUVIA_CHECK(request.targetForm() == ruvia::HttpRequestTargetForm::kHttp3);
+        ruvia::http3_server_request owner_value(head, &resource, &resource);
+        RUVIA_CHECK(owner_value.request().body_bytes().empty());
+        owner_value.append_body(body);
+        owner_value.finish_body();
+        const auto& request = owner_value.request();
+        RUVIA_CHECK(request.protocol_version() == ruvia::http_protocol_version::http3);
+        RUVIA_CHECK(request.target_form() == ruvia::http_request_target_form::http3);
         RUVIA_CHECK_EQ(request.target(), "/items?a=1");
         RUVIA_CHECK_EQ(request.path(), "/items");
-        RUVIA_CHECK_EQ(request.queryString(), "a=1");
-        RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "");
+        RUVIA_CHECK_EQ(request.query_string(), "a=1");
+        RUVIA_CHECK_EQ(owner_value.extended_connect_protocol(), "");
         RUVIA_CHECK_EQ(request.scheme(), "https");
         RUVIA_CHECK_EQ(request.authority(), "example.test");
         RUVIA_CHECK_EQ(request.header("cookie").value(), "a=1; b=2");
@@ -180,72 +180,72 @@ RUVIA_TEST(http3_server_request_adapts_pseudo_fields_cookies_and_host) {
         RUVIA_CHECK_EQ(request.headers()[0].name(), "x-first");
         RUVIA_CHECK_EQ(request.headers()[1].name(), "cookie");
         RUVIA_CHECK_EQ(request.headers()[2].name(), "host");
-        RUVIA_CHECK_EQ(request.bodyBytes().size(), 2U);
-        RUVIA_CHECK(request.bodyBytes().data() != body.data());
-        RUVIA_CHECK(resource.outstanding > baseline);
+        RUVIA_CHECK_EQ(request.body_bytes().size(), 2U);
+        RUVIA_CHECK(request.body_bytes().data() != body.data());
+        RUVIA_CHECK(resource.outstanding_ > baseline);
     }
-    RUVIA_CHECK_EQ(resource.outstanding, baseline);
+    RUVIA_CHECK_EQ(resource.outstanding_, baseline);
 }
 
 RUVIA_TEST(http3_server_request_adapts_standard_connect_authority_target) {
-    CountingResource resource;
-    auto encoded = ruvia::encodeHttp3FieldSection(
-        std::array<ruvia::Http3FieldSectionFieldView, 2>{{{":method", "CONNECT"},
+    counting_resource resource;
+    auto encoded = ruvia::encode_http3_field_section(
+        std::array<ruvia::http3_field_section_field_view, 2>{{{":method", "CONNECT"},
             {":authority", "example.test:443"}}},
         std::pmr::get_default_resource());
-    auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(encoded), ruvia::Http3MessageHeadKind::kRequest, &resource);
+    auto decoded = ruvia::decode_http3_message_head(std::get<0>(encoded), ruvia::http3_message_head_kind::request, &resource);
     RUVIA_CHECK((decoded.index() == 0));
     if ((decoded.index() != 0)) {
         return;
     }
-    ruvia::Http3ServerRequest owner(std::get<0>(decoded), &resource, &resource);
-    owner.finishBody();
-    RUVIA_CHECK_EQ(owner.request().target(), "example.test:443");
-    RUVIA_CHECK_EQ(owner.request().path(), "");
-    RUVIA_CHECK_EQ(owner.request().queryString(), "");
-    RUVIA_CHECK(owner.request().knownMethod() == ruvia::HttpKnownMethod::kConnect);
-    RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "");
+    ruvia::http3_server_request owner_value(std::get<0>(decoded), &resource, &resource);
+    owner_value.finish_body();
+    RUVIA_CHECK_EQ(owner_value.request().target(), "example.test:443");
+    RUVIA_CHECK_EQ(owner_value.request().path(), "");
+    RUVIA_CHECK_EQ(owner_value.request().query_string(), "");
+    RUVIA_CHECK(owner_value.request().known_method() == ruvia::http_known_method::connect);
+    RUVIA_CHECK_EQ(owner_value.extended_connect_protocol(), "");
 }
 
 RUVIA_TEST(http3_server_request_preserves_extended_connect_wire_metadata) {
-    CountingResource resource;
-    const std::array fields{
-        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
-        ruvia::Http3FieldSectionFieldView{":protocol", "websocket"},
-        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
-        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
-        ruvia::Http3FieldSectionFieldView{":path", "/socket?channel=42"},
-        ruvia::Http3FieldSectionFieldView{"host", "example.test"},
-        ruvia::Http3FieldSectionFieldView{"x-preserved", "yes"},
-        ruvia::Http3FieldSectionFieldView{"origin", "https://example.test"},
-        ruvia::Http3FieldSectionFieldView{"authorization", "Bearer opaque"},
-        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", "13"},
-        ruvia::Http3FieldSectionFieldView{"sec-websocket-protocol", "chat, superchat"},
-        ruvia::Http3FieldSectionFieldView{"sec-websocket-extensions", "permessage-deflate"},
-        ruvia::Http3FieldSectionFieldView{"cookie", "a=1"},
-        ruvia::Http3FieldSectionFieldView{"cookie", "b=2"},
+    counting_resource resource;
+    const std::array fields_value{
+        ruvia::http3_field_section_field_view{":method", "CONNECT"},
+        ruvia::http3_field_section_field_view{":protocol", "websocket"},
+        ruvia::http3_field_section_field_view{":scheme", "https"},
+        ruvia::http3_field_section_field_view{":authority", "example.test"},
+        ruvia::http3_field_section_field_view{":path", "/socket?channel=42"},
+        ruvia::http3_field_section_field_view{"host", "example.test"},
+        ruvia::http3_field_section_field_view{"x-preserved", "yes"},
+        ruvia::http3_field_section_field_view{"origin", "https://example.test"},
+        ruvia::http3_field_section_field_view{"authorization", "Bearer opaque"},
+        ruvia::http3_field_section_field_view{"sec-websocket-version", "13"},
+        ruvia::http3_field_section_field_view{"sec-websocket-protocol", "chat, superchat"},
+        ruvia::http3_field_section_field_view{"sec-websocket-extensions", "permessage-deflate"},
+        ruvia::http3_field_section_field_view{"cookie", "a=1"},
+        ruvia::http3_field_section_field_view{"cookie", "b=2"},
     };
-    const auto section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
+    const auto section = ruvia::encode_http3_field_section(fields_value, std::pmr::get_default_resource());
     RUVIA_CHECK((section.index() == 0));
     if ((section.index() != 0)) {
         return;
     }
-    const auto head = ruvia::decodeHttp3MessageHead(std::get<0>(section),
-        ruvia::Http3MessageHeadKind::kRequest, &resource);
+    const auto head = ruvia::decode_http3_message_head(std::get<0>(section),
+        ruvia::http3_message_head_kind::request, &resource);
     RUVIA_CHECK((head.index() == 0));
     if ((head.index() != 0)) {
         return;
     }
 
-    ruvia::Http3ServerRequest owner(std::get<0>(head), &resource, &resource);
-    owner.finishBody();
-    const auto& request = owner.request();
+    ruvia::http3_server_request owner_value(std::get<0>(head), &resource, &resource);
+    owner_value.finish_body();
+    const auto& request = owner_value.request();
     RUVIA_CHECK_EQ(request.method(), "CONNECT");
-    RUVIA_CHECK(request.knownMethod() == ruvia::HttpKnownMethod::kConnect);
-    RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "websocket");
+    RUVIA_CHECK(request.known_method() == ruvia::http_known_method::connect);
+    RUVIA_CHECK_EQ(owner_value.extended_connect_protocol(), "websocket");
     RUVIA_CHECK_EQ(request.target(), "/socket?channel=42");
     RUVIA_CHECK_EQ(request.path(), "/socket");
-    RUVIA_CHECK_EQ(request.queryString(), "channel=42");
+    RUVIA_CHECK_EQ(request.query_string(), "channel=42");
     RUVIA_CHECK_EQ(request.headers().size(), 8U);
     RUVIA_CHECK_EQ(request.header("host").value(), "example.test");
     RUVIA_CHECK_EQ(request.header("x-preserved").value(), "yes");
@@ -257,147 +257,147 @@ RUVIA_TEST(http3_server_request_preserves_extended_connect_wire_metadata) {
         request.header("sec-websocket-extensions").value(), "permessage-deflate");
     RUVIA_CHECK_EQ(request.header("cookie").value(), "a=1; b=2");
 
-    const std::array otherProtocolFields{
-        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
-        ruvia::Http3FieldSectionFieldView{":protocol", "other-protocol"},
-        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
-        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
-        ruvia::Http3FieldSectionFieldView{":path", "/tunnel"},
+    const std::array other_protocol_fields{
+        ruvia::http3_field_section_field_view{":method", "CONNECT"},
+        ruvia::http3_field_section_field_view{":protocol", "other-protocol"},
+        ruvia::http3_field_section_field_view{":scheme", "https"},
+        ruvia::http3_field_section_field_view{":authority", "example.test"},
+        ruvia::http3_field_section_field_view{":path", "/tunnel"},
     };
-    const auto otherSection = ruvia::encodeHttp3FieldSection(
-        otherProtocolFields, std::pmr::get_default_resource());
-    const auto otherHead = ruvia::decodeHttp3MessageHead(std::get<0>(otherSection),
-        ruvia::Http3MessageHeadKind::kRequest, &resource);
-    RUVIA_CHECK((otherHead.index() == 0));
-    if ((otherHead.index() == 0)) {
-        ruvia::Http3ServerRequest other(std::get<0>(otherHead), &resource, &resource);
-        RUVIA_CHECK_EQ(other.extendedConnectProtocol(), "other-protocol");
+    const auto other_section = ruvia::encode_http3_field_section(
+        other_protocol_fields, std::pmr::get_default_resource());
+    const auto other_head = ruvia::decode_http3_message_head(std::get<0>(other_section),
+        ruvia::http3_message_head_kind::request, &resource);
+    RUVIA_CHECK((other_head.index() == 0));
+    if ((other_head.index() == 0)) {
+        ruvia::http3_server_request other(std::get<0>(other_head), &resource, &resource);
+        RUVIA_CHECK_EQ(other.extended_connect_protocol(), "other-protocol");
         RUVIA_CHECK_EQ(other.request().method(), "CONNECT");
     }
 }
 
 RUVIA_TEST(http3_server_request_repeated_lifetimes_return_allocations) {
-    CountingResource resource;
+    counting_resource resource;
     for (int i = 0; i < 20; ++i) {
-        auto head = makeGet(&resource);
-        const auto baseline = resource.outstanding;
+        auto head = make_get(&resource);
+        const auto baseline = resource.outstanding_;
         {
-            ruvia::Http3ServerRequest owner(head, &resource, &resource);
-            owner.finishBody();
+            ruvia::http3_server_request owner_value(head, &resource, &resource);
+            owner_value.finish_body();
         }
-        RUVIA_CHECK_EQ(resource.outstanding, baseline);
+        RUVIA_CHECK_EQ(resource.outstanding_, baseline);
     }
 }
 
 RUVIA_TEST(http3_server_request_rejects_header_limit_and_cleans_partial_state) {
-    CountingResource resource;
-    const auto baseline = resource.outstanding;
+    counting_resource resource;
+    const auto baseline = resource.outstanding_;
     {
-        ruvia::Http3MessageHead head(&resource);
-        head.method = "GET";
-        head.scheme = "https";
-        head.authority = "example.test";
-        head.path = "/";
-        for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
-            head.headers.emplace_back("x-test", "v", &resource);
+        ruvia::http3_message_head head(&resource);
+        head.method_ = "GET";
+        head.scheme_ = "https";
+        head.authority_ = "example.test";
+        head.path_ = "/";
+        for (std::size_t i = 0; i < ruvia::max_http_header_fields; ++i) {
+            head.headers_.emplace_back("x-test", "v", &resource);
         }
         bool threw = false;
         try {
-            ruvia::Http3ServerRequest owner(head, &resource, &resource);
+            ruvia::http3_server_request owner_value(head, &resource, &resource);
         } catch (const std::length_error&) {
             threw = true;
         }
         RUVIA_CHECK(threw);
     }
-    RUVIA_CHECK_EQ(resource.outstanding, baseline);
+    RUVIA_CHECK_EQ(resource.outstanding_, baseline);
 }
 
 RUVIA_TEST(http3_server_request_allocation_exception_propagates) {
-    auto head = makeGet(std::pmr::get_default_resource());
-    FailingResource failing;
+    auto head = make_get(std::pmr::get_default_resource());
+    failing_resource failing;
     bool threw = false;
     try {
-        ruvia::Http3ServerRequest owner(head, &failing, std::pmr::get_default_resource());
+        ruvia::http3_server_request owner_value(head, &failing, std::pmr::get_default_resource());
     } catch (const std::bad_alloc&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
-    RUVIA_CHECK_EQ(failing.live, std::size_t{0});
+    RUVIA_CHECK_EQ(failing.live_, std::size_t{0});
 }
 
 RUVIA_TEST(http3_server_request_unstarted_owner_destruction_releases_resources) {
-    CountingResource requestResource;
-    CountingResource bodyPool;
-    const auto requestBaseline = requestResource.outstanding;
-    const auto poolBaseline = bodyPool.outstanding;
+    counting_resource request_resource;
+    counting_resource body_pool;
+    const auto request_baseline = request_resource.outstanding_;
+    const auto pool_baseline = body_pool.outstanding_;
     {
-        auto head = makeGet(std::pmr::get_default_resource());
-        ruvia::Http3ServerRequest owner(head, &requestResource, &bodyPool);
-        RUVIA_CHECK(!owner.bodyComplete());
-        RUVIA_CHECK(owner.request().bodyBytes().empty());
-        RUVIA_CHECK(requestResource.outstanding > requestBaseline);
+        auto head = make_get(std::pmr::get_default_resource());
+        ruvia::http3_server_request owner_value(head, &request_resource, &body_pool);
+        RUVIA_CHECK(!owner_value.body_complete());
+        RUVIA_CHECK(owner_value.request().body_bytes().empty());
+        RUVIA_CHECK(request_resource.outstanding_ > request_baseline);
     }
-    RUVIA_CHECK_EQ(requestResource.outstanding, requestBaseline);
-    RUVIA_CHECK_EQ(bodyPool.outstanding, poolBaseline);
+    RUVIA_CHECK_EQ(request_resource.outstanding_, request_baseline);
+    RUVIA_CHECK_EQ(body_pool.outstanding_, pool_baseline);
 }
 
 RUVIA_TEST(http3_server_request_head_owner_and_incremental_body_lifetimes) {
-    CountingResource requestResource;
-    CountingResource pool;
-    const auto poolBaseline = pool.outstanding;
-    std::optional<ruvia::Http3ServerRequest> owner;
+    counting_resource request_resource;
+    counting_resource pool;
+    const auto pool_baseline = pool.outstanding_;
+    std::optional<ruvia::http3_server_request> owner;
     {
-        auto temporary = makeGet(std::pmr::get_default_resource());
-        owner.emplace(temporary, &requestResource, &pool);
+        auto temporary = make_get(std::pmr::get_default_resource());
+        owner.emplace(temporary, &request_resource, &pool);
     }
     const auto& request = owner->request();
     RUVIA_CHECK_EQ(request.method(), "GET");
     RUVIA_CHECK_EQ(request.path(), "/items");
     RUVIA_CHECK_EQ(request.authority(), "example.test");
     RUVIA_CHECK_EQ(request.header("cookie").value(), "a=1; b=2");
-    RUVIA_CHECK(request.bodyBytes().empty());
-    RUVIA_CHECK(!owner->bodyComplete());
+    RUVIA_CHECK(request.body_bytes().empty());
+    RUVIA_CHECK(!owner->body_complete());
 
     std::vector<std::byte> chunk(4096, std::byte{'x'});
     for (int i = 0; i < 16; ++i) {
-        owner->appendBody(chunk);
+        owner->append_body(chunk);
     }
-    RUVIA_CHECK_EQ(owner->bodyBytes(), chunk.size() * 16);
-    RUVIA_CHECK(request.bodyBytes().empty());
-    RUVIA_CHECK(pool.outstanding > poolBaseline);
-    owner->finishBody();
-    RUVIA_CHECK(owner->bodyComplete());
-    RUVIA_CHECK_EQ(request.bodyBytes().size(), chunk.size() * 16);
-    RUVIA_CHECK(request.bodyBytes().front() == std::byte{'x'});
+    RUVIA_CHECK_EQ(owner->body_bytes(), chunk.size() * 16);
+    RUVIA_CHECK(request.body_bytes().empty());
+    RUVIA_CHECK(pool.outstanding_ > pool_baseline);
+    owner->finish_body();
+    RUVIA_CHECK(owner->body_complete());
+    RUVIA_CHECK_EQ(request.body_bytes().size(), chunk.size() * 16);
+    RUVIA_CHECK(request.body_bytes().front() == std::byte{'x'});
     bool rejected = false;
     try {
-        owner->appendBody(chunk);
+        owner->append_body(chunk);
     } catch (const std::logic_error&) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
     owner.reset();
-    RUVIA_CHECK_EQ(pool.outstanding, poolBaseline);
+    RUVIA_CHECK_EQ(pool.outstanding_, pool_baseline);
 }
 
 RUVIA_TEST(http3_server_request_abort_returns_pool_capacity_and_is_terminal) {
-    CountingResource requestResource;
-    CountingResource pool;
-    auto head = makeGet(std::pmr::get_default_resource());
-    ruvia::Http3ServerRequest owner(head, &requestResource, &pool);
-    const auto baseline = pool.outstanding;
+    counting_resource request_resource;
+    counting_resource pool;
+    auto head = make_get(std::pmr::get_default_resource());
+    ruvia::http3_server_request owner_value(head, &request_resource, &pool);
+    const auto baseline = pool.outstanding_;
     std::vector<std::byte> chunk(8192, std::byte{'z'});
-    owner.appendBody(chunk);
-    RUVIA_CHECK(pool.outstanding > baseline);
-    const auto deallocations = pool.deallocations;
-    owner.abortBody();
-    RUVIA_CHECK_EQ(owner.bodyBytes(), 0U);
-    RUVIA_CHECK(!owner.bodyComplete());
-    RUVIA_CHECK_EQ(pool.outstanding, baseline);
-    RUVIA_CHECK(pool.deallocations > deallocations);
+    owner_value.append_body(chunk);
+    RUVIA_CHECK(pool.outstanding_ > baseline);
+    const auto deallocations = pool.deallocations_;
+    owner_value.abort_body();
+    RUVIA_CHECK_EQ(owner_value.body_bytes(), 0U);
+    RUVIA_CHECK(!owner_value.body_complete());
+    RUVIA_CHECK_EQ(pool.outstanding_, baseline);
+    RUVIA_CHECK(pool.deallocations_ > deallocations);
     bool rejected = false;
     try {
-        owner.appendBody(chunk);
+        owner_value.append_body(chunk);
     } catch (const std::logic_error&) {
         rejected = true;
     }
@@ -405,76 +405,76 @@ RUVIA_TEST(http3_server_request_abort_returns_pool_capacity_and_is_terminal) {
 }
 
 RUVIA_TEST(http3_server_request_append_allocation_failure_preserves_state) {
-    CountingResource requestResource;
-    FailingResource bodyPool;
-    bodyPool.reject = false;
-    auto head = makeGet(std::pmr::get_default_resource());
-    ruvia::Http3ServerRequest owner(head, &requestResource, &bodyPool);
-    bodyPool.reject = true;
-    const std::array<std::byte, 256> bytes{};
+    counting_resource request_resource;
+    failing_resource body_pool;
+    body_pool.reject_ = false;
+    auto head = make_get(std::pmr::get_default_resource());
+    ruvia::http3_server_request owner_value(head, &request_resource, &body_pool);
+    body_pool.reject_ = true;
+    const std::array<std::byte, 256> bytes_value{};
     bool threw = false;
     try {
-        owner.appendBody(bytes);
+        owner_value.append_body(bytes_value);
     } catch (const std::bad_alloc&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
-    RUVIA_CHECK_EQ(owner.bodyBytes(), 0U);
-    RUVIA_CHECK(!owner.bodyComplete());
-    RUVIA_CHECK(owner.request().bodyBytes().empty());
-    owner.abortBody();
+    RUVIA_CHECK_EQ(owner_value.body_bytes(), 0U);
+    RUVIA_CHECK(!owner_value.body_complete());
+    RUVIA_CHECK(owner_value.request().body_bytes().empty());
+    owner_value.abort_body();
 }
 
 RUVIA_TEST(http3_server_request_copies_mixed_callback_head_resources) {
-    CountingResource first;
-    CountingResource requestResource;
-    CountingResource bodyPool;
-    ruvia::Http3MessageHead head(&first);
-    head.method = "GET";
-    head.scheme = "https";
-    head.authority = "example.test";
-    head.path = "/stable";
-    head.headers.emplace_back("x-owned", std::string(200, 'v'), &bodyPool);
+    counting_resource first;
+    counting_resource request_resource;
+    counting_resource body_pool;
+    ruvia::http3_message_head head(&first);
+    head.method_ = "GET";
+    head.scheme_ = "https";
+    head.authority_ = "example.test";
+    head.path_ = "/stable";
+    head.headers_.emplace_back("x-owned", std::string(200, 'v'), &body_pool);
     {
-        ruvia::Http3ServerRequest owner(head, &requestResource, &bodyPool);
-        RUVIA_CHECK_EQ(owner.request().path(), "/stable");
-        RUVIA_CHECK_EQ(owner.request().header("x-owned")->size(), 200U);
-        RUVIA_CHECK(!owner.bodyComplete());
-        owner.finishBody();
-        RUVIA_CHECK(owner.bodyComplete());
+        ruvia::http3_server_request owner_value(head, &request_resource, &body_pool);
+        RUVIA_CHECK_EQ(owner_value.request().path(), "/stable");
+        RUVIA_CHECK_EQ(owner_value.request().header("x-owned")->size(), 200U);
+        RUVIA_CHECK(!owner_value.body_complete());
+        owner_value.finish_body();
+        RUVIA_CHECK(owner_value.body_complete());
     }
-    RUVIA_CHECK_EQ(requestResource.outstanding, 0U);
+    RUVIA_CHECK_EQ(request_resource.outstanding_, 0U);
 }
 
 RUVIA_TEST(http3_server_request_expectation_plan_tracks_remaining_content_and_repeated_fields) {
     std::pmr::unsynchronized_pool_resource resource;
-    auto head = makeGet(&resource);
-    head.method = "POST";
-    head.contentLength = 3;
-    head.headers.emplace_back("expect", "100-continue", &resource);
-    ruvia::Http3ServerRequest request(head, &resource, &resource);
-    const auto initial = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(initial.sendContinue() != nullptr);
-    const std::array bytes{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
-    request.appendBody(bytes);
+    auto head = make_get(&resource);
+    head.method_ = "POST";
+    head.content_length_ = 3;
+    head.headers_.emplace_back("expect", "100-continue", &resource);
+    ruvia::http3_server_request request(head, &resource, &resource);
+    const auto initial_value = request.expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
+    RUVIA_CHECK(initial_value.send_continue() != nullptr);
+    const std::array bytes_value{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
+    request.append_body(bytes_value);
     {
-        const auto complete = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
-        RUVIA_CHECK(complete.noAction() != nullptr);
+        const auto complete_value = request.expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
+        RUVIA_CHECK(complete_value.no_action() != nullptr);
     }
-    request.finishBody();
+    request.finish_body();
     {
-        const auto complete = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
-        RUVIA_CHECK(complete.noAction() != nullptr);
+        const auto complete_value = request.expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
+        RUVIA_CHECK(complete_value.no_action() != nullptr);
     }
-    head.headers.emplace_back("expect", "custom-expectation", &resource);
-    ruvia::Http3ServerRequest unsupported(head, &resource, &resource);
-    const auto rejected = unsupported.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+    head.headers_.emplace_back("expect", "custom-expectation", &resource);
+    ruvia::http3_server_request unsupported(head, &resource, &resource);
+    const auto rejected = unsupported.expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
     RUVIA_CHECK(rejected.rejection() != nullptr);
-    const auto ignored = unsupported.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kIgnore);
-    RUVIA_CHECK(ignored.sendContinue() != nullptr);
-    head.headers.pop_back();
-    head.contentLength = 0;
-    ruvia::Http3ServerRequest empty(head, &resource, &resource);
-    const auto emptyPlan = empty.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(emptyPlan.noAction() != nullptr);
+    const auto ignored = unsupported.expectation_plan(ruvia::http_unsupported_expectation_policy::ignore);
+    RUVIA_CHECK(ignored.send_continue() != nullptr);
+    head.headers_.pop_back();
+    head.content_length_ = 0;
+    ruvia::http3_server_request empty(head, &resource, &resource);
+    const auto empty_plan = empty.expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
+    RUVIA_CHECK(empty_plan.no_action() != nullptr);
 }

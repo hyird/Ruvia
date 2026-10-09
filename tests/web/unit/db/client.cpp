@@ -23,122 +23,122 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/db/Db.h"
-#include "ruvia/web/db/DbExpressions.h"
-#include "ruvia/web/detail/db/DbOperationState.h"
-#include "ruvia/web/detail/db/DbResultAccess.h"
-#include "ruvia/web/detail/db/DbValueAccess.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/web/db/db.h"
+#include "ruvia/web/db/db_expressions.h"
+#include "ruvia/web/detail/db/db_operation_state.h"
+#include "ruvia/web/detail/db/db_result_access.h"
+#include "ruvia/web/detail/db/db_value_access.h"
 
-#include "db/DbConfigValidation.h"
-#include "db/DbPoolOperations.h"
-#include "db/DbPreparedStatement.h"
-#include "db/DbRegistry.h"
-#include "db/DbSlotSocket.h"
+#include "db/db_config_validation.h"
+#include "db/db_pool_operations.h"
+#include "db/db_prepared_statement.h"
+#include "db/db_registry.h"
+#include "db/db_slot_socket.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 #ifdef RUVIA_ENABLE_MARIADB
-#include "db/DbMysqlRuntime.h"
+#include "db/db_mysql_runtime.h"
 #endif
 
 namespace {
 
-using ruvia::test::RejectingMemoryResource;
-using ruvia::test::TrackingResource;
-using ruvia::testing::throwsOn;
+using ruvia::test::rejecting_memory_resource;
+using ruvia::test::tracking_resource;
+using ruvia::testing::throws_on;
 
 std::size_t owned_string_allocations() {
-    ruvia::test::CountingMemoryResource memory;
+    ruvia::test::counting_memory_resource memory;
     // Include implementation-owned storage such as MSVC debug iterator proxies.
     const std::pmr::string input(256, 'x', &memory);
-    return memory.liveAllocations();
+    return memory.live_allocations();
 }
 
-[[nodiscard]] ruvia::DbConfig testDbConfig() {
+[[nodiscard]] ruvia::db_config test_db_config() {
 #ifdef RUVIA_ENABLE_MARIADB
-    return ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
+    return ruvia::db_config{.driver_ = ruvia::db_driver::mariadb};
 #else
-    return ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
+    return ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
 #endif
 }
 
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
-struct ClosingResolveSlot;
+struct closing_resolve_slot;
 
-class ClosingResolver final {
+class closing_resolver final {
 public:
-    explicit ClosingResolver(ClosingResolveSlot& slot) noexcept
+    explicit closing_resolver(closing_resolve_slot& slot) noexcept
         : slot_(&slot) {}
 
-    template <typename Handler>
-    void async_resolve(std::string_view, std::string_view, Handler handler);
+    template <typename handler_type>
+    void async_resolve(std::string_view, std::string_view, handler_type handler);
 
     void cancel() noexcept {}
 
 private:
-    ClosingResolveSlot* slot_;
+    closing_resolve_slot* slot_;
 };
 
-struct ClosingResolveSlot final {
-    enum class DeadlineKind : std::uint8_t { kResolve };
+struct closing_resolve_slot final {
+    enum class deadline_kind_type : std::uint8_t { resolve };
 
-    ClosingResolveSlot()
-        : resolver(*this) {}
+    closing_resolve_slot()
+        : resolver_(*this) {}
 
-    bool waitActive{false};
-    bool closeRequested{false};
-    bool observedActiveResolve{false};
-    ClosingResolver resolver;
-    bool throw_on_initiation{false};
-    ruvia::WorkerTimerRegistration deadline_timer;
-    ruvia::WorkerTimerRegistration* deadlineTimer{&deadline_timer};
-    ruvia::operation_deadline<DeadlineKind> deadline;
+    bool wait_active_{false};
+    bool close_requested_{false};
+    bool observed_active_resolve_{false};
+    closing_resolver resolver_;
+    bool throw_on_initiation_{false};
+    ruvia::worker_timer_registration timer_;
+    ruvia::worker_timer_registration* deadline_timer_{&timer_};
+    ruvia::operation_deadline<deadline_kind_type> deadline_;
 
-    static void expire_deadline(ClosingResolveSlot& slot, DeadlineKind) noexcept {
-        slot.resolver.cancel();
+    static void expire_deadline(closing_resolve_slot& slot, deadline_kind_type) noexcept {
+        slot.resolver_.cancel();
     }
 };
 
-template <typename Handler>
-void ClosingResolver::async_resolve(std::string_view, std::string_view, Handler handler) {
-    slot_->observedActiveResolve = slot_->waitActive;
-    if (slot_->throw_on_initiation) {
+template <typename handler_type>
+void closing_resolver::async_resolve(std::string_view, std::string_view, handler_type handler) {
+    slot_->observed_active_resolve_ = slot_->wait_active_;
+    if (slot_->throw_on_initiation_) {
         throw std::runtime_error("resolver initiation failed");
     }
-    slot_->closeRequested = true;
+    slot_->close_requested_ = true;
     handler(asio::error::operation_aborted, asio::ip::tcp::resolver::results_type{});
 }
 
-struct ClosingResolvePool final {
-    struct Config final {
-        std::string host{"resolver.test"};
-        std::uint16_t port{3306};
-        ruvia::DbDriver driver{ruvia::DbDriver::kMariaDb};
+struct closing_resolve_pool final {
+    struct config_type final {
+        std::string host_{"resolver.test"};
+        std::uint16_t port_{3306};
+        ruvia::db_driver driver_{ruvia::db_driver::mariadb};
     } config_;
 
     std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
-    ruvia::WorkerHandle worker_;
+    ruvia::worker_handle worker_;
 
-    void throwIfCancelled(const ClosingResolveSlot&) const {}
+    void throw_if_cancelled(const closing_resolve_slot&) const {}
 };
 #endif
 
-[[nodiscard]] ruvia::detail::DbDefinition dbDefinition(std::string_view alias,
-    const ruvia::DbConfig& config,
+[[nodiscard]] ruvia::detail::db_definition db_definition(std::string_view alias,
+    const ruvia::db_config& config,
     std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
     return {
         std::pmr::string(alias, resource),
-        ruvia::detail::DbConfigStorage(config, resource),
+        ruvia::detail::db_config_storage(config, resource),
     };
 }
 
-using GuardedLease = std::pmr::string;
-using GuardedLeaseState = ruvia::detail::DbOperationState<GuardedLease>;
-using GuardedLeaseGuard = ruvia::detail::DbOperationGuard<GuardedLease>;
+using guarded_lease_type = std::pmr::string;
+using guarded_lease_state_type = ruvia::detail::db_operation_state<guarded_lease_type>;
+using guarded_lease_guard_type = ruvia::detail::db_operation_guard<guarded_lease_type>;
 
-struct GuardedLeaseGate final {
+struct guarded_lease_gate final {
     [[nodiscard]] bool await_ready() const noexcept {
         return false;
     }
@@ -153,74 +153,74 @@ struct GuardedLeaseGate final {
     std::coroutine_handle<> continuation_{};
 };
 
-class GuardedLeaseCapability final {
+class guarded_lease_capability final {
 public:
-    GuardedLeaseCapability(ruvia::operation_scope& scope, GuardedLeaseState& state,
+    guarded_lease_capability(ruvia::operation_scope& scope, guarded_lease_state_type& state_value,
         bool& expired) noexcept
-        : state_(state),
+        : state_(state_value),
           expired_(expired),
-          registration_(scope, this, &GuardedLeaseCapability::expire) {}
+          registration_(scope, this, &guarded_lease_capability::expire) {}
 
 private:
     static void expire(void* target) noexcept {
-        auto& capability = *static_cast<GuardedLeaseCapability*>(target);
-        capability.state_.reset([](GuardedLease&) noexcept {});
+        auto& capability = *static_cast<guarded_lease_capability*>(target);
+        capability.state_.reset([](guarded_lease_type&) noexcept {});
         capability.expired_ = true;
     }
 
-    GuardedLeaseState& state_;
+    guarded_lease_state_type& state_;
     bool& expired_;
     ruvia::scoped_capability_registration registration_;
 };
 
-ruvia::Task<void> failGuardedLeaseAfterGate(
-    GuardedLeaseGuard pending, GuardedLeaseGate& gate, std::pmr::string input) {
-    GuardedLeaseGuard operation(std::move(pending));
+ruvia::task<void> fail_guarded_lease_after_gate(
+    guarded_lease_guard_type pending, guarded_lease_gate& gate_value, std::pmr::string input) {
+    guarded_lease_guard_type operation(std::move(pending));
     operation.start();
-    co_await gate;
+    co_await gate_value;
     (void)input;
     throw std::runtime_error("scoped database operation failed");
 }
 
-ruvia::Task<void> completeGuardedLease(GuardedLeaseGuard pending, std::pmr::string input) {
-    GuardedLeaseGuard operation(std::move(pending));
+ruvia::task<void> complete_guarded_lease(guarded_lease_guard_type pending, std::pmr::string input) {
+    guarded_lease_guard_type operation(std::move(pending));
     operation.start();
     (void)input;
-    operation.finishActive();
+    operation.finish_active();
     co_return;
 }
 
-ruvia::Task<void> awaitScopedOperation(ruvia::ScopedOperation<void>& operation) {
+ruvia::task<void> await_scoped_operation(ruvia::scoped_operation<void>& operation) {
     co_await std::move(operation);
     co_return;
 }
 
-ruvia::Task<void> joinScopedOperations(ruvia::operation_scope& scope) {
+ruvia::task<void> join_scoped_operations(ruvia::operation_scope& scope) {
     co_await scope.close_and_join();
     co_return;
 }
 
-class DbRegistryTestRuntime final {
+class db_registry_test_runtime final {
 #ifndef _WIN32
-    asio::io_context ownedIoContext;
+    asio::io_context owned_io_context_;
 #endif
 
 public:
 #ifdef _WIN32
-    DbRegistryTestRuntime()
-        : ioContext(ruvia::test::newTestIoContext()),
-          attachment(ruvia::attachEventLoop(ioContext)),
-          worker(attachment.loop().handle()) {}
+    db_registry_test_runtime()
+        : io_context_(ruvia::test::new_test_io_context()),
+          attachment_(ruvia::attach_event_loop(io_context_)),
+          worker_(attachment_.loop().handle()) {}
 #else
-    DbRegistryTestRuntime()
-        : ioContext(ownedIoContext),
-          attachment(ruvia::attachEventLoop(ioContext)),
-          worker(attachment.loop().handle()) {}
+    db_registry_test_runtime()
+        : io_context_(owned_io_context_),
+          attachment_(ruvia::attach_event_loop(io_context_)),
+          worker_(attachment_.loop().handle()) {}
 #endif
 
-    asio::io_context& ioContext;
-    ruvia::EventLoopAttachment attachment;
-    ruvia::WorkerHandle worker;
+    asio::io_context& io_context_;
+    ruvia::event_loop_attachment attachment_;
+    ruvia::worker_handle worker_;
 };
 
 struct deadline_test_slot final {
@@ -229,20 +229,20 @@ struct deadline_test_slot final {
         sleep };
 
     static void expire_deadline(deadline_test_slot& slot, deadline_kind kind) noexcept {
-        ++slot.expiry_count;
-        slot.last_expired = kind;
-        auto continuation = std::exchange(slot.deadlineContinuation, {});
+        ++slot.expiry_count_;
+        slot.last_expired_ = kind;
+        auto continuation = std::exchange(slot.deadline_continuation_, {});
         if (continuation) {
             continuation.resume();
         }
     }
 
-    ruvia::WorkerTimerRegistration timer;
-    ruvia::WorkerTimerRegistration* deadlineTimer{&timer};
-    ruvia::operation_deadline<deadline_kind> deadline;
-    std::coroutine_handle<> deadlineContinuation{};
-    unsigned expiry_count{0};
-    std::optional<deadline_kind> last_expired;
+    ruvia::worker_timer_registration timer_;
+    ruvia::worker_timer_registration* deadline_timer_{&timer_};
+    ruvia::operation_deadline<deadline_kind> deadline_;
+    std::coroutine_handle<> deadline_continuation_{};
+    unsigned expiry_count_{0};
+    std::optional<deadline_kind> last_expired_;
 };
 
 // Bound parameters passed as ordinary arguments.
@@ -251,7 +251,7 @@ struct deadline_test_slot final {
 // absorbed as a single bound parameter, which would send the wrong argument.
 
 // Variadic calls clone an owning-string temporary before returning, while the
-// storable DbValue type above continues to reject the same temporary.
+// storable db_value type above continues to reject the same temporary.
 
 // An lvalue string is fine: it outlives the call, which is all the synchronous
 // parameter cloning requires.
@@ -261,501 +261,501 @@ struct deadline_test_slot final {
 RUVIA_TEST(db_slot_deadline_replacement_cancel_and_disable_retire_previous_action) {
     using namespace std::chrono_literals;
     using kind = deadline_test_slot::deadline_kind;
-    DbRegistryTestRuntime runtime;
+    db_registry_test_runtime runtime;
     deadline_test_slot slot;
-    asio::post(runtime.ioContext, [&] {
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1h, kind::resolve);
-        slot.deadlineContinuation = std::noop_coroutine();
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::socket);
-        RUVIA_CHECK(!slot.deadlineContinuation);
+    asio::post(runtime.io_context_, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1h, kind::resolve);
+        slot.deadline_continuation_ = std::noop_coroutine();
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1ms, kind::socket);
+        RUVIA_CHECK(!slot.deadline_continuation_);
     });
     // The attachment retains its owner loop; wait for expiry, not loop exit.
-    while (slot.expiry_count != 1) {
-        runtime.ioContext.run_one();
+    while (slot.expiry_count_ != 1) {
+        runtime.io_context_.run_one();
     }
-    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
-    RUVIA_CHECK(slot.last_expired == kind::socket);
-    RUVIA_CHECK(slot.deadline.expired());
+    RUVIA_CHECK_EQ(slot.expiry_count_, 1u);
+    RUVIA_CHECK(slot.last_expired_ == kind::socket);
+    RUVIA_CHECK(slot.deadline_.expired());
 
-    runtime.ioContext.restart();
-    asio::post(runtime.ioContext, [&] {
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::sleep);
-        slot.deadlineContinuation = std::noop_coroutine();
+    runtime.io_context_.restart();
+    asio::post(runtime.io_context_, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1ms, kind::sleep);
+        slot.deadline_continuation_ = std::noop_coroutine();
         ruvia::detail::clear_db_slot_deadline(slot);
-        RUVIA_CHECK(!slot.timer.registered());
-        RUVIA_CHECK(!slot.deadlineContinuation);
-        RUVIA_CHECK(slot.deadline.kind() == nullptr);
-        RUVIA_CHECK(!slot.deadline.expired());
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::resolve);
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 0ms, kind::socket);
-        RUVIA_CHECK(!slot.timer.registered());
-        RUVIA_CHECK(slot.deadline.kind() == nullptr);
+        RUVIA_CHECK(!slot.timer_.registered());
+        RUVIA_CHECK(!slot.deadline_continuation_);
+        RUVIA_CHECK(slot.deadline_.kind() == nullptr);
+        RUVIA_CHECK(!slot.deadline_.expired());
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1ms, kind::resolve);
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 0ms, kind::socket);
+        RUVIA_CHECK(!slot.timer_.registered());
+        RUVIA_CHECK(slot.deadline_.kind() == nullptr);
     });
-    runtime.ioContext.poll();
-    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
+    runtime.io_context_.poll();
+    RUVIA_CHECK_EQ(slot.expiry_count_, 1u);
 
-    runtime.ioContext.restart();
-    asio::post(runtime.ioContext, [&] {
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::sleep);
-        slot.deadlineContinuation = std::noop_coroutine();
+    runtime.io_context_.restart();
+    asio::post(runtime.io_context_, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1ms, kind::sleep);
+        slot.deadline_continuation_ = std::noop_coroutine();
     });
-    while (slot.expiry_count != 2) {
-        runtime.ioContext.run_one();
+    while (slot.expiry_count_ != 2) {
+        runtime.io_context_.run_one();
     }
-    RUVIA_CHECK_EQ(slot.expiry_count, 2u);
-    RUVIA_CHECK(slot.last_expired == kind::sleep);
-    RUVIA_CHECK(!slot.deadlineContinuation);
+    RUVIA_CHECK_EQ(slot.expiry_count_, 2u);
+    RUVIA_CHECK(slot.last_expired_ == kind::sleep);
+    RUVIA_CHECK(!slot.deadline_continuation_);
     ruvia::detail::clear_db_slot_deadline(slot);
 }
 
 RUVIA_TEST(db_slot_deadline_initiation_failure_rolls_back_and_can_be_reused) {
     using namespace std::chrono_literals;
     using kind = deadline_test_slot::deadline_kind;
-    DbRegistryTestRuntime runtime;
+    db_registry_test_runtime runtime;
     deadline_test_slot slot;
-    const ruvia::WorkerHandle unavailable_worker;
-    asio::post(runtime.ioContext, [&] {
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1h, kind::resolve);
-        slot.deadlineContinuation = std::noop_coroutine();
-        RUVIA_CHECK(throwsOn([&] {
+    const ruvia::worker_handle unavailable_worker;
+    asio::post(runtime.io_context_, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1h, kind::resolve);
+        slot.deadline_continuation_ = std::noop_coroutine();
+        RUVIA_CHECK(throws_on([&] {
             ruvia::detail::arm_db_slot_deadline(unavailable_worker, slot, 1ms, kind::sleep);
         }));
-        RUVIA_CHECK(!slot.timer.registered());
-        RUVIA_CHECK(!slot.deadlineContinuation);
-        RUVIA_CHECK(slot.deadline.kind() == nullptr);
-        RUVIA_CHECK(!slot.deadline.expired());
-        RUVIA_CHECK_EQ(slot.expiry_count, 0u);
-        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::socket);
+        RUVIA_CHECK(!slot.timer_.registered());
+        RUVIA_CHECK(!slot.deadline_continuation_);
+        RUVIA_CHECK(slot.deadline_.kind() == nullptr);
+        RUVIA_CHECK(!slot.deadline_.expired());
+        RUVIA_CHECK_EQ(slot.expiry_count_, 0u);
+        ruvia::detail::arm_db_slot_deadline(runtime.worker_, slot, 1ms, kind::socket);
     });
-    while (slot.expiry_count != 1) {
-        runtime.ioContext.run_one();
+    while (slot.expiry_count_ != 1) {
+        runtime.io_context_.run_one();
     }
-    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
-    RUVIA_CHECK(slot.last_expired == kind::socket);
+    RUVIA_CHECK_EQ(slot.expiry_count_, 1u);
+    RUVIA_CHECK(slot.last_expired_ == kind::socket);
     ruvia::detail::clear_db_slot_deadline(slot);
 }
 
 RUVIA_TEST(db_operation_options_validate_and_compose_restrictions) {
-    RUVIA_CHECK(throwsOn([] {
-        ruvia::detail::validateOperationOptions(
-            ruvia::OperationOptions{.timeout = std::chrono::milliseconds(0)});
+    RUVIA_CHECK(throws_on([] {
+        ruvia::detail::validate_operation_options(
+            ruvia::operation_options{.timeout_ = std::chrono::milliseconds(0)});
     }));
-    RUVIA_CHECK(throwsOn([] {
-        ruvia::detail::validateOperationOptions(
-            ruvia::OperationOptions{.timeout = std::chrono::milliseconds(-1)});
+    RUVIA_CHECK(throws_on([] {
+        ruvia::detail::validate_operation_options(
+            ruvia::operation_options{.timeout_ = std::chrono::milliseconds(-1)});
     }));
 
-    ruvia::StopSource ambient;
-    ruvia::StopSource explicitOperation;
-    auto merged = ruvia::detail::mergeOperationOptions(
-        ruvia::OperationOptions{
-            .timeout = std::chrono::milliseconds(100), .stopToken = ambient.token()},
-        ruvia::OperationOptions{
-            .timeout = std::chrono::milliseconds(250), .stopToken = explicitOperation.token()});
-    RUVIA_CHECK(merged.timeout == std::chrono::milliseconds(100));
-    RUVIA_CHECK(!merged.stopToken.stopRequested());
-    explicitOperation.requestStop();
-    RUVIA_CHECK(merged.stopToken.stopRequested());
+    ruvia::stop_source ambient;
+    ruvia::stop_source explicit_operation;
+    auto merged = ruvia::detail::merge_operation_options(
+        ruvia::operation_options{
+            .timeout_ = std::chrono::milliseconds(100), .stop_token_ = ambient.token()},
+        ruvia::operation_options{
+            .timeout_ = std::chrono::milliseconds(250), .stop_token_ = explicit_operation.token()});
+    RUVIA_CHECK(merged.timeout_ == std::chrono::milliseconds(100));
+    RUVIA_CHECK(!merged.stop_token_.stop_requested());
+    explicit_operation.request_stop();
+    RUVIA_CHECK(merged.stop_token_.stop_requested());
 
-    ruvia::StopSource secondAmbient;
-    ruvia::StopSource secondExplicit;
-    auto shorterOverride = ruvia::detail::mergeOperationOptions(
-        ruvia::OperationOptions{
-            .timeout = std::chrono::milliseconds(500), .stopToken = secondAmbient.token()},
-        ruvia::OperationOptions{
-            .timeout = std::chrono::milliseconds(50), .stopToken = secondExplicit.token()});
-    RUVIA_CHECK(shorterOverride.timeout == std::chrono::milliseconds(50));
-    secondAmbient.requestStop();
-    RUVIA_CHECK(shorterOverride.stopToken.stopRequested());
+    ruvia::stop_source second_ambient;
+    ruvia::stop_source second_explicit;
+    auto shorter_override = ruvia::detail::merge_operation_options(
+        ruvia::operation_options{
+            .timeout_ = std::chrono::milliseconds(500), .stop_token_ = second_ambient.token()},
+        ruvia::operation_options{
+            .timeout_ = std::chrono::milliseconds(50), .stop_token_ = second_explicit.token()});
+    RUVIA_CHECK(shorter_override.timeout_ == std::chrono::milliseconds(50));
+    second_ambient.request_stop();
+    RUVIA_CHECK(shorter_override.stop_token_.stop_requested());
 }
 
 RUVIA_TEST(db_error_carries_category_and_native_diagnostics) {
-    const ruvia::DbError timeout(
-        ruvia::DbError::Code::kTimeout, ruvia::DbDriver::kMariaDb, "timeout", 1205, "HY000");
-    const ruvia::DbError uniqueViolation(ruvia::DbError::Code::kStatementFailed,
-        ruvia::DbDriver::kPostgreSql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
-    const ruvia::DbError cancelled(
-        ruvia::DbError::Code::kCancelled, ruvia::DbDriver::kPostgreSql, "cancelled");
-    const ruvia::DbError closing(
-        ruvia::DbError::Code::kClosing, ruvia::DbDriver::kMariaDb, "closing");
-    RUVIA_CHECK(timeout.code() == ruvia::DbError::Code::kTimeout);
-    RUVIA_CHECK(timeout.driver() == ruvia::DbDriver::kMariaDb);
-    RUVIA_CHECK(timeout.nativeCode() == 1205);
-    RUVIA_CHECK(timeout.sqlState() == "HY000");
-    RUVIA_CHECK(!timeout.constraintName().has_value());
-    RUVIA_CHECK(uniqueViolation.constraintName() == "uq_jobs_key");
-    RUVIA_CHECK(cancelled.code() == ruvia::DbError::Code::kCancelled);
-    RUVIA_CHECK(cancelled.driver() == ruvia::DbDriver::kPostgreSql);
-    RUVIA_CHECK(!cancelled.nativeCode().has_value());
-    RUVIA_CHECK(!cancelled.sqlState().has_value());
-    RUVIA_CHECK(!cancelled.constraintName().has_value());
-    RUVIA_CHECK(closing.code() == ruvia::DbError::Code::kClosing);
+    const ruvia::db_error timeout(
+        ruvia::db_error::code_type::timeout, ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
+    const ruvia::db_error unique_violation(ruvia::db_error::code_type::statement_failed,
+        ruvia::db_driver::postgresql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
+    const ruvia::db_error cancelled(
+        ruvia::db_error::code_type::cancelled, ruvia::db_driver::postgresql, "cancelled");
+    const ruvia::db_error closing(
+        ruvia::db_error::code_type::closing, ruvia::db_driver::mariadb, "closing");
+    RUVIA_CHECK(timeout.code() == ruvia::db_error::code_type::timeout);
+    RUVIA_CHECK(timeout.driver() == ruvia::db_driver::mariadb);
+    RUVIA_CHECK(timeout.native_code() == 1205);
+    RUVIA_CHECK(timeout.sql_state() == "HY000");
+    RUVIA_CHECK(!timeout.constraint_name().has_value());
+    RUVIA_CHECK(unique_violation.constraint_name() == "uq_jobs_key");
+    RUVIA_CHECK(cancelled.code() == ruvia::db_error::code_type::cancelled);
+    RUVIA_CHECK(cancelled.driver() == ruvia::db_driver::postgresql);
+    RUVIA_CHECK(!cancelled.native_code().has_value());
+    RUVIA_CHECK(!cancelled.sql_state().has_value());
+    RUVIA_CHECK(!cancelled.constraint_name().has_value());
+    RUVIA_CHECK(closing.code() == ruvia::db_error::code_type::closing);
 }
 
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
 RUVIA_TEST(db_resolve_shutdown_preserves_slot_until_it_reports_closing) {
-    asio::io_context ioContext;
-    ClosingResolvePool pool;
-    ClosingResolveSlot slot;
-    auto future = asio::co_spawn(ioContext,
-        ruvia::asAwaitable(ruvia::detail::resolveDbHost(
-            pool, slot, ruvia::OperationTimeout(std::nullopt), "test database")),
+    asio::io_context io_context;
+    closing_resolve_pool pool;
+    closing_resolve_slot slot;
+    auto future = asio::co_spawn(io_context,
+        ruvia::as_awaitable(ruvia::detail::resolve_db_host(
+            pool, slot, ruvia::operation_timeout(std::nullopt), "test database")),
         asio::use_future);
-    ioContext.run();
+    io_context.run();
 
-    bool reportedClosing = false;
+    bool reported_closing = false;
     try {
         (void)future.get();
-    } catch (const ruvia::DbError& error) {
-        reportedClosing = error.code() == ruvia::DbError::Code::kClosing;
+    } catch (const ruvia::db_error& error) {
+        reported_closing = error.code() == ruvia::db_error::code_type::closing;
     }
-    RUVIA_CHECK(slot.observedActiveResolve);
-    RUVIA_CHECK(!slot.waitActive);
-    RUVIA_CHECK(reportedClosing);
+    RUVIA_CHECK(slot.observed_active_resolve_);
+    RUVIA_CHECK(!slot.wait_active_);
+    RUVIA_CHECK(reported_closing);
 }
 
 RUVIA_TEST(db_resolve_initiation_failure_retires_slot_deadline) {
-    DbRegistryTestRuntime runtime;
-    ClosingResolvePool pool;
-    pool.worker_ = runtime.worker;
-    ClosingResolveSlot slot;
-    slot.throw_on_initiation = true;
-    auto future = asio::co_spawn(runtime.ioContext,
-        ruvia::asAwaitable(ruvia::detail::resolveDbHost(
-            pool, slot, ruvia::OperationTimeout(std::chrono::hours(1)), "test database")),
+    db_registry_test_runtime runtime;
+    closing_resolve_pool pool;
+    pool.worker_ = runtime.worker_;
+    closing_resolve_slot slot;
+    slot.throw_on_initiation_ = true;
+    auto future = asio::co_spawn(runtime.io_context_,
+        ruvia::as_awaitable(ruvia::detail::resolve_db_host(
+            pool, slot, ruvia::operation_timeout(std::chrono::hours(1)), "test database")),
         asio::use_future);
     while (future.wait_for(std::chrono::seconds::zero()) != std::future_status::ready) {
-        runtime.ioContext.run_one();
+        runtime.io_context_.run_one();
     }
-    runtime.ioContext.poll();
-    RUVIA_CHECK(throwsOn([&] { (void)future.get(); }));
-    RUVIA_CHECK(slot.observedActiveResolve);
-    RUVIA_CHECK(!slot.waitActive);
-    RUVIA_CHECK(!slot.deadline_timer.registered());
-    RUVIA_CHECK(slot.deadline.kind() == nullptr);
-    RUVIA_CHECK(!slot.deadline.expired());
+    runtime.io_context_.poll();
+    RUVIA_CHECK(throws_on([&] { (void)future.get(); }));
+    RUVIA_CHECK(slot.observed_active_resolve_);
+    RUVIA_CHECK(!slot.wait_active_);
+    RUVIA_CHECK(!slot.timer_.registered());
+    RUVIA_CHECK(slot.deadline_.kind() == nullptr);
+    RUVIA_CHECK(!slot.deadline_.expired());
 }
 #endif
 
 #ifdef RUVIA_ENABLE_MARIADB
 RUVIA_TEST(mariadb_wait_deadline_uses_the_earliest_source) {
     using namespace std::chrono_literals;
-    using ruvia::detail::MysqlWaitDeadlineSource;
+    using ruvia::detail::mysql_wait_deadline_source;
 
-    const auto operationFirst = ruvia::detail::selectMysqlWaitDeadline(30s, 1s);
-    RUVIA_CHECK(operationFirst.timeout == 1s);
-    RUVIA_CHECK(operationFirst.source == MysqlWaitDeadlineSource::kDriver);
+    const auto operation_first = ruvia::detail::select_mysql_wait_deadline(30s, 1s);
+    RUVIA_CHECK(operation_first.timeout_ == 1s);
+    RUVIA_CHECK(operation_first.source_ == mysql_wait_deadline_source::driver);
 
-    const auto driverLater = ruvia::detail::selectMysqlWaitDeadline(1s, 30s);
-    RUVIA_CHECK(driverLater.timeout == 1s);
-    RUVIA_CHECK(driverLater.source == MysqlWaitDeadlineSource::kOperation);
+    const auto driver_later = ruvia::detail::select_mysql_wait_deadline(1s, 30s);
+    RUVIA_CHECK(driver_later.timeout_ == 1s);
+    RUVIA_CHECK(driver_later.source_ == mysql_wait_deadline_source::operation);
 
-    const auto tie = ruvia::detail::selectMysqlWaitDeadline(1s, 1s);
-    RUVIA_CHECK(tie.timeout == 1s);
-    RUVIA_CHECK(tie.source == MysqlWaitDeadlineSource::kOperation);
+    const auto tie = ruvia::detail::select_mysql_wait_deadline(1s, 1s);
+    RUVIA_CHECK(tie.timeout_ == 1s);
+    RUVIA_CHECK(tie.source_ == mysql_wait_deadline_source::operation);
 
-    const auto driverOnly = ruvia::detail::selectMysqlWaitDeadline(std::nullopt, 2s);
-    RUVIA_CHECK(driverOnly.timeout == 2s);
-    RUVIA_CHECK(driverOnly.source == MysqlWaitDeadlineSource::kDriver);
+    const auto driver_only = ruvia::detail::select_mysql_wait_deadline(std::nullopt, 2s);
+    RUVIA_CHECK(driver_only.timeout_ == 2s);
+    RUVIA_CHECK(driver_only.source_ == mysql_wait_deadline_source::driver);
 }
 #endif
 
 RUVIA_TEST(db_slot_socket_cancel_drains_before_release_and_preserves_driver_socket) {
-    asio::io_context ioContext;
+    asio::io_context io_context;
     asio::ip::tcp::acceptor acceptor(
-        ioContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
-    asio::ip::tcp::socket driverSocket(ioContext);
-    driverSocket.connect(acceptor.local_endpoint());
-    asio::ip::tcp::socket peerSocket(ioContext);
-    acceptor.accept(peerSocket);
+        io_context, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::tcp::socket driver_socket(io_context);
+    driver_socket.connect(acceptor.local_endpoint());
+    asio::ip::tcp::socket peer_socket(io_context);
+    acceptor.accept(peer_socket);
 
-    std::error_code driverReleaseError;
-    const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-        driverSocket.release(driverReleaseError));
-    RUVIA_CHECK(!driverReleaseError);
-    ruvia::detail::DbSlotSocket waitSocket(ioContext);
-    RUVIA_CHECK(!waitSocket.ensureAssigned(source));
+    std::error_code driver_release_error;
+    const auto source_value = static_cast<ruvia::detail::db_slot_socket::native_socket_type>(
+        driver_socket.release(driver_release_error));
+    RUVIA_CHECK(!driver_release_error);
+    ruvia::detail::db_slot_socket wait_socket(io_context);
+    RUVIA_CHECK(!wait_socket.ensure_assigned(source_value));
 #if defined(_WIN32)
-    RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-                    waitSocket.socket.native_handle()) == source);
+    RUVIA_CHECK(static_cast<ruvia::detail::db_slot_socket::native_socket_type>(
+                    wait_socket.socket_.native_handle()) == source_value);
 #else
-    RUVIA_CHECK(waitSocket.descriptor.native_handle() == source);
+    RUVIA_CHECK(wait_socket.descriptor_.native_handle() == source_value);
 #endif
 
     int completions = 0;
-    std::error_code waitError;
+    std::error_code wait_error;
 #if defined(_WIN32)
-    waitSocket.socket.async_wait(asio::ip::tcp::socket::wait_read, [&](std::error_code error) {
+    wait_socket.socket_.async_wait(asio::ip::tcp::socket::wait_read, [&](std::error_code error) {
         ++completions;
-        waitError = error;
+        wait_error = error;
     });
 #else
-    waitSocket.descriptor.async_wait(
+    wait_socket.descriptor_.async_wait(
         asio::posix::stream_descriptor::wait_read, [&](std::error_code error) {
             ++completions;
-            waitError = error;
+            wait_error = error;
         });
 #endif
-    waitSocket.cancel();
-    ioContext.run();
+    wait_socket.cancel();
+    io_context.run();
     RUVIA_CHECK_EQ(completions, 1);
-    RUVIA_CHECK(waitError == asio::error::operation_aborted);
-    RUVIA_CHECK(!waitSocket.release());
+    RUVIA_CHECK(wait_error == asio::error::operation_aborted);
+    RUVIA_CHECK(!wait_socket.release());
 
-    std::error_code driverAssignError;
-    driverSocket.assign(asio::ip::tcp::v4(), source, driverAssignError);
-    RUVIA_CHECK(!driverAssignError);
-    constexpr std::array<char, 2> payload{'o', 'k'};
-    std::array<char, payload.size()> received{};
-    asio::write(driverSocket, asio::buffer(payload));
-    asio::read(peerSocket, asio::buffer(received));
-    RUVIA_CHECK(received == payload);
+    std::error_code driver_assign_error;
+    driver_socket.assign(asio::ip::tcp::v4(), source_value, driver_assign_error);
+    RUVIA_CHECK(!driver_assign_error);
+    constexpr std::array<char, 2> payload_value{'o', 'k'};
+    std::array<char, payload_value.size()> received_value{};
+    asio::write(driver_socket, asio::buffer(payload_value));
+    asio::read(peer_socket, asio::buffer(received_value));
+    RUVIA_CHECK(received_value == payload_value);
 }
 
 RUVIA_TEST(db_slot_socket_reports_invalid_driver_socket) {
-    asio::io_context ioContext;
-    ruvia::detail::DbSlotSocket waitSocket(ioContext);
-    const auto error = waitSocket.ensureAssigned(ruvia::detail::DbSlotSocket::kInvalidSocket);
+    asio::io_context io_context;
+    ruvia::detail::db_slot_socket wait_socket(io_context);
+    const auto error = wait_socket.ensure_assigned(ruvia::detail::db_slot_socket::invalid_socket);
     RUVIA_CHECK(error == std::errc::bad_file_descriptor);
 }
 
 RUVIA_TEST(db_slot_socket_releases_before_driver_socket_closes) {
-    asio::io_context ioContext;
+    asio::io_context io_context;
     asio::ip::tcp::acceptor acceptor(
-        ioContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
-    asio::ip::tcp::socket driverSocket(ioContext);
-    driverSocket.connect(acceptor.local_endpoint());
-    asio::ip::tcp::socket peerSocket(ioContext);
-    acceptor.accept(peerSocket);
+        io_context, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::tcp::socket driver_socket(io_context);
+    driver_socket.connect(acceptor.local_endpoint());
+    asio::ip::tcp::socket peer_socket(io_context);
+    acceptor.accept(peer_socket);
 
-    std::error_code driverReleaseError;
-    const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-        driverSocket.release(driverReleaseError));
-    RUVIA_CHECK(!driverReleaseError);
+    std::error_code driver_release_error;
+    const auto source_value = static_cast<ruvia::detail::db_slot_socket::native_socket_type>(
+        driver_socket.release(driver_release_error));
+    RUVIA_CHECK(!driver_release_error);
     {
-        ruvia::detail::DbSlotSocket waitSocket(ioContext);
-        RUVIA_CHECK(!waitSocket.ensureAssigned(source));
+        ruvia::detail::db_slot_socket wait_socket(io_context);
+        RUVIA_CHECK(!wait_socket.ensure_assigned(source_value));
 #if defined(_WIN32)
-        RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-                        waitSocket.socket.native_handle()) == source);
+        RUVIA_CHECK(static_cast<ruvia::detail::db_slot_socket::native_socket_type>(
+                        wait_socket.socket_.native_handle()) == source_value);
 #else
-        RUVIA_CHECK(waitSocket.descriptor.native_handle() == source);
+        RUVIA_CHECK(wait_socket.descriptor_.native_handle() == source_value);
 #endif
-        RUVIA_CHECK(!waitSocket.release());
-        std::error_code driverAssignError;
-        driverSocket.assign(asio::ip::tcp::v4(), source, driverAssignError);
-        RUVIA_CHECK(!driverAssignError);
-        std::error_code closeError;
-        driverSocket.close(closeError);
-        RUVIA_CHECK(!closeError);
+        RUVIA_CHECK(!wait_socket.release());
+        std::error_code driver_assign_error;
+        driver_socket.assign(asio::ip::tcp::v4(), source_value, driver_assign_error);
+        RUVIA_CHECK(!driver_assign_error);
+        std::error_code close_error;
+        driver_socket.close(close_error);
+        RUVIA_CHECK(!close_error);
     }
 
     std::array<char, 1> byte{};
-    std::error_code readError;
-    (void)peerSocket.read_some(asio::buffer(byte), readError);
-    RUVIA_CHECK(readError == asio::error::eof || readError == asio::error::connection_reset);
+    std::error_code read_error;
+    (void)peer_socket.read_some(asio::buffer(byte), read_error);
+    RUVIA_CHECK(read_error == asio::error::eof || read_error == asio::error::connection_reset);
 }
 
 RUVIA_TEST(db_prepared_statement_rejects_blank_sql_before_io) {
-    RUVIA_CHECK(throwsOn(
-        [] { (void)ruvia::prepareDbStatement("", {}, std::pmr::get_default_resource()); }));
-    RUVIA_CHECK(throwsOn(
-        [] { (void)ruvia::prepareDbStatement(" \n\t\r", {}, std::pmr::get_default_resource()); }));
+    RUVIA_CHECK(throws_on(
+        [] { (void)ruvia::prepare_db_statement("", {}, std::pmr::get_default_resource()); }));
+    RUVIA_CHECK(throws_on(
+        [] { (void)ruvia::prepare_db_statement(" \n\t\r", {}, std::pmr::get_default_resource()); }));
 
     const auto statement =
-        ruvia::prepareDbStatement("SELECT 1", {}, std::pmr::get_default_resource());
-    RUVIA_CHECK_EQ(std::string_view(statement.sql), std::string_view("SELECT 1"));
+        ruvia::prepare_db_statement("SELECT 1", {}, std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(std::string_view(statement.sql_), std::string_view("SELECT 1"));
 }
 
 RUVIA_TEST(database_operation_state_cold_borrows_and_start_exclusivity) {
-    struct Lease final {
-        int value;
+    struct lease final {
+        int value_;
     };
-    using State = ruvia::detail::DbOperationState<Lease>;
-    using Guard = ruvia::detail::DbOperationGuard<Lease>;
+    using state_type = ruvia::detail::db_operation_state<lease>;
+    using guard_type = ruvia::detail::db_operation_guard<lease>;
 
-    State state(Lease{7});
-    Guard first(state);
-    Guard second(state);
-    RUVIA_CHECK(state.active());
+    state_type state_value(lease{7});
+    guard_type first(state_value);
+    guard_type second(state_value);
+    RUVIA_CHECK(state_value.active());
 
     first.start();
-    RUVIA_CHECK_EQ(first.lease().value, 7);
-    bool coldLeaseRejected = false;
+    RUVIA_CHECK_EQ(first.lease().value_, 7);
+    bool cold_lease_rejected = false;
     try {
         (void)second.lease();
     } catch (const std::logic_error& error) {
-        coldLeaseRejected = std::string_view(error.what()) == "database operation is already in progress";
+        cold_lease_rejected = std::string_view(error.what()) == "database operation is already in progress";
     }
-    RUVIA_CHECK(coldLeaseRejected);
-    bool overlapRejected = false;
+    RUVIA_CHECK(cold_lease_rejected);
+    bool overlap_rejected = false;
     try {
         second.start();
     } catch (const std::logic_error& error) {
-        overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
+        overlap_rejected = std::string_view(error.what()) == "database operation is already in progress";
     }
-    RUVIA_CHECK(overlapRejected);
-    RUVIA_CHECK_EQ(first.lease().value, 7);
-    first.finishActive();
+    RUVIA_CHECK(overlap_rejected);
+    RUVIA_CHECK_EQ(first.lease().value_, 7);
+    first.finish_active();
 
     second.start();
-    RUVIA_CHECK_EQ(second.lease().value, 7);
-    second.finishActive();
-    RUVIA_CHECK(state.active());
+    RUVIA_CHECK_EQ(second.lease().value_, 7);
+    second.finish_active();
+    RUVIA_CHECK(state_value.active());
 }
 
 RUVIA_TEST(database_operation_guard_drops_cold_borrows_without_claiming_lease) {
-    struct Payload final {
-        int value;
+    struct payload final {
+        int value_;
     };
-    using State = ruvia::detail::DbOperationState<Payload>;
-    using Guard = ruvia::detail::DbOperationGuard<Payload>;
+    using state_type = ruvia::detail::db_operation_state<payload>;
+    using guard_type = ruvia::detail::db_operation_guard<payload>;
 
-    State state(Payload{7});
+    state_type state_value(payload{7});
     {
-        Guard first(state);
-        Guard second(state);
-        RUVIA_CHECK(state.active());
+        guard_type first(state_value);
+        guard_type second(state_value);
+        RUVIA_CHECK(state_value.active());
     }
-    RUVIA_CHECK(state.active());
+    RUVIA_CHECK(state_value.active());
 
-    Guard pending(state);
-    Guard failing(state);
+    guard_type pending(state_value);
+    guard_type failing(state_value);
     failing.start();
-    failing.finishFailed();
-    bool failedLeaseRejected = false;
+    failing.finish_failed();
+    bool failed_lease_rejected = false;
     try {
         (void)pending.lease();
     } catch (const std::logic_error& error) {
-        failedLeaseRejected = std::string_view(error.what()) == "database resource is not active";
+        failed_lease_rejected = std::string_view(error.what()) == "database resource is not active";
     }
-    RUVIA_CHECK(failedLeaseRejected);
-    bool failedStartRejected = false;
+    RUVIA_CHECK(failed_lease_rejected);
+    bool failed_start_rejected = false;
     try {
         pending.start();
     } catch (const std::logic_error& error) {
-        failedStartRejected = std::string_view(error.what()) == "database resource is not active";
+        failed_start_rejected = std::string_view(error.what()) == "database resource is not active";
     }
-    RUVIA_CHECK(failedStartRejected);
+    RUVIA_CHECK(failed_start_rejected);
 
-    State closedState(Payload{9});
-    Guard closedPending(closedState);
-    Guard closer(closedState);
+    state_type closed_state(payload{9});
+    guard_type closed_pending(closed_state);
+    guard_type closer(closed_state);
     closer.start();
-    closer.finishClosed();
-    bool closedLeaseRejected = false;
+    closer.finish_closed();
+    bool closed_lease_rejected = false;
     try {
-        (void)closedPending.lease();
+        (void)closed_pending.lease();
     } catch (const std::logic_error& error) {
-        closedLeaseRejected = std::string_view(error.what()) == "database resource is not active";
+        closed_lease_rejected = std::string_view(error.what()) == "database resource is not active";
     }
-    RUVIA_CHECK(closedLeaseRejected);
-    bool closedStartRejected = false;
+    RUVIA_CHECK(closed_lease_rejected);
+    bool closed_start_rejected = false;
     try {
-        closedPending.start();
+        closed_pending.start();
     } catch (const std::logic_error& error) {
-        closedStartRejected = std::string_view(error.what()) == "database resource is not active";
+        closed_start_rejected = std::string_view(error.what()) == "database resource is not active";
     }
-    RUVIA_CHECK(closedStartRejected);
+    RUVIA_CHECK(closed_start_rejected);
 }
 
 RUVIA_TEST(database_operation_guard_runs_cold_operation) {
-    struct Payload final {
-        int value;
+    struct payload final {
+        int value_;
     };
-    struct Owner final {
-        ruvia::detail::DbOperationState<Payload> state{Payload{7}};
+    struct owner final {
+        ruvia::detail::db_operation_state<payload> state_{payload{7}};
     };
-    using Guard = ruvia::detail::DbOperationGuard<Payload>;
-    auto operate = [](Guard operation, int& observedValue) -> ruvia::Task<void> {
+    using guard_type = ruvia::detail::db_operation_guard<payload>;
+    auto operate = [](guard_type operation, int& observed_value) -> ruvia::task<void> {
         operation.start();
-        observedValue = operation.lease().value;
-        operation.finishActive();
+        observed_value = operation.lease().value_;
+        operation.finish_active();
         co_return;
     };
 
-    Owner owner;
-    int observedValue = 0;
+    owner owner;
+    int observed_value = 0;
     {
-        Guard coldOne(owner.state);
-        Guard coldTwo(owner.state);
-        auto one = operate(std::move(coldOne), observedValue);
-        auto two = operate(std::move(coldTwo), observedValue);
-        RUVIA_CHECK(owner.state.active());
+        guard_type cold_one(owner.state_);
+        guard_type cold_two(owner.state_);
+        auto one = operate(std::move(cold_one), observed_value);
+        auto two = operate(std::move(cold_two), observed_value);
+        RUVIA_CHECK(owner.state_.active());
 
         asio::io_context io(1);
-        auto first = asio::co_spawn(io, ruvia::asAwaitable(std::move(one)), asio::use_future);
+        auto first = asio::co_spawn(io, ruvia::as_awaitable(std::move(one)), asio::use_future);
         io.run();
         first.get();
         io.restart();
-        auto second = asio::co_spawn(io, ruvia::asAwaitable(std::move(two)), asio::use_future);
+        auto second = asio::co_spawn(io, ruvia::as_awaitable(std::move(two)), asio::use_future);
         io.run();
         second.get();
     }
-    RUVIA_CHECK(owner.state.active());
-    RUVIA_CHECK_EQ(observedValue, 7);
+    RUVIA_CHECK(owner.state_.active());
+    RUVIA_CHECK_EQ(observed_value, 7);
 }
 
 RUVIA_TEST(database_operation_guarded_cold_tasks_release_owned_inputs_and_retain_results) {
-    using Lease = std::pmr::string;
-    using State = ruvia::detail::DbOperationState<Lease>;
-    using Guard = ruvia::detail::DbOperationGuard<Lease>;
-    ruvia::test::CountingMemoryResource memory;
+    using lease_type = std::pmr::string;
+    using state_type = ruvia::detail::db_operation_state<lease_type>;
+    using guard_type = ruvia::detail::db_operation_guard<lease_type>;
+    ruvia::test::counting_memory_resource memory;
 
-    auto operate = [](Guard operation, std::pmr::string input, std::pmr::memory_resource* resource)
-        -> ruvia::Task<std::pmr::string> {
+    auto operate = [](guard_type operation, std::pmr::string input, std::pmr::memory_resource* resource)
+        -> ruvia::task<std::pmr::string> {
         operation.start();
         std::pmr::string result(input, resource);
-        operation.finishActive();
+        operation.finish_active();
         co_return result;
     };
 
-    State state(Lease("lease"));
+    state_type state_value(lease_type("lease"));
     {
-        std::optional<std::pmr::string> firstResult;
-        std::optional<std::pmr::string> secondResult;
-        auto first = operate(Guard(state), std::pmr::string(256, 'a', &memory), &memory);
-        auto second = operate(Guard(state), std::pmr::string(256, 'b', &memory), &memory);
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
+        std::optional<std::pmr::string> first_result;
+        std::optional<std::pmr::string> second_result;
+        auto first = operate(guard_type(state_value), std::pmr::string(256, 'a', &memory), &memory);
+        auto second = operate(guard_type(state_value), std::pmr::string(256, 'b', &memory), &memory);
+        RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
         {
-            auto dropped = operate(Guard(state), std::pmr::string(256, 'x', &memory), &memory);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), 3U * owned_string_allocations());
+            auto dropped = operate(guard_type(state_value), std::pmr::string(256, 'x', &memory), &memory);
+            RUVIA_CHECK_EQ(memory.live_allocations(), 3U * owned_string_allocations());
         }
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
-        RUVIA_CHECK(state.active());
+        RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
+        RUVIA_CHECK(state_value.active());
 
         asio::io_context io(1);
         {
-            auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
+            auto first_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(first)), asio::use_future);
             io.run();
-            firstResult.emplace(firstFuture.get(), &memory);
+            first_result.emplace(first_future.get(), &memory);
         }
-        RUVIA_CHECK_EQ(firstResult->size(), 256U);
-        RUVIA_CHECK_EQ(firstResult->front(), 'a');
-        RUVIA_CHECK_EQ(firstResult->back(), 'a');
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
+        RUVIA_CHECK_EQ(first_result->size(), 256U);
+        RUVIA_CHECK_EQ(first_result->front(), 'a');
+        RUVIA_CHECK_EQ(first_result->back(), 'a');
+        RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
 
         io.restart();
         {
-            auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
+            auto second_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(second)), asio::use_future);
             io.run();
-            secondResult.emplace(secondFuture.get(), &memory);
+            second_result.emplace(second_future.get(), &memory);
         }
-        RUVIA_CHECK_EQ(secondResult->size(), 256U);
-        RUVIA_CHECK_EQ(secondResult->front(), 'b');
-        RUVIA_CHECK_EQ(secondResult->back(), 'b');
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
-        RUVIA_CHECK(state.active());
+        RUVIA_CHECK_EQ(second_result->size(), 256U);
+        RUVIA_CHECK_EQ(second_result->front(), 'b');
+        RUVIA_CHECK_EQ(second_result->back(), 'b');
+        RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
+        RUVIA_CHECK(state_value.active());
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
-    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    RUVIA_CHECK_EQ(memory.live_allocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(database_operation_guarded_overlapping_task_does_not_damage_first) {
-    using Lease = std::pmr::string;
-    using State = ruvia::detail::DbOperationState<Lease>;
-    using Guard = ruvia::detail::DbOperationGuard<Lease>;
-    struct Gate final {
+    using lease_type = std::pmr::string;
+    using state_type = ruvia::detail::db_operation_state<lease_type>;
+    using guard_type = ruvia::detail::db_operation_guard<lease_type>;
+    struct gate final {
         [[nodiscard]] bool await_ready() const noexcept {
             return false;
         }
@@ -769,218 +769,218 @@ RUVIA_TEST(database_operation_guarded_overlapping_task_does_not_damage_first) {
         }
         std::coroutine_handle<> continuation_{};
     };
-    ruvia::test::CountingMemoryResource memory;
-    auto operate = [](Guard operation, Gate& gate, std::pmr::string input,
-                       std::pmr::memory_resource* resource) -> ruvia::Task<std::pmr::string> {
+    ruvia::test::counting_memory_resource memory;
+    auto operate = [](guard_type operation, gate& gate_value, std::pmr::string input,
+                       std::pmr::memory_resource* resource) -> ruvia::task<std::pmr::string> {
         operation.start();
-        co_await gate;
-        std::pmr::string result(input, resource);
-        operation.finishActive();
-        co_return result;
+        co_await gate_value;
+        std::pmr::string result_value(input, resource);
+        operation.finish_active();
+        co_return result_value;
     };
 
-    State state(Lease("lease"));
+    state_type state_value(lease_type("lease"));
     {
-        Gate gate;
-        auto first = operate(Guard(state), gate, std::pmr::string(256, 'a', &memory), &memory);
-        auto second = operate(Guard(state), gate, std::pmr::string(256, 'b', &memory), &memory);
+        gate gate;
+        auto first = operate(guard_type(state_value), gate, std::pmr::string(256, 'a', &memory), &memory);
+        auto second = operate(guard_type(state_value), gate, std::pmr::string(256, 'b', &memory), &memory);
         asio::io_context io(1);
-        auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
+        auto first_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(first)), asio::use_future);
         io.poll();
         RUVIA_CHECK(gate.continuation_ != nullptr);
 
-        auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
+        auto second_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(second)), asio::use_future);
         io.restart();
         // The first co_spawn still owns work while suspended at the gate.
         // Only drain ready handlers for the rejected overlapping operation.
         io.poll();
-        bool overlapRejected = false;
+        bool overlap_rejected = false;
         try {
-            (void)secondFuture.get();
+            (void)second_future.get();
         } catch (const std::logic_error& error) {
-            overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
+            overlap_rejected = std::string_view(error.what()) == "database operation is already in progress";
         }
-        RUVIA_CHECK(overlapRejected);
-        RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
+        RUVIA_CHECK(overlap_rejected);
+        RUVIA_CHECK_EQ(memory.live_allocations(), owned_string_allocations());
 
         io.restart();
         gate.resume();
         io.run();
-        const auto result = firstFuture.get();
-        RUVIA_CHECK_EQ(result.size(), 256U);
-        RUVIA_CHECK_EQ(result.front(), 'a');
-        RUVIA_CHECK(state.active());
+        const auto result_value = first_future.get();
+        RUVIA_CHECK_EQ(result_value.size(), 256U);
+        RUVIA_CHECK_EQ(result_value.front(), 'a');
+        RUVIA_CHECK(state_value.active());
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
-    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    RUVIA_CHECK_EQ(memory.live_allocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(database_operation_guarded_failure_rejects_pending_task_and_releases_inputs) {
-    using Lease = std::pmr::string;
-    using State = ruvia::detail::DbOperationState<Lease>;
-    using Guard = ruvia::detail::DbOperationGuard<Lease>;
-    ruvia::test::CountingMemoryResource memory;
+    using lease_type = std::pmr::string;
+    using state_type = ruvia::detail::db_operation_state<lease_type>;
+    using guard_type = ruvia::detail::db_operation_guard<lease_type>;
+    ruvia::test::counting_memory_resource memory;
 
-    auto fail = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+    auto fail = [](guard_type operation, std::pmr::string input) -> ruvia::task<void> {
         operation.start();
         (void)input;
         throw std::runtime_error("operation failed");
         co_return;
     };
-    auto complete = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+    auto complete_value = [](guard_type operation, std::pmr::string input) -> ruvia::task<void> {
         operation.start();
         (void)input;
-        operation.finishActive();
+        operation.finish_active();
         co_return;
     };
 
-    State state(Lease("lease"));
-    auto failed = fail(Guard(state), std::pmr::string(256, 'f', &memory));
-    auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
+    state_type state_value(lease_type("lease"));
+    auto failed = fail(guard_type(state_value), std::pmr::string(256, 'f', &memory));
+    auto pending = complete_value(guard_type(state_value), std::pmr::string(256, 'p', &memory));
+    RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
 
     asio::io_context io(1);
-    auto failedFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(failed)), asio::use_future);
+    auto failed_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(failed)), asio::use_future);
     io.run();
-    bool failureObserved = false;
+    bool failure_observed = false;
     try {
-        failedFuture.get();
+        failed_future.get();
     } catch (const std::runtime_error& error) {
-        failureObserved = std::string_view(error.what()) == "operation failed";
+        failure_observed = std::string_view(error.what()) == "operation failed";
     }
-    RUVIA_CHECK(failureObserved);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
+    RUVIA_CHECK(failure_observed);
+    RUVIA_CHECK_EQ(memory.live_allocations(), owned_string_allocations());
 
     io.restart();
-    auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
+    auto pending_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(pending)), asio::use_future);
     io.run();
-    bool pendingRejected = false;
+    bool pending_rejected = false;
     try {
-        pendingFuture.get();
+        pending_future.get();
     } catch (const std::logic_error& error) {
-        pendingRejected = std::string_view(error.what()) == "database resource is not active";
+        pending_rejected = std::string_view(error.what()) == "database resource is not active";
     }
-    RUVIA_CHECK(pendingRejected);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
-    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    RUVIA_CHECK(pending_rejected);
+    RUVIA_CHECK_EQ(memory.live_allocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(database_operation_guarded_started_cancellation_fails_lease_and_releases_inputs) {
-    using Lease = std::pmr::string;
-    using State = ruvia::detail::DbOperationState<Lease>;
-    using Guard = ruvia::detail::DbOperationGuard<Lease>;
-    ruvia::test::CountingMemoryResource memory;
-    auto cancel = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+    using lease_type = std::pmr::string;
+    using state_type = ruvia::detail::db_operation_state<lease_type>;
+    using guard_type = ruvia::detail::db_operation_guard<lease_type>;
+    ruvia::test::counting_memory_resource memory;
+    auto cancel = [](guard_type operation, std::pmr::string input) -> ruvia::task<void> {
         operation.start();
         (void)input;
-        throw ruvia::DbError(ruvia::DbError::Code::kCancelled, ruvia::DbDriver::kPostgreSql, "cancelled");
+        throw ruvia::db_error(ruvia::db_error::code_type::cancelled, ruvia::db_driver::postgresql, "cancelled");
         co_return;
     };
-    auto complete = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+    auto complete_value = [](guard_type operation, std::pmr::string input) -> ruvia::task<void> {
         operation.start();
         (void)input;
-        operation.finishActive();
+        operation.finish_active();
         co_return;
     };
 
-    State state(Lease("lease"));
+    state_type state_value(lease_type("lease"));
     {
-        auto cold = cancel(Guard(state), std::pmr::string(256, 'c', &memory));
-        auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
+        auto cold = cancel(guard_type(state_value), std::pmr::string(256, 'c', &memory));
+        auto pending = complete_value(guard_type(state_value), std::pmr::string(256, 'p', &memory));
+        RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
         asio::io_context io(1);
-        auto future = asio::co_spawn(io, ruvia::asAwaitable(std::move(cold)), asio::use_future);
+        auto future = asio::co_spawn(io, ruvia::as_awaitable(std::move(cold)), asio::use_future);
         io.run();
-        bool cancellationObserved = false;
+        bool cancellation_observed = false;
         try {
             future.get();
-        } catch (const ruvia::DbError& error) {
-            cancellationObserved = error.code() == ruvia::DbError::Code::kCancelled;
+        } catch (const ruvia::db_error& error) {
+            cancellation_observed = error.code() == ruvia::db_error::code_type::cancelled;
         }
-        RUVIA_CHECK(cancellationObserved);
-        RUVIA_CHECK(!state.active());
-        RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
+        RUVIA_CHECK(cancellation_observed);
+        RUVIA_CHECK(!state_value.active());
+        RUVIA_CHECK_EQ(memory.live_allocations(), owned_string_allocations());
 
         io.restart();
-        auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
+        auto pending_future = asio::co_spawn(io, ruvia::as_awaitable(std::move(pending)), asio::use_future);
         io.run();
-        bool pendingRejected = false;
+        bool pending_rejected = false;
         try {
-            pendingFuture.get();
+            pending_future.get();
         } catch (const std::logic_error& error) {
-            pendingRejected = std::string_view(error.what()) == "database resource is not active";
+            pending_rejected = std::string_view(error.what()) == "database resource is not active";
         }
-        RUVIA_CHECK(pendingRejected);
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+        RUVIA_CHECK(pending_rejected);
+        RUVIA_CHECK_EQ(memory.live_allocations(), 0U);
     }
-    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(database_operation_guard_releases_before_scoped_join_expires_owner) {
     asio::io_context io;
     ruvia::operation_scope scope;
-    ruvia::test::CountingMemoryResource memory;
-    GuardedLeaseState state(GuardedLease("lease"));
-    bool ownerExpired = false;
-    GuardedLeaseCapability capability(scope, state, ownerExpired);
-    GuardedLeaseGate gate;
+    ruvia::test::counting_memory_resource memory;
+    guarded_lease_state_type state_value(guarded_lease_type("lease"));
+    bool owner_expired = false;
+    guarded_lease_capability capability(scope, state_value, owner_expired);
+    guarded_lease_gate gate;
 
     auto operation = ruvia::make_scoped_operation(scope,
-        failGuardedLeaseAfterGate(GuardedLeaseGuard(state), gate, std::pmr::string(256, 'j', &memory)));
+        fail_guarded_lease_after_gate(guarded_lease_guard_type(state_value), gate, std::pmr::string(256, 'j', &memory)));
     auto overlap = ruvia::make_scoped_operation(scope,
-        completeGuardedLease(GuardedLeaseGuard(state), std::pmr::string(256, 'o', &memory)));
+        complete_guarded_lease(guarded_lease_guard_type(state_value), std::pmr::string(256, 'o', &memory)));
     auto runner = asio::co_spawn(io,
-        ruvia::asAwaitable(awaitScopedOperation(operation)), asio::use_future);
+        ruvia::as_awaitable(await_scoped_operation(operation)), asio::use_future);
     io.poll();
     RUVIA_CHECK(gate.continuation_ != nullptr);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
+    RUVIA_CHECK_EQ(memory.live_allocations(), 2U * owned_string_allocations());
 
-    auto overlapRunner = asio::co_spawn(io,
-        ruvia::asAwaitable(awaitScopedOperation(overlap)), asio::use_future);
+    auto overlap_runner = asio::co_spawn(io,
+        ruvia::as_awaitable(await_scoped_operation(overlap)), asio::use_future);
     io.restart();
     io.poll();
-    bool overlapRejected = false;
+    bool overlap_rejected = false;
     try {
-        overlapRunner.get();
+        overlap_runner.get();
     } catch (const std::logic_error& error) {
-        overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
+        overlap_rejected = std::string_view(error.what()) == "database operation is already in progress";
     }
-    RUVIA_CHECK(overlapRejected);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
+    RUVIA_CHECK(overlap_rejected);
+    RUVIA_CHECK_EQ(memory.live_allocations(), owned_string_allocations());
 
     auto joiner = asio::co_spawn(io,
-        ruvia::asAwaitable(joinScopedOperations(scope)), asio::use_future);
+        ruvia::as_awaitable(join_scoped_operations(scope)), asio::use_future);
     io.restart();
     io.poll();
     RUVIA_CHECK(!scope.active());
-    RUVIA_CHECK(!ownerExpired);
+    RUVIA_CHECK(!owner_expired);
 
     gate.resume();
     io.restart();
     io.run();
-    bool operationFailed = false;
+    bool operation_failed = false;
     try {
         runner.get();
     } catch (const std::runtime_error& error) {
-        operationFailed = std::string_view(error.what()) == "scoped database operation failed";
+        operation_failed = std::string_view(error.what()) == "scoped database operation failed";
     }
     joiner.get();
 
-    RUVIA_CHECK(operationFailed);
-    RUVIA_CHECK(ownerExpired);
-    RUVIA_CHECK(!state.active());
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
-    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    RUVIA_CHECK(operation_failed);
+    RUVIA_CHECK(owner_expired);
+    RUVIA_CHECK(!state_value.active());
+    RUVIA_CHECK_EQ(memory.live_allocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) {
-    struct Payload final {
-        int value;
+    struct payload final {
+        int value_;
     };
-    using State = ruvia::detail::DbOperationState<Payload>;
-    using Guard = ruvia::detail::DbOperationGuard<Payload>;
+    using state_type = ruvia::detail::db_operation_state<payload>;
+    using guard_type = ruvia::detail::db_operation_guard<payload>;
 
-    struct ResumeGate final {
+    struct resume_gate final {
         [[nodiscard]] bool await_ready() const noexcept {
             return false;
         }
@@ -999,121 +999,121 @@ RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) 
         std::coroutine_handle<> continuation_{};
     };
 
-    struct Owner final {
-        Owner()
-            : state(std::make_unique<State>(Payload{7})) {}
+    struct owner final {
+        owner()
+            : state_(std::make_unique<state_type>(payload{7})) {}
 
-        Owner(const Owner&) = delete;
-        Owner& operator=(const Owner&) = delete;
-        Owner(Owner&&) noexcept = default;
+        owner(const owner&) = delete;
+        owner& operator=(const owner&) = delete;
+        owner(owner&&) noexcept = default;
 
-        std::unique_ptr<State> state;
+        std::unique_ptr<state_type> state_;
     };
 
-    auto operate = [](Guard operation, ResumeGate& gate, int& observedValue) -> ruvia::Task<void> {
+    auto operate = [](guard_type operation, resume_gate& gate_value, int& observed_value) -> ruvia::task<void> {
         operation.start();
-        co_await gate;
-        observedValue = operation.lease().value;
-        operation.finishActive();
+        co_await gate_value;
+        observed_value = operation.lease().value_;
+        operation.finish_active();
     };
 
-    Owner source;
-    ResumeGate gate;
-    int observedValue = 0;
-    Guard reservation(*source.state);
-    auto task = operate(std::move(reservation), gate, observedValue);
+    owner source;
+    resume_gate gate;
+    int observed_value = 0;
+    guard_type reservation(*source.state_);
+    auto task_value = operate(std::move(reservation), gate, observed_value);
 
     asio::io_context io(1);
     auto future =
-        asio::co_spawn(io, ruvia::asAwaitable(std::move(task)), asio::use_future);
+        asio::co_spawn(io, ruvia::as_awaitable(std::move(task_value)), asio::use_future);
     io.poll();
     RUVIA_CHECK(gate.continuation_ != nullptr);
 
-    Owner moved(std::move(source));
-    RUVIA_CHECK(source.state == nullptr);
+    owner moved(std::move(source));
+    RUVIA_CHECK(source.state_ == nullptr);
     io.restart();
     gate.resume();
     io.run();
     future.get();
 
-    RUVIA_CHECK_EQ(observedValue, 7);
-    RUVIA_CHECK(moved.state->active());
+    RUVIA_CHECK_EQ(observed_value, 7);
+    RUVIA_CHECK(moved.state_->active());
 }
 
 RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {
-    ruvia::operation_scope operationScope;
-    auto coldTask = []() -> ruvia::Task<void> { co_return; }();
+    ruvia::operation_scope operation_scope;
+    auto cold_task = []() -> ruvia::task<void> { co_return; }();
     {
-        auto operation = ruvia::make_scoped_operation(operationScope, std::move(coldTask));
-        RUVIA_CHECK(operationScope.has_pending_operations());
+        auto operation = ruvia::make_scoped_operation(operation_scope, std::move(cold_task));
+        RUVIA_CHECK(operation_scope.has_pending_operations());
     }
-    RUVIA_CHECK(!operationScope.has_pending_operations());
+    RUVIA_CHECK(!operation_scope.has_pending_operations());
 }
 
 RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
-    const ruvia::DbValue nullValue(nullptr);
-    const ruvia::DbValue textValue("value");
-    const ruvia::DbValue borrowedTextValue(ruvia::BorrowedText("borrowed-value"));
-    const ruvia::DbValue signedValue(-7);
-    const ruvia::DbValue unsignedValue(std::uint64_t{9});
-    const ruvia::DbValue doubleValue(1.5);
-    const ruvia::DbValue boolValue(true);
-    using ValueAccess = ruvia::detail::DbValueAccess;
-    RUVIA_CHECK(ValueAccess::type(nullValue) == ruvia::detail::DbValueType::kNull);
-    RUVIA_CHECK(ValueAccess::type(textValue) == ruvia::detail::DbValueType::kString);
-    RUVIA_CHECK_EQ(ValueAccess::text(textValue), std::string_view("value"));
-    RUVIA_CHECK(ValueAccess::type(borrowedTextValue) == ruvia::detail::DbValueType::kString);
-    RUVIA_CHECK_EQ(ValueAccess::text(borrowedTextValue), std::string_view("borrowed-value"));
-    RUVIA_CHECK(ValueAccess::type(signedValue) == ruvia::detail::DbValueType::kSigned);
-    RUVIA_CHECK_EQ(ValueAccess::signedValue(signedValue), std::int64_t{-7});
-    RUVIA_CHECK(ValueAccess::type(unsignedValue) == ruvia::detail::DbValueType::kUnsigned);
-    RUVIA_CHECK_EQ(ValueAccess::unsignedValue(unsignedValue), std::uint64_t{9});
-    RUVIA_CHECK(ValueAccess::type(doubleValue) == ruvia::detail::DbValueType::kDouble);
-    RUVIA_CHECK_EQ(ValueAccess::doubleValue(doubleValue), 1.5);
-    RUVIA_CHECK(ValueAccess::type(boolValue) == ruvia::detail::DbValueType::kBool);
-    RUVIA_CHECK(ValueAccess::boolValue(boolValue));
+    const ruvia::db_value null_value(nullptr);
+    const ruvia::db_value text_value("value");
+    const ruvia::db_value borrowed_text_value(ruvia::borrowed_text("borrowed-value"));
+    const ruvia::db_value signed_value(-7);
+    const ruvia::db_value unsigned_value(std::uint64_t{9});
+    const ruvia::db_value double_value_value(1.5);
+    const ruvia::db_value bool_value_value(true);
+    using value_access_type = ruvia::detail::db_value_access;
+    RUVIA_CHECK(value_access_type::type(null_value) == ruvia::detail::db_value_type::null);
+    RUVIA_CHECK(value_access_type::type(text_value) == ruvia::detail::db_value_type::string);
+    RUVIA_CHECK_EQ(value_access_type::text(text_value), std::string_view("value"));
+    RUVIA_CHECK(value_access_type::type(borrowed_text_value) == ruvia::detail::db_value_type::string);
+    RUVIA_CHECK_EQ(value_access_type::text(borrowed_text_value), std::string_view("borrowed-value"));
+    RUVIA_CHECK(value_access_type::type(signed_value) == ruvia::detail::db_value_type::signed_value);
+    RUVIA_CHECK_EQ(value_access_type::signed_value(signed_value), std::int64_t{-7});
+    RUVIA_CHECK(value_access_type::type(unsigned_value) == ruvia::detail::db_value_type::unsigned_value);
+    RUVIA_CHECK_EQ(value_access_type::unsigned_value(unsigned_value), std::uint64_t{9});
+    RUVIA_CHECK(value_access_type::type(double_value_value) == ruvia::detail::db_value_type::double_value);
+    RUVIA_CHECK_EQ(value_access_type::get_double_value(double_value_value), 1.5);
+    RUVIA_CHECK(value_access_type::type(bool_value_value) == ruvia::detail::db_value_type::bool_value);
+    RUVIA_CHECK(value_access_type::get_bool_value(bool_value_value));
 
-    auto ownedRow = ruvia::detail::DbResultAccess::ownedRow(nullptr);
-    auto& fields = ruvia::detail::DbResultAccess::ownedFields(ownedRow);
-    auto& columnNames = ruvia::detail::DbResultAccess::ownedColumnNames(ownedRow);
-    columnNames.emplace_back("label");
-    fields.push_back(ruvia::detail::DbResultAccess::ownedField("owned", nullptr));
-    RUVIA_CHECK_EQ(ownedRow.size(), std::size_t{1});
-    RUVIA_CHECK(ownedRow[0].value() == std::optional<std::string_view>("owned"));
-    RUVIA_CHECK(ownedRow["label"].as<std::string>() == std::optional<std::string>("owned"));
+    auto owned_row = ruvia::detail::db_result_access::owned_row(nullptr);
+    auto& fields_value = ruvia::detail::db_result_access::owned_fields(owned_row);
+    auto& column_names = ruvia::detail::db_result_access::owned_column_names(owned_row);
+    column_names.emplace_back("label");
+    fields_value.push_back(ruvia::detail::db_result_access::owned_field("owned", nullptr));
+    RUVIA_CHECK_EQ(owned_row.size(), std::size_t{1});
+    RUVIA_CHECK(owned_row[0].value() == std::optional<std::string_view>("owned"));
+    RUVIA_CHECK(owned_row["label"].as<std::string>() == std::optional<std::string>("owned"));
 
-    auto movedRow = std::move(ownedRow);
-    RUVIA_CHECK(ownedRow.empty());
-    RUVIA_CHECK_EQ(movedRow.size(), std::size_t{1});
+    auto moved_row = std::move(owned_row);
+    RUVIA_CHECK(owned_row.empty());
+    RUVIA_CHECK_EQ(moved_row.size(), std::size_t{1});
 
-    auto borrowedField = ruvia::detail::DbResultAccess::borrowedField("borrowed", nullptr);
-    const std::pmr::string borrowedColumn("borrowed_column");
-    auto borrowedRow =
-        ruvia::detail::DbResultAccess::borrowedRow(&borrowedField, 1, &borrowedColumn, 1, nullptr);
-    RUVIA_CHECK(borrowedRow["borrowed_column"].as<std::string_view>() ==
+    auto borrowed_field = ruvia::detail::db_result_access::borrowed_field("borrowed", nullptr);
+    const std::pmr::string borrowed_column("borrowed_column");
+    auto borrowed_row =
+        ruvia::detail::db_result_access::borrowed_row(&borrowed_field, 1, &borrowed_column, 1, nullptr);
+    RUVIA_CHECK(borrowed_row["borrowed_column"].as<std::string_view>() ==
                 std::optional<std::string_view>("borrowed"));
 
-    auto movedField = std::move(borrowedField);
-    // DbField defines an observable empty moved-from state; this assertion is
+    auto moved_field = std::move(borrowed_field);
+    // db_field defines an observable empty moved-from state; this assertion is
     // the contract under test rather than an accidental post-move use.
-    RUVIA_CHECK(!borrowedField.value().has_value());  // NOLINT(clang-analyzer-cplusplus.Move)
-    RUVIA_CHECK(movedField.value() == std::optional<std::string_view>("borrowed"));
-    auto numeric = ruvia::detail::DbResultAccess::ownedField("-42", nullptr);
+    RUVIA_CHECK(!borrowed_field.value().has_value());  // NOLINT(clang-analyzer-cplusplus.Move)
+    RUVIA_CHECK(moved_field.value() == std::optional<std::string_view>("borrowed"));
+    auto numeric = ruvia::detail::db_result_access::owned_field("-42", nullptr);
     RUVIA_CHECK(numeric.as<std::int64_t>() == std::optional<std::int64_t>(-42));
-    auto boolean = ruvia::detail::DbResultAccess::ownedField("t", nullptr);
+    auto boolean = ruvia::detail::db_result_access::owned_field("t", nullptr);
     RUVIA_CHECK(boolean.as<bool>() == std::optional<bool>(true));
-    auto null = ruvia::detail::DbResultAccess::nullField(nullptr);
+    auto null = ruvia::detail::db_result_access::null_field(nullptr);
     RUVIA_CHECK(!null.as<std::int64_t>().has_value());
-    auto invalid = ruvia::detail::DbResultAccess::ownedField("not-a-number", nullptr);
+    auto invalid = ruvia::detail::db_result_access::owned_field("not-a-number", nullptr);
     try {
         (void)invalid.as<std::int64_t>();
         RUVIA_CHECK(false);
-    } catch (const ruvia::DbConversionError& error) {
-        RUVIA_CHECK(error.code() == ruvia::DbConversionError::Code::kInvalidFormat);
+    } catch (const ruvia::db_conversion_error& error) {
+        RUVIA_CHECK(error.code() == ruvia::db_conversion_error::code_type::invalid_format);
     }
 
     try {
-        (void)movedRow["missing"];
+        (void)moved_row["missing"];
         RUVIA_CHECK(false);
     } catch (const std::out_of_range&) {
     }
@@ -1122,21 +1122,21 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
 RUVIA_TEST(db_query_rows_and_execution_metadata_have_independent_storage) {
     int releases = 0;
     {
-        auto result = ruvia::detail::DbResultAccess::makeResult(nullptr);
-        auto& columnNames = ruvia::detail::DbResultAccess::columnNames(result);
-        auto& fields = ruvia::detail::DbResultAccess::fields(result);
-        auto& rows = ruvia::detail::DbResultAccess::rows(result);
-        columnNames.emplace_back("value");
-        fields.push_back(ruvia::detail::DbResultAccess::borrowedField("stable", nullptr));
-        rows.push_back(ruvia::detail::DbResultAccess::borrowedRow(
-            fields.data(), fields.size(), columnNames.data(), columnNames.size(), nullptr));
-        ruvia::detail::DbResultAccess::ownRawResult(
-            result, &releases, [](void* value) noexcept { ++*static_cast<int*>(value); });
-        const auto execution = ruvia::detail::DbResultAccess::makeExecResult(7);
+        auto result_value = ruvia::detail::db_result_access::make_result(nullptr);
+        auto& column_names = ruvia::detail::db_result_access::column_names(result_value);
+        auto& fields_value = ruvia::detail::db_result_access::fields(result_value);
+        auto& rows = ruvia::detail::db_result_access::rows(result_value);
+        column_names.emplace_back("value");
+        fields_value.push_back(ruvia::detail::db_result_access::borrowed_field("stable", nullptr));
+        rows.push_back(ruvia::detail::db_result_access::borrowed_row(
+            fields_value.data(), fields_value.size(), column_names.data(), column_names.size(), nullptr));
+        ruvia::detail::db_result_access::own_raw_result(
+            result_value, &releases, [](void* value) noexcept { ++*static_cast<int*>(value); });
+        const auto execution = ruvia::detail::db_result_access::make_exec_result(7);
 
-        auto moved = std::move(result);
-        RUVIA_CHECK_EQ(execution.affectedRows(), std::uint64_t{7});
-        RUVIA_CHECK(!execution.lastInsertId().has_value());
+        auto moved = std::move(result_value);
+        RUVIA_CHECK_EQ(execution.affected_rows(), std::uint64_t{7});
+        RUVIA_CHECK(!execution.last_insert_id().has_value());
         RUVIA_CHECK_EQ(moved.size(), std::size_t{1});
         RUVIA_CHECK(moved[0]["value"].value() == std::optional<std::string_view>("stable"));
         RUVIA_CHECK_EQ(releases, 0);
@@ -1145,123 +1145,123 @@ RUVIA_TEST(db_query_rows_and_execution_metadata_have_independent_storage) {
 }
 
 RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
-    DbRegistryTestRuntime runtime;
+    db_registry_test_runtime runtime;
 #ifdef RUVIA_ENABLE_MARIADB
-    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
+    const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb};
 #else
-    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
+    const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
 #endif
-    const std::array<ruvia::detail::DbDefinition, 2> definitions{{
-        dbDefinition("analytics", config),
-        dbDefinition("default", config),
+    const std::array<ruvia::detail::db_definition, 2> definitions{{
+        db_definition("analytics", config),
+        db_definition("default", config),
     }};
-    ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
-    ruvia::operation_scope operationScope;
+    ruvia::detail::db_registry registry(
+        runtime.io_context_, runtime.worker_, std::pmr::get_default_resource(), definitions);
+    ruvia::operation_scope operation_scope;
 
-    bool defaultResolved = true;
-    bool aliasResolved = true;
+    bool default_resolved = true;
+    bool alias_resolved = true;
     try {
-        (void)registry.get(operationScope);
+        (void)registry.get(operation_scope);
     } catch (...) {
-        defaultResolved = false;
+        default_resolved = false;
     }
     try {
-        (void)registry.get("analytics", operationScope);
+        (void)registry.get("analytics", operation_scope);
     } catch (...) {
-        aliasResolved = false;
+        alias_resolved = false;
     }
-    RUVIA_CHECK(defaultResolved);
-    RUVIA_CHECK(aliasResolved);
+    RUVIA_CHECK(default_resolved);
+    RUVIA_CHECK(alias_resolved);
 }
 
 RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
-    DbRegistryTestRuntime runtime;
-    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker,
-        std::pmr::get_default_resource(), std::span<const ruvia::detail::DbDefinition>());
-    ruvia::operation_scope operationScope;
+    db_registry_test_runtime runtime;
+    ruvia::detail::db_registry registry(runtime.io_context_, runtime.worker_,
+        std::pmr::get_default_resource(), std::span<const ruvia::detail::db_definition>());
+    ruvia::operation_scope operation_scope;
 
-    bool defaultTyped = false;
-    bool aliasTyped = false;
+    bool default_typed = false;
+    bool alias_typed = false;
     try {
-        (void)registry.get(operationScope);
-    } catch (const ruvia::DbError& error) {
-        defaultTyped =
-            error.code() == ruvia::DbError::Code::kNotConfigured && !error.driver().has_value();
+        (void)registry.get(operation_scope);
+    } catch (const ruvia::db_error& error) {
+        default_typed =
+            error.code() == ruvia::db_error::code_type::not_configured && !error.driver().has_value();
     }
     try {
-        (void)registry.get("missing", operationScope);
-    } catch (const ruvia::DbError& error) {
-        aliasTyped =
-            error.code() == ruvia::DbError::Code::kNotConfigured && !error.driver().has_value();
+        (void)registry.get("missing", operation_scope);
+    } catch (const ruvia::db_error& error) {
+        alias_typed =
+            error.code() == ruvia::db_error::code_type::not_configured && !error.driver().has_value();
     }
-    RUVIA_CHECK(defaultTyped);
-    RUVIA_CHECK(aliasTyped);
+    RUVIA_CHECK(default_typed);
+    RUVIA_CHECK(alias_typed);
 }
 
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
-    TrackingResource sourceResource;
-    std::pmr::unsynchronized_pool_resource targetResource;
-    DbRegistryTestRuntime runtime;
-    std::optional<ruvia::detail::DbDefinition> definition;
-    auto config = testDbConfig();
-    config.host = std::string(80, 'h');
-    config.tls.mode = ruvia::client_tls_mode::disabled;
-    config.username = std::string(80, 'u');
-    config.password = std::string(80, 'p');
-    config.database = std::string(80, 'd');
-    definition.emplace(dbDefinition("default", config, &sourceResource));
+    tracking_resource source_resource;
+    std::pmr::unsynchronized_pool_resource target_resource;
+    db_registry_test_runtime runtime;
+    std::optional<ruvia::detail::db_definition> definition;
+    auto config = test_db_config();
+    config.host_ = std::string(80, 'h');
+    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+    config.username_ = std::string(80, 'u');
+    config.password_ = std::string(80, 'p');
+    config.database_ = std::string(80, 'd');
+    definition.emplace(db_definition("default", config, &source_resource));
 
-    std::optional<ruvia::detail::DbRegistry> registry;
-    registry.emplace(runtime.ioContext, runtime.worker, &targetResource,
-        std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
+    std::optional<ruvia::detail::db_registry> registry;
+    registry.emplace(runtime.io_context_, runtime.worker_, &target_resource,
+        std::span<const ruvia::detail::db_definition>(&*definition, 1));
     definition.reset();
-    sourceResource.release();
+    source_resource.release();
     registry.reset();
 
-    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
+    RUVIA_CHECK(!source_resource.deallocated_after_release());
 }
 
 RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
-    DbRegistryTestRuntime runtime;
+    db_registry_test_runtime runtime;
 #ifdef RUVIA_ENABLE_MARIADB
-    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
+    const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb};
 #else
-    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
+    const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
 #endif
-    const std::array definitions{dbDefinition("default", config)};
-    ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
-    ruvia::operation_scope operationScope;
-    auto handle = registry.get(operationScope);
-    auto copiedHandle = handle;
-    operationScope.close();
+    const std::array definitions{db_definition("default", config)};
+    ruvia::detail::db_registry registry(
+        runtime.io_context_, runtime.worker_, std::pmr::get_default_resource(), definitions);
+    ruvia::operation_scope operation_scope;
+    auto handle = registry.get(operation_scope);
+    auto copied_handle = handle;
+    operation_scope.close();
 
-    bool handleRejected = false;
-    bool copyRejected = false;
+    bool handle_rejected = false;
+    bool copy_rejected = false;
     try {
         (void)handle.query("SELECT 1");
     } catch (const std::logic_error&) {
-        handleRejected = true;
+        handle_rejected = true;
     }
     try {
-        (void)copiedHandle.query("SELECT 1");
+        (void)copied_handle.query("SELECT 1");
     } catch (const std::logic_error&) {
-        copyRejected = true;
+        copy_rejected = true;
     }
-    RUVIA_CHECK(handleRejected);
-    RUVIA_CHECK(copyRejected);
+    RUVIA_CHECK(handle_rejected);
+    RUVIA_CHECK(copy_rejected);
 }
 
 RUVIA_TEST(db_migrator_validates_before_opening_connection) {
-    const std::array<ruvia::DbMigration, 2> migrations{{
-        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 1"}},
-        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 2"}},
+    const std::array<ruvia::db_migration, 2> migrations{{
+        ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
+        ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
     }};
     bool rejected = false;
     try {
-        (void)ruvia::DbMigrator::migrate(
-            testDbConfig(), std::span<const ruvia::DbMigration>(migrations));
+        (void)ruvia::db_migrator::migrate(
+            test_db_config(), std::span<const ruvia::db_migration>(migrations));
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view(error.what()) ==
                    "database migration ids must be unique, including case";
@@ -1271,13 +1271,13 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
-    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
-    ruvia::DbMigratorOptions options;
-    options.lockTimeout = std::chrono::seconds::max();
+    auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
+    ruvia::db_migrator_options options;
+    options.lock_timeout_ = std::chrono::seconds::max();
 
     bool rejected = false;
     try {
-        (void)ruvia::DbMigrator::migrate(config, std::span<const ruvia::DbMigration>(), options);
+        (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(), options);
     } catch (const std::invalid_argument& error) {
         rejected =
             std::string_view(error.what()) ==
@@ -1288,130 +1288,128 @@ RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_co
 #endif
 
 RUVIA_TEST(db_migrator_copies_public_configuration) {
-    TrackingResource targetResource;
-    std::optional<ruvia::DbMigrator> migrator;
+    tracking_resource target_resource;
+    std::optional<ruvia::db_migrator> migrator;
     {
-        auto config = testDbConfig();
-        config.host = std::string(80, 'h');
-        config.tls.mode = ruvia::client_tls_mode::disabled;
-        config.username = std::string(80, 'u');
-        config.password = std::string(80, 'p');
-        config.database = std::string(80, 'd');
-        ruvia::DbMigratorOptions options{
-            .table = std::string(60, 't'),
-            .lockTimeout = std::chrono::seconds(30),
-            .resource = &targetResource,
+        auto config = test_db_config();
+        config.host_ = std::string(80, 'h');
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        config.username_ = std::string(80, 'u');
+        config.password_ = std::string(80, 'p');
+        config.database_ = std::string(80, 'd');
+        ruvia::db_migrator_options options{
+            .table_ = std::string(60, 't'),
+            .lock_timeout_ = std::chrono::seconds(30),
+            .resource_ = &target_resource,
         };
         migrator.emplace(config, options);
     }
     // Opaque owner + four long DB strings + the long migration table all use
     // the caller's resource rather than their public std::string allocators.
-    RUVIA_CHECK(targetResource.allocationCount() >= 6);
+    RUVIA_CHECK(target_resource.allocation_count() >= 6);
     migrator.reset();
 }
 
 RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     {
-        auto config = testDbConfig();
-        config.host = std::string(80, 'h');
-        config.tls.mode = ruvia::client_tls_mode::disabled;
-        config.connectTimeout = std::chrono::milliseconds::zero();
-        TrackingResource resource;
-        const ruvia::DbMigratorOptions options{
-            .table = std::string(60, 't'),
-            .resource = &resource,
+        auto config = test_db_config();
+        config.host_ = std::string(80, 'h');
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        config.connect_timeout_ = std::chrono::milliseconds::zero();
+        tracking_resource resource;
+        const ruvia::db_migrator_options options{
+            .table_ = std::string(60, 't'),
+            .resource_ = &resource,
         };
 
-        RUVIA_CHECK(throwsOn([&] { (void)ruvia::DbMigrator(config, options); }));
-        RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
     }
     {
-        auto config = testDbConfig();
-        config.host = std::string(80, 'h');
-        config.tls.mode = ruvia::client_tls_mode::disabled;
-        TrackingResource resource;
-        const ruvia::DbMigratorOptions options{
-            .table = "invalid-table-name",
-            .resource = &resource,
+        auto config = test_db_config();
+        config.host_ = std::string(80, 'h');
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        tracking_resource resource;
+        const ruvia::db_migrator_options options{
+            .table_ = "invalid-table-name",
+            .resource_ = &resource,
         };
 
-        RUVIA_CHECK(throwsOn([&] { (void)ruvia::DbMigrator(config, options); }));
-        RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
     }
 }
 
 RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
-    const std::array<ruvia::DbMigration, 2> migrations{{
-        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 1"}},
-        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 2"}},
+    const std::array<ruvia::db_migration, 2> migrations{{
+        ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
+        ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
     }};
-    auto config = testDbConfig();
-    config.host = std::string(80, 'h');
-    config.tls.mode = ruvia::client_tls_mode::disabled;
-    TrackingResource resource;
-    const ruvia::DbMigratorOptions options{
-        .table = std::string(60, 't'),
-        .resource = &resource,
+    auto config = test_db_config();
+    config.host_ = std::string(80, 'h');
+    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+    tracking_resource resource;
+    const ruvia::db_migrator_options options{
+        .table_ = std::string(60, 't'),
+        .resource_ = &resource,
     };
 
-    RUVIA_CHECK(throwsOn([&] {
-        (void)ruvia::DbMigrator::migrate(
-            config, std::span<const ruvia::DbMigration>(migrations), options);
+    RUVIA_CHECK(throws_on([&] {
+        (void)ruvia::db_migrator::migrate(
+            config, std::span<const ruvia::db_migration>(migrations), options);
     }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
-    RejectingMemoryResource rejecting;
-    auto destination = ruvia::detail::DbResultAccess::ownedField({}, &rejecting);
-    auto source = ruvia::detail::DbResultAccess::ownedField(
+    rejecting_memory_resource rejecting;
+    auto destination = ruvia::detail::db_result_access::owned_field({}, &rejecting);
+    auto source_value = ruvia::detail::db_result_access::owned_field(
         std::string_view("database field large enough to require an allocation"),
         std::pmr::get_default_resource());
-    rejecting.rejectAllocations();
+    rejecting.reject_allocations();
 
-    bool allocationFailure = false;
+    bool allocation_failure = false;
     try {
-        destination = std::move(source);
+        destination = std::move(source_value);
     } catch (const std::bad_alloc&) {
-        allocationFailure = true;
+        allocation_failure = true;
     }
-    RUVIA_CHECK(allocationFailure);
+    RUVIA_CHECK(allocation_failure);
 
-    rejecting.rejectAllocations(false);
-    auto destinationRow = ruvia::detail::DbResultAccess::ownedRow(&rejecting);
-    auto sourceRow = ruvia::detail::DbResultAccess::ownedRow(std::pmr::get_default_resource());
-    ruvia::detail::DbResultAccess::ownedFields(sourceRow).emplace_back(
-        ruvia::detail::DbResultAccess::ownedField("row field", std::pmr::get_default_resource()));
-    rejecting.rejectAllocations();
+    rejecting.reject_allocations(false);
+    auto destination_row = ruvia::detail::db_result_access::owned_row(&rejecting);
+    auto source_row = ruvia::detail::db_result_access::owned_row(std::pmr::get_default_resource());
+    ruvia::detail::db_result_access::owned_fields(source_row).emplace_back(ruvia::detail::db_result_access::owned_field("row field", std::pmr::get_default_resource()));
+    rejecting.reject_allocations();
 
-    allocationFailure = false;
+    allocation_failure = false;
     try {
-        destinationRow = std::move(sourceRow);
+        destination_row = std::move(source_row);
     } catch (const std::bad_alloc&) {
-        allocationFailure = true;
+        allocation_failure = true;
     }
-    RUVIA_CHECK(allocationFailure);
+    RUVIA_CHECK(allocation_failure);
 }
 
 RUVIA_TEST(db_row_move_assignment_preserves_destination_on_allocation_failure) {
-    RejectingMemoryResource destination_resource;
-    auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
-    auto& destination_fields = ruvia::detail::DbResultAccess::ownedFields(destination);
-    auto& destination_names = ruvia::detail::DbResultAccess::ownedColumnNames(destination);
-    destination_fields.push_back(ruvia::detail::DbResultAccess::ownedField("old first", &destination_resource));
-    destination_fields.push_back(ruvia::detail::DbResultAccess::ownedField("old second", &destination_resource));
+    rejecting_memory_resource destination_resource;
+    auto destination = ruvia::detail::db_result_access::owned_row(&destination_resource);
+    auto& destination_fields = ruvia::detail::db_result_access::owned_fields(destination);
+    auto& destination_names = ruvia::detail::db_result_access::owned_column_names(destination);
+    destination_fields.push_back(ruvia::detail::db_result_access::owned_field("old first", &destination_resource));
+    destination_fields.push_back(ruvia::detail::db_result_access::owned_field("old second", &destination_resource));
     destination_names.emplace_back("first");
     destination_names.emplace_back("second");
 
-    auto source = ruvia::detail::DbResultAccess::ownedRow(std::pmr::get_default_resource());
-    ruvia::detail::DbResultAccess::ownedFields(source).push_back(
-        ruvia::detail::DbResultAccess::ownedField("incoming", std::pmr::get_default_resource()));
-    ruvia::detail::DbResultAccess::ownedColumnNames(source).emplace_back(64, 'n');
-    destination_resource.rejectAllocations();
+    auto source_value = ruvia::detail::db_result_access::owned_row(std::pmr::get_default_resource());
+    ruvia::detail::db_result_access::owned_fields(source_value).push_back(ruvia::detail::db_result_access::owned_field("incoming", std::pmr::get_default_resource()));
+    ruvia::detail::db_result_access::owned_column_names(source_value).emplace_back(64, 'n');
+    destination_resource.reject_allocations();
 
     bool allocation_failed = false;
     try {
-        destination = std::move(source);
+        destination = std::move(source_value);
     } catch (const std::bad_alloc&) {
         allocation_failed = true;
     }
@@ -1429,25 +1427,25 @@ RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource) {
     const std::string value(128, 'v');
     const std::string borrowed_value(128, 'b');
     for (const bool same_resource : {false, true}) {
-        ruvia::test::CountingMemoryResource source_resource;
-        ruvia::test::CountingMemoryResource destination_resource;
+        ruvia::test::counting_memory_resource source_resource;
+        ruvia::test::counting_memory_resource destination_resource;
         {
-            auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
+            auto destination = ruvia::detail::db_result_access::owned_row(&destination_resource);
             {
                 auto* const resource = same_resource ? &destination_resource : &source_resource;
-                auto source = ruvia::detail::DbResultAccess::ownedRow(resource);
-                auto& fields = ruvia::detail::DbResultAccess::ownedFields(source);
-                auto& names = ruvia::detail::DbResultAccess::ownedColumnNames(source);
-                fields.push_back(ruvia::detail::DbResultAccess::ownedField(value, resource));
-                fields.push_back(ruvia::detail::DbResultAccess::borrowedField(borrowed_value, resource));
-                fields.push_back(ruvia::detail::DbResultAccess::nullField(resource));
+                auto source_value = ruvia::detail::db_result_access::owned_row(resource);
+                auto& fields_value = ruvia::detail::db_result_access::owned_fields(source_value);
+                auto& names = ruvia::detail::db_result_access::owned_column_names(source_value);
+                fields_value.push_back(ruvia::detail::db_result_access::owned_field(value, resource));
+                fields_value.push_back(ruvia::detail::db_result_access::borrowed_field(borrowed_value, resource));
+                fields_value.push_back(ruvia::detail::db_result_access::null_field(resource));
                 names.emplace_back(column);
                 names.emplace_back("borrowed");
                 names.emplace_back("null");
-                destination = std::move(source);
-                RUVIA_CHECK(source.empty());
+                destination = std::move(source_value);
+                RUVIA_CHECK(source_value.empty());
             }
-            RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
             RUVIA_CHECK_EQ(destination.size(), std::size_t{3});
             RUVIA_CHECK_EQ(destination[column].value().value_or("missing"), std::string_view(value));
             const auto borrowed = destination["borrowed"].value();
@@ -1455,219 +1453,219 @@ RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource) {
             RUVIA_CHECK(borrowed && borrowed->data() == borrowed_value.data());
             RUVIA_CHECK(!destination["null"].value().has_value());
         }
-        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(destination_resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
     }
 }
 
 RUVIA_TEST(db_row_move_assignment_preserves_borrowed_row_views) {
-    ruvia::test::CountingMemoryResource backing_resource;
-    ruvia::test::CountingMemoryResource destination_resource;
+    ruvia::test::counting_memory_resource backing_resource;
+    ruvia::test::counting_memory_resource destination_resource;
     const std::string value(128, 'v');
     {
-        auto backing = ruvia::detail::DbResultAccess::makeResult(&backing_resource);
-        auto& fields = ruvia::detail::DbResultAccess::fields(backing);
-        auto& names = ruvia::detail::DbResultAccess::columnNames(backing);
-        fields.push_back(ruvia::detail::DbResultAccess::borrowedField(value, &backing_resource));
-        fields.push_back(ruvia::detail::DbResultAccess::nullField(&backing_resource));
+        auto backing = ruvia::detail::db_result_access::make_result(&backing_resource);
+        auto& fields_value = ruvia::detail::db_result_access::fields(backing);
+        auto& names = ruvia::detail::db_result_access::column_names(backing);
+        fields_value.push_back(ruvia::detail::db_result_access::borrowed_field(value, &backing_resource));
+        fields_value.push_back(ruvia::detail::db_result_access::null_field(&backing_resource));
         names.emplace_back("value");
         names.emplace_back("null");
-        auto source = ruvia::detail::DbResultAccess::borrowedRow(
-            fields.data(), fields.size(), names.data(), names.size(), &backing_resource);
-        auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
-        destination = std::move(source);
-        RUVIA_CHECK(source.empty());
+        auto source_value = ruvia::detail::db_result_access::borrowed_row(
+            fields_value.data(), fields_value.size(), names.data(), names.size(), &backing_resource);
+        auto destination = ruvia::detail::db_result_access::owned_row(&destination_resource);
+        destination = std::move(source_value);
+        RUVIA_CHECK(source_value.empty());
         RUVIA_CHECK_EQ(destination.size(), std::size_t{2});
         const auto borrowed = destination["value"].value();
         RUVIA_CHECK_EQ(borrowed.value_or("missing"), std::string_view(value));
         RUVIA_CHECK(borrowed && borrowed->data() == value.data());
         RUVIA_CHECK(!destination["null"].value().has_value());
     }
-    RUVIA_CHECK_EQ(backing_resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(backing_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(destination_resource.live_allocations(), std::size_t{0});
 }
 
 namespace {
 struct default_resource_guard final {
     explicit default_resource_guard(std::pmr::memory_resource* resource) noexcept
-        : previous(std::pmr::set_default_resource(resource)) {}
+        : previous_(std::pmr::set_default_resource(resource)) {}
     ~default_resource_guard() {
-        std::pmr::set_default_resource(previous);
+        std::pmr::set_default_resource(previous_);
     }
-    std::pmr::memory_resource* previous;
+    std::pmr::memory_resource* previous_;
 };
 }  // namespace
 
 RUVIA_TEST(db_expression_values_use_explicit_resource_for_owned_parameters) {
-    ruvia::test::CountingMemoryResource source_resource;
+    ruvia::test::counting_memory_resource source_resource;
     const std::string value(128, 'v');
-    ruvia::DbQuery source(&source_resource);
-    source.select(source.value(value));
-    const auto statement = source.compile(ruvia::DbDriver::kPostgreSql, &source_resource);
+    ruvia::db_query source_value(&source_resource);
+    source_value.select(source_value.value(value));
+    const auto statement = source_value.compile(ruvia::db_driver::postgresql, &source_resource);
     RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
     if (statement.params().size() != 1) {
         return;
     }
 
     for (const bool through_expressions : {false, true}) {
-        ruvia::test::CountingMemoryResource destination_resource;
-        ruvia::DbQuery destination(&destination_resource);
-        ruvia::DbExpressions expressions(&destination_resource);
-        RejectingMemoryResource rejecting_default;
-        rejecting_default.rejectAllocations();
+        ruvia::test::counting_memory_resource destination_resource;
+        ruvia::db_query destination(&destination_resource);
+        ruvia::db_expressions expressions(&destination_resource);
+        rejecting_memory_resource rejecting_default;
+        rejecting_default.reject_allocations();
         bool unexpected_allocation = false;
         try {
-            default_resource_guard guard(&rejecting_default);
+            default_resource_guard guard_value(&rejecting_default);
             destination.select(through_expressions
-                                   ? destination.importExpression(expressions.value(statement.params()[0]))
+                                   ? destination.import_expression(expressions.value(statement.params()[0]))
                                    : destination.value(statement.params()[0]));
         } catch (const std::bad_alloc&) {
             unexpected_allocation = true;
         }
         RUVIA_CHECK(!unexpected_allocation);
         if (!unexpected_allocation) {
-            const auto compiled = destination.compile(ruvia::DbDriver::kPostgreSql, &destination_resource);
+            const auto compiled = destination.compile(ruvia::db_driver::postgresql, &destination_resource);
             RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{1});
             if (compiled.params().size() == 1) {
-                RUVIA_CHECK_EQ(ruvia::detail::DbValueAccess::text(compiled.params()[0]), std::string_view(value));
+                RUVIA_CHECK_EQ(ruvia::detail::db_value_access::text(compiled.params()[0]), std::string_view(value));
             }
         }
     }
 }
 
 RUVIA_TEST(db_variadic_calls_use_explicit_resource_for_owned_parameters) {
-    ruvia::test::CountingMemoryResource source_resource;
+    ruvia::test::counting_memory_resource source_resource;
     const std::string value(128, 'v');
-    ruvia::DbQuery source(&source_resource);
-    source.select(source.value(value));
-    const auto statement = source.compile(ruvia::DbDriver::kPostgreSql, &source_resource);
+    ruvia::db_query source_value(&source_resource);
+    source_value.select(source_value.value(value));
+    const auto statement = source_value.compile(ruvia::db_driver::postgresql, &source_resource);
     RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
     if (statement.params().size() != 1) {
         return;
     }
 
-    DbRegistryTestRuntime runtime;
-    ruvia::test::CountingMemoryResource destination_resource;
-    const auto config = testDbConfig();
-    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker, &destination_resource, config);
+    db_registry_test_runtime runtime;
+    ruvia::test::counting_memory_resource destination_resource;
+    const auto config = test_db_config();
+    ruvia::detail::db_registry registry(runtime.io_context_, runtime.worker_, &destination_resource, config);
     ruvia::operation_scope scope;
     auto handle = registry.get(scope);
-    const std::string_view sql = config.driver == ruvia::DbDriver::kPostgreSql ? "SELECT $1" : "SELECT ?";
-    const auto baseline = destination_resource.liveAllocations();
+    const std::string_view sql = config.driver_ == ruvia::db_driver::postgresql ? "SELECT $1" : "SELECT ?";
+    const auto baseline = destination_resource.live_allocations();
 
     for (int operation_kind = 0; operation_kind != 3; ++operation_kind) {
-        RejectingMemoryResource rejecting_default;
-        rejecting_default.rejectAllocations();
+        rejecting_memory_resource rejecting_default;
+        rejecting_default.reject_allocations();
         bool unexpected_allocation = false;
         try {
-            default_resource_guard guard(&rejecting_default);
+            default_resource_guard guard_value(&rejecting_default);
             if (operation_kind == 0) {
                 auto operation = handle.query(sql, statement.params()[0]);
-                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                RUVIA_CHECK(destination_resource.live_allocations() > baseline);
                 static_cast<void>(operation);
             } else if (operation_kind == 1) {
                 auto operation = handle.execute(sql, statement.params()[0]);
-                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                RUVIA_CHECK(destination_resource.live_allocations() > baseline);
                 static_cast<void>(operation);
             } else {
-                auto operation = handle.queryStream(sql, statement.params()[0]);
-                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                auto operation = handle.query_stream(sql, statement.params()[0]);
+                RUVIA_CHECK(destination_resource.live_allocations() > baseline);
                 static_cast<void>(operation);
             }
         } catch (const std::bad_alloc&) {
             unexpected_allocation = true;
         }
         RUVIA_CHECK(!unexpected_allocation);
-        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), baseline);
+        RUVIA_CHECK_EQ(destination_resource.live_allocations(), baseline);
     }
 }
 
 RUVIA_TEST(db_sql_literal_cold_operations_release_owned_parameters) {
-    DbRegistryTestRuntime runtime;
-    ruvia::test::CountingMemoryResource memory;
-    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker, &memory, testDbConfig());
+    db_registry_test_runtime runtime;
+    ruvia::test::counting_memory_resource memory;
+    ruvia::detail::db_registry registry(runtime.io_context_, runtime.worker_, &memory, test_db_config());
     ruvia::operation_scope scope;
     auto handle = registry.get(scope);
-    const auto baseline = memory.liveAllocations();
+    const auto baseline = memory.live_allocations();
     for (int i = 0; i < 16; ++i) {
         {
 #ifdef RUVIA_ENABLE_MARIADB
             auto query = handle.query<"SELECT ?">(std::string(200, 'q'));
             auto execute = handle.execute<"UPDATE t SET name = ?">(std::string(200, 'e'));
-            auto stream = handle.queryStream<"SELECT ?">(std::string(200, 's'));
-            auto noParams = handle.query<"SELECT 1">();
+            auto stream = handle.query_stream<"SELECT ?">(std::string(200, 's'));
+            auto no_params = handle.query<"SELECT 1">();
 #else
-            auto query = handle.query<"SELECT $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 'q'));
-            auto execute = handle.execute<"UPDATE t SET name = $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 'e'));
-            auto stream = handle.queryStream<"SELECT $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 's'));
-            auto noParams = handle.query<"SELECT 1", ruvia::DbDriver::kPostgreSql>();
+            auto query = handle.query<"SELECT $1", ruvia::db_driver::postgresql>(std::string(200, 'q'));
+            auto execute = handle.execute<"UPDATE t SET name = $1", ruvia::db_driver::postgresql>(std::string(200, 'e'));
+            auto stream = handle.query_stream<"SELECT $1", ruvia::db_driver::postgresql>(std::string(200, 's'));
+            auto no_params = handle.query<"SELECT 1", ruvia::db_driver::postgresql>();
 #endif
-            RUVIA_CHECK(memory.liveAllocations() > baseline);
+            RUVIA_CHECK(memory.live_allocations() > baseline);
         }
-        RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+        RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
     }
-    const auto allocations = memory.allocationCount();
-    const bool rejected = throwsOn([&] {
+    const auto allocations = memory.allocation_count();
+    const bool rejected = throws_on([&] {
 #ifdef RUVIA_ENABLE_MARIADB
-        (void)handle.query<"SELECT $1", ruvia::DbDriver::kPostgreSql>(1);
+        (void)handle.query<"SELECT $1", ruvia::db_driver::postgresql>(1);
 #else
         (void)handle.query<"SELECT ?">(1);
 #endif
     });
     RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(memory.allocationCount(), allocations);
+    RUVIA_CHECK_EQ(memory.allocation_count(), allocations);
 }
 
 RUVIA_TEST(database_tls_configuration_enforces_backend_identity_constraints) {
 #ifdef RUVIA_ENABLE_MARIADB
-    ruvia::DbConfig maria{.driver = ruvia::DbDriver::kMariaDb};
-    RUVIA_CHECK(maria.tls.mode == ruvia::client_tls_mode::verify_identity);
-    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
-    maria.host = "database.example.test";
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
-    maria.host = "127.0.0.1";
-    maria.tls.server_name = "database.example.test";
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
-    maria.tls = {.mode = ruvia::client_tls_mode::disabled};
-    maria.host = "database.example.test";
-    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
+    ruvia::db_config maria{.driver_ = ruvia::db_driver::mariadb};
+    RUVIA_CHECK(maria.tls_.mode_ == ruvia::client_tls_mode::verify_identity);
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(maria); }));
+    maria.host_ = "database.example.test";
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(maria); }));
+    maria.host_ = "127.0.0.1";
+    maria.tls_.server_name_ = "database.example.test";
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(maria); }));
+    maria.tls_ = {.mode_ = ruvia::client_tls_mode::disabled};
+    maria.host_ = "database.example.test";
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(maria); }));
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    ruvia::DbConfig postgres{.driver = ruvia::DbDriver::kPostgreSql, .host = "database.example.test"};
-    postgres.tls.server_name = "expected.example.test";
-    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(postgres); }));
-    postgres.tls.ca_file = std::string("bad\0file", 8);
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(postgres); }));
+    ruvia::db_config postgres{.driver_ = ruvia::db_driver::postgresql, .host_ = "database.example.test"};
+    postgres.tls_.server_name_ = "expected.example.test";
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(postgres); }));
+    postgres.tls_.ca_file_ = std::string("bad\0file", 8);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::detail::validate_db_config(postgres); }));
 #endif
 }
 
 RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource_after_source_resource_release) {
-    using access = ruvia::detail::DbResultAccess;
+    using access = ruvia::detail::db_result_access;
     const std::string first_value(256, 'a');
     const std::string second_value(256, 'b');
     constexpr std::string_view borrowed = "borrowed";
     for (const bool populated : {false, true}) {
-        TrackingResource source_resource;
-        ruvia::test::CountingMemoryResource destination_resource;
+        tracking_resource source_resource;
+        ruvia::test::counting_memory_resource destination_resource;
         {
-            auto destination = access::ownedRow(&destination_resource);
+            auto destination = access::owned_row(&destination_resource);
             if (populated) {
-                access::ownedFields(destination).push_back(access::ownedField("old", &destination_resource));
-                access::ownedColumnNames(destination).emplace_back("old");
+                access::owned_fields(destination).push_back(access::owned_field("old", &destination_resource));
+                access::owned_column_names(destination).emplace_back("old");
             }
             {
-                auto source = access::ownedRow(&source_resource);
-                auto& fields = access::ownedFields(source);
-                fields.push_back(access::ownedField(first_value, &source_resource));
-                fields.push_back(access::ownedField(second_value, &source_resource));
-                fields.push_back(access::borrowedField(borrowed, &source_resource));
-                fields.push_back(access::nullField(&source_resource));
-                auto& names = access::ownedColumnNames(source);
+                auto source_value = access::owned_row(&source_resource);
+                auto& fields_value = access::owned_fields(source_value);
+                fields_value.push_back(access::owned_field(first_value, &source_resource));
+                fields_value.push_back(access::owned_field(second_value, &source_resource));
+                fields_value.push_back(access::borrowed_field(borrowed, &source_resource));
+                fields_value.push_back(access::null_field(&source_resource));
+                auto& names = access::owned_column_names(source_value);
                 for (const auto name : {"first", "second", "borrowed", "null"}) {
                     names.emplace_back(name);
                 }
-                destination = std::move(source);
-                RUVIA_CHECK(source.empty());
+                destination = std::move(source_value);
+                RUVIA_CHECK(source_value.empty());
             }
             source_resource.release();
             RUVIA_CHECK(destination["first"].value() == std::optional<std::string_view>(first_value));
@@ -1675,98 +1673,98 @@ RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource_after_sour
             RUVIA_CHECK(destination["borrowed"].value()->data() == borrowed.data());
             RUVIA_CHECK(!destination["null"].value());
         }
-        RUVIA_CHECK(!source_resource.deallocatedAfterRelease());
-        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK(!source_resource.deallocated_after_release());
+        RUVIA_CHECK_EQ(destination_resource.live_allocations(), std::size_t{0});
     }
 }
 
 RUVIA_TEST(db_row_move_assignment_keeps_rows_consistent_when_allocation_fails) {
-    using access = ruvia::detail::DbResultAccess;
+    using access = ruvia::detail::db_result_access;
     for (const bool fail_field : {false, true}) {
         const std::string incoming_value = fail_field ? std::string(256, 'v') : "new";
-        RejectingMemoryResource destination_resource;
-        auto destination = access::ownedRow(&destination_resource);
-        auto& destination_fields = access::ownedFields(destination);
-        auto& destination_names = access::ownedColumnNames(destination);
+        rejecting_memory_resource destination_resource;
+        auto destination = access::owned_row(&destination_resource);
+        auto& destination_fields = access::owned_fields(destination);
+        auto& destination_names = access::owned_column_names(destination);
         for (const auto name : {"old_first", "old_second"}) {
-            destination_fields.push_back(access::ownedField(name, &destination_resource));
+            destination_fields.push_back(access::owned_field(name, &destination_resource));
             destination_names.emplace_back(name);
         }
-        auto source = access::ownedRow(std::pmr::get_default_resource());
-        access::ownedFields(source).push_back(access::ownedField(incoming_value, std::pmr::get_default_resource()));
-        access::ownedColumnNames(source).emplace_back(std::string(256, 'n'));
-        destination_resource.rejectAllocations(true, 256);
+        auto source_value = access::owned_row(std::pmr::get_default_resource());
+        access::owned_fields(source_value).push_back(access::owned_field(incoming_value, std::pmr::get_default_resource()));
+        access::owned_column_names(source_value).emplace_back(std::string(256, 'n'));
+        destination_resource.reject_allocations(true, 256);
 
         bool allocation_failed = false;
         try {
-            destination = std::move(source);
+            destination = std::move(source_value);
         } catch (const std::bad_alloc&) {
             allocation_failed = true;
         }
         RUVIA_CHECK(allocation_failed);
         RUVIA_CHECK_EQ(destination.size(), std::size_t{2});
-        RUVIA_CHECK_EQ(access::columnNames(destination).size(), destination.size());
+        RUVIA_CHECK_EQ(access::column_names(destination).size(), destination.size());
         if (destination.size() == 2) {
             RUVIA_CHECK(destination["old_first"].value() == std::optional<std::string_view>("old_first"));
             RUVIA_CHECK(destination["old_second"].value() == std::optional<std::string_view>("old_second"));
         }
-        RUVIA_CHECK_EQ(source.size(), std::size_t{1});
-        RUVIA_CHECK(source[0].value() == std::optional<std::string_view>(incoming_value));
+        RUVIA_CHECK_EQ(source_value.size(), std::size_t{1});
+        RUVIA_CHECK(source_value[0].value() == std::optional<std::string_view>(incoming_value));
     }
 }
 
 RUVIA_TEST(db_row_move_assignment_with_shared_resource_does_not_allocate) {
-    using access = ruvia::detail::DbResultAccess;
-    RejectingMemoryResource resource;
-    auto destination = access::ownedRow(&resource);
-    auto source = access::ownedRow(&resource);
-    access::ownedFields(source).push_back(access::ownedField("value", &resource));
-    access::ownedColumnNames(source).emplace_back("name");
-    resource.rejectAllocations();
+    using access = ruvia::detail::db_result_access;
+    rejecting_memory_resource resource;
+    auto destination = access::owned_row(&resource);
+    auto source_value = access::owned_row(&resource);
+    access::owned_fields(source_value).push_back(access::owned_field("value", &resource));
+    access::owned_column_names(source_value).emplace_back("name");
+    resource.reject_allocations();
 
     bool completed = false;
     try {
-        destination = std::move(source);
+        destination = std::move(source_value);
         completed = true;
     } catch (const std::bad_alloc&) {
     }
-    resource.rejectAllocations(false);
+    resource.reject_allocations(false);
     RUVIA_CHECK(completed);
     if (completed) {
-        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK(source_value.empty());
         RUVIA_CHECK(destination["name"].value() == std::optional<std::string_view>("value"));
     }
 }
 
 RUVIA_TEST(db_row_moves_preserve_borrowed_and_owned_storage) {
-    using access = ruvia::detail::DbResultAccess;
-    std::array backing_fields{access::ownedField("borrowed value", nullptr)};
+    using access = ruvia::detail::db_result_access;
+    std::array backing_fields{access::owned_field("borrowed value", nullptr)};
     std::array backing_names{std::pmr::string("borrowed_name")};
     const std::string owned_value(256, 'x');
     for (const bool shared_resource : {false, true}) {
-        RejectingMemoryResource destination_resource;
+        rejecting_memory_resource destination_resource;
         auto* source_resource = shared_resource ? &destination_resource : std::pmr::get_default_resource();
-        auto destination = access::ownedRow(&destination_resource);
-        auto borrowed = access::borrowedRow(backing_fields.data(), backing_fields.size(),
+        auto destination = access::owned_row(&destination_resource);
+        auto borrowed = access::borrowed_row(backing_fields.data(), backing_fields.size(),
             backing_names.data(), backing_names.size(), source_resource);
-        destination_resource.rejectAllocations();
+        destination_resource.reject_allocations();
         destination = std::move(borrowed);
         auto moved_borrowed = std::move(destination);
         RUVIA_CHECK(destination.empty());
         RUVIA_CHECK(borrowed.empty());
         RUVIA_CHECK(&moved_borrowed["borrowed_name"] == backing_fields.data());
         destination = std::move(moved_borrowed);
-        destination_resource.rejectAllocations(false);
+        destination_resource.reject_allocations(false);
 
-        auto owned = access::ownedRow(source_resource);
-        access::ownedFields(owned).push_back(access::ownedField(owned_value, source_resource));
-        access::ownedColumnNames(owned).emplace_back("owned_name");
+        auto owned = access::owned_row(source_resource);
+        access::owned_fields(owned).push_back(access::owned_field(owned_value, source_resource));
+        access::owned_column_names(owned).emplace_back("owned_name");
         destination = std::move(owned);
         auto moved_owned = std::move(destination);
         RUVIA_CHECK(destination.empty());
         RUVIA_CHECK(owned.empty());
         RUVIA_CHECK(moved_owned["owned_name"].value() == std::optional<std::string_view>(owned_value));
-        auto empty = access::ownedRow(source_resource);
+        auto empty = access::owned_row(source_resource);
         moved_owned = std::move(empty);
         RUVIA_CHECK(moved_owned.empty());
     }

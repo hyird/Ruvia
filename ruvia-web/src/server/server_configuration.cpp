@@ -1,12 +1,12 @@
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/memory/process_resource.h"
 
-#include "server/HttpServerOptionsValidation.h"
+#include "server/http_server_options_validation.h"
 
 namespace ruvia::detail {
 
-ValidatedHttpServerConfiguration::ValidatedHttpServerConfiguration(
-    std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions&& options)
-    : listeners_(processResource()),
+validated_http_server_configuration::validated_http_server_configuration(
+    std::span<const http_server_listener_definition> listeners, http_server_options&& options)
+    : listeners_(process_resource()),
       options_(std::move(options)) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
@@ -19,168 +19,168 @@ const server_config& server_config_defaults() noexcept {
     return defaults;
 }
 
-HttpServerOptions normalize_server_options(const server_config& config, HttpServerOptions options) {
-    ruvia::ensurePositiveSize(config.worker_count, "worker count must be greater than zero");
-    if (config.process_signal_handlers != process_signal_handler_policy::external_owner &&
-        config.process_signal_handlers != process_signal_handler_policy::install) {
+http_server_options normalize_server_options(const server_config& config, http_server_options options) {
+    ruvia::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
+    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
+        config.process_signal_handlers_ != process_signal_handler_policy::install) {
         throw std::invalid_argument("process signal handler policy is invalid");
     }
-    options.worker_queue_capacity = config.worker_queue_capacity;
-    options.idle_timeout = config.idle_timeout;
-    options.scanInterval = config.connection_scan_interval;
-    options.request_header_timeout = config.request_header_timeout;
-    options.request_body_timeout = config.request_body_timeout;
-    options.write_timeout = config.write_timeout;
-    options.maxConnections = config.max_connections_per_worker;
-    options.max_requests_per_connection = config.max_requests_per_connection;
-    options.max_buffered_body_bytes = config.max_buffered_body_bytes;
-    options.max_inbound_buffer_bytes_per_worker = config.max_inbound_buffer_bytes_per_worker;
-    options.max_inbound_buffer_bytes_per_connection = config.max_inbound_buffer_bytes_per_connection;
-    options.header_completion_timeout = config.header_completion_timeout;
-    options.body_completion_timeout = config.body_completion_timeout;
-    options.max_stream_body_bytes = config.max_stream_body_bytes;
-    options.max_web_socket_message_bytes = config.max_web_socket_message_bytes;
-    options.memoryConfig = config.memory_pool;
-    options.http_client_result_budget = config.http_client_result_budget;
+    options.worker_queue_capacity_ = config.worker_queue_capacity_;
+    options.idle_timeout_ = config.idle_timeout_;
+    options.scan_interval_ = config.connection_scan_interval_;
+    options.request_header_timeout_ = config.request_header_timeout_;
+    options.request_body_timeout_ = config.request_body_timeout_;
+    options.write_timeout_ = config.write_timeout_;
+    options.max_connections_ = config.max_connections_per_worker_;
+    options.max_requests_per_connection_ = config.max_requests_per_connection_;
+    options.max_buffered_body_bytes_ = config.max_buffered_body_bytes_;
+    options.max_inbound_buffer_bytes_per_worker_ = config.max_inbound_buffer_bytes_per_worker_;
+    options.max_inbound_buffer_bytes_per_connection_ = config.max_inbound_buffer_bytes_per_connection_;
+    options.header_completion_timeout_ = config.header_completion_timeout_;
+    options.body_completion_timeout_ = config.body_completion_timeout_;
+    options.max_stream_body_bytes_ = config.max_stream_body_bytes_;
+    options.max_websocket_message_bytes_ = config.max_websocket_message_bytes_;
+    options.memory_config_ = config.memory_pool_;
+    options.http_client_result_budget_ = config.http_client_result_budget_;
     validate_server_limits(options);
     return options;
 }
 
-void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) {
-    const auto* refresh = options.documentRoot.refreshOptions();
+void validate_document_root_runtime_config(const http_server_options& options) {
+    const auto* refresh = options.document_root_.refresh_options();
     if (refresh == nullptr) {
         return;
     }
-    ruvia::ensurePositiveDuration(
-        refresh->refreshInterval, "document root refresh interval must be greater than zero");
-    if (options.blockingPool == nullptr) {
+    ruvia::ensure_positive_duration(
+        refresh->refresh_interval_, "document root refresh interval must be greater than zero");
+    if (options.blocking_pool_ == nullptr) {
         throw std::invalid_argument(
             "document root refresh cannot run while the blocking pool is disabled");
     }
-    const auto* precompression = options.documentRoot.precompressionOptions();
+    const auto* precompression = options.document_root_.precompression_options();
     if (precompression == nullptr) {
         return;
     }
-    ruvia::ensurePositiveSize(precompression->minBytes,
+    ruvia::ensure_positive_size(precompression->min_bytes_,
         "document root precompression minimum size must be greater than zero");
-    if (precompression->maxBytes < precompression->minBytes) {
+    if (precompression->max_bytes_ < precompression->min_bytes_) {
         throw std::invalid_argument(
             "document root precompression maximum size must not be smaller than the minimum size");
     }
 }
 
 void validate_worker_queue_capacity(std::size_t capacity) {
-    ruvia::ensurePositiveSize(capacity, "worker queue capacity must be greater than zero");
+    ruvia::ensure_positive_size(capacity, "worker queue capacity must be greater than zero");
     if (capacity == std::numeric_limits<std::size_t>::max()) {
         throw std::invalid_argument("worker queue capacity must leave a reserved execution slot");
     }
 }
 
-void validate_server_limits(const HttpServerOptions& options) {
-    ruvia::ensurePositiveOptionalDurations("configured server timeouts must be greater than zero",
-        options.idle_timeout, options.request_header_timeout, options.request_body_timeout,
-        options.write_timeout);
-    ruvia::ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
-    validate_worker_queue_capacity(options.worker_queue_capacity);
-    ruvia::ensurePositiveSize(options.memoryConfig.requestInitialBufferBytes,
+void validate_server_limits(const http_server_options& options) {
+    ruvia::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
+        options.idle_timeout_, options.request_header_timeout_, options.request_body_timeout_,
+        options.write_timeout_);
+    ruvia::ensure_positive_duration(options.scan_interval_, "connection scan interval must be greater than 0");
+    validate_worker_queue_capacity(options.worker_queue_capacity_);
+    ruvia::ensure_positive_size(options.memory_config_.request_initial_buffer_bytes_,
         "memory pool config values must be greater than 0");
-    ruvia::ensurePositiveSize(options.max_buffered_body_bytes, "buffered body limit must be greater than 0");
-    ruvia::ensurePositiveOptionalSize(
-        options.max_stream_body_bytes, "configured stream body limit must be greater than zero");
-    ruvia::ensurePositiveSize(
-        options.max_web_socket_message_bytes, "websocket message limit must be greater than 0");
-    ruvia::ensurePositiveOptionalSize(
-        options.maxConnections, "configured connection limit must be greater than zero");
-    ruvia::ensurePositiveOptionalSize(options.max_requests_per_connection,
+    ruvia::ensure_positive_size(options.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
+    ruvia::ensure_positive_optional_size(
+        options.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
+    ruvia::ensure_positive_size(
+        options.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
+    ruvia::ensure_positive_optional_size(
+        options.max_connections_, "configured connection limit must be greater than zero");
+    ruvia::ensure_positive_optional_size(options.max_requests_per_connection_,
         "configured requests-per-connection limit must be greater than zero");
-    ruvia::ensurePositiveSize(options.max_inbound_buffer_bytes_per_worker,
+    ruvia::ensure_positive_size(options.max_inbound_buffer_bytes_per_worker_,
         "worker inbound buffer budget must be greater than zero");
-    ruvia::ensurePositiveSize(options.max_inbound_buffer_bytes_per_connection,
+    ruvia::ensure_positive_size(options.max_inbound_buffer_bytes_per_connection_,
         "connection inbound buffer budget must be greater than zero");
-    ruvia::ensurePositiveOptionalDurations("completion deadlines must be greater than zero",
-        options.header_completion_timeout, options.body_completion_timeout);
-    ruvia::ensurePositiveSize(options.http_client_result_budget.maxRetainedBytes,
+    ruvia::ensure_positive_optional_durations("completion deadlines must be greater than zero",
+        options.header_completion_timeout_, options.body_completion_timeout_);
+    ruvia::ensure_positive_size(options.http_client_result_budget_.max_retained_bytes_,
         "HTTP client retained result byte budget must be greater than zero");
-    ruvia::ensurePositiveSize(options.http_client_result_budget.max_in_flight_bytes,
+    ruvia::ensure_positive_size(options.http_client_result_budget_.max_in_flight_bytes_,
         "HTTP client in-flight response budget must be greater than zero");
 }
 
-void validateHttpServerOptions(const HttpServerOptions& options) {
+void validate_http_server_options(const http_server_options& options) {
     validate_server_limits(options);
-    if (!std::has_single_bit(options.rateLimitCapacityPerWorker)) {
+    if (!std::has_single_bit(options.rate_limit_capacity_per_worker_)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
-    if (options.compression.has_value()) {
-        ruvia::ensurePositiveSize(
-            options.compression->minBytes, "compression minimum size must be greater than zero");
-        if (options.compression->syncBytes < options.compression->minBytes) {
+    if (options.compression_.has_value()) {
+        ruvia::ensure_positive_size(
+            options.compression_->min_bytes_, "compression minimum size must be greater than zero");
+        if (options.compression_->sync_bytes_ < options.compression_->min_bytes_) {
             throw std::invalid_argument(
                 "compression synchronous size must not be smaller than the minimum size");
         }
-        if (options.compression->maxBytes < options.compression->syncBytes) {
+        if (options.compression_->max_bytes_ < options.compression_->sync_bytes_) {
             throw std::invalid_argument(
                 "compression maximum size must not be smaller than the synchronous size");
         }
     }
-    validateDocumentRootRuntimeConfig(options);
+    validate_document_root_runtime_config(options);
 }
 
-void validateHttpServerTlsOptions(const HttpServerListenerDefinition::Tls& tls) {
-    validateHttpServerTlsIdentity(tls.identity);
-    if (tls.http3_early_data && tls.clientCertificates.has_value()) {
+void validate_http_server_tls_options(const http_server_listener_definition::tls_type& tls) {
+    validate_http_server_tls_identity(tls.identity_);
+    if (tls.http3_early_data_ && tls.client_certificates_.has_value()) {
         throw std::invalid_argument("HTTP/3 early data is unavailable with TLS client certificates");
     }
-    if (tls.clientCertificates.has_value()) {
-        validateHttpServerTlsClientCertificatePolicy(*tls.clientCertificates);
+    if (tls.client_certificates_.has_value()) {
+        validate_http_server_tls_client_certificate_policy(*tls.client_certificates_);
     }
-    for (std::size_t i = 0; i < tls.sniIdentities.size(); ++i) {
-        const auto& sni = tls.sniIdentities[i];
-        ensureSniHost(sni.host, "SNI host must not be empty", "SNI host is invalid");
-        validateHttpServerTlsIdentity(sni.identity);
+    for (std::size_t i = 0; i < tls.sni_identities_.size(); ++i) {
+        const auto& sni = tls.sni_identities_[i];
+        ensure_sni_host(sni.host_, "SNI host must not be empty", "SNI host is invalid");
+        validate_http_server_tls_identity(sni.identity_);
         for (std::size_t j = 0; j < i; ++j) {
-            if (httpAsciiEqualsIgnoreCase(tls.sniIdentities[j].host, sni.host)) {
+            if (http_ascii_equals_ignore_case(tls.sni_identities_[j].host_, sni.host_)) {
                 throw std::invalid_argument("SNI hosts must be unique");
             }
         }
     }
 }
 
-[[nodiscard]] std::size_t http3WorkerTrackedStreamCapacity(
+[[nodiscard]] std::size_t http3_worker_tracked_stream_capacity(
     std::size_t max_requests_per_connection) {
-    constexpr auto allowance = kHttp3PeerUnidirectionalStreamAllowance + kHttp3ServerPushAllowance;
+    constexpr auto allowance = http3_peer_unidirectional_stream_allowance + http3_server_push_allowance;
     if (max_requests_per_connection > std::numeric_limits<std::size_t>::max() - allowance) {
         throw std::invalid_argument("HTTP/3 worker stream capacity is not representable");
     }
     return max_requests_per_connection + allowance;
 }
 
-[[nodiscard]] std::size_t http3TransportLifetimeStreamCapacity(
+[[nodiscard]] std::size_t http3_transport_lifetime_stream_capacity(
     std::size_t max_requests_per_connection) {
-    constexpr auto allowance = kHttp3PeerUnidirectionalStreamAllowance +
-                               kHttp3PostGoawayRequestAllowance;
+    constexpr auto allowance = http3_peer_unidirectional_stream_allowance +
+                               http3_post_goaway_request_allowance;
     if (max_requests_per_connection > std::numeric_limits<std::size_t>::max() - allowance) {
         throw std::invalid_argument("HTTP/3 transport stream capacity is not representable");
     }
     return max_requests_per_connection + allowance;
 }
 
-void validateHttp3ServerLimits(
-    std::optional<std::size_t> maxConnections, const Http3ListenConfig& config,
+void validate_http3_server_limits(
+    std::optional<std::size_t> max_connections, const http3_listen_config& config,
     std::optional<std::size_t> max_requests_per_connection, std::size_t worker_count) {
     if (worker_count == 0) {
         throw std::invalid_argument("HTTP/3 worker count must be greater than zero");
     }
-    if (!maxConnections.has_value()) {
+    if (!max_connections.has_value()) {
         throw std::invalid_argument("HTTP/3 requires a finite per-worker connection limit");
     }
-    ruvia::ensurePositiveSize(*maxConnections,
+    ruvia::ensure_positive_size(*max_connections,
         "HTTP/3 per-worker connection limit must be greater than zero");
 
     // Keep the aggregate startup-allocated slot count representable as a
     // container difference across all worker-local protocol drivers.
-    const auto maxConnectionCapacity =
+    const auto max_connection_capacity =
         static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
-    if (*maxConnections > maxConnectionCapacity / worker_count) {
+    if (*max_connections > max_connection_capacity / worker_count) {
         throw std::invalid_argument(
             "HTTP/3 aggregate connection capacity is not representable");
     }
@@ -191,88 +191,88 @@ void validateHttp3ServerLimits(
         throw std::invalid_argument(
             "HTTP/3 requires a finite per-connection request limit");
     }
-    ruvia::ensurePositiveSize(*max_requests_per_connection,
+    ruvia::ensure_positive_size(*max_requests_per_connection,
         "HTTP/3 per-connection request limit must be greater than zero");
 
     // The request-stream boundary is a client-bidi QUIC stream ID: 4 * N.
-    constexpr std::uint64_t maxGoawayId = (std::uint64_t{1} << 62) - 4;
+    constexpr std::uint64_t max_goaway_id = (std::uint64_t{1} << 62) - 4;
     if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
         if (*max_requests_per_connection > std::numeric_limits<std::uint64_t>::max()) {
             throw std::invalid_argument("HTTP/3 request limit does not fit a GOAWAY varint");
         }
     }
-    const auto requestLimit = static_cast<std::uint64_t>(*max_requests_per_connection);
-    if (requestLimit > maxGoawayId / 4) {
+    const auto request_limit = static_cast<std::uint64_t>(*max_requests_per_connection);
+    if (request_limit > max_goaway_id / 4) {
         throw std::invalid_argument("HTTP/3 GOAWAY request boundary is not representable");
     }
 
-    const auto trackedStreams =
-        http3WorkerTrackedStreamCapacity(*max_requests_per_connection);
-    const auto lifetimeStreams =
-        http3TransportLifetimeStreamCapacity(*max_requests_per_connection);
-    constexpr auto maxPowerOfTwo =
+    const auto tracked_streams =
+        http3_worker_tracked_stream_capacity(*max_requests_per_connection);
+    const auto lifetime_streams =
+        http3_transport_lifetime_stream_capacity(*max_requests_per_connection);
+    constexpr auto max_power_of_two =
         std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
-    if (trackedStreams > maxPowerOfTwo / 2 || lifetimeStreams > maxPowerOfTwo) {
+    if (tracked_streams > max_power_of_two / 2 || lifetime_streams > max_power_of_two) {
         throw std::invalid_argument("HTTP/3 stream tracking capacity is not representable");
     }
     const std::vector<std::size_t> slots;
-    if (trackedStreams > slots.max_size() / 2 || lifetimeStreams > slots.max_size()) {
+    if (tracked_streams > slots.max_size() / 2 || lifetime_streams > slots.max_size()) {
         throw std::invalid_argument("HTTP/3 stream capacity exceeds container limits");
     }
 }
 
-void validate_http3_listen_config(const Http3ListenConfig& config) {
+void validate_http3_listen_config(const http3_listen_config& config) {
     (void)normalize_http3_capacity(config, 1);
-    validateHttp3QpackConfig(config.qpack);
-    ruvia::ensurePositiveDuration(config.handshakeTimeout,
+    validate_http3_qpack_config(config.qpack_);
+    ruvia::ensure_positive_duration(config.handshake_timeout_,
         "HTTP/3 handshake timeout must be greater than zero");
-    ruvia::ensurePositiveDuration(config.drainTimeout,
+    ruvia::ensure_positive_duration(config.drain_timeout_,
         "HTTP/3 drain timeout must be greater than zero");
-    if (std::chrono::duration<long double>(config.drainTimeout) >
+    if (std::chrono::duration<long double>(config.drain_timeout_) >
         std::chrono::duration<long double>(std::chrono::steady_clock::duration::max())) {
         throw std::invalid_argument("HTTP/3 drain timeout is not representable");
     }
 }
 
-void validateHttpServerListener(const HttpServerListenerDefinition& listener) {
-    if (const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport)) {
-        validateHttpServerTlsOptions(*tls);
-    } else if (listener.http3.has_value()) {
+void validate_http_server_listener(const http_server_listener_definition& listener_value) {
+    if (const auto* tls = std::get_if<http_server_listener_definition::tls_type>(&listener_value.transport_)) {
+        validate_http_server_tls_options(*tls);
+    } else if (listener_value.http3_.has_value()) {
         throw std::invalid_argument("HTTP/3 listener requires TLS");
     }
-    if (listener.http3) {
-        validate_http3_listen_config(*listener.http3);
+    if (listener_value.http3_) {
+        validate_http3_listen_config(*listener_value.http3_);
     }
     if (const auto* redirect =
-            std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&listener.transport)) {
-        ruvia::ensureNonZeroPort(
-            redirect->httpsPort, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
+            std::get_if<http_server_listener_definition::redirect_http_to_https_type>(&listener_value.transport_)) {
+        ruvia::ensure_non_zero_port(
+            redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
 }
 
-[[nodiscard]] ValidatedHttpServerConfiguration validateHttpServerConfiguration(
-    std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions&& options) {
+[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
+    std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
     if (listeners.empty()) {
         throw std::invalid_argument("HTTP server worker requires at least one listener");
     }
-    const Http3ListenConfig* http3 = nullptr;
+    const http3_listen_config* http3 = nullptr;
     for (const auto& listener : listeners) {
-        validateHttpServerListener(listener);
-        if (listener.http3.has_value()) {
+        validate_http_server_listener(listener);
+        if (listener.http3_.has_value()) {
             if (http3) {
                 throw std::invalid_argument(
                     "only one HTTP/3 listener is supported by the App runtime");
             }
-            http3 = &*listener.http3;
+            http3 = &*listener.http3_;
         }
     }
-    validateHttpServerOptions(options);
+    validate_http_server_options(options);
     if (http3) {
-        validateHttp3ServerLimits(
-            options.maxConnections, *http3,
-            options.max_requests_per_connection, 1);
+        validate_http3_server_limits(
+            options.max_connections_, *http3,
+            options.max_requests_per_connection_, 1);
     }
-    return ValidatedHttpServerConfiguration(listeners, std::move(options));
+    return validated_http_server_configuration(listeners, std::move(options));
 }
 
 }  // namespace ruvia::detail

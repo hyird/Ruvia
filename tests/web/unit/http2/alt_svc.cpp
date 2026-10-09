@@ -6,100 +6,100 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/http/Hpack.h"
-#include "ruvia/http/Http2Framing.h"
-#include "ruvia/http/Http2Types.h"
+#include "ruvia/http/hpack.h"
+#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_types.h"
 
-#include "context/ContextServices.h"
-#include "http2/Http2SansIoSession.h"
+#include "context/context_services.h"
+#include "http2/http2_sans_io_session.h"
 #include "http2_sansio_session_fixture.h"
-#include "router/Router.h"
-#include "router/RouterImpl.h"
+#include "router/router.h"
+#include "router/router_impl.h"
 #include "sansio_driver_fixture.h"
 #include "test_io_context.h"
 
 namespace {
 
-constexpr std::string_view kAutomaticAltSvc = "h3=\":443\"; ma=86400";
+constexpr std::string_view automatic_alt_svc = "h3=\":443\"; ma=86400";
 
-ruvia::Task<ruvia::HttpResponse> altSvcBufferedHandler(void*, ruvia::Context& context) {
-    co_return context.text("buffered");
+ruvia::task<ruvia::http_response> alt_svc_buffered_handler(void*, ruvia::context& context_value) {
+    co_return context_value.text("buffered");
 }
 
-ruvia::Task<ruvia::HttpResponse> altSvcOverrideHandler(void*, ruvia::Context& context) {
-    context.header("Alt-Svc", "h3=\":9443\"; ma=10");
-    co_return context.text("overridden");
+ruvia::task<ruvia::http_response> alt_svc_override_handler(void*, ruvia::context& context_value) {
+    context_value.header("Alt-Svc", "h3=\":9443\"; ma=10");
+    co_return context_value.text("overridden");
 }
 
-ruvia::Task<ruvia::HttpResponse> altSvcEraseHandler(void*, ruvia::Context& context) {
-    context.removeHeader("Alt-Svc");
-    co_return context.text("removed");
+ruvia::task<ruvia::http_response> alt_svc_erase_handler(void*, ruvia::context& context_value) {
+    context_value.remove_header("Alt-Svc");
+    co_return context_value.text("removed");
 }
 
-ruvia::Task<ruvia::HttpResponse> altSvcExceptionHandler(void*, ruvia::Context&) {
+ruvia::task<ruvia::http_response> alt_svc_exception_handler(void*, ruvia::context&) {
     throw std::runtime_error("test exception");
-    co_return ruvia::HttpResponse{};
+    co_return ruvia::http_response{};
 }
 
-ruvia::Task<void> altSvcStreamHandler(void*, ruvia::Context& context) {
-    auto& stream = context.streamText();
+ruvia::task<void> alt_svc_stream_handler(void*, ruvia::context& context_value) {
+    auto& stream = context_value.stream_text();
     co_await stream.write("streamed");
     co_await stream.end();
 }
 
-struct ResponseHeaders final {
-    std::string status;
-    std::string altSvc;
-    bool hasAltSvc{false};
-    bool hasConnection{false};
-    bool hasUpgrade{false};
-    bool hasWebSocketAccept{false};
+struct response_headers final {
+    std::string status_;
+    std::string alt_svc_;
+    bool has_alt_svc_{false};
+    bool has_connection_{false};
+    bool has_upgrade_{false};
+    bool has_websocket_accept_{false};
 };
 
 }  // namespace
 
 RUVIA_TEST(sansio_driver_h2_emits_alt_svc_on_buffered_streaming_and_error_responses) {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context& io = ruvia::test::new_test_io_context();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
-    std::map<std::uint32_t, ResponseHeaders> responses;
+    std::map<std::uint32_t, response_headers> responses;
     std::map<std::uint32_t, std::string> bodies;
-    bool hpackDecodeSucceeded = true;
+    bool hpack_decode_succeeded = true;
 
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
-            ruvia::WorkerMemory worker;
-            ruvia::detail::Router router;
-            auto& impl = ruvia::detail::RouterImpl::from(router);
-            const auto noMiddlewares = std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{};
-            impl.registerRoute(ruvia::HttpKnownMethod::kGet,
+            ruvia::worker_memory worker;
+            ruvia::detail::router router;
+            auto& impl = ruvia::detail::router_impl::from(router);
+            const auto no_middlewares = std::span<const ruvia::detail::controller_middleware_descriptor>{};
+            impl.register_route(ruvia::http_known_method::get,
                 std::pmr::string("/buffered", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &altSvcBufferedHandler),
-                ruvia::detail::RequestBodyMode::kBuffered, noMiddlewares, noMiddlewares);
-            impl.registerRoute(ruvia::HttpKnownMethod::kGet,
+                ruvia::detail::route_handler_type(nullptr, &alt_svc_buffered_handler),
+                ruvia::detail::request_body_mode::buffered, no_middlewares, no_middlewares);
+            impl.register_route(ruvia::http_known_method::get,
                 std::pmr::string("/override", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &altSvcOverrideHandler),
-                ruvia::detail::RequestBodyMode::kBuffered, noMiddlewares, noMiddlewares);
-            impl.registerRoute(ruvia::HttpKnownMethod::kGet,
+                ruvia::detail::route_handler_type(nullptr, &alt_svc_override_handler),
+                ruvia::detail::request_body_mode::buffered, no_middlewares, no_middlewares);
+            impl.register_route(ruvia::http_known_method::get,
                 std::pmr::string("/erase", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &altSvcEraseHandler),
-                ruvia::detail::RequestBodyMode::kBuffered, noMiddlewares, noMiddlewares);
-            impl.registerRoute(ruvia::HttpKnownMethod::kGet,
+                ruvia::detail::route_handler_type(nullptr, &alt_svc_erase_handler),
+                ruvia::detail::request_body_mode::buffered, no_middlewares, no_middlewares);
+            impl.register_route(ruvia::http_known_method::get,
                 std::pmr::string("/exception", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &altSvcExceptionHandler),
-                ruvia::detail::RequestBodyMode::kBuffered, noMiddlewares, noMiddlewares);
-            impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet,
+                ruvia::detail::route_handler_type(nullptr, &alt_svc_exception_handler),
+                ruvia::detail::request_body_mode::buffered, no_middlewares, no_middlewares);
+            impl.register_response_stream_route(ruvia::http_known_method::get,
                 std::pmr::string("/stream", std::pmr::get_default_resource()),
-                ruvia::detail::RouteStreamHandler(nullptr, &altSvcStreamHandler),
-                noMiddlewares, noMiddlewares);
+                ruvia::detail::route_stream_handler_type(nullptr, &alt_svc_stream_handler),
+                no_middlewares, no_middlewares);
             impl.finalize();
-            co_await ruvia::asAwaitable(ruvia::test::runBareHttp2SansIoSessionWith(
-                sock, impl.routeTable(), worker,
-                [](ruvia::detail::ContextServices services) {
-                    return services.withTlsTransport("127.0.0.1")
-                        .withAutomaticAltSvc(kAutomaticAltSvc);
+            co_await ruvia::as_awaitable(ruvia::test::run_bare_http2_sans_io_session_with(
+                sock, impl.route_table(), worker,
+                [](ruvia::detail::context_services services) {
+                    return services.with_tls_transport("127.0.0.1")
+                        .with_automatic_alt_svc(automatic_alt_svc);
                 },
                 std::string_view{}));
         },
@@ -111,107 +111,107 @@ RUVIA_TEST(sansio_driver_h2_emits_alt_svc_on_buffered_streaming_and_error_respon
             tcp::socket sock(io);
             co_await sock.async_connect(
                 tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
-            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+            auto write_all = [&sock](std::string_view bytes_value) -> asio::awaitable<bool> {
                 const auto [ec, count] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
-                co_return !ec && count == bytes.size();
+                    asio::buffer(bytes_value.data(), bytes_value.size()), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && count == bytes_value.size();
             };
-            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+            auto read_exact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
                 const auto [ec, count] = co_await asio::async_read(
                     sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && count == size;
             };
-            auto requestOn = [](std::uint32_t streamId, std::string_view path) {
+            auto request_on = [](std::uint32_t stream_id, std::string_view path) {
                 std::pmr::string block(std::pmr::get_default_resource());
-                ruvia::HpackEncoder::encodeHeader(block, ":method", "GET");
-                ruvia::HpackEncoder::encodeHeader(block, ":path", path);
-                ruvia::HpackEncoder::encodeHeader(block, ":scheme", "https");
-                ruvia::HpackEncoder::encodeHeader(block, ":authority", "localhost");
+                ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+                ruvia::hpack_encoder::encode_header(block, ":path", path);
+                ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+                ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
                 return frame(0x1,
-                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders,
-                    streamId, std::string_view(block.data(), block.size()));
+                    sansio_driver_test::flag_end_stream | sansio_driver_test::flag_end_headers,
+                    stream_id, std::string_view(block.data(), block.size()));
             };
 
-            if (!co_await writeAll(kClientPreface) ||
-                !co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+            if (!co_await write_all(client_preface) ||
+                !co_await write_all(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
                 co_return;
             }
             std::string requests;
-            for (const auto& [streamId, path] : std::array{
+            for (const auto& [stream_id, path] : std::array{
                      std::pair{1U, std::string_view("/buffered")},
                      std::pair{3U, std::string_view("/override")},
                      std::pair{5U, std::string_view("/erase")},
                      std::pair{7U, std::string_view("/exception")},
                      std::pair{9U, std::string_view("/missing")},
                      std::pair{11U, std::string_view("/stream")}}) {
-                requests += requestOn(streamId, path);
+                requests += request_on(stream_id, path);
             }
-            if (!co_await writeAll(requests)) {
+            if (!co_await write_all(requests)) {
                 co_return;
             }
 
-            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+            ruvia::hpack_decoder decoder({.resource_ = std::pmr::get_default_resource()});
             std::set<std::uint32_t> pending{1, 3, 5, 7, 9, 11};
             while (!pending.empty()) {
-                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                char header_bytes[ruvia::http2_frame_header_bytes];
+                if (!co_await read_exact(header_bytes, sizeof(header_bytes))) {
                     break;
                 }
-                const auto header = sansio_driver_test::parseFrameHeader(
-                    std::string_view(headerBytes, sizeof(headerBytes)));
-                std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                const auto header_value = sansio_driver_test::parse_frame_header(
+                    std::string_view(header_bytes, sizeof(header_bytes)));
+                std::string payload_value(header_value.length_, '\0');
+                if (header_value.length_ != 0 && !co_await read_exact(payload_value.data(), payload_value.size())) {
                     break;
                 }
-                if (header.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders) &&
-                    pending.contains(header.streamId)) {
-                    auto& fields = responses[header.streamId];
-                    const auto decoded = decoder.decode(payload,
-                        [&fields](std::string_view name, std::string_view value) {
+                if (header_value.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) &&
+                    pending.contains(header_value.stream_id_)) {
+                    auto& fields_value = responses[header_value.stream_id_];
+                    const auto decoded = decoder.decode(payload_value,
+                        [&fields_value](std::string_view name, std::string_view value) {
                             if (name == ":status") {
-                                fields.status.assign(value);
+                                fields_value.status_.assign(value);
                             } else if (name == "alt-svc") {
-                                fields.hasAltSvc = true;
-                                fields.altSvc.assign(value);
+                                fields_value.has_alt_svc_ = true;
+                                fields_value.alt_svc_.assign(value);
                             } else if (name == "connection") {
-                                fields.hasConnection = true;
+                                fields_value.has_connection_ = true;
                             } else if (name == "upgrade") {
-                                fields.hasUpgrade = true;
+                                fields_value.has_upgrade_ = true;
                             } else if (name == "sec-websocket-accept") {
-                                fields.hasWebSocketAccept = true;
+                                fields_value.has_websocket_accept_ = true;
                             }
                             return true;
                         });
-                    hpackDecodeSucceeded = hpackDecodeSucceeded && decoded.decoded();
-                } else if (header.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kData) &&
-                           pending.contains(header.streamId)) {
-                    bodies[header.streamId].append(payload);
+                    hpack_decode_succeeded = hpack_decode_succeeded && decoded.decoded();
+                } else if (header_value.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
+                           pending.contains(header_value.stream_id_)) {
+                    bodies[header_value.stream_id_].append(payload_value);
                 }
-                if (pending.contains(header.streamId) &&
-                    (header.flags & sansio_driver_test::kFlagEndStream) != 0) {
-                    pending.erase(header.streamId);
+                if (pending.contains(header_value.stream_id_) &&
+                    (header_value.flags_ & sansio_driver_test::flag_end_stream) != 0) {
+                    pending.erase(header_value.stream_id_);
                 }
             }
-            sansio_driver_test::closeClientSocket(sock);
+            sansio_driver_test::close_client_socket(sock);
         },
         asio::detached);
 
     io.run();
-    RUVIA_CHECK(hpackDecodeSucceeded);
-    for (const auto streamId : {1U, 7U, 9U, 11U}) {
-        const auto& fields = responses[streamId];
-        RUVIA_CHECK(fields.hasAltSvc);
-        RUVIA_CHECK_EQ(fields.altSvc, std::string(kAutomaticAltSvc));
-        RUVIA_CHECK(!fields.hasConnection);
-        RUVIA_CHECK(!fields.hasUpgrade);
-        RUVIA_CHECK(!fields.hasWebSocketAccept);
+    RUVIA_CHECK(hpack_decode_succeeded);
+    for (const auto stream_id : {1U, 7U, 9U, 11U}) {
+        const auto& fields_value = responses[stream_id];
+        RUVIA_CHECK(fields_value.has_alt_svc_);
+        RUVIA_CHECK_EQ(fields_value.alt_svc_, std::string(automatic_alt_svc));
+        RUVIA_CHECK(!fields_value.has_connection_);
+        RUVIA_CHECK(!fields_value.has_upgrade_);
+        RUVIA_CHECK(!fields_value.has_websocket_accept_);
     }
-    RUVIA_CHECK_EQ(responses[1].status, std::string("200"));
-    RUVIA_CHECK_EQ(responses[7].status, std::string("500"));
-    RUVIA_CHECK_EQ(responses[9].status, std::string("404"));
-    RUVIA_CHECK_EQ(responses[11].status, std::string("200"));
-    RUVIA_CHECK_EQ(responses[3].altSvc, std::string("h3=\":9443\"; ma=10"));
-    RUVIA_CHECK_EQ(responses[5].status, std::string("200"));
-    RUVIA_CHECK(!responses[5].hasAltSvc);
+    RUVIA_CHECK_EQ(responses[1].status_, std::string("200"));
+    RUVIA_CHECK_EQ(responses[7].status_, std::string("500"));
+    RUVIA_CHECK_EQ(responses[9].status_, std::string("404"));
+    RUVIA_CHECK_EQ(responses[11].status_, std::string("200"));
+    RUVIA_CHECK_EQ(responses[3].alt_svc_, std::string("h3=\":9443\"; ma=10"));
+    RUVIA_CHECK_EQ(responses[5].status_, std::string("200"));
+    RUVIA_CHECK(!responses[5].has_alt_svc_);
     RUVIA_CHECK_EQ(bodies[11], std::string("streamed"));
 }

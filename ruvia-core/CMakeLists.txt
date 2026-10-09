@@ -8,8 +8,8 @@ configure_file(
     "${_ruvia_core_version_header}"
     @ONLY)
 
-ruvia_collect_cpp_sources(RUVIA_CORE_SOURCES src)
-add_library(ruvia-core ${RUVIA_CORE_SOURCES})
+ruvia_collect_cpp_sources(ruvia_core_sources src)
+add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
 ruvia_configure_runtime_library(ruvia-core)

@@ -8,7 +8,7 @@
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
-#include "client/ClientTransport.h"
+#include "client/client_transport.h"
 
 namespace ruvia::detail {
 namespace {
@@ -86,14 +86,14 @@ const OSSL_DISPATCH callbacks[]{
 
 }  // namespace
 
-openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role role,
+openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context_value, quic_role role,
     std::span<const unsigned char> alpn, std::string_view peer_host,
     std::pmr::memory_resource* resource, SSL_SESSION* resumption_session,
     bool enable_early_data)
     : role_(role),
       resource_(resource ? resource : std::pmr::get_default_resource()),
       peer_host_(peer_host, resource_),
-      ssl_(context ? SSL_new(context) : nullptr) {
+      ssl_(context_value ? SSL_new(context_value) : nullptr) {
     if (!ssl_) {
         throw std::runtime_error("failed to create QUIC TLS session");
     }
@@ -101,7 +101,7 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role r
         SSL_set_connect_state(ssl_.get());
         if (!peer_host_.empty()) {
             std::pmr::string normalized(peer_host_, resource_);
-            const bool ip_address = isClientIpAddress(normalized);
+            const bool ip_address = is_client_ip_address(normalized);
             if (!ip_address && normalized.ends_with('.')) {
                 normalized.pop_back();
             }
@@ -125,8 +125,8 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role r
         if (index < 0 || SSL_set_ex_data(ssl_.get(), index, this) != 1) {
             throw std::runtime_error("failed to bind QUIC TLS session owner");
         }
-        SSL_CTX_set_session_cache_mode(context, SSL_SESS_CACHE_CLIENT);
-        SSL_CTX_sess_set_new_cb(context, new_session_callback);
+        SSL_CTX_set_session_cache_mode(context_value, SSL_SESS_CACHE_CLIENT);
+        SSL_CTX_sess_set_new_cb(context_value, new_session_callback);
     }
     // OpenSSL snapshots the SSL role when the callback table is installed.
     if (SSL_set_quic_tls_cbs(ssl_.get(), callbacks, this) != 1) {
@@ -157,16 +157,16 @@ void openssl_quic_tls_session::ssl_deleter::operator()(SSL* ssl) const noexcept 
 }
 
 quic_tls_driver_view openssl_quic_tls_session::driver_view() noexcept {
-    return {.context = this, .drive = drive_callback, .retire = retire_callback};
+    return {.context_ = this, .drive_ = drive_callback, .retire_ = retire_callback};
 }
 
-void openssl_quic_tls_session::retire_callback(void* context) noexcept {
-    static_cast<openssl_quic_tls_session*>(context)->stop();
+void openssl_quic_tls_session::retire_callback(void* context_value) noexcept {
+    static_cast<openssl_quic_tls_session*>(context_value)->stop();
 }
 
-quic_tls_drive_result openssl_quic_tls_session::drive_callback(void* context,
+quic_tls_drive_result openssl_quic_tls_session::drive_callback(void* context_value,
     quic_tls_handshake& handshake) noexcept {
-    return static_cast<openssl_quic_tls_session*>(context)->drive(handshake);
+    return static_cast<openssl_quic_tls_session*>(context_value)->drive(handshake);
 }
 
 quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handshake) noexcept {
@@ -196,15 +196,15 @@ quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handsh
         std::array<unsigned char, 1> post_handshake{};
         std::size_t read{};
         ERR_clear_error();
-        const int result = handshake.completed()
-                               ? SSL_read_ex(ssl_.get(), post_handshake.data(), post_handshake.size(), &read)
-                               : SSL_do_handshake(ssl_.get());
-        const int error = result == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl_.get(), result);
+        const int result_value = handshake.completed()
+                                     ? SSL_read_ex(ssl_.get(), post_handshake.data(), post_handshake.size(), &read)
+                                     : SSL_do_handshake(ssl_.get());
+        const int error = result_value == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl_.get(), result_value);
         if (callback_failed_) {
             handshake.fail(callback_alert_);
             return {quic_tls_progress::failed, callback_alert_};
         }
-        if (result == 1) {
+        if (result_value == 1) {
             if (!handshake.completed()) {
                 if (!SSL_is_init_finished(ssl_.get())) {
                     return {quic_tls_progress::progress, quic_tls_alert::internal_error};
@@ -221,8 +221,8 @@ quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handsh
                     handshake.fail(quic_tls_alert::no_application_protocol);
                     return {quic_tls_progress::failed, quic_tls_alert::no_application_protocol};
                 }
-                handshake.complete({.negotiated_alpn = {reinterpret_cast<const std::byte*>(alpn), alpn_size},
-                    .cipher_suite = cipher_suite(ssl_.get())});
+                handshake.complete({.negotiated_alpn_ = {reinterpret_cast<const std::byte*>(alpn), alpn_size},
+                    .cipher_suite_ = cipher_suite(ssl_.get())});
                 return {quic_tls_progress::completed, quic_tls_alert::internal_error};
             }
             return {quic_tls_progress::progress, quic_tls_alert::internal_error};
@@ -245,8 +245,8 @@ openssl_quic_tls_session::take_resumption_session() noexcept {
     return std::move(pending_session_);
 }
 
-void openssl_quic_tls_session::session_deleter::operator()(SSL_SESSION* session) const noexcept {
-    SSL_SESSION_free(session);
+void openssl_quic_tls_session::session_deleter::operator()(SSL_SESSION* session_value) const noexcept {
+    SSL_SESSION_free(session_value);
 }
 
 int openssl_quic_tls_session::session_owner_index() noexcept {
@@ -254,28 +254,28 @@ int openssl_quic_tls_session::session_owner_index() noexcept {
     return index;
 }
 
-int openssl_quic_tls_session::new_session_callback(SSL* ssl, SSL_SESSION* session) noexcept {
+int openssl_quic_tls_session::new_session_callback(SSL* ssl, SSL_SESSION* session_value) noexcept {
     const int index = session_owner_index();
-    auto* const owner = index < 0
-                            ? nullptr
-                            : static_cast<openssl_quic_tls_session*>(SSL_get_ex_data(ssl, index));
-    if (owner) {
-        owner->capture_resumption_session(session);
+    auto* const owner_value = index < 0
+                                  ? nullptr
+                                  : static_cast<openssl_quic_tls_session*>(SSL_get_ex_data(ssl, index));
+    if (owner_value) {
+        owner_value->capture_resumption_session(session_value);
     }
     return 0;
 }
 
-void openssl_quic_tls_session::capture_resumption_session(SSL_SESSION* session) noexcept {
-    if (!session || SSL_SESSION_is_resumable(session) != 1) {
+void openssl_quic_tls_session::capture_resumption_session(SSL_SESSION* session_value) noexcept {
+    if (!session_value || SSL_SESSION_is_resumable(session_value) != 1) {
         return;
     }
     const unsigned char* ticket{};
     std::size_t ticket_size{};
-    SSL_SESSION_get0_ticket(session, &ticket, &ticket_size);
+    SSL_SESSION_get0_ticket(session_value, &ticket, &ticket_size);
     if (!ticket || ticket_size == 0 || ticket_size > 16 * 1024) {
         return;
     }
-    SSL_SESSION* const snapshot = SSL_SESSION_dup(session);
+    SSL_SESSION* const snapshot = SSL_SESSION_dup(session_value);
     if (snapshot) {
         pending_session_.reset(snapshot);
     } else {
@@ -298,21 +298,21 @@ void openssl_quic_tls_session::stop() noexcept {
     write_level_ = quic_encryption_level::initial;
 }
 
-int openssl_quic_tls_session::crypto_send(SSL*, const unsigned char* bytes,
+int openssl_quic_tls_session::crypto_send(SSL*, const unsigned char* bytes_value,
     std::size_t size, std::size_t* consumed, void* argument) noexcept {
     auto& self = *static_cast<openssl_quic_tls_session*>(argument);
     try {
-        return self.on_crypto_send(bytes, size, consumed);
+        return self.on_crypto_send(bytes_value, size, consumed);
     } catch (...) {
         self.fail(quic_tls_alert::internal_error);
         return 0;
     }
 }
-int openssl_quic_tls_session::crypto_receive(SSL*, const unsigned char** bytes,
+int openssl_quic_tls_session::crypto_receive(SSL*, const unsigned char** bytes_value,
     std::size_t* size, void* argument) noexcept {
     auto& self = *static_cast<openssl_quic_tls_session*>(argument);
     try {
-        return self.on_crypto_receive(bytes, size);
+        return self.on_crypto_receive(bytes_value, size);
     } catch (...) {
         self.fail(quic_tls_alert::internal_error);
         return 0;
@@ -351,18 +351,18 @@ int openssl_quic_tls_session::alert(SSL*, unsigned char value, void* argument) n
     return static_cast<openssl_quic_tls_session*>(argument)->on_alert(value);
 }
 
-int openssl_quic_tls_session::on_crypto_send(const unsigned char* bytes, std::size_t size,
+int openssl_quic_tls_session::on_crypto_send(const unsigned char* bytes_value, std::size_t size,
     std::size_t* consumed) {
     if (!handshake_ || !consumed) {
         throw std::logic_error("QUIC TLS driver is not bound");
     }
-    const auto result = handshake_->submit_crypto(write_level_,
-        {reinterpret_cast<const std::byte*>(bytes), size});
-    *consumed = result == quic_operation_status::accepted ? size : 0;
-    return result == quic_operation_status::accepted || result == quic_operation_status::would_block;
+    const auto result_value = handshake_->submit_crypto(write_level_,
+        {reinterpret_cast<const std::byte*>(bytes_value), size});
+    *consumed = result_value == quic_operation_status::accepted ? size : 0;
+    return result_value == quic_operation_status::accepted || result_value == quic_operation_status::would_block;
 }
-int openssl_quic_tls_session::on_crypto_receive(const unsigned char** bytes, std::size_t* size) {
-    if (!handshake_ || !bytes || !size) {
+int openssl_quic_tls_session::on_crypto_receive(const unsigned char** bytes_value, std::size_t* size) {
+    if (!handshake_ || !bytes_value || !size) {
         throw std::logic_error("QUIC TLS driver is not bound");
     }
     if (!record_) {
@@ -372,12 +372,12 @@ int openssl_quic_tls_session::on_crypto_receive(const unsigned char** bytes, std
         }
     }
     if (!record_) {
-        *bytes = nullptr;
+        *bytes_value = nullptr;
         *size = 0;
         return 1;
     }
     const auto data = record_->bytes();
-    *bytes = reinterpret_cast<const unsigned char*>(data.data());
+    *bytes_value = reinterpret_cast<const unsigned char*>(data.data());
     *size = data.size();
     return 1;
 }

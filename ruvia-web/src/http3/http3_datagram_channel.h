@@ -10,11 +10,11 @@
 
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/core/WorkerNotification.h"
-#include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/channel_lifecycle.h"
 #include "ruvia/core/spsc_ring_queue.h"
+#include "ruvia/core/worker_notification.h"
+#include "ruvia/core/worker_runtime_context.h"
 
 #include "http3/http3_capacity.h"
 
@@ -36,25 +36,25 @@ class http3_datagram_channel final {
 public:
     using udp = asio::ip::udp;
     static constexpr std::size_t packet_capacity = http3_capacity::packet_bytes;
-    static constexpr std::size_t default_input_capacity = Http3ListenConfig{}.datagram_input_capacity;
-    static constexpr std::size_t default_output_window = Http3ListenConfig{}.datagram_output_capacity;
+    static constexpr std::size_t default_input_capacity = http3_listen_config{}.datagram_input_capacity_;
+    static constexpr std::size_t default_output_window = http3_listen_config{}.datagram_output_capacity_;
 
     struct datagram_view final {
-        std::span<const std::byte> bytes;
-        udp::endpoint local_destination;
-        udp::endpoint peer;
+        std::span<const std::byte> bytes_;
+        udp::endpoint local_destination_;
+        udp::endpoint peer_;
     };
     struct datagram final {
-        buffer_lease storage;
-        std::size_t size{};
-        udp::endpoint local_destination;
-        udp::endpoint peer;
+        buffer_lease storage_;
+        std::size_t size_{};
+        udp::endpoint local_destination_;
+        udp::endpoint peer_;
         [[nodiscard]] datagram_view view() const noexcept {
-            return {storage.bytes().first(size), local_destination, peer};
+            return {storage_.bytes().first(size_), local_destination_, peer_};
         }
     };
 
-    http3_datagram_channel(buffer_pool& pool, WorkerNotification& acceptor_notification,
+    http3_datagram_channel(buffer_pool& pool, ruvia::worker_notification& acceptor_notification,
         std::pmr::memory_resource* resource = nullptr,
         std::size_t input_capacity = default_input_capacity,
         std::size_t output_window = default_output_window);
@@ -62,9 +62,9 @@ public:
     http3_datagram_channel(const http3_datagram_channel&) = delete;
     http3_datagram_channel& operator=(const http3_datagram_channel&) = delete;
 
-    void stage_worker(WorkerRuntimeContext& worker);
+    void stage_worker(worker_runtime_context& worker);
     void worker_start() noexcept;
-    [[nodiscard]] WorkerNotification& worker_notification() noexcept;
+    [[nodiscard]] ruvia::worker_notification& worker_notification() noexcept;
 
     // Acceptor-affine. Failed routing leaves the caller's lease untouched.
     [[nodiscard]] bool acceptor_push(datagram&& packet) noexcept;
@@ -95,8 +95,8 @@ public:
 
 private:
     struct returned_credit final {
-        buffer_credit credit;
-        bool output{};
+        buffer_credit credit_;
+        bool output_{};
     };
     static void worker_receive_return(void*, buffer_credit) noexcept;
     static void worker_output_return(void*, buffer_credit) noexcept;
@@ -111,8 +111,8 @@ private:
     const std::thread::id acceptor_owner_;
     std::thread::id worker_owner_;
     buffer_pool& pool_;
-    WorkerNotification& acceptor_notification_;
-    std::optional<WorkerNotification> worker_notification_;
+    ruvia::worker_notification& acceptor_notification_;
+    std::optional<ruvia::worker_notification> worker_notification_;
     const std::size_t credit_capacity_;
     spsc_ring_queue<datagram> input_;
     spsc_ring_queue<datagram> output_;

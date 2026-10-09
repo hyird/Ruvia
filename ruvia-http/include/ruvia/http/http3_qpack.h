@@ -1,0 +1,56 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory_resource>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+
+namespace ruvia {
+
+enum class http3_qpack_error : std::uint8_t {
+    need_more_data,
+    integer_overflow,
+    invalid_index,
+    invalid_huffman,
+    output_too_small,
+};
+
+struct http3_qpack_static_entry final {
+    std::string_view name_;
+    std::string_view value_;
+};
+
+struct http3_qpack_integer final {
+    std::uint64_t value_{0};
+    std::size_t encoded_bytes_{0};
+};
+
+// RFC 9204 static-table lookup. Valid indices are 0 through 98.
+[[nodiscard]] std::variant<http3_qpack_static_entry, http3_qpack_error> get_http3_qpack_static_entry(
+    std::uint64_t index) noexcept;
+
+// Decodes/encodes a prefixed integer at the start of a field. `prefix_bits` is 1..8;
+// encode's `prefix` supplies bits outside the integer prefix.
+[[nodiscard]] std::variant<http3_qpack_integer, http3_qpack_error> decode_http3_qpack_integer(
+    std::span<const char> input, std::uint8_t prefix_bits) noexcept;
+[[nodiscard]] std::variant<std::size_t, http3_qpack_error> encode_http3_qpack_integer(
+    std::span<char> output, std::uint8_t prefix_bits, std::uint8_t prefix,
+    std::uint64_t value) noexcept;
+
+// Decodes a QPACK string literal into `output`; the returned size includes the
+// first-byte Huffman flag and the prefixed length. Huffman strings use HPACK's
+// identical Huffman code table (RFC 7541 Appendix B).
+[[nodiscard]] std::variant<std::size_t, http3_qpack_error> decode_http3_qpack_string(
+    std::span<const char> input, std::pmr::string& output);
+// Decodes a literal using a caller-selected prefixed length (1..7 bits).
+[[nodiscard]] std::variant<std::size_t, http3_qpack_error> decode_http3_qpack_string(
+    std::span<const char> input, std::uint8_t prefix_bits, std::pmr::string& output);
+// Encodes a non-Huffman string literal. QPACK Huffman encoding is intentionally
+// not provided by this primitive.
+[[nodiscard]] std::variant<std::size_t, http3_qpack_error> encode_http3_qpack_string(
+    std::span<char> output, std::string_view value) noexcept;
+
+}  // namespace ruvia

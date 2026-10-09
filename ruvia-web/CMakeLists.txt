@@ -1,28 +1,28 @@
 ruvia_fetch_web_dependencies("${RUVIA_ENABLE_MARIADB}" "${RUVIA_ENABLE_POSTGRESQL}" "${RUVIA_ENABLE_REDIS}")
 
-ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
+ruvia_collect_cpp_sources(ruvia_web_sources src)
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/db/")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db/")
 else()
     if(NOT RUVIA_ENABLE_MARIADB)
-        list(FILTER RUVIA_WEB_SOURCES EXCLUDE
-            REGEX "/src/db/(Db|DbMysqlRuntime|DbPoolIo|DbPoolLifecycle|DbSql)\\.cpp$")
+        list(FILTER ruvia_web_sources EXCLUDE
+            REGEX "/src/db/(db|db_mysql_runtime|db_pool_io|db_pool_lifecycle|db_sql)\\.cpp$")
     endif()
     if(NOT RUVIA_ENABLE_POSTGRESQL)
-        list(FILTER RUVIA_WEB_SOURCES EXCLUDE
-            REGEX "/src/db/(DbPostgreSql|Pg[^/]*)\\.cpp$")
+        list(FILTER ruvia_web_sources EXCLUDE
+            REGEX "/src/db/(db_postgresql|pg_[^/]*)\\.cpp$")
     endif()
 endif()
 if(NOT RUVIA_ENABLE_REDIS)
-    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/redis/")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis/")
 endif()
 if(NOT RUVIA_ENABLE_JWT)
-    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/auth/jwt[^/]*\\.cpp$")
 endif()
 
-add_library(ruvia-web ${RUVIA_WEB_SOURCES})
+add_library(ruvia-web STATIC ${ruvia_web_sources})
 
 ruvia_configure_library(ruvia-web web)
 ruvia_configure_runtime_library(ruvia-web)
@@ -66,7 +66,7 @@ if(NOT RUVIA_ENABLE_REDIS)
         file(GLOB _ruvia_redis_runtime_headers CONFIGURE_DEPENDS
             RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/web/redis/*.h")
-        list(REMOVE_ITEM _ruvia_redis_runtime_headers "include/ruvia/web/redis/RedisTypes.h")
+        list(REMOVE_ITEM _ruvia_redis_runtime_headers "include/ruvia/web/redis/redis_types.h")
         list(APPEND _ruvia_web_excluded_headers ${_ruvia_redis_runtime_headers})
     else()
         list(APPEND _ruvia_web_excluded_header_directories redis)

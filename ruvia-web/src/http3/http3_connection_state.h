@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "ruvia/core/buffer_pool.h"
-#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/spsc_ring_queue.h"
 
 #include "http3/http3_ready_scheduler.h"
@@ -17,8 +17,8 @@
 namespace ruvia::detail {
 
 struct http3_connection_identity final {
-    std::uint64_t epoch{};
-    std::uint64_t connection_generation{};
+    std::uint64_t epoch_{};
+    std::uint64_t connection_generation_{};
 
     friend bool operator==(const http3_connection_identity&, const http3_connection_identity&) noexcept = default;
 };
@@ -49,50 +49,50 @@ public:
         invalid };
 
     struct local_change_callback final {
-        void* context;
-        void (*changed)(void*) noexcept;
+        void* context_;
+        void (*changed_)(void*) noexcept;
     };
     struct connection_metadata_view final {
-        std::string_view remote_address;
-        std::string_view client_certificate_subject;
-        std::uint16_t remote_port;
+        std::string_view remote_address_;
+        std::string_view client_certificate_subject_;
+        std::uint16_t remote_port_;
     };
     // Text remains valid until handler attachment has copied it. The protocol
     // owner retains its metadata storage until this generation is reset.
     struct binding_snapshot final {
-        http3_connection_identity identity{};
-        connection_metadata_view metadata{};
-        Http3Settings settings{.enableConnectProtocol = true};
-        std::size_t max_quic_datagram_payload_bytes{};
+        http3_connection_identity identity_{};
+        connection_metadata_view metadata_{};
+        http3_settings settings_{.enable_connect_protocol_ = true};
+        std::size_t max_quic_datagram_payload_bytes_{};
     };
     struct admission_seal_snapshot final {
-        http3_connection_identity identity{};
-        std::size_t expected_admitted_requests{};
-        std::uint64_t goaway_id{};
+        http3_connection_identity identity_{};
+        std::size_t expected_admitted_requests_{};
+        std::uint64_t goaway_id_{};
     };
     struct intent_execution_result final {
-        execution_outcome outcome{execution_outcome::unavailable};
-        std::optional<Http3ServerConnection::PushStreamOpenResult> push_stream{};
+        execution_outcome outcome_{execution_outcome::unavailable};
+        std::optional<http3_server_connection::push_stream_open_result_type> push_stream_{};
 
         [[nodiscard]] bool completed() const noexcept {
-            return outcome == execution_outcome::executed || outcome == execution_outcome::transport_retired;
+            return outcome_ == execution_outcome::executed || outcome_ == execution_outcome::transport_retired;
         }
     };
     struct transport_executor final {
-        void* context{};
-        intent_execution_result (*execute)(void*, http3_connection_identity, const Http3ServerConnection::TransportIntent&) noexcept {};
+        void* context_{};
+        intent_execution_result (*execute_)(void*, http3_connection_identity, const http3_server_connection::transport_intent_type&) noexcept {};
     };
 
     static constexpr std::size_t datagram_capacity = 16;
     static constexpr std::size_t max_datagram_bytes = 1200;
     struct datagram final {
-        http3_connection_identity identity{};
-        std::uint64_t stream_id{};
-        buffer_lease storage{};
-        std::size_t size{};
+        http3_connection_identity identity_{};
+        std::uint64_t stream_id_{};
+        buffer_lease storage_{};
+        std::size_t size_{};
 
         [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
-            return storage ? storage.bytes().first(size) : std::span<const std::byte>{};
+            return storage_ ? storage_.bytes().first(size_) : std::span<const std::byte>{};
         }
     };
 
@@ -111,9 +111,9 @@ public:
     [[nodiscard]] std::optional<http3_ready_scheduler::registration> registration() const noexcept;
     [[nodiscard]] admission_phase admission() const noexcept;
     void stop_admission() noexcept;
-    [[nodiscard]] status bind(http3_connection_identity identity, connection_metadata_view metadata = {}, Http3Settings settings = {.enableConnectProtocol = true}, std::size_t max_quic_datagram_payload_bytes = 0) noexcept;
+    [[nodiscard]] status bind(http3_connection_identity identity, connection_metadata_view metadata = {}, http3_settings settings = {.enable_connect_protocol_ = true}, std::size_t max_quic_datagram_payload_bytes = 0) noexcept;
     [[nodiscard]] std::optional<binding_snapshot> binding() const noexcept;
-    [[nodiscard]] status attach_handler(http3_connection_identity identity, Http3ServerConnection& connection) noexcept;
+    [[nodiscard]] status attach_handler(http3_connection_identity identity, http3_server_connection& connection) noexcept;
     [[nodiscard]] status reject(http3_connection_identity identity, reject_reason reason) noexcept;
     [[nodiscard]] std::optional<reject_reason> rejection() const noexcept;
     [[nodiscard]] status revoke(http3_connection_identity identity) noexcept;
@@ -121,12 +121,12 @@ public:
     // Synchronous worker-local input requires the exact attached generation.
     // Before attachment, the transport retains bytes/FIN/RESET; no request DATA
     // credit or borrowed buffer is consumed by these peer-unidirectional calls.
-    [[nodiscard]] std::optional<Http3ServerConnection::EventResult> accept_peer_stream_data(http3_stream_id id, std::span<const std::byte> bytes);
-    [[nodiscard]] std::optional<Http3ServerConnection::EventResult> accept_peer_stream_control(const http3_stream_control& control);
+    [[nodiscard]] std::optional<http3_server_connection::event_result_type> accept_peer_stream_data(http3_stream_id id, std::span<const std::byte> bytes);
+    [[nodiscard]] std::optional<http3_server_connection::event_result_type> accept_peer_stream_control(const http3_stream_control& control);
     void set_transport_executor(transport_executor executor) noexcept;
     // The caller immediately settles the scheduler's exact offered token after
     // a completed result. This method neither queues nor settles scheduler work.
-    [[nodiscard]] intent_execution_result execute_intent(http3_connection_identity identity, const Http3ServerConnection::TransportIntent& intent) noexcept;
+    [[nodiscard]] intent_execution_result execute_intent(http3_connection_identity identity, const http3_server_connection::transport_intent_type& intent) noexcept;
 
     [[nodiscard]] status seal_admission(http3_connection_identity identity, std::size_t expected_admitted_requests, std::uint64_t goaway_id) noexcept;
     [[nodiscard]] std::optional<admission_seal_snapshot> admission_seal() const noexcept;
@@ -151,9 +151,9 @@ public:
 
 private:
     struct datagram_storage final {
-        buffer_pool pool;
-        local_ring_queue<datagram> requests;
-        local_ring_queue<datagram> responses;
+        buffer_pool pool_;
+        local_ring_queue<datagram> requests_;
+        local_ring_queue<datagram> responses_;
 
         explicit datagram_storage(std::pmr::memory_resource* resource);
     };
@@ -164,14 +164,14 @@ private:
     void discard_datagrams() noexcept;
     void signal_change() noexcept;
     static void return_datagram(void* context, buffer_credit credit) noexcept;
-    [[nodiscard]] static intent_execution_result retired_intent(const Http3ServerConnection::TransportIntent& intent) noexcept;
+    [[nodiscard]] static intent_execution_result retired_intent(const http3_server_connection::transport_intent_type& intent) noexcept;
 
     const local_change_callback changed_;
     transport_executor executor_{};
-    std::unique_ptr<datagram_storage, PmrObjectDeleter<datagram_storage>> datagrams_;
+    std::unique_ptr<datagram_storage, pmr_object_deleter<datagram_storage>> datagrams_;
     http3_ready_scheduler* scheduler_{};
     std::optional<http3_ready_scheduler::registration> registration_{};
-    Http3ServerConnection* connection_{};
+    http3_server_connection* connection_{};
     std::optional<http3_connection_identity> identity_{};
     std::optional<http3_connection_identity> last_identity_{};
     std::optional<binding_snapshot> binding_{};

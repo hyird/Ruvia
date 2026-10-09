@@ -12,8 +12,8 @@
 
 #include "ruvia/core/buffer_pool.h"
 
-#include "http3/Http3UdpSocket.h"
 #include "http3/http3_datagram_channel.h"
+#include "http3/http3_udp_socket.h"
 
 namespace ruvia::detail {
 
@@ -26,8 +26,8 @@ public:
         stopping,
         endpoint_retired };
     struct notification final {
-        void* context{};
-        void (*notify)(void*, notification_kind) noexcept {};
+        void* context_{};
+        void (*notify_)(void*, notification_kind) noexcept {};
     };
     enum class pump_result : std::uint8_t { idle,
         pending,
@@ -37,9 +37,9 @@ public:
         done,
         error };
     struct received_datagram final {
-        std::span<const std::byte> bytes;
-        udp::endpoint peer;
-        udp::endpoint local_destination;
+        std::span<const std::byte> bytes_;
+        udp::endpoint peer_;
+        udp::endpoint local_destination_;
     };
 };
 

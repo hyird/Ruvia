@@ -1,28 +1,29 @@
+#include "http/static_path_normalization.h"
+
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/Error.h"
+#include "ruvia/web/error.h"
 
-#include "http/StaticPathNormalization.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::HttpError;
-using ruvia::detail::isWindowsDrivePath;
-using ruvia::detail::normalizeStaticRelativePath;
+using ruvia::http_error;
+using ruvia::detail::is_windows_drive_path;
+using ruvia::detail::normalize_static_relative_path;
 
 std::string normalize(std::string_view input) {
-    const auto out = normalizeStaticRelativePath(input, std::pmr::new_delete_resource());
+    const auto out = normalize_static_relative_path(input, std::pmr::new_delete_resource());
     return std::string(out.data(), out.size());
 }
 
 bool rejects(std::string_view input) {
     try {
-        (void)normalizeStaticRelativePath(input, std::pmr::new_delete_resource());
+        (void)normalize_static_relative_path(input, std::pmr::new_delete_resource());
         return false;
-    } catch (const HttpError&) {
+    } catch (const http_error&) {
         return true;
     }
 }
@@ -79,9 +80,9 @@ RUVIA_TEST(static_path_only_exact_dot_segments_are_special) {
 }
 
 RUVIA_TEST(static_path_windows_drive_predicate) {
-    RUVIA_CHECK(isWindowsDrivePath("C:"));
-    RUVIA_CHECK(isWindowsDrivePath("z:/x"));
-    RUVIA_CHECK(!isWindowsDrivePath("C"));      // too short to hold a drive spec
-    RUVIA_CHECK(!isWindowsDrivePath("1:/x"));   // drive letter must be alphabetic
-    RUVIA_CHECK(!isWindowsDrivePath("ab:/x"));  // ':' must be the second character
+    RUVIA_CHECK(is_windows_drive_path("C:"));
+    RUVIA_CHECK(is_windows_drive_path("z:/x"));
+    RUVIA_CHECK(!is_windows_drive_path("C"));      // too short to hold a drive spec
+    RUVIA_CHECK(!is_windows_drive_path("1:/x"));   // drive letter must be alphabetic
+    RUVIA_CHECK(!is_windows_drive_path("ab:/x"));  // ':' must be the second character
 }

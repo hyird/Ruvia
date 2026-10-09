@@ -11,51 +11,51 @@
 
 #include <chrono>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/BodyLimit.h"
-#include "ruvia/web/Controller.h"
-#include "ruvia/web/Csrf.h"
-#include "ruvia/web/Session.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/body_limit.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/csrf.h"
+#include "ruvia/web/session.h"
 
 #include "backend_tls.h"
 
 namespace {
 
-class session_controller final : public ruvia::Controller<session_controller> {
+class session_controller final : public ruvia::controller<session_controller> {
 public:
-    // SessionMiddleware loads Redis data before entering the route. CSRF uses
+    // session_middleware loads Redis data before entering the route. CSRF uses
     // a separate readable cookie, while the session ID cookie is HttpOnly.
-    RUVIA_CONTROLLER_GROUP("/session", ruvia::SessionMiddleware, ruvia::CsrfProtection)
+    RUVIA_CONTROLLER_GROUP("/session", ruvia::session_middleware, ruvia::csrf_protection)
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", read);
-    RUVIA_POST("/", write, ruvia::BodyLimit<1024>);
+    RUVIA_POST("/", write, ruvia::body_limit<1024>);
     RUVIA_POST("/rotate", rotate);
     RUVIA_POST("/clear", clear);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> read(ruvia::Context& c) {
-        const auto session = c.session();
+    ruvia::task<ruvia::http_response> read(ruvia::context& c) {
+        const auto session_value = c.session();
         // A read leaves the existing ID unchanged. The handle and data view
-        // borrow Context and must never be retained by background work.
-        co_return c.text(session.data().empty() ? "no preference\n" : session.data());
+        // borrow context and must never be retained by background work.
+        co_return c.text(session_value.data().empty() ? "no preference\n" : session_value.data());
     }
 
-    ruvia::Task<ruvia::HttpResponse> write(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> write(ruvia::context& c) {
         const auto preference = co_await c.req().text();
         c.session().set(preference);
         // The middleware commits before response publication; every non-empty
         // write also rotates the ID. Mutate before a stream's first write or
-        // a WebSocket handshake, since changes after publication are rejected.
+        // a websocket handshake, since changes after publication are rejected.
         co_return c.text("preference saved\n");
     }
 
-    ruvia::Task<ruvia::HttpResponse> rotate(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> rotate(ruvia::context& c) {
         c.session().regenerate();
         co_return c.text("session rotated\n");
     }
 
-    ruvia::Task<ruvia::HttpResponse> clear(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> clear(ruvia::context& c) {
         c.session().clear();
         co_return c.text("session cleared\n");
     }
@@ -65,17 +65,17 @@ private:
 
 int main() {
     auto& app = ruvia::app();
-    app.loadDotenv();
-    const example::environment env(&app.env());
-    app.server({.process_signal_handlers = ruvia::process_signal_handler_policy::install})
-        .listen({.address = "127.0.0.1", .http = 8092})
-        .redis({.config = {
-                    .host = std::string(env.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
-                    .port = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-                    .username = std::string(env.get("RUVIA_REDIS_USER").value_or("")),
-                    .password = std::string(env.get("RUVIA_REDIS_PASSWORD").value_or("")),
-                    .tls = example::backend_tls("RUVIA_REDIS", env),
-                    .database = env.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
+    app.load_dotenv();
+    const example::environment env_value(&app.env());
+    app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+        .listen({.address_ = "127.0.0.1", .http_ = 8092})
+        .redis({.config_ = {
+                    .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
+                    .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
+                    .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
+                    .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
+                    .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
+                    .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
                 }})
         .run();
 }

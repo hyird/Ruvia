@@ -11,8 +11,8 @@ namespace {
 
 bool is_concrete_unicast(const asio::ip::address& address) noexcept {
     if (address.is_v4()) {
-        const auto bytes = address.to_v4().to_bytes();
-        return bytes[0] != 0 && bytes[0] < 224;
+        const auto bytes_value = address.to_v4().to_bytes();
+        return bytes_value[0] != 0 && bytes_value[0] < 224;
     }
     if (!address.is_v6()) {
         return false;
@@ -44,20 +44,20 @@ asio::ip::udp::endpoint checked_bind_endpoint(asio::ip::udp::endpoint endpoint) 
     return endpoint;
 }
 
-http3_datagram_endpoint_types::notification checked_notification(http3_datagram_endpoint_types::notification callback) {
-    if (!callback.notify) {
+http3_datagram_endpoint_types::notification checked_notification(http3_datagram_endpoint_types::notification callback_value) {
+    if (!callback_value.notify_) {
         throw std::invalid_argument("HTTP/3 UDP notification is required");
     }
-    return callback;
+    return callback_value;
 }
 
-std::error_code packet_error(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& source,
+std::error_code packet_error(std::span<const std::byte> bytes_value, const asio::ip::udp::endpoint& source_value,
     const asio::ip::udp::endpoint& peer, const asio::ip::udp::endpoint& bound) noexcept {
     const auto max_payload = bound.address().is_v4() ? 65507U : 65527U;
-    if (bytes.size() > max_payload) {
+    if (bytes_value.size() > max_payload) {
         return std::make_error_code(std::errc::message_size);
     }
-    if (bytes.empty() || !matches_bound_destination(source, bound) ||
+    if (bytes_value.empty() || !matches_bound_destination(source_value, bound) ||
         !is_concrete_unicast(peer.address()) || peer.port() == 0 ||
         peer.address().is_v4() != bound.address().is_v4()) {
         return invalid_datagram();
@@ -68,12 +68,12 @@ std::error_code packet_error(std::span<const std::byte> bytes, const asio::ip::u
 }  // namespace
 
 http3_acceptor_datagram_endpoint::http3_acceptor_datagram_endpoint(asio::io_context& network_io,
-    udp::endpoint bind_endpoint, notification callback, buffer_pool& pool)
+    udp::endpoint bind_endpoint, notification callback_value, buffer_pool& pool)
     : bind_endpoint_(checked_bind_endpoint(std::move(bind_endpoint))),
       owner_thread_(std::this_thread::get_id()),
       pool_(pool),
       socket_(network_io, bind_endpoint_),
-      notification_(checked_notification(callback)) {}
+      notification_(checked_notification(callback_value)) {}
 
 std::uint16_t http3_acceptor_datagram_endpoint::bound_port() const noexcept {
     require_owner_thread();
@@ -105,7 +105,7 @@ void http3_acceptor_datagram_endpoint::require_owner_thread() const noexcept {
 
 void http3_acceptor_datagram_endpoint::notify(notification_kind kind) noexcept {
     ++callback_depth_;
-    notification_.notify(notification_.context, kind);
+    notification_.notify_(notification_.context_, kind);
     --callback_depth_;
 }
 
@@ -116,9 +116,9 @@ void http3_acceptor_datagram_endpoint::fail(std::error_code error) noexcept {
     request_stop();
 }
 
-bool http3_acceptor_datagram_endpoint::valid_packet(std::span<const std::byte> bytes,
-    const udp::endpoint& source, const udp::endpoint& peer) noexcept {
-    const auto error = packet_error(bytes, source, peer, bound_endpoint_);
+bool http3_acceptor_datagram_endpoint::valid_packet(std::span<const std::byte> bytes_value,
+    const udp::endpoint& source_value, const udp::endpoint& peer) noexcept {
+    const auto error = packet_error(bytes_value, source_value, peer, bound_endpoint_);
     if (!prepared_ || !started_ || error) {
         fail(error ? error : invalid_datagram());
         return false;
@@ -186,11 +186,11 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
     if (stopping_) {
         return pump_result::stopped;
     }
-    if (!packet.storage || packet.size > packet.storage.bytes().size()) {
+    if (!packet.storage_ || packet.size_ > packet.storage_.bytes().size()) {
         fail(invalid_datagram());
         return pump_result::error;
     }
-    if (!valid_packet(packet.view().bytes, packet.local_destination, packet.peer)) {
+    if (!valid_packet(packet.view().bytes_, packet.local_destination_, packet.peer_)) {
         return pump_result::error;
     }
     if (pending_send_) {
@@ -198,7 +198,7 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
     }
     pending_send_.emplace(std::move(packet));
     const auto view = pending_send_->view();
-    if (!socket_.async_send({view.local_destination, view.peer, view.bytes}, this, send_completion)) {
+    if (!socket_.async_send({view.local_destination_, view.peer_, view.bytes_}, this, send_completion)) {
         pending_send_.reset();
         fail(io_failure());
         return pump_result::error;
@@ -241,9 +241,9 @@ bool http3_acceptor_datagram_endpoint::endpoint_retired() const noexcept {
     return socket_.done();
 }
 
-void http3_acceptor_datagram_endpoint::receive_completion(void* context, std::error_code error,
+void http3_acceptor_datagram_endpoint::receive_completion(void* context_value, std::error_code error,
     http3_udp_socket::receive_view view) noexcept {
-    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context);
+    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context_value);
     ++self.callback_depth_;
     self.receive_armed_ = false;
     self.handle_receive(error, std::move(view));
@@ -253,8 +253,8 @@ void http3_acceptor_datagram_endpoint::receive_completion(void* context, std::er
     --self.callback_depth_;
 }
 
-void http3_acceptor_datagram_endpoint::send_completion(void* context, std::error_code error, std::size_t size) noexcept {
-    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context);
+void http3_acceptor_datagram_endpoint::send_completion(void* context_value, std::error_code error, std::size_t size) noexcept {
+    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context_value);
     ++self.callback_depth_;
     self.handle_send(error, size);
     if (self.stopping_) {
@@ -295,17 +295,17 @@ void http3_acceptor_datagram_endpoint::handle_receive(std::error_code error, htt
         }
         return;
     }
-    if (view.bytes.empty() || !is_concrete_unicast(view.peer.address()) || view.peer.port() == 0 ||
-        !matches_bound_destination(view.local_destination, bound_endpoint_)) {
+    if (view.bytes_.empty() || !is_concrete_unicast(view.peer_.address()) || view.peer_.port() == 0 ||
+        !matches_bound_destination(view.local_destination_, bound_endpoint_)) {
         receive_lease_.reset();
         (void)arm_receive();
         return;
     }
-    if (held_receive_ || !receive_lease_ || view.bytes.data() != receive_lease_->bytes().data()) {
+    if (held_receive_ || !receive_lease_ || view.bytes_.data() != receive_lease_->bytes().data()) {
         std::terminate();
     }
-    held_receive_.emplace(datagram{std::move(*receive_lease_), view.bytes.size(),
-        view.local_destination, view.peer});
+    held_receive_.emplace(datagram{std::move(*receive_lease_), view.bytes_.size(),
+        view.local_destination_, view.peer_});
     receive_lease_.reset();
     notify(notification_kind::input_available);
 }
@@ -314,7 +314,7 @@ void http3_acceptor_datagram_endpoint::handle_send(std::error_code error, std::s
     if (!pending_send_) {
         std::terminate();
     }
-    const auto expected_size = pending_send_->size;
+    const auto expected_size = pending_send_->size_;
     pending_send_.reset();
     if (stopping_) {
         return;
@@ -330,11 +330,11 @@ void http3_acceptor_datagram_endpoint::handle_send(std::error_code error, std::s
 }
 
 http3_worker_datagram_endpoint::http3_worker_datagram_endpoint(http3_datagram_channel& channel,
-    udp::endpoint local_endpoint, notification callback)
+    udp::endpoint local_endpoint, notification callback_value)
     : bind_endpoint_(checked_bind_endpoint(std::move(local_endpoint))),
       owner_thread_(std::this_thread::get_id()),
       channel_(&channel),
-      notification_(checked_notification(callback)) {}
+      notification_(checked_notification(callback_value)) {}
 
 std::uint16_t http3_worker_datagram_endpoint::bound_port() const noexcept {
     require_owner_thread();
@@ -366,7 +366,7 @@ void http3_worker_datagram_endpoint::require_owner_thread() const noexcept {
 
 void http3_worker_datagram_endpoint::notify(notification_kind kind) noexcept {
     ++callback_depth_;
-    notification_.notify(notification_.context, kind);
+    notification_.notify_(notification_.context_, kind);
     --callback_depth_;
 }
 
@@ -377,9 +377,9 @@ void http3_worker_datagram_endpoint::fail(std::error_code error) noexcept {
     request_stop();
 }
 
-bool http3_worker_datagram_endpoint::valid_packet(std::span<const std::byte> bytes,
-    const udp::endpoint& source, const udp::endpoint& peer) noexcept {
-    const auto error = packet_error(bytes, source, peer, bound_endpoint_);
+bool http3_worker_datagram_endpoint::valid_packet(std::span<const std::byte> bytes_value,
+    const udp::endpoint& source_value, const udp::endpoint& peer) noexcept {
+    const auto error = packet_error(bytes_value, source_value, peer, bound_endpoint_);
     if (!prepared_ || !started_ || error) {
         fail(error ? error : invalid_datagram());
         return false;
@@ -435,8 +435,8 @@ http3_worker_datagram_endpoint::receive_slot() const noexcept {
     if (stopping_) {
         return std::nullopt;
     }
-    const auto received = channel_->worker_input();
-    return received ? std::optional<received_datagram>{{received->bytes, received->peer, received->local_destination}} : std::nullopt;
+    const auto received_value = channel_->worker_input();
+    return received_value ? std::optional<received_datagram>{{received_value->bytes_, received_value->peer_, received_value->local_destination_}} : std::nullopt;
 }
 
 http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::consume_receive() noexcept {
@@ -466,16 +466,16 @@ void http3_worker_datagram_endpoint::cancel_packet() noexcept {
 }
 
 http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::send_datagram(
-    std::span<const std::byte> bytes, const udp::endpoint& source, const udp::endpoint& peer) noexcept {
+    std::span<const std::byte> bytes_value, const udp::endpoint& source_value, const udp::endpoint& peer) noexcept {
     require_owner_thread();
     if (stopping_) {
         cancel_packet();
         return pump_result::stopped;
     }
-    if (!valid_packet(bytes, source, peer)) {
+    if (!valid_packet(bytes_value, source_value, peer)) {
         return pump_result::error;
     }
-    if (channel_->worker_send(bytes, source, peer)) {
+    if (channel_->worker_send(bytes_value, source_value, peer)) {
         ++observed_output_count_;
     }
     return pump_result::pending;

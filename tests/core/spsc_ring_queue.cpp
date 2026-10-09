@@ -138,13 +138,13 @@ RUVIA_TEST(spsc_ring_queue_preparation_is_unpublished_and_cancel_reuses_capacity
     for (const std::size_t capacity : {1, 3}) {
         ruvia::spsc_ring_queue<int> queue(capacity);
         queue.cancel_push();
-        for (int attempt = 0; attempt != 100; ++attempt) {
+        for (int attempt_value = 0; attempt_value != 100; ++attempt_value) {
             auto* slot = queue.prepare_push();
             RUVIA_CHECK(slot != nullptr);
             if (!slot) {
                 return;
             }
-            *slot = attempt;
+            *slot = attempt_value;
             RUVIA_CHECK(queue.empty());
             RUVIA_CHECK(queue.front() == nullptr);
             int value = -1;
@@ -181,7 +181,7 @@ RUVIA_TEST(spsc_ring_queue_front_borrow_prevents_slot_overwrite) {
     }
     RUVIA_CHECK(queue.try_push(22));
     RUVIA_CHECK(queue.try_push(33));
-    for (unsigned attempt = 0; attempt != 50; ++attempt) {
+    for (unsigned attempt_value = 0; attempt_value != 50; ++attempt_value) {
         RUVIA_CHECK(queue.prepare_push() == nullptr);
         RUVIA_CHECK(!queue.try_push(44));
         RUVIA_CHECK_EQ(*held, 11);
@@ -206,7 +206,7 @@ RUVIA_TEST(spsc_ring_queue_moves_payload_and_pop_keeps_slot_constructed) {
         RUVIA_CHECK(!input);
         const auto batch = queue.front_batch(1);
         RUVIA_CHECK(!batch.empty());
-        std::unique_ptr<retained_payload> output = std::move(batch.first[0]);
+        std::unique_ptr<retained_payload> output = std::move(batch.first_[0]);
         queue.pop();
         RUVIA_CHECK(output != nullptr);
         if (!output) {
@@ -389,19 +389,19 @@ RUVIA_TEST(spsc_ring_queue_cross_thread_fifo_publishes_complete_payloads) {
         ruvia::spsc_ring_queue<sequence_packet> queue(capacity);
         std::atomic<bool> stop{false};
         bool producer_completed = false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        std::thread producer([&] {
+        const auto deadline_value = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        std::thread producer_value([&] {
             std::size_t sequence = 1;
             while (sequence <= packet_count) {
                 auto batch = queue.prepare_push_batch(std::min(std::size_t{17}, packet_count - sequence + 1));
                 if (batch.empty()) {
-                    if (stop.load(std::memory_order_relaxed) || std::chrono::steady_clock::now() >= deadline) {
+                    if (stop.load(std::memory_order_relaxed) || std::chrono::steady_clock::now() >= deadline_value) {
                         return;
                     }
                     std::this_thread::yield();
                     continue;
                 }
-                for (auto slots : {batch.first, batch.second}) {
+                for (auto slots : {batch.first_, batch.second_}) {
                     for (auto& slot : slots) {
                         slot.sequence_ = sequence;
                         for (std::size_t index = 0; index != slot.payload_.size(); ++index) {
@@ -416,19 +416,19 @@ RUVIA_TEST(spsc_ring_queue_cross_thread_fifo_publishes_complete_payloads) {
         });
 
         bool fifo_valid = true;
-        std::size_t received = 0;
-        while (received != packet_count && std::chrono::steady_clock::now() < deadline) {
+        std::size_t received_value = 0;
+        while (received_value != packet_count && std::chrono::steady_clock::now() < deadline_value) {
             const auto batch = queue.front_batch(11);
             if (batch.empty()) {
                 std::this_thread::yield();
                 continue;
             }
-            for (auto slots : {batch.first, batch.second}) {
+            for (auto slots : {batch.first_, batch.second_}) {
                 for (const auto& packet : slots) {
-                    ++received;
-                    fifo_valid = fifo_valid && packet.sequence_ == received;
+                    ++received_value;
+                    fifo_valid = fifo_valid && packet.sequence_ == received_value;
                     for (std::size_t index = 0; index != packet.payload_.size(); ++index) {
-                        fifo_valid = fifo_valid && packet.payload_[index] == static_cast<std::uint64_t>(received) * 17 + index;
+                        fifo_valid = fifo_valid && packet.payload_[index] == static_cast<std::uint64_t>(received_value) * 17 + index;
                     }
                 }
             }
@@ -438,10 +438,10 @@ RUVIA_TEST(spsc_ring_queue_cross_thread_fifo_publishes_complete_payloads) {
             }
         }
         stop.store(true, std::memory_order_relaxed);
-        producer.join();
+        producer_value.join();
         RUVIA_CHECK(producer_completed);
         RUVIA_CHECK(fifo_valid);
-        RUVIA_CHECK_EQ(received, packet_count);
+        RUVIA_CHECK_EQ(received_value, packet_count);
         RUVIA_CHECK(queue.empty());
     }
 }
@@ -450,50 +450,50 @@ RUVIA_TEST(local_ring_batch_wrap_partial_publication_and_cancel) {
     ruvia::local_ring_queue<int> queue(5);
     auto batch = queue.prepare_push_batch(4);
     RUVIA_CHECK_EQ(batch.size(), std::size_t{4});
-    for (std::size_t index = 0; index != batch.first.size(); ++index) {
-        batch.first[index] = static_cast<int>(index + 1);
+    for (std::size_t index = 0; index != batch.first_.size(); ++index) {
+        batch.first_[index] = static_cast<int>(index + 1);
     }
     queue.commit_push(3);
     const auto held = queue.front_batch(2);
-    RUVIA_CHECK_EQ(held.first[0], 1);
-    RUVIA_CHECK_EQ(held.first[1], 2);
+    RUVIA_CHECK_EQ(held.first_[0], 1);
+    RUVIA_CHECK_EQ(held.first_[1], 2);
     auto tail = queue.prepare_push_batch(5);
-    RUVIA_CHECK_EQ(tail.first.size(), std::size_t{2});
-    tail.first[0] = 4;
-    tail.first[1] = 5;
+    RUVIA_CHECK_EQ(tail.first_.size(), std::size_t{2});
+    tail.first_[0] = 4;
+    tail.first_[1] = 5;
     queue.commit_push(2);
-    RUVIA_CHECK_EQ(held.first[0], 1);
-    RUVIA_CHECK_EQ(held.first[1], 2);
+    RUVIA_CHECK_EQ(held.first_[0], 1);
+    RUVIA_CHECK_EQ(held.first_[1], 2);
     queue.pop(2);
     batch = queue.prepare_push_batch(5);
     RUVIA_CHECK_EQ(batch.size(), std::size_t{2});
     queue.cancel_push();
     queue.pop(2);
     batch = queue.prepare_push_batch(4);
-    RUVIA_CHECK_EQ(batch.first.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(batch.first_.size(), std::size_t{4});
     for (std::size_t index = 0; index != batch.size(); ++index) {
-        batch.first[index] = static_cast<int>(index + 6);
+        batch.first_[index] = static_cast<int>(index + 6);
     }
     queue.commit_push(4);
     const auto wrapped = queue.front_batch(5);
-    RUVIA_CHECK_EQ(wrapped.first.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(wrapped.second.size(), std::size_t{4});
-    RUVIA_CHECK_EQ(wrapped.first[0], 5);
-    for (std::size_t index = 0; index != wrapped.second.size(); ++index) {
-        RUVIA_CHECK_EQ(wrapped.second[index], static_cast<int>(index + 6));
+    RUVIA_CHECK_EQ(wrapped.first_.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(wrapped.second_.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(wrapped.first_[0], 5);
+    for (std::size_t index = 0; index != wrapped.second_.size(); ++index) {
+        RUVIA_CHECK_EQ(wrapped.second_[index], static_cast<int>(index + 6));
     }
     queue.pop(5);
     RUVIA_CHECK(queue.empty());
     batch = queue.prepare_push_batch(4);
-    RUVIA_CHECK_EQ(batch.first.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(batch.second.size(), std::size_t{3});
-    batch.first[0] = 10;
-    batch.second[0] = 11;
+    RUVIA_CHECK_EQ(batch.first_.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(batch.second_.size(), std::size_t{3});
+    batch.first_[0] = 10;
+    batch.second_[0] = 11;
     queue.commit_push(2);
     const auto prefix = queue.front_batch(5);
     RUVIA_CHECK_EQ(prefix.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(prefix.first[0], 10);
-    RUVIA_CHECK_EQ(prefix.second[0], 11);
+    RUVIA_CHECK_EQ(prefix.first_[0], 10);
+    RUVIA_CHECK_EQ(prefix.second_[0], 11);
     queue.pop(2);
     RUVIA_CHECK(queue.prepare_push_batch(0).empty());
     RUVIA_CHECK(queue.front_batch(0).empty());
@@ -536,8 +536,8 @@ RUVIA_TEST(buffer_pool_credit_callback_transfers_without_reclaiming_on_consumer)
         ruvia::buffer_pool pool(3, 32, &resource);
         ruvia::spsc_ring_queue<ruvia::buffer_credit> credits(3, &resource);
         resource.fail_after(0);
-        const auto publish_credit = [](void* context, ruvia::buffer_credit credit) noexcept {
-            auto& queue = *static_cast<ruvia::spsc_ring_queue<ruvia::buffer_credit>*>(context);
+        const auto publish_credit = [](void* context_value, ruvia::buffer_credit credit) noexcept {
+            auto& queue = *static_cast<ruvia::spsc_ring_queue<ruvia::buffer_credit>*>(context_value);
             if (!queue.try_push(std::move(credit))) {
                 std::terminate();
             }
@@ -614,13 +614,13 @@ RUVIA_TEST(channel_lifecycle_stop_rejects_new_admission_and_preserves_started_wo
 
 RUVIA_TEST(ring_queue_throwing_assignment_cancels_hidden_reservation_and_preserves_fifo) {
     struct throwing_value final {
-        int value{0};
-        bool fail{false};
+        int value_{0};
+        bool fail_{false};
         throwing_value& operator=(const throwing_value& input) {
-            if (input.fail) {
+            if (input.fail_) {
                 throw std::runtime_error("payload assignment failed");
             }
-            value = input.value;
+            value_ = input.value_;
             return *this;
         }
     };
@@ -635,14 +635,14 @@ RUVIA_TEST(ring_queue_throwing_assignment_cancels_hidden_reservation_and_preserv
     RUVIA_CHECK(failed);
     auto* prepared = queue.prepare_push();
     RUVIA_CHECK(prepared != nullptr);
-    prepared->value = 3;
+    prepared->value_ = 3;
     queue.commit_push();
     const throwing_value fourth{4};
     RUVIA_CHECK(queue.try_push(fourth));
     throwing_value output;
     for (const int expected : {1, 3, 4}) {
         RUVIA_CHECK(queue.try_pop(output));
-        RUVIA_CHECK_EQ(output.value, expected);
+        RUVIA_CHECK_EQ(output.value_, expected);
     }
     RUVIA_CHECK(queue.empty());
 }

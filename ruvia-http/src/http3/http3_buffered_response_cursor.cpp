@@ -34,16 +34,16 @@ http3_buffered_response_cursor::http3_buffered_response_cursor(http3_buffered_re
 }
 
 std::variant<http3_buffered_response_cursor, http3_buffered_response_cursor::error>
-http3_buffered_response_cursor::create(const HttpResponse& response,
-    const HttpBufferedResponseWritePlan& write_plan, std::pmr::memory_resource* resource) noexcept {
-    if (!write_plan.matchesResponse(response)) {
+http3_buffered_response_cursor::create(const http_response& response,
+    const http_buffered_response_write_plan& write_plan, std::pmr::memory_resource* resource) noexcept {
+    if (!write_plan.matches_response(response)) {
         return error::invalid_response_plan;
     }
-    if (response.fileBody() && write_plan.sendBody() && write_plan.contentLength() != 0) {
+    if (response.file_body() && write_plan.send_body() && write_plan.content_length() != 0) {
         return error::file_body_unsupported;
     }
     try {
-        auto encoded = encodeHttp3ResponseHead(response, write_plan, {}, resource);
+        auto encoded = encode_http3_response_head(response, write_plan, {}, resource);
         if ((encoded.index() != 0)) {
             return error::response_encoding;
         }
@@ -56,40 +56,40 @@ http3_buffered_response_cursor::create(const HttpResponse& response,
 }
 
 std::variant<http3_buffered_response_cursor, http3_buffered_response_cursor::error>
-http3_buffered_response_cursor::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& write_plan,
-    Http3ResponseHead encoded_head, std::pmr::memory_resource* resource) noexcept {
-    if (!write_plan.matchesResponse(response)) {
+http3_buffered_response_cursor::create(const http_response& response, const http_buffered_response_write_plan& write_plan,
+    http3_response_head encoded_head, std::pmr::memory_resource* resource) noexcept {
+    if (!write_plan.matches_response(response)) {
         return error::invalid_response_plan;
     }
-    if (response.fileBody() && write_plan.sendBody() && write_plan.contentLength() != 0) {
+    if (response.file_body() && write_plan.send_body() && write_plan.content_length() != 0) {
         return error::file_body_unsupported;
     }
     try {
         http3_buffered_response_cursor cursor(resource);
-        const auto* encoded = &encoded_head.field_section;
-        cursor.decoded_field_section_size_ = encoded->decodedFieldSectionSize();
-        if (encoded->fieldSection.size() > std::numeric_limits<std::size_t>::max() -
-                                               kHttp3FrameHeaderMaxBytes) {
+        const auto* encoded = &encoded_head.field_section_;
+        cursor.decoded_field_section_size_ = encoded->decoded_field_section_size();
+        if (encoded->field_section_.size() > std::numeric_limits<std::size_t>::max() -
+                                                 http3_frame_header_max_bytes) {
             return error::response_encoding;
         }
-        cursor.headers_.resize(kHttp3FrameHeaderMaxBytes + encoded->fieldSection.size());
-        const auto frame_header = encodeHttp3FrameHeader(cursor.headers_,
-            static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection.size());
+        cursor.headers_.resize(http3_frame_header_max_bytes + encoded->field_section_.size());
+        const auto frame_header = encode_http3_frame_header(cursor.headers_,
+            static_cast<std::uint64_t>(http3_frame_type::headers), encoded->field_section_.size());
         if ((frame_header.index() != 0)) {
             return error::response_encoding;
         }
-        cursor.headers_.resize(std::get<0>(frame_header) + encoded->fieldSection.size());
-        std::copy(encoded->fieldSection.begin(), encoded->fieldSection.end(),
+        cursor.headers_.resize(std::get<0>(frame_header) + encoded->field_section_.size());
+        std::copy(encoded->field_section_.begin(), encoded->field_section_.end(),
             cursor.headers_.begin() + static_cast<std::ptrdiff_t>(std::get<0>(frame_header)));
 
-        const auto body_plan = write_plan.bodyPlan();
-        const bool send_body = write_plan.sendBody();
-        cursor.body_ = send_body ? response.bodyBytes() : std::string_view{};
-        if (send_body && cursor.body_.size() != write_plan.contentLength()) {
+        const auto body_plan = write_plan.body_plan();
+        const bool send_body = write_plan.send_body();
+        cursor.body_ = send_body ? response.body_bytes() : std::string_view{};
+        if (send_body && cursor.body_.size() != write_plan.content_length()) {
             return error::invalid_response_plan;
         }
         const std::optional<std::uint64_t> length = send_body
-                                                        ? std::optional<std::uint64_t>(write_plan.contentLength())
+                                                        ? std::optional<std::uint64_t>(write_plan.content_length())
                                                         : std::nullopt;
         cursor.data_plan_.emplace(body_plan, length);
         return cursor;
@@ -118,13 +118,13 @@ http3_buffered_response_cursor::step http3_buffered_response_cursor::next_step()
         case state::headers:
             return segment_offset_ < headers_.size() ? step::bytes : step::failed;
         case state::data_header:
-            return chunk_pending_ && chunk_.emitsData &&
-                           segment_offset_ < chunk_.frameHeaderSize
+            return chunk_pending_ && chunk_.emits_data_ &&
+                           segment_offset_ < chunk_.frame_header_size_
                        ? step::bytes
                        : step::failed;
         case state::data_body:
-            return chunk_pending_ && !chunk_.payload.empty() &&
-                           segment_offset_ < chunk_.payload.size()
+            return chunk_pending_ && !chunk_.payload_.empty() &&
+                           segment_offset_ < chunk_.payload_.size()
                        ? step::bytes
                        : step::failed;
         case state::fin:
@@ -142,9 +142,9 @@ http3_buffered_response_cursor::segment http3_buffered_response_cursor::active_s
         case state::headers:
             return segment(headers_).subspan(segment_offset_);
         case state::data_header:
-            return segment(chunk_.frameHeader.data(), chunk_.frameHeaderSize).subspan(segment_offset_);
+            return segment(chunk_.frame_header_.data(), chunk_.frame_header_size_).subspan(segment_offset_);
         case state::data_body:
-            return chunk_.payload.subspan(segment_offset_);
+            return chunk_.payload_.subspan(segment_offset_);
         case state::fin:
         case state::finished:
         case state::failed:
@@ -159,17 +159,17 @@ http3_buffered_response_cursor::prepare_data() noexcept {
         return error::invalid_state;
     }
     const auto remaining = body_.size() - body_offset_;
-    const auto chunk_size = std::min<std::uint64_t>(remaining, kHttp3VarIntMax);
+    const auto chunk_size = std::min<std::uint64_t>(remaining, http3_var_int_max);
     const bool finishing = chunk_size == remaining;
-    const auto payload = body_.substr(body_offset_, static_cast<std::size_t>(chunk_size));
-    auto planned = data_plan_->planChunk(payload, finishing);
+    const auto payload_value = body_.substr(body_offset_, static_cast<std::size_t>(chunk_size));
+    auto planned = data_plan_->plan_chunk(payload_value, finishing);
     if ((planned.index() != 0)) {
         return fail_data_plan();
     }
     chunk_ = std::get<0>(planned);
     chunk_pending_ = true;
     segment_offset_ = 0;
-    if (!chunk_.emitsData) {
+    if (!chunk_.emits_data_) {
         state_ = state::fin;
         chunk_pending_ = true;
         return {};
@@ -203,7 +203,7 @@ http3_buffered_response_cursor::acknowledge(std::size_t count) noexcept {
     }
     if (state_ == state::data_header) {
         segment_offset_ += count;
-        if (segment_offset_ == chunk_.frameHeaderSize) {
+        if (segment_offset_ == chunk_.frame_header_size_) {
             offered_ = false;
             state_ = state::data_body;
             segment_offset_ = 0;
@@ -212,14 +212,14 @@ http3_buffered_response_cursor::acknowledge(std::size_t count) noexcept {
     }
     if (state_ == state::data_body) {
         segment_offset_ += count;
-        if (segment_offset_ == chunk_.payload.size()) {
+        if (segment_offset_ == chunk_.payload_.size()) {
             offered_ = false;
-            const auto chunk_bytes = chunk_.payload.size();
-            if (chunk_.finishing) {
+            const auto chunk_bytes = chunk_.payload_.size();
+            if (chunk_.finishing_) {
                 state_ = state::fin;
                 return {};
             }
-            if (auto committed = data_plan_->commitPayload(chunk_bytes, false); (committed.index() != 0)) {
+            if (auto committed = data_plan_->commit_payload(chunk_bytes, false); (committed.index() != 0)) {
                 return fail_data_plan();
             }
             body_offset_ += chunk_bytes;
@@ -243,7 +243,7 @@ http3_buffered_response_cursor::acknowledge_fin(bool successful) noexcept {
         chunk_pending_ = false;
         return {};
     }
-    const auto committed = data_plan_->commitPayload(chunk_.payload.size(), true);
+    const auto committed = data_plan_->commit_payload(chunk_.payload_.size(), true);
     if ((committed.index() != 0)) {
         return fail_data_plan();
     }

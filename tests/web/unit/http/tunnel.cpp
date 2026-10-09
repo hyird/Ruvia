@@ -2,65 +2,65 @@
 #include <optional>
 #include <string>
 
-#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/event_loop_attachment.h"
 
-#include "http/HttpTunnelSession.h"
+#include "http/http_tunnel_session.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
-struct TunnelTransportState {
-    std::string output;
-    unsigned reads{};
-    unsigned finishes{};
-    bool aborted{};
+struct tunnel_transport_state {
+    std::string output_;
+    unsigned reads_{};
+    unsigned finishes_{};
+    bool aborted_{};
 };
-struct TunnelTransport {
-    TunnelTransportState& state;
-    ruvia::Task<ruvia::detail::HttpStreamReadResult> readMore(std::pmr::string& bytes) {
-        if (state.aborted) {
-            co_return ruvia::detail::HttpStreamReadResult::makeFailure(std::make_error_code(std::errc::operation_canceled));
+struct tunnel_transport {
+    tunnel_transport_state& state_;
+    ruvia::task<ruvia::detail::http_stream_read_result> read_more(std::pmr::string& bytes_value) {
+        if (state_.aborted_) {
+            co_return ruvia::detail::http_stream_read_result::make_failure(std::make_error_code(std::errc::operation_canceled));
         }
-        if (++state.reads == 1) {
-            bytes.append(512, 'r');
-            co_return ruvia::detail::HttpStreamReadResult::makeData();
+        if (++state_.reads_ == 1) {
+            bytes_value.append(512, 'r');
+            co_return ruvia::detail::http_stream_read_result::make_data();
         }
-        co_return ruvia::detail::HttpStreamReadResult::makeEnd();
+        co_return ruvia::detail::http_stream_read_result::make_end();
     }
-    ruvia::Task<std::error_code> writeBytes(std::string_view bytes, ruvia::detail::HttpStreamEnd end) {
-        if (state.aborted) {
+    ruvia::task<std::error_code> write_bytes(std::string_view bytes_value, ruvia::detail::http_stream_end end) {
+        if (state_.aborted_) {
             co_return std::make_error_code(std::errc::operation_canceled);
         }
-        state.output.append(bytes);
-        if (end == ruvia::detail::HttpStreamEnd::kEnd) {
-            ++state.finishes;
+        state_.output_.append(bytes_value);
+        if (end == ruvia::detail::http_stream_end::end) {
+            ++state_.finishes_;
         }
         co_return std::error_code{};
     }
     void abort() noexcept {
-        state.aborted = true;
+        state_.aborted_ = true;
     }
 };
 }  // namespace
-RUVIA_TEST(httpTunnelOwnsColdWritesEnforcesDirectionLanesAndPreservesReadsAfterFinish) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io);
-    ruvia::test::CountingMemoryResource resource;
+RUVIA_TEST(http_tunnel_owns_cold_writes_enforces_direction_lanes_and_preserves_reads_after_finish) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::counting_memory_resource resource;
     std::exception_ptr failure;
-    auto run = [&]() -> ruvia::Task<void> {
+    auto run = [&]() -> ruvia::task<void> {
         try {
-            TunnelTransportState state;
-            const auto& worker = attachment.loop().handle();
-            ruvia::detail::HttpTunnelSession session(TunnelTransport{state}, worker, resource);
-            auto& tunnel = session.tunnel();
+            tunnel_transport_state state;
+            const auto& worker_value = attachment.loop().handle();
+            ruvia::detail::http_tunnel_session session_value(tunnel_transport{state}, worker_value, resource);
+            auto& tunnel = session_value.tunnel();
             {
                 auto cold = tunnel.write("discarded");
             }
-            RUVIA_CHECK(state.output.empty());
-            std::string bytes(1024, 'w');
-            auto write = tunnel.write(std::string_view(bytes));
-            bytes.assign("mutated");
+            RUVIA_CHECK(state.output_.empty());
+            std::string bytes_value(1024, 'w');
+            auto write = tunnel.write(std::string_view(bytes_value));
+            bytes_value.assign("mutated");
             bool overlap = false;
             try {
                 auto busy = tunnel.finish();
@@ -72,20 +72,20 @@ RUVIA_TEST(httpTunnelOwnsColdWritesEnforcesDirectionLanesAndPreservesReadsAfterF
             co_await std::move(write);
             auto retained = co_await std::move(read);
             RUVIA_CHECK(retained && std::string_view(*retained) == std::string(512, 'r'));
-            RUVIA_CHECK(state.output == std::string(1024, 'w'));
+            RUVIA_CHECK(state.output_ == std::string(1024, 'w'));
             co_await tunnel.finish();
             co_await tunnel.finish();
-            RUVIA_CHECK_EQ(state.finishes, 1U);
+            RUVIA_CHECK_EQ(state.finishes_, 1U);
             RUVIA_CHECK(!(co_await tunnel.read()));
             RUVIA_CHECK(std::string_view(*retained) == std::string(512, 'r'));
-            bool afterFinish = false;
+            bool after_finish = false;
             try {
                 auto invalid = tunnel.write("invalid");
             } catch (const std::logic_error&) {
-                afterFinish = true;
+                after_finish = true;
             }
-            RUVIA_CHECK(afterFinish);
-            co_await session.join();
+            RUVIA_CHECK(after_finish);
+            co_await session_value.join();
             bool expired = false;
             try {
                 auto invalid = tunnel.read();
@@ -98,11 +98,11 @@ RUVIA_TEST(httpTunnelOwnsColdWritesEnforcesDirectionLanesAndPreservesReadsAfterF
         }
         attachment.stop();
     };
-    auto task = attachment.loop().start(run());
+    auto task_value = attachment.loop().start(run());
     io.run();
-    task.get();
+    task_value.get();
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

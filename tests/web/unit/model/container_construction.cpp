@@ -2,7 +2,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/model_types.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -13,27 +13,27 @@ struct owned_value final {
     enum class ownership { cloned,
         transferred };
 
-    explicit owned_value(ruvia::ModelOptions options = {})
+    explicit owned_value(ruvia::model_options options = {})
         : owned_value(0, options) {}
-    explicit owned_value(int key, ruvia::ModelOptions options = {})
+    explicit owned_value(int key, ruvia::model_options options = {})
         : key_(key),
-          resource_(options.resource) {
+          resource_(options.resource_) {
         if (key < 0) {
             throw std::runtime_error("invalid element");
         }
     }
 
-    owned_value rebindForModel(std::pmr::memory_resource* resource) const& {
-        return owned_value(key_, {.resource = resource});
+    owned_value rebind_for_model(std::pmr::memory_resource* resource) const& {
+        return owned_value(key_, {.resource_ = resource});
     }
-    owned_value rebindForModel(std::pmr::memory_resource* resource) & {
+    owned_value rebind_for_model(std::pmr::memory_resource* resource) & {
         // An lvalue must never select a mutable ownership transfer.
-        return owned_value(std::exchange(key_, 0), {.resource = resource});
+        return owned_value(std::exchange(key_, 0), {.resource_ = resource});
     }
-    owned_value rebindForModel(std::pmr::memory_resource* resource) && {
-        owned_value result(std::exchange(key_, 0), {.resource = resource});
-        result.ownership_ = ownership::transferred;
-        return result;
+    owned_value rebind_for_model(std::pmr::memory_resource* resource) && {
+        owned_value result_value(std::exchange(key_, 0), {.resource_ = resource});
+        result_value.ownership_ = ownership::transferred;
+        return result_value;
     }
 
     int key_{};
@@ -44,10 +44,10 @@ struct owned_value final {
 }  // namespace
 
 RUVIA_TEST(model_containers_clone_borrowed_values_and_transfer_owned_values) {
-    ruvia::test::CountingMemoryResource memory;
+    ruvia::test::counting_memory_resource memory;
     {
-        ruvia::Array<owned_value> dense({.resource = &memory});
-        ruvia::BoxedArray<owned_value> boxed({.resource = &memory});
+        ruvia::array<owned_value> dense({.resource_ = &memory});
+        ruvia::boxed_array<owned_value> boxed({.resource_ = &memory});
         owned_value borrowed(7);
         const owned_value constant(9);
         dense.emplace_back(borrowed);
@@ -92,5 +92,5 @@ RUVIA_TEST(model_containers_clone_borrowed_values_and_transfer_owned_values) {
         RUVIA_CHECK(dense_failed && boxed_failed);
         RUVIA_CHECK(dense.size() == 5 && boxed.size() == 5);
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
 }

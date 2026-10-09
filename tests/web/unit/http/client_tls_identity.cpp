@@ -10,8 +10,8 @@
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 
-#include "client/ClientTransport.h"
-#include "client/HttpClientConfigStorage.h"
+#include "client/client_transport.h"
+#include "client/http_client_config_storage.h"
 #include "test_harness.h"
 #include "tls_password_fixture.h"
 
@@ -19,31 +19,31 @@ RUVIA_TEST(client_tls_identity_loading_rejects_nul_file_paths_before_opening_the
     using namespace ruvia::detail;
     ruvia::test::tls_identity files("client-file-path.ruvia-test.local");
     const auto key = ruvia::test::write_encrypted_key(files, "key.pem", "path-password").string();
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
-        for (const auto member : {&ruvia::HttpClientConfig::caFile,
-                 &ruvia::HttpClientConfig::certificateChainFile,
-                 &ruvia::HttpClientConfig::privateKeyFile}) {
-            ruvia::HttpClientConfig config;
-            config.host = "client-file-path.ruvia-test.local";
-            config.scheme = ruvia::HttpScheme::kHttps;
-            config.protocol = protocol == client_tls_protocol::quic
-                                  ? ruvia::HttpClientProtocol::kHttp3Only
-                                  : ruvia::HttpClientProtocol::kHttp1Only;
-            config.caFile = certificate;
-            config.certificateChainFile = certificate;
-            config.privateKeyFile = key;
-            config.privateKeyPassword = "path-password";
+        for (const auto member : {&ruvia::http_client_config::ca_file_,
+                 &ruvia::http_client_config::certificate_chain_file_,
+                 &ruvia::http_client_config::private_key_file_}) {
+            ruvia::http_client_config config;
+            config.host_ = "client-file-path.ruvia-test.local";
+            config.scheme_ = ruvia::http_scheme::https;
+            config.protocol_ = protocol == client_tls_protocol::quic
+                                   ? ruvia::http_client_protocol::http3_only
+                                   : ruvia::http_client_protocol::http1_only;
+            config.ca_file_ = certificate;
+            config.certificate_chain_file_ = certificate;
+            config.private_key_file_ = key;
+            config.private_key_password_ = "path-password";
             auto& path = config.*member;
             path.push_back('\0');
             path.append("other.pem");
-            RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-                HttpClientConfigStorage storage(config, std::pmr::new_delete_resource());
+            RUVIA_CHECK(ruvia::testing::throws_on([&] {
+                http_client_config_storage storage(config, std::pmr::new_delete_resource());
             }));
             asio::ssl::context context(asio::ssl::context::tls_client);
             bool rejected = false;
             try {
-                configure_client_tls_context(*context.native_handle(), clientTransportConfigView(config), protocol);
+                configure_client_tls_context(*context.native_handle(), make_client_transport_config_view(config), protocol);
             } catch (const std::invalid_argument&) {
                 rejected = true;
             } catch (const std::runtime_error&) {
@@ -60,7 +60,7 @@ RUVIA_TEST(client_tls_identity_loading_does_not_prompt_for_unsupplied_password) 
     ruvia::test::tls_identity files("client-password-ui.ruvia-test.local");
     const auto required_key = ruvia::test::write_encrypted_key(files, "required.pem", "required-password").string();
     const auto empty_key = ruvia::test::write_encrypted_key(files, "empty.pem", "").string();
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     int attempts = 0;
     ruvia::test::noninteractive_ui_scope ui(attempts);
     for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
@@ -69,14 +69,14 @@ RUVIA_TEST(client_tls_identity_loading_does_not_prompt_for_unsupplied_password) 
             if (explicit_default) {
                 SSL_CTX_set_default_passwd_cb(context.native_handle(), PEM_def_callback);
             }
-            ClientTransportConfigView config;
-            config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
-            config.certificateChainFile = certificate;
-            config.privateKeyFile = required_key;
-            RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            client_transport_config_view config;
+            config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
+            config.certificate_chain_file_ = certificate;
+            config.private_key_file_ = required_key;
+            RUVIA_CHECK(ruvia::testing::throws_on([&] {
                 configure_client_tls_context(*context.native_handle(), config, protocol);
             }));
-            config.privateKeyFile = empty_key;
+            config.private_key_file_ = empty_key;
             bool loaded = false;
             try {
                 configure_client_tls_context(*context.native_handle(), config, protocol);
@@ -97,7 +97,7 @@ RUVIA_TEST(client_tls_identity_loading_preserves_the_context_password_callback_o
     ruvia::test::tls_identity files("client-password-owner.ruvia-test.local");
     const auto configured_key = ruvia::test::write_encrypted_key(files, "configured.pem", "configured-password").string();
     const auto original_key = ruvia::test::write_encrypted_key(files, "original.pem", "original-password").string();
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     int attempts = 0;
     ruvia::test::noninteractive_ui_scope ui(attempts);
     for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
@@ -114,11 +114,11 @@ RUVIA_TEST(client_tls_identity_loading_preserves_the_context_password_callback_o
                 });
                 password.reset();
                 ruvia::test::password_callback_cleanup cleanup(context.native_handle());
-                ClientTransportConfigView config;
-                config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
-                config.certificateChainFile = certificate;
-                config.privateKeyFile = configured_key;
-                config.privateKeyPassword = correct_password ? "configured-password" : "incorrect-password";
+                client_transport_config_view config;
+                config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
+                config.certificate_chain_file_ = certificate;
+                config.private_key_file_ = configured_key;
+                config.private_key_password_ = correct_password ? "configured-password" : "incorrect-password";
                 bool configured = false;
                 try {
                     configure_client_tls_context(*context.native_handle(), config, protocol);
@@ -147,7 +147,7 @@ RUVIA_TEST(client_tls_identity_loading_uses_a_caller_password_callback_when_pass
     using namespace ruvia::detail;
     ruvia::test::tls_identity files("client-password-provider.ruvia-test.local");
     const auto key = ruvia::test::write_encrypted_key(files, "callback.pem", "callback-password").string();
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
         std::weak_ptr<std::string> callback_lifetime;
         int calls = 0;
@@ -161,10 +161,10 @@ RUVIA_TEST(client_tls_identity_loading_uses_a_caller_password_callback_when_pass
             });
             password.reset();
             ruvia::test::password_callback_cleanup cleanup(context.native_handle());
-            ClientTransportConfigView config;
-            config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
-            config.certificateChainFile = certificate;
-            config.privateKeyFile = key;
+            client_transport_config_view config;
+            config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
+            config.certificate_chain_file_ = certificate;
+            config.private_key_file_ = key;
             bool loaded = false;
             try {
                 configure_client_tls_context(*context.native_handle(), config, protocol);
@@ -185,16 +185,16 @@ RUVIA_TEST(client_tls_identity_loading_rejects_oversized_password_instead_of_usi
     using namespace ruvia::detail;
     ruvia::test::tls_identity files("client-password-error.ruvia-test.local");
     const auto key = ruvia::test::write_encrypted_key(files, "empty.pem", "").string();
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     const std::string password(PEM_BUFSIZE + 1U, 'p');
     for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
         asio::ssl::context context(asio::ssl::context::tls_client);
-        ClientTransportConfigView config;
-        config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
-        config.certificateChainFile = certificate;
-        config.privateKeyFile = key;
-        config.privateKeyPassword = password;
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        client_transport_config_view config;
+        config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
+        config.certificate_chain_file_ = certificate;
+        config.private_key_file_ = key;
+        config.private_key_password_ = password;
+        RUVIA_CHECK(ruvia::testing::throws_on([&] {
             configure_client_tls_context(*context.native_handle(), config, protocol);
         }));
     }
@@ -203,7 +203,7 @@ RUVIA_TEST(client_tls_identity_loading_rejects_oversized_password_instead_of_usi
 RUVIA_TEST(client_tls_identity_loading_accepts_binary_passwords_up_to_callback_capacity) {
     using namespace ruvia::detail;
     ruvia::test::tls_identity files("client-password-capacity.ruvia-test.local");
-    const auto certificate = files.ca_file.string();
+    const auto certificate = files.ca_file_.string();
     constexpr auto capacity = static_cast<std::size_t>(PEM_BUFSIZE);
     for (const std::size_t length : {capacity - 1, capacity, capacity + 1}) {
         std::string password(length, 'p');
@@ -211,11 +211,11 @@ RUVIA_TEST(client_tls_identity_loading_accepts_binary_passwords_up_to_callback_c
         const auto key = ruvia::test::write_encrypted_key(files, "capacity.pem", password).string();
         for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
             asio::ssl::context context(asio::ssl::context::tls_client);
-            ClientTransportConfigView config;
-            config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
-            config.certificateChainFile = certificate;
-            config.privateKeyFile = key;
-            config.privateKeyPassword = password;
+            client_transport_config_view config;
+            config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
+            config.certificate_chain_file_ = certificate;
+            config.private_key_file_ = key;
+            config.private_key_password_ = password;
             bool loaded = false;
             try {
                 configure_client_tls_context(*context.native_handle(), config, protocol);

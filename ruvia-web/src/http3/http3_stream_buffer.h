@@ -9,24 +9,24 @@
 
 #include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/spsc_ring_queue.h"
-#include "ruvia/http/Http3Connection.h"
+#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http3_critical_stream_output.h"
 
 namespace ruvia::detail {
 
 struct http3_stream_id final {
-    std::uint64_t epoch{};
-    std::uint64_t connection_generation{};
-    std::uint64_t stream_id{};
+    std::uint64_t epoch_{};
+    std::uint64_t connection_generation_{};
+    std::uint64_t stream_id_{};
     // Only real server-initiated response streams bind a Push ID.
-    std::optional<std::uint64_t> push_id{};
-    bool received_early_data{};
+    std::optional<std::uint64_t> push_id_{};
+    bool received_early_data_{};
 };
 
 struct http3_critical_stream_id final {
-    std::uint64_t epoch{};
-    std::uint64_t connection_generation{};
-    ruvia::http3_critical_stream_output::stream_kind kind{ruvia::http3_critical_stream_output::stream_kind::qpack_encoder};
+    std::uint64_t epoch_{};
+    std::uint64_t connection_generation_{};
+    ruvia::http3_critical_stream_output::stream_kind kind_{ruvia::http3_critical_stream_output::stream_kind::qpack_encoder};
 };
 using http3_stream_destination = std::variant<http3_stream_id, http3_critical_stream_id>;
 
@@ -36,14 +36,14 @@ struct http3_stream_control final {
         writable,
         stream_fin,
         tunnel_established };
-    kind kind{kind::connection_closed};
-    http3_stream_id id{};
+    kind kind_{kind::connection_closed};
+    http3_stream_id id_{};
     // FIN is the final cumulative DATA count. Peer RESET is the cumulative
     // published DATA count, not QUIC Final Size. Independent lanes can deliver
     // these barriers before DATA; consumers must defer them until that count.
     // Tunnel establishment waits for this count to be accepted by transport.
-    std::uint64_t value{};
-    Http3ConnectionErrorCode stream_reset_error_code{Http3ConnectionErrorCode::kRequestCancelled};
+    std::uint64_t value_{};
+    http3_connection_error_code stream_reset_error_code_{http3_connection_error_code::request_cancelled};
 };
 
 // All operations, reservations and borrows belong to one worker. The pool is
@@ -76,12 +76,12 @@ public:
         stopped };
 
     struct local_callback final {
-        void* context{};
-        void (*notify)(void*, std::uint8_t lanes) noexcept {};
+        void* context_{};
+        void (*notify_)(void*, std::uint8_t lanes) noexcept {};
     };
     struct local_notifications final {
-        local_callback ready{};
-        local_callback capacity{};
+        local_callback ready_{};
+        local_callback capacity_{};
     };
 
     // Reserves a DATA queue slot and a linear block before protocol reads.
@@ -104,7 +104,7 @@ public:
 
     private:
         friend class http3_stream_buffer;
-        data_reservation(http3_stream_buffer& owner, buffer_lease&& lease, http3_stream_id id) noexcept;
+        data_reservation(http3_stream_buffer& owner_value, buffer_lease&& lease_value, http3_stream_id id) noexcept;
         http3_stream_buffer* owner_{};
         buffer_lease lease_{};
         http3_stream_id id_{};
@@ -132,7 +132,7 @@ public:
 
     private:
         friend class http3_stream_buffer;
-        borrowed_block(http3_stream_buffer& owner, buffer_lease&& lease, std::size_t size, http3_stream_destination id) noexcept;
+        borrowed_block(http3_stream_buffer& owner_value, buffer_lease&& lease_value, std::size_t size, http3_stream_destination id) noexcept;
         http3_stream_buffer* owner_{};
         buffer_lease lease_{};
         std::size_t size_{};
@@ -175,9 +175,9 @@ public:
 
 private:
     struct data_slot final {
-        buffer_lease lease{};
-        std::size_t size{};
-        http3_stream_destination id{};
+        buffer_lease lease_{};
+        std::size_t size_{};
+        http3_stream_destination id_{};
     };
     [[nodiscard]] send_result send_address(http3_stream_destination id, std::span<const std::byte> bytes) noexcept;
     static void reclaim_block(void* context, buffer_credit credit) noexcept;

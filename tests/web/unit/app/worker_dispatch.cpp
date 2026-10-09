@@ -10,47 +10,47 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/App.h"
-#include "ruvia/web/WebWorker.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/web_worker.h"
 
-#include "app/WebWorkerDispatch.h"
-#include "integration/WorkerCapabilities.h"
+#include "app/web_worker_dispatch.h"
+#include "integration/worker_capabilities.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
 
-struct WorkerDispatchFixture final {
-    asio::io_context& ioContext = ruvia::test::newTestIoContext();
-    ruvia::EventLoopAttachment attachment =
-        ruvia::attachEventLoop(ioContext, {.queue_capacity = 1});
-    ruvia::WorkerHandle worker = attachment.loop().handle();
-    ruvia::WorkerMemory memory;
-    ruvia::detail::WorkerCapabilities capabilities{
-        ioContext, worker, memory.resource(), {}, {}};
-    std::shared_ptr<ruvia::detail::WebWorkerDispatch> dispatch;
+struct worker_dispatch_fixture final {
+    asio::io_context& io_context_ = ruvia::test::new_test_io_context();
+    ruvia::event_loop_attachment attachment_ =
+        ruvia::attach_event_loop(io_context_, {.queue_capacity_ = 1});
+    ruvia::worker_handle worker_ = attachment_.loop().handle();
+    ruvia::worker_memory memory_;
+    ruvia::detail::worker_capabilities capabilities_{
+        io_context_, worker_, memory_.resource(), {}, {}};
+    std::shared_ptr<ruvia::detail::web_worker_dispatch> dispatch_;
 
-    WorkerDispatchFixture()
-        : dispatch(std::make_shared<ruvia::detail::WebWorkerDispatch>(ioContext.get_executor(),
-              worker, memory.resource(), capabilities,
+    worker_dispatch_fixture()
+        : dispatch_(std::make_shared<ruvia::detail::web_worker_dispatch>(io_context_.get_executor(),
+              worker_, memory_.resource(), capabilities_,
               [](std::exception_ptr) noexcept {})) {
-        capabilities.initializeWorkerState();
+        capabilities_.initialize_worker_state();
     }
 
     void retire() {
-        attachment.stop();
+        attachment_.stop();
         // External attachments detach on their io_context; drain that terminal
         // cleanup before checking reservations held by abandoned queue posts.
-        ioContext.poll();
-        dispatch->retire();
-        capabilities.closeNow();
-        capabilities.shutdownWorkerState();
+        io_context_.poll();
+        dispatch_->retire();
+        capabilities_.close_now();
+        capabilities_.shutdown_worker_state();
     }
 };
 
-ruvia::Task<void> emptyTask(ruvia::WebWorkerContext&) {
+ruvia::task<void> empty_task(ruvia::web_worker_context&) {
     co_return;
 }
 
@@ -58,7 +58,7 @@ ruvia::Task<void> emptyTask(ruvia::WebWorkerContext&) {
 
 RUVIA_TEST(app_server_rejects_zero_http_client_result_budget) {
     ruvia::server_config config;
-    config.http_client_result_budget.maxRetainedBytes = 0;
+    config.http_client_result_budget_.max_retained_bytes_ = 0;
 
     bool rejected = false;
     try {
@@ -70,134 +70,134 @@ RUVIA_TEST(app_server_rejects_zero_http_client_result_budget) {
 }
 
 RUVIA_TEST(web_worker_context_pool_is_worker_resource) {
-    WorkerDispatchFixture fixture;
-    std::pmr::memory_resource* observed = nullptr;
+    worker_dispatch_fixture fixture;
+    std::pmr::memory_resource* observed_value = nullptr;
 
-    const auto result = fixture.dispatch->handle().post([&observed](ruvia::WebWorkerContext& context) {
-        observed = context.pool();
-        return emptyTask(context);
+    const auto result_value = fixture.dispatch_->handle().post([&observed_value](ruvia::web_worker_context& context_value) {
+        observed_value = context_value.pool();
+        return empty_task(context_value);
     });
-    RUVIA_CHECK(result.accepted());
+    RUVIA_CHECK(result_value.accepted());
 
-    fixture.ioContext.poll();
+    fixture.io_context_.poll();
 
-    RUVIA_CHECK(observed == fixture.memory.resource());
+    RUVIA_CHECK(observed_value == fixture.memory_.resource());
     fixture.retire();
 }
 
 RUVIA_TEST(web_worker_dispatch_completes_started_task_and_releases_reservation) {
-    WorkerDispatchFixture fixture;
+    worker_dispatch_fixture fixture;
     std::atomic_bool ran{false};
 
-    const auto result = fixture.dispatch->handle().post([&ran](ruvia::WebWorkerContext& context) {
+    const auto result_value = fixture.dispatch_->handle().post([&ran](ruvia::web_worker_context& context_value) {
         ran.store(true, std::memory_order_release);
-        return emptyTask(context);
+        return empty_task(context_value);
     });
-    RUVIA_CHECK(result.accepted());
+    RUVIA_CHECK(result_value.accepted());
 
-    fixture.ioContext.poll();
+    fixture.io_context_.poll();
 
-    const auto stats = fixture.dispatch->stats();
+    const auto stats = fixture.dispatch_->stats();
     RUVIA_CHECK(ran.load(std::memory_order_acquire));
-    RUVIA_CHECK_EQ(stats.completed, 1U);
-    RUVIA_CHECK_EQ(stats.outstanding, 0U);
+    RUVIA_CHECK_EQ(stats.completed_, 1U);
+    RUVIA_CHECK_EQ(stats.outstanding_, 0U);
     fixture.retire();
 }
 
 RUVIA_TEST(web_worker_dispatch_reconciles_rejected_and_abandoned_posts) {
-    WorkerDispatchFixture fixture;
+    worker_dispatch_fixture fixture;
     bool ran = false;
 
     // Run the terminal stop on the worker before its queued queue drain.
     // Stopping from outside poll() defers detach behind that drain instead.
-    asio::post(fixture.ioContext, [&fixture] { fixture.attachment.stop(); });
-    const auto accepted = fixture.dispatch->handle().post([&ran](ruvia::WebWorkerContext& context) {
+    asio::post(fixture.io_context_, [&fixture] { fixture.attachment_.stop(); });
+    const auto accepted = fixture.dispatch_->handle().post([&ran](ruvia::web_worker_context& context_value) {
         ran = true;
-        return emptyTask(context);
+        return empty_task(context_value);
     });
     RUVIA_CHECK(accepted.accepted());
-    auto full = fixture.dispatch->handle().post(emptyTask);
-    RUVIA_CHECK_EQ(full.status(), ruvia::PostStatus::kQueueFull);
+    auto full = fixture.dispatch_->handle().post(empty_task);
+    RUVIA_CHECK_EQ(full.status(), ruvia::post_status::queue_full);
     RUVIA_CHECK(full.rejected() != nullptr);
 
-    fixture.dispatch->close();
+    fixture.dispatch_->close();
 
-    auto stopped = fixture.dispatch->handle().post(emptyTask);
-    RUVIA_CHECK_EQ(stopped.status(), ruvia::PostStatus::kWorkerStopping);
+    auto stopped = fixture.dispatch_->handle().post(empty_task);
+    RUVIA_CHECK_EQ(stopped.status(), ruvia::post_status::worker_stopping);
     RUVIA_CHECK(stopped.rejected() != nullptr);
 
-    fixture.ioContext.poll();
+    fixture.io_context_.poll();
     fixture.retire();
     RUVIA_CHECK(!ran);
-    RUVIA_CHECK_EQ(fixture.dispatch->stats().completed, 0U);
-    RUVIA_CHECK_EQ(fixture.dispatch->stats().outstanding, 0U);
+    RUVIA_CHECK_EQ(fixture.dispatch_->stats().completed_, 0U);
+    RUVIA_CHECK_EQ(fixture.dispatch_->stats().outstanding_, 0U);
 }
 
 RUVIA_TEST(web_worker_dispatch_retires_late_factory_producer) {
-    WorkerDispatchFixture fixture;
-    struct State final {
-        std::barrier<> producerReady{2};
-        std::binary_semaphore factoryEntered{0};
-        std::binary_semaphore releaseFactory{0};
-        ruvia::detail::WebWorkerDispatch* dispatch{nullptr};
-        std::atomic_bool paused{false};
-        std::atomic_bool ran{false};
-        std::atomic_uint32_t liveDestructions{0};
-    } state;
-    state.dispatch = fixture.dispatch.get();
+    worker_dispatch_fixture fixture;
+    struct state_type final {
+        std::barrier<> producer_ready_{2};
+        std::binary_semaphore factory_entered_{0};
+        std::binary_semaphore release_factory_{0};
+        ruvia::detail::web_worker_dispatch* dispatch_{nullptr};
+        std::atomic_bool paused_{false};
+        std::atomic_bool ran_{false};
+        std::atomic_uint32_t live_destructions_{0};
+    } state_value;
+    state_value.dispatch_ = fixture.dispatch_.get();
 
-    struct Producer final {
-        State* state;
-        bool live = true;
+    struct producer final {
+        state_type* state_;
+        bool live_ = true;
 
-        explicit Producer(State& value) noexcept
-            : state(&value) {}
+        explicit producer(state_type& value) noexcept
+            : state_(&value) {}
 
-        Producer(const Producer&) = delete;
-        Producer& operator=(const Producer&) = delete;
+        producer(const producer&) = delete;
+        producer& operator=(const producer&) = delete;
 
-        Producer(Producer&& other) noexcept
-            : state(other.state),
-              live(std::exchange(other.live, false)) {
-            if (state->dispatch->stats().outstanding != 0 &&
-                !state->paused.exchange(true, std::memory_order_acq_rel)) {
-                state->factoryEntered.release();
-                state->releaseFactory.acquire();
+        producer(producer&& other) noexcept
+            : state_(other.state_),
+              live_(std::exchange(other.live_, false)) {
+            if (state_->dispatch_->stats().outstanding_ != 0 &&
+                !state_->paused_.exchange(true, std::memory_order_acq_rel)) {
+                state_->factory_entered_.release();
+                state_->release_factory_.acquire();
             }
         }
 
-        ~Producer() {
-            if (live) {
-                state->liveDestructions.fetch_add(1, std::memory_order_relaxed);
+        ~producer() {
+            if (live_) {
+                state_->live_destructions_.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
-        ruvia::Task<void> operator()(ruvia::WebWorkerContext&) {
-            state->ran.store(true, std::memory_order_release);
+        ruvia::task<void> operator()(ruvia::web_worker_context&) {
+            state_->ran_.store(true, std::memory_order_release);
             co_return;
         }
     };
 
-    std::atomic<ruvia::PostStatus> status{ruvia::PostStatus::kWorkerStopping};
-    std::thread producer([&] {
-        state.producerReady.arrive_and_wait();
-        const auto result = fixture.dispatch->handle().post(Producer{state});
-        status.store(result.status(), std::memory_order_release);
+    std::atomic<ruvia::post_status> status{ruvia::post_status::worker_stopping};
+    std::thread producer_value([&] {
+        state_value.producer_ready_.arrive_and_wait();
+        const auto result_value = fixture.dispatch_->handle().post(producer{state_value});
+        status.store(result_value.status(), std::memory_order_release);
     });
-    state.producerReady.arrive_and_wait();
-    state.factoryEntered.acquire();
+    state_value.producer_ready_.arrive_and_wait();
+    state_value.factory_entered_.acquire();
 
     fixture.retire();
-    state.releaseFactory.release();
-    producer.join();
+    state_value.release_factory_.release();
+    producer_value.join();
     // Retirement retains the context until reserved publication quiesces.
     // Drive the late factory's abandonment before destroying its owner.
-    fixture.ioContext.poll();
+    fixture.io_context_.poll();
 
-    const auto stats = fixture.dispatch->stats();
-    RUVIA_CHECK_EQ(status.load(std::memory_order_acquire), ruvia::PostStatus::kAccepted);
-    RUVIA_CHECK(!state.ran.load(std::memory_order_acquire));
-    RUVIA_CHECK_EQ(state.liveDestructions.load(std::memory_order_acquire), 1U);
-    RUVIA_CHECK_EQ(stats.completed, 0U);
-    RUVIA_CHECK_EQ(stats.outstanding, 0U);
+    const auto stats = fixture.dispatch_->stats();
+    RUVIA_CHECK_EQ(status.load(std::memory_order_acquire), ruvia::post_status::accepted);
+    RUVIA_CHECK(!state_value.ran_.load(std::memory_order_acquire));
+    RUVIA_CHECK_EQ(state_value.live_destructions_.load(std::memory_order_acquire), 1U);
+    RUVIA_CHECK_EQ(stats.completed_, 0U);
+    RUVIA_CHECK_EQ(stats.outstanding_, 0U);
 }

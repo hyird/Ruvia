@@ -29,79 +29,79 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/ConnectionScanner.h"
-#include "ruvia/core/StopToken.h"
-#include "ruvia/core/TaskScope.h"
-#include "ruvia/core/WorkerNotification.h"
-#include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/core/WorkerSignal.h"
+#include "ruvia/core/asio_task.h"
 #include "ruvia/core/buffer_pool.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/connection_scanner.h"
+#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_notification.h"
 #include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_runtime_context.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/quic_server.h"
 
-#include "client/ClientTransport.h"
-#include "http3/Http3QuicClientTlsContext.h"
-#include "http3/Http3QuicClientTransport.h"
-#include "http3/Http3QuicSocketAddress.h"
-#include "http3/Http3QuicWireOwner.h"
+#include "client/client_transport.h"
 #include "http3/http3_datagram_channel.h"
+#include "http3/http3_quic_client_tls_context.h"
+#include "http3/http3_quic_client_transport.h"
+#include "http3/http3_quic_socket_address.h"
+#include "http3/http3_quic_wire_owner.h"
 #include "http3/http3_worker_runtime.h"
 #include "http3/http3_worker_server.h"
-#include "integration/WorkerCapabilities.h"
-#include "router/Router.h"
-#include "router/RouterImpl.h"
-#include "server/HttpServerListener.h"
-#include "server/HttpServerOptions.h"
+#include "integration/worker_capabilities.h"
+#include "router/router.h"
+#include "router/router_impl.h"
+#include "server/http_server_listener.h"
+#include "server/http_server_options.h"
 #include "test_harness.h"
 #include "test_tls_crypto.h"
 
 namespace {
 using namespace std::chrono_literals;
-using Udp = asio::ip::udp;
+using udp_type = asio::ip::udp;
 using ruvia::detail::http3_quic_client_tls_context;
 using ruvia::detail::http3_quic_client_transport;
 using ruvia::detail::http3_quic_datagram_address;
 using ruvia::detail::http3_quic_server_transport;
 using ruvia::detail::http3_quic_tls_context;
+using ruvia::detail::http3_quic_wire_owner;
 using ruvia::detail::http3_worker_datagram_endpoint;
-using ruvia::detail::Http3QuicWireOwner;
 
-Http3QuicWireOwner::ProtocolPumpResult fail_protocol_pump(
+http3_quic_wire_owner::protocol_pump_result_type fail_protocol_pump(
     void*, http3_quic_server_transport&, http3_worker_datagram_endpoint&) noexcept {
-    return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
+    return http3_quic_wire_owner::protocol_pump_result_type::fatal;
 }
 
-class FailOnAllocationResource final : public std::pmr::memory_resource {
+class fail_on_allocation_resource final : public std::pmr::memory_resource {
 public:
-    explicit FailOnAllocationResource(std::size_t failAt) noexcept
-        : failAt_(failAt) {}
-    [[nodiscard]] std::size_t allocationAttempts() const noexcept {
+    explicit fail_on_allocation_resource(std::size_t fail_at) noexcept
+        : fail_at_(fail_at) {}
+    [[nodiscard]] std::size_t allocation_attempts() const noexcept {
         return attempts_;
     }
-    [[nodiscard]] std::size_t outstandingAllocations() const noexcept {
+    [[nodiscard]] std::size_t outstanding_allocations() const noexcept {
         return outstanding_;
     }
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         // MSVC debug containers allocate small iterator proxies in noexcept
         // constructors. Inject failure into payload storage, not those proxies.
-        if (bytes >= 32 && ++attempts_ == failAt_) {
+        if (bytes_value >= 32 && ++attempts_ == fail_at_) {
             throw std::bad_alloc();
         }
         ++outstanding_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
     }
-    void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override {
+    void do_deallocate(void* allocation, std::size_t bytes_value, std::size_t alignment) override {
         --outstanding_;
-        std::pmr::new_delete_resource()->deallocate(allocation, bytes, alignment);
+        std::pmr::new_delete_resource()->deallocate(allocation, bytes_value, alignment);
     }
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
-    std::size_t failAt_{};
+    std::size_t fail_at_{};
     std::size_t attempts_{};
     std::size_t outstanding_{};
 };
@@ -113,124 +113,124 @@ struct version_negotiation_pump_state final {
     std::exception_ptr failure_;
 };
 
-Http3QuicWireOwner::ProtocolPumpResult pump_version_negotiation(void* context,
+http3_quic_wire_owner::protocol_pump_result_type pump_version_negotiation(void* context_value,
     http3_quic_server_transport& transport, http3_worker_datagram_endpoint& endpoint) noexcept {
-    auto& state = *static_cast<version_negotiation_pump_state*>(context);
+    auto& state_value = *static_cast<version_negotiation_pump_state*>(context_value);
     try {
-        const auto received = endpoint.receive_slot();
-        if (!received) {
-            return Http3QuicWireOwner::ProtocolPumpResult::kIdle;
+        const auto received_value = endpoint.receive_slot();
+        if (!received_value) {
+            return http3_quic_wire_owner::protocol_pump_result_type::idle;
         }
         const auto local = ruvia::detail::to_http3_quic_datagram_address(
-            received->local_destination);
-        const auto peer = ruvia::detail::to_http3_quic_datagram_address(received->peer);
+            received_value->local_destination_);
+        const auto peer = ruvia::detail::to_http3_quic_datagram_address(received_value->peer_);
         if ((local.index() != 0) || (peer.index() != 0)) {
             throw std::runtime_error("test QUIC datagram has invalid endpoint addresses");
         }
-        auto route = transport.route_datagram(received->bytes, std::get<0>(local), std::get<0>(peer));
-        state.routed_ = route.kind == ruvia::quic_server_route_kind::version_negotiation;
-        if (state.routed_) {
-            const auto result = ruvia::detail::send_http3_version_negotiation(
-                transport.server(), route.version_negotiation, endpoint);
-            state.sent_ = result == http3_worker_datagram_endpoint::pump_result::pending;
-            state.plan_consumed_ = !route.version_negotiation.valid();
+        auto route = transport.route_datagram(received_value->bytes_, std::get<0>(local), std::get<0>(peer));
+        state_value.routed_ = route.kind_ == ruvia::quic_server_route_kind::version_negotiation;
+        if (state_value.routed_) {
+            const auto result_value = ruvia::detail::send_http3_version_negotiation(
+                transport.server(), route.version_negotiation_, endpoint);
+            state_value.sent_ = result_value == http3_worker_datagram_endpoint::pump_result::pending;
+            state_value.plan_consumed_ = !route.version_negotiation_.valid();
         }
         if (endpoint.consume_receive() == http3_worker_datagram_endpoint::pump_result::error) {
             throw std::system_error(endpoint.error(), "consume test QUIC datagram");
         }
-        return Http3QuicWireOwner::ProtocolPumpResult::kProgress;
+        return http3_quic_wire_owner::protocol_pump_result_type::progress;
     } catch (...) {
-        state.failure_ = std::current_exception();
-        return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
+        state_value.failure_ = std::current_exception();
+        return http3_quic_wire_owner::protocol_pump_result_type::fatal;
     }
 }
 
 struct connection_pump_state final {
-    std::optional<ruvia::quic_connection_token> connection;
-    std::size_t full_drives{};
-    std::size_t full_receives{};
-    std::size_t full_expirations{};
-    std::size_t full_expirations_with_deadline{};
-    std::optional<ruvia::quic_timestamp> last_full_expiry;
-    bool repeated_full_expiry{};
-    bool full_idle_retired{};
-    std::size_t packet_writes{};
-    std::size_t packets_sent{};
-    std::exception_ptr failure;
+    std::optional<ruvia::quic_connection_token> connection_;
+    std::size_t full_drives_{};
+    std::size_t full_receives_{};
+    std::size_t full_expirations_{};
+    std::size_t full_expirations_with_deadline_{};
+    std::optional<ruvia::quic_timestamp> last_full_expiry_;
+    bool repeated_full_expiry_{};
+    bool full_idle_retired_{};
+    std::size_t packet_writes_{};
+    std::size_t packets_sent_{};
+    std::exception_ptr failure_;
 };
 
-Http3QuicWireOwner::ProtocolPumpResult pump_connection(void* context,
+http3_quic_wire_owner::protocol_pump_result_type pump_connection(void* context_value,
     http3_quic_server_transport& transport, http3_worker_datagram_endpoint& endpoint) noexcept {
-    auto& state = *static_cast<connection_pump_state*>(context);
+    auto& state_value = *static_cast<connection_pump_state*>(context_value);
     try {
         const auto now = std::chrono::steady_clock::now();
         const bool full = endpoint.outbound_pending() && !endpoint.outbound_capacity();
-        state.full_drives += full;
+        state_value.full_drives_ += full;
         const auto expiry = transport.server().next_expiry();
         const bool expired_while_full = full && expiry && *expiry <= now;
         (void)transport.server().handle_expiry(now);
         if (expired_while_full) {
-            state.repeated_full_expiry |= state.last_full_expiry && *expiry <= *state.last_full_expiry;
-            state.last_full_expiry = expiry;
-            ++state.full_expirations;
-            const auto next = transport.server().next_expiry();
-            state.full_expirations_with_deadline += next.has_value();
-            state.repeated_full_expiry |= next && *next <= *expiry;
-            state.full_idle_retired |= state.connection &&
-                                       transport.server().connection(*state.connection).info().state == ruvia::quic_connection_state::retired;
+            state_value.repeated_full_expiry_ |= state_value.last_full_expiry_ && *expiry <= *state_value.last_full_expiry_;
+            state_value.last_full_expiry_ = expiry;
+            ++state_value.full_expirations_;
+            const auto next_value = transport.server().next_expiry();
+            state_value.full_expirations_with_deadline_ += next_value.has_value();
+            state_value.repeated_full_expiry_ |= next_value && *next_value <= *expiry;
+            state_value.full_idle_retired_ |= state_value.connection_ &&
+                                              transport.server().connection(*state_value.connection_).info().state_ == ruvia::quic_connection_state::retired;
         }
-        bool progress{};
+        bool progress_value{};
         if (const auto received = endpoint.receive_slot()) {
-            const auto local = ruvia::detail::to_http3_quic_datagram_address(received->local_destination);
-            const auto peer = ruvia::detail::to_http3_quic_datagram_address(received->peer);
+            const auto local = ruvia::detail::to_http3_quic_datagram_address(received->local_destination_);
+            const auto peer = ruvia::detail::to_http3_quic_datagram_address(received->peer_);
             if ((local.index() != 0) || (peer.index() != 0)) {
                 throw std::runtime_error("test QUIC datagram has invalid endpoint addresses");
             }
-            auto route = transport.route_datagram(received->bytes, std::get<0>(local), std::get<0>(peer));
-            if (route.kind == ruvia::quic_server_route_kind::initial_offer && !state.connection) {
-                const auto admitted = transport.admit_initial(route.offer, now);
-                if (admitted.status == ruvia::quic_operation_status::accepted) {
-                    state.connection = admitted.connection;
+            auto route = transport.route_datagram(received->bytes_, std::get<0>(local), std::get<0>(peer));
+            if (route.kind_ == ruvia::quic_server_route_kind::initial_offer && !state_value.connection_) {
+                const auto admitted = transport.admit_initial(route.offer_, now);
+                if (admitted.status_ == ruvia::quic_operation_status::accepted) {
+                    state_value.connection_ = admitted.connection_;
                 }
-            } else if (route.kind == ruvia::quic_server_route_kind::existing_connection) {
-                const auto status = transport.server().receive(route.connection,
-                    {received->bytes, ruvia::detail::to_quic_address(std::get<0>(local)), ruvia::detail::to_quic_address(std::get<0>(peer))}, now);
+            } else if (route.kind_ == ruvia::quic_server_route_kind::existing_connection) {
+                const auto status = transport.server().receive(route.connection_,
+                    {received->bytes_, ruvia::detail::to_quic_address(std::get<0>(local)), ruvia::detail::to_quic_address(std::get<0>(peer))}, now);
                 if (status == ruvia::quic_operation_status::accepted ||
                     status == ruvia::quic_operation_status::need_input) {
-                    state.full_receives += full;
+                    state_value.full_receives_ += full;
                 }
             }
             if (endpoint.consume_receive() == http3_worker_datagram_endpoint::pump_result::error) {
                 throw std::system_error(endpoint.error(), "consume test QUIC datagram");
             }
-            progress = true;
+            progress_value = true;
         }
-        if (state.connection) {
+        if (state_value.connection_) {
             const auto output = endpoint.packet_buffer();
             if (!output.empty()) {
-                ++state.packet_writes;
-                const auto packet = transport.server().connection(*state.connection).write_packet(output, now);
-                if (packet.size == 0) {
+                ++state_value.packet_writes_;
+                const auto packet = transport.server().connection(*state_value.connection_).write_packet(output, now);
+                if (packet.size_ == 0) {
                     endpoint.cancel_packet();
                 } else {
-                    const auto source = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.local));
-                    const auto peer = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.peer));
-                    if ((source.index() != 0) || (peer.index() != 0)) {
+                    const auto source_value = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.local_));
+                    const auto peer = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.peer_));
+                    if ((source_value.index() != 0) || (peer.index() != 0)) {
                         throw std::runtime_error("test QUIC packet has invalid endpoint addresses");
                     }
-                    if (endpoint.send_datagram(output.first(packet.size), std::get<0>(source), std::get<0>(peer)) != http3_worker_datagram_endpoint::pump_result::pending) {
+                    if (endpoint.send_datagram(output.first(packet.size_), std::get<0>(source_value), std::get<0>(peer)) != http3_worker_datagram_endpoint::pump_result::pending) {
                         throw std::runtime_error("test QUIC endpoint did not accept reserved packet");
                     }
-                    ++state.packets_sent;
-                    progress = true;
+                    ++state_value.packets_sent_;
+                    progress_value = true;
                 }
             }
         }
-        return progress ? Http3QuicWireOwner::ProtocolPumpResult::kProgress : Http3QuicWireOwner::ProtocolPumpResult::kIdle;
+        return progress_value ? http3_quic_wire_owner::protocol_pump_result_type::progress : http3_quic_wire_owner::protocol_pump_result_type::idle;
     } catch (...) {
         endpoint.cancel_packet();
-        state.failure = std::current_exception();
-        return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
+        state_value.failure_ = std::current_exception();
+        return http3_quic_wire_owner::protocol_pump_result_type::fatal;
     }
 }
 
@@ -243,15 +243,15 @@ public:
         owner_.request_stop();
         owner_.join();
     }
-    [[nodiscard]] ruvia::WorkerRuntimeContext& runtime() noexcept {
+    [[nodiscard]] ruvia::worker_runtime_context& runtime() noexcept {
         return owner_.context();
     }
     template <typename function>
     auto invoke(function operation) {
         using result = decltype(operation());
-        auto task = std::make_shared<std::packaged_task<result()>>(std::move(operation));
-        auto completion = task->get_future();
-        if (!runtime().submission().post([task] { (*task)(); }).accepted() ||
+        auto task_value = std::make_shared<std::packaged_task<result()>>(std::move(operation));
+        auto completion = task_value->get_future();
+        if (!runtime().submission().post([task_value] { (*task_value)(); }).accepted() ||
             completion.wait_for(5s) != std::future_status::ready) {
             std::terminate();
         }
@@ -259,29 +259,29 @@ public:
     }
 
 private:
-    ruvia::worker_runtime owner_{{.queue_capacity = 8}};
+    ruvia::worker_runtime owner_{{.queue_capacity_ = 8}};
 };
 
-struct TestIdentityFiles final {
-    TestIdentityFiles() {
+struct test_identity_files final {
+    test_identity_files() {
         std::random_device random;
-        directory = std::filesystem::temp_directory_path() /
-                    ("ruvia-http3-network-wire-" + std::to_string(random()) + "-" +
-                        std::to_string(random()));
-        if (!std::filesystem::create_directory(directory)) {
+        directory_ = std::filesystem::temp_directory_path() /
+                     ("ruvia-http3-network-wire-" + std::to_string(random()) + "-" +
+                         std::to_string(random()));
+        if (!std::filesystem::create_directory(directory_)) {
             throw std::runtime_error("could not create QUIC test TLS directory");
         }
-        certificate = directory / "certificate.pem";
-        privateKey = directory / "private-key.pem";
-        std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> keyContext(
+        certificate_ = directory_ / "certificate.pem";
+        private_key_ = directory_ / "private-key.pem";
+        std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> key_context(
             EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr), EVP_PKEY_CTX_free);
-        EVP_PKEY* rawKey = nullptr;
-        if (!keyContext || EVP_PKEY_keygen_init(keyContext.get()) <= 0 ||
-            EVP_PKEY_CTX_set_rsa_keygen_bits(keyContext.get(), 2048) <= 0 ||
-            EVP_PKEY_generate(keyContext.get(), &rawKey) <= 0) {
+        EVP_PKEY* raw_key = nullptr;
+        if (!key_context || EVP_PKEY_keygen_init(key_context.get()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_keygen_bits(key_context.get(), 2048) <= 0 ||
+            EVP_PKEY_generate(key_context.get(), &raw_key) <= 0) {
             throw std::runtime_error("could not generate QUIC test TLS key");
         }
-        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(raw_key, EVP_PKEY_free);
         std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new_ex(nullptr, nullptr), X509_free);
         if (!cert || X509_set_version(cert.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1) != 1 ||
@@ -292,25 +292,25 @@ struct TestIdentityFiles final {
             ruvia::test::sign_tls_certificate(cert.get(), key.get()) <= 0) {
             throw std::runtime_error("could not create QUIC test TLS certificate");
         }
-        std::unique_ptr<BIO, decltype(&BIO_free)> certBio(
-            BIO_new_file(certificate.string().c_str(), "w"), BIO_free);
-        std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(
-            BIO_new_file(privateKey.string().c_str(), "w"), BIO_free);
-        if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), cert.get()) != 1 ||
-            ruvia::test::write_tls_private_key(keyBio.get(), key.get()) != 1) {
+        std::unique_ptr<BIO, decltype(&BIO_free)> cert_bio(
+            BIO_new_file(certificate_.string().c_str(), "w"), BIO_free);
+        std::unique_ptr<BIO, decltype(&BIO_free)> key_bio(
+            BIO_new_file(private_key_.string().c_str(), "w"), BIO_free);
+        if (!cert_bio || !key_bio || PEM_write_bio_X509(cert_bio.get(), cert.get()) != 1 ||
+            ruvia::test::write_tls_private_key(key_bio.get(), key.get()) != 1) {
             throw std::runtime_error("could not write QUIC test TLS identity");
         }
     }
-    ~TestIdentityFiles() {
+    ~test_identity_files() {
         std::error_code error;
-        std::filesystem::remove_all(directory, error);
+        std::filesystem::remove_all(directory_, error);
     }
-    std::filesystem::path directory;
-    std::filesystem::path certificate;
-    std::filesystem::path privateKey;
+    std::filesystem::path directory_;
+    std::filesystem::path certificate_;
+    std::filesystem::path private_key_;
 };
 
-http3_quic_datagram_address quic_address(const Udp::endpoint& endpoint) {
+http3_quic_datagram_address quic_address(const udp_type::endpoint& endpoint) {
     const auto address = ruvia::detail::to_http3_quic_datagram_address(endpoint);
     if ((address.index() != 0)) {
         throw std::runtime_error("test UDP endpoint cannot be converted to QUIC address");
@@ -330,19 +330,19 @@ bool is_long_header_type(std::span<const std::byte> packet, std::uint8_t type) {
     return version == 1 && ((std::to_integer<std::uint8_t>(packet[0]) >> 4U) & 0x03U) == type;
 }
 
-ruvia::quic_connection_config client_config(Udp::socket& peer, const Udp::endpoint& server) {
+ruvia::quic_connection_config client_config(udp_type::socket& peer, const udp_type::endpoint& server) {
     ruvia::quic_connection_config config;
-    config.local_address = ruvia::detail::to_quic_address(quic_address(peer.local_endpoint()));
-    config.peer_address = ruvia::detail::to_quic_address(quic_address(server));
+    config.local_address_ = ruvia::detail::to_quic_address(quic_address(peer.local_endpoint()));
+    config.peer_address_ = ruvia::detail::to_quic_address(quic_address(server));
     return config;
 }
 
-std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) {
+std::size_t pump_peer(http3_quic_client_transport& client, udp_type::socket& socket) {
     const auto now = std::chrono::steady_clock::now();
     const auto check_core_state = [&client] {
-        const auto state = client.connection().info().state;
-        if (state == ruvia::quic_connection_state::failed ||
-            state == ruvia::quic_connection_state::retired) {
+        const auto state_value = client.connection().info().state_;
+        if (state_value == ruvia::quic_connection_state::failed ||
+            state_value == ruvia::quic_connection_state::retired) {
             throw std::runtime_error("test QUIC client entered a terminal state");
         }
     };
@@ -351,18 +351,18 @@ std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) 
     for (std::size_t count = 0; count < 32; ++count) {
         const auto packet = client.write_packet(output, now);
         check_core_state();
-        if (packet.size == 0) {
+        if (packet.size_ == 0) {
             break;
         }
         const auto destination = ruvia::detail::to_udp_endpoint(
-            ruvia::detail::from_quic_address(packet.peer));
+            ruvia::detail::from_quic_address(packet.peer_));
         if ((destination.index() != 0)) {
             throw std::runtime_error("test QUIC client packet has invalid destination");
         }
         asio::error_code error;
-        const auto size = socket.send_to(asio::buffer(output.data(), packet.size),
+        const auto size = socket.send_to(asio::buffer(output.data(), packet.size_),
             std::get<0>(destination), 0, error);
-        if (error || size != packet.size) {
+        if (error || size != packet.size_) {
             throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                 "send test QUIC client packet");
         }
@@ -371,7 +371,7 @@ std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) 
 
     std::array<std::byte, 2048> input{};
     for (;;) {
-        Udp::endpoint source;
+        udp_type::endpoint source;
         asio::error_code error;
         const auto size = socket.receive_from(asio::buffer(input), source, 0, error);
         if (error == asio::error::would_block || error == asio::error::try_again) {
@@ -383,16 +383,16 @@ std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) 
         const auto local = ruvia::detail::to_quic_address(quic_address(socket.local_endpoint()));
         const auto remote = ruvia::detail::to_quic_address(quic_address(source));
         const ruvia::quic_datagram_view datagram{
-            .bytes = std::span<const std::byte>(input.data(), size),
-            .local = local,
-            .peer = remote,
+            .bytes_ = std::span<const std::byte>(input.data(), size),
+            .local_ = local,
+            .peer_ = remote,
         };
         (void)client.receive(datagram, std::chrono::steady_clock::now());
         check_core_state();
     }
-    const auto expiryNow = std::chrono::steady_clock::now();
-    if (const auto expiry = client.next_expiry(); expiry && *expiry <= expiryNow) {
-        (void)client.handle_expiry(expiryNow);
+    const auto expiry_now = std::chrono::steady_clock::now();
+    if (const auto expiry = client.next_expiry(); expiry && *expiry <= expiry_now) {
+        (void)client.handle_expiry(expiry_now);
         check_core_state();
     }
     return sent;
@@ -401,9 +401,9 @@ std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) 
 // Real Acceptor/channel/worker path shared by the wire-driver tests.
 class native_wire_fixture final {
 public:
-    native_wire_fixture(ruvia::WorkerRuntimeContext& runtime, asio::io_context& io, Udp::endpoint bind, http3_quic_tls_context& tls,
+    native_wire_fixture(ruvia::worker_runtime_context& runtime, asio::io_context& io, udp_type::endpoint bind, http3_quic_tls_context& tls,
         ruvia::quic_server_config config, std::pmr::memory_resource* resource,
-        Http3QuicWireOwner::ProtocolPump pump)
+        http3_quic_wire_owner::protocol_pump_type pump)
         : io_(io),
           runtime_(runtime),
           notification_(runtime_),
@@ -415,22 +415,22 @@ public:
         packets_.worker_start();
         native_.prepare();
         (void)native_.start();
-        owner_ = std::make_unique<Http3QuicWireOwner>(io, packets_,
-            Udp::endpoint(bind.address(), native_.bound_port()), tls, config, resource, pump);
+        owner_ = std::make_unique<http3_quic_wire_owner>(io, packets_,
+            udp_type::endpoint(bind.address(), native_.bound_port()), tls, config, resource, pump);
         arm();
     }
     ~native_wire_fixture() {
-        owner_->requestStop();
-        const auto deadline = std::chrono::steady_clock::now() + 2s;
-        while ((!owner_->stopStatus().complete() || !native_.endpoint_retired()) && std::chrono::steady_clock::now() < deadline) {
+        owner_->request_stop();
+        const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+        while ((!owner_->stop_status().complete() || !native_.endpoint_retired()) && std::chrono::steady_clock::now() < deadline_value) {
             poll();
             if (io_.stopped()) {
                 io_.restart();
             }
             io_.run_for(1ms);
-            owner_->pollStop();
+            owner_->poll_stop();
         }
-        if (!owner_->stopStatus().complete() || !native_.endpoint_retired()) {
+        if (!owner_->stop_status().complete() || !native_.endpoint_retired()) {
             std::terminate();
         }
         owner_.reset();
@@ -446,7 +446,7 @@ public:
         io_.poll();
         notification_.close();
     }
-    Http3QuicWireOwner& owner() noexcept {
+    http3_quic_wire_owner& owner() noexcept {
         return *owner_;
     }
     bool native_retired() const noexcept {
@@ -454,7 +454,7 @@ public:
     }
     void poll() noexcept {
         packets_.acceptor_poll();
-        if (owner_->stopStatus().stopping) {
+        if (owner_->stop_status().stopping_) {
             packets_.acceptor_close();
             native_.request_stop();
             while (packets_.acceptor_take_output()) {
@@ -488,74 +488,74 @@ private:
     }
     asio::io_context& io_;
 
-    ruvia::WorkerRuntimeContext& runtime_;
-    ruvia::WorkerNotification notification_;
+    ruvia::worker_runtime_context& runtime_;
+    ruvia::worker_notification notification_;
     ruvia::buffer_pool pool_;
     channel packets_;
     ruvia::detail::http3_acceptor_datagram_endpoint native_;
     asio::steady_timer timer_;
-    std::unique_ptr<Http3QuicWireOwner> owner_;
+    std::unique_ptr<http3_quic_wire_owner> owner_;
 };
 
-void drain_owner(asio::io_context& io, native_wire_fixture& fixture) {
-    auto& owner = fixture.owner();
-    owner.requestStop();
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        fixture.poll();
+void drain_owner(asio::io_context& io, native_wire_fixture& fixture_value) {
+    auto& owner_value = fixture_value.owner();
+    owner_value.request_stop();
+    const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline_value) {
+        fixture_value.poll();
         if (io.stopped()) {
             io.restart();
         }
         io.run_for(2ms);
-        owner.pollStop();
-        if (owner.stopStatus().complete() && fixture.native_retired()) {
+        owner_value.poll_stop();
+        if (owner_value.stop_status().complete() && fixture_value.native_retired()) {
             return;
         }
     }
     throw std::runtime_error("HTTP/3 network QUIC wire owner did not drain");
 }
 
-void exercise_owner_allocation_failure(ruvia::testing::TestContext& ruvia_ctx,
-    std::size_t failAt, ruvia::WorkerRuntimeContext& worker_context) {
-    TestIdentityFiles files;
-    ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-    tlsConfig.identity.certificateChainFile = files.certificate.string();
-    tlsConfig.identity.privateKeyFile = files.privateKey.string();
-    http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
-    http3_quic_client_tls_context clientTls({
-        .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+void exercise_owner_allocation_failure(ruvia::testing::test_context& ruvia_ctx,
+    std::size_t fail_at, ruvia::worker_runtime_context& worker_context) {
+    test_identity_files files;
+    ruvia::detail::http_server_listener_definition::tls_type tls_config;
+    tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+    tls_config.identity_.private_key_file_ = files.private_key_.string();
+    http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
+    http3_quic_client_tls_context client_tls({
+        .tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification,
     });
-    FailOnAllocationResource allocationResource(failAt);
+    fail_on_allocation_resource allocation_resource(fail_at);
     asio::io_context io;
     connection_pump_state pump;
-    native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
-        {}, &allocationResource, {&pump, &pump_connection});
-    auto& owner = fixture.owner();
+    native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        {}, &allocation_resource, {&pump, &pump_connection});
+    auto& owner_value = fixture_value.owner();
     try {
-        owner.prepare();
-        owner.start();
+        owner_value.prepare();
+        owner_value.start();
     } catch (...) {
-        RUVIA_CHECK(owner.failure() != nullptr);
+        RUVIA_CHECK(owner_value.failure() != nullptr);
     }
 
-    if (!owner.failure()) {
-        Udp::socket peer(io, Udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    if (!owner_value.failure()) {
+        udp_type::socket peer(io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0));
         peer.non_blocking(true);
-        const Udp::endpoint server(asio::ip::address_v4::loopback(), owner.boundPort());
-        http3_quic_client_transport client(clientTls, client_config(peer, server), "localhost",
+        const udp_type::endpoint server(asio::ip::address_v4::loopback(), owner_value.bound_port());
+        http3_quic_client_transport client(client_tls, client_config(peer, server), "localhost",
             std::chrono::steady_clock::now());
         RUVIA_CHECK(pump_peer(client, peer) != 0);
         std::array<std::byte, 2048> packet{};
-        Udp::endpoint source;
-        std::size_t packetSize{};
-        bool receivedRetry{};
-        const auto retryDeadline = std::chrono::steady_clock::now() + 2s;
-        while (!receivedRetry && !owner.failure() &&
-               std::chrono::steady_clock::now() < retryDeadline) {
+        udp_type::endpoint source;
+        std::size_t packet_size{};
+        bool received_retry{};
+        const auto retry_deadline = std::chrono::steady_clock::now() + 2s;
+        while (!received_retry && !owner_value.failure() &&
+               std::chrono::steady_clock::now() < retry_deadline) {
             asio::error_code error;
-            packetSize = peer.receive_from(asio::buffer(packet), source, 0, error);
+            packet_size = peer.receive_from(asio::buffer(packet), source, 0, error);
             if (!error) {
-                receivedRetry = true;
+                received_retry = true;
                 break;
             }
             RUVIA_CHECK(error == asio::error::would_block || error == asio::error::try_again);
@@ -567,139 +567,139 @@ void exercise_owner_allocation_failure(ruvia::testing::TestContext& ruvia_ctx,
             }
             io.run_for(2ms);
         }
-        RUVIA_CHECK(receivedRetry || owner.failure() != nullptr);
-        if (receivedRetry) {
+        RUVIA_CHECK(received_retry || owner_value.failure() != nullptr);
+        if (received_retry) {
             RUVIA_CHECK(source == server);
-            const std::span<const std::byte> retry(packet.data(), packetSize);
+            const std::span<const std::byte> retry(packet.data(), packet_size);
             RUVIA_CHECK(is_long_header_type(retry, 0));
             const auto local = ruvia::detail::to_quic_address(quic_address(peer.local_endpoint()));
             const auto remote = ruvia::detail::to_quic_address(quic_address(source));
             (void)client.receive({retry, local, remote}, std::chrono::steady_clock::now());
-            RUVIA_CHECK(client.connection().info().state != ruvia::quic_connection_state::failed);
+            RUVIA_CHECK(client.connection().info().state_ != ruvia::quic_connection_state::failed);
             RUVIA_CHECK(pump_peer(client, peer) != 0);
         }
-        const auto deadline = std::chrono::steady_clock::now() + 3s;
-        while (!owner.failure() && std::chrono::steady_clock::now() < deadline) {
+        const auto deadline_value = std::chrono::steady_clock::now() + 3s;
+        while (!owner_value.failure() && std::chrono::steady_clock::now() < deadline_value) {
             if (io.stopped()) {
                 io.restart();
             }
             io.run_for(2ms);
         }
     }
-    RUVIA_CHECK(owner.failure() != nullptr);
-    RUVIA_CHECK(allocationResource.allocationAttempts() == failAt);
-    drain_owner(io, fixture);
-    const auto done = owner.stopStatus();
+    RUVIA_CHECK(owner_value.failure() != nullptr);
+    RUVIA_CHECK(allocation_resource.allocation_attempts() == fail_at);
+    drain_owner(io, fixture_value);
+    const auto done = owner_value.stop_status();
     RUVIA_CHECK(done.complete());
-    RUVIA_CHECK(done.endpoint_retired);
-    RUVIA_CHECK(done.timerHandlersRetired);
-    RUVIA_CHECK(done.transportDestroyed);
-    RUVIA_CHECK(!done.outbound_pending);
-    RUVIA_CHECK(done.failed);
-    RUVIA_CHECK(allocationResource.outstandingAllocations() == 0);
+    RUVIA_CHECK(done.endpoint_retired_);
+    RUVIA_CHECK(done.timer_handlers_retired_);
+    RUVIA_CHECK(done.transport_destroyed_);
+    RUVIA_CHECK(!done.outbound_pending_);
+    RUVIA_CHECK(done.failed_);
+    RUVIA_CHECK(allocation_resource.outstanding_allocations() == 0);
 }
 struct runtime_burst_observation final {
-    std::optional<std::size_t> business_head;
-    std::optional<std::size_t> timer_head;
-    bool input_empty{};
-    bool output_empty{};
-    std::size_t active{};
-    std::size_t refused{};
-    std::exception_ptr failure;
+    std::optional<std::size_t> business_head_;
+    std::optional<std::size_t> timer_head_;
+    bool input_empty_{};
+    bool output_empty_{};
+    std::size_t active_{};
+    std::size_t refused_{};
+    std::exception_ptr failure_;
 };
 
 struct runtime_burst_fixture final {
     using channel = ruvia::detail::http3_datagram_channel;
 
-    ruvia::WorkerMemory memory;
-    ruvia::detail::HttpServerOptions options;
-    ruvia::detail::Router router;
-    ruvia::detail::RouterImpl& routes{ruvia::detail::RouterImpl::from(router)};
-    ruvia::detail::WorkerCapabilities capabilities;
-    ruvia::ConnectionScanner scanner;
-    ruvia::StopSource stop;
-    ruvia::StopToken stop_token;
-    std::atomic<std::size_t> active{};
-    std::atomic<std::size_t> refused{};
-    ruvia::detail::http3_worker_server server;
-    std::exception_ptr failure;
-    ruvia::detail::http3_worker_runtime protocol;
-    ruvia::TaskScope runners;
-    ruvia::WorkerSignal business_ready;
-    asio::steady_timer business_timer;
-    asio::steady_timer observation_timer;
-    channel& packets;
-    std::optional<std::size_t> business_head;
-    std::optional<std::size_t> timer_head;
+    ruvia::worker_memory memory_;
+    ruvia::detail::http_server_options options_;
+    ruvia::detail::router router_;
+    ruvia::detail::router_impl& routes_{ruvia::detail::router_impl::from(router_)};
+    ruvia::detail::worker_capabilities capabilities_;
+    ruvia::connection_scanner scanner_;
+    ruvia::stop_source stop_;
+    ruvia::stop_token stop_token_;
+    std::atomic<std::size_t> active_{};
+    std::atomic<std::size_t> refused_{};
+    ruvia::detail::http3_worker_server server_;
+    std::exception_ptr failure_;
+    ruvia::detail::http3_worker_runtime protocol_;
+    ruvia::task_scope runners_;
+    ruvia::worker_signal business_ready_;
+    asio::steady_timer business_timer_;
+    asio::steady_timer observation_timer_;
+    channel& packets_;
+    std::optional<std::size_t> business_head_;
+    std::optional<std::size_t> timer_head_;
 
-    runtime_burst_fixture(ruvia::WorkerRuntimeContext& worker, channel& input,
-        const Udp::endpoint& local, const ruvia::detail::HttpServerListenerDefinition::Tls& tls)
-        : capabilities(worker.ioContext(), worker.handle(), memory.resource(), {}, {}),
-          scanner(worker.handle(), {}),
-          stop_token(stop.token()),
-          server(worker.handle(), memory, finalize_routes(), capabilities, scanner,
-              worker.ioContext().get_executor(), options, stop_token, 1, 8, active, refused),
-          protocol(worker, local, tls, ruvia::Http3ListenConfig{},
-              {.server = &server, .max_connections = 1, .buffer_capacity = 8, .max_requests_per_connection = 8},
-              input, {}, {this, [](void* context, std::exception_ptr error) noexcept {
-                              static_cast<runtime_burst_fixture*>(context)->failure =
+    runtime_burst_fixture(ruvia::worker_runtime_context& worker_value, channel& input,
+        const udp_type::endpoint& local, const ruvia::detail::http_server_listener_definition::tls_type& tls)
+        : capabilities_(worker_value.io_context(), worker_value.handle(), memory_.resource(), {}, {}),
+          scanner_(worker_value.handle(), {}),
+          stop_token_(stop_.token()),
+          server_(worker_value.handle(), memory_, finalize_routes(), capabilities_, scanner_,
+              worker_value.io_context().get_executor(), options_, stop_token_, 1, 8, active_, refused_),
+          protocol_(worker_value, local, tls, ruvia::http3_listen_config{},
+              {.server_ = &server_, .max_connections_ = 1, .buffer_capacity_ = 8, .max_requests_per_connection_ = 8},
+              input, {}, {this, [](void* context_value, std::exception_ptr error) noexcept {
+                              static_cast<runtime_burst_fixture*>(context_value)->failure_ =
                                   std::move(error);
                           }}),
-          runners(worker.handle(), {.resource = memory.resource()}),
-          business_ready(worker.handle()),
-          business_timer(worker.ioContext()),
-          observation_timer(worker.ioContext()),
-          packets(input) {
-        protocol.stage();
+          runners_(worker_value.handle(), {.resource_ = memory_.resource()}),
+          business_ready_(worker_value.handle()),
+          business_timer_(worker_value.io_context()),
+          observation_timer_(worker_value.io_context()),
+          packets_(input) {
+        protocol_.stage();
     }
 
-    [[nodiscard]] const ruvia::detail::RouteTable& finalize_routes() {
-        routes.finalize();
-        return routes.routeTable();
+    [[nodiscard]] const ruvia::detail::route_table& finalize_routes() {
+        routes_.finalize();
+        return routes_.route_table();
     }
 
     [[nodiscard]] std::optional<std::size_t> input_head() noexcept {
-        const auto input = packets.worker_input();
+        const auto input = packets_.worker_input();
         if (!input) {
             return std::nullopt;
         }
-        return std::to_integer<std::size_t>(input->bytes[1]) |
-               (std::to_integer<std::size_t>(input->bytes[2]) << 8U);
+        return std::to_integer<std::size_t>(input->bytes_[1]) |
+               (std::to_integer<std::size_t>(input->bytes_[2]) << 8U);
     }
 
-    [[nodiscard]] ruvia::Task<void> run_business_task() {
-        co_await business_ready.wait();
-        business_head = input_head();
+    [[nodiscard]] ruvia::task<void> run_business_task() {
+        co_await business_ready_.wait();
+        business_head_ = input_head();
     }
 
-    void release(std::promise<runtime_burst_observation>& observed) {
-        runners.spawn(run_business_task());
-        business_ready.notify();
-        business_timer.expires_at(std::chrono::steady_clock::now());
-        business_timer.async_wait([this](const asio::error_code& error) {
+    void release(std::promise<runtime_burst_observation>& observed_value) {
+        runners_.spawn(run_business_task());
+        business_ready_.notify();
+        business_timer_.expires_at(std::chrono::steady_clock::now());
+        business_timer_.async_wait([this](const asio::error_code& error) {
             if (!error) {
-                timer_head = input_head();
+                timer_head_ = input_head();
             }
         });
         // This read-only snapshot precedes the runtime's 10ms monitor. Neither
         // observer pumps protocol work or publishes another datagram edge.
-        observation_timer.expires_after(5ms);
-        observation_timer.async_wait([this, &observed](const asio::error_code& error) {
+        observation_timer_.expires_after(5ms);
+        observation_timer_.async_wait([this, &observed_value](const asio::error_code& error) {
             if (error) {
-                observed.set_exception(std::make_exception_ptr(std::system_error(error)));
+                observed_value.set_exception(std::make_exception_ptr(std::system_error(error)));
                 return;
             }
-            observed.set_value({business_head, timer_head, !packets.worker_input(),
-                packets.worker_outbound_count() == 0, active.load(), refused.load(), failure});
+            observed_value.set_value({business_head_, timer_head_, !packets_.worker_input(),
+                packets_.worker_outbound_count() == 0, active_.load(), refused_.load(), failure_});
         });
-        runners.spawn(server.run());
-        runners.spawn(protocol.run_datagrams());
-        protocol.start();
+        runners_.spawn(server_.run());
+        runners_.spawn(protocol_.run_datagrams());
+        protocol_.start();
     }
 
-    [[nodiscard]] ruvia::Task<void> join_cold_retirement() {
-        co_await protocol.join();
-        co_await runners.join();
+    [[nodiscard]] ruvia::task<void> join_cold_retirement() {
+        co_await protocol_.join();
+        co_await runners_.join();
     }
 };
 
@@ -709,27 +709,27 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
     using channel = ruvia::detail::http3_datagram_channel;
     constexpr std::size_t burst_size = 256;
     constexpr std::size_t output_window = 16;
-    TestIdentityFiles files;
-    ruvia::detail::HttpServerListenerDefinition::Tls tls;
-    tls.identity.certificateChainFile = files.certificate.string();
-    tls.identity.privateKeyFile = files.privateKey.string();
+    test_identity_files files;
+    ruvia::detail::http_server_listener_definition::tls_type tls;
+    tls.identity_.certificate_chain_file_ = files.certificate_.string();
+    tls.identity_.private_key_file_ = files.private_key_.string();
     asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor_runtime(acceptor_io, 8);
-    ruvia::WorkerNotification acceptor_notification(acceptor_runtime);
+    ruvia::worker_runtime_context acceptor_runtime(acceptor_io, 8);
+    ruvia::worker_notification acceptor_notification(acceptor_runtime);
     ruvia::buffer_pool pool(burst_size + output_window, channel::packet_capacity);
     wire_worker worker;
     channel packets(pool, acceptor_notification, nullptr, burst_size, output_window);
     packets.stage_worker(worker.runtime());
-    const Udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
-    const Udp::endpoint peer(asio::ip::address_v4::loopback(), 43210);
+    const udp_type::endpoint local(asio::ip::address_v4::loopback(), 4433);
+    const udp_type::endpoint peer(asio::ip::address_v4::loopback(), 43210);
     std::unique_ptr<runtime_burst_fixture> fixture;
     RUVIA_CHECK(worker.invoke([&] {
         fixture = std::make_unique<runtime_burst_fixture>(
             worker.runtime(), packets, local, tls);
-        return fixture->server.install();
+        return fixture->server_.install();
     }));
     std::promise<runtime_burst_observation> observed;
-    auto observation = observed.get_future();
+    auto observation_value = observed.get_future();
     // No runner exists yet. Every notification therefore belongs to one
     // coalesced RX burst; there is no follow-up UDP or completion-credit edge.
     for (std::size_t index = 0; index < burst_size; ++index) {
@@ -743,25 +743,25 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
     worker.invoke([&] { fixture->release(observed); });
     // Waiting is Acceptor-only. Do not poll credits or post worker commands
     // until the read-only owner snapshot proves the complete burst was consumed.
-    const bool observed_in_time = observation.wait_for(2s) == std::future_status::ready;
+    const bool observed_in_time = observation_value.wait_for(2s) == std::future_status::ready;
     RUVIA_CHECK(observed_in_time);
     if (!observed_in_time) {
         std::terminate();
     }
-    const auto snapshot = observation.get();
-    RUVIA_CHECK(snapshot.business_head.has_value());
-    RUVIA_CHECK(snapshot.timer_head.has_value());
-    if (snapshot.business_head) {
-        RUVIA_CHECK(*snapshot.business_head > 0 && *snapshot.business_head < burst_size);
+    const auto snapshot = observation_value.get();
+    RUVIA_CHECK(snapshot.business_head_.has_value());
+    RUVIA_CHECK(snapshot.timer_head_.has_value());
+    if (snapshot.business_head_) {
+        RUVIA_CHECK(*snapshot.business_head_ > 0 && *snapshot.business_head_ < burst_size);
     }
-    if (snapshot.timer_head) {
-        RUVIA_CHECK(*snapshot.timer_head > 0 && *snapshot.timer_head < burst_size);
+    if (snapshot.timer_head_) {
+        RUVIA_CHECK(*snapshot.timer_head_ > 0 && *snapshot.timer_head_ < burst_size);
     }
-    RUVIA_CHECK(snapshot.input_empty);
-    RUVIA_CHECK(snapshot.output_empty);
-    RUVIA_CHECK_EQ(snapshot.active, std::size_t{0});
-    RUVIA_CHECK_EQ(snapshot.refused, std::size_t{0});
-    RUVIA_CHECK(!snapshot.failure);
+    RUVIA_CHECK(snapshot.input_empty_);
+    RUVIA_CHECK(snapshot.output_empty_);
+    RUVIA_CHECK_EQ(snapshot.active_, std::size_t{0});
+    RUVIA_CHECK_EQ(snapshot.refused_, std::size_t{0});
+    RUVIA_CHECK(!snapshot.failure_);
     RUVIA_CHECK(!packets.acceptor_take_output());
     RUVIA_CHECK_EQ(pool.outstanding(), burst_size + output_window);
     // Aggregate credit returns are bounded per poll, independently of the
@@ -775,9 +775,9 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
     std::promise<void> joined;
     auto completion = joined.get_future();
     worker.invoke([&] {
-        fixture->protocol.stop();
-        asio::co_spawn(worker.runtime().ioContext(),
-            ruvia::asAwaitable(fixture->runners.join()),
+        fixture->protocol_.stop();
+        asio::co_spawn(worker.runtime().io_context(),
+            ruvia::as_awaitable(fixture->runners_.join()),
             [&joined](std::exception_ptr error) {
                 if (error) {
                     joined.set_exception(std::move(error));
@@ -802,8 +802,8 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
     completion.get();
     packets.acceptor_poll();
     const bool drained = worker.invoke([&] {
-        const bool done = fixture->server.drained() && fixture->protocol.drained() &&
-                          !fixture->failure;
+        const bool done = fixture->server_.drained() && fixture->protocol_.drained() &&
+                          !fixture->failure_;
         fixture.reset();
         return done;
     });
@@ -815,31 +815,31 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
 
 RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_and_returns_channel_loans) {
     using channel = ruvia::detail::http3_datagram_channel;
-    TestIdentityFiles files;
-    ruvia::detail::HttpServerListenerDefinition::Tls tls;
-    tls.identity.certificateChainFile = files.certificate.string();
-    tls.identity.privateKeyFile = files.privateKey.string();
+    test_identity_files files;
+    ruvia::detail::http_server_listener_definition::tls_type tls;
+    tls.identity_.certificate_chain_file_ = files.certificate_.string();
+    tls.identity_.private_key_file_ = files.private_key_.string();
     asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor_runtime(acceptor_io, 8);
-    ruvia::WorkerNotification acceptor_notification(acceptor_runtime);
+    ruvia::worker_runtime_context acceptor_runtime(acceptor_io, 8);
+    ruvia::worker_notification acceptor_notification(acceptor_runtime);
     ruvia::buffer_pool pool(8, channel::packet_capacity);
     wire_worker worker;
     auto packets = std::make_unique<channel>(pool, acceptor_notification, nullptr, 2, 2);
     packets->stage_worker(worker.runtime());
-    const Udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
+    const udp_type::endpoint local(asio::ip::address_v4::loopback(), 4433);
     std::unique_ptr<runtime_burst_fixture> fixture;
     std::promise<void> joined;
     auto completion = joined.get_future();
     worker.invoke([&] {
         fixture = std::make_unique<runtime_burst_fixture>(
             worker.runtime(), *packets, local, tls);
-        RUVIA_CHECK(fixture->server.install());
-        fixture->runners.spawn(fixture->server.run());
-        RUVIA_CHECK(fixture->server.run_started());
-        RUVIA_CHECK(!fixture->protocol.runner_started());
-        fixture->protocol.abandon_before_launch();
-        asio::co_spawn(worker.runtime().ioContext(),
-            ruvia::asAwaitable(fixture->join_cold_retirement()),
+        RUVIA_CHECK(fixture->server_.install());
+        fixture->runners_.spawn(fixture->server_.run());
+        RUVIA_CHECK(fixture->server_.run_started());
+        RUVIA_CHECK(!fixture->protocol_.runner_started());
+        fixture->protocol_.abandon_before_launch();
+        asio::co_spawn(worker.runtime().io_context(),
+            ruvia::as_awaitable(fixture->join_cold_retirement()),
             [&joined](std::exception_ptr error) {
                 if (error) {
                     joined.set_exception(std::move(error));
@@ -850,9 +850,9 @@ RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_an
     });
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{2});
     packets->acceptor_close();
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    const auto deadline_value = std::chrono::steady_clock::now() + 2s;
     while (completion.wait_for(0s) != std::future_status::ready &&
-           std::chrono::steady_clock::now() < deadline) {
+           std::chrono::steady_clock::now() < deadline_value) {
         packets->acceptor_poll();
         (void)completion.wait_for(1ms);
     }
@@ -865,14 +865,14 @@ RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_an
     RUVIA_CHECK(packets->worker_closed());
     RUVIA_CHECK(packets->acceptor_finalize());
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
-    // App destroys Acceptor channels before phase-two worker finalization.
+    // application destroys Acceptor channels before phase-two worker finalization.
     // Repeated lifecycle requests and protocol destruction must not borrow them.
     packets.reset();
     RUVIA_CHECK(worker.invoke([&] {
-        fixture->protocol.stop();
-        fixture->protocol.abandon_before_launch();
-        const bool drained = fixture->server.drained() && fixture->protocol.drained() &&
-                             !fixture->failure;
+        fixture->protocol_.stop();
+        fixture->protocol_.abandon_before_launch();
+        const bool drained = fixture->server_.drained() && fixture->protocol_.drained() &&
+                             !fixture->failure_;
         fixture.reset();
         return drained;
     }));
@@ -882,17 +882,17 @@ RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_an
 RUVIA_TEST(http3_network_queue_deduplicates_initial_offers_and_preserves_capacity) {
     std::pmr::vector<ruvia::quic_initial_offer> pending;
     pending.reserve(2);
-    ruvia::quic_initial_offer offer{.offer_id = 1};
+    ruvia::quic_initial_offer offer{.offer_id_ = 1};
     RUVIA_CHECK(ruvia::detail::queue_http3_initial_offer(pending, offer));
     RUVIA_CHECK(!ruvia::detail::queue_http3_initial_offer(pending, offer));
     RUVIA_CHECK_EQ(pending.size(), std::size_t{1});
 
     std::uint64_t next_id = 2;
     while (pending.size() < pending.capacity()) {
-        offer.offer_id = next_id++;
+        offer.offer_id_ = next_id++;
         RUVIA_CHECK(ruvia::detail::queue_http3_initial_offer(pending, offer));
     }
-    offer.offer_id = next_id;
+    offer.offer_id_ = next_id;
     RUVIA_CHECK(!ruvia::detail::queue_http3_initial_offer(pending, offer));
     RUVIA_CHECK_EQ(pending.size(), pending.capacity());
 }
@@ -901,26 +901,26 @@ RUVIA_TEST(http3_network_sends_version_negotiation_from_owned_udp_slot_without_a
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tls_config;
-        tls_config.identity.certificateChainFile = files.certificate.string();
-        tls_config.identity.privateKeyFile = files.privateKey.string();
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
         http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
         asio::io_context io;
         version_negotiation_pump_state pump_state;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
             {}, nullptr, {&pump_state, &pump_version_negotiation});
-        auto& owner = fixture.owner();
-        owner.prepare();
-        owner.start();
+        auto& owner_value = fixture_value.owner();
+        owner_value.prepare();
+        owner_value.start();
 
-        Udp::socket peer(io, Udp::endpoint(asio::ip::address_v4::loopback(), 0));
+        udp_type::socket peer(io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0));
         std::array<std::byte, ruvia::detail::http3_udp_socket::datagram_buffer_size> response{};
-        Udp::endpoint responseSource;
+        udp_type::endpoint response_source;
         asio::error_code receive_error;
         std::size_t response_size{};
         bool receive_complete{};
-        peer.async_receive_from(asio::buffer(response), responseSource,
+        peer.async_receive_from(asio::buffer(response), response_source,
             [&](const asio::error_code& error, std::size_t size) noexcept {
                 receive_error = error;
                 response_size = size;
@@ -936,14 +936,14 @@ RUVIA_TEST(http3_network_sends_version_negotiation_from_owned_udp_slot_without_a
             unsupported_version[6 + i] = static_cast<std::byte>(0x10 + i);
             unsupported_version[15 + i] = static_cast<std::byte>(0x20 + i);
         }
-        const Udp::endpoint server(asio::ip::address_v4::loopback(), owner.boundPort());
+        const udp_type::endpoint server(asio::ip::address_v4::loopback(), owner_value.bound_port());
         asio::error_code send_error;
         RUVIA_CHECK(peer.send_to(asio::buffer(unsupported_version), server, 0, send_error) ==
                     unsupported_version.size());
         RUVIA_CHECK(!send_error);
 
-        const auto deadline = std::chrono::steady_clock::now() + 2s;
-        while (!receive_complete && std::chrono::steady_clock::now() < deadline) {
+        const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+        while (!receive_complete && std::chrono::steady_clock::now() < deadline_value) {
             if (io.stopped()) {
                 io.restart();
             }
@@ -962,16 +962,16 @@ RUVIA_TEST(http3_network_sends_version_negotiation_from_owned_udp_slot_without_a
             RUVIA_CHECK_EQ(response[3], std::byte{});
             RUVIA_CHECK_EQ(response[4], std::byte{});
         }
-        RUVIA_CHECK(responseSource == server);
-        RUVIA_CHECK(owner.transport() != nullptr);
-        if (owner.transport() != nullptr) {
-            RUVIA_CHECK_EQ(owner.transport()->server().connection_count(), std::size_t{0});
-            RUVIA_CHECK_EQ(owner.transport()->server().pending_connection_count(), std::size_t{0});
+        RUVIA_CHECK(response_source == server);
+        RUVIA_CHECK(owner_value.transport() != nullptr);
+        if (owner_value.transport() != nullptr) {
+            RUVIA_CHECK_EQ(owner_value.transport()->server().connection_count(), std::size_t{0});
+            RUVIA_CHECK_EQ(owner_value.transport()->server().pending_connection_count(), std::size_t{0});
         }
-        RUVIA_CHECK(!owner.failure());
-        drain_owner(io, fixture);
-        RUVIA_CHECK(owner.stopStatus().complete());
-        RUVIA_CHECK(!owner.stopStatus().failed);
+        RUVIA_CHECK(!owner_value.failure());
+        drain_owner(io, fixture_value);
+        RUVIA_CHECK(owner_value.stop_status().complete());
+        RUVIA_CHECK(!owner_value.stop_status().failed_);
     });
 }
 
@@ -979,50 +979,50 @@ RUVIA_TEST(http3_network_quic_wire_owner_handles_initial_and_bounds_timer_progre
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-        tlsConfig.identity.certificateChainFile = files.certificate.string();
-        tlsConfig.identity.privateKeyFile = files.privateKey.string();
-        http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
-        http3_quic_client_tls_context clientTls({
-            .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
+        http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
+        http3_quic_client_tls_context client_tls({
+            .tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification,
         });
         asio::io_context io;
         connection_pump_state pump;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
             {}, nullptr, {&pump, &pump_connection});
-        auto& owner = fixture.owner();
-        owner.prepare();
-        RUVIA_CHECK(owner.boundPort() != 0);
-        Udp::socket peer(io, Udp::endpoint(asio::ip::address_v4::loopback(), 0));
+        auto& owner_value = fixture_value.owner();
+        owner_value.prepare();
+        RUVIA_CHECK(owner_value.bound_port() != 0);
+        udp_type::socket peer(io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0));
         peer.non_blocking(true);
-        const Udp::endpoint server(asio::ip::address_v4::loopback(), owner.boundPort());
-        http3_quic_client_transport client(clientTls, client_config(peer, server), "localhost",
+        const udp_type::endpoint server(asio::ip::address_v4::loopback(), owner_value.bound_port());
+        http3_quic_client_transport client(client_tls, client_config(peer, server), "localhost",
             std::chrono::steady_clock::now());
         RUVIA_CHECK(pump_peer(client, peer) != 0);
-        RUVIA_CHECK(client.connection().info().state == ruvia::quic_connection_state::connecting);
+        RUVIA_CHECK(client.connection().info().state_ == ruvia::quic_connection_state::connecting);
 
         io.poll();
-        std::array<std::byte, 2048> beforeStart{};
-        Udp::endpoint beforeStartSource;
-        asio::error_code beforeStartError;
-        (void)peer.receive_from(asio::buffer(beforeStart), beforeStartSource, 0, beforeStartError);
-        RUVIA_CHECK(beforeStartError == asio::error::would_block ||
-                    beforeStartError == asio::error::try_again);
-        RUVIA_CHECK(owner.timerExpirations() == 0);
+        std::array<std::byte, 2048> before_start{};
+        udp_type::endpoint before_start_source;
+        asio::error_code before_start_error;
+        (void)peer.receive_from(asio::buffer(before_start), before_start_source, 0, before_start_error);
+        RUVIA_CHECK(before_start_error == asio::error::would_block ||
+                    before_start_error == asio::error::try_again);
+        RUVIA_CHECK(owner_value.timer_expirations() == 0);
         io.restart();
-        owner.start();
+        owner_value.start();
 
         std::array<std::byte, 2048> packet{};
-        Udp::endpoint source;
-        std::size_t packetSize{};
-        bool receivedRetry{};
-        const auto receiveDeadline = std::chrono::steady_clock::now() + 2s;
-        while (!receivedRetry && std::chrono::steady_clock::now() < receiveDeadline) {
+        udp_type::endpoint source;
+        std::size_t packet_size{};
+        bool received_retry{};
+        const auto receive_deadline = std::chrono::steady_clock::now() + 2s;
+        while (!received_retry && std::chrono::steady_clock::now() < receive_deadline) {
             asio::error_code error;
-            packetSize = peer.receive_from(asio::buffer(packet), source, 0, error);
+            packet_size = peer.receive_from(asio::buffer(packet), source, 0, error);
             if (!error) {
-                receivedRetry = true;
+                received_retry = true;
                 break;
             }
             RUVIA_CHECK(error == asio::error::would_block || error == asio::error::try_again);
@@ -1031,93 +1031,93 @@ RUVIA_TEST(http3_network_quic_wire_owner_handles_initial_and_bounds_timer_progre
             }
             io.run_for(2ms);
         }
-        RUVIA_CHECK(receivedRetry);
+        RUVIA_CHECK(received_retry);
         RUVIA_CHECK(source == server);
-        const std::span<const std::byte> retry(packet.data(), packetSize);
+        const std::span<const std::byte> retry(packet.data(), packet_size);
         RUVIA_CHECK(is_long_header_type(retry, 0));
-        if (receivedRetry && is_long_header_type(retry, 0)) {
-            RUVIA_CHECK(packetSize > 21);
+        if (received_retry && is_long_header_type(retry, 0)) {
+            RUVIA_CHECK(packet_size > 21);
             const auto local = ruvia::detail::to_quic_address(quic_address(peer.local_endpoint()));
             const auto remote = ruvia::detail::to_quic_address(quic_address(source));
-            const auto received = client.receive({retry, local, remote}, std::chrono::steady_clock::now());
-            RUVIA_CHECK(received == ruvia::quic_operation_status::accepted || received == ruvia::quic_operation_status::need_input);
-            RUVIA_CHECK(client.connection().info().state == ruvia::quic_connection_state::connecting);
+            const auto received_value = client.receive({retry, local, remote}, std::chrono::steady_clock::now());
+            RUVIA_CHECK(received_value == ruvia::quic_operation_status::accepted || received_value == ruvia::quic_operation_status::need_input);
+            RUVIA_CHECK(client.connection().info().state_ == ruvia::quic_connection_state::connecting);
             RUVIA_CHECK(pump_peer(client, peer) != 0);
             io.run_for(1200ms);
-            RUVIA_CHECK(owner.timerExpirations() > 0);
-            RUVIA_CHECK(owner.timerExpirations() < 1600);
-            constexpr std::array<char, 4> closeReason{'d', 'o', 'n', 'e'};
-            const auto closeStatus = client.connection().close({
-                .kind = ruvia::quic_close_kind::application,
-                .code = 0,
-                .frame_type = 0,
-                .reason = closeReason,
+            RUVIA_CHECK(owner_value.timer_expirations() > 0);
+            RUVIA_CHECK(owner_value.timer_expirations() < 1600);
+            constexpr std::array<char, 4> close_reason{'d', 'o', 'n', 'e'};
+            const auto close_status = client.connection().close({
+                .kind_ = ruvia::quic_close_kind::application,
+                .code_ = 0,
+                .frame_type_ = 0,
+                .reason_ = close_reason,
             });
-            RUVIA_CHECK(closeStatus == ruvia::quic_operation_status::accepted);
+            RUVIA_CHECK(close_status == ruvia::quic_operation_status::accepted);
             RUVIA_CHECK(pump_peer(client, peer) != 0);
             io.run_for(10ms);
         }
-        RUVIA_CHECK(!owner.failure());
-        drain_owner(io, fixture);
-        RUVIA_CHECK(owner.stopStatus().complete());
-        RUVIA_CHECK(!owner.stopStatus().failed);
+        RUVIA_CHECK(!owner_value.failure());
+        drain_owner(io, fixture_value);
+        RUVIA_CHECK(owner_value.stop_status().complete());
+        RUVIA_CHECK(!owner_value.stop_status().failed_);
     });
 }
 
 RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_window_is_full) {
     using channel = ruvia::detail::http3_datagram_channel;
-    TestIdentityFiles files;
-    ruvia::detail::HttpServerListenerDefinition::Tls tls_config;
-    tls_config.identity.certificateChainFile = files.certificate.string();
-    tls_config.identity.privateKeyFile = files.privateKey.string();
+    test_identity_files files;
+    ruvia::detail::http_server_listener_definition::tls_type tls_config;
+    tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+    tls_config.identity_.private_key_file_ = files.private_key_.string();
     http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
     http3_quic_client_tls_context client_tls({
-        .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+        .tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification,
     });
     asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor_runtime(acceptor_io, 8);
-    ruvia::WorkerNotification acceptor_notification(acceptor_runtime);
+    ruvia::worker_runtime_context acceptor_runtime(acceptor_io, 8);
+    ruvia::worker_notification acceptor_notification(acceptor_runtime);
     ruvia::buffer_pool pool(8, channel::packet_capacity);
     wire_worker worker;
     constexpr std::size_t output_window = 1;
     channel packets(pool, acceptor_notification, nullptr, 2, output_window);
     packets.stage_worker(worker.runtime());
     ruvia::detail::http3_acceptor_datagram_endpoint acceptor(acceptor_io,
-        Udp::endpoint(asio::ip::address_v4::loopback(), 0),
+        udp_type::endpoint(asio::ip::address_v4::loopback(), 0),
         {nullptr, [](void*, ruvia::detail::http3_acceptor_datagram_endpoint::notification_kind) noexcept {}}, pool);
     acceptor.prepare();
     RUVIA_CHECK(acceptor.start() == http3_worker_datagram_endpoint::pump_result::pending);
-    const Udp::endpoint server(asio::ip::address_v4::loopback(), acceptor.bound_port());
+    const udp_type::endpoint server(asio::ip::address_v4::loopback(), acceptor.bound_port());
     connection_pump_state pump;
-    std::unique_ptr<Http3QuicWireOwner> owner;
+    std::unique_ptr<http3_quic_wire_owner> owner;
     ruvia::quic_server_config server_config;
     // ngtcp2 applies its authoritative max(idle_timeout, 3*PTO) minimum.
     // Even with TX held, its independent idle deadline must retire the peer.
-    server_config.local_transport_parameters.idle_timeout_ms = 1;
+    server_config.local_transport_parameters_.idle_timeout_ms_ = 1;
     worker.invoke([&] {
         packets.worker_start();
-        owner = std::make_unique<Http3QuicWireOwner>(worker.runtime().ioContext(), packets,
+        owner = std::make_unique<http3_quic_wire_owner>(worker.runtime().io_context(), packets,
             server, tls, server_config, nullptr,
-            Http3QuicWireOwner::ProtocolPump{&pump, &pump_connection});
+            http3_quic_wire_owner::protocol_pump_type{&pump, &pump_connection});
         owner->prepare();
         owner->start();
     });
-    Udp::socket peer(acceptor_io, Udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    udp_type::socket peer(acceptor_io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0));
     http3_quic_client_transport client(client_tls, client_config(peer, server), "localhost",
         std::chrono::steady_clock::now());
     std::array<std::byte, 2048> initial_bytes{};
-    const auto initial = client.write_packet(initial_bytes, std::chrono::steady_clock::now());
-    RUVIA_CHECK(initial.size != 0);
-    RUVIA_CHECK(is_long_header_type(std::span<const std::byte>(initial_bytes).first(initial.size), 0));
+    const auto initial_value = client.write_packet(initial_bytes, std::chrono::steady_clock::now());
+    RUVIA_CHECK(initial_value.size_ != 0);
+    RUVIA_CHECK(is_long_header_type(std::span<const std::byte>(initial_bytes).first(initial_value.size_), 0));
     const auto send_initial = [&] {
         asio::error_code error;
-        const auto sent = peer.send_to(asio::buffer(initial_bytes.data(), initial.size), server, 0, error);
+        const auto sent = peer.send_to(asio::buffer(initial_bytes.data(), initial_value.size_), server, 0, error);
         RUVIA_CHECK(!error);
-        RUVIA_CHECK_EQ(sent, initial.size);
+        RUVIA_CHECK_EQ(sent, initial_value.size_);
     };
     const auto forward_input = [&] {
-        const auto deadline = std::chrono::steady_clock::now() + 2s;
-        while (std::chrono::steady_clock::now() < deadline) {
+        const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+        while (std::chrono::steady_clock::now() < deadline_value) {
             acceptor.poll_receive();
             if (acceptor_io.stopped()) {
                 acceptor_io.restart();
@@ -1135,17 +1135,17 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
     auto held_output = packets.acceptor_take_output();
     RUVIA_CHECK(held_output.has_value());
     if (held_output) {
-        RUVIA_CHECK(is_long_header_type(held_output->view().bytes, 0));
-        RUVIA_CHECK(held_output->local_destination == server);
-        RUVIA_CHECK(held_output->peer == peer.local_endpoint());
+        RUVIA_CHECK(is_long_header_type(held_output->view().bytes_, 0));
+        RUVIA_CHECK(held_output->local_destination_ == server);
+        RUVIA_CHECK(held_output->peer_ == peer.local_endpoint());
     }
     std::array<std::byte, channel::packet_capacity> held_bytes{};
     if (held_output) {
-        std::ranges::copy(held_output->view().bytes, held_bytes.begin());
+        std::ranges::copy(held_output->view().bytes_, held_bytes.begin());
     }
     const auto before_input = worker.invoke([&] {
-        RUVIA_CHECK(pump.connection.has_value());
-        RUVIA_CHECK(owner->stopStatus().outbound_pending);
+        RUVIA_CHECK(pump.connection_.has_value());
+        RUVIA_CHECK(owner->stop_status().outbound_pending_);
         RUVIA_CHECK_EQ(packets.worker_outbound_count(), output_window);
         RUVIA_CHECK(!packets.worker_outbound_capacity());
         RUVIA_CHECK(owner->transport()->server().next_expiry().has_value());
@@ -1157,43 +1157,43 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
     send_initial();
     RUVIA_CHECK(forward_input());
     const auto after_input = worker.invoke([&] {
-        owner->requestDrive();
+        owner->request_drive();
         RUVIA_CHECK(!packets.worker_input());
-        RUVIA_CHECK(owner->stopStatus().outbound_pending);
+        RUVIA_CHECK(owner->stop_status().outbound_pending_);
         RUVIA_CHECK(!packets.worker_outbound_capacity());
         return pump;
     });
-    RUVIA_CHECK(after_input.full_drives > before_input.full_drives);
-    RUVIA_CHECK_EQ(after_input.full_receives, before_input.full_receives + 1);
-    RUVIA_CHECK_EQ(after_input.packet_writes, before_input.packet_writes);
-    RUVIA_CHECK_EQ(after_input.packets_sent, before_input.packets_sent);
+    RUVIA_CHECK(after_input.full_drives_ > before_input.full_drives_);
+    RUVIA_CHECK_EQ(after_input.full_receives_, before_input.full_receives_ + 1);
+    RUVIA_CHECK_EQ(after_input.packet_writes_, before_input.packet_writes_);
+    RUVIA_CHECK_EQ(after_input.packets_sent_, before_input.packets_sent_);
     packets.acceptor_poll();
 
     struct timer_observation final {
-        connection_pump_state pump;
-        std::size_t expirations{};
-        std::chrono::steady_clock::time_point observed_at{};
-        bool deadline{};
-        bool full{};
-        bool failed{};
+        connection_pump_state pump_;
+        std::size_t expirations_{};
+        std::chrono::steady_clock::time_point observed_at_{};
+        bool deadline_{};
+        bool full_{};
+        bool failed_{};
     };
     const auto observe_timer = [&] {
         return worker.invoke([&] {
             return timer_observation{
-                pump, owner->timerExpirations(), std::chrono::steady_clock::now(),
+                pump, owner->timer_expirations(), std::chrono::steady_clock::now(),
                 owner->transport() && owner->transport()->server().next_expiry().has_value(),
-                owner->stopStatus().outbound_pending && !packets.worker_outbound_capacity(),
-                owner->failure() != nullptr || pump.failure != nullptr};
+                owner->stop_status().outbound_pending_ && !packets.worker_outbound_capacity(),
+                owner->failure() != nullptr || pump.failure_ != nullptr};
         });
     };
     const auto before_timer = observe_timer();
     auto after_timer = before_timer;
     const auto timer_deadline = std::chrono::steady_clock::now() + 6s;
-    // Only read worker state: no requestDrive/poll_datagrams can masquerade
+    // Only read worker state: no request_drive/poll_datagrams can masquerade
     // as a timer callback. Native PTO deadlines must advance while production
     // waits for credit, and the independent idle expiry must still retire.
-    while (!after_timer.pump.full_idle_retired &&
-           std::chrono::steady_clock::now() < timer_deadline && !after_timer.failed) {
+    while (!after_timer.pump_.full_idle_retired_ &&
+           std::chrono::steady_clock::now() < timer_deadline && !after_timer.failed_) {
         acceptor.poll_receive();
         if (acceptor_io.stopped()) {
             acceptor_io.restart();
@@ -1202,31 +1202,31 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
         after_timer = observe_timer();
     }
     // RX can process the first due native deadline before before_timer.
-    RUVIA_CHECK(after_timer.expirations > before_timer.expirations);
-    RUVIA_CHECK(after_timer.pump.full_expirations >= 2);
-    RUVIA_CHECK_EQ(after_timer.pump.full_expirations_with_deadline + 1,
-        after_timer.pump.full_expirations);
-    RUVIA_CHECK(!after_timer.pump.repeated_full_expiry);
-    RUVIA_CHECK(after_timer.pump.full_idle_retired);
-    RUVIA_CHECK(!after_timer.deadline);
-    RUVIA_CHECK(after_timer.full);
-    RUVIA_CHECK(!after_timer.failed);
-    RUVIA_CHECK_EQ(after_timer.pump.packet_writes, before_input.packet_writes);
-    RUVIA_CHECK_EQ(after_timer.pump.packets_sent, before_input.packets_sent);
+    RUVIA_CHECK(after_timer.expirations_ > before_timer.expirations_);
+    RUVIA_CHECK(after_timer.pump_.full_expirations_ >= 2);
+    RUVIA_CHECK_EQ(after_timer.pump_.full_expirations_with_deadline_ + 1,
+        after_timer.pump_.full_expirations_);
+    RUVIA_CHECK(!after_timer.pump_.repeated_full_expiry_);
+    RUVIA_CHECK(after_timer.pump_.full_idle_retired_);
+    RUVIA_CHECK(!after_timer.deadline_);
+    RUVIA_CHECK(after_timer.full_);
+    RUVIA_CHECK(!after_timer.failed_);
+    RUVIA_CHECK_EQ(after_timer.pump_.packet_writes_, before_input.packet_writes_);
+    RUVIA_CHECK_EQ(after_timer.pump_.packets_sent_, before_input.packets_sent_);
     if (held_output) {
-        RUVIA_CHECK(std::ranges::equal(held_output->view().bytes,
-            std::span<const std::byte>(held_bytes).first(held_output->size)));
+        RUVIA_CHECK(std::ranges::equal(held_output->view().bytes_,
+            std::span<const std::byte>(held_bytes).first(held_output->size_)));
     }
 
     packets.acceptor_close();
     const auto stopping = worker.invoke([&] {
-        owner->requestStop();
-        owner->pollStop();
-        return owner->stopStatus();
+        owner->request_stop();
+        owner->poll_stop();
+        return owner->stop_status();
     });
-    RUVIA_CHECK(stopping.stopping);
-    RUVIA_CHECK(stopping.outbound_pending);
-    RUVIA_CHECK(!stopping.transportDestroyed);
+    RUVIA_CHECK(stopping.stopping_);
+    RUVIA_CHECK(stopping.outbound_pending_);
+    RUVIA_CHECK(!stopping.transport_destroyed_);
     RUVIA_CHECK(!stopping.complete());
     RUVIA_CHECK(!packets.acceptor_finalize());
     // This models the Acceptor UDP completion, not a QUIC ACK: the client has
@@ -1234,7 +1234,7 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
     held_output.reset();
     packets.acceptor_poll();
     acceptor.request_stop();
-    Http3QuicWireOwner::StopStatus done;
+    http3_quic_wire_owner::stop_status_type done;
     const auto stop_deadline = std::chrono::steady_clock::now() + 2s;
     do {
         packets.acceptor_poll();
@@ -1244,14 +1244,14 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
         acceptor_io.run_for(2ms);
         done = worker.invoke([&] {
             owner->poll_datagrams();
-            owner->pollStop();
-            return owner->stopStatus();
+            owner->poll_stop();
+            return owner->stop_status();
         });
     } while ((!done.complete() || acceptor.status() == http3_worker_datagram_endpoint::stop_status::pending) &&
              std::chrono::steady_clock::now() < stop_deadline);
     RUVIA_CHECK(done.complete());
-    RUVIA_CHECK(!done.outbound_pending);
-    RUVIA_CHECK(!done.failed);
+    RUVIA_CHECK(!done.outbound_pending_);
+    RUVIA_CHECK(!done.failed_);
     RUVIA_CHECK(acceptor.status() == http3_worker_datagram_endpoint::stop_status::done);
     worker.invoke([&] {
         owner.reset();
@@ -1261,7 +1261,7 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
 }
 
-RUVIA_TEST(http3NetworkQuicWireOwnerAsyncWaitSubmissionFailureDrainsHandlers) {
+RUVIA_TEST(http3_network_quic_wire_owner_async_wait_submission_failure_drains_handlers) {
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1277,155 +1277,155 @@ RUVIA_TEST(http3_network_quic_wire_owner_allocation_failure_drains_handlers) {
     });
 }
 
-RUVIA_TEST(http3NetworkQuicWireOwnerFatalFailureWaitsForNetworkRetirementGate) {
+RUVIA_TEST(http3_network_quic_wire_owner_fatal_failure_waits_for_network_retirement_gate) {
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-        tlsConfig.identity.certificateChainFile = files.certificate.string();
-        tlsConfig.identity.privateKeyFile = files.privateKey.string();
-        http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
+        http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
         asio::io_context io;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
             {}, nullptr, {&tls, &fail_protocol_pump});
-        auto& owner = fixture.owner();
-        owner.prepare();
-        owner.deferTransportRetirement();
+        auto& owner_value = fixture_value.owner();
+        owner_value.prepare();
+        owner_value.defer_transport_retirement();
         try {
-            owner.start();
+            owner_value.start();
         } catch (...) {
         }
-        RUVIA_CHECK(owner.failure() != nullptr);
-        const auto deadline = std::chrono::steady_clock::now() + 2s;
-        while (std::chrono::steady_clock::now() < deadline) {
+        RUVIA_CHECK(owner_value.failure() != nullptr);
+        const auto deadline_value = std::chrono::steady_clock::now() + 2s;
+        while (std::chrono::steady_clock::now() < deadline_value) {
             if (io.stopped()) {
                 io.restart();
             }
             io.run_for(2ms);
-            owner.pollStop();
-            const auto status = owner.stopStatus();
-            if (status.endpoint_retired && status.timerHandlersRetired) {
-                RUVIA_CHECK(!status.transportDestroyed);
-                RUVIA_CHECK(owner.transport() != nullptr);
+            owner_value.poll_stop();
+            const auto status = owner_value.stop_status();
+            if (status.endpoint_retired_ && status.timer_handlers_retired_) {
+                RUVIA_CHECK(!status.transport_destroyed_);
+                RUVIA_CHECK(owner_value.transport() != nullptr);
                 break;
             }
         }
-        RUVIA_CHECK(!owner.stopStatus().complete());
-        owner.releaseTransportRetirement();
-        drain_owner(io, fixture);
-        RUVIA_CHECK(owner.stopStatus().complete());
-        RUVIA_CHECK(owner.stopStatus().failed);
+        RUVIA_CHECK(!owner_value.stop_status().complete());
+        owner_value.release_transport_retirement();
+        drain_owner(io, fixture_value);
+        RUVIA_CHECK(owner_value.stop_status().complete());
+        RUVIA_CHECK(owner_value.stop_status().failed_);
     });
 }
 
-RUVIA_TEST(http3NetworkQuicWireOwnerStopWaitsForBorrowedDatagramSendAndHandlers) {
+RUVIA_TEST(http3_network_quic_wire_owner_stop_waits_for_borrowed_datagram_send_and_handlers) {
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-        tlsConfig.identity.certificateChainFile = files.certificate.string();
-        tlsConfig.identity.privateKeyFile = files.privateKey.string();
-        http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
-        http3_quic_client_tls_context clientTls({
-            .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
+        http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
+        http3_quic_client_tls_context client_tls({
+            .tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification,
         });
         asio::io_context io;
         connection_pump_state pump;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
             {}, nullptr, {&pump, &pump_connection});
-        auto& owner = fixture.owner();
-        owner.prepare();
-        owner.start();
-        Udp::socket peer(io, Udp::endpoint(asio::ip::address_v4::loopback(), 0));
+        auto& owner_value = fixture_value.owner();
+        owner_value.prepare();
+        owner_value.start();
+        udp_type::socket peer(io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0));
         peer.non_blocking(true);
-        const Udp::endpoint server(asio::ip::address_v4::loopback(), owner.boundPort());
-        http3_quic_client_transport client(clientTls, client_config(peer, server), "localhost",
+        const udp_type::endpoint server(asio::ip::address_v4::loopback(), owner_value.bound_port());
+        http3_quic_client_transport client(client_tls, client_config(peer, server), "localhost",
             std::chrono::steady_clock::now());
         RUVIA_CHECK(pump_peer(client, peer) != 0);
-        bool stoppedDuringSend{};
-        for (std::size_t turn = 0; turn < 64 && !stoppedDuringSend; ++turn) {
+        bool stopped_during_send{};
+        for (std::size_t turn = 0; turn < 64 && !stopped_during_send; ++turn) {
             if (io.stopped()) {
                 io.restart();
             }
             if (io.run_one() == 0) {
                 break;
             }
-            stoppedDuringSend = owner.stopStatus().outbound_pending;
+            stopped_during_send = owner_value.stop_status().outbound_pending_;
         }
-        RUVIA_CHECK(stoppedDuringSend);
-        if (stoppedDuringSend) {
-            owner.requestStop();
-            const auto pending = owner.stopStatus();
-            RUVIA_CHECK(pending.stopping);
-            RUVIA_CHECK(pending.outbound_pending);
-            RUVIA_CHECK(!pending.transportDestroyed);
-            owner.requestDrive();
-            RUVIA_CHECK(owner.stopStatus().stopping);
+        RUVIA_CHECK(stopped_during_send);
+        if (stopped_during_send) {
+            owner_value.request_stop();
+            const auto pending = owner_value.stop_status();
+            RUVIA_CHECK(pending.stopping_);
+            RUVIA_CHECK(pending.outbound_pending_);
+            RUVIA_CHECK(!pending.transport_destroyed_);
+            owner_value.request_drive();
+            RUVIA_CHECK(owner_value.stop_status().stopping_);
         }
-        drain_owner(io, fixture);
-        const auto done = owner.stopStatus();
+        drain_owner(io, fixture_value);
+        const auto done = owner_value.stop_status();
         RUVIA_CHECK(done.complete());
-        RUVIA_CHECK(done.endpoint_retired);
-        RUVIA_CHECK(done.timerHandlersRetired);
-        RUVIA_CHECK(done.transportDestroyed);
-        RUVIA_CHECK(!done.outbound_pending);
-        RUVIA_CHECK(!done.failed);
+        RUVIA_CHECK(done.endpoint_retired_);
+        RUVIA_CHECK(done.timer_handlers_retired_);
+        RUVIA_CHECK(done.transport_destroyed_);
+        RUVIA_CHECK(!done.outbound_pending_);
+        RUVIA_CHECK(!done.failed_);
     });
 }
 
-RUVIA_TEST(http3NetworkQuicWireOwnerConstructionFailureDrainsBeforeAllocatorRetires) {
+RUVIA_TEST(http3_network_quic_wire_owner_construction_failure_drains_before_allocator_retires) {
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-        tlsConfig.identity.certificateChainFile = files.certificate.string();
-        tlsConfig.identity.privateKeyFile = files.privateKey.string();
-        http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
+        http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
         asio::io_context io;
-        ruvia::quic_server_config invalidConfig;
-        invalidConfig.local_transport_parameters.max_udp_payload_size = 1199;
+        ruvia::quic_server_config invalid_config;
+        invalid_config.local_transport_parameters_.max_udp_payload_size_ = 1199;
         connection_pump_state pump;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
-            invalidConfig, nullptr, {&pump, &pump_connection});
-        auto& owner = fixture.owner();
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.prepare(); }));
-        drain_owner(io, fixture);
-        RUVIA_CHECK(owner.stopStatus().complete());
-        RUVIA_CHECK(owner.stopStatus().failed);
-        RUVIA_CHECK(owner.failure() != nullptr);
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.rethrowFailure(); }));
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+            invalid_config, nullptr, {&pump, &pump_connection});
+        auto& owner_value = fixture_value.owner();
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_value.prepare(); }));
+        drain_owner(io, fixture_value);
+        RUVIA_CHECK(owner_value.stop_status().complete());
+        RUVIA_CHECK(owner_value.stop_status().failed_);
+        RUVIA_CHECK(owner_value.failure() != nullptr);
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_value.rethrow_failure(); }));
     });
 }
 
-RUVIA_TEST(http3NetworkQuicWireOwnerPreparedListenerStopsWithoutServing) {
+RUVIA_TEST(http3_network_quic_wire_owner_prepared_listener_stops_without_serving) {
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
-        TestIdentityFiles files;
-        ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
-        tlsConfig.identity.certificateChainFile = files.certificate.string();
-        tlsConfig.identity.privateKeyFile = files.privateKey.string();
-        http3_quic_tls_context tls(tlsConfig, std::pmr::get_default_resource());
+        test_identity_files files;
+        ruvia::detail::http_server_listener_definition::tls_type tls_config;
+        tls_config.identity_.certificate_chain_file_ = files.certificate_.string();
+        tls_config.identity_.private_key_file_ = files.private_key_.string();
+        http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
         asio::io_context io;
         connection_pump_state pump;
-        native_wire_fixture fixture(worker_context, io, Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls,
+        native_wire_fixture fixture_value(worker_context, io, udp_type::endpoint(asio::ip::address_v4::loopback(), 0), tls,
             {}, nullptr, {&pump, &pump_connection});
-        auto& owner = fixture.owner();
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.start(); }));
-        RUVIA_CHECK(!owner.failure());
-        owner.prepare();
-        const auto port = owner.boundPort();
+        auto& owner_value = fixture_value.owner();
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_value.start(); }));
+        RUVIA_CHECK(!owner_value.failure());
+        owner_value.prepare();
+        const auto port = owner_value.bound_port();
         RUVIA_CHECK(port != 0);
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.prepare(); }));
-        owner.requestStop();
-        drain_owner(io, fixture);
-        RUVIA_CHECK(owner.stopStatus().complete());
-        RUVIA_CHECK(!owner.failure());
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.start(); }));
-        Udp::socket rebound(io, Udp::endpoint(asio::ip::address_v4::loopback(), port));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_value.prepare(); }));
+        owner_value.request_stop();
+        drain_owner(io, fixture_value);
+        RUVIA_CHECK(owner_value.stop_status().complete());
+        RUVIA_CHECK(!owner_value.failure());
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_value.start(); }));
+        udp_type::socket rebound(io, udp_type::endpoint(asio::ip::address_v4::loopback(), port));
         RUVIA_CHECK(rebound.local_endpoint().port() == port);
     });
 }

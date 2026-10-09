@@ -9,12 +9,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/EventLoop.h"
-#include "ruvia/core/OperationOptions.h"
-#include "ruvia/core/ScopedOperation.h"
-#include "ruvia/core/StopToken.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/stop_token.h"
 
-#include "client/ClientCloseState.h"
+#include "client/client_close_state.h"
 
 namespace ruvia::detail {
 
@@ -31,12 +31,12 @@ enum class client_phase : unsigned char { fresh,
 template <typename owner_type>
 class client_lifecycle final {
 public:
-    client_lifecycle(owner_type& owner, const EventLoop& loop, const WorkerHandle& worker,
+    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_handle& worker_value,
         client_phase initial = client_phase::fresh)
-        : owner_(owner),
+        : owner_(owner_value),
           loop_(loop),
-          worker_(worker),
-          close_(loop, worker),
+          worker_(worker_value),
+          close_(loop, worker_value),
           phase_(initial) {}
 
     ~client_lifecycle() {
@@ -49,7 +49,7 @@ public:
     client_lifecycle(const client_lifecycle&) = delete;
     client_lifecycle& operator=(const client_lifecycle&) = delete;
 
-    [[nodiscard]] static EventLoop require_loop(EventLoop loop) {
+    [[nodiscard]] static event_loop require_loop(event_loop loop) {
         if (!loop.valid()) {
             throw std::invalid_argument(message(" requires a valid event loop"));
         }
@@ -59,20 +59,20 @@ public:
     void bind_stop() {
         try {
             std::weak_ptr<owner_type> weak = owner_.shared_from_this();
-            stop_registration_ = loop_.onStop([weak = std::move(weak)]() -> Task<void> {
+            stop_registration_ = loop_.on_stop([weak = std::move(weak)]() -> task<void> {
                 if (const auto state = weak.lock()) {
-                    co_await shutdown_owned(state, ClientCloseState::ObservationMode::kRetirement);
+                    co_await shutdown_owned(state, client_close_state::observation_mode_type::retirement);
                 }
             });
         } catch (...) {
-            owner_.backend().closeNow();
+            owner_.backend().close_now();
             phase_.store(client_phase::closed, std::memory_order_release);
-            close_.completeBeforePublication();
+            close_.complete_before_publication();
             throw;
         }
     }
 
-    [[nodiscard]] Task<void> connect() {
+    [[nodiscard]] task<void> connect() {
         return connect_owned(owner_.shared_from_this());
     }
 
@@ -87,17 +87,17 @@ public:
         return operations_;
     }
 
-    [[nodiscard]] OperationOptions options(OperationOptions options) const {
-        return mergeOperationOptions(
-            OperationOptions{.timeout = std::nullopt, .stopToken = stop_.token()}, std::move(options));
+    [[nodiscard]] operation_options options(operation_options options) const {
+        return merge_operation_options(
+            operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_.token()}, std::move(options));
     }
 
     void request_close() noexcept {
-        stop_.requestStop();
+        stop_.request_stop();
         if (!begin_close()) {
             return;
         }
-        if (worker_.isCurrent()) {
+        if (worker_.is_current()) {
             start_close();
             return;
         }
@@ -113,8 +113,8 @@ public:
         }
     }
 
-    [[nodiscard]] Task<void> shutdown() {
-        return shutdown_owned(owner_.shared_from_this(), ClientCloseState::ObservationMode::kCaller);
+    [[nodiscard]] task<void> shutdown() {
+        return shutdown_owned(owner_.shared_from_this(), client_close_state::observation_mode_type::caller);
     }
 
 private:
@@ -126,16 +126,16 @@ private:
     }
 
     void require_current(std::string_view suffix) const {
-        if (!worker_.isCurrent()) {
+        if (!worker_.is_current()) {
             throw std::logic_error(message(suffix));
         }
     }
 
-    [[nodiscard]] static Task<void> connect_owned(std::shared_ptr<owner_type> state) {
-        co_await state->lifecycle_.connect_on_worker();
+    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<owner_type> state_value) {
+        co_await state_value->lifecycle_.connect_on_worker();
     }
 
-    Task<void> connect_on_worker() {
+    task<void> connect_on_worker() {
         require_current(" must connect on its bound event loop");
         auto expected = client_phase::fresh;
         if (!phase_.compare_exchange_strong(expected, client_phase::connecting,
@@ -148,7 +148,7 @@ private:
         // Only the startup lease holder may tear down a failed connection.
         try {
             connecting_ = true;
-            if (stop_.stopRequested() || !worker_.accepting()) {
+            if (stop_.stop_requested() || !worker_.accepting()) {
                 throw std::runtime_error(message(" closed before connecting"));
             }
             co_await owner_.backend().connect();
@@ -158,16 +158,16 @@ private:
                 throw std::runtime_error(message(" stopped while connecting"));
             }
             connecting_ = false;
-            close_.notifyProgress();
+            close_.notify_progress();
         } catch (...) {
-            owner_.backend().closeNow();
-            stop_.requestStop();
+            owner_.backend().close_now();
+            stop_.request_stop();
             phase_.store(client_phase::closed, std::memory_order_release);
             connecting_ = false;
-            if (close_.taskStarted()) {
-                close_.notifyProgress();
+            if (close_.task_started()) {
+                close_.notify_progress();
             } else if (!close_.complete()) {
-                close_.completeNow();
+                close_.complete_now();
             }
             throw;
         }
@@ -184,23 +184,23 @@ private:
         return false;
     }
 
-    [[nodiscard]] static Task<void> shutdown_owned(std::shared_ptr<owner_type> state,
-        ClientCloseState::ObservationMode mode) {
-        auto& lifecycle = state->lifecycle_;
-        return lifecycle.close_.shutdown_owned(std::move(state), [&lifecycle] { lifecycle.start_close(); }, mode);
+    [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value,
+        client_close_state::observation_mode_type mode) {
+        auto& lifecycle = state_value->lifecycle_;
+        return lifecycle.close_.shutdown_owned(std::move(state_value), [&lifecycle] { lifecycle.start_close(); }, mode);
     }
 
     void start_close() noexcept {
-        if (!worker_.isCurrent()) {
+        if (!worker_.is_current()) {
             std::terminate();
         }
         (void)begin_close();
-        stop_.requestStop();
-        owner_.backend().closeNow();
+        stop_.request_stop();
+        owner_.backend().close_now();
         close_.start_cleanup(owner_.shared_from_this(), [this] { return close_on_worker(); }, [this](std::exception_ptr failure) { finish_close(std::move(failure)); });
     }
 
-    Task<void> close_on_worker() {
+    task<void> close_on_worker() {
         while (connecting_) {
             co_await close_.wait();
         }
@@ -233,11 +233,11 @@ private:
     }
 
     owner_type& owner_;
-    const EventLoop& loop_;
-    const WorkerHandle& worker_;
-    StopSource stop_;
-    EventLoopStopRegistration stop_registration_;
-    ClientCloseState close_;
+    const event_loop& loop_;
+    const worker_handle& worker_;
+    stop_source stop_;
+    event_loop_stop_registration stop_registration_;
+    client_close_state close_;
     std::atomic<client_phase> phase_;
     bool connecting_{};
     // Last: invalidate cold operations before backend and allocator retirement.

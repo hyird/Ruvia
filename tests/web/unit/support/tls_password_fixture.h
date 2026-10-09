@@ -20,14 +20,14 @@ namespace ruvia::test {
 
 inline std::filesystem::path write_encrypted_key(tls_identity& files,
     std::string_view filename, std::string_view password) {
-    const auto directory = std::filesystem::canonical(files.ca_file.parent_path());
+    const auto directory = std::filesystem::canonical(files.ca_file_.parent_path());
     if (directory.parent_path() != std::filesystem::canonical(std::filesystem::temp_directory_path())) {
         throw std::runtime_error("TLS test directory is outside its temporary root");
     }
     const auto path = directory / filename;
     std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(path.string().c_str(), "wb"), BIO_free);
     if (!output || password.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(files.context.native_handle()), password, true) != 1) {
+        ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(files.context_.native_handle()), password, true) != 1) {
         throw std::runtime_error("cannot write encrypted TLS test key");
     }
     return path;
@@ -37,13 +37,13 @@ inline std::filesystem::path write_encrypted_key(tls_identity& files,
 // even when an identity loader loses or replaces the caller's password userdata.
 struct password_callback_cleanup final {
     explicit password_callback_cleanup(SSL_CTX* value)
-        : context(value),
-          callback(SSL_CTX_get_default_passwd_cb(value)),
-          userdata(SSL_CTX_get_default_passwd_cb_userdata(value)) {}
+        : context_(value),
+          callback_(SSL_CTX_get_default_passwd_cb(value)),
+          userdata_(SSL_CTX_get_default_passwd_cb_userdata(value)) {}
 
     ~password_callback_cleanup() {
-        SSL_CTX_set_default_passwd_cb(context, callback);
-        SSL_CTX_set_default_passwd_cb_userdata(context, userdata);
+        SSL_CTX_set_default_passwd_cb(context_, callback_);
+        SSL_CTX_set_default_passwd_cb_userdata(context_, userdata_);
     }
 
     password_callback_cleanup(const password_callback_cleanup&) = delete;
@@ -51,9 +51,9 @@ struct password_callback_cleanup final {
     password_callback_cleanup(password_callback_cleanup&&) = delete;
     password_callback_cleanup& operator=(password_callback_cleanup&&) = delete;
 
-    SSL_CTX* context;
-    pem_password_cb* callback;
-    void* userdata;
+    SSL_CTX* context_;
+    pem_password_cb* callback_;
+    void* userdata_;
 };
 
 class noninteractive_ui_scope final {

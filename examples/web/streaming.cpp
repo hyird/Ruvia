@@ -11,62 +11,62 @@
 #include <cstddef>
 #include <system_error>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 
-class StreamingController final : public ruvia::Controller<StreamingController> {
+class streaming_controller final : public ruvia::controller<streaming_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/streaming")
 
     RUVIA_ROUTES_BEGIN
-    RUVIA_POST_STREAM("/upload/raw", uploadRaw);
-    RUVIA_POST_STREAM("/upload/multipart", uploadMultipart);
+    RUVIA_POST_STREAM("/upload/raw", upload_raw);
+    RUVIA_POST_STREAM("/upload/multipart", upload_multipart);
     RUVIA_GET_STREAM("/chunks", chunks);
-    RUVIA_GET_SSE("/events", events);
+    RUVIA_GET_SSE("/events", events_value);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> uploadRaw(ruvia::Context& c) {
-        std::size_t bytes = 0;
-        auto& reader = c.req().bodyReader();
-        while (auto chunk = co_await reader.read()) {
-            bytes += chunk->size();
+    ruvia::task<ruvia::http_response> upload_raw(ruvia::context& c) {
+        std::size_t bytes_value = 0;
+        auto& reader_value = c.req().get_body_reader();
+        while (auto chunk = co_await reader_value.read()) {
+            bytes_value += chunk->size();
         }
 
         std::pmr::string body(c.allocator<char>());
         body.append("uploaded bytes=");
-        appendUnsigned(body, bytes);
+        append_unsigned(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> uploadMultipart(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> upload_multipart(ruvia::context& c) {
         std::size_t parts = 0;
-        std::size_t bytes = 0;
-        auto reader = c.req().multipartReader();
-        while (auto part = co_await reader.read()) {
-            if (part->phase() == ruvia::MultipartChunkPhase::kFirst ||
-                part->phase() == ruvia::MultipartChunkPhase::kComplete) {
+        std::size_t bytes_value = 0;
+        auto reader_value = c.req().get_multipart_reader();
+        while (auto part = co_await reader_value.read()) {
+            if (part->phase() == ruvia::multipart_chunk_phase::first ||
+                part->phase() == ruvia::multipart_chunk_phase::complete) {
                 ++parts;
             }
-            bytes += part->body().size();
+            bytes_value += part->body().size();
         }
 
         std::pmr::string body(c.allocator<char>());
         body.append("multipart parts=");
-        appendUnsigned(body, parts);
+        append_unsigned(body, parts);
         body.append(" bytes=");
-        appendUnsigned(body, bytes);
+        append_unsigned(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<void> chunks(ruvia::Context& c) {
-        auto& stream = c.streamText();
+    ruvia::task<void> chunks(ruvia::context& c) {
+        auto& stream = c.stream_text();
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
         if (co_await stream.sleep(std::chrono::milliseconds(20)) ==
-            ruvia::TimerSleepResult::kStopRequested) {
+            ruvia::timer_sleep_result::stop_requested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -74,22 +74,22 @@ private:
         }
     }
 
-    ruvia::Task<void> events(ruvia::Context& c) {
-        auto events = c.streamSse();
-        co_await events.write({.data = "connected", .event = "open", .id = "1"});
-        if (co_await events.sleep(std::chrono::milliseconds(20)) ==
-            ruvia::TimerSleepResult::kStopRequested) {
+    ruvia::task<void> events_value(ruvia::context& c) {
+        auto events_value = c.stream_sse();
+        co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});
+        if (co_await events_value.sleep(std::chrono::milliseconds(20)) ==
+            ruvia::timer_sleep_result::stop_requested) {
             co_return;
         }
-        if (!events.aborted()) {
-            co_await events.write({.data = "heartbeat",
-                .event = "tick",
-                .id = "2",
-                .retry = std::chrono::milliseconds{3000}});
+        if (!events_value.aborted()) {
+            co_await events_value.write({.data_ = "heartbeat",
+                .event_ = "tick",
+                .id_ = "2",
+                .retry_ = std::chrono::milliseconds{3000}});
         }
     }
 
-    static void appendUnsigned(std::pmr::string& output, std::size_t value) {
+    static void append_unsigned(std::pmr::string& output, std::size_t value) {
         char buffer[32]{};
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
         if (ec == std::errc{}) {
@@ -100,12 +100,12 @@ private:
 
 int main() {
     ruvia::app()
-        .listen({.address = "0.0.0.0", .http = 8082})
+        .listen({.address_ = "0.0.0.0", .http_ = 8082})
         .server({
-            .worker_count = 2,
-            .process_signal_handlers = ruvia::process_signal_handler_policy::install,
-            .max_buffered_body_bytes = 16 * 1024 * 1024,
-            .max_stream_body_bytes = std::nullopt,
+            .worker_count_ = 2,
+            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            .max_buffered_body_bytes_ = 16 * 1024 * 1024,
+            .max_stream_body_bytes_ = std::nullopt,
         })
         .run();
 }

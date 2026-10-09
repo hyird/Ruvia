@@ -4,55 +4,55 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/web/db/DbSchema.h"
+#include "ruvia/web/db/db_schema.h"
 
 #include "test_harness.h"
 
-using ruvia::DbDataType;
-using ruvia::DbDriver;
-using ruvia::DbGeneratedType;
-using ruvia::DbProcedure;
-using ruvia::DbSchema;
-using ruvia::DbSchemaColumn;
-using ruvia::DbSchemaConstraint;
-using ruvia::DbTableDefinition;
-using ruvia::DbTableOption;
-using ruvia::testing::throwsOn;
+using ruvia::db_data_type;
+using ruvia::db_driver;
+using ruvia::db_generated_type;
+using ruvia::db_procedure;
+using ruvia::db_schema;
+using ruvia::db_schema_column;
+using ruvia::db_schema_constraint;
+using ruvia::db_table_definition;
+using ruvia::db_table_option;
+using ruvia::testing::throws_on;
 
-using EnumEntity = ruvia::DbEntity<"enum_events",
-    ruvia::DbColumn<"state", std::pmr::string,
-        ruvia::DbColumnOptions{.enumName = ruvia::FixedString{"app.event_state"}, .defaultExpression = ruvia::FixedString{"'pending'::app.event_state"}}>,
-    ruvia::DbColumn<"created_at", std::pmr::string,
-        ruvia::DbColumnOptions{.dataType = DbDataType::kTimestampTz, .defaultExpression = ruvia::FixedString{"now()"}}>>;
+using enum_entity_type = ruvia::db_entity<"enum_events",
+    ruvia::db_column<"state", std::pmr::string,
+        ruvia::db_column_options{.enum_name_ = ruvia::fixed_string{"app.event_state"}, .default_expression_ = ruvia::fixed_string{"'pending'::app.event_state"}}>,
+    ruvia::db_column<"created_at", std::pmr::string,
+        ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .default_expression_ = ruvia::fixed_string{"now()"}}>>;
 
 RUVIA_TEST(db_schema_entity_named_enum_and_default_expressions) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<EnumEntity>();
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<enum_entity_type>();
     const auto migrations = schema.compile("enum_defaults");
     RUVIA_CHECK(migrations[0].sql().find("\"state\" \"app\".\"event_state\" NOT NULL DEFAULT ('pending'::app.event_state)") != std::string_view::npos);
     RUVIA_CHECK(migrations[0].sql().find("DEFAULT (now())") != std::string_view::npos);
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] { maria.createTable<EnumEntity>(); }));
-    ruvia::DbQuery defaults;
-    RUVIA_CHECK(throwsOn([&] { schema.createTable<EnumEntity>({.defaults = {{"state", defaults.value("ready")}}}); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] { maria.create_table<enum_entity_type>(); }));
+    ruvia::db_query defaults;
+    RUVIA_CHECK(throws_on([&] { schema.create_table<enum_entity_type>({.defaults_ = {{"state", defaults.value("ready")}}}); }));
 }
 
-using SchemaTarget = ruvia::DbEntity<"schema_targets", ruvia::DbColumn<"id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}>,
-    ruvia::DbColumn<"tenant_id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}>>;
-using SchemaOwner = ruvia::DbEntity<"schema_owners",
-    ruvia::DbColumn<"id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}>,
-    ruvia::DbColumn<"parent_id", std::int64_t>, ruvia::DbColumn<"parent_tenant_id", std::int64_t>,
-    ruvia::DbColumn<"peer_id", std::int64_t>,
-    ruvia::DbManyToOne<"parent", SchemaTarget, ruvia::DbJoinColumn<"parent_id", "id">,
-        ruvia::DbJoinColumn<"parent_tenant_id", "tenant_id">>,
-    ruvia::DbOneToOne<"peer", SchemaTarget, ruvia::DbJoinColumn<"peer_id", "id">>,
-    ruvia::DbOneToMany<"children", SchemaTarget, "parent">,
-    ruvia::DbManyToMany<"labels", SchemaTarget, ruvia::DbJoinTable<"owner_labels", ruvia::DbJoinColumns<ruvia::DbJoinColumn<"owner_id", "id">>, ruvia::DbJoinColumns<ruvia::DbJoinColumn<"label_id", "id">, ruvia::DbJoinColumn<"label_tenant_id", "tenant_id">>>>>;
+using schema_target_type = ruvia::db_entity<"schema_targets", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+    ruvia::db_column<"tenant_id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>>;
+using schema_owner_type = ruvia::db_entity<"schema_owners",
+    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+    ruvia::db_column<"parent_id", std::int64_t>, ruvia::db_column<"parent_tenant_id", std::int64_t>,
+    ruvia::db_column<"peer_id", std::int64_t>,
+    ruvia::db_many_to_one<"parent", schema_target_type, ruvia::db_join_column<"parent_id", "id">,
+        ruvia::db_join_column<"parent_tenant_id", "tenant_id">>,
+    ruvia::db_one_to_one<"peer", schema_target_type, ruvia::db_join_column<"peer_id", "id">>,
+    ruvia::db_one_to_many<"children", schema_target_type, "parent">,
+    ruvia::db_many_to_many<"labels", schema_target_type, ruvia::db_join_table<"owner_labels", ruvia::db_join_columns<ruvia::db_join_column<"owner_id", "id">>, ruvia::db_join_columns<ruvia::db_join_column<"label_id", "id">, ruvia::db_join_column<"label_tenant_id", "tenant_id">>>>>;
 
 RUVIA_TEST(db_schema_create_table_composite_foreign_key_and_nullable_default) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    DbTableDefinition table{.name = "tenant_users", .columns = {DbSchemaColumn{.name = "tenant_id", .type = {.dataType = DbDataType::kBigInt}}, DbSchemaColumn{.name = "user_id", .type = {.dataType = DbDataType::kBigInt}, .nullable = true}}, .constraints = {DbSchemaConstraint{.name = "tenant_users_pk", .kind = ruvia::DbConstraintKind::kPrimaryKey, .columns = {"tenant_id", "user_id"}}, DbSchemaConstraint{.name = "tenant_fk", .kind = ruvia::DbConstraintKind::kForeignKey, .columns = {"tenant_id", "user_id"}, .referencedTable = "tenants", .referencedColumns = {"id", "id"}, .onDelete = ruvia::DbReferentialAction::kCascade}}};
-    schema.createTable(table);
+    db_schema schema({.driver_ = db_driver::postgresql});
+    db_table_definition table_value{.name_ = "tenant_users", .columns_ = {db_schema_column{.name_ = "tenant_id", .type_ = {.data_type_ = db_data_type::big_int}}, db_schema_column{.name_ = "user_id", .type_ = {.data_type_ = db_data_type::big_int}, .nullable_ = true}}, .constraints_ = {db_schema_constraint{.name_ = "tenant_users_pk", .kind_ = ruvia::db_constraint_kind::primary_key, .columns_ = {"tenant_id", "user_id"}}, db_schema_constraint{.name_ = "tenant_fk", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"tenant_id", "user_id"}, .referenced_table_ = "tenants", .referenced_columns_ = {"id", "id"}, .on_delete_ = ruvia::db_referential_action::cascade}}};
+    schema.create_table(table_value);
     const auto migrations = schema.compile("001_create");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
     RUVIA_CHECK(migrations[0].sql().find("PRIMARY KEY") != std::string_view::npos);
@@ -61,11 +61,11 @@ RUVIA_TEST(db_schema_create_table_composite_foreign_key_and_nullable_default) {
 }
 
 RUVIA_TEST(db_schema_partial_gin_index_quotes_identifiers_and_literals) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    ruvia::DbQuery query;
-    const auto value = query.value(ruvia::DbValue(std::string_view("x' OR 1=1")));
-    const auto predicate = query.binary(query.column("state"), ruvia::DbBinaryOperator::kEqual, value);
-    schema.createIndex({.name = "events_idx", .table = "events", .keys = {{.column = "payload"}}, .method = ruvia::DbIndexMethod::kGin, .where = predicate});
+    db_schema schema({.driver_ = db_driver::postgresql});
+    ruvia::db_query query;
+    const auto value = query.value(ruvia::db_value(std::string_view("x' OR 1=1")));
+    const auto predicate = query.binary(query.column("state"), ruvia::db_binary_operator::equal, value);
+    schema.create_index({.name_ = "events_idx", .table_ = "events", .keys_ = {{.column_ = "payload"}}, .method_ = ruvia::db_index_method::gin, .where_ = predicate});
     const auto migrations = schema.compile("002_index");
     RUVIA_CHECK(migrations[0].sql().find("USING gin") != std::string_view::npos);
     RUVIA_CHECK(migrations[0].sql().find("x'' OR 1=1") != std::string_view::npos);
@@ -73,182 +73,182 @@ RUVIA_TEST(db_schema_partial_gin_index_quotes_identifiers_and_literals) {
 }
 
 RUVIA_TEST(db_schema_postgresql_batch_is_atomic_and_unwrapped_isolated) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createSchema("one");
-    schema.createSchema("two");
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_schema("one");
+    schema.create_schema("two");
     auto migrations = schema.compile("003_batch");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
     RUVIA_CHECK(migrations[0].sql().find("DO $ruvia$ BEGIN") == 0);
 
-    DbSchema invalid({.driver = DbDriver::kPostgreSql});
-    invalid.createSchema("one");
-    invalid.createIndex({.name = "idx", .table = "t", .keys = {{.column = "x"}}, .concurrently = true});
-    RUVIA_CHECK(throwsOn([&] { (void)invalid.compile("004_invalid"); }));
+    db_schema invalid({.driver_ = db_driver::postgresql});
+    invalid.create_schema("one");
+    invalid.create_index({.name_ = "idx", .table_ = "t", .keys_ = {{.column_ = "x"}}, .concurrently_ = true});
+    RUVIA_CHECK(throws_on([&] { (void)invalid.compile("004_invalid"); }));
 }
 
 RUVIA_TEST(db_schema_enum_and_postgresql_only_operations_reject_mariadb) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
+    db_schema schema({.driver_ = db_driver::postgresql});
     const std::array<std::string_view, 2> values{"open", "closed"};
-    schema.createEnum("status", values);
+    schema.create_enum("status", values);
     auto migrations = schema.compile("005_enum");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
-    DbSchema addition({.driver = DbDriver::kPostgreSql});
-    addition.addEnumValue("status", "paused");
+    db_schema addition({.driver_ = db_driver::postgresql});
+    addition.add_enum_value("status", "paused");
     const auto added = addition.compile("006_enum_value");
-    RUVIA_CHECK(added[0].atomicity() == ruvia::DbMigrationAtomicity::kUnwrapped);
+    RUVIA_CHECK(added[0].atomicity() == ruvia::db_migration_atomicity::unwrapped);
 
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] { maria.createEnum("status", values); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] { maria.create_enum("status", values); }));
 }
 
 RUVIA_TEST(db_schema_entity_metadata_preserves_explicit_array_element_types) {
-    using Entity = ruvia::DbEntity<"app.events",
-        ruvia::DbColumn<"id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true, .generated = true}>,
-        ruvia::DbColumn<"payloads", std::pmr::vector<std::pmr::string>, ruvia::DbColumnOptions{.dataType = DbDataType::kJsonb}>>;
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<Entity>();
+    using entity_type = ruvia::db_entity<"app.events",
+        ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>,
+        ruvia::db_column<"payloads", std::pmr::vector<std::pmr::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>>;
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<entity_type>();
     const auto migrations = schema.compile("entity");
     RUVIA_CHECK_EQ(migrations[0].sql(), "CREATE TABLE \"app\".\"events\" (\"id\" BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, \"payloads\" JSONB[] NOT NULL, CONSTRAINT \"events_pkey\" PRIMARY KEY (\"id\"))");
 }
 
 RUVIA_TEST(db_schema_char_entity_and_column_operations_render_with_dialect_limits) {
-    using Entity = ruvia::DbEntity<"char_records",
-        ruvia::DbColumn<"code", std::pmr::string, ruvia::DbColumnOptions{.dataType = DbDataType::kChar, .length = 64}>,
-        ruvia::DbColumn<"codes", std::pmr::vector<std::pmr::string>, ruvia::DbColumnOptions{.dataType = DbDataType::kChar, .length = 8}>>;
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createTable<Entity>();
-    pg.alterColumnType("char_records", "code", {.dataType = DbDataType::kChar, .length = 32});
-    const auto pgMigrations = pg.compile("char_pg");
-    RUVIA_CHECK(pgMigrations[0].sql().find("\"code\" CHAR(64) NOT NULL") != std::string_view::npos);
-    RUVIA_CHECK(pgMigrations[0].sql().find("\"codes\" CHAR(8)[] NOT NULL") != std::string_view::npos);
-    RUVIA_CHECK(pgMigrations[0].sql().find("ALTER TABLE \"char_records\" ALTER COLUMN \"code\" TYPE CHAR(32)") != std::string_view::npos);
+    using entity_type = ruvia::db_entity<"char_records",
+        ruvia::db_column<"code", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 64}>,
+        ruvia::db_column<"codes", std::pmr::vector<std::pmr::string>, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>>;
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_table<entity_type>();
+    pg.alter_column_type("char_records", "code", {.data_type_ = db_data_type::char_value, .length_ = 32});
+    const auto pg_migrations = pg.compile("char_pg");
+    RUVIA_CHECK(pg_migrations[0].sql().find("\"code\" CHAR(64) NOT NULL") != std::string_view::npos);
+    RUVIA_CHECK(pg_migrations[0].sql().find("\"codes\" CHAR(8)[] NOT NULL") != std::string_view::npos);
+    RUVIA_CHECK(pg_migrations[0].sql().find("ALTER TABLE \"char_records\" ALTER COLUMN \"code\" TYPE CHAR(32)") != std::string_view::npos);
 
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createTable({.name = "char_records", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar, .length = 255}}}});
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_table({.name_ = "char_records", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value, .length_ = 255}}}});
     RUVIA_CHECK(maria.compile("char_maria")[0].sql().find("`code` CHAR(255) NOT NULL") != std::string_view::npos);
 
-    DbSchema pgLimit({.driver = DbDriver::kPostgreSql});
-    pgLimit.createTable({.name = "char_limit", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar, .length = 10485760}}}});
-    RUVIA_CHECK(pgLimit.compile("char_pg_limit")[0].sql().find("\"code\" CHAR(10485760) NOT NULL") != std::string_view::npos);
+    db_schema pg_limit({.driver_ = db_driver::postgresql});
+    pg_limit.create_table({.name_ = "char_limit", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value, .length_ = 10485760}}}});
+    RUVIA_CHECK(pg_limit.compile("char_pg_limit")[0].sql().find("\"code\" CHAR(10485760) NOT NULL") != std::string_view::npos);
 
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createTable({.name = "invalid_char", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value}}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createTable({.name = "invalid_char", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar, .length = 10485761}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value, .length_ = 10485761}}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kMariaDb});
-        invalid.createTable({.name = "invalid_char", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar, .length = 256}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::mariadb});
+        invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value, .length_ = 256}}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createTable({.name = "invalid_char", .columns = {{.name = "code", .type = {.dataType = DbDataType::kChar, .length = 8, .precision = 2}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::char_value, .length_ = 8, .precision_ = 2}}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createTable({.name = "invalid_char", .columns = {{.name = "code", .type = {.dataType = DbDataType::kText, .length = 8}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::text, .length_ = 8}}}});
     }));
 }
 
 RUVIA_TEST(db_schema_entity_computed_columns_render_and_validate) {
-    using Entity = ruvia::DbEntity<"computed_events",
-        ruvia::DbColumn<"first_name", ruvia::String>,
-        ruvia::DbColumn<"last_name", ruvia::String>,
-        ruvia::DbColumn<"display_name", ruvia::String,
-            ruvia::DbColumnOptions{.generatedType = DbGeneratedType::kStored}>>;
-    ruvia::DbQuery expression;
-    auto generated = expression.binary(expression.column("first_name"), ruvia::DbBinaryOperator::kConcat,
+    using entity_type = ruvia::db_entity<"computed_events",
+        ruvia::db_column<"first_name", ruvia::string>,
+        ruvia::db_column<"last_name", ruvia::string>,
+        ruvia::db_column<"display_name", ruvia::string,
+            ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>>;
+    ruvia::db_query expression;
+    auto generated = expression.binary(expression.column("first_name"), ruvia::db_binary_operator::concat,
         expression.column("last_name"));
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<Entity>({.generatedColumns = {{.column = "display_name", .expression = generated}}});
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<entity_type>({.generated_columns_ = {{.column_ = "display_name", .expression_ = generated}}});
     const auto migrations = schema.compile("computed");
     const auto sql = migrations[0].sql();
     RUVIA_CHECK(sql.find("\"display_name\" TEXT GENERATED ALWAYS AS") != std::string_view::npos);
     RUVIA_CHECK(sql.find(" STORED") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] { schema.createTable<Entity>(); }));
+    RUVIA_CHECK(throws_on([&] { schema.create_table<entity_type>(); }));
 
-    using MariaEntity = ruvia::DbEntity<"maria_computed",
-        ruvia::DbColumn<"value", std::int64_t>,
-        ruvia::DbColumn<"double_value", std::int64_t,
-            ruvia::DbColumnOptions{.generatedType = DbGeneratedType::kVirtual, .nullable = true}>>;
-    ruvia::DbQuery mariaExpression;
-    auto doubled = mariaExpression.binary(mariaExpression.column("value"), ruvia::DbBinaryOperator::kMultiply,
-        mariaExpression.value(2));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createTable<MariaEntity>({.generatedColumns = {{.column = "double_value", .expression = doubled}}});
+    using maria_entity_type = ruvia::db_entity<"maria_computed",
+        ruvia::db_column<"value", std::int64_t>,
+        ruvia::db_column<"double_value", std::int64_t,
+            ruvia::db_column_options{.generated_type_ = db_generated_type::virtual_value, .nullable_ = true}>>;
+    ruvia::db_query maria_expression;
+    auto doubled = maria_expression.binary(maria_expression.column("value"), ruvia::db_binary_operator::multiply,
+        maria_expression.value(2));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_table<maria_entity_type>({.generated_columns_ = {{.column_ = "double_value", .expression_ = doubled}}});
     RUVIA_CHECK(maria.compile("maria_computed")[0].sql().find(" VIRTUAL") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] {
-        maria.addColumn("maria_computed", {.name = "invalid", .type = {.dataType = DbDataType::kBigInt}, .generatedType = DbGeneratedType::kStored, .asExpression = doubled});
+    RUVIA_CHECK(throws_on([&] {
+        maria.add_column("maria_computed", {.name_ = "invalid", .type_ = {.data_type_ = db_data_type::big_int}, .generated_type_ = db_generated_type::stored, .as_expression_ = doubled});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema pg({.driver = DbDriver::kPostgreSql});
-        pg.createTable<MariaEntity>({.generatedColumns = {{.column = "double_value", .expression = doubled}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema pg({.driver_ = db_driver::postgresql});
+        pg.create_table<maria_entity_type>({.generated_columns_ = {{.column_ = "double_value", .expression_ = doubled}}});
     }));
 }
 
 RUVIA_TEST(db_schema_computed_columns_reject_invalid_metadata_and_conflicts) {
-    using Computed = ruvia::DbEntity<"invalid_computed",
-        ruvia::DbColumn<"value", std::int64_t>,
-        ruvia::DbColumn<"total", std::int64_t,
-            ruvia::DbColumnOptions{.generatedType = DbGeneratedType::kStored}>>;
-    ruvia::DbQuery query;
-    const auto expression = query.binary(query.column("value"), ruvia::DbBinaryOperator::kAdd, query.value(1));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<Computed>({.generatedColumns = {{.column = "missing", .expression = expression}}});
+    using computed_type = ruvia::db_entity<"invalid_computed",
+        ruvia::db_column<"value", std::int64_t>,
+        ruvia::db_column<"total", std::int64_t,
+            ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>>;
+    ruvia::db_query query;
+    const auto expression = query.binary(query.column("value"), ruvia::db_binary_operator::add, query.value(1));
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<computed_type>({.generated_columns_ = {{.column_ = "missing", .expression_ = expression}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<Computed>({.generatedColumns = {{"total", expression}, {"total", expression}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<computed_type>({.generated_columns_ = {{"total", expression}, {"total", expression}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<Computed>({.generatedColumns = {{"value", expression}, {"total", expression}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<computed_type>({.generated_columns_ = {{"value", expression}, {"total", expression}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<Computed>({.generatedColumns = {{.column = "total", .expression = {}}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<computed_type>({.generated_columns_ = {{.column_ = "total", .expression_ = {}}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<Computed>({.defaults = {{.column = "total", .value = expression}},
-            .generatedColumns = {{.column = "total", .expression = expression}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<computed_type>({.defaults_ = {{.column_ = "total", .value_ = expression}},
+            .generated_columns_ = {{.column_ = "total", .expression_ = expression}}});
     }));
-    using IdentityComputed = ruvia::DbEntity<"identity_computed",
-        ruvia::DbColumn<"id", std::int64_t,
-            ruvia::DbColumnOptions{.generated = true, .generatedType = DbGeneratedType::kStored}>>;
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema schema({.driver = DbDriver::kPostgreSql});
-        schema.createTable<IdentityComputed>({.generatedColumns = {{.column = "id", .expression = expression}}});
+    using identity_computed_type = ruvia::db_entity<"identity_computed",
+        ruvia::db_column<"id", std::int64_t,
+            ruvia::db_column_options{.generated_ = true, .generated_type_ = db_generated_type::stored}>>;
+    RUVIA_CHECK(throws_on([&] {
+        db_schema schema({.driver_ = db_driver::postgresql});
+        schema.create_table<identity_computed_type>({.generated_columns_ = {{.column_ = "id", .expression_ = expression}}});
     }));
 }
 
 RUVIA_TEST(db_schema_mariadb_computed_columns_reject_table_primary_keys) {
-    using Entity = ruvia::DbEntity<"computed_keys",
-        ruvia::DbColumn<"source", std::int64_t>,
-        ruvia::DbColumn<"computed", std::int64_t,
-            ruvia::DbColumnOptions{.primaryKey = true, .generatedType = DbGeneratedType::kStored, .nullable = true}>>;
-    ruvia::DbQuery query;
+    using entity_type = ruvia::db_entity<"computed_keys",
+        ruvia::db_column<"source", std::int64_t>,
+        ruvia::db_column<"computed", std::int64_t,
+            ruvia::db_column_options{.primary_key_ = true, .generated_type_ = db_generated_type::stored, .nullable_ = true}>>;
+    ruvia::db_query query;
     auto expression = query.column("source");
-    DbSchema schema({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] {
-        schema.createTable<Entity>({.generatedColumns = {{"computed", expression}}});
+    db_schema schema({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] {
+        schema.create_table<entity_type>({.generated_columns_ = {{"computed", expression}}});
     }));
     for (const bool composite : {false, true}) {
-        DbTableDefinition table{.name = "computed_keys", .columns = {{.name = "source", .type = {.dataType = DbDataType::kBigInt}}, {.name = "computed", .type = {.dataType = DbDataType::kBigInt}, .nullable = true, .generatedType = DbGeneratedType::kStored, .asExpression = expression}}, .constraints = {{.name = "computed_key", .kind = ruvia::DbConstraintKind::kPrimaryKey, .columns = {"computed"}}}};
+        db_table_definition table_value{.name_ = "computed_keys", .columns_ = {{.name_ = "source", .type_ = {.data_type_ = db_data_type::big_int}}, {.name_ = "computed", .type_ = {.data_type_ = db_data_type::big_int}, .nullable_ = true, .generated_type_ = db_generated_type::stored, .as_expression_ = expression}}, .constraints_ = {{.name_ = "computed_key", .kind_ = ruvia::db_constraint_kind::primary_key, .columns_ = {"computed"}}}};
         if (composite) {
-            table.constraints[0].columns.push_back("source");
+            table_value.constraints_[0].columns_.push_back("source");
         }
-        RUVIA_CHECK(throwsOn([&] { schema.createTable(table); }));
+        RUVIA_CHECK(throws_on([&] { schema.create_table(table_value); }));
     }
 }
 
 RUVIA_TEST(db_schema_entity_relations_emit_owning_foreign_keys_and_one_to_one_unique) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<SchemaOwner>();
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<schema_owner_type>();
     const auto migrations = schema.compile("relations");
     const auto sql = migrations[0].sql();
     RUVIA_CHECK(sql.find("FOREIGN KEY (\"parent_id\",\"parent_tenant_id\") REFERENCES \"schema_targets\" (\"id\",\"tenant_id\")") != std::string_view::npos);
@@ -258,8 +258,8 @@ RUVIA_TEST(db_schema_entity_relations_emit_owning_foreign_keys_and_one_to_one_un
 }
 
 RUVIA_TEST(db_schema_many_to_many_relation_table_has_composite_primary_key_and_two_foreign_keys) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createRelationTables<SchemaOwner>();
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_relation_tables<schema_owner_type>();
     const auto migrations = schema.compile("relation_tables");
     const auto sql = migrations[0].sql();
     RUVIA_CHECK(sql.find("CREATE TABLE \"owner_labels\"") != std::string_view::npos);
@@ -270,13 +270,13 @@ RUVIA_TEST(db_schema_many_to_many_relation_table_has_composite_primary_key_and_t
 }
 
 RUVIA_TEST(db_schema_qualified_types_and_replace_view_use_valid_ddl_grammar) {
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
+    db_schema schema({.driver_ = db_driver::postgresql});
     const std::array<std::string_view, 2> values{"on", "off"};
-    schema.createEnum("app.state", values);
-    schema.createTable({.name = "app.devices", .columns = {{.name = "state", .type = {.customName = "app.state"}}}});
-    ruvia::DbQuery query;
+    schema.create_enum("app.state", values);
+    schema.create_table({.name_ = "app.devices", .columns_ = {{.name_ = "state", .type_ = {.custom_name_ = "app.state"}}}});
+    ruvia::db_query query;
     query.select(query.column("state")).from("app.devices");
-    schema.createView("app.device_state", query, true);
+    schema.create_view("app.device_state", query, true);
     const auto migrations = schema.compile("types");
     RUVIA_CHECK(migrations[0].sql().find("CREATE TYPE \"app\".\"state\" AS ENUM") != std::string_view::npos);
     RUVIA_CHECK(migrations[0].sql().find("\"state\" \"app\".\"state\" NOT NULL") != std::string_view::npos);
@@ -284,21 +284,21 @@ RUVIA_TEST(db_schema_qualified_types_and_replace_view_use_valid_ddl_grammar) {
 }
 
 RUVIA_TEST(db_schema_procedure_builds_channel_guard_and_escapes_body_delimiters) {
-    ruvia::DbQuery query;
-    ruvia::DbProcedure body;
-    body.declareRow("channel", "link");
-    ruvia::DbQuery channel;
-    channel.from("link").where(channel.binary(channel.column("id"), ruvia::DbBinaryOperator::kEqual, channel.column("link_id", "new"))).lock({.mode = ruvia::DbRowLock::kShare});
+    ruvia::db_query query;
+    ruvia::db_procedure body;
+    body.declare_row("channel", "link");
+    ruvia::db_query channel;
+    channel.from("link").where(channel.binary(channel.column("id"), ruvia::db_binary_operator::equal, channel.column("link_id", "new"))).lock({.mode_ = ruvia::db_row_lock::share});
     const std::array<std::string_view, 1> targets{"channel"};
-    body.selectInto(channel, targets, true);
-    body.beginIf(query.binary(query.column("protocol", "channel"), ruvia::DbBinaryOperator::kNotEqual, query.column("protocol", "new")));
-    body.raiseException("channel mismatch $ruvia$ 'quoted'", "23514");
-    body.endIf();
-    body.assign("new.revision", query.binary(query.column("revision", "old"), ruvia::DbBinaryOperator::kAdd, query.value(1)));
-    body.returnValue(query.column("new"));
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTriggerFunction("app.bind_channel", body);
-    schema.createTrigger({.name = "bind_channel", .table = "app.device", .function = "app.bind_channel", .events = {ruvia::DbTriggerEvent::kInsert, ruvia::DbTriggerEvent::kUpdate}});
+    body.select_into(channel, targets, true);
+    body.begin_if(query.binary(query.column("protocol", "channel"), ruvia::db_binary_operator::not_equal, query.column("protocol", "new")));
+    body.raise_exception("channel mismatch $ruvia$ 'quoted'", "23514");
+    body.end_if();
+    body.assign("new.revision", query.binary(query.column("revision", "old"), ruvia::db_binary_operator::add, query.value(1)));
+    body.return_value(query.column("new"));
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_trigger_function("app.bind_channel", body);
+    schema.create_trigger({.name_ = "bind_channel", .table_ = "app.device", .function_ = "app.bind_channel", .events_ = {ruvia::db_trigger_event::insert, ruvia::db_trigger_event::update}});
     const auto migrations = schema.compile("guard");
     RUVIA_CHECK(migrations[0].sql().find("\"channel\" \"link\"%ROWTYPE") != std::string_view::npos);
     RUVIA_CHECK(migrations[0].sql().find("FOR SHARE INTO STRICT \"channel\"") != std::string_view::npos);
@@ -308,13 +308,13 @@ RUVIA_TEST(db_schema_procedure_builds_channel_guard_and_escapes_body_delimiters)
 }
 
 RUVIA_TEST(db_schema_timescale_policies_are_typed_function_calls_and_table_options) {
-    ruvia::DbQuery query;
-    auto interval = query.cast(query.value("7 days"), DbDataType::kInterval);
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createHypertable({.table = "telemetry.events", .timeColumn = "ts", .chunkInterval = interval, .ifNotExists = true});
-    schema.setCompression("telemetry.events", {.segmentBy = {"device_id"}, .orderBy = {{"ts", ruvia::DbOrderDirection::kDesc}}});
-    schema.addCompressionPolicy("telemetry.events", interval, true);
-    schema.addRetentionPolicy("telemetry.events", query.cast(query.value("90 days"), DbDataType::kInterval));
+    ruvia::db_query query;
+    auto interval = query.cast(query.value("7 days"), db_data_type::interval);
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_hypertable({.table_ = "telemetry.events", .time_column_ = "ts", .chunk_interval_ = interval, .if_not_exists_ = true});
+    schema.set_compression("telemetry.events", {.segment_by_ = {"device_id"}, .order_by_ = {{"ts", ruvia::db_order_direction::desc}}});
+    schema.add_compression_policy("telemetry.events", interval, true);
+    schema.add_retention_policy("telemetry.events", query.cast(query.value("90 days"), db_data_type::interval));
     const auto migrations = schema.compile("storage");
     RUVIA_CHECK(migrations[0].sql().find("\"create_hypertable\"(E'\"telemetry\".\"events\"', \"by_range\"(E'ts', CAST(E'7 days' AS INTERVAL))") != std::string_view::npos);
     RUVIA_CHECK(migrations[0].sql().find("\"timescaledb\".\"compress\" = true") != std::string_view::npos);
@@ -323,126 +323,126 @@ RUVIA_TEST(db_schema_timescale_policies_are_typed_function_calls_and_table_optio
 }
 
 RUVIA_TEST(db_schema_single_perform_and_control_flow_have_complete_blocks) {
-    ruvia::DbQuery query;
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
+    ruvia::db_query query;
+    db_schema schema({.driver_ = db_driver::postgresql});
     schema.perform(query.call("pg_notify", {query.value("channel"), query.value("body $ruvia$")}));
     const auto migrations = schema.compile("notify");
     RUVIA_CHECK(migrations[0].sql().find("DO $ruvia1$ BEGIN PERFORM") == 0);
-    ruvia::DbProcedure body;
-    body.beginIf(query.value(true));
-    RUVIA_CHECK(throwsOn([&] { (void)body.body(); }));
-    body.endIf();
-    RUVIA_CHECK(throwsOn([&] { body.otherwise(); }));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] { maria.validateConstraint("t", "fk"); }));
-    ruvia::DbQuery removed;
-    removed.deleteFrom("t").returning({removed.column("id")});
-    RUVIA_CHECK(throwsOn([&] { schema.createView("v", removed); }));
-    ruvia::DbQuery read;
+    ruvia::db_procedure body;
+    body.begin_if(query.value(true));
+    RUVIA_CHECK(throws_on([&] { (void)body.body(); }));
+    body.end_if();
+    RUVIA_CHECK(throws_on([&] { body.otherwise(); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] { maria.validate_constraint("t", "fk"); }));
+    ruvia::db_query removed;
+    removed.delete_from("t").returning({removed.column("id")});
+    RUVIA_CHECK(throws_on([&] { schema.create_view("v", removed); }));
+    ruvia::db_query read;
     read.with("removed", removed).from("removed");
-    RUVIA_CHECK(throwsOn([&] { schema.createView("v", read); }));
+    RUVIA_CHECK(throws_on([&] { schema.create_view("v", read); }));
 }
 
 RUVIA_TEST(db_schema_ddl_operations_and_table_options_render_for_both_drivers) {
-    ruvia::DbQuery pgExpressions;
-    const auto pgDefault = pgExpressions.value("pending");
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createSchema("cs_pg", true);
-    pg.createTable({.name = "cs_pg.records",
-        .columns = {{.name = "id",
-                        .type = {.dataType = DbDataType::kBigInt},
-                        .identity = ruvia::DbIdentity::kAlways},
-            {.name = "name",
-                .type = {.dataType = DbDataType::kVarchar, .length = 32},
-                .nullable = true,
-                .unique = true},
-            {.name = "state", .type = {.dataType = DbDataType::kText}, .defaultValue = pgDefault}},
-        .ifNotExists = true,
-        .unlogged = true});
-    pg.renameTable("cs_pg.records", "records_renamed");
-    pg.addColumn("cs_pg.records_renamed",
-        {.name = "created_at", .type = {.dataType = DbDataType::kTimestampTz}, .nullable = true}, true);
-    pg.renameColumn("cs_pg.records_renamed", "created_at", "created_on");
-    pg.alterColumnType("cs_pg.records_renamed", "state", {.dataType = DbDataType::kVarchar, .length = 64},
-        pgExpressions.column("state"));
-    pg.setColumnNullable("cs_pg.records_renamed", "state", true);
-    pg.setColumnNullable("cs_pg.records_renamed", "state", false);
-    pg.setColumnDefault("cs_pg.records_renamed", "state", pgExpressions.value("ready"));
-    pg.dropColumnDefault("cs_pg.records_renamed", "state");
-    pg.dropColumn("cs_pg.records_renamed", "created_on", ruvia::DbDropBehavior::kCascade, true);
-    pg.dropTable("cs_pg.records_renamed", ruvia::DbDropBehavior::kCascade, true);
-    pg.dropSchema("cs_pg", ruvia::DbDropBehavior::kCascade, true);
-    const auto pgMigrations = pg.compile("cs_pg_ops");
-    RUVIA_CHECK_EQ(pgMigrations.size(), std::size_t{1});
-    const auto pgSql = pgMigrations[0].sql();
-    RUVIA_CHECK(pgSql.find("CREATE SCHEMA IF NOT EXISTS \"cs_pg\"") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("CREATE UNLOGGED TABLE IF NOT EXISTS \"cs_pg\".\"records\"") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("GENERATED ALWAYS AS IDENTITY") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("VARCHAR(32) UNIQUE") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("ALTER COLUMN \"state\" TYPE VARCHAR(64) USING \"state\"") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("DROP COLUMN IF EXISTS \"created_on\" CASCADE") != std::string_view::npos);
-    RUVIA_CHECK(pgSql.find("DROP SCHEMA IF EXISTS \"cs_pg\" CASCADE") != std::string_view::npos);
+    ruvia::db_query pg_expressions;
+    const auto pg_default = pg_expressions.value("pending");
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_schema("cs_pg", true);
+    pg.create_table({.name_ = "cs_pg.records",
+        .columns_ = {{.name_ = "id",
+                         .type_ = {.data_type_ = db_data_type::big_int},
+                         .identity_ = ruvia::db_identity::always},
+            {.name_ = "name",
+                .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32},
+                .nullable_ = true,
+                .unique_ = true},
+            {.name_ = "state", .type_ = {.data_type_ = db_data_type::text}, .default_value_ = pg_default}},
+        .if_not_exists_ = true,
+        .unlogged_ = true});
+    pg.rename_table("cs_pg.records", "records_renamed");
+    pg.add_column("cs_pg.records_renamed",
+        {.name_ = "created_at", .type_ = {.data_type_ = db_data_type::timestamp_tz}, .nullable_ = true}, true);
+    pg.rename_column("cs_pg.records_renamed", "created_at", "created_on");
+    pg.alter_column_type("cs_pg.records_renamed", "state", {.data_type_ = db_data_type::varchar, .length_ = 64},
+        pg_expressions.column("state"));
+    pg.set_column_nullable("cs_pg.records_renamed", "state", true);
+    pg.set_column_nullable("cs_pg.records_renamed", "state", false);
+    pg.set_column_default("cs_pg.records_renamed", "state", pg_expressions.value("ready"));
+    pg.drop_column_default("cs_pg.records_renamed", "state");
+    pg.drop_column("cs_pg.records_renamed", "created_on", ruvia::db_drop_behavior::cascade, true);
+    pg.drop_table("cs_pg.records_renamed", ruvia::db_drop_behavior::cascade, true);
+    pg.drop_schema("cs_pg", ruvia::db_drop_behavior::cascade, true);
+    const auto pg_migrations = pg.compile("cs_pg_ops");
+    RUVIA_CHECK_EQ(pg_migrations.size(), std::size_t{1});
+    const auto pg_sql = pg_migrations[0].sql();
+    RUVIA_CHECK(pg_sql.find("CREATE SCHEMA IF NOT EXISTS \"cs_pg\"") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("CREATE UNLOGGED TABLE IF NOT EXISTS \"cs_pg\".\"records\"") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("GENERATED ALWAYS AS IDENTITY") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("VARCHAR(32) UNIQUE") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("ALTER COLUMN \"state\" TYPE VARCHAR(64) USING \"state\"") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("DROP COLUMN IF EXISTS \"created_on\" CASCADE") != std::string_view::npos);
+    RUVIA_CHECK(pg_sql.find("DROP SCHEMA IF EXISTS \"cs_pg\" CASCADE") != std::string_view::npos);
 
-    ruvia::DbQuery mariaExpressions;
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createSchema("cs_maria", true);
-    maria.createTable({.name = "cs_maria.records",
-        .columns = {{.name = "id",
-                        .type = {.dataType = DbDataType::kBigInt},
-                        .identity = ruvia::DbIdentity::kByDefault},
-            {.name = "state",
-                .type = {.dataType = DbDataType::kVarchar, .length = 32},
-                .nullable = true,
-                .defaultValue = mariaExpressions.value("ready")}},
-        .ifNotExists = true});
-    maria.addColumn("cs_maria.records", {.name = "note", .type = {.dataType = DbDataType::kText}, .nullable = true}, true);
-    maria.renameColumn("cs_maria.records", "note", "memo");
-    maria.setColumnDefault("cs_maria.records", "memo", mariaExpressions.value("n/a"));
-    maria.dropColumnDefault("cs_maria.records", "memo");
-    maria.dropColumn("cs_maria.records", "memo", ruvia::DbDropBehavior::kCascade, true);
-    maria.addConstraint("cs_maria.records", {.name = "records_state_unique", .kind = ruvia::DbConstraintKind::kUnique, .columns = {"state"}});
-    maria.dropConstraint("cs_maria.records", "records_state_unique", ruvia::DbDropBehavior::kCascade, true);
-    maria.renameTable("cs_maria.records", "records_renamed");
-    maria.dropTable("cs_maria.records_renamed", ruvia::DbDropBehavior::kCascade, true);
-    RUVIA_CHECK(throwsOn([&] { maria.dropSchema("cs_maria", ruvia::DbDropBehavior::kCascade, true); }));
-    maria.dropSchema("cs_maria", ruvia::DbDropBehavior::kRestrict, true);
-    const auto mariaMigrations = maria.compile("cs_maria_ops");
-    RUVIA_CHECK_EQ(mariaMigrations.size(), std::size_t{12});
-    RUVIA_CHECK_EQ(mariaMigrations[0].id(), "cs_maria_ops_1");
-    RUVIA_CHECK(mariaMigrations[1].sql().find("CREATE TABLE IF NOT EXISTS `cs_maria`.`records`") != std::string_view::npos);
-    RUVIA_CHECK(mariaMigrations[1].sql().find("AUTO_INCREMENT") != std::string_view::npos);
-    RUVIA_CHECK(mariaMigrations[2].sql().find("ADD COLUMN IF NOT EXISTS `note` TEXT") != std::string_view::npos);
-    RUVIA_CHECK(mariaMigrations[9].sql().find("ALTER TABLE `cs_maria`.`records` RENAME TO `cs_maria`.`records_renamed`") != std::string_view::npos);
-    RUVIA_CHECK(mariaMigrations[10].sql().find("DROP TABLE IF EXISTS `cs_maria`.`records_renamed` CASCADE") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] {
-        maria.alterColumnType("cs_maria.records", "state", {.dataType = DbDataType::kText});
+    ruvia::db_query maria_expressions;
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_schema("cs_maria", true);
+    maria.create_table({.name_ = "cs_maria.records",
+        .columns_ = {{.name_ = "id",
+                         .type_ = {.data_type_ = db_data_type::big_int},
+                         .identity_ = ruvia::db_identity::by_default},
+            {.name_ = "state",
+                .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32},
+                .nullable_ = true,
+                .default_value_ = maria_expressions.value("ready")}},
+        .if_not_exists_ = true});
+    maria.add_column("cs_maria.records", {.name_ = "note", .type_ = {.data_type_ = db_data_type::text}, .nullable_ = true}, true);
+    maria.rename_column("cs_maria.records", "note", "memo");
+    maria.set_column_default("cs_maria.records", "memo", maria_expressions.value("n/a"));
+    maria.drop_column_default("cs_maria.records", "memo");
+    maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::cascade, true);
+    maria.add_constraint("cs_maria.records", {.name_ = "records_state_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"state"}});
+    maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::cascade, true);
+    maria.rename_table("cs_maria.records", "records_renamed");
+    maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::cascade, true);
+    RUVIA_CHECK(throws_on([&] { maria.drop_schema("cs_maria", ruvia::db_drop_behavior::cascade, true); }));
+    maria.drop_schema("cs_maria", ruvia::db_drop_behavior::restrict, true);
+    const auto maria_migrations = maria.compile("cs_maria_ops");
+    RUVIA_CHECK_EQ(maria_migrations.size(), std::size_t{12});
+    RUVIA_CHECK_EQ(maria_migrations[0].id(), "cs_maria_ops_1");
+    RUVIA_CHECK(maria_migrations[1].sql().find("CREATE TABLE IF NOT EXISTS `cs_maria`.`records`") != std::string_view::npos);
+    RUVIA_CHECK(maria_migrations[1].sql().find("AUTO_INCREMENT") != std::string_view::npos);
+    RUVIA_CHECK(maria_migrations[2].sql().find("ADD COLUMN IF NOT EXISTS `note` TEXT") != std::string_view::npos);
+    RUVIA_CHECK(maria_migrations[9].sql().find("ALTER TABLE `cs_maria`.`records` RENAME TO `cs_maria`.`records_renamed`") != std::string_view::npos);
+    RUVIA_CHECK(maria_migrations[10].sql().find("DROP TABLE IF EXISTS `cs_maria`.`records_renamed` CASCADE") != std::string_view::npos);
+    RUVIA_CHECK(throws_on([&] {
+        maria.alter_column_type("cs_maria.records", "state", {.data_type_ = db_data_type::text});
     }));
-    RUVIA_CHECK(throwsOn([&] { maria.setColumnNullable("cs_maria.records", "state", true); }));
+    RUVIA_CHECK(throws_on([&] { maria.set_column_nullable("cs_maria.records", "state", true); }));
 }
 
 RUVIA_TEST(db_schema_constraints_cover_actions_deferred_not_valid_and_rejections) {
-    ruvia::DbQuery expressions;
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.addConstraint("cs_child",
-        {.name = "child_fk",
-            .kind = ruvia::DbConstraintKind::kForeignKey,
-            .columns = {"parent_id"},
-            .referencedTable = "cs_parent",
-            .referencedColumns = {"id"},
-            .onDelete = ruvia::DbReferentialAction::kSetNull,
-            .onUpdate = ruvia::DbReferentialAction::kSetDefault,
-            .deferrable = true,
-            .initiallyDeferred = true,
-            .notValid = true});
-    pg.addConstraint("cs_child",
-        {.name = "child_unique", .kind = ruvia::DbConstraintKind::kUnique, .columns = {"parent_id"}, .deferrable = true});
-    pg.addConstraint("cs_child",
-        {.name = "child_check",
-            .kind = ruvia::DbConstraintKind::kCheck,
-            .notValid = true,
-            .check = expressions.binary(expressions.column("amount"), ruvia::DbBinaryOperator::kGreaterEqual,
+    ruvia::db_query expressions;
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.add_constraint("cs_child",
+        {.name_ = "child_fk",
+            .kind_ = ruvia::db_constraint_kind::foreign_key,
+            .columns_ = {"parent_id"},
+            .referenced_table_ = "cs_parent",
+            .referenced_columns_ = {"id"},
+            .on_delete_ = ruvia::db_referential_action::set_null,
+            .on_update_ = ruvia::db_referential_action::set_default,
+            .deferrable_ = true,
+            .initially_deferred_ = true,
+            .not_valid_ = true});
+    pg.add_constraint("cs_child",
+        {.name_ = "child_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"parent_id"}, .deferrable_ = true});
+    pg.add_constraint("cs_child",
+        {.name_ = "child_check",
+            .kind_ = ruvia::db_constraint_kind::check,
+            .not_valid_ = true,
+            .check_ = expressions.binary(expressions.column("amount"), ruvia::db_binary_operator::greater_equal,
                 expressions.value(0))});
-    pg.validateConstraint("cs_child", "child_fk");
+    pg.validate_constraint("cs_child", "child_fk");
     const auto migrations = pg.compile("cs_constraints");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
     const auto sql = migrations[0].sql();
@@ -451,122 +451,122 @@ RUVIA_TEST(db_schema_constraints_cover_actions_deferred_not_valid_and_rejections
     RUVIA_CHECK(sql.find("CONSTRAINT \"child_check\" CHECK ((\"amount\" >= 0)) NOT VALID") != std::string_view::npos);
     RUVIA_CHECK(sql.find("VALIDATE CONSTRAINT \"child_fk\"") != std::string_view::npos);
 
-    DbTableDefinition invalidTable{.name = "cs_invalid",
-        .columns = {{.name = "id", .type = {.dataType = DbDataType::kBigInt}}},
-        .constraints = {{.name = "bad", .kind = ruvia::DbConstraintKind::kUnique, .columns = {"id"}, .notValid = true}}};
-    RUVIA_CHECK(throwsOn([&] { pg.createTable(invalidTable); }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.addConstraint("cs_child", {.name = "bad", .kind = ruvia::DbConstraintKind::kUnique, .columns = {"id"}, .initiallyDeferred = true});
+    db_table_definition invalid_table{.name_ = "cs_invalid",
+        .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::big_int}}},
+        .constraints_ = {{.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .not_valid_ = true}}};
+    RUVIA_CHECK(throws_on([&] { pg.create_table(invalid_table); }));
+    RUVIA_CHECK(throws_on([&] {
+        pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .initially_deferred_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.addConstraint("cs_child", {.name = "bad", .kind = ruvia::DbConstraintKind::kCheck, .deferrable = true, .check = expressions.value(true)});
+    RUVIA_CHECK(throws_on([&] {
+        pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::check, .deferrable_ = true, .check_ = expressions.value(true)});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.addConstraint("cs_child", {.name = "bad", .kind = ruvia::DbConstraintKind::kUnique, .columns = {"id"}, .notValid = true});
+    RUVIA_CHECK(throws_on([&] {
+        pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .not_valid_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.addConstraint("cs_child", {.name = "bad", .kind = ruvia::DbConstraintKind::kForeignKey, .columns = {"id"}, .referencedTable = "cs_parent", .referencedColumns = {}});
+    RUVIA_CHECK(throws_on([&] {
+        pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"id"}, .referenced_table_ = "cs_parent", .referenced_columns_ = {}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.addConstraint("cs_child", {.name = "bad", .kind = ruvia::DbConstraintKind::kCheck});
+    RUVIA_CHECK(throws_on([&] {
+        pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::check});
     }));
 
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] {
-        maria.addConstraint("cs_child", {.name = "fk", .kind = ruvia::DbConstraintKind::kForeignKey, .columns = {"id"}, .referencedTable = "cs_parent", .referencedColumns = {"id"}, .deferrable = true});
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] {
+        maria.add_constraint("cs_child", {.name_ = "fk", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"id"}, .referenced_table_ = "cs_parent", .referenced_columns_ = {"id"}, .deferrable_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        maria.addConstraint("cs_child", {.name = "check", .kind = ruvia::DbConstraintKind::kCheck, .notValid = true, .check = expressions.value(true)});
+    RUVIA_CHECK(throws_on([&] {
+        maria.add_constraint("cs_child", {.name_ = "check", .kind_ = ruvia::db_constraint_kind::check, .not_valid_ = true, .check_ = expressions.value(true)});
     }));
 }
 
 RUVIA_TEST(db_schema_constructor_table_flags_and_compile_boundaries_are_checked) {
-    RUVIA_CHECK(throwsOn([&] { DbSchema invalid({}); }));
-    DbSchema empty({.driver = DbDriver::kPostgreSql});
+    RUVIA_CHECK(throws_on([&] { db_schema invalid({}); }));
+    db_schema empty({.driver_ = db_driver::postgresql});
     RUVIA_CHECK(empty.compile("cs_empty").empty());
-    RUVIA_CHECK(throwsOn([&] { (void)empty.compile(""); }));
+    RUVIA_CHECK(throws_on([&] { (void)empty.compile(""); }));
 
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createTable({.name = "cs_temp_pg", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}}}, .temporary = true});
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_table({.name_ = "cs_temp_pg", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}, .temporary_ = true});
     RUVIA_CHECK(pg.compile("cs_temp_pg")[0].sql().find("CREATE TEMPORARY TABLE") != std::string_view::npos);
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createTable({.name = "cs_temp_maria", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}}}, .temporary = true});
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_table({.name_ = "cs_temp_maria", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}, .temporary_ = true});
     RUVIA_CHECK(maria.compile("cs_temp_maria")[0].sql().find("CREATE TEMPORARY TABLE") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createTable({.name = "cs_invalid_flags", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}}}, .temporary = true, .unlogged = true});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_table({.name_ = "cs_invalid_flags", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}, .temporary_ = true, .unlogged_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createTable({.name = "cs_unlogged", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}}}, .unlogged = true});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_table({.name_ = "cs_unlogged", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}, .unlogged_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createTable({.name = "cs_always", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}, .identity = ruvia::DbIdentity::kAlways}}});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_table({.name_ = "cs_always", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}, .identity_ = ruvia::db_identity::always}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        pg.createTable({.name = "cs_duplicate", .columns = {{.name = "id", .type = {.dataType = DbDataType::kInteger}}, {.name = "id", .type = {.dataType = DbDataType::kInteger}}}});
+    RUVIA_CHECK(throws_on([&] {
+        pg.create_table({.name_ = "cs_duplicate", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}, {.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}});
     }));
 }
 
 RUVIA_TEST(db_schema_index_variants_and_dialect_rejections) {
-    ruvia::DbQuery expressions;
-    const auto predicate = expressions.binary(expressions.column("active"), ruvia::DbBinaryOperator::kEqual, expressions.value(true));
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createIndex({.name = "cs_idx", .table = "cs_records", .keys = {{.column = "name", .order = ruvia::DbOrderDirection::kDesc, .nulls = ruvia::DbNullsOrder::kLast, .operatorClass = "text_ops"}, {.expression = expressions.column("lower_name")}}, .unique = true, .ifNotExists = true, .method = ruvia::DbIndexMethod::kBtree, .include = {"id"}, .where = predicate});
-    const auto pgMigrations = pg.compile("cs_index");
-    RUVIA_CHECK_EQ(pgMigrations.size(), std::size_t{1});
-    RUVIA_CHECK(pgMigrations[0].sql().find("CREATE UNIQUE INDEX IF NOT EXISTS \"cs_idx\" ON \"cs_records\" USING btree") != std::string_view::npos);
-    RUVIA_CHECK(pgMigrations[0].sql().find("\"name\" \"text_ops\" DESC NULLS LAST, (\"lower_name\")") != std::string_view::npos);
-    RUVIA_CHECK(pgMigrations[0].sql().find("INCLUDE (\"id\") WHERE (\"active\" = TRUE)") != std::string_view::npos);
+    ruvia::db_query expressions;
+    const auto predicate = expressions.binary(expressions.column("active"), ruvia::db_binary_operator::equal, expressions.value(true));
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_index({.name_ = "cs_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::db_order_direction::desc, .nulls_ = ruvia::db_nulls_order::last, .operator_class_ = "text_ops"}, {.expression_ = expressions.column("lower_name")}}, .unique_ = true, .if_not_exists_ = true, .method_ = ruvia::db_index_method::btree, .include_ = {"id"}, .where_ = predicate});
+    const auto pg_migrations = pg.compile("cs_index");
+    RUVIA_CHECK_EQ(pg_migrations.size(), std::size_t{1});
+    RUVIA_CHECK(pg_migrations[0].sql().find("CREATE UNIQUE INDEX IF NOT EXISTS \"cs_idx\" ON \"cs_records\" USING btree") != std::string_view::npos);
+    RUVIA_CHECK(pg_migrations[0].sql().find("\"name\" \"text_ops\" DESC NULLS LAST, (\"lower_name\")") != std::string_view::npos);
+    RUVIA_CHECK(pg_migrations[0].sql().find("INCLUDE (\"id\") WHERE (\"active\" = TRUE)") != std::string_view::npos);
 
-    for (const auto method : {ruvia::DbIndexMethod::kHash, ruvia::DbIndexMethod::kGin, ruvia::DbIndexMethod::kGist,
-             ruvia::DbIndexMethod::kSpGist, ruvia::DbIndexMethod::kBrin}) {
-        DbSchema methodSchema({.driver = DbDriver::kPostgreSql});
-        methodSchema.createIndex({.name = "cs_method", .table = "cs_records", .keys = {{.column = "name"}}, .method = method});
-        RUVIA_CHECK(methodSchema.compile("cs_method")[0].sql().find("USING ") != std::string_view::npos);
+    for (const auto method : {ruvia::db_index_method::hash, ruvia::db_index_method::gin, ruvia::db_index_method::gist,
+             ruvia::db_index_method::sp_gist, ruvia::db_index_method::brin}) {
+        db_schema method_schema({.driver_ = db_driver::postgresql});
+        method_schema.create_index({.name_ = "cs_method", .table_ = "cs_records", .keys_ = {{.column_ = "name"}}, .method_ = method});
+        RUVIA_CHECK(method_schema.compile("cs_method")[0].sql().find("USING ") != std::string_view::npos);
     }
-    DbSchema concurrent({.driver = DbDriver::kPostgreSql});
-    concurrent.createIndex({.name = "cs_concurrent", .table = "cs_records", .keys = {{.column = "id"}}, .concurrently = true});
-    const auto concurrentMigrations = concurrent.compile("cs_concurrent");
-    RUVIA_CHECK_EQ(concurrentMigrations[0].atomicity(), ruvia::DbMigrationAtomicity::kUnwrapped);
-    DbSchema drop({.driver = DbDriver::kPostgreSql});
-    drop.dropIndex("cs_records.cs_idx", true, true);
+    db_schema concurrent({.driver_ = db_driver::postgresql});
+    concurrent.create_index({.name_ = "cs_concurrent", .table_ = "cs_records", .keys_ = {{.column_ = "id"}}, .concurrently_ = true});
+    const auto concurrent_migrations = concurrent.compile("cs_concurrent");
+    RUVIA_CHECK_EQ(concurrent_migrations[0].atomicity(), ruvia::db_migration_atomicity::unwrapped);
+    db_schema drop({.driver_ = db_driver::postgresql});
+    drop.drop_index("cs_records.cs_idx", true, true);
     RUVIA_CHECK(drop.compile("cs_drop_index")[0].sql().find("DROP INDEX CONCURRENTLY IF EXISTS \"cs_records\".\"cs_idx\"") != std::string_view::npos);
 
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createIndex({.name = "bad", .table = "t", .keys = {{.column = "id", .expression = expressions.column("id")}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id", .expression_ = expressions.column("id")}}});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        DbSchema invalid({.driver = DbDriver::kPostgreSql});
-        invalid.createIndex({.name = "bad", .table = "t", .keys = {{.column = "id"}, {.column = ""}}});
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}, {.column_ = ""}}});
     }));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createIndex({.name = "cs_maria_idx", .table = "cs_records", .keys = {{.column = "name", .order = ruvia::DbOrderDirection::kDesc}}, .unique = true, .ifNotExists = true});
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_index({.name_ = "cs_maria_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::db_order_direction::desc}}, .unique_ = true, .if_not_exists_ = true});
     RUVIA_CHECK(maria.compile("cs_maria_idx")[0].sql().find("CREATE UNIQUE INDEX IF NOT EXISTS `cs_maria_idx` USING btree ON `cs_records`") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createIndex({.name = "bad", .table = "t", .keys = {{.column = "id"}}, .concurrently = true});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}}, .concurrently_ = true});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createIndex({.name = "bad", .table = "t", .keys = {{.column = "id"}}, .method = ruvia::DbIndexMethod::kHash});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}}, .method_ = ruvia::db_index_method::hash});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        maria.createIndex({.name = "bad", .table = "t", .keys = {{.column = "id"}}, .include = {"extra"}});
+    RUVIA_CHECK(throws_on([&] {
+        maria.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}}, .include_ = {"extra"}});
     }));
-    RUVIA_CHECK(throwsOn([&] { maria.dropIndex("idx"); }));
+    RUVIA_CHECK(throws_on([&] { maria.drop_index("idx"); }));
 }
 
 RUVIA_TEST(db_schema_views_enums_extensions_and_commands_cover_dialect_boundaries) {
-    ruvia::DbQuery query;
+    ruvia::db_query query;
     query.select(query.column("id")).from("cs_records");
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
+    db_schema pg({.driver_ = db_driver::postgresql});
     const std::array<std::string_view, 2> values{"new", "done"};
-    pg.createEnum("cs_status", values);
-    pg.dropEnum("cs_status", ruvia::DbDropBehavior::kCascade, true);
-    pg.createExtension("hstore", true);
-    pg.createView("cs_view", query, true);
-    pg.dropView("cs_view", false, ruvia::DbDropBehavior::kCascade, true);
-    pg.createView("cs_mat", query, false, true);
-    pg.dropView("cs_mat", true, ruvia::DbDropBehavior::kRestrict, true);
-    ruvia::DbQuery command;
+    pg.create_enum("cs_status", values);
+    pg.drop_enum("cs_status", ruvia::db_drop_behavior::cascade, true);
+    pg.create_extension("hstore", true);
+    pg.create_view("cs_view", query, true);
+    pg.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true);
+    pg.create_view("cs_mat", query, false, true);
+    pg.drop_view("cs_mat", true, ruvia::db_drop_behavior::restrict, true);
+    ruvia::db_query command;
     command.update("cs_records").set("state", command.value("done"));
     pg.execute(command);
     const auto migrations = pg.compile("cs_objects");
@@ -578,44 +578,44 @@ RUVIA_TEST(db_schema_views_enums_extensions_and_commands_cover_dialect_boundarie
     RUVIA_CHECK(sql.find("CREATE OR REPLACE VIEW \"cs_view\" AS SELECT") != std::string_view::npos);
     RUVIA_CHECK(sql.find("DROP MATERIALIZED VIEW IF EXISTS \"cs_mat\"") != std::string_view::npos);
     RUVIA_CHECK(sql.find("UPDATE \"cs_records\" SET \"state\" = E'done'") != std::string_view::npos);
-    DbSchema enumAddition({.driver = DbDriver::kPostgreSql});
-    enumAddition.addEnumValue("cs_status", "archived", true);
-    const auto enumMigrations = enumAddition.compile("cs_enum_addition");
-    RUVIA_CHECK_EQ(enumMigrations.size(), std::size_t{1});
-    RUVIA_CHECK(enumMigrations[0].sql().find("ALTER TYPE \"cs_status\" ADD VALUE IF NOT EXISTS E'archived'") != std::string_view::npos);
+    db_schema enum_addition({.driver_ = db_driver::postgresql});
+    enum_addition.add_enum_value("cs_status", "archived", true);
+    const auto enum_migrations = enum_addition.compile("cs_enum_addition");
+    RUVIA_CHECK_EQ(enum_migrations.size(), std::size_t{1});
+    RUVIA_CHECK(enum_migrations[0].sql().find("ALTER TYPE \"cs_status\" ADD VALUE IF NOT EXISTS E'archived'") != std::string_view::npos);
 
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    maria.createView("cs_view", query);
-    maria.dropView("cs_view", false, ruvia::DbDropBehavior::kCascade, true);
+    db_schema maria({.driver_ = db_driver::mariadb});
+    maria.create_view("cs_view", query);
+    maria.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true);
     maria.execute(command);
     RUVIA_CHECK(maria.compile("cs_objects").size() == std::size_t{3});
-    RUVIA_CHECK(throwsOn([&] { maria.createEnum("status", values); }));
-    RUVIA_CHECK(throwsOn([&] { maria.addEnumValue("status", "x"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.dropEnum("status"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.createExtension("hstore"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.createView("mat", query, false, true); }));
-    RUVIA_CHECK(throwsOn([&] { maria.dropView("mat", true); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createView("bad", command); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createView("bad", query, true, true); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createEnum("empty", {}); }));
-    ruvia::DbQuery returned;
-    returned.deleteFrom("cs_records").returning({returned.column("id")});
-    RUVIA_CHECK(throwsOn([&] { pg.execute(returned); }));
+    RUVIA_CHECK(throws_on([&] { maria.create_enum("status", values); }));
+    RUVIA_CHECK(throws_on([&] { maria.add_enum_value("status", "x"); }));
+    RUVIA_CHECK(throws_on([&] { maria.drop_enum("status"); }));
+    RUVIA_CHECK(throws_on([&] { maria.create_extension("hstore"); }));
+    RUVIA_CHECK(throws_on([&] { maria.create_view("mat", query, false, true); }));
+    RUVIA_CHECK(throws_on([&] { maria.drop_view("mat", true); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_view("bad", command); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_view("bad", query, true, true); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_enum("empty", {}); }));
+    ruvia::db_query returned;
+    returned.delete_from("cs_records").returning({returned.column("id")});
+    RUVIA_CHECK(throws_on([&] { pg.execute(returned); }));
 }
 
 RUVIA_TEST(db_schema_trigger_variants_cover_events_timing_when_arguments_and_rejections) {
-    ruvia::DbQuery expressions;
-    const auto when = expressions.binary(expressions.column("enabled"), ruvia::DbBinaryOperator::kEqual, expressions.value(true));
-    DbProcedure procedure;
-    procedure.returnValue();
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createTriggerFunction("cs_trigger_fn", procedure, true);
-    pg.createTrigger({.name = "cs_before_insert", .table = "cs_records", .function = "cs_trigger_fn", .events = {ruvia::DbTriggerEvent::kInsert}});
-    pg.createTrigger({.name = "cs_after_update", .table = "cs_records", .function = "cs_trigger_fn", .timing = ruvia::DbTriggerTiming::kAfter, .events = {ruvia::DbTriggerEvent::kUpdate}, .updateColumns = {"state", "enabled"}, .when = when, .arguments = {"arg 'one'", "two"}});
-    pg.createTrigger({.name = "cs_statement", .table = "cs_records", .function = "cs_trigger_fn", .events = {ruvia::DbTriggerEvent::kDelete, ruvia::DbTriggerEvent::kTruncate}, .forEachRow = false});
-    pg.createTrigger({.name = "cs_instead", .table = "cs_records_view", .function = "cs_trigger_fn", .timing = ruvia::DbTriggerTiming::kInsteadOf, .events = {ruvia::DbTriggerEvent::kInsert}});
-    pg.dropTrigger("cs_records", "cs_after_update", true);
-    pg.dropTriggerFunction("cs_trigger_fn", ruvia::DbDropBehavior::kCascade, true);
+    ruvia::db_query expressions;
+    const auto when = expressions.binary(expressions.column("enabled"), ruvia::db_binary_operator::equal, expressions.value(true));
+    db_procedure procedure;
+    procedure.return_value();
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_trigger_function("cs_trigger_fn", procedure, true);
+    pg.create_trigger({.name_ = "cs_before_insert", .table_ = "cs_records", .function_ = "cs_trigger_fn", .events_ = {ruvia::db_trigger_event::insert}});
+    pg.create_trigger({.name_ = "cs_after_update", .table_ = "cs_records", .function_ = "cs_trigger_fn", .timing_ = ruvia::db_trigger_timing::after, .events_ = {ruvia::db_trigger_event::update}, .update_columns_ = {"state", "enabled"}, .when_ = when, .arguments_ = {"arg 'one'", "two"}});
+    pg.create_trigger({.name_ = "cs_statement", .table_ = "cs_records", .function_ = "cs_trigger_fn", .events_ = {ruvia::db_trigger_event::delete_value, ruvia::db_trigger_event::truncate}, .for_each_row_ = false});
+    pg.create_trigger({.name_ = "cs_instead", .table_ = "cs_records_view", .function_ = "cs_trigger_fn", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}});
+    pg.drop_trigger("cs_records", "cs_after_update", true);
+    pg.drop_trigger_function("cs_trigger_fn", ruvia::db_drop_behavior::cascade, true);
     const auto migrations = pg.compile("cs_triggers");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
     const auto sql = migrations[0].sql();
@@ -627,31 +627,31 @@ RUVIA_TEST(db_schema_trigger_variants_cover_events_timing_when_arguments_and_rej
     RUVIA_CHECK(sql.find("DROP TRIGGER IF EXISTS \"cs_after_update\" ON \"cs_records\"") != std::string_view::npos);
     RUVIA_CHECK(sql.find("DROP FUNCTION IF EXISTS \"cs_trigger_fn\"() CASCADE") != std::string_view::npos);
 
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f"}); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f", .events = {ruvia::DbTriggerEvent::kInsert, ruvia::DbTriggerEvent::kInsert}}); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f", .events = {ruvia::DbTriggerEvent::kInsert}, .updateColumns = {"x"}}); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f", .events = {ruvia::DbTriggerEvent::kTruncate}}); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f", .timing = ruvia::DbTriggerTiming::kInsteadOf, .events = {ruvia::DbTriggerEvent::kInsert}, .forEachRow = false}); }));
-    RUVIA_CHECK(throwsOn([&] { pg.createTrigger({.name = "bad", .table = "t", .function = "f", .timing = ruvia::DbTriggerTiming::kInsteadOf, .events = {ruvia::DbTriggerEvent::kInsert}, .when = when}); }));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] { maria.createTriggerFunction("f", procedure); }));
-    RUVIA_CHECK(throwsOn([&] { maria.createTrigger({.name = "f", .table = "t", .function = "f", .events = {ruvia::DbTriggerEvent::kInsert}}); }));
-    RUVIA_CHECK(throwsOn([&] { maria.dropTrigger("t", "f"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.perform(expressions.value(true)); }));
-    RUVIA_CHECK(throwsOn([&] { maria.run(procedure); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f"}); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert, ruvia::db_trigger_event::insert}}); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}, .update_columns_ = {"x"}}); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::truncate}}); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .for_each_row_ = false}); }));
+    RUVIA_CHECK(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .when_ = when}); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] { maria.create_trigger_function("f", procedure); }));
+    RUVIA_CHECK(throws_on([&] { maria.create_trigger({.name_ = "f", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}}); }));
+    RUVIA_CHECK(throws_on([&] { maria.drop_trigger("t", "f"); }));
+    RUVIA_CHECK(throws_on([&] { maria.perform(expressions.value(true)); }));
+    RUVIA_CHECK(throws_on([&] { maria.run(procedure); }));
 }
 
 RUVIA_TEST(db_schema_timescale_options_cover_direct_settings_and_rejections) {
-    ruvia::DbQuery expressions;
-    const auto interval = expressions.cast(expressions.value("1 day"), DbDataType::kInterval);
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    const std::array tableOptions{DbTableOption{"autovacuum_enabled", true}, DbTableOption{"fillfactor", std::int64_t{80}}, DbTableOption{"toast_tuple_target", "128"}};
-    pg.setTableOptions("cs_events", tableOptions);
-    pg.setDatabaseOption("cs_db", "timescaledb.max_background_workers", "8");
-    pg.setChunkTimeInterval("cs_events", interval);
-    pg.setCompression("cs_events", {.enabled = false});
-    pg.removeCompressionPolicy("cs_events", true);
-    pg.removeRetentionPolicy("cs_events", true);
+    ruvia::db_query expressions;
+    const auto interval = expressions.cast(expressions.value("1 day"), db_data_type::interval);
+    db_schema pg({.driver_ = db_driver::postgresql});
+    const std::array table_options{db_table_option{"autovacuum_enabled", true}, db_table_option{"fillfactor", std::int64_t{80}}, db_table_option{"toast_tuple_target", "128"}};
+    pg.set_table_options("cs_events", table_options);
+    pg.set_database_option("cs_db", "timescaledb.max_background_workers", "8");
+    pg.set_chunk_time_interval("cs_events", interval);
+    pg.set_compression("cs_events", {.enabled_ = false});
+    pg.remove_compression_policy("cs_events", true);
+    pg.remove_retention_policy("cs_events", true);
     const auto migrations = pg.compile("cs_timescale_options");
     RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
     const auto sql = migrations[0].sql();
@@ -661,50 +661,50 @@ RUVIA_TEST(db_schema_timescale_options_cover_direct_settings_and_rejections) {
     RUVIA_CHECK(sql.find("\"timescaledb\".\"compress\" = false") != std::string_view::npos);
     RUVIA_CHECK(sql.find("\"remove_compression_policy\"(E'\"cs_events\"', \"if_exists\" => TRUE)") != std::string_view::npos);
     RUVIA_CHECK(sql.find("\"remove_retention_policy\"(E'\"cs_events\"', \"if_exists\" => TRUE)") != std::string_view::npos);
-    RUVIA_CHECK(throwsOn([&] { pg.setTableOptions("cs_events", std::span<const DbTableOption>()); }));
-    const std::array duplicateOptions{DbTableOption{"fillfactor", std::int64_t{80}}, DbTableOption{"fillfactor", std::int64_t{90}}};
-    RUVIA_CHECK(throwsOn([&] {
-        pg.setTableOptions("cs_events", duplicateOptions);
+    RUVIA_CHECK(throws_on([&] { pg.set_table_options("cs_events", std::span<const db_table_option>()); }));
+    const std::array duplicate_options{db_table_option{"fillfactor", std::int64_t{80}}, db_table_option{"fillfactor", std::int64_t{90}}};
+    RUVIA_CHECK(throws_on([&] {
+        pg.set_table_options("cs_events", duplicate_options);
     }));
-    RUVIA_CHECK(throwsOn([&] { pg.setCompression("cs_events", {.enabled = false, .segmentBy = {"device_id"}}); }));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    const std::array mariaOptions{DbTableOption{"x", true}};
-    RUVIA_CHECK(throwsOn([&] { maria.setTableOptions("t", mariaOptions); }));
-    RUVIA_CHECK(throwsOn([&] { maria.setDatabaseOption("d", "x", "y"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.createHypertable({.table = "t", .timeColumn = "ts"}); }));
-    RUVIA_CHECK(throwsOn([&] { maria.setChunkTimeInterval("t", interval); }));
-    RUVIA_CHECK(throwsOn([&] { maria.setCompression("t", {}); }));
-    RUVIA_CHECK(throwsOn([&] { maria.addCompressionPolicy("t", interval); }));
-    RUVIA_CHECK(throwsOn([&] { maria.removeCompressionPolicy("t"); }));
-    RUVIA_CHECK(throwsOn([&] { maria.addRetentionPolicy("t", interval); }));
-    RUVIA_CHECK(throwsOn([&] { maria.removeRetentionPolicy("t"); }));
+    RUVIA_CHECK(throws_on([&] { pg.set_compression("cs_events", {.enabled_ = false, .segment_by_ = {"device_id"}}); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    const std::array maria_options{db_table_option{"x", true}};
+    RUVIA_CHECK(throws_on([&] { maria.set_table_options("t", maria_options); }));
+    RUVIA_CHECK(throws_on([&] { maria.set_database_option("d", "x", "y"); }));
+    RUVIA_CHECK(throws_on([&] { maria.create_hypertable({.table_ = "t", .time_column_ = "ts"}); }));
+    RUVIA_CHECK(throws_on([&] { maria.set_chunk_time_interval("t", interval); }));
+    RUVIA_CHECK(throws_on([&] { maria.set_compression("t", {}); }));
+    RUVIA_CHECK(throws_on([&] { maria.add_compression_policy("t", interval); }));
+    RUVIA_CHECK(throws_on([&] { maria.remove_compression_policy("t"); }));
+    RUVIA_CHECK(throws_on([&] { maria.add_retention_policy("t", interval); }));
+    RUVIA_CHECK(throws_on([&] { maria.remove_retention_policy("t"); }));
 }
 
 RUVIA_TEST(db_procedure_public_helpers_render_and_validate) {
-    ruvia::DbQuery expressions;
-    ruvia::DbProcedure procedure;
-    procedure.declareVariable({.name = "counter", .type = {.dataType = DbDataType::kInteger}, .defaultValue = expressions.value(0)});
-    procedure.declareRow("row_value", "cs_records");
-    procedure.declareRecord("record_value");
-    procedure.assign("counter", expressions.binary(expressions.column("counter"), ruvia::DbBinaryOperator::kAdd, expressions.value(1)));
-    ruvia::DbQuery select;
+    ruvia::db_query expressions;
+    ruvia::db_procedure procedure;
+    procedure.declare_variable({.name_ = "counter", .type_ = {.data_type_ = db_data_type::integer}, .default_value_ = expressions.value(0)});
+    procedure.declare_row("row_value", "cs_records");
+    procedure.declare_record("record_value");
+    procedure.assign("counter", expressions.binary(expressions.column("counter"), ruvia::db_binary_operator::add, expressions.value(1)));
+    ruvia::db_query select;
     select.select(select.column("id")).from("cs_records");
     const std::array<std::string_view, 1> targets{"row_value"};
-    procedure.selectInto(select, targets, false);
-    procedure.selectInto(select, targets, true);
-    ruvia::DbQuery command;
+    procedure.select_into(select, targets, false);
+    procedure.select_into(select, targets, true);
+    ruvia::db_query command;
     command.update("cs_records").set("state", command.value("done"));
     procedure.execute(command);
     procedure.perform(expressions.call("pg_notify", {expressions.value("cs"), expressions.value("body")}));
-    procedure.beginIf(expressions.column("enabled"));
-    procedure.elseIf(expressions.column("fallback"));
+    procedure.begin_if(expressions.column("enabled"));
+    procedure.else_if(expressions.column("fallback"));
     procedure.otherwise();
-    procedure.endIf();
-    procedure.beginBlock();
-    procedure.catchSqlState("23505");
-    procedure.endBlock();
-    procedure.returnValue();
-    procedure.raiseException("failed", "P0001");
+    procedure.end_if();
+    procedure.begin_block();
+    procedure.catch_sql_state("23505");
+    procedure.end_block();
+    procedure.return_value();
+    procedure.raise_exception("failed", "P0001");
     const auto body = procedure.body();
     RUVIA_CHECK(body.find("DECLARE\n") == 0);
     RUVIA_CHECK(body.find("\"counter\" INTEGER := 0;") != std::string_view::npos);
@@ -715,57 +715,57 @@ RUVIA_TEST(db_procedure_public_helpers_render_and_validate) {
     RUVIA_CHECK(body.find("EXCEPTION\nWHEN SQLSTATE E'23505'") != std::string_view::npos);
     RUVIA_CHECK(body.find("RETURN;\nRAISE EXCEPTION USING MESSAGE = E'failed'") != std::string_view::npos);
 
-    DbSchema pg({.driver = DbDriver::kPostgreSql});
-    pg.createSchema("cs_nested");
-    ruvia::DbProcedure applied;
+    db_schema pg({.driver_ = db_driver::postgresql});
+    pg.create_schema("cs_nested");
+    ruvia::db_procedure applied;
     applied.apply(pg);
     RUVIA_CHECK(applied.body().find("CREATE SCHEMA \"cs_nested\";") != std::string_view::npos);
-    DbSchema nonTransactional({.driver = DbDriver::kPostgreSql});
-    nonTransactional.createIndex({.name = "cs_idx", .table = "cs_records", .keys = {{.column = "id"}}, .concurrently = true});
-    RUVIA_CHECK(throwsOn([&] { applied.apply(nonTransactional); }));
-    DbSchema maria({.driver = DbDriver::kMariaDb});
-    RUVIA_CHECK(throwsOn([&] { applied.apply(maria); }));
+    db_schema non_transactional({.driver_ = db_driver::postgresql});
+    non_transactional.create_index({.name_ = "cs_idx", .table_ = "cs_records", .keys_ = {{.column_ = "id"}}, .concurrently_ = true});
+    RUVIA_CHECK(throws_on([&] { applied.apply(non_transactional); }));
+    db_schema maria({.driver_ = db_driver::mariadb});
+    RUVIA_CHECK(throws_on([&] { applied.apply(maria); }));
 
-    RUVIA_CHECK(throwsOn([&] { procedure.declareRecord("counter"); }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
+    RUVIA_CHECK(throws_on([&] { procedure.declare_record("counter"); }));
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
         invalid.execute(select);
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.selectInto(command, targets);
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.select_into(command, targets);
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.selectInto(select, {});
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.select_into(select, {});
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.elseIf(expressions.value(true));
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.else_if(expressions.value(true));
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
         invalid.otherwise();
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.endIf();
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.end_if();
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.catchSqlState("23505");
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.catch_sql_state("23505");
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.beginBlock();
-        invalid.catchSqlState("bad");
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.begin_block();
+        invalid.catch_sql_state("bad");
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.endBlock();
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.end_block();
     }));
-    RUVIA_CHECK(throwsOn([&] {
-        ruvia::DbProcedure invalid;
-        invalid.raiseException("bad", "00000");
+    RUVIA_CHECK(throws_on([&] {
+        ruvia::db_procedure invalid;
+        invalid.raise_exception("bad", "00000");
     }));
 }

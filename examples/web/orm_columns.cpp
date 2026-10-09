@@ -12,20 +12,20 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/db/DbClient.h"
-#include "ruvia/web/db/DbSchema.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_schema.h"
 
 #include "backend_tls.h"
 
 namespace {
 using namespace ruvia;
 
-RUVIA_DB_ENTITY(LineItem, "orm_column_line_item",
-    RUVIA_DB_COLUMN(id, std::int64_t, DbColumnOptions{.primaryKey = true}),
+RUVIA_DB_ENTITY(line_item, "orm_column_line_item",
+    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
     RUVIA_DB_COLUMN(quantity, std::int64_t),
     RUVIA_DB_COLUMN(unit_price, std::int64_t),
-    RUVIA_DB_COLUMN(total, std::int64_t, DbColumnOptions{.generatedType = DbGeneratedType::kStored}))
+    RUVIA_DB_COLUMN(total, std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}))
 
 void require(bool condition, std::string_view message) {
     if (!condition) {
@@ -34,68 +34,68 @@ void require(bool condition, std::string_view message) {
 }
 
 auto migrations() {
-    DbQuery expressions;
-    DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<LineItem>({.generatedColumns = {{"total", expressions.binary(
-                                                                     expressions.column("quantity"), DbBinaryOperator::kMultiply,
-                                                                     expressions.column("unit_price"))}}});
+    db_query expressions;
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<line_item>({.generated_columns_ = {{"total", expressions.binary(
+                                                                         expressions.column("quantity"), db_binary_operator::multiply,
+                                                                         expressions.column("unit_price"))}}});
     return schema.compile("orm_columns_001");
 }
 
-Task<void> demonstrate(DbClient& db, DbClient& concurrent) {
-    auto items = db.getRepository<LineItem>();
-    LineItem input;
+task<void> demonstrate(db_client& db, db_client& concurrent) {
+    auto items = db.get_repository<line_item>();
+    line_item input;
     input.set<"id">(1);
     input.set<"quantity">(3);
     input.set<"unit_price">(7);
     // Even explicitly supplied computed values are excluded from writes.
     input.set<"total">(-1);
-    co_await items.deleteBy(LineItem::column<"id">() == 1);
+    co_await items.delete_by(line_item::column<"id">() == 1);
     co_await items.insert(input);
-    const auto inserted = co_await items.findOne({.where = LineItem::column<"id">() == 1});
+    const auto inserted = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(inserted && inserted->get<"total">() == 21, "computed INSERT value differs");
 
-    LineItem changes;
+    line_item changes;
     changes.set<"quantity">(4);
     changes.set<"total">(-2);
-    co_await items.update(LineItem::column<"id">() == 1, changes);
-    const auto updated = co_await items.findOne({.where = LineItem::column<"id">() == 1});
+    co_await items.update(line_item::column<"id">() == 1, changes);
+    const auto updated = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(updated && updated->get<"total">() == 28, "computed UPDATE value differs");
     input.set<"quantity">(5);
-    co_await items.upsert(input, {.conflictPaths = {"id"}});
-    const auto retained = co_await items.findOne({.where = LineItem::column<"id">() == 1});
+    co_await items.upsert(input, {.conflict_paths_ = {"id"}});
+    const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 
-    auto snapshot = co_await db.beginTransaction({.isolation = DbTransactionIsolation::kRepeatableRead,
-        .accessMode = DbTransactionAccessMode::kReadOnly});
-    auto snapshotItems = snapshot.getRepository<LineItem>();
-    const auto before = co_await snapshotItems.findOne({.where = LineItem::column<"id">() == 1});
+    auto snapshot = co_await db.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
+        .access_mode_ = db_transaction_access_mode::read_only});
+    auto snapshot_items = snapshot.get_repository<line_item>();
+    const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     changes.set<"quantity">(6);
-    co_await concurrent.getRepository<LineItem>().update(LineItem::column<"id">() == 1, changes);
-    const auto after = co_await snapshotItems.findOne({.where = LineItem::column<"id">() == 1});
+    co_await concurrent.get_repository<line_item>().update(line_item::column<"id">() == 1, changes);
+    const auto after = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35,
         "repeatable-read snapshot changed after another connection committed");
 
     bool rejected = false;
     try {
-        co_await snapshotItems.update(LineItem::column<"id">() == 1, changes);
-    } catch (const DbError& error) {
-        rejected = error.code() == DbError::Code::kStatementFailed;
+        co_await snapshot_items.update(line_item::column<"id">() == 1, changes);
+    } catch (const db_error& error) {
+        rejected = error.code() == db_error::code_type::statement_failed;
     }
     require(rejected, "read-only transaction accepted a write");
     // Failed transactions are retired by the backend. A new transaction must
     // retain the server defaults, without inheriting read-only access.
-    auto writable = co_await db.beginTransaction();
-    co_await writable.getRepository<LineItem>().update(LineItem::column<"id">() == 1, changes);
+    auto writable = co_await db.begin_transaction();
+    co_await writable.get_repository<line_item>().update(line_item::column<"id">() == 1, changes);
     co_await writable.commit();
-    const auto current = co_await items.findOne({.where = LineItem::column<"id">() == 1});
+    const auto current = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(current && current->get<"total">() == 42, "default transaction failed to write");
     require(retained->get<"total">() == 35, "later operation changed retained entity data");
     std::cout << "Computed INSERT/UPDATE/UPSERT, retained results, repeatable-read snapshot, "
                  "read-only rejection and default transaction verified.\n";
 }
 
-Task<void> run(DbClient& db, DbClient& concurrent, EventLoopAttachment& attachment) {
+task<void> run(db_client& db, db_client& concurrent, event_loop_attachment& attachment) {
     std::exception_ptr failure;
     try {
         co_await db.connect();
@@ -112,26 +112,26 @@ Task<void> run(DbClient& db, DbClient& concurrent, EventLoopAttachment& attachme
     }
 }
 
-DbConfig config() {
-    DbConfig result{.driver = DbDriver::kPostgreSql};
-    result.tls = example::backend_tls("RUVIA_DB");
+db_config config() {
+    db_config result_value{.driver_ = db_driver::postgresql};
+    result_value.tls_ = example::backend_tls("RUVIA_DB");
     const auto read = [](const char* key, std::string& target) {
         if (const auto* value = std::getenv(key)) {
             target = value;
         }
     };
-    read("RUVIA_DB_HOST", result.host);
-    read("RUVIA_DB_USER", result.username);
-    read("RUVIA_DB_PASSWORD", result.password);
-    read("RUVIA_DB_DATABASE", result.database);
+    read("RUVIA_DB_HOST", result_value.host_);
+    read("RUVIA_DB_USER", result_value.username_);
+    read("RUVIA_DB_PASSWORD", result_value.password_);
+    read("RUVIA_DB_DATABASE", result_value.database_);
     if (const auto* port = std::getenv("RUVIA_DB_PORT")) {
         const auto value = std::stoul(port);
         if (value == 0 || value > 65535) {
             throw std::invalid_argument("invalid database port");
         }
-        result.port = static_cast<std::uint16_t>(value);
+        result_value.port_ = static_cast<std::uint16_t>(value);
     }
-    return result;
+    return result_value;
 }
 }  // namespace
 
@@ -156,13 +156,13 @@ int main(int argc, char** argv) {
         }
         const auto settings = config();
         if (migrate) {
-            (void)DbMigrator::migrate(settings, changes);
+            (void)db_migrator::migrate(settings, changes);
         }
         if (execute) {
-            asio::io_context context(1);
-            auto attachment = attachEventLoop(context);
-            DbClient db(attachment.loop(), settings);
-            DbClient concurrent(attachment.loop(), settings);
+            asio::io_context context_value(1);
+            auto attachment = attach_event_loop(context_value);
+            db_client db(attachment.loop(), settings);
+            db_client concurrent(attachment.loop(), settings);
             auto root = attachment.loop().start(run(db, concurrent, attachment));
             attachment.run();
             root.get();

@@ -10,7 +10,7 @@ namespace ruvia::test {
 // never destroyed. This is a correctness requirement on Windows, not an optimization.
 //
 // asio's win_iocp backend spawns a dedicated timer thread the first time any
-// steady_timer is bound to a context (e.g. via WorkerDispatcher). Joining that thread
+// steady_timer is bound to a context (e.g. via worker_dispatcher). Joining that thread
 // while the context is destroyed can deadlock after a few rapid create/destroy cycles
 // on the Windows IOCP backend -- see the long-standing Asio reports #424 and #520.
 // Because every socket test builds and tears down its own io_context, that
@@ -23,7 +23,7 @@ namespace ruvia::test {
 // they stay reachable (leak-sanitizer clean) and are reclaimed by the OS at process
 // exit; deque never invalidates references to existing elements, so the returned
 // reference stays valid for the test's lifetime.
-inline asio::io_context& newTestIoContext() {
+inline asio::io_context& new_test_io_context() {
     static std::deque<asio::io_context>& registry = *new std::deque<asio::io_context>();
     return registry.emplace_back();
 }

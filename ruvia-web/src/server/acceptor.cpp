@@ -11,8 +11,8 @@
 #include <asio/recycling_allocator.hpp>
 #include <asio/socket_base.hpp>
 
-#include "ruvia/core/Async.h"
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/async.h"
+#include "ruvia/core/memory/process_resource.h"
 
 #include "http3/http3_datagram_channel.h"
 
@@ -28,14 +28,14 @@ bool recoverable_accept_error(const asio::error_code& error) noexcept {
 
 }  // namespace
 
-acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
+acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
     std::span<const worker_target> targets, void* failure_target, failure_callback failure)
-    : runtime_({.queue_capacity = 128, .io_policy = worker_io_policy::single_owner}),
-      io_context_(runtime_.context().ioContext()),
-      listeners_(processResource()),
-      targets_(targets.begin(), targets.end(), processResource()),
-      quic_channels_(processResource()),
-      udp_(nullptr, PmrObjectDeleter<http3_acceptor_datagram_endpoint>{processResource()}),
+    : runtime_({.queue_capacity_ = 128, .io_policy_ = worker_io_policy::single_owner}),
+      io_context_(runtime_.context().io_context()),
+      listeners_(process_resource()),
+      targets_(targets.begin(), targets.end(), process_resource()),
+      quic_channels_(process_resource()),
+      udp_(nullptr, pmr_object_deleter<http3_acceptor_datagram_endpoint>{process_resource()}),
       quic_notification_(runtime_.context()),
       quic_retirement_(io_context_),
       failure_target_(failure_target),
@@ -44,7 +44,7 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
         throw std::invalid_argument("acceptor requires at least one TCP listener");
     }
     const auto quic_count = std::ranges::count_if(listeners,
-        [](const auto& configured) { return configured.http3.has_value(); });
+        [](const auto& configured) { return configured.http3_.has_value(); });
     if (quic_count > 1) {
         throw std::invalid_argument("acceptor supports one QUIC listener");
     }
@@ -53,28 +53,28 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
         throw std::invalid_argument("QUIC acceptor requires representable worker targets");
     }
     for (const auto& target : targets_) {
-        if (!target.submission.valid() || target.object == nullptr || target.available == nullptr ||
-            target.accept == nullptr || (quic_count != 0 && target.stage_quic == nullptr)) {
+        if (!target.submission_.valid() || target.object_ == nullptr || target.available_ == nullptr ||
+            target.accept_ == nullptr || (quic_count != 0 && target.stage_quic_ == nullptr)) {
             throw std::invalid_argument("acceptor worker target is incomplete");
         }
     }
     listeners_.reserve(listeners.size());
     quic_channels_.reserve(quic_count != 0 ? targets.size() : 0);
     for (const auto& configured : listeners) {
-        listeners_.push_back(makePmrObject<listener>(processResource(), io_context_,
-            configured.endpoint, configured.http3 ? std::optional(normalize_http3_capacity(*configured.http3, targets.size())) : std::nullopt));
+        listeners_.push_back(make_pmr_object<listener>(process_resource(), io_context_,
+            configured.endpoint_, configured.http3_ ? std::optional(normalize_http3_capacity(*configured.http3_, targets.size())) : std::nullopt));
     }
     runtime_.configure({
-        .startup = [this] {
+        .startup_ = [this] {
             prepare_quic();
-            if (runtime_.state() == RuntimeLifecycle::State::kRunning) {
+            if (runtime_.state() == runtime_lifecycle::state_type::running) {
                 (void)completion_.mark_startup_ready();
             } else {
                 completion_.mark_startup_aborted();
             } },
-        .stop_admission = [this] { stop_on_owner(); },
-        .failure = [this](std::exception_ptr error) noexcept { fail(std::move(error)); },
-        .shutdown = [this]() noexcept {
+        .stop_admission_ = [this] { stop_on_owner(); },
+        .failure_ = [this](std::exception_ptr error) noexcept { fail(std::move(error)); },
+        .shutdown_ = [this]() noexcept {
             close_listeners();
             udp_.reset();
             quic_channels_.clear();
@@ -91,22 +91,22 @@ acceptor::~acceptor() {
 
 void acceptor::prepare_quic() {
     const auto configured = std::ranges::find_if(listeners_,
-        [](const auto& bound) { return bound->quic.has_value(); });
+        [](const auto& bound) { return bound->quic_.has_value(); });
     if (configured == listeners_.end()) {
         return;
     }
-    const auto& tcp = (*configured)->endpoint;
-    const auto capacity = *(*configured)->quic;
-    quic_pool_.emplace(capacity.packet_slots,
-        http3_capacity::packet_bytes, processResource());
-    udp_ = makePmrObject<http3_acceptor_datagram_endpoint>(processResource(), io_context_,
+    const auto& tcp = (*configured)->endpoint_;
+    const auto capacity = *(*configured)->quic_;
+    quic_pool_.emplace(capacity.packet_slots_,
+        http3_capacity::packet_bytes, process_resource());
+    udp_ = make_pmr_object<http3_acceptor_datagram_endpoint>(process_resource(), io_context_,
         asio::ip::udp::endpoint(tcp.address(), tcp.port()),
         http3_acceptor_datagram_endpoint::notification{this, &datagram_ready}, *quic_pool_);
     udp_->prepare();
     const asio::ip::udp::endpoint endpoint(tcp.address(), udp_->bound_port());
     quic_running_ = true;
     try {
-        asio::co_spawn(io_context_, ruvia::asAwaitable(run_quic()),
+        asio::co_spawn(io_context_, ruvia::as_awaitable(run_quic()),
             asio::bind_allocator(asio::recycling_allocator<void>(),
                 [this](std::exception_ptr error) noexcept {
                     quic_running_ = false;
@@ -125,15 +125,15 @@ void acceptor::prepare_quic() {
         quic_running_ = false;
         throw;
     }
-    for (std::size_t worker = 0; worker < targets_.size(); ++worker) {
-        auto channel = makePmrObject<http3_datagram_channel>(processResource(),
-            *quic_pool_, quic_notification_, processResource(),
-            capacity.input_slots, capacity.output_credits);
+    for (std::size_t worker_value = 0; worker_value < targets_.size(); ++worker_value) {
+        auto channel = make_pmr_object<http3_datagram_channel>(process_resource(),
+            *quic_pool_, quic_notification_, process_resource(),
+            capacity.input_slots_, capacity.output_credits_);
         // A staging failure must not leave an unowned channel waiting for an ACK.
         try {
-            targets_[worker].stage_quic(targets_[worker].object, *channel, endpoint,
-                {.index = static_cast<std::uint32_t>(worker),
-                    .count = static_cast<std::uint32_t>(targets_.size())});
+            targets_[worker_value].stage_quic_(targets_[worker_value].object_, *channel, endpoint,
+                {.index_ = static_cast<std::uint32_t>(worker_value),
+                    .count_ = static_cast<std::uint32_t>(targets_.size())});
         } catch (...) {
             channel->acceptor_close();
             channel->abandon_worker();
@@ -146,7 +146,7 @@ void acceptor::prepare_quic() {
     }
 }
 
-Task<void> acceptor::run_quic() {
+task<void> acceptor::run_quic() {
     for (;;) {
         pump_quic();
         if (quic_retired()) {
@@ -157,15 +157,15 @@ Task<void> acceptor::run_quic() {
             // ACK publication follows the last cross-thread notification call.
             // A cold timer covers wake-before-ACK without hot-path polling.
             quic_retirement_.expires_after(std::chrono::milliseconds(1));
-            const auto completed = co_await ruvia::asyncAsio([this](auto handler) {
+            const auto completed = co_await ruvia::async_asio([this](auto handler) {
                 quic_retirement_.async_wait(std::move(handler));
             });
-            if (completed.errorCode()) {
-                throw std::system_error(completed.errorCode(), "QUIC acceptor retirement wait");
+            if (completed.error_code()) {
+                throw std::system_error(completed.error_code(), "QUIC acceptor retirement wait");
             }
         } else {
             try {
-                if (co_await quic_notification_.wait() == WorkerNotificationWaitStatus::kClosed) {
+                if (co_await quic_notification_.wait() == worker_notification_wait_status::closed) {
                     stop_on_owner();
                 }
             } catch (...) {
@@ -227,10 +227,10 @@ void acceptor::pump_quic() noexcept {
         return;
     }
     if (auto packet = udp_->take_receive()) {
-        const auto worker = ruvia::quic_datagram_partition(packet->view().bytes,
+        const auto worker_value = ruvia::quic_datagram_partition(packet->view().bytes_,
             static_cast<std::uint32_t>(targets_.size()));
-        if (worker) {
-            (void)quic_channels_[*worker]->acceptor_push(std::move(*packet));
+        if (worker_value) {
+            (void)quic_channels_[*worker_value]->acceptor_push(std::move(*packet));
         }
     }
     // A route/drop above or an independent RX credit return can make storage
@@ -240,36 +240,36 @@ void acceptor::pump_quic() noexcept {
         return;
     }
     for (std::size_t offset = 0; offset < quic_channels_.size(); ++offset) {
-        const auto worker = (next_output_ + offset) % quic_channels_.size();
-        auto packet = quic_channels_[worker]->acceptor_take_output();
+        const auto worker_value = (next_output_ + offset) % quic_channels_.size();
+        auto packet = quic_channels_[worker_value]->acceptor_take_output();
         if (!packet) {
             continue;
         }
         (void)udp_->send_owned_datagram(std::move(*packet));
-        next_output_ = (worker + 1) % quic_channels_.size();
+        next_output_ = (worker_value + 1) % quic_channels_.size();
         break;
     }
 }
 
 void acceptor::prepare() {
-    if (prepared_ || runtime_.state() != RuntimeLifecycle::State::kReady) {
+    if (prepared_ || runtime_.state() != runtime_lifecycle::state_type::ready) {
         throw std::logic_error("acceptor can only be prepared once before launch");
     }
     for (auto& configured : listeners_) {
-        auto& socket = configured->socket;
+        auto& socket = configured->socket_;
         asio::error_code error;
-        socket.open(configured->endpoint.protocol(), error);
+        socket.open(configured->endpoint_.protocol(), error);
         if (!error) {
             socket.set_option(asio::socket_base::reuse_address(true), error);
         }
         if (!error) {
-            socket.bind(configured->endpoint, error);
+            socket.bind(configured->endpoint_, error);
         }
         if (!error) {
             socket.listen(asio::socket_base::max_listen_connections, error);
         }
         if (!error) {
-            configured->endpoint = socket.local_endpoint(error);
+            configured->endpoint_ = socket.local_endpoint(error);
         }
         if (error) {
             close_listeners();
@@ -288,7 +288,7 @@ void acceptor::launch() {
     } catch (...) {
         if (const auto failure = runtime_.failure()) {
             (void)completion_.record_failure(failure);
-        } else if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+        } else if (runtime_.state() != runtime_lifecycle::state_type::running) {
             completion_.mark_startup_aborted();
             completion_.mark_serving_aborted();
         }
@@ -301,11 +301,11 @@ void acceptor::wait_until_ready() {
 }
 
 void acceptor::request_serve() {
-    if (runtime_.state() != RuntimeLifecycle::State::kRunning || serve_requested_.exchange(true)) {
+    if (runtime_.state() != runtime_lifecycle::state_type::running || serve_requested_.exchange(true)) {
         return;
     }
     const auto posted = runtime_.post_control([this] {
-        if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+        if (runtime_.state() != runtime_lifecycle::state_type::running) {
             completion_.mark_serving_aborted();
             return;
         }
@@ -316,7 +316,7 @@ void acceptor::request_serve() {
             for (std::size_t i = 0; i < listeners_.size(); ++i) {
                 begin_accept(i);
             }
-            if (runtime_.state() == RuntimeLifecycle::State::kRunning && completion_.failure() == nullptr) {
+            if (runtime_.state() == runtime_lifecycle::state_type::running && completion_.failure() == nullptr) {
                 (void)completion_.mark_serving();
             } else {
                 completion_.mark_serving_aborted();
@@ -366,7 +366,7 @@ void acceptor::join() {
 }
 
 asio::ip::tcp::endpoint acceptor::local_endpoint(std::size_t index) const {
-    return listeners_.at(index)->endpoint;
+    return listeners_.at(index)->endpoint_;
 }
 
 std::exception_ptr acceptor::failure() const noexcept {
@@ -381,10 +381,10 @@ void acceptor::rethrow_failure() const {
 }
 
 void acceptor::begin_accept(std::size_t index) noexcept {
-    if (runtime_.state() != RuntimeLifecycle::State::kRunning || targets_.empty()) {
+    if (runtime_.state() != runtime_lifecycle::state_type::running || targets_.empty()) {
         return;
     }
-    auto& socket = listeners_[index]->socket;
+    auto& socket = listeners_[index]->socket_;
     if (!socket.is_open()) {
         return;
     }
@@ -400,7 +400,7 @@ void acceptor::begin_accept(std::size_t index) noexcept {
 void acceptor::accepted(std::size_t index, const asio::error_code& error,
     asio::ip::tcp::socket socket) noexcept {
     if (error) {
-        if (error == asio::error::operation_aborted && runtime_.state() != RuntimeLifecycle::State::kRunning) {
+        if (error == asio::error::operation_aborted && runtime_.state() != runtime_lifecycle::state_type::running) {
             return;
         }
         if (!recoverable_accept_error(error)) {
@@ -424,16 +424,16 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         }
         return;
     }
-    NativeAcceptedSocketTicket ticket(listeners_[index]->endpoint.protocol(), index, native);
-    if (runtime_.state() != RuntimeLifecycle::State::kRunning || targets_.empty()) {
+    native_accepted_socket_ticket ticket(listeners_[index]->endpoint_.protocol(), index, native);
+    if (runtime_.state() != runtime_lifecycle::state_type::running || targets_.empty()) {
         return;
     }
     auto selected = targets_.size();
     for (std::size_t offset = 0; offset < targets_.size(); ++offset) {
-        const auto worker = (next_target_ + offset) % targets_.size();
-        if (targets_[worker].available(targets_[worker].object) && targets_[worker].submission.accepting()) {
-            selected = worker;
-            next_target_ = (worker + 1) % targets_.size();
+        const auto worker_value = (next_target_ + offset) % targets_.size();
+        if (targets_[worker_value].available_(targets_[worker_value].object_) && targets_[worker_value].submission_.accepting()) {
+            selected = worker_value;
+            next_target_ = (worker_value + 1) % targets_.size();
             break;
         }
     }
@@ -443,30 +443,30 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
     }
     const auto target = targets_[selected];
     try {
-        auto posted = target.submission.post([target, ticket = std::move(ticket)]() mutable noexcept {
-            if (target.available(target.object)) {
-                target.accept(target.object, std::move(ticket));
+        auto posted = target.submission_.post([target, ticket = std::move(ticket)]() mutable noexcept {
+            if (target.available_(target.object_)) {
+                target.accept_(target.object_, std::move(ticket));
             }
         });
         if (!posted.accepted()) {
-            auto rejected = std::move(posted).takeRejected();
+            auto rejected = std::move(posted).take_rejected();
             rejected = {};
         }
     } catch (...) {
         fail(std::current_exception());
         return;
     }
-    if (runtime_.state() == RuntimeLifecycle::State::kRunning) {
+    if (runtime_.state() == runtime_lifecycle::state_type::running) {
         begin_accept(index);
     }
 }
 
 void acceptor::schedule_retry(std::size_t index) noexcept {
-    if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+    if (runtime_.state() != runtime_lifecycle::state_type::running) {
         return;
     }
     try {
-        auto& timer = listeners_[index]->retry;
+        auto& timer = listeners_[index]->retry_;
         timer.expires_after(std::chrono::milliseconds(25));
         timer.async_wait([this, index](const asio::error_code& error) {
             if (!error) {
@@ -489,11 +489,11 @@ void acceptor::fail(std::exception_ptr error) noexcept {
 void acceptor::close_listeners() noexcept {
     for (auto& configured : listeners_) {
         asio::error_code ignored;
-        configured->retry.cancel();
+        configured->retry_.cancel();
         ignored.clear();
-        configured->socket.cancel(ignored);
+        configured->socket_.cancel(ignored);
         ignored.clear();
-        configured->socket.close(ignored);
+        configured->socket_.close(ignored);
     }
 }
 

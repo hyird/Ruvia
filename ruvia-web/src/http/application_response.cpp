@@ -1,40 +1,40 @@
-#include "context/ContextServices.h"
-#include "router/RouteTable.h"
-#include "server/HttpBufferedResponse.h"
+#include "context/context_services.h"
+#include "router/route_table.h"
+#include "server/http_buffered_response.h"
 
 namespace ruvia::detail {
 
-Task<std::optional<prepared_application_response>> prepare_application_response(
-    const HttpRequest& request, HttpResponseCodingPolicy policy, HttpResponse& response,
-    const HttpServerOptions& options, const RouteTable& routes, RequestMemory& memory,
-    const ContextServices& services, application_response_control control) {
-    buffered_response_recovery recovery(control.recovery_mode);
+task<std::optional<prepared_application_response>> prepare_application_response(
+    const http_request& request, http_response_coding_policy policy, http_response& response,
+    const http_server_options& options, const route_table& routes_value, request_memory& memory,
+    const context_services& services, application_response_control control) {
+    buffered_response_recovery recovery(control.recovery_mode_);
     for (;;) {
-        if (control.terminal_stop != nullptr && control.terminal_stop->stopRequested()) {
+        if (control.terminal_stop_ != nullptr && control.terminal_stop_->stop_requested()) {
             co_return std::nullopt;
         }
-        response.materializeBody();
-        if (options.cors.has_value()) {
-            applyCorsHeaders(request, response, *options.cors);
+        response.materialize_body();
+        if (options.cors_.has_value()) {
+            apply_cors_headers(request, response, *options.cors_);
         }
-        auto compression = HttpResponseCompressionResult::makeNotApplicable();
-        if (options.compression.has_value()) {
+        auto compression = http_response_compression_result::make_not_applicable();
+        if (options.compression_.has_value()) {
             if (const auto* selection = policy.selection()) {
-                compression = co_await applyResponseCompressionAsync(*selection,
-                    request.knownMethod(), response, *options.compression,
-                    options.blockingPool, services.worker());
+                compression = co_await apply_response_compression_async(*selection,
+                    request.known_method(), response, *options.compression_,
+                    options.blocking_pool_, services.worker());
             }
         }
-        if (control.terminal_stop != nullptr && control.terminal_stop->stopRequested()) {
+        if (control.terminal_stop_ != nullptr && control.terminal_stop_->stop_requested()) {
             co_return std::nullopt;
         }
         const auto step = recovery.advance(policy, request, response, compression);
-        if (step.action == buffered_response_recovery_action::ready) {
+        if (step.action_ == buffered_response_recovery_action::ready) {
             co_return prepared_application_response{
-                planBufferedHttpResponseWrite(request.knownMethod(), response), recovery.recovered()};
+                plan_buffered_http_response_write(request.known_method(), response), recovery.recovered()};
         }
-        if (step.action == buffered_response_recovery_action::handle_error) {
-            response = co_await routes.handleError(request, memory, *step.error, services);
+        if (step.action_ == buffered_response_recovery_action::handle_error) {
+            response = co_await routes_value.handle_error(request, memory, *step.error_, services);
         }
     }
 }

@@ -22,7 +22,7 @@ std::size_t checked_credit_capacity(const buffer_pool& pool, std::size_t input_c
 }  // namespace
 
 http3_datagram_channel::http3_datagram_channel(buffer_pool& pool,
-    WorkerNotification& acceptor_notification, std::pmr::memory_resource* resource,
+    ruvia::worker_notification& acceptor_notification, std::pmr::memory_resource* resource,
     std::size_t input_capacity, std::size_t output_window)
     : acceptor_owner_(std::this_thread::get_id()),
       pool_(pool),
@@ -44,11 +44,11 @@ http3_datagram_channel::~http3_datagram_channel() {
     }
 }
 
-void http3_datagram_channel::stage_worker(WorkerRuntimeContext& worker) {
+void http3_datagram_channel::stage_worker(worker_runtime_context& worker_value) {
     if (worker_notification_ || worker_started_.load(std::memory_order_acquire) || worker_closed()) {
         throw std::logic_error("HTTP/3 datagram worker already staged or retired");
     }
-    worker_notification_.emplace(worker);
+    worker_notification_.emplace(worker_value);
 }
 
 void http3_datagram_channel::worker_start() noexcept {
@@ -60,7 +60,7 @@ void http3_datagram_channel::worker_start() noexcept {
     worker_started_.store(true, std::memory_order_release);
 }
 
-WorkerNotification& http3_datagram_channel::worker_notification() noexcept {
+worker_notification& http3_datagram_channel::worker_notification() noexcept {
     if (!worker_notification_) {
         std::terminate();
     }
@@ -70,8 +70,8 @@ WorkerNotification& http3_datagram_channel::worker_notification() noexcept {
 bool http3_datagram_channel::acceptor_push(datagram&& packet) noexcept {
     require_acceptor();
     auto admission = input_lifecycle_.try_admit();
-    if (!admission || routed_input_ == input_.capacity() || !packet.storage || packet.size == 0 ||
-        packet.size > packet.storage.bytes().size() || packet.size > packet_capacity) {
+    if (!admission || routed_input_ == input_.capacity() || !packet.storage_ || packet.size_ == 0 ||
+        packet.size_ > packet.storage_.bytes().size() || packet.size_ > packet_capacity) {
         return false;
     }
     auto* slot = input_.prepare_push();
@@ -93,7 +93,7 @@ std::optional<http3_datagram_channel::datagram> http3_datagram_channel::acceptor
     }
     // Only the current holder rebinds. Queue publication itself never changes
     // sender failure/cancellation's owner-affine return destination.
-    packet.storage.set_return_callback({this, acceptor_output_return});
+    packet.storage_.set_return_callback({this, acceptor_output_return});
     return packet;
 }
 
@@ -102,8 +102,8 @@ void http3_datagram_channel::acceptor_poll() noexcept {
     const auto batch = credits_.front_batch(default_input_capacity);
     const auto reclaim = [this](auto span) noexcept {
         for (auto& returned : span) {
-            pool_.reclaim(std::move(returned.credit));
-            if (returned.output) {
+            pool_.reclaim(std::move(returned.credit_));
+            if (returned.output_) {
                 if (issued_output_ == 0) {
                     std::terminate();
                 }
@@ -116,8 +116,8 @@ void http3_datagram_channel::acceptor_poll() noexcept {
             }
         }
     };
-    reclaim(batch.first);
-    reclaim(batch.second);
+    reclaim(batch.first_);
+    reclaim(batch.second_);
     if (!batch.empty()) {
         credits_.pop(batch.size());
         notify_worker();
@@ -136,7 +136,7 @@ void http3_datagram_channel::acceptor_poll() noexcept {
         acceptor_close();
         datagram packet;
         while (input_.try_pop(packet)) {
-            pool_.reclaim(packet.storage.release_credit());
+            pool_.reclaim(packet.storage_.release_credit());
             --routed_input_;
         }
         buffer_lease lease;
@@ -181,7 +181,7 @@ std::optional<http3_datagram_channel::datagram_view> http3_datagram_channel::wor
             return std::nullopt;
         }
         datagram packet = std::move(*slot);
-        packet.storage.set_return_callback({this, worker_receive_return});
+        packet.storage_.set_return_callback({this, worker_receive_return});
         held_input_.emplace(std::move(packet));
     }
     return held_input_->view();
@@ -224,15 +224,15 @@ std::span<std::byte> http3_datagram_channel::worker_output_buffer() noexcept {
     return prepared_output_->bytes();
 }
 
-bool http3_datagram_channel::worker_send(std::span<const std::byte> bytes,
+bool http3_datagram_channel::worker_send(std::span<const std::byte> bytes_value,
     const udp::endpoint& local_destination, const udp::endpoint& peer) noexcept {
     require_worker();
-    if (!prepared_output_ || bytes.empty() || bytes.data() != prepared_output_->bytes().data() ||
-        bytes.size() > prepared_output_->bytes().size() || output_lifecycle_.stop_requested()) {
+    if (!prepared_output_ || bytes_value.empty() || bytes_value.data() != prepared_output_->bytes().data() ||
+        bytes_value.size() > prepared_output_->bytes().size() || output_lifecycle_.stop_requested()) {
         worker_cancel_output();
         return false;
     }
-    *output_slot_ = datagram{std::move(*prepared_output_), bytes.size(), local_destination, peer};
+    *output_slot_ = datagram{std::move(*prepared_output_), bytes_value.size(), local_destination, peer};
     prepared_output_.reset();
     output_slot_ = nullptr;
     ++submitted_output_;
@@ -291,8 +291,8 @@ void http3_datagram_channel::worker_stop() noexcept {
     }
     datagram packet;
     while (input_.try_pop(packet)) {
-        packet.storage.set_return_callback({this, worker_receive_return});
-        packet.storage.reset();
+        packet.storage_.set_return_callback({this, worker_receive_return});
+        packet.storage_.reset();
     }
     buffer_lease lease;
     while (available_output_.try_pop(lease)) {
@@ -347,12 +347,12 @@ std::error_code http3_datagram_channel::error() const noexcept {
     return acceptor_closed() ? error_ : std::error_code{};
 }
 
-void http3_datagram_channel::worker_receive_return(void* context, buffer_credit credit) noexcept {
-    static_cast<http3_datagram_channel*>(context)->return_worker_credit(std::move(credit), false);
+void http3_datagram_channel::worker_receive_return(void* context_value, buffer_credit credit) noexcept {
+    static_cast<http3_datagram_channel*>(context_value)->return_worker_credit(std::move(credit), false);
 }
 
-void http3_datagram_channel::worker_output_return(void* context, buffer_credit credit) noexcept {
-    static_cast<http3_datagram_channel*>(context)->return_worker_credit(std::move(credit), true);
+void http3_datagram_channel::worker_output_return(void* context_value, buffer_credit credit) noexcept {
+    static_cast<http3_datagram_channel*>(context_value)->return_worker_credit(std::move(credit), true);
 }
 
 void http3_datagram_channel::return_worker_credit(buffer_credit credit, bool output) noexcept {
@@ -363,8 +363,8 @@ void http3_datagram_channel::return_worker_credit(buffer_credit credit, bool out
     (void)acceptor_notification_.notify();
 }
 
-void http3_datagram_channel::acceptor_output_return(void* context, buffer_credit credit) noexcept {
-    auto& self = *static_cast<http3_datagram_channel*>(context);
+void http3_datagram_channel::acceptor_output_return(void* context_value, buffer_credit credit) noexcept {
+    auto& self = *static_cast<http3_datagram_channel*>(context_value);
     self.require_acceptor();
     self.pool_.reclaim(std::move(credit));
     if (self.issued_output_ == 0) {
@@ -376,8 +376,8 @@ void http3_datagram_channel::acceptor_output_return(void* context, buffer_credit
     (void)self.acceptor_notification_.notify();
 }
 
-void http3_datagram_channel::acceptor_pool_return(void* context, buffer_credit credit) noexcept {
-    auto& self = *static_cast<http3_datagram_channel*>(context);
+void http3_datagram_channel::acceptor_pool_return(void* context_value, buffer_credit credit) noexcept {
+    auto& self = *static_cast<http3_datagram_channel*>(context_value);
     self.require_acceptor();
     self.pool_.reclaim(std::move(credit));
 }
@@ -392,12 +392,12 @@ void http3_datagram_channel::replenish_output() noexcept {
         if (!slot) {
             break;
         }
-        auto lease = pool_.try_acquire({this, acceptor_pool_return});
-        if (!lease) {
+        auto lease_value = pool_.try_acquire({this, acceptor_pool_return});
+        if (!lease_value) {
             available_output_.cancel_push();
             break;
         }
-        *slot = std::move(*lease);
+        *slot = std::move(*lease_value);
         ++issued_output_;
         available_output_.commit_push();
         published = true;

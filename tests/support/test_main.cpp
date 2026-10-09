@@ -20,23 +20,23 @@ int main() {
 #endif
 
     using namespace ruvia::testing;
-    int totalFailures = 0;
-    int failedCases = 0;
-    std::size_t executedCases = 0;
+    int total_failures = 0;
+    int failed_cases = 0;
+    std::size_t executed_cases = 0;
     auto& cases = registry();
     const char* filter = std::getenv("RUVIA_TEST_FILTER");
-    const char* firstText = std::getenv("RUVIA_TEST_FIRST");
-    const char* lastText = std::getenv("RUVIA_TEST_LAST");
-    const auto first = firstText != nullptr
-                           ? static_cast<std::size_t>(std::strtoull(firstText, nullptr, 10))
+    const char* first_text = std::getenv("RUVIA_TEST_FIRST");
+    const char* last_text = std::getenv("RUVIA_TEST_LAST");
+    const auto first = first_text != nullptr
+                           ? static_cast<std::size_t>(std::strtoull(first_text, nullptr, 10))
                            : std::size_t{0};
-    const auto last = lastText != nullptr
-                          ? static_cast<std::size_t>(std::strtoull(lastText, nullptr, 10))
+    const auto last = last_text != nullptr
+                          ? static_cast<std::size_t>(std::strtoull(last_text, nullptr, 10))
                           : cases.size();
-    std::size_t caseIndex = 0;
+    std::size_t case_index = 0;
     for (auto& c : cases) {
-        if (caseIndex < first || caseIndex > last) {
-            ++caseIndex;
+        if (case_index < first || case_index > last) {
+            ++case_index;
             continue;
         }
         if (filter != nullptr) {
@@ -47,7 +47,7 @@ int main() {
                 const auto token = filters.substr(
                     begin, end == std::string_view::npos ? filters.size() - begin : end - begin);
                 if (!token.empty() &&
-                    std::string_view(c.name).find(token) != std::string_view::npos) {
+                    std::string_view(c.name_).find(token) != std::string_view::npos) {
                     matched = true;
                     break;
                 }
@@ -57,37 +57,37 @@ int main() {
                 begin = end + 1;
             }
             if (!matched) {
-                ++caseIndex;
+                ++case_index;
                 continue;
             }
         }
-        ++executedCases;
-        TestContext ctx;
-        ctx.current = c.name;
-        std::printf("[ RUN ] %s (#%zu)\n", c.name, caseIndex);
+        ++executed_cases;
+        test_context ctx;
+        ctx.current_ = c.name_;
+        std::printf("[ RUN ] %s (#%zu)\n", c.name_, case_index);
         std::fflush(stdout);
         try {
-            c.fn(ctx);
+            c.fn_(ctx);
         } catch (const std::exception& error) {
-            reportFailure(ctx, __FILE__, __LINE__, error.what());
+            report_failure(ctx, __FILE__, __LINE__, error.what());
         } catch (...) {
-            reportFailure(ctx, __FILE__, __LINE__, "unknown exception");
+            report_failure(ctx, __FILE__, __LINE__, "unknown exception");
         }
-        if (ctx.failures == 0) {
-            std::printf("[ ok ] %s\n", c.name);
+        if (ctx.failures_ == 0) {
+            std::printf("[ ok ] %s\n", c.name_);
         } else {
-            std::printf("[FAIL] %s (%d checks failed)\n", c.name, ctx.failures);
-            ++failedCases;
+            std::printf("[FAIL] %s (%d checks failed)\n", c.name_, ctx.failures_);
+            ++failed_cases;
         }
         std::fflush(stdout);
-        totalFailures += ctx.failures;
-        ++caseIndex;
+        total_failures += ctx.failures_;
+        ++case_index;
     }
-    if (executedCases == 0) {
+    if (executed_cases == 0) {
         std::fputs("No test cases were selected. Check RUVIA_TEST_FILTER, RUVIA_TEST_FIRST, and RUVIA_TEST_LAST.\n", stderr);
         return 1;
     }
-    std::printf("\n%zu tests, %d failed cases, %d failed checks\n", executedCases, failedCases,
-        totalFailures);
-    return totalFailures == 0 ? 0 : 1;
+    std::printf("\n%zu tests, %d failed cases, %d failed checks\n", executed_cases, failed_cases,
+        total_failures);
+    return total_failures == 0 ? 0 : 1;
 }

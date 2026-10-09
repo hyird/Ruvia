@@ -13,90 +13,90 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
-#include "ruvia/web/redis/RedisEntity.h"
-#include "ruvia/web/redis/RedisRepository.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/redis/redis_entity.h"
+#include "ruvia/web/redis/redis_repository.h"
 
 #include "backend_tls.h"
 
-RUVIA_REDIS_ENTITY(CachedUser, "users",
-    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::String),
+RUVIA_REDIS_ENTITY(cached_user, "users",
+    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string),
     RUVIA_REDIS_COLUMN(age, std::uint32_t));
 
-const ruvia::RedisRepositoryConfig userRedisConfig{
-    .prefix = "ruvia:example:users",
-    .indexes = {
-        {.field = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
-        {.field = "age", .kind = ruvia::RedisIndexKind::kNumeric},
+const ruvia::redis_repository_config user_redis_config{
+    .prefix_ = "ruvia:example:users",
+    .indexes_ = {
+        {.field_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
+        {.field_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
     },
 };
-RUVIA_MODEL(CreateCachedUser,
-    RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is required"),
+RUVIA_MODEL(create_cached_user,
+    RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"),
         RUVIA_MAX(64, "id is too long")),
-    RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is required"),
+    RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"),
         RUVIA_MAX(120, "name is too long")),
-    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
+    RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_MODEL(CachedUserResponse,
-    RUVIA_REQUIRED_FIELD(id, ruvia::String),
-    RUVIA_REQUIRED_FIELD(name, ruvia::String),
-    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32));
+RUVIA_MODEL(cached_user_response,
+    RUVIA_REQUIRED_FIELD(id, ruvia::string),
+    RUVIA_REQUIRED_FIELD(name, ruvia::string),
+    RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
 
-RUVIA_MODEL(CachedUsersResponse,
-    RUVIA_REQUIRED_FIELD(users, ruvia::Array<CachedUserResponse>));
+RUVIA_MODEL(cached_users_response,
+    RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
 
-class CachedUserController final : public ruvia::Controller<CachedUserController> {
+class cached_user_controller final : public ruvia::controller<cached_user_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/users")
     RUVIA_ROUTES_BEGIN
-    RUVIA_POST("", create, ruvia::JsonBody<CreateCachedUser>);
+    RUVIA_POST("", create, ruvia::json_body<create_cached_user>);
     RUVIA_GET("", adults);
     RUVIA_GET("/:id", find);
     RUVIA_ROUTES_END
 
 private:
-    static void fill(CachedUserResponse& response, const CachedUser& user) {
-        response.set<"id">(user.get<"id">().view());
-        response.set<"name">(user.get<"name">().view());
-        response.set<"age">(ruvia::UInt32{user.get<"age">()});
+    static void fill(cached_user_response& response, const cached_user& user_value) {
+        response.set<"id">(user_value.get<"id">().view());
+        response.set<"name">(user_value.get<"name">().view());
+        response.set<"age">(ruvia::uint32{user_value.get<"age">()});
     }
-    ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
-        const auto& request = c.req().validated<CreateCachedUser>();
-        CachedUser user(c.pool());
-        user.set<"id">(request.get<"id">().view());
-        user.set<"name">(request.get<"name">().view());
-        user.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
-        auto users = c.redis().getRepository<CachedUser>(userRedisConfig);
-        const auto result = co_await users.insert(user, {.ttl = std::chrono::hours(1)});
-        if (result.affected_entities() == 0) {
-            co_return c.error({.status = ruvia::http_status::kConflict, .message = "user already exists"});
+    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
+        const auto& request = c.req().validated<create_cached_user>();
+        cached_user user_value(c.pool());
+        user_value.set<"id">(request.get<"id">().view());
+        user_value.set<"name">(request.get<"name">().view());
+        user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
+        auto users = c.redis().get_repository<cached_user>(user_redis_config);
+        const auto result_value = co_await users.insert(user_value, {.ttl_ = std::chrono::hours(1)});
+        if (result_value.affected_entities() == 0) {
+            co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "user already exists"});
         }
-        CachedUserResponse response({.resource = c.arena()});
-        fill(response, user);
-        c.status(ruvia::http_status::kCreated);
+        cached_user_response response({.resource_ = c.arena()});
+        fill(response, user_value);
+        c.status(ruvia::http_status::created);
         co_return c.json(response);
     }
-    ruvia::Task<ruvia::HttpResponse> find(ruvia::Context& c) {
-        auto user = co_await c.redis().getRepository<CachedUser>(userRedisConfig).findOne({.where = CachedUser::field<"id">() == c.req().param("id").value_or("")});
-        if (!user) {
-            co_return c.error({.status = ruvia::http_status::kNotFound, .message = "user not found"});
+    ruvia::task<ruvia::http_response> find(ruvia::context& c) {
+        auto user_value = co_await c.redis().get_repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::field<"id">() == c.req().param("id").value_or("")});
+        if (!user_value) {
+            co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
-        CachedUserResponse response({.resource = c.arena()});
-        fill(response, *user);
+        cached_user_response response({.resource_ = c.arena()});
+        fill(response, *user_value);
         co_return c.json(response);
     }
-    ruvia::Task<ruvia::HttpResponse> adults(ruvia::Context& c) {
-        const ruvia::redis_find_options findOptions{
-            .where = CachedUser::field<"age">() >= 18,
-            .order = {{.field = "name", .direction = ruvia::redis_order_direction::ascending}},
-            .take = 20};
-        auto users = co_await c.redis().getRepository<CachedUser>(userRedisConfig).find(findOptions);
-        CachedUsersResponse response({.resource = c.arena()});
+    ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
+        const ruvia::redis_find_options find_options{
+            .where_ = cached_user::field<"age">() >= 18,
+            .order_ = {{.field_ = "name", .direction_ = ruvia::redis_order_direction::ascending}},
+            .take_ = 20};
+        auto users = co_await c.redis().get_repository<cached_user>(user_redis_config).find(find_options);
+        cached_users_response response({.resource_ = c.arena()});
         auto& output = response.ensure<"users">();
         for (const auto& user : users) {
-            auto& item = output.emplace_back(ruvia::ModelOptions{.resource = c.arena()});
+            auto& item = output.emplace_back(ruvia::model_options{.resource_ = c.arena()});
             fill(item, user);
         }
         co_return c.json(response);
@@ -104,43 +104,43 @@ private:
 };
 
 int main(int argc, char** argv) {
-    const bool createIndex = argc == 2 && std::string_view(argv[1]) == "--create-index";
+    const bool create_index = argc == 2 && std::string_view(argv[1]) == "--create-index";
     bool failed = false;
     auto& app = ruvia::app();
-    app.loadDotenv();
-    const example::environment env(&app.env());
-    ruvia::RedisConfig config;
-    config.tls = example::backend_tls("RUVIA_REDIS", env);
-    config.host = env.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
-    config.port = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
-    config.username = env.get("RUVIA_REDIS_USER").value_or("");
-    config.password = env.get("RUVIA_REDIS_PASSWORD").value_or("");
-    app.redis({.config = config})
-        .listen({.address = "127.0.0.1", .http = 8091})
-        .server({.worker_count = 1, .process_signal_handlers = ruvia::process_signal_handler_policy::install})
-        .onStart([createIndex, &failed] {
-            if (!createIndex) {
+    app.load_dotenv();
+    const example::environment env_value(&app.env());
+    ruvia::redis_config config;
+    config.tls_ = example::backend_tls("RUVIA_REDIS", env_value);
+    config.host_ = env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
+    config.port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
+    config.username_ = env_value.get("RUVIA_REDIS_USER").value_or("");
+    config.password_ = env_value.get("RUVIA_REDIS_PASSWORD").value_or("");
+    app.redis({.config_ = config})
+        .listen({.address_ = "127.0.0.1", .http_ = 8091})
+        .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+        .on_start([create_index, &failed] {
+            if (!create_index) {
                 return;
             }
             const auto workers = ruvia::app().workers();
             std::promise<void> completion;
-            auto result = completion.get_future();
-            const auto posted = workers.front().post([completion = std::move(completion)](ruvia::WebWorkerContext& worker) mutable -> ruvia::Task<void> {
+            auto result_value = completion.get_future();
+            const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
                 try {
-                    co_await worker.redis().getRepository<CachedUser>(userRedisConfig).createIndex();
+                    co_await worker_value.redis().get_repository<cached_user>(user_redis_config).create_index();
                     completion.set_value();
                 } catch (...) {
                     completion.set_exception(std::current_exception());
                 }
             });
-            if (posted != ruvia::PostStatus::kAccepted) {
+            if (posted != ruvia::post_status::accepted) {
                 failed = true;
             } else {
                 // Only the lifecycle caller blocks. Workers are ready before
-                // onStart; request admission stays closed until this returns.
+                // on_start; request admission stays closed until this returns.
                 // Abandoning an unstarted job destroys its promise and wakes get().
                 try {
-                    result.get();
+                    result_value.get();
                     std::cout << "Redis user index created.\n";
                 } catch (const std::exception& error) {
                     std::cerr << error.what() << '\n';
