@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <new>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -21,6 +22,33 @@ namespace detail {
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
 void task_frame_deallocate(void* pointer) noexcept;
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
+
+template <std::size_t t_alignment>
+[[nodiscard]] void* task_frame_allocate(std::size_t bytes_value) {
+    if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+        return ::operator new(bytes_value, std::align_val_t{t_alignment});
+    } else {
+        return task_frame_allocate(bytes_value);
+    }
+}
+
+template <std::size_t t_alignment>
+void task_frame_deallocate(void* pointer) noexcept {
+    if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+        ::operator delete(pointer, std::align_val_t{t_alignment});
+    } else {
+        task_frame_deallocate(pointer);
+    }
+}
+
+template <std::size_t t_alignment>
+void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
+    if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+        task_frame_deallocate<t_alignment>(pointer);
+    } else {
+        task_frame_deallocate_sized(pointer, bytes_value);
+    }
+}
 
 template <typename t_type>
 class task_promise;
@@ -182,13 +210,13 @@ public:
     task_promise() noexcept = default;
 
     static void* operator new(std::size_t size) {
-        return task_frame_allocate(size);
+        return task_frame_allocate<alignof(task_promise)>(size);
     }
     static void operator delete(void* pointer) noexcept {
-        task_frame_deallocate(pointer);
+        task_frame_deallocate<alignof(task_promise)>(pointer);
     }
     static void operator delete(void* pointer, std::size_t size) noexcept {
-        task_frame_deallocate_sized(pointer, size);
+        task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);
     }
 
     [[nodiscard]] task<t_type> get_return_object() noexcept;
@@ -230,13 +258,13 @@ class task_promise<void> final {
 public:
     task_promise() noexcept = default;
     static void* operator new(std::size_t size) {
-        return task_frame_allocate(size);
+        return task_frame_allocate<alignof(task_promise)>(size);
     }
     static void operator delete(void* pointer) noexcept {
-        task_frame_deallocate(pointer);
+        task_frame_deallocate<alignof(task_promise)>(pointer);
     }
     static void operator delete(void* pointer, std::size_t size) noexcept {
-        task_frame_deallocate_sized(pointer, size);
+        task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);
     }
 
     [[nodiscard]] task<void> get_return_object() noexcept;

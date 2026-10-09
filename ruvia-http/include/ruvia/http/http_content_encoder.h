@@ -18,6 +18,7 @@ public:
 // its input and appends to caller-owned output; it does not retain either view.
 // The PMR resource must outlive the stable-address encoder. Output can be cleared
 // between calls and remains valid after encoder destruction.
+// Empty input is valid, including repeated flushes; it does not end the stream.
 // Codec failures throw http_content_encoder_error; allocation exceptions retain
 // their original type when the codec returns through its C API. Brotli builds
 // that exit on internal OOM cannot be recovered by this boundary.

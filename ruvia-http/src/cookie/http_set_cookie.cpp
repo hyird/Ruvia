@@ -254,6 +254,8 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
             }
         } else if (detail::http_ascii_equals_ignore_case(attribute, "Secure")) {
             result.set(http_set_cookie_attribute::secure);
+        } else if (detail::http_ascii_equals_ignore_case(attribute, "Partitioned")) {
+            result.set(http_set_cookie_attribute::partitioned);
         }
         if (end == std::string_view::npos) {
             break;

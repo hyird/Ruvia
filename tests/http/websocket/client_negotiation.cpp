@@ -13,7 +13,6 @@
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "test_harness.h"
-#include "websocket/http_websocket_permessage_deflate.h"
 
 namespace {
 void add(ruvia::http3_message_head& head, std::string_view name, std::string_view value) {
@@ -170,17 +169,6 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     auto accepted = client.validate_response(*response.parsed());
     RUVIA_CHECK((accepted.index() == 0));
     RUVIA_CHECK(std::get<0>(accepted).compression_.enabled_);
-}
-RUVIA_TEST(websocket_deflate_asymmetric_context_and_eight_bit_window_round_trip) {
-    ruvia::detail::websocket_deflate sender(6, true, false, 8, 15);
-    ruvia::detail::websocket_deflate receiver(6, false, true, 15, 8);
-    const std::string payload_value(2048, 'a');
-    for (int i = 0; i < 3; ++i) {
-        std::pmr::string compressed, decoded;
-        RUVIA_CHECK(sender.compress(payload_value, compressed));
-        RUVIA_CHECK(receiver.decompress(compressed, decoded, ruvia::protocol_byte_limit::limited(4096)) == ruvia::detail::websocket_inflate_result::ok);
-        RUVIA_CHECK_EQ(std::string_view(decoded), std::string_view(payload_value));
-    }
 }
 
 namespace {

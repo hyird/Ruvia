@@ -117,8 +117,14 @@ public:
             r != websocket_inflate_result::ok) {
             return r;
         }
-        return inflate_chunk(
-            reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, message_limit);
+        if (const auto r = inflate_chunk(
+                reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, message_limit);
+            r != websocket_inflate_result::ok) {
+            return r;
+        }
+        // zlib reports bit 128 only at a complete DEFLATE block boundary.
+        // Consuming every input byte alone does not detect a truncated block.
+        return (inflate_.data_type & 128) != 0 ? websocket_inflate_result::ok : websocket_inflate_result::error;
     }
 
     // A trial that is not sent must not enter the peer's future dictionary.
@@ -149,12 +155,7 @@ private:
             inflate_.next_out = reinterpret_cast<Bytef*>(buffer);
             inflate_.avail_out = sizeof(buffer);
             const int status = inflate(&inflate_, Z_NO_FLUSH);
-            // RFC 7692 messages are Z_SYNC_FLUSH blocks with the four-byte
-            // marker removed. After restoring that marker, the raw stream does
-            // not terminate with BFINAL. Accepting Z_STREAM_END lets a peer
-            // submit an independently terminated DEFLATE stream and makes zlib
-            // silently ignore any bytes that follow it.
-            if (status == Z_STREAM_END || (status != Z_OK && status != Z_BUF_ERROR)) {
+            if (status != Z_STREAM_END && status != Z_OK && status != Z_BUF_ERROR) {
                 return websocket_inflate_result::error;
             }
             const auto produced = sizeof(buffer) - inflate_.avail_out;
@@ -162,6 +163,12 @@ private:
                 return websocket_inflate_result::too_large;
             }
             out.append(buffer, produced);
+            // RFC 7692 permits BFINAL=1 followed by another DEFLATE stream.
+            // Preserve the LZ77 window across streams, including takeover
+            // history, while discarding the terminated stream's padding bits.
+            if (status == Z_STREAM_END && inflateResetKeep(&inflate_) != Z_OK) {
+                return websocket_inflate_result::error;
+            }
             if (inflate_.avail_out != 0 && inflate_.avail_in == 0 && supplied == size) {
                 break;
             }

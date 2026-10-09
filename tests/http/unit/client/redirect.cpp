@@ -1,4 +1,3 @@
-#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
@@ -8,8 +7,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_client_redirect.h"
 
-#include "client/http_client_access.h"
-#include "http_header_access.h"
+#include "http_client_response_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -173,11 +171,9 @@ RUVIA_TEST(http_client_redirect_request_plan_owns_preserved_method) {
 }
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {
-    auto head = ruvia::detail::http_client_response_head_access::make(ruvia::http_status::found,
-        ruvia::http_protocol_version::http11, std::pmr::get_default_resource());
-    auto& headers = ruvia::detail::http_client_response_head_access::headers(head);
-    headers.emplace_back(ruvia::detail::http_header_access::make(
-        "Location", "", std::pmr::get_default_resource()));
+    auto parsed = http_client_response_test::parse_response(
+        "GET", "HTTP/1.1 302 Found\r\nLocation:\r\nContent-Length: 0");
+    const auto& head = parsed.head_;
 
     const auto empty = lookup_unique_http_client_response_header(head, "location");
     RUVIA_CHECK(empty.absent() == nullptr);
@@ -191,9 +187,9 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
     RUVIA_CHECK(missing.found() == nullptr);
     RUVIA_CHECK(missing.repeated() == nullptr);
 
-    headers.emplace_back(ruvia::detail::http_header_access::make(
-        "LOCATION", "/second", std::pmr::get_default_resource()));
-    const auto repeated = lookup_unique_http_client_response_header(head, "Location");
+    auto repeated_parsed = http_client_response_test::parse_response(
+        "GET", "HTTP/1.1 302 Found\r\nLocation:\r\nLOCATION: /second\r\nContent-Length: 0");
+    const auto repeated = lookup_unique_http_client_response_header(repeated_parsed.head_, "Location");
     RUVIA_CHECK(repeated.absent() == nullptr);
     RUVIA_CHECK(repeated.found() == nullptr);
     RUVIA_CHECK(repeated.repeated() != nullptr);

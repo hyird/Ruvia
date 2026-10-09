@@ -234,6 +234,9 @@ void quic_connection_state::latch_close_reason(quic_close_reason_view reason) {
     if (close_reason_latched_) {
         return;
     }
+    if (reason.code_ > NGTCP2_MAX_VARINT) {
+        throw quic_error(quic_error_code::invalid_configuration, "QUIC close code exceeds varint range");
+    }
     if (reason.reason_.size() > 1024) {
         throw quic_error(quic_error_code::resource_limit, "QUIC close reason exceeds its bound");
     }

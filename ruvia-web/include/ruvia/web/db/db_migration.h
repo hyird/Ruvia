@@ -45,6 +45,8 @@ struct db_migration_options final {
 // call -- libpq's extended protocol refuses multiple commands and the MariaDB
 // connection never enables CLIENT_MULTI_STATEMENTS -- so a schema change that
 // needs several statements is several migrations. A trailing ';' is allowed.
+// Comments follow the selected backend's syntax; PostgreSQL line comments end
+// at either CR or LF.
 //
 // `id` identifies an applied migration for the rest of the schema's life. It is
 // compared with the migrations table's collation, so ids that differ only in

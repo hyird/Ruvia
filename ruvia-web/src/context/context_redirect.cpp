@@ -104,10 +104,11 @@ struct redirect_authority_span {
 }
 
 [[nodiscard]] bool encode_uri_keeps_byte(unsigned char ch, std::string_view location,
-    std::size_t index, redirect_authority_span authority) noexcept;
+    std::size_t index, redirect_authority_span authority, bool& fragment_seen) noexcept;
 
 [[nodiscard]] bool redirect_location_needs_encoding(std::string_view location) noexcept {
     const auto authority = find_redirect_authority(location);
+    bool fragment_seen = false;
     for (std::size_t i = 0; i < location.size(); ++i) {
         const auto ch = static_cast<unsigned char>(location[i]);
         if (ch == '%') {
@@ -117,7 +118,7 @@ struct redirect_authority_span {
             i += 2;
             continue;
         }
-        if (!encode_uri_keeps_byte(ch, location, i, authority)) {
+        if (!encode_uri_keeps_byte(ch, location, i, authority, fragment_seen)) {
             return true;
         }
     }
@@ -125,7 +126,7 @@ struct redirect_authority_span {
 }
 
 [[nodiscard]] bool encode_uri_keeps_byte(unsigned char ch, std::string_view location,
-    std::size_t index, redirect_authority_span authority) noexcept {
+    std::size_t index, redirect_authority_span authority, bool& fragment_seen) noexcept {
     if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
         return true;
     }
@@ -154,8 +155,12 @@ struct redirect_authority_span {
         case '\'':
         case '(':
         case ')':
-        case '#':
             return true;
+        case '#': {
+            const bool keeps_separator = !fragment_seen;
+            fragment_seen = true;
+            return keeps_separator;
+        }
         default:
             return false;
     }
@@ -172,6 +177,7 @@ void append_percent_encoded_byte(std::pmr::string& output, unsigned char ch) {
     std::pmr::string encoded(resource);
     encoded.reserve(location.size());
     const auto authority = find_redirect_authority(location);
+    bool fragment_seen = false;
     for (std::size_t i = 0; i < location.size(); ++i) {
         const auto ch = static_cast<unsigned char>(location[i]);
         // Pass an already well-formed percent-escape (%HH) through verbatim. The
@@ -189,7 +195,7 @@ void append_percent_encoded_byte(std::pmr::string& output, unsigned char ch) {
             i += 2;
             continue;
         }
-        if (encode_uri_keeps_byte(ch, location, i, authority)) {
+        if (encode_uri_keeps_byte(ch, location, i, authority, fragment_seen)) {
             encoded.push_back(static_cast<char>(ch));
             continue;
         }

@@ -12,6 +12,11 @@ class task_scope;
 
 // task is a structured, lazy coroutine owner. A cold task may be discarded and
 // a completed task may be destroyed, but a started task must run to completion.
+// Frame allocation happens when the coroutine is called; allocation failure
+// throws std::bad_alloc before a task is returned.
+// Over-aligned result types are supported. GCC 13/14 can misalign over-aligned
+// coroutine locals independently of the promise allocator; keep such locals in
+// separately allocated, owned storage rather than directly in the frame.
 // Cancellation is cooperative: request it through the owning operation/scope
 // and then await or join the task. Destroying a suspended frame would invalidate
 // every external await registration that borrows it, so that contract violation

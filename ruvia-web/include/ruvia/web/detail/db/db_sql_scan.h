@@ -77,9 +77,9 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] constexpr std::size_t skip_sql_line_comment(
-    std::string_view sql, std::size_t start) noexcept {
+    std::string_view sql, std::size_t start, bool carriage_return_ends_comment) noexcept {
     auto cursor_value = start;
-    while (cursor_value < sql.size() && sql[cursor_value] != '\n') {
+    while (cursor_value < sql.size() && sql[cursor_value] != '\n' && (!carriage_return_ends_comment || sql[cursor_value] != '\r')) {
         ++cursor_value;
     }
     return cursor_value < sql.size() ? cursor_value + 1 : sql.size();
@@ -134,14 +134,14 @@ namespace ruvia::detail {
         case '#':
             // MariaDB's second line-comment introducer. PostgreSQL has no '#'
             // comment and uses skip_postgresql_sql_atom() instead.
-            return skip_sql_line_comment(sql, index + 1);
+            return skip_sql_line_comment(sql, index + 1, false);
         case '-':
             // MySQL/MariaDB accept "--" as a line-comment introducer only when
             // the second dash is followed by whitespace or a control byte.
             // Otherwise expressions such as "balance--1" and placeholders such
             // as "--?" stay statement-level SQL.
             if (is_mariadb_double_dash_comment(sql, index)) {
-                return skip_sql_line_comment(sql, index + 2);
+                return skip_sql_line_comment(sql, index + 2, false);
             }
             return index + 1;
         case '/':
@@ -248,7 +248,7 @@ namespace ruvia::detail {
             return skip_sql_quoted_run(sql, index, '`', false);
         case '-':
             if (index + 1 < size && sql[index + 1] == '-') {
-                return skip_sql_line_comment(sql, index + 2);
+                return skip_sql_line_comment(sql, index + 2, true);
             }
             return index + 1;
         case '/':

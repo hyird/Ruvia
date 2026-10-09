@@ -34,6 +34,11 @@ bool split_request_path_segment(
     }
     if (path.front() == '/') {
         path.remove_prefix(1);
+        if (path.empty()) {
+            segment = {};
+            rest = {};
+            return false;
+        }
     }
 
     const auto slash = path.find('/');

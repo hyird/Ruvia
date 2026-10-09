@@ -109,6 +109,44 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }
 
+RUVIA_TEST(ws_public_compression_accepts_final_blocks_and_preserves_required_history) {
+    for (const bool no_takeover : {false, true}) {
+        mask_source mask;
+        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        // RFC 7692 section 7.2.3.4: BFINAL=1, padding, then an empty block.
+        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x08\xf3\x48\xcd\xc9\xc9\x07\x00\x00", 10)) == websocket_feed_status::accepted);
+        auto event = receiver.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload() == "Hello");
+        // Two terminated streams within one message share their LZ77 history
+        // even when context takeover between messages is disabled.
+        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x0c\xf3\x48\xcd\xc9\xc9\x07\x00\xf3\x00\x11\x00\x00", 14)) == websocket_feed_status::accepted);
+        event = receiver.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload() == "HelloHello");
+        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x01\x00", 3)) == websocket_feed_status::accepted);
+        event = receiver.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload().empty());
+        // This message refers back to the preceding message's dictionary.
+        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x05\xf2\x00\x11\x00\x00", 7)) == websocket_feed_status::accepted);
+        event = receiver.next_event();
+        if (no_takeover) {
+            RUVIA_CHECK(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
+        } else {
+            RUVIA_CHECK(event && event->message() && event->message()->payload() == "Hello");
+        }
+    }
+}
+
+RUVIA_TEST(ws_public_compression_rejects_incomplete_empty_block_headers) {
+    for (const auto wire : {std::string_view("\xc1\x00", 2), std::string_view("\xc1\x02\x03\x00", 4)}) {
+        mask_source mask;
+        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+        const auto event = receiver.next_event();
+        RUVIA_CHECK(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
+        RUVIA_CHECK(receiver.submit_frame(websocket_opcode::text, "after-error") == websocket_frame_submit_status::not_open);
+    }
+}
+
 RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     mask_source mask;
     auto sender = client(mask);
@@ -506,7 +544,7 @@ RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
     RUVIA_CHECK_EQ(replaced_memory.allocations_, replaced_memory.deallocations_);
 }
 
-RUVIA_TEST(ws_public_driver_implementation_lifetime_and_construction_failures) {
+RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
     counting_resource memory;
     {
         websocket_connection unused({.resource_ = &memory});

@@ -335,6 +335,8 @@ public:
     // Remove a header set by an earlier step. header(key, std::nullopt) meant
     // deletion; removal now has its own named entry point.
     void remove_header(std::string_view key);
+    // Replace cookies with the same name, Domain/Path scope, and Partitioned
+    // state; partitioned and unpartitioned cookies may coexist.
     void set_cookie(const set_cookie_plan& plan);
     // Copy the source's application headers with RFC-aware append and cookie semantics.
     // Assignment preserves the destination Content-Type.
@@ -399,10 +401,10 @@ private:
     void upsert_set_cookie_header_validated(std::string_view value);
     [[nodiscard]] http_response_header* find_set_cookie_header(std::string_view wire_prefix,
         std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain) noexcept;
+        std::string_view domain, bool partitioned) noexcept;
     void erase_later_set_cookie_headers(http_response_header& retained,
         std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain) noexcept;
+        std::string_view domain, bool partitioned) noexcept;
     [[nodiscard]] http_response_header& collapse_response_headers(
         http_response_header& retained, std::uint32_t known_bit) noexcept;
     bool remove_header_validated(std::string_view key, std::uint32_t known_bit) noexcept;

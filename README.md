@@ -15,6 +15,11 @@ Windows builds use MSVC with static dependencies and runtime.
 The three Ruvia libraries are static archives; Linux executables also link their
 runtime libraries statically.
 Result-returning APIs use C++20 `std::variant` value and error alternatives.
+Coroutines use `ruvia::task<T>`. With GCC 13/14, keep over-aligned coroutine locals
+in separately allocated, owned storage: the compiler can misalign objects stored
+directly in coroutine frames.
+Plain TCP response writes yield under socket backpressure instead of blocking
+the connection's worker.
 Web code targets the OpenSSL 4 API with deprecated interfaces disabled. Crypto
 operations use provider-based EVP APIs; no older OpenSSL compatibility path is built.
 
@@ -74,6 +79,32 @@ Ordinary buffered `RUVIA_GET` routes also handle HEAD by default. An explicit
 `RUVIA_HEAD` match takes precedence; otherwise the GET handler and middleware
 receive the original HEAD request, and the response writer suppresses its body.
 Streaming, SSE, and websocket endpoints require an explicit HEAD route.
+Parameterized routes match with or without a single trailing slash, regardless
+of whether the route declaration includes that slash.
+Incremental HTTP content encoding accepts empty flushes without ending the stream;
+subsequent writes and `finish()` remain valid.
+
+CONNECT tunnels support independent send and receive half-closes: a peer FIN
+ends reads without preventing further writes; `finish()` closes only the local
+send direction. HTTP/3 tunnel input uses bounded backpressure while the receiver
+consumes buffered data. See [tunnels.cpp](examples/web/tunnels.cpp).
+
+Redirect `Location` values preserve existing `%HH` escapes and the first `#`
+fragment separator; subsequent `#` bytes are encoded as `%23`.
+
+File responses require a matching strong ETag to honor `If-Range`; a
+`Last-Modified` date cannot authorize a partial file response.
+
+Response cookie updates preserve partitioned and unpartitioned cookies as
+distinct storage keys, even when their names and Domain/Path scopes match.
+
+WebSocket `permessage-deflate` accepts the final DEFLATE blocks permitted by
+[RFC 7692](https://www.rfc-editor.org/rfc/rfc7692.html#section-7.2.1), preserving
+the required dictionary history. Truncated compressed messages close with
+protocol error 1002.
+
+QUIC close error codes are limited to `2^62 - 1`; an out-of-range first close
+throws `quic_error` with `invalid_configuration` without changing the connection state.
 
 Enable `RUVIA_BUILD_EXAMPLES=ON`, then build with
 `cmake --build build --config Release --target ruvia_examples_web "-j$(nproc)"`.

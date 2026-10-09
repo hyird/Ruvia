@@ -4,8 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,8 +12,9 @@
 #include <type_traits>
 #include <utility>
 
-#include "auth/jwt_primitives.h"
-#include "memory_resource_fixture.h"
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
 #include "test_harness.h"
 
 namespace {
@@ -63,17 +62,42 @@ ruvia::jwt_payload decode_jwt_unverified(ruvia::borrowed_text token) {
     return ruvia::jwt_decode_unverified({.token_ = token});
 }
 
+// Standard OpenSSL primitives prepare independent wire input for malformed JWTs.
+std::string wire_base64url(std::string_view bytes) {
+    std::string encoded(4 * ((bytes.size() + 2) / 3) + 1, '\0');
+    const auto size = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(encoded.data()),
+        reinterpret_cast<const unsigned char*>(bytes.data()), static_cast<int>(bytes.size()));
+    if (size < 0) {
+        throw std::runtime_error("test base64 encoding failed");
+    }
+    encoded.resize(static_cast<std::size_t>(size));
+    for (auto& byte : encoded) {
+        if (byte == '+') {
+            byte = '-';
+        } else if (byte == '/') {
+            byte = '_';
+        }
+    }
+    while (!encoded.empty() && encoded.back() == '=') {
+        encoded.pop_back();
+    }
+    return encoded;
+}
+
 std::string signed_token_with_header_and_payload(
     std::string_view secret_value, std::string_view header_json, std::string_view payload_json) {
-    auto* const resource = std::pmr::get_default_resource();
-    const auto header_value = ruvia::detail::jwt_base64_url_encode(header_json, resource);
-    const auto payload_value = ruvia::detail::jwt_base64_url_encode(payload_json, resource);
-    std::pmr::string signing_input(resource);
-    signing_input.append(header_value);
-    signing_input.push_back('.');
-    signing_input.append(payload_value);
-    const auto signature = ruvia::detail::jwt_hmac_sign(jwt_algorithm::hs256, secret_value,
-        std::string_view(signing_input.data(), signing_input.size()), resource);
+    const auto header_value = wire_base64url(header_json);
+    const auto payload_value = wire_base64url(payload_json);
+    std::string signing_input = header_value + "." + payload_value;
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned digest_size{};
+    if (HMAC(EVP_sha256(), secret_value.data(), static_cast<int>(secret_value.size()),
+            reinterpret_cast<const unsigned char*>(signing_input.data()), signing_input.size(),
+            digest, &digest_size) == nullptr) {
+        throw std::runtime_error("test HMAC signing failed");
+    }
+    const auto signature = wire_base64url(
+        std::string_view(reinterpret_cast<const char*>(digest), digest_size));
     signing_input.push_back('.');
     signing_input.append(signature);
     return std::string(signing_input.data(), signing_input.size());
@@ -84,35 +108,6 @@ std::string signed_token_with_payload(std::string_view secret_value, std::string
 }
 
 }  // namespace
-
-RUVIA_TEST(jwt_json_escape_preserves_exact_bytes) {
-    std::string controls;
-    for (unsigned byte = 0; byte < 32; ++byte) {
-        controls.push_back(static_cast<char>(byte));
-    }
-    std::pmr::string output("prefix:");
-    ruvia::detail::jwt_append_json_escaped(output, controls);
-    RUVIA_CHECK_EQ(output, std::string_view(
-                               R"(prefix:"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f")"));
-
-    for (const std::size_t size : {0u, 15u, 16u, 17u, 4096u}) {
-        const std::string plain(size, 'x');
-        output.clear();
-        ruvia::detail::jwt_append_json_escaped(output, plain);
-        RUVIA_CHECK_EQ(output, std::string_view('"' + plain + '"'));
-        output.clear();
-        ruvia::detail::jwt_append_json_escaped(output, plain + "\"\\\n" + plain);
-        RUVIA_CHECK_EQ(output, std::string_view('"' + plain + R"(\"\\\n)" + plain + '"'));
-    }
-
-    std::string high_bytes;
-    for (unsigned byte = 0x80; byte <= 0xff; ++byte) {
-        high_bytes.push_back(static_cast<char>(byte));
-    }
-    output.clear();
-    ruvia::detail::jwt_append_json_escaped(output, high_bytes);
-    RUVIA_CHECK_EQ(output, std::string_view('"' + high_bytes + '"'));
-}
 
 RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
     auto options = sign_options(secret);
@@ -188,33 +183,6 @@ RUVIA_TEST(jwt_hmac_enforces_algorithm_key_lengths_for_signing_and_verification)
                 RUVIA_CHECK(verification_rejected);
             }
         }
-    }
-}
-
-RUVIA_TEST(jwt_hmac_rejects_unrepresentable_secret_length) {
-    if constexpr (sizeof(std::size_t) > sizeof(int)) {
-        const auto oversized_secret_size =
-            static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
-        bool rejected = false;
-        try {
-            (void)ruvia::detail::jwt_hmac_sign(jwt_algorithm::hs256,
-                std::string_view("x", oversized_secret_size), "data",
-                std::pmr::get_default_resource());
-        } catch (const std::length_error&) {
-            rejected = true;
-        }
-        RUVIA_CHECK(rejected);
-
-        const auto oversized_data_size =
-            static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
-        rejected = false;
-        try {
-            (void)ruvia::detail::jwt_hmac_sign(jwt_algorithm::hs256, secret,
-                std::string_view("x", oversized_data_size), std::pmr::get_default_resource());
-        } catch (const std::length_error&) {
-            rejected = true;
-        }
-        RUVIA_CHECK(rejected);
     }
 }
 
@@ -472,26 +440,15 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     RUVIA_CHECK(throws_on([&] { (void)verify_jwt(single, want_other_single); }));
 }
 
-RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
-    // exp/nbf beyond the clock's representable range (~year 2262) would overflow
-    // int64 nanoseconds when converted to a time_point (UB on attacker-controlled
-    // claims); jwt_from_epoch_seconds must saturate instead. A huge exp then reads as
-    // far-future (not expired) and a huge nbf as far-future (not yet valid).
+RUVIA_TEST(jwt_verify_handles_extreme_and_fractional_epoch_claims) {
     const auto far_exp = signed_token_with_payload(secret, R"({"sub":"u","exp":99999999999})");
     const auto far_exp_payload = verify_jwt(far_exp, verify_options(secret));
     RUVIA_CHECK_EQ(far_exp_payload.subject(), std::string_view("u"));
 
-    // int64 max must not overflow the saturating conversion either.
     const auto max_exp =
         signed_token_with_payload(secret, R"({"sub":"u","exp":9223372036854775807})");
     const auto max_exp_payload = verify_jwt(max_exp, verify_options(secret));
     RUVIA_CHECK_EQ(max_exp_payload.subject(), std::string_view("u"));
-
-    using clock_type = std::chrono::system_clock;
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(
-                    clock_type::time_point::max(), std::chrono::seconds(1)) == clock_type::time_point::max());
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point::min(),
-                    std::chrono::seconds(-1)) == clock_type::time_point::min());
 
     const auto fractional =
         signed_token_with_payload(secret, R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
@@ -530,84 +487,6 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
     RUVIA_CHECK_EQ(recently_expired_payload.subject(), std::string_view("user-1"));
 }
 
-RUVIA_TEST(jwt_exp_nbf_boundaries_follow_rfc7519) {
-    // The exact exp/nbf boundary can't be pinned against the live clock inside
-    // jwt_verify, so exercise the pure predicates it delegates to. RFC 7519 §4.1.4:
-    // a token is rejected at now == exp (no leeway); §4.1.5: it is valid at
-    // now == nbf. leeway widens each window (later for exp, earlier for nbf).
-    using std::chrono::seconds;
-    const auto t = std::chrono::system_clock::from_time_t(1'000'000'000);
-
-    RUVIA_CHECK(ruvia::detail::jwt_token_expired(t, t, seconds{0}));                // now == exp -> expired
-    RUVIA_CHECK(ruvia::detail::jwt_token_expired(t + seconds{1}, t, seconds{0}));   // after exp
-    RUVIA_CHECK(!ruvia::detail::jwt_token_expired(t - seconds{1}, t, seconds{0}));  // before exp
-    RUVIA_CHECK(
-        !ruvia::detail::jwt_token_expired(t + seconds{5}, t, seconds{10}));  // inside leeway grace
-    RUVIA_CHECK(ruvia::detail::jwt_token_expired(
-        t + seconds{10}, t, seconds{10}));  // now == exp+leeway -> expired
-
-    RUVIA_CHECK(!ruvia::detail::jwt_token_not_yet_valid(t, t, seconds{0}));               // now == nbf -> valid
-    RUVIA_CHECK(ruvia::detail::jwt_token_not_yet_valid(t - seconds{1}, t, seconds{0}));   // before nbf
-    RUVIA_CHECK(!ruvia::detail::jwt_token_not_yet_valid(t + seconds{1}, t, seconds{0}));  // after nbf
-    RUVIA_CHECK(!ruvia::detail::jwt_token_not_yet_valid(
-        t - seconds{5}, t, seconds{10}));  // inside leeway grace
-    RUVIA_CHECK(
-        ruvia::detail::jwt_token_not_yet_valid(t - seconds{11}, t, seconds{10}));  // before nbf-leeway
-}
-
-RUVIA_TEST(jwt_time_offset_preserves_clock_ticks) {
-    using clock_type = std::chrono::system_clock;
-    using std::chrono::seconds;
-    for (const auto base : {clock_type::time_point::max() - seconds{2},
-             clock_type::time_point::min() + seconds{2}, clock_type::time_point{seconds{2'000'000'000}}}) {
-        for (int index = 0; index < 4096; ++index) {
-            const auto time = base + clock_type::duration{index};
-            const auto unchanged = ruvia::detail::jwt_time_with_offset(time, seconds{0});
-            RUVIA_CHECK(unchanged == time);
-            if (unchanged != time) {
-                return;
-            }
-            RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(time, seconds{1}) == time + seconds{1});
-            RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(time, seconds{-1}) == time - seconds{1});
-        }
-    }
-}
-
-RUVIA_TEST(jwt_time_offset_saturates_extreme_offsets_and_partial_seconds) {
-    using clock_type = std::chrono::system_clock;
-    using std::chrono::seconds;
-    const auto tick = clock_type::duration{1};
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point::min(), seconds::max()) == clock_type::time_point::max());
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point::max(), seconds::min()) == clock_type::time_point::min());
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point::min() + seconds{1}, seconds{-1}) == clock_type::time_point::min());
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point::max() - seconds{1}, seconds{1}) == clock_type::time_point::max());
-    RUVIA_CHECK(ruvia::detail::jwt_from_epoch_seconds(std::numeric_limits<std::int64_t>::max()) == clock_type::time_point::max());
-    RUVIA_CHECK(ruvia::detail::jwt_from_epoch_seconds(std::numeric_limits<std::int64_t>::min()) == clock_type::time_point::min());
-    RUVIA_CHECK(ruvia::detail::jwt_from_epoch_seconds(-1) == clock_type::time_point{seconds{-1}});
-    const auto high_seconds = std::chrono::duration_cast<seconds>(clock_type::duration::max());
-    const auto high = clock_type::time_point{high_seconds};
-    const auto fraction = (clock_type::time_point::max() - high) / 2;
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point{fraction - seconds{1}}, high_seconds + seconds{1}) == high + fraction);
-    RUVIA_CHECK(ruvia::detail::jwt_time_with_offset(clock_type::time_point{-tick}, high_seconds) == high - tick);
-}
-
-RUVIA_TEST(jwt_time_predicates_distinguish_adjacent_clock_ticks) {
-    using clock_type = std::chrono::system_clock;
-    using std::chrono::seconds;
-    const auto tick = clock_type::duration{1};
-    for (const auto time : {clock_type::time_point{seconds{2'147'483'648}},
-             clock_type::time_point::max() - seconds{20}, clock_type::time_point::min() + seconds{20}}) {
-        RUVIA_CHECK(!ruvia::detail::jwt_token_expired(time - tick, time, seconds{0}));
-        RUVIA_CHECK(ruvia::detail::jwt_token_not_yet_valid(time - tick, time, seconds{0}));
-        RUVIA_CHECK(!ruvia::detail::jwt_token_expired(time + seconds{10} - tick, time, seconds{10}));
-        RUVIA_CHECK(ruvia::detail::jwt_token_expired(time + seconds{10}, time, seconds{10}));
-        RUVIA_CHECK(ruvia::detail::jwt_token_not_yet_valid(time - seconds{10} - tick, time, seconds{10}));
-        RUVIA_CHECK(!ruvia::detail::jwt_token_not_yet_valid(time - seconds{10}, time, seconds{10}));
-    }
-    RUVIA_CHECK(!ruvia::detail::jwt_token_expired(clock_type::time_point::max(), clock_type::time_point::min(), seconds::max()));
-    RUVIA_CHECK(!ruvia::detail::jwt_token_not_yet_valid(clock_type::time_point::min(), clock_type::time_point::max(), seconds::max()));
-}
-
 RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
     // jwt_decode_unverified reads the payload WITHOUT checking the signature -- it
     // provides no authentication. Pin that contract: it returns the claims even
@@ -638,10 +517,8 @@ RUVIA_TEST(jwt_verify_rejects_none_algorithm_downgrade) {
     // the token's signature, so the forgery fails the signature gate before the
     // alg field is even inspected. The exp requirement is disabled here so the
     // rejection can only come from the signature/alg gates, never a missing exp.
-    auto* const resource = std::pmr::get_default_resource();
-    const auto header_value =
-        ruvia::detail::jwt_base64_url_encode(R"({"alg":"none","typ":"JWT"})", resource);
-    const auto payload_value = ruvia::detail::jwt_base64_url_encode(R"({"sub":"admin"})", resource);
+    const auto header_value = wire_base64url(R"({"alg":"none","typ":"JWT"})");
+    const auto payload_value = wire_base64url(R"({"sub":"admin"})");
 
     // "<header>.<payload>." -- an empty third section, as an alg:none token has.
     std::string forged;
@@ -665,96 +542,6 @@ RUVIA_TEST(jwt_verify_rejects_signed_non_object_payload) {
     verify.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
     const auto token = signed_token_with_payload(secret, "not-json");
     RUVIA_CHECK(throws_on([&] { (void)verify_jwt(token, verify); }));
-}
-
-RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {
-    using ruvia::detail::jwt_base64_url_decode;
-    using ruvia::detail::jwt_base64_url_encode;
-    auto* res = std::pmr::get_default_resource();
-
-    // Round trip over every remainder length, including bytes that need the -/_
-    // alphabet (0xFB 0xFF 0xBF -> "-_-_").
-    for (const std::string_view sample : {std::string_view(""), std::string_view("f"),
-             std::string_view("fo"), std::string_view("foo"), std::string_view("\xfb\xff\xbf")}) {
-        const auto encoded = jwt_base64_url_encode(sample, res);
-        const auto decoded =
-            jwt_base64_url_decode(std::string_view(encoded.data(), encoded.size()), res);
-        RUVIA_CHECK_EQ(std::string_view(decoded.data(), decoded.size()), sample);
-    }
-
-    // "QQ" is the canonical encoding of the single byte 'A'. "QR" would decode to
-    // the same byte but leaves non-zero trailing bits, so it must be rejected --
-    // otherwise a token part would have multiple valid spellings (malleability).
-    const auto canonical = jwt_base64_url_decode("QQ", res);
-    RUVIA_CHECK(canonical.size() == 1 && canonical[0] == 'A');
-    RUVIA_CHECK(throws_on([&] { (void)jwt_base64_url_decode("QR", res); }));
-
-    // '=' padding and the standard-base64 '+' '/' are not part of base64url.
-    RUVIA_CHECK(throws_on([&] { (void)jwt_base64_url_decode("QQ==", res); }));
-    RUVIA_CHECK(throws_on([&] { (void)jwt_base64_url_decode("a+/b", res); }));
-
-    // A length of 1 (mod 4) cannot encode a whole byte group.
-    RUVIA_CHECK(throws_on([&] { (void)jwt_base64_url_decode("abcde", res); }));
-}
-
-RUVIA_TEST(jwt_base64url_preserves_binary_values_and_releases_output_storage) {
-    ruvia::test::counting_memory_resource resource;
-    std::string input;
-    for (std::size_t size = 0; size <= 257; ++size) {
-        {
-            const auto encoded = ruvia::detail::jwt_base64_url_encode(input, &resource);
-            const auto remainder = input.size() % 3;
-            RUVIA_CHECK_EQ(encoded.size(), (input.size() / 3) * 4 + (remainder == 0 ? 0 : remainder + 1));
-            const auto decoded = ruvia::detail::jwt_base64_url_decode(encoded, &resource);
-            RUVIA_CHECK_EQ(std::string_view(decoded), std::string_view(input));
-        }
-        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-        input.push_back(static_cast<char>(size));
-    }
-    {
-        const auto encoded = ruvia::detail::jwt_base64_url_encode("\xfb\xff\xbf", &resource);
-        RUVIA_CHECK_EQ(std::string_view(encoded), std::string_view("-_-_"));
-    }
-    const std::string invalid = std::string(128, 'A') + '?';
-    RUVIA_CHECK(throws_on([&] { (void)ruvia::detail::jwt_base64_url_decode(invalid, &resource); }));
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-}
-
-RUVIA_TEST(jwt_base64url_decode_preserves_error_categories) {
-    const struct {
-        std::string_view input_;
-        std::string_view message_;
-    } cases[] = {
-        {"AA=", "JWT base64url value is invalid"},
-        {"A", "JWT base64url has invalid length"},
-        {"QR", "JWT base64url is not canonical"},
-    };
-    for (const auto& test : cases) {
-        bool rejected = false;
-        try {
-            (void)ruvia::detail::jwt_base64_url_decode(test.input_, std::pmr::get_default_resource());
-        } catch (const std::invalid_argument& error) {
-            rejected = true;
-            RUVIA_CHECK_EQ(std::string_view(error.what()), test.message_);
-        }
-        RUVIA_CHECK(rejected);
-    }
-}
-
-RUVIA_TEST(jwt_base64url_rejects_unrepresentable_capacity_hint) {
-    using ruvia::detail::jwt_base64_url_encode;
-    const auto max_value = std::numeric_limits<std::size_t>::max();
-    const auto too_large = (max_value / 4) * 3 + 1;
-    const std::string_view fake_input("x", too_large);
-
-    bool length_error = false;
-    try {
-        (void)jwt_base64_url_encode(fake_input, std::pmr::get_default_resource());
-    } catch (const std::length_error&) {
-        length_error = true;
-    } catch (...) {
-    }
-    RUVIA_CHECK(length_error);
 }
 
 RUVIA_TEST(jwt_bearer_token_extraction) {

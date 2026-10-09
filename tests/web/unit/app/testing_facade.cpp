@@ -150,6 +150,7 @@ public:
     RUVIA_CONTROLLER_GROUP("/t")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/hello", hello);
+    RUVIA_GET("/a/:id/", slash_test);
     RUVIA_ALL(counted_all_path(), hello);
     RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_value),
         (counted_on_path()), hello);
@@ -173,6 +174,9 @@ public:
     RUVIA_GET("/session-clear", clear_session);
 #endif
     RUVIA_ROUTES_END
+    ruvia::task<ruvia::http_response> slash_test(ruvia::context& c) {
+        co_return c.text("ok");
+    }
 
 private:
     ruvia::task<ruvia::http_response> boom(ruvia::context&) {
@@ -958,4 +962,13 @@ RUVIA_TEST(testing_facade_options_reports_extension_only_resource_methods_too) {
     RUVIA_CHECK(allow.has_value());
     RUVIA_CHECK(allow.has_value() && allow->find("OPTIONS") != std::string_view::npos);
     RUVIA_CHECK(allow.has_value() && allow->find("PROPFIND") != std::string_view::npos);
+}
+
+RUVIA_TEST(testing_facade_router_slash) {
+    ruvia::test_app app;
+    auto res1 = app.request(ruvia::test_request::get("/t/a/123/"));
+    RUVIA_CHECK_EQ(res1.status(), ruvia::http_status::ok);
+
+    auto res2 = app.request(ruvia::test_request::get("/t/a/123"));
+    RUVIA_CHECK_EQ(res2.status(), ruvia::http_status::ok);
 }

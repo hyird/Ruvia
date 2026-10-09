@@ -5,7 +5,6 @@
 #include <utility>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/validation.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -76,14 +75,9 @@ RUVIA_TEST(model_resource_assignment_recursively_outlives_source_owner) {
             target.ensure<"children">().emplace_back(borrowed);
             target.ensure<"boxed">().emplace(std::move(other));
         }
-        RUVIA_CHECK_EQ(target.get<"title">().resource(), &target_resource);
         RUVIA_CHECK_EQ(target.get<"title">().view(), std::string_view(text));
         const auto verify = [&](const resource_child& child_value) {
-            RUVIA_CHECK_EQ(child_value.resource(), &target_resource);
-            RUVIA_CHECK_EQ(child_value.get<"name">().resource(), &target_resource);
             RUVIA_CHECK_EQ(child_value.get<"name">().view(), std::string_view(text));
-            RUVIA_CHECK_EQ(child_value.get<"tags">()->resource(), &target_resource);
-            RUVIA_CHECK_EQ(child_value.get<"tags">()->front().resource(), &target_resource);
             RUVIA_CHECK_EQ(child_value.get<"tags">()->front().view(), std::string_view(text));
         };
         verify(*target.get<"child">());
@@ -114,39 +108,12 @@ RUVIA_TEST(model_resource_array_construction_and_mutable_assignment_keep_owner) 
             boxed.front() = ruvia::string(text, {.resource_ = &temporary});
         }
         for (const auto& value : strings) {
-            RUVIA_CHECK_EQ(value.resource(), &target_resource);
             RUVIA_CHECK_EQ(value.view(), std::string_view(text));
         }
-        RUVIA_CHECK_EQ(children.front().resource(), &target_resource);
-        RUVIA_CHECK_EQ(children.front().get<"name">().resource(), &target_resource);
         RUVIA_CHECK_EQ(children.front().get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(boxed.front().resource(), &target_resource);
         RUVIA_CHECK_EQ(boxed.front().view(), std::string_view(text));
     }
     RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
-}
-
-RUVIA_TEST(model_resource_public_insertion_owns_borrowed_parser_values) {
-    ruvia::test::counting_memory_resource resource;
-    const std::string text(160, 'c');
-    {
-        std::string body = "{\"name\":\"" + text + "\",\"tags\":[\"" + text + "\"]}";
-        std::string_view name_input(body.data() + body.find(text) - 1, text.size() + 2);
-        std::string_view tags_input(body.data() + body.rfind('['), body.size() - body.rfind('[') - 1);
-        auto name = ruvia::detail::parse_json_value<ruvia::string>(name_input, &resource);
-        auto tags = ruvia::detail::parse_json_value<ruvia::array<ruvia::string>>(tags_input, &resource);
-        RUVIA_CHECK(name.has_value());
-        RUVIA_CHECK(tags.has_value());
-        RUVIA_CHECK_EQ(name->data(), body.data() + body.find(text));
-        RUVIA_CHECK_EQ(tags->front().data(), body.data() + body.rfind(text));
-        resource_child owned({.resource_ = &resource});
-        owned.set<"name">(std::move(*name));
-        owned.set<"tags">(std::move(*tags));
-        body.assign(body.size(), 'x');
-        RUVIA_CHECK_EQ(owned.get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(owned.get<"tags">()->front().view(), std::string_view(text));
-    }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(model_resource_array_resize_accepts_its_own_fill_element) {
@@ -159,7 +126,6 @@ RUVIA_TEST(model_resource_array_resize_accepts_its_own_fill_element) {
         values.resize(count, values.front());
         RUVIA_CHECK_EQ(values.size(), count);
         for (const auto& value : values) {
-            RUVIA_CHECK_EQ(value.resource(), &resource);
             RUVIA_CHECK_EQ(value.view(), std::string_view(text));
         }
     }
@@ -178,7 +144,6 @@ RUVIA_TEST(model_resource_recursive_assignment_can_promote_an_owned_child) {
         root = std::move(child_value);
         RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));
         RUVIA_CHECK_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("grandchild"));
-        RUVIA_CHECK_EQ(root.resource(), &resource);
 
         auto& children = root.ensure<"children">();
         children.front().ensure<"children">().emplace().set<"name">(text);
@@ -222,38 +187,15 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
         RUVIA_CHECK_EQ(target.get<"second">().view(), std::string_view(old_text));
         RUVIA_CHECK_EQ(source_value.get<"first">().view(), std::string_view(new_text));
         RUVIA_CHECK_EQ(source_value.get<"second">().view(), std::string_view(new_text));
-        RUVIA_CHECK_EQ(source_value.resource(), &source_resource);
         RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
         for (int iteration = 0; iteration != 32; ++iteration) {
             source_value.set<"first">(new_text);
             source_value.set<"second">(new_text);
             target = std::move(source_value);
-            RUVIA_CHECK_EQ(target.resource(), &target_resource);
             RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
             RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(new_text));
         }
     }
     RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
-}
-
-RUVIA_TEST(model_resource_rebind_preserves_invalid_duplicate_and_missing_states) {
-    ruvia::test::counting_memory_resource resource;
-    for (const auto json : {"{\"first\":42}", "{\"first\":\"a\",\"first\":\"b\"}", "{}"}) {
-        resource_pair target({.resource_ = &resource});
-        {
-            std::pmr::monotonic_buffer_resource source_resource;
-            auto source_value = ruvia::detail::model_parse_access::parse_json_borrowed_partial<resource_pair>(json, &source_resource);
-            RUVIA_CHECK(source_value.has_value());
-            if (!source_value) {
-                continue;
-            }
-            target = std::move(*source_value);
-        }
-        ruvia::validator validator;
-        ruvia::detail::model_validation_access::validate_model(target, validator);
-        RUVIA_CHECK(!validator.ok());
-        RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{2});
-    }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

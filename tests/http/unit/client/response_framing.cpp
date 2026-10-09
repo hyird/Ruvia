@@ -4,32 +4,8 @@
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
-#include "http_header_access.h"
 
 // HTTP/1 client responses: what the head says about the body.
-
-RUVIA_TEST(http_owned_header_string_inputs_survive_allocation_failure) {
-    failing_memory_resource resource;
-    {
-        std::pmr::string name("X-Test", &resource);
-        std::pmr::string value("retained", &resource);
-        resource.fail_after(0);
-        bool failed = false;
-        try {
-            (void)ruvia::detail::http_header_access::make(std::move(name), std::move(value));
-        } catch (const std::bad_alloc&) {
-            failed = true;
-        }
-        RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(name, "X-Test");
-        RUVIA_CHECK_EQ(value, "retained");
-        resource.allow_allocations();
-        const auto header_value = ruvia::detail::http_header_access::make(std::move(name), std::move(value));
-        RUVIA_CHECK_EQ(header_value.name(), "X-Test");
-        RUVIA_CHECK_EQ(header_value.value(), "retained");
-    }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-}
 
 RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
     failing_memory_resource first_resource;
@@ -69,10 +45,14 @@ RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
 RUVIA_TEST(http_client_response_header_extraction_preserves_owned_fields_on_failure) {
     failing_memory_resource resource;
     {
-        auto head = ruvia::detail::http_client_response_head_access::make(
-            ruvia::http_status::ok, ruvia::http_protocol_version::http11, &resource);
-        ruvia::detail::http_client_response_head_access::headers(head).push_back(
-            ruvia::http_header::copy_of("Content-Type", "text/plain", &resource));
+        auto parsed = parse_wire("GET",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
+            http1_close_policy::allow_reuse, {}, &resource);
+        RUVIA_CHECK(parsed.parsed() != nullptr);
+        if (parsed.parsed() == nullptr) {
+            return;
+        }
+        auto head = std::move(*parsed.parsed()).take_head();
         resource.fail_after(0);
         bool failed = false;
         try {

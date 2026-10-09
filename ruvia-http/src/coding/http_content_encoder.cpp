@@ -123,6 +123,12 @@ struct http_content_encoder::impl final {
             gzip_.next_out = reinterpret_cast<Bytef*>(buffer.data());
             gzip_.avail_out = static_cast<uInt>(buffer.size());
             const auto status = deflate(&gzip_, operation);
+            // Repeating a completed flush has no work left; zlib reports
+            // Z_BUF_ERROR without invalidating the stream.
+            if (status == Z_BUF_ERROR && operation != Z_FINISH &&
+                gzip_.avail_in == 0 && supplied == input.size()) {
+                return;
+            }
             if (status != Z_OK && status != Z_STREAM_END) {
                 fail("zlib content encoding failed");
             }

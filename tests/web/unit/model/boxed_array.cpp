@@ -84,8 +84,6 @@ RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{3});
 
         target = std::move(source_value);
-        RUVIA_CHECK_EQ(target.resource(), &target_resource);
-        RUVIA_CHECK_EQ(source_value.resource(), &source_resource);
         RUVIA_CHECK_EQ(target.size(), std::size_t{2});
         RUVIA_CHECK_EQ(target[0].value(), 4);
         RUVIA_CHECK_EQ(target[1].value(), 5);

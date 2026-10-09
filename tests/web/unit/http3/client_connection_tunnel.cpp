@@ -1,22 +1,23 @@
 #include "http3_client_connection_fixture.h"
 
-RUVIA_TEST(http3_websocket_client_drives_extended_connect_dynamic_qpack_deflate_and_fin) {
+RUVIA_TEST(http3_websocket_client_drives_extended_connect_deflate_and_fin) {
     test_identity_files identity;
-    local_quic_response_peer peer(identity, false, true, true);
+    local_http3_peer peer(identity);
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto worker_value = attachment.loop().handle();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::wss,
                                                               .protocol_ = ruvia::websocket_client_protocol::http3,
-                                                              .host_ = "127.0.0.1",
+                                                              .host_ = "localhost",
                                                               .port_ = peer.port(),
+                                                              .target_ = "/ws",
                                                               .subprotocols_ = {"chat"},
                                                               .deflate_ = {.enabled_ = true},
                                                               .connect_timeout_ = 5s,
                                                               .read_timeout_ = 2s,
                                                               .write_timeout_ = 2s,
-                                                              .tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification});
+                                                              .ca_file_ = identity.certificate().string()});
         std::exception_ptr failure;
         try {
             co_await client.connect();
@@ -27,8 +28,15 @@ RUVIA_TEST(http3_websocket_client_drives_extended_connect_dynamic_qpack_deflate_
                 RUVIA_CHECK_EQ(greeting->payload(), std::string(100000, 'w'));
             }
             const std::string payload_value(100000, 'c');
-            co_await client.binary(payload_value, {.compress_ = false});
-            co_await client.binary(payload_value, {.compress_ = true});
+            for (const bool compress : {false, true}) {
+                co_await client.binary(payload_value, {.compress_ = compress});
+                const auto echo = co_await client.read();
+                RUVIA_CHECK(echo.has_value());
+                if (echo) {
+                    RUVIA_CHECK(echo->opcode() == ruvia::websocket_opcode::binary);
+                    RUVIA_CHECK_EQ(echo->payload(), std::string_view(payload_value));
+                }
+            }
             RUVIA_CHECK(!(co_await client.read()).has_value());
             const bool fin_observed = co_await wait_for_peer(worker_value, peer, [&] { return peer.client_end_observed(); }, 2s);
             RUVIA_CHECK(fin_observed);
@@ -37,21 +45,18 @@ RUVIA_TEST(http3_websocket_client_drives_extended_connect_dynamic_qpack_deflate_
             failure = std::current_exception();
         }
         co_await client.shutdown();
-        attachment.stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
-    attachment.run();
-    root.get();
+    run_client_task(attachment, run());
     peer.rethrow_if_failed();
 }
 
 RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_orders) {
     for (unsigned round = 0; round != 4; ++round) {
         test_identity_files identity;
-        local_quic_response_peer peer(identity, false, true, false, false, {}, true);
+        local_http3_peer peer(identity);
         if (round >= 2) {
             peer.allow_final_part();
         }
@@ -60,11 +65,31 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
         std::exception_ptr failure;
         auto run = [&]() -> ruvia::task<void> {
             const auto& worker_value = attachment.loop().handle();
-            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::https, .host_ = "127.0.0.1", .port_ = peer.port(), .connection_count_ = 1, .request_timeout_ = 5s, .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http3_only, .ca_file_ = identity.certificate().string()});
+            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::https, .host_ = "localhost", .port_ = peer.port(), .connection_count_ = 1, .request_timeout_ = 5s, .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http3_only, .ca_file_ = identity.certificate().string()});
             std::optional<ruvia::http_client_tunnel> retired_tunnel;
+            ruvia::task_scope readers(worker_value);
+            std::string greeting;
+            const auto receive = [&]() -> ruvia::task<void> {
+                auto& tunnel = *retired_tunnel;
+                try {
+                    while (auto bytes = co_await tunnel.read()) {
+                        greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    }
+                } catch (...) {
+                    tunnel.abort();
+                    throw;
+                }
+            };
             try {
                 const bool extended = (round & 1) != 0;
-                auto result_value = co_await client.open_tunnel({.authority_ = extended ? "proxy.test" : "target.test:443", .protocol_ = extended ? "test-protocol" : "", .target_ = extended ? "/tunnel" : ""});
+                std::string authority = extended ? "proxy.test" : "target.test:443";
+                std::string protocol = extended ? "test-protocol" : "";
+                std::string target = extended ? "/tunnel" : "";
+                auto open = client.open_tunnel({.authority_ = authority, .protocol_ = protocol, .target_ = target});
+                authority.assign("mutated");
+                protocol.assign("mutated");
+                target.assign("mutated");
+                auto result_value = co_await std::move(open);
                 RUVIA_CHECK(result_value.tunnel() && !result_value.response());
                 if (!result_value.tunnel()) {
                     throw std::runtime_error("missing CONNECT tunnel");
@@ -73,20 +98,12 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 auto& tunnel = *retired_tunnel;
                 RUVIA_CHECK(tunnel.protocol_version() == ruvia::http_protocol_version::http3);
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
-                std::string greeting;
-                while (greeting.size() < 100003) {
-                    const auto bytes_value = co_await tunnel.read();
-                    if (!bytes_value) {
-                        throw std::runtime_error("early tunnel FIN");
-                    }
-                    greeting.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
-                }
-                RUVIA_CHECK(greeting.starts_with(std::string(100003, 's')));
                 if (round >= 2) {
-                    while (auto bytes_value = co_await tunnel.read()) {
-                        greeting.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
-                    }
+                    co_await receive();
                     RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
+                } else {
+                    // Both peers consume independently while writing past QUIC's initial window.
+                    readers.spawn(receive());
                 }
                 std::string payload_value(120003, 't');
                 for (std::size_t offset = 0; offset != payload_value.size();) {
@@ -99,22 +116,41 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 }
                 co_await tunnel.finish();
                 co_await tunnel.finish();
-                RUVIA_CHECK(co_await wait_for_peer(worker_value, peer, [&] { return peer.client_end_observed(); }, 2s));
+                if (!(co_await wait_for_peer(worker_value, peer, [&] { return peer.client_end_observed(); }, 2s))) {
+                    throw std::runtime_error("HTTP/3 peer did not observe tunnel FIN in round " +
+                                             std::to_string(round) + " after " +
+                                             std::to_string(peer.tunnel_bytes()) + " bytes");
+                }
                 RUVIA_CHECK_EQ(peer.tunnel_bytes(), payload_value.size());
                 peer.allow_final_part();
-                if (round < 2) {
-                    while (auto bytes_value = co_await tunnel.read()) {
-                        greeting.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
-                    }
-                    RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
+            } catch (...) {
+                failure = std::current_exception();
+                if (retired_tunnel) {
+                    retired_tunnel->abort();
                 }
+                readers.request_stop();
+            }
+            try {
+                co_await readers.join();
+            } catch (...) {
+                if (!failure) {
+                    failure = std::current_exception();
+                }
+            }
+            try {
+                if (failure) {
+                    std::rethrow_exception(failure);
+                }
+                auto& tunnel = *retired_tunnel;
+                RUVIA_CHECK(greeting.starts_with(std::string(100003, 's')));
+                RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
                 RUVIA_CHECK(co_await wait_for_peer(worker_value, peer, [&] { return client.stats().completed_requests_ == 1; }, 2s));
                 RUVIA_CHECK(co_await wait_for_peer(worker_value, peer, [&] { return client.stats().in_flight_requests_ == 0; }, 2s));
                 // Normal bidirectional retirement must not undo a successfully
                 // completed sending direction or make finish non-idempotent.
                 co_await tunnel.finish();
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
-                RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)tunnel.write("late"); }));
+                RUVIA_CHECK(co_await write_after_finish_is_rejected(tunnel, "late"));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -123,17 +159,14 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 try {
                     co_await retired_tunnel->finish();
                     RUVIA_CHECK(retired_tunnel->header("x-tunnel") == "owned-metadata");
-                    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)retired_tunnel->write("late after shutdown"); }));
+                    RUVIA_CHECK(co_await write_after_finish_is_rejected(*retired_tunnel, "late after shutdown"));
                 } catch (...) {
                     failure = std::current_exception();
                 }
             }
-            attachment.stop();
         };
-        auto root = attachment.loop().start(run());
-        attachment.run();
-        root.get();
-        RUVIA_CHECK(peer.synchronize());
+        run_client_task(attachment, run());
+        peer.rethrow_if_failed();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -142,8 +175,7 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
 
 RUVIA_TEST(http3_client_udp_tunnel_negotiates_capsules_owns_packets_and_keeps_send_open_after_peer_fin) {
     test_identity_files identity;
-    local_quic_response_peer peer(identity, false, true, false, false, {}, false, true);
-    peer.allow_final_part();
+    local_http3_peer peer(identity);
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     std::exception_ptr failure;
@@ -151,7 +183,7 @@ RUVIA_TEST(http3_client_udp_tunnel_negotiates_capsules_owns_packets_and_keeps_se
         const auto& worker_value = attachment.loop().handle();
         std::optional<ruvia::http_udp_datagram> retained;
         {
-            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::https, .host_ = "127.0.0.1", .port_ = peer.port(), .connection_count_ = 1, .request_timeout_ = 5s, .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http3_only, .ca_file_ = identity.certificate().string()});
+            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::https, .host_ = "localhost", .port_ = peer.port(), .connection_count_ = 1, .request_timeout_ = 5s, .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http3_only, .ca_file_ = identity.certificate().string()});
             try {
                 auto result_value = co_await client.open_udp_tunnel({.target_ = "/udp"}, {.max_chunk_bytes_ = 1024});
                 if (!result_value.tunnel()) {
@@ -180,12 +212,9 @@ RUVIA_TEST(http3_client_udp_tunnel_negotiates_capsules_owns_packets_and_keeps_se
         }
         RUVIA_CHECK(retained && retained->payload().size() == 16003);
         retained.reset();
-        attachment.stop();
     };
-    auto root = attachment.loop().start(run());
-    attachment.run();
-    root.get();
-    RUVIA_CHECK(peer.synchronize());
+    run_client_task(attachment, run());
+    peer.rethrow_if_failed();
     if (failure) {
         std::rethrow_exception(failure);
     }

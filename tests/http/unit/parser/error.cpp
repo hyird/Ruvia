@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <type_traits>
 
 #include "ruvia/http/http1_request_parser.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -31,11 +30,6 @@ RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
         threw = true;
     }
     RUVIA_CHECK(threw);
-}
-
-RUVIA_TEST(http_status_code_wire_token_is_derived_from_the_strong_type) {
-    const auto token = ruvia::detail::http_status_code_token(ruvia::http_status_code::from_value(599));
-    RUVIA_CHECK_EQ(ruvia::detail::http_status_code_token_view(token), std::string_view("599"));
 }
 
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {

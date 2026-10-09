@@ -350,7 +350,9 @@ template <typename apply_response_state_type>
             .length_ = source_value.size_,
             .etag_ = etag,
             .last_modified_ = last_modified.empty() ? std::nullopt : std::optional(validator_modified_seconds),
-            .strong_date_validator_ = emit_response_validators && last_modified_is_actual && !last_modified.empty(),
+            // Filesystem mtime cannot establish that a representation changed
+            // at most once during the second in its Last-Modified value.
+            .strong_date_validator_ = false,
         },
         http_representation_response_options{
             .normal_status_ = normal_status,

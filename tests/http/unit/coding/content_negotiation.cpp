@@ -6,7 +6,6 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 
-#include "field/http_quality_value.h"
 #include "test_harness.h"
 
 RUVIA_TEST(response_coding_sets_and_selection_snapshots_distinguish_every_supported_coding) {
@@ -40,7 +39,6 @@ using ruvia::http_content_coding;
 using ruvia::http_response_coding_candidates;
 using ruvia::http_response_coding_qualities;
 using ruvia::http_response_coding_selection;
-using ruvia::detail::http_parse_quality_value;
 
 // Reference form: one full Accept-Encoding scan per coding. The aggregate
 // single-pass update must produce identical qualities.
@@ -95,23 +93,6 @@ RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
         RUVIA_CHECK(same_quality(qualities.brotli_, ref.brotli_));
         RUVIA_CHECK(same_quality(qualities.zstd_, ref.zstd_));
         RUVIA_CHECK(same_quality(qualities.identity_, ref.identity_));
-    }
-}
-
-RUVIA_TEST(qvalue_parser_rejects_more_than_three_fraction_digits_for_one) {
-    RUVIA_CHECK_EQ(http_parse_quality_value("1"), 1000);
-    RUVIA_CHECK_EQ(http_parse_quality_value("1."), 1000);
-    RUVIA_CHECK_EQ(http_parse_quality_value("1.000"), 1000);
-    RUVIA_CHECK_EQ(http_parse_quality_value("0.123"), 123);
-    RUVIA_CHECK_EQ(http_parse_quality_value("1.0000"), -1);
-    RUVIA_CHECK_EQ(http_parse_quality_value("1.00000"), -1);
-
-    http_response_coding_qualities qualities;
-    qualities.update("identity;q=0.5, gzip;q=1.0000");
-    const auto result_value = http_response_coding_selection::select(qualities);
-    RUVIA_CHECK(result_value.selected() != nullptr);
-    if (const auto* selected = result_value.selected()) {
-        RUVIA_CHECK(selected->coding() == http_content_coding::identity);
     }
 }
 

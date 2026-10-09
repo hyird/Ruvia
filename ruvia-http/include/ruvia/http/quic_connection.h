@@ -87,6 +87,8 @@ public:
     quic_datagram_result read_datagram(std::span<std::byte> output) noexcept;
     // A failed connection can only be closed or retired. Closing permits the
     // owner to send CONNECTION_CLOSE after catching an operation failure.
+    // The first close reason is retained. An error code greater than 2^62 - 1
+    // throws quic_error(invalid_configuration) before changing connection state.
     quic_operation_status close(quic_close_reason_view reason);
 
 private:

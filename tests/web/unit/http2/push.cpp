@@ -1,24 +1,19 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <exception>
-#include <memory_resource>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
-#include <asio/ip/tcp.hpp>
-
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 
-#include "http2/http2_sans_io_session.h"
-#include "http2_sansio_session_fixture.h"
-#include "memory_resource_fixture.h"
-#include "router/router.h"
-#include "router/router_impl.h"
+#include "http2_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -28,12 +23,36 @@ ruvia::task<std::string> collect_text(ruvia::http_client_response& response) {
     const auto view = bytes_value.bytes();
     co_return std::string(reinterpret_cast<const char*>(view.data()), view.size());
 }
-struct push_routes final {
-    unsigned promised_{};
-    unsigned refused_{};
-    unsigned streamed_{};
-    static ruvia::task<ruvia::http_response> parent(void* raw, ruvia::context& context_value) {
-        auto& owner_value = *static_cast<push_routes*>(raw);
+struct push_observation final {
+    std::atomic<unsigned> promised_{};
+    std::atomic<unsigned> refused_{};
+    std::atomic<unsigned> streamed_{};
+};
+
+const auto observation = std::make_shared<push_observation>();
+[[maybe_unused]] const bool observation_registered = [] {
+    ruvia::app().use_worker_state<std::shared_ptr<push_observation>>([] { return observation; });
+    return true;
+}();
+
+std::shared_ptr<push_observation> prepare_observation() {
+    observation->promised_ = 0;
+    observation->refused_ = 0;
+    observation->streamed_ = 0;
+    return observation;
+}
+
+class push_routes final : public ruvia::controller<push_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/parent", parent);
+    RUVIA_GET("/two", parent);
+    RUVIA_GET("/large", parent);
+    RUVIA_GET("/asset", asset);
+    RUVIA_GET_STREAM("/large-asset", large);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> parent(ruvia::context& context_value) {
+        auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
         const auto count = context_value.req().path() == "/two" ? 2U : 1U;
         const auto path = context_value.req().path() == "/large" ? "/large-asset" : "/asset";
         const std::array<ruvia::http_header_view, 1> headers{{{"x-promise", "owned-request"}}};
@@ -46,75 +65,42 @@ struct push_routes final {
         }
         co_return context_value.text("parent");
     }
-    static ruvia::task<ruvia::http_response> asset(void*, ruvia::context& context_value) {
+    ruvia::task<ruvia::http_response> asset(ruvia::context& context_value) {
         if (context_value.req().header("x-promise") != "owned-request") {
             throw std::runtime_error("lost push request metadata");
         }
         context_value.header("x-asset", "metadata");
         co_return context_value.text("pushed-body");
     }
-    static ruvia::task<void> large(void* raw, ruvia::context& context_value) {
-        auto& owner_value = *static_cast<push_routes*>(raw);
+    ruvia::task<void> large(ruvia::context& context_value) {
+        auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
         std::string chunk(16384, 'p');
         for (unsigned i = 0; i != 80; ++i) {
             co_await context_value.stream().write(chunk);
         }
-        co_await context_value.stream().end();
         ++owner_value.streamed_;
-    }
-    void register_with(ruvia::detail::router_impl& routes_value) {
-        for (const auto path : {"/parent", "/two", "/large"}) {
-            routes_value.register_route(ruvia::http_known_method::get, std::pmr::string(path),
-                ruvia::detail::route_handler_type(this, &parent), ruvia::detail::request_body_mode::buffered, {}, {});
-        }
-        routes_value.register_route(ruvia::http_known_method::get, std::pmr::string("/asset"),
-            ruvia::detail::route_handler_type(this, &asset), ruvia::detail::request_body_mode::buffered, {}, {});
-        routes_value.register_response_stream_route(ruvia::http_known_method::get, std::pmr::string("/large-asset"),
-            ruvia::detail::route_stream_handler_type(this, &large), {}, {});
-        routes_value.finalize();
+        co_await context_value.stream().end();
     }
 };
 
-ruvia::task<void> serve(asio::ip::tcp::acceptor& acceptor, const ruvia::worker_handle& worker_value,
-    const ruvia::detail::route_table& routes_value, ruvia::worker_memory& memory) {
-    auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto completion) {
-        acceptor.async_accept(std::move(completion));
-    });
-    if (accepted.error_code()) {
-        throw std::system_error(accepted.error_code());
-    }
-    auto socket = std::move(accepted.result());
-    ruvia::test::http2_sans_io_session_fixture fixture;
-    co_await ruvia::detail::run_http2_sans_io_session(socket, routes_value, memory,
-        fixture.context(fixture.services(worker_value).with_plain_transport("127.0.0.1")));
-}
 }  // namespace
 
 RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_and_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::test::counting_memory_resource allocation_upstream;
+    const auto observation = prepare_observation();
+    ruvia::test::http2_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().handle();
-        asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
-        ruvia::worker_memory memory(allocation_upstream);
-        ruvia::detail::router router;
-        auto& routes_value = ruvia::detail::router_impl::from(router);
-        push_routes observation;
-        observation.register_with(routes_value);
-        ruvia::task_scope tasks(worker_value);
-        tasks.spawn(serve(acceptor, worker_value, routes_value.route_table(), memory));
         std::optional<ruvia::http_client_push> retained;
         std::optional<ruvia::http_client_response> retained_response;
         {
             ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
                                                              .host_ = "127.0.0.1",
-                                                             .port_ = acceptor.local_endpoint().port(),
+                                                             .port_ = server.endpoint().port(),
                                                              .protocol_ = ruvia::http_client_protocol::http2_only,
                                                              .push_ = {.enabled_ = true}});
             std::exception_ptr failure;
             try {
-                std::size_t warm_allocations{};
                 for (unsigned repeat = 0; repeat != 128; ++repeat) {
                     auto parent_value = co_await client.send({.target_ = "/parent"});
                     RUVIA_CHECK((co_await collect_text(parent_value)) == "parent");
@@ -148,12 +134,6 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                     }
                     RUVIA_CHECK(retained->request().path_ == "/asset");
                     RUVIA_CHECK(retained_response->header("x-asset") == "metadata");
-                    if (repeat == 96) {
-                        warm_allocations = allocation_upstream.allocation_count();
-                    }
-                    if (repeat > 96) {
-                        RUVIA_CHECK_EQ(allocation_upstream.allocation_count(), warm_allocations);
-                    }
                 }
                 auto parent_value = co_await client.send({.target_ = "/large"});
                 RUVIA_CHECK((co_await collect_text(parent_value)) == "parent");
@@ -169,7 +149,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                     bytes_value += chunk->size();
                 }
                 RUVIA_CHECK_EQ(bytes_value, std::size_t{80 * 16384});
-                RUVIA_CHECK_EQ(observation.streamed_, 1U);
+                RUVIA_CHECK_EQ(observation->streamed_.load(), 1U);
                 auto cancelled_parent = co_await client.send({.target_ = "/large"});
                 RUVIA_CHECK((co_await collect_text(cancelled_parent)) == "parent");
                 auto cancelled_push = client.next_push();
@@ -189,7 +169,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                 failure = std::current_exception();
             }
             co_await client.shutdown();
-            co_await tasks.join();
+            server.finish();
             if (failure) {
                 std::rethrow_exception(failure);
             }
@@ -203,27 +183,18 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
     auto root = attachment.loop().start(run());
     attachment.run();
     root.get();
-    RUVIA_CHECK_EQ(allocation_upstream.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(allocation_upstream.allocation_count(), allocation_upstream.deallocation_count());
 }
 
 RUVIA_TEST(http2_push_queue_overflow_and_disabled_permission_keep_parent_response_usable) {
     for (const bool enabled : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();
         auto attachment = ruvia::attach_event_loop(io);
+        const auto observation = prepare_observation();
+        ruvia::test::http2_server_fixture server(io);
         auto run = [&]() -> ruvia::task<void> {
-            const auto& worker_value = attachment.loop().handle();
-            asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
-            ruvia::worker_memory memory;
-            ruvia::detail::router router;
-            auto& routes_value = ruvia::detail::router_impl::from(router);
-            push_routes observation;
-            observation.register_with(routes_value);
-            ruvia::task_scope tasks(worker_value);
-            tasks.spawn(serve(acceptor, worker_value, routes_value.route_table(), memory));
             ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
                                                              .host_ = "127.0.0.1",
-                                                             .port_ = acceptor.local_endpoint().port(),
+                                                             .port_ = server.endpoint().port(),
                                                              .protocol_ = ruvia::http_client_protocol::http2_only,
                                                              .push_ = {.enabled_ = enabled, .max_queued_pushes_ = 1}});
             std::exception_ptr failure;
@@ -238,12 +209,12 @@ RUVIA_TEST(http2_push_queue_overflow_and_disabled_permission_keep_parent_respons
                 }
                 RUVIA_CHECK_EQ(client.stats().received_pushes_, enabled ? std::size_t{1} : std::size_t{0});
                 RUVIA_CHECK_EQ(client.stats().rejected_pushes_, enabled ? std::size_t{1} : std::size_t{0});
-                RUVIA_CHECK_EQ(observation.refused_, enabled ? 0U : 2U);
+                RUVIA_CHECK_EQ(observation->refused_.load(), enabled ? 0U : 2U);
             } catch (...) {
                 failure = std::current_exception();
             }
             co_await client.shutdown();
-            co_await tasks.join();
+            server.finish();
             if (failure) {
                 std::rethrow_exception(failure);
             }

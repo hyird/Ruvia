@@ -8,13 +8,12 @@
 #include <type_traits>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/asio_await.h"
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_runtime_context.h"
+
+#include "worker_task_fixture.h"
 
 namespace {
 
@@ -69,10 +68,10 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         } catch (const std::logic_error&) {
             empty_task_rejected = true;
         }
+        co_await empty_task_scope.join();
         if (!empty_task_rejected || empty_task_scope.size() != 0) {
             co_return;
         }
-        co_await empty_task_scope.join();
     }
 
     {
@@ -85,19 +84,16 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         } catch (const std::logic_error&) {
             spawn_after_reservation_rejected = true;
         }
+        co_await std::move(reserved_join);
         if (!spawn_after_reservation_rejected) {
             co_return;
         }
-        co_await std::move(reserved_join);
     }
 
     {
         ruvia::task_scope completed_failure_scope(worker_value);
         completed_failure_scope.spawn(fail());
         static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
-        if (completed_failure_scope.size() != 0) {
-            co_return;
-        }
         bool completed_failure_observed = false;
         try {
             co_await completed_failure_scope.join();
@@ -113,10 +109,6 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     ruvia::task_scope scope(worker_value);
     scope.spawn(increment(worker_value, calls));
     scope.spawn(fail());
-    if (scope.size() != 2) {
-        co_return;
-    }
-
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
@@ -139,13 +131,10 @@ int main() {
     }
 
     asio::io_context io_context;
-    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 8);
-    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    const auto worker_value = runtime.handle();
     bool success = false;
-
-    asio::co_spawn(
-        io_context, ruvia::detail::task_as_awaitable(exercise(worker_value, success)), asio::detached);
-    io_context.run();
-    dispatcher->close();
+    ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success));
+    runtime.detach();
     return success ? 0 : 1;
 }

@@ -5,10 +5,10 @@
 #include <string_view>
 #include <utility>
 
-#include "http/static_root_index.h"
+#include "context_request_fixture.h"
 #include "test_harness.h"
 
-namespace {
+namespace static_files_test {
 
 namespace fs = std::filesystem;
 
@@ -32,16 +32,32 @@ fs::path make_dotfile_root() {
 }
 
 [[nodiscard]] bool served(const ruvia::static_root& root, std::string_view path) {
-    return ruvia::detail::static_root_access::find(root, path).has_value();
+    bool found = false;
+    static_cast<void>(context_request_test::with_context(
+        ruvia::test_request::get("/"),
+        [&](ruvia::context& ctx) -> ruvia::task<void> {
+            try {
+                found =
+                    ctx.static_file(root, {.relative_path_ = path}).status() == ruvia::http_status::ok;
+            } catch (const ruvia::http_error&) {
+                found = false;
+            }
+            ctx.respond(ctx.text("ok"));
+            co_return;
+        }));
+    return found;
 }
 
-}  // namespace
+}  // namespace static_files_test
+
+using static_files_test::make_dotfile_root;
+using static_files_test::served;
+namespace fs = std::filesystem;
 
 RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
     const auto dir = make_dotfile_root();
     ruvia::static_root_options options;
-    // all() would otherwise index and serve every file regardless of extension;
-    // the hidden-path default-deny must still keep secrets out of the index.
+    // The hidden-path default-deny must still keep secrets out of responses.
     options.file_types_ =
         ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
     ruvia::static_root root(dir, std::move(options));

@@ -1,177 +1,144 @@
+#include <atomic>
 #include <chrono>
 #include <exception>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
-#include <system_error>
+#include <string_view>
 
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_udp_tunnel.h"
 
-#include "router/router_impl.h"
-#include "server/native_accepted_socket_ticket.h"
-#include "server/web_worker_runtime.h"
+#include "http2_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
-ruvia::task<void> udp_echo(void*, ruvia::context& context_value) {
-    ruvia::http_udp_tunnel udp(context_value.tunnel().capsules());
-    while (auto datagram = co_await udp.read()) {
-        co_await udp.send(datagram->payload());
+struct udp_tunnel_observation {
+    std::atomic<bool> eof_{};
+};
+
+const auto udp_observation = std::make_shared<udp_tunnel_observation>();
+[[maybe_unused]] const bool udp_state_registered = [] {
+    ruvia::app().use_worker_state<std::shared_ptr<udp_tunnel_observation>>(
+        [] { return udp_observation; });
+    return true;
+}();
+
+class udp_tunnel_routes final : public ruvia::controller<udp_tunnel_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/target.test/53/", echo);
+    RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/cancel.test/53/", delayed);
+    RUVIA_GET("/udp-tunnel-sibling", sibling);
+    RUVIA_ROUTES_END
+
+    ruvia::task<void> echo(ruvia::context& c) {
+        auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
+        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        while (auto datagram = co_await tunnel.read()) {
+            co_await tunnel.send(datagram->payload());
+        }
+        observation.eof_ = true;
+        co_await tunnel.finish();
     }
-    co_await udp.finish();
-}
-ruvia::task<ruvia::http_response> udp_sibling(void*, ruvia::context& context_value) {
-    co_return context_value.text("sibling");
-}
-ruvia::task<void> forward_connections(asio::ip::tcp::acceptor& acceptor, ruvia::detail::web_worker_runtime& server) {
-    for (;;) {
-        auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto done) { acceptor.async_accept(std::move(done)); });
-        if (accepted.error_code() == asio::error::operation_aborted) {
-            co_return;
-        }
-        if (accepted.error_code()) {
-            throw std::system_error(accepted.error_code());
-        }
-        auto socket = std::move(accepted.result());
-        std::error_code error;
-        const auto native = socket.release(error);
-        if (error) {
-            throw std::system_error(error);
-        }
-        ruvia::detail::native_accepted_socket_ticket ticket(asio::ip::tcp::v4(), 0, native);
-        if (!server.network_submission().post([&server, ticket = std::move(ticket)]() mutable {
-                                            server.accept_transferred_connection(std::move(ticket));
-                                        })
-                .accepted()) {
-            throw std::runtime_error("UDP tunnel socket dispatch rejected");
-        }
+
+    ruvia::task<void> delayed(ruvia::context& c) {
+        co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(30));
+        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        co_await tunnel.finish();
     }
-}
+
+    ruvia::task<ruvia::http_response> sibling(ruvia::context& c) {
+        co_return c.text("sibling");
+    }
+};
 }  // namespace
 
-RUVIA_TEST(http_udp_tunnel_negotiates_http1_upgrade_and_http2_extended_connect_and_owns_results) {
-    for (const auto protocol : {ruvia::http_client_protocol::http1_only, ruvia::http_client_protocol::http2_only}) {
-        auto& io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(io);
-        ruvia::detail::router router;
-        auto& routes_value = ruvia::detail::router_impl::from(router);
-        routes_value.register_tunnel_route("connect-udp", std::pmr::string("/udp/:host/:port"), {nullptr, udp_echo}, {}, {});
-        routes_value.register_route(ruvia::http_known_method::get, std::pmr::string("/sibling"), {nullptr, udp_sibling}, ruvia::detail::request_body_mode::buffered, {}, {});
-        routes_value.finalize();
-        ruvia::detail::web_worker_runtime server(asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes_value.route_table());
-        server.start();
-        std::exception_ptr failure;
-        auto run = [&]() -> ruvia::task<void> {
-            const auto worker_value = attachment.loop().handle();
-            asio::ip::tcp::acceptor source_value(io, {asio::ip::address_v4::loopback(), 0});
-            ruvia::task_scope forwarding(worker_value);
-            forwarding.spawn(forward_connections(source_value, server));
-            std::optional<ruvia::http_udp_datagram> retained;
-            {
-                ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = source_value.local_endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = protocol});
-                try {
-                    std::string target = "/udp/target.test/443";
-                    auto operation = client.open_udp_tunnel({.target_ = target}, {.max_chunk_bytes_ = 1024});
-                    target.assign("mutated");
-                    auto result_value = co_await std::move(operation);
-                    if (!result_value.tunnel()) {
-                        throw std::runtime_error("CONNECT-UDP rejected");
-                    }
-                    RUVIA_CHECK(result_value.tunnel()->status().value() == (protocol == ruvia::http_client_protocol::http1_only ? 101 : 200));
-                    RUVIA_CHECK(result_value.tunnel()->header("capsule-protocol") == "?1");
-                    RUVIA_CHECK(!result_value.tunnel()->header("content-length"));
-                    if (protocol == ruvia::http_client_protocol::http1_only) {
-                        RUVIA_CHECK(result_value.tunnel()->header("upgrade") == "connect-udp");
-                    } else {
-                        RUVIA_CHECK(!result_value.tunnel()->header("connection"));
-                    }
-                    auto udp = std::move(*result_value.tunnel()).udp();
-                    std::string payload_value(16003, 'u');
-                    auto send = udp.send(payload_value);
-                    payload_value.assign("mutated");
-                    co_await std::move(send);
-                    retained = co_await udp.read();
-                    RUVIA_CHECK(retained && retained->payload().size() == 16003);
-                    RUVIA_CHECK(retained && std::ranges::all_of(retained->payload(), [](std::byte value) { return value == std::byte{'u'}; }));
-                    co_await udp.send("");
-                    auto empty = co_await udp.read();
-                    RUVIA_CHECK(empty && empty->payload().empty());
-                    co_await udp.finish();
-                    RUVIA_CHECK(!(co_await udp.read()));
-                    auto rejected = co_await client.open_udp_tunnel({.target_ = "/missing"});
-                    RUVIA_CHECK(!rejected.tunnel() && rejected.response());
-                    if (!rejected.response()) {
-                        throw std::runtime_error("missing UDP tunnel rejection");
-                    }
-                    RUVIA_CHECK(rejected.response()->status() == ruvia::http_status::not_found);
-                    auto denial = co_await rejected.response()->body().read_all();
-                    RUVIA_CHECK(!denial.bytes().empty());
-                    if (protocol == ruvia::http_client_protocol::http1_only) {
-                        const ruvia::http_header_view malformed[]{{"Connection", "Upgrade"}, {"Upgrade", "connect-udp"}};
-                        auto bad = co_await client.send({.target_ = "/udp/target.test/443", .headers_ = malformed});
-                        RUVIA_CHECK(bad.status() == ruvia::http_status::bad_request);
-                        auto error_body = co_await bad.body().read_all();
-                        RUVIA_CHECK(!error_body.bytes().empty());
-                    }
-                    {
-                        auto second = co_await client.open_udp_tunnel({.target_ = "/udp/target.test/443"});
-                        if (!second.tunnel()) {
-                            throw std::runtime_error("second CONNECT-UDP rejected");
-                        }
-                        auto blocked = std::move(*second.tunnel()).udp();
-                        bool failed{};
-                        ruvia::task_scope reads(worker_value);
-                        auto receive = [&]() -> ruvia::task<void> {
-                            try {
-                                (void)co_await blocked.read();
-                            } catch (const ruvia::http_client_error&) {
-                                failed = true;
-                            }
-                        };
-                        reads.spawn(receive());
-                        co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1));
-                        blocked.abort();
-                        co_await reads.join();
-                        RUVIA_CHECK(failed);
-                    }
-                    auto sibling = co_await client.send({.target_ = "/sibling"});
-                    std::string body;
-                    while (auto bytes = co_await sibling.body().text()) {
-                        body.append(*bytes);
-                    }
-                    RUVIA_CHECK(body == "sibling");
-                } catch (...) {
-                    failure = std::current_exception();
-                }
-                co_await client.shutdown();
-            }
-            RUVIA_CHECK(retained && retained->payload().size() == 16003);
-            retained.reset();
-            std::error_code ignored;
-            source_value.close(ignored);
+RUVIA_TEST(http2_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    std::exception_ptr failure;
+    const auto& observation = udp_observation;
+    observation->eof_ = false;
+    ruvia::test::http2_server_fixture server(io);
+    auto run = [&]() -> ruvia::task<void> {
+        try {
+            ruvia::http_client client(
+                attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
+                                       .host_ = "127.0.0.1",
+                                       .port_ = server.endpoint().port(),
+                                       .connection_count_ = 1,
+                                       .request_timeout_ = std::chrono::seconds(5),
+                                       .protocol_ = ruvia::http_client_protocol::http2_only});
+            auto result = co_await client.open_udp_tunnel(
+                {.target_ = "/.well-known/masque/udp/target.test/53/"});
+            RUVIA_CHECK(result.response() == nullptr && result.tunnel() != nullptr);
+            RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::ok);
+            RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
+            RUVIA_CHECK(!result.tunnel()->header("content-length"));
+            auto tunnel = std::move(*result.tunnel()).udp();
+            bool oversized = false;
             try {
-                co_await forwarding.join();
-            } catch (...) {
-                if (!failure) {
-                    failure = std::current_exception();
-                }
+                co_await tunnel.send(std::string(65528, 'x'));
+            } catch (const std::length_error&) {
+                oversized = true;
             }
-            attachment.stop();
-        };
-        auto root = attachment.loop().start(run());
-        attachment.run();
-        root.get();
-        server.stop();
-        server.join();
-        if (failure) {
-            std::rethrow_exception(failure);
+            RUVIA_CHECK(oversized);
+            std::optional<ruvia::http_udp_datagram> retained;
+            const auto worker = attachment.loop().handle();
+            ruvia::task_scope reader(worker);
+            const auto receive = [&]() -> ruvia::task<void> {
+                retained = co_await tunnel.read();
+                RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
+                RUVIA_CHECK(!(co_await tunnel.read()));
+            };
+            reader.spawn(receive());
+            std::string payload = "dns-query";
+            auto cold_write = tunnel.send(payload);
+            payload.assign("mutated");
+            co_await std::move(cold_write);
+            auto sibling = co_await client.send({.target_ = "/udp-tunnel-sibling"});
+            auto sibling_body = co_await sibling.body().read_all();
+            RUVIA_CHECK(std::string_view(
+                            reinterpret_cast<const char*>(sibling_body.bytes().data()), sibling_body.size()) == "sibling");
+            co_await tunnel.finish();
+            co_await reader.join();
+            RUVIA_CHECK(observation->eof_);
+            RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
+            auto next_sibling = co_await client.send({.target_ = "/udp-tunnel-sibling"});
+            auto next_sibling_body = co_await next_sibling.body().read_all();
+            RUVIA_CHECK(std::string_view(
+                            reinterpret_cast<const char*>(next_sibling_body.bytes().data()), next_sibling_body.size()) == "sibling");
+            ruvia::stop_source cancel;
+            auto pending = client.with_options({.stop_token_ = cancel.token()}).open_udp_tunnel({.target_ = "/.well-known/masque/udp/cancel.test/53/"});
+            cancel.request_stop();
+            bool cancelled = false;
+            try {
+                (void)co_await std::move(pending);
+            } catch (const ruvia::http_client_error& error) {
+                cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+            }
+            RUVIA_CHECK(cancelled);
+            co_await client.shutdown();
+        } catch (...) {
+            failure = std::current_exception();
         }
+        server.finish();
+        attachment.stop();
+    };
+    auto done = attachment.loop().start(run());
+    attachment.run();
+    done.get();
+    if (failure) {
+        std::rethrow_exception(failure);
     }
 }

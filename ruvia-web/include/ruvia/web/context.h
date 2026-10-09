@@ -91,6 +91,8 @@ template <typename t_type>
 using request_state_binding_type = detail::request_binding_handle<t_type>;
 
 struct redirect_response_options final {
+    // URI reference: preserves existing %HH escapes and the first '#' separator;
+    // subsequent '#' bytes are encoded as %23. CR and LF are rejected.
     borrowed_text location_{};
     http_status_code status_{http_status::found};
 };
@@ -423,6 +425,8 @@ public:
 
     [[nodiscard]] http_response redirect(redirect_response_options options) const;
 
+    // File helpers honor If-Range only for matching strong ETags. Last-Modified
+    // dates are weak and do not authorize a partial response.
     [[nodiscard]] http_response file(file_response_options options) const;
 
     [[nodiscard]] http_response static_file(

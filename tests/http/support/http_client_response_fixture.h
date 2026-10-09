@@ -16,9 +16,6 @@
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/http/http_limits.h"
 
-#include "client/http_client_access.h"
-#include "client/http_client_content_encoding.h"
-#include "client/http_client_response_limits.h"
 #include "test_harness.h"
 
 namespace http_client_response_test {

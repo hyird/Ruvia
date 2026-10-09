@@ -48,6 +48,10 @@ constexpr std::size_t task_frame_cache_bin_count =
     task_frame_cache_max_block_bytes / task_frame_cache_granularity;
 
 [[nodiscard]] constexpr std::size_t task_frame_class_bytes(std::size_t bytes_value) noexcept {
+    // Large frames bypass the cache; rounding them could overflow.
+    if (bytes_value > task_frame_cache_max_block_bytes) {
+        return bytes_value;
+    }
     return (bytes_value + task_frame_cache_granularity - 1) & ~(task_frame_cache_granularity - 1);
 }
 

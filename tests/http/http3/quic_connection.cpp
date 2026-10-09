@@ -155,6 +155,36 @@ RUVIA_TEST(quic_connection_closing_keeps_tls_driver_and_packet_keys_until_retire
     RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
 }
 
+RUVIA_TEST(quic_connection_close_enforces_error_code_range_without_changing_state) {
+    for (const auto kind : {ruvia::quic_close_kind::transport,
+             ruvia::quic_close_kind::application, ruvia::quic_close_kind::tls}) {
+        counting_resource resource;
+        {
+            ruvia::quic_connection connection(client_config(), provider(),
+                {.drive_ = drive_tls, .retire_ = retire_tls}, &resource,
+                ruvia::quic_timestamp{} + std::chrono::seconds(1));
+            for (const auto code : {std::uint64_t{1} << 62, std::numeric_limits<std::uint64_t>::max()}) {
+                bool rejected{};
+                try {
+                    (void)connection.close({.kind_ = kind, .code_ = code});
+                } catch (const ruvia::quic_error& error) {
+                    rejected = error.code() == ruvia::quic_error_code::invalid_configuration;
+                }
+                RUVIA_CHECK(rejected);
+                RUVIA_CHECK_EQ(connection.info().state_, ruvia::quic_connection_state::connecting);
+                RUVIA_CHECK_EQ(connection.info().close_error_code_, std::uint64_t{0});
+            }
+            constexpr auto maximum = (std::uint64_t{1} << 62) - 1;
+            RUVIA_CHECK_EQ(connection.close({.kind_ = kind, .code_ = maximum}), ruvia::quic_operation_status::accepted);
+            RUVIA_CHECK_EQ(connection.info().state_, ruvia::quic_connection_state::closing);
+            RUVIA_CHECK_EQ(connection.info().close_error_code_, maximum);
+            RUVIA_CHECK_EQ(connection.close({.kind_ = kind, .code_ = 0}), ruvia::quic_operation_status::accepted);
+            RUVIA_CHECK_EQ(connection.info().close_error_code_, maximum);
+        }
+        RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
+    }
+}
+
 RUVIA_TEST(quic_connection_requires_tls_driver_retirement_callback) {
     counting_resource resource;
     retire_context retire_state;

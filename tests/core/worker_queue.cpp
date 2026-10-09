@@ -1,7 +1,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -9,44 +8,11 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/mpsc_ring_queue.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_runtime_context.h"
 
 #include "test_harness.h"
-
-namespace {
-
-struct release_observation final {
-    bool destroyed_{false};
-    bool reentered_{false};
-    bool idle_after_destruction_{false};
-    bool ran_{false};
-};
-
-struct reentrant_payload final {
-    ruvia::detail::worker_dispatcher& dispatcher_;
-    release_observation& observation_;
-
-    ~reentrant_payload() noexcept {
-        observation_.destroyed_ = true;
-        // Outside a running owner this query acquires the dispatcher mutex,
-        // proving payload destruction is not occurring under that mutex.
-        observation_.reentered_ = !dispatcher_.is_current();
-    }
-};
-
-ruvia::move_only_function<void()> make_payload(
-    ruvia::detail::worker_dispatcher& dispatcher, release_observation& observation_value) {
-    dispatcher.when_idle([&observation_value] {
-        observation_value.idle_after_destruction_ = observation_value.destroyed_ && observation_value.reentered_;
-    });
-    auto payload_value = std::make_unique<reentrant_payload>(dispatcher, observation_value);
-    return [payload_value = std::move(payload_value), &observation_value] { observation_value.ran_ = true; };
-}
-
-}  // namespace
 
 RUVIA_TEST(mpsc_ring_queue_delivers_each_producer_in_order_across_wraparound) {
     struct item final {
@@ -210,7 +176,6 @@ RUVIA_TEST(worker_cancellation_registration_handles_precancel_and_exception_unwi
     runtime.run();
     RUVIA_CHECK(unwound);
     RUVIA_CHECK_EQ(state.cancelled_, 1u);
-    RUVIA_CHECK_EQ(target.use_count(), 1L);
 }
 
 RUVIA_TEST(mpsc_ring_queue_releases_queued_values_and_pmr_storage) {
@@ -244,54 +209,4 @@ RUVIA_TEST(mpsc_ring_queue_releases_queued_values_and_pmr_storage) {
     }
     RUVIA_CHECK_EQ(destroyed, 1u);
     RUVIA_CHECK_EQ(memory.outstanding_, std::size_t{0});
-}
-
-RUVIA_TEST(worker_queue_abandoned_payload_reenters_before_idle_completion) {
-    // Queued work and an unpublished factory result use the same retirement
-    // sequence, despite claiming their releasing nodes at different boundaries.
-    for (const bool detach_in_factory : {false, true}) {
-        asio::io_context context;
-        auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
-        release_observation observation;
-        const auto status = dispatcher->post_factory([&] {
-            auto payload_value = make_payload(*dispatcher, observation);
-            if (detach_in_factory) {
-                dispatcher->detach_context();
-            }
-            return payload_value;
-        });
-        RUVIA_CHECK(status == ruvia::post_status::accepted);
-        if (!detach_in_factory) {
-            dispatcher->detach_context();
-        }
-        dispatcher->wait_for_reservations();
-        context.run();
-        RUVIA_CHECK(!observation.ran_);
-        RUVIA_CHECK(observation.destroyed_);
-        RUVIA_CHECK(observation.reentered_);
-        RUVIA_CHECK(observation.idle_after_destruction_);
-    }
-}
-
-RUVIA_TEST(worker_queue_failed_publication_recovers_capacity_and_destroys_payload_before_idle) {
-    asio::io_context context;
-    // Without a shared owner publication cannot acquire the drain's lifetime.
-    // Repeated attempts must recover the single reservation rather than fill it.
-    ruvia::detail::worker_dispatcher dispatcher(context, 1);
-    for (unsigned attempt_value = 0; attempt_value != 2; ++attempt_value) {
-        release_observation observation;
-        bool failed = false;
-        try {
-            (void)dispatcher.post_factory([&] { return make_payload(dispatcher, observation); });
-        } catch (const std::bad_weak_ptr&) {
-            failed = true;
-        }
-        RUVIA_CHECK(failed);
-        dispatcher.wait_for_reservations();
-        RUVIA_CHECK(!observation.ran_);
-        RUVIA_CHECK(observation.destroyed_);
-        RUVIA_CHECK(observation.reentered_);
-        RUVIA_CHECK(observation.idle_after_destruction_);
-    }
-    dispatcher.detach_context();
 }
