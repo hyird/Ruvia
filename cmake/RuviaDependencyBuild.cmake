@@ -1,10 +1,34 @@
 cmake_minimum_required(VERSION 3.28)
 
+if(kind STREQUAL "patch-postgresql")
+    # Upstream's automatic dependency lookup can fall back to system OpenSSL.
+    # Require our isolated pkg-config metadata instead; never search elsewhere.
+    file(READ "${source}/meson.build" meson_build)
+    set(original "ssl = dependency('openssl', required: false)")
+    set(replacement "ssl = dependency('openssl', required: true, method: 'pkg-config', static: true)")
+    string(FIND "${meson_build}" "${original}" found)
+    if(found EQUAL -1)
+        string(FIND "${meson_build}" "${replacement}" found)
+        if(found EQUAL -1)
+            message(FATAL_ERROR "PostgreSQL OpenSSL dependency declaration has changed")
+        endif()
+    else()
+        string(REPLACE "${original}" "${replacement}" meson_build "${meson_build}")
+        file(WRITE "${source}/meson.build" "${meson_build}")
+    endif()
+    return()
+endif()
+
 set(prefix "${root}/${config}")
 set(binary "${prefix}/build")
 file(MAKE_DIRECTORY "${binary}" "${prefix}/include" "${prefix}/lib")
 if(WIN32)
-    set(ENV{CL} "$ENV{CL} /FS")
+    # MSBuild's pipe bypasses stdout/stderr, breaking Meson's /showIncludes probe.
+    unset(ENV{VS_UNICODE_OUTPUT})
+    set(ENV{CL} "/FS")
+    unset(ENV{_CL_})
+    get_filename_component(compiler_dir "${compiler}" DIRECTORY)
+    set(ENV{PATH} "${compiler_dir};$ENV{PATH}")
 endif()
 
 function(run)
@@ -17,7 +41,7 @@ function(copy_library source_name destination_name)
 endfunction()
 
 function(configure_openssl)
-    string(JOIN ";" signature ${ARGV} "$ENV{CC}" "$ENV{_CL_}")
+    string(JOIN ";" signature ${ARGV} "$ENV{CC}" "$ENV{CL}" "$ENV{_CL_}")
     set(signature_file "${binary}/ruvia-configure.txt")
     if(EXISTS "${signature_file}")
         file(READ "${signature_file}" previous_signature)
@@ -31,9 +55,9 @@ endfunction()
 if(kind STREQUAL "openssl")
     if(WIN32)
         if(config STREQUAL "Debug")
-            set(ENV{_CL_} "$ENV{_CL_} /MTd")
+            set(ENV{_CL_} "/MTd")
         else()
-            set(ENV{_CL_} "$ENV{_CL_} /MT")
+            set(ENV{_CL_} "/MT")
         endif()
     endif()
     set(options no-shared no-tests no-apps no-docs no-module --libdir=lib "--prefix=${prefix}")
@@ -41,7 +65,6 @@ if(kind STREQUAL "openssl")
         list(APPEND options --debug)
     endif()
     if(WIN32)
-        find_program(nasm NAMES nasm)
         if(NOT nasm)
             list(APPEND options no-asm)
         endif()
@@ -60,20 +83,42 @@ if(kind STREQUAL "openssl")
     endif()
 elseif(kind STREQUAL "mariadb")
     set(ssl "${openssl_root}/${config}")
+    foreach(library IN ITEMS openssl_ssl openssl_crypto)
+        set(${library} "${ssl}/lib/${library_prefix}${library}${library_suffix}")
+        if(NOT EXISTS "${${library}}")
+            message(FATAL_ERROR "Fetched OpenSSL library is missing: ${${library}}")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${zlib_library}")
+        message(FATAL_ERROR "Fetched zlib library is missing: ${zlib_library}")
+    endif()
+    set(zlib_include "${binary}/ruvia-zlib/include")
+    file(MAKE_DIRECTORY "${zlib_include}")
+    file(COPY "${zlib_source}/zlib.h" "${zlib_binary}/zconf.h" DESTINATION "${zlib_include}")
     set(args -S "${source}" -B "${binary}" -G "${generator}"
         "-DCMAKE_BUILD_TYPE=${config}" "-DCMAKE_C_COMPILER=${compiler}"
         "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-        -DWITH_UNIT_TESTS=OFF -DWITH_TOOLS=OFF -DWITH_CURL=OFF
-        -DWITH_EXTERNAL_ZLIB=ON "-DZLIB_INCLUDE_DIR=${zlib_include}" "-DZLIB_LIBRARY=${zlib_library}"
-        -DWITH_SSL=OPENSSL "-DOPENSSL_ROOT_DIR=${ssl}" -DOPENSSL_USE_STATIC_LIBS=ON
-        -DCLIENT_PLUGIN_AUTH_GSSAPI=OFF -DCLIENT_PLUGIN_REMOTEIO=OFF
+        -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
+        -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=OFF -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON
+        -DWITH_UNIT_TESTS=OFF -DWITH_TOOLS=OFF -DWITH_CURL=OFF -DWITH_ICONV=OFF
+        -DWITH_EXTERNAL_ZLIB=ON "-DZLIB_INCLUDE_DIR=${zlib_include}"
+        "-DZLIB_LIBRARY=${zlib_library}"
+        -DZSTD_LIBRARIES:FILEPATH= -DZSTD_INCLUDE_DIRS:PATH=
+        -DWITH_SSL=OPENSSL "-DOPENSSL_INCLUDE_DIR=${ssl}/include"
+        "-DOPENSSL_SSL_LIBRARY=${openssl_ssl}" "-DOPENSSL_CRYPTO_LIBRARY=${openssl_crypto}"
+        -DCLIENT_PLUGIN_AUTH_GSSAPI_CLIENT=OFF
+        -DCLIENT_PLUGIN_REMOTE_IO=OFF
         -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC -DCLIENT_PLUGIN_SHA256_PASSWORD=STATIC
         -DCLIENT_PLUGIN_MYSQL_CLEAR_PASSWORD=STATIC -DCLIENT_PLUGIN_DIALOG=STATIC
-        -DCLIENT_PLUGIN_CLIENT_ED25519=STATIC -DCLIENT_PLUGIN_ZSTD=OFF)
+        -DOPENSSL_VERSION=4.0.3 -DZSTD_LIBRARY= -DZSTD_INCLUDE_DIR=)
+    if(WIN32)
+        list(APPEND args -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)
+    endif()
     if(platform)
         list(APPEND args -A "${platform}")
+    endif()
+    if(toolset)
+        list(APPEND args -T "${toolset}")
     endif()
     run("${CMAKE_COMMAND}" ${args})
     run("${CMAKE_COMMAND}" --build "${binary}" --config "${config}" --target mariadbclient "-j${jobs}")
@@ -92,10 +137,50 @@ elseif(kind STREQUAL "mariadb")
     file(COPY "${binary}/include/" DESTINATION "${prefix}/include" FILES_MATCHING PATTERN "*.h")
 elseif(kind STREQUAL "postgresql")
     set(ssl "${openssl_root}/${config}")
-    set(options -Dauto_features=disabled -Dssl=openssl -Ddefault_library=static
-        -Dextra_include_dirs=${ssl}/include -Dextra_lib_dirs=${ssl}/lib "-DPERL=${perl}")
+    set(pkgconfig_dir "${binary}/ruvia-pkgconfig")
+    file(MAKE_DIRECTORY "${pkgconfig_dir}")
+    file(STRINGS "${ssl}/include/openssl/opensslv.h" version_line
+        REGEX "^# *define OPENSSL_VERSION_STR ")
+    if(NOT version_line MATCHES "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
+        message(FATAL_ERROR "Cannot read fetched OpenSSL version")
+    endif()
+    set(ssl_version "${CMAKE_MATCH_1}")
+    set(ssl_library "${ssl}/lib/${library_prefix}openssl_ssl${library_suffix}")
+    set(crypto_library "${ssl}/lib/${library_prefix}openssl_crypto${library_suffix}")
+    foreach(library IN ITEMS "${ssl_library}" "${crypto_library}")
+        if(NOT EXISTS "${library}")
+            message(FATAL_ERROR "Fetched OpenSSL library is missing: ${library}")
+        endif()
+    endforeach()
+    if(WIN32)
+        set(ssl_platform_libs "ws2_32.lib crypt32.lib advapi32.lib user32.lib")
+    else()
+        set(ssl_platform_libs "-pthread -lm")
+        if(dl_library)
+            string(APPEND ssl_platform_libs " -l${dl_library}")
+        endif()
+    endif()
+    file(WRITE "${pkgconfig_dir}/openssl.pc"
+        "Name: Ruvia fetched OpenSSL\nDescription: FetchContent static OpenSSL\nVersion: ${ssl_version}\nLibs: \"${ssl_library}\" \"${crypto_library}\" ${ssl_platform_libs}\nCflags: -I\"${ssl}/include\"\n")
+    # Both pkg-config search paths are private, including when nested in a
+    # consumer using vcpkg or another package manager.
+    set(ENV{PKG_CONFIG_PATH} "")
+    set(ENV{PKG_CONFIG_LIBDIR} "${pkgconfig_dir}")
+    set(ENV{PKG_CONFIG_SYSROOT_DIR} "")
+    set(ENV{NINJA} "${ninja}")
+    file(WRITE "${binary}/ruvia-native.ini"
+        "[binaries]\nc = ['${compiler}']\nar = ['${archiver}']\npkg-config = ['${pkgconfig}']\n")
+    set(options --backend=ninja --wrap-mode=nofallback
+        "--native-file=${binary}/ruvia-native.ini"
+        -Dauto_features=disabled -Dssl=openssl -Dzlib=disabled -Ddefault_library=static
+        -Db_staticpic=true "-Dpkg_config_path=[]" "-DPERL=${perl}"
+        "-DBISON=['${bison}']" "-DFLEX=['${flex}']")
     if(config STREQUAL "Debug")
         list(APPEND options --buildtype=debug)
+    elseif(config STREQUAL "RelWithDebInfo")
+        list(APPEND options --buildtype=debugoptimized)
+    elseif(config STREQUAL "MinSizeRel")
+        list(APPEND options --buildtype=minsize)
     else()
         list(APPEND options --buildtype=release)
     endif()
@@ -117,6 +202,7 @@ elseif(kind STREQUAL "postgresql")
     run("${meson}" compile -C "${binary}" "-j${jobs}" libpq:static_library libpgcommon_shlib:static_library libpgport:static_library libpgcommon_excluded_shlib:static_library)
     file(READ "${binary}/meson-info/intro-targets.json" targets)
     string(JSON count LENGTH "${targets}")
+    set(missing postgresql_client postgresql_common postgresql_port postgresql_frontend)
     math(EXPR last "${count} - 1")
     foreach(index RANGE ${last})
         string(JSON name GET "${targets}" ${index} name)
@@ -135,8 +221,12 @@ elseif(kind STREQUAL "postgresql")
             endif()
             string(JSON library GET "${targets}" ${index} filename 0)
             copy_library("${library}" "${destination}")
+            list(REMOVE_ITEM missing "${destination}")
         endif()
     endforeach()
+    if(missing)
+        message(FATAL_ERROR "PostgreSQL static libraries were not produced: ${missing}")
+    endif()
     file(COPY "${source}/src/interfaces/libpq/libpq-fe.h"
         "${source}/src/interfaces/libpq/libpq-events.h"
         "${source}/src/include/postgres_ext.h" DESTINATION "${prefix}/include")

@@ -65,34 +65,6 @@ jobs:
       CC: gcc-13
       CXX: g++-13
       BUILD_TYPE: Debug
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: ruvia
-          POSTGRES_PASSWORD: ruvia
-          POSTGRES_DB: ruvia
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U ruvia -d ruvia"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_USER: ruvia
-          MARIADB_PASSWORD: ruvia
-          MARIADB_DATABASE: ruvia
-          MARIADB_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -100,31 +72,37 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build perl bison flex pkg-config
+          sudo apt-get install -y gcc-13 g++-13 ninja-build make perl bison flex pkg-config
           python3 -m pip install --user meson
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Restore dependency builds
-        uses: actions/cache@v6
+      - name: Restore dependency cache
+        id: restore-dependency-cache
+        uses: actions/cache/restore@v6
         with:
-          path: build/test/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ hashFiles('cmake/Ruvia*Dependencies.cmake', 'cmake/RuviaNativeBuild.cmake') }}
+          path: build/_deps
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-${{ hashFiles('cmake/RuviaDependencies.cmake', 'cmake/RuviaDependencyConfigure.cmake', 'cmake/RuviaDependencyBuild.cmake') }}
+          restore-keys: |
+            fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-
       - name: Configure
         run: |
-          cmake -S . -B build/test -G Ninja \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
+      - name: Build dependencies
+        run: cmake --build build --config "$BUILD_TYPE" --target ruvia_dependencies -j$(nproc)
       - name: Build
-        run: cmake --build build/test --config "$BUILD_TYPE" -j$(nproc)
+        run: cmake --build build --config "$BUILD_TYPE" -j$(nproc)
       - name: Test
-        env:
-          RUVIA_RUN_POSTGRESQL_INTEGRATION: 1
-          RUVIA_TEST_PG_PORT: 5432
-          RUVIA_RUN_MARIADB_INTEGRATION: 1
-        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
-
+        run: ctest --test-dir build --output-on-failure --build-config "$BUILD_TYPE"
+      - name: Save dependency cache
+        if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/_deps
+          key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}
   windows_build:
     name: Windows
     runs-on: windows-2025
@@ -142,26 +120,36 @@ jobs:
         shell: pwsh
         run: |
           choco install strawberryperl winflexbison3 jom pkgconfiglite --yes --no-progress
-          python -m pip install meson
+          python -m pip install meson ninja
           "C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
-      - name: Restore dependency builds
-        uses: actions/cache@v6
+      - name: Restore dependency cache
+        id: restore-dependency-cache
+        uses: actions/cache/restore@v6
         with:
-          path: build/test/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-${{ hashFiles('cmake/Ruvia*Dependencies.cmake', 'cmake/RuviaNativeBuild.cmake') }}
+          path: build/_deps
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-${{ hashFiles('cmake/RuviaDependencies.cmake', 'cmake/RuviaDependencyConfigure.cmake', 'cmake/RuviaDependencyBuild.cmake') }}
+          restore-keys: |
+            fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build/test `
+          cmake -S . -B build `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
+      - name: Build dependencies
+        shell: pwsh
+        run: cmake --build build --config $env:BUILD_TYPE --target ruvia_dependencies "-j$([Environment]::ProcessorCount)"
       - name: Build
         shell: pwsh
-        run: |
-          function nproc { [Environment]::ProcessorCount }
-          cmake --build build/test --config $env:BUILD_TYPE "-j$(nproc)"
+        run: cmake --build build --config $env:BUILD_TYPE "-j$([Environment]::ProcessorCount)"
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build/test -C $env:BUILD_TYPE --output-on-failure
+        run: ctest --test-dir build --build-config $env:BUILD_TYPE --output-on-failure
+      - name: Save dependency cache
+        if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/_deps
+          key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}

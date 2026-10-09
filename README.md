@@ -39,13 +39,20 @@ ctest --test-dir build -C Release --output-on-failure
 | PostgreSQL libpq (optional) | 18.6 |
 | hiredis (optional) | 1.4.1 |
 
-Only dependencies of enabled components are fetched. Sources and native build
-outputs stay under `build/_deps`; CMake's `FETCHCONTENT_BASE_DIR` and
-`FETCHCONTENT_SOURCE_DIR_RUVIA_<NAME>` overrides support shared caches and offline
-source trees. Installed packages use the same dependency definitions when
-consumed with `find_package(ruvia REQUIRED COMPONENTS core http web)`; consumers
-enable both C and C++ in their CMake project. Updating a dependency means changing
-its release URL and SHA-256 together in `cmake/RuviaDependencies.cmake`.
+Only dependencies of enabled components are fetched. Third-party headers and
+libraries come exclusively from these builds; preinstalled third-party libraries
+and package-manager toolchains are not dependency alternatives. MariaDB and
+PostgreSQL use the fetched OpenSSL static libraries, not a separate OpenSSL
+discovered on the host.
+Sources and native build outputs stay under `build/_deps`; CMake's
+`FETCHCONTENT_BASE_DIR` and `FETCHCONTENT_SOURCE_DIR_RUVIA_<NAME>` overrides support
+shared caches and offline source trees. Installed packages use the same dependency
+definitions when consumed with `find_package(ruvia REQUIRED COMPONENTS core http web)`;
+consumers enable both C and C++ in their CMake project. MSVC consumers also select
+the matching static runtime through `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
+Updating a dependency means changing its release URL and SHA-256 together in
+`cmake/RuviaDependencies.cmake`. The aggregate `ruvia_dependencies` CMake target
+builds all third-party dependencies ahead of the project targets.
 
 Start with [basic_http.cpp](examples/web/basic_http.cpp). The
 [Web examples](examples/web) contain usage, configuration, and lifetime notes
@@ -59,7 +66,7 @@ Streaming, SSE, and WebSocket endpoints require an explicit HEAD route.
 
 Enable `RUVIA_BUILD_EXAMPLES=ON`, then build with
 `cmake --build build --config Release --target ruvia_examples_web "-j$(nproc)"`.
-In PowerShell, define `function nproc { [Environment]::ProcessorCount }` first.
+In PowerShell, replace `-j$(nproc)` with `"-j$([Environment]::ProcessorCount)"`.
 Enable `RUVIA_ENABLE_MARIADB`, `RUVIA_ENABLE_POSTGRESQL`, `RUVIA_ENABLE_REDIS`,
 or `RUVIA_ENABLE_JWT` for the corresponding examples.
 

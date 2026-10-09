@@ -69,7 +69,7 @@ public:
     // original request once, retaining its allocator (which must outlive it).
     [[nodiscard]] std::optional<HttpClientRequestStorage> takeRequestAfterRetirement();
 
-    // Only create() can produce PreparedTag; this lets expected construct the
+    // Only create() can produce PreparedTag; this lets variant construct the
     // completed cursor in place without a potentially throwing cursor move.
     explicit Http3ClientRequestWrite(PreparedTag, std::pmr::memory_resource* resource,
         HttpClientRequestStorage&& request, std::pmr::string&& scheme,

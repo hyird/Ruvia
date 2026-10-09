@@ -18,11 +18,12 @@
 
 namespace ruvia::detail {
 
-using PreparedRequestWriteResult = std::variant<Http3ClientRequestWrite,
-    Http3ClientRequestWriteError>;
-static_assert(std::is_nothrow_constructible_v<PreparedRequestWriteResult, std::in_place_index_t<0>,
+// variant's in-place constructor has no noexcept specification. The commit
+// relies on the selected alternative's constructor, without moving the cursor.
+static_assert(std::is_nothrow_constructible_v<Http3ClientRequestWrite,
     Http3ClientRequestWrite::PreparedTag, std::pmr::memory_resource*, HttpClientRequestStorage&&,
-    std::pmr::string&&, std::pmr::string&&, std::pmr::vector<char>&&, Http3DataWritePlan>);
+    std::pmr::string&&, std::pmr::string&&, std::pmr::vector<char>&&, Http3DataWritePlan,
+    Http3FieldSectionLimits>);
 
 Http3ClientRequestWrite::Http3ClientRequestWrite(PreparedTag,
     std::pmr::memory_resource* resource, HttpClientRequestStorage&& request,

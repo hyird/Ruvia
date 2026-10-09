@@ -1,46 +1,13 @@
 ruvia_fetch_http_dependencies()
 
 ruvia_collect_cpp_sources(RUVIA_HTTP_SOURCES src)
-add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
-    include/ruvia/http/Http3ClientRequestHead.h
-    include/ruvia/http/Http3ClientResponse.h
-    include/ruvia/http/Http3Connection.h
-    include/ruvia/http/Http3ConnectionError.h
-    include/ruvia/http/Http3ControlStream.h
-    include/ruvia/http/Http3DataWritePlan.h
-    include/ruvia/http/Http3FieldSection.h
-    include/ruvia/http/Http3Frames.h
-    include/ruvia/http/Http3LocalCriticalStreams.h
-    include/ruvia/http/Http3MessageBody.h
-    include/ruvia/http/Http3MessageHead.h
-    include/ruvia/http/Http3PeerStreams.h
-    include/ruvia/http/Http3QpackConnection.h
-    include/ruvia/http/Http3RequestWriter.h
-    include/ruvia/http/Http3Qpack.h
-    include/ruvia/http/Http3QpackStreams.h
-    include/ruvia/http/Http3ResponseWriter.h
-    include/ruvia/http/Http3ServerRequest.h
-    include/ruvia/http/Http3ServerRequestAdmission.h
-    include/ruvia/http/Http3Settings.h
-    include/ruvia/http/Http3StreamFrames.h
-    include/ruvia/http/Http3WebSocketHandshake.h
-    include/ruvia/http/Http3VarInt.h
-    include/ruvia/http/HttpRepresentationResponsePlan.h
-    include/ruvia/http/http_multipart_byte_range_plan.h
-    include/ruvia/http/http3_buffered_response_cursor.h
-    include/ruvia/http/http3_critical_stream_output.h)
-add_library(ruvia::http ALIAS ruvia-http)
-
-set_target_properties(ruvia-http PROPERTIES
-    EXPORT_NAME http
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
+add_library(ruvia-http ${RUVIA_HTTP_SOURCES})
 
 if(WIN32)
     target_compile_definitions(ruvia-http PRIVATE NOMINMAX)
 endif()
 
-ruvia_configure_library(ruvia-http)
+ruvia_configure_library(ruvia-http http)
 
 target_link_libraries(ruvia-http
     PRIVATE

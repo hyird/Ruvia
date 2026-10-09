@@ -10,14 +10,8 @@ configure_file(
 
 ruvia_collect_cpp_sources(RUVIA_CORE_SOURCES src)
 add_library(ruvia-core ${RUVIA_CORE_SOURCES})
-add_library(ruvia::core ALIAS ruvia-core)
 
-set_target_properties(ruvia-core PROPERTIES
-    EXPORT_NAME core
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
-
-ruvia_configure_library(ruvia-core)
+ruvia_configure_library(ruvia-core core)
 ruvia_configure_runtime_library(ruvia-core)
 
 target_include_directories(ruvia-core

@@ -1516,8 +1516,18 @@ RUVIA_TEST(http2_data_output_budget_recovers_after_peer_reset_without_reusing_pe
 
     budget.noteDataSubmitted(first, 2);
     bool secondAcquired = false;
+    std::size_t remaining = 2;
+    std::exception_ptr failure;
+    const auto stopWhenBothComplete = [&](std::exception_ptr error) {
+        if (error && !failure) {
+            failure = error;
+        }
+        if (--remaining == 0) {
+            asio::post(io, [&io] { io.stop(); });
+        }
+    };
     asio::co_spawn(io, acquireDataBudgetSlot(budget, second, streamSignal, secondAcquired),
-        stopIoOnCompletion(io));
+        stopWhenBothComplete);
     (void)io.poll();
     io.restart();
     RUVIA_CHECK(!secondAcquired);
@@ -1556,9 +1566,12 @@ RUVIA_TEST(http2_data_output_budget_recovers_after_peer_reset_without_reusing_pe
     RUVIA_CHECK(!secondAcquired);
     asio::co_spawn(io, [&]() -> asio::awaitable<void> {
         budget.reconcile(connection, true);
-        co_return; }, stopIoOnCompletion(io));
+        co_return; }, stopWhenBothComplete);
     io.run();
     io.restart();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
     RUVIA_CHECK(secondAcquired);
     RUVIA_CHECK(connection.submitData(second, "x", ruvia::Http2EndStream::kKeepOpen) ==
                 ruvia::Http2DataSubmitStatus::kAccepted);
