@@ -38,13 +38,6 @@ RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
     }
 }
 
-RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction) {
-    auto head = ruvia::detail::http_client_response_head_access::make(ruvia::http_status::multi_status,
-        http_protocol_version::http10, std::pmr::get_default_resource());
-    RUVIA_CHECK_EQ(head.status(), ruvia::http_status::multi_status);
-    RUVIA_CHECK(head.protocol_version() == http_protocol_version::http10);
-}
-
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     const auto upper_boundary =
         parse_head("GET", "HTTP/1.1 599 Extension Status\r\nContent-Length: 0");

@@ -5,7 +5,6 @@
 
 #include "ruvia/web/model.h"
 #include "ruvia/web/model_json.h"
-#include "ruvia/web/validation.h"
 
 #include "test_harness.h"
 
@@ -44,10 +43,6 @@ RUVIA_TEST(nullable_optional_string_accepts_json_null) {
     RUVIA_CHECK(!parsed_value->get<"remark">().has_value());
     RUVIA_CHECK(parsed_value->is_present<"remark">());
     RUVIA_CHECK(parsed_value->is_null<"remark">());
-
-    ruvia::validator validator;
-    ruvia::detail::model_validation_access::validate_model(*parsed_value, validator);
-    RUVIA_CHECK(validator.ok());
 }
 
 RUVIA_TEST(nullable_optional_string_still_accepts_text) {
@@ -86,16 +81,6 @@ RUVIA_TEST(required_string_rejects_json_null) {
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(!ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource})
             .has_value());
-
-    const auto partial =
-        ruvia::detail::model_parse_access::parse_json_borrowed_partial<required_remark_request>(
-            R"({"remark":null})", &resource);
-    RUVIA_CHECK(partial.has_value());
-    if (!partial) {
-        return;
-    }
-    RUVIA_CHECK(ruvia::detail::model_validation_access::field_state<"remark">(*partial) ==
-                ruvia::detail::model_field_state::invalid_type);
 }
 
 RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
@@ -160,7 +145,7 @@ RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));
 }
 
-RUVIA_TEST(model_json_emission_options_share_exact_string_size_and_output_for_all_states) {
+RUVIA_TEST(model_json_emission_options_write_expected_output_for_all_states) {
     // Each pair of bits selects missing, explicit null, empty, or text. The
     // Cartesian product also covers every comma position after omitted fields.
     constexpr std::string_view names[] = {R"("p\"lain")", R"("omitted")", R"("emitted")", R"("both")"};
@@ -197,6 +182,5 @@ RUVIA_TEST(model_json_emission_options_share_exact_string_size_and_output_for_al
         expected.push_back('}');
         const auto output = ruvia::to_json(value);
         RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
-        RUVIA_CHECK_EQ(ruvia::detail::model_json_access::size_hint(value), output.size());
     }
 }

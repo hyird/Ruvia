@@ -13,12 +13,14 @@ enum class http_set_cookie_attribute : std::uint8_t {
     secure = 1U << 0,
     path = 1U << 1,
     same_site_none = 1U << 2,
+    partitioned = 1U << 3,
 };
 
 // Borrowed, allocation-free Set-Cookie fields for outbound client runtimes.
 // Unknown and oversized attributes are ignored; invalid received cookies are
 // rejected. Expires follows RFC 6265 cookie-date token grammar, including its
 // permitted suffixes; this does not relax the separate HTTP-date grammar.
+// Partitioned is reported independently of Secure; callers own origin policy.
 class http_set_cookie_view final {
 public:
     [[nodiscard]] constexpr std::string_view name() const noexcept {

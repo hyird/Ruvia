@@ -49,20 +49,21 @@ RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {
 
     http1_client_response_parser parser(prepared.prepared()->exchange_state());
     constexpr std::string_view early_hints = "HTTP/1.1 103 Early Hints\r\n\r\n";
-    for (std::size_t i = 0; i < ruvia::detail::max_http_client_interim_responses; ++i) {
+    bool reached_limit = false;
+    for (std::size_t i = 0; i < 1024; ++i) {
         const auto interim = parser.parse(early_hints);
+        if (const auto* failure = interim.failure()) {
+            RUVIA_CHECK(failure->error() ==
+                        http1_client_response_parse_error::too_many_informational_responses);
+            reached_limit = true;
+            break;
+        }
         RUVIA_CHECK(interim.parsed() != nullptr);
         if (interim.parsed() != nullptr) {
             RUVIA_CHECK(interim.parsed()->plan().informational() != nullptr);
         }
     }
-
-    const auto excessive = parser.parse(early_hints);
-    RUVIA_CHECK(excessive.failure() != nullptr);
-    if (excessive.failure() != nullptr) {
-        RUVIA_CHECK(excessive.failure()->error() ==
-                    http1_client_response_parse_error::too_many_informational_responses);
-    }
+    RUVIA_CHECK(reached_limit);
     const auto after_failure = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(after_failure.terminal() != nullptr);
     if (after_failure.terminal() != nullptr) {

@@ -257,7 +257,7 @@ RUVIA_TEST(http1_parse_message_maps_random_valid_heads_to_stable_request_plans) 
     }
 }
 
-RUVIA_TEST(http1_internal_parse_failure_classifies_only_request_line_failures) {
+RUVIA_TEST(http1_parse_failure_classifies_only_request_line_failures) {
     http1_server_request_parser parser;
 
     const auto request_line_failure =

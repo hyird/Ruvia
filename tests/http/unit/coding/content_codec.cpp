@@ -9,7 +9,6 @@
 
 #include "ruvia/http/http_content_encoder.h"
 
-#include "coding/http_content_coding.h"
 #include "content_decoding_fixture.h"
 
 using ruvia::http_content_encoder;
@@ -267,49 +266,6 @@ RUVIA_TEST(http_content_encoding_stack_round_trips_in_protocol_order) {
         }
     }
     RUVIA_CHECK_EQ(resource.live_bytes(), 0U);
-}
-
-RUVIA_TEST(http_content_coding_parser_separates_capability_from_syntax) {
-    std::pmr::monotonic_buffer_resource resource;
-    ruvia::detail::http_content_coding_field_parser unknown(
-        ruvia::detail::http_field_list_role::recipient, &resource);
-    unknown.update("compress");
-    unknown.update("gzip");
-    const auto unknown_result = std::move(unknown).finish();
-    RUVIA_CHECK(unknown_result.invalid() == nullptr);
-    RUVIA_CHECK(unknown_result.unsupported() != nullptr);
-
-    ruvia::detail::http_content_coding_field_parser stacked(
-        ruvia::detail::http_field_list_role::recipient, &resource);
-    stacked.update("gzip");
-    stacked.update("");
-    stacked.update("br");
-    const auto stacked_result = std::move(stacked).finish();
-    RUVIA_CHECK(stacked_result.invalid() == nullptr);
-    RUVIA_CHECK(stacked_result.unsupported() == nullptr);
-    RUVIA_CHECK_EQ(stacked_result.codings().size(), 2U);
-
-    ruvia::detail::http_content_coding_field_parser malformed_after_unknown(
-        ruvia::detail::http_field_list_role::recipient, &resource);
-    malformed_after_unknown.update("compress");
-    malformed_after_unknown.update("gzip;level=9");
-    const auto malformed_result = std::move(malformed_after_unknown).finish();
-    RUVIA_CHECK(malformed_result.unsupported() == nullptr);
-    RUVIA_CHECK(malformed_result.invalid() != nullptr);
-}
-
-RUVIA_TEST(http_content_coding_empty_members_follow_field_list_role) {
-    for (const std::string_view value : {"", ",gzip", "gzip,", "gzip,,br", "deflate,"}) {
-        RUVIA_CHECK(ruvia::detail::is_valid_http_content_encoding_field_value(
-            value, ruvia::detail::http_field_list_role::recipient));
-        RUVIA_CHECK(!ruvia::detail::is_valid_http_content_encoding_field_value(
-            value, ruvia::detail::http_field_list_role::sender));
-    }
-
-    RUVIA_CHECK(ruvia::detail::is_valid_http_content_encoding_field_value(
-        "deflate", ruvia::detail::http_field_list_role::sender));
-    RUVIA_CHECK(ruvia::detail::is_valid_http_content_encoding_field_value(
-        "gzip, br", ruvia::detail::http_field_list_role::sender));
 }
 
 RUVIA_TEST(http_zstd_content_rejects_window_above_rfc9659_limit) {
@@ -672,6 +628,24 @@ RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
         encoder.finish(chunk);
         encoded.append(chunk);
         RUVIA_CHECK_EQ(decoded(coding, encoded, input.size()), input);
+    }
+}
+
+RUVIA_TEST(http_content_encoder_accepts_empty_flushes_between_chunks) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
+             http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        std::pmr::string encoded(std::pmr::get_default_resource());
+        http_content_encoder encoder(coding, std::pmr::get_default_resource());
+        encoder.write({}, encoded, true);
+        encoder.write({}, encoded, true);
+        encoder.write("first", encoded, true);
+        encoder.write({}, encoded, true);
+        encoder.write({}, encoded, true);
+        encoder.write("second", encoded, true);
+        encoder.write({}, encoded, true);
+        encoder.write({}, encoded, true);
+        encoder.finish(encoded);
+        RUVIA_CHECK_EQ(decoded(coding, encoded, 11), std::string("firstsecond"));
     }
 }
 

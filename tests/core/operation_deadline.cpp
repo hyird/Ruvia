@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "ruvia/core/operation_timeout.h"
-#include "ruvia/core/worker_timer.h"
 
 namespace {
 
@@ -61,23 +60,11 @@ bool operation_timeout_uses_one_absolute_deadline() {
            unlimited.constrained_by(std::chrono::seconds(2)).deadline().has_value();
 }
 
-bool positive_timeout_remainder_does_not_become_immediate() {
-    using clock_type = ruvia::operation_timeout::clock_type;
-    const auto exact = std::chrono::duration_cast<clock_type::duration>(std::chrono::milliseconds(3));
-    const auto fractional = exact +
-                            std::chrono::duration_cast<clock_type::duration>(std::chrono::microseconds(1));
-    return ruvia::worker_timer_ceil_milliseconds(exact) == std::chrono::milliseconds(3) &&
-           ruvia::worker_timer_ceil_milliseconds(fractional) ==
-               std::chrono::milliseconds(4) &&
-           ruvia::worker_timer_ceil_milliseconds(clock_type::duration::zero()) ==
-               std::chrono::milliseconds(0);
-}
-
 }  // namespace
 
 int main() {
-    return operation_deadline_transitions_are_exclusive() && operation_timeout_uses_one_absolute_deadline() &&
-                   positive_timeout_remainder_does_not_become_immediate()
+    return operation_deadline_transitions_are_exclusive() &&
+                   operation_timeout_uses_one_absolute_deadline()
                ? 0
                : 1;
 }

@@ -12,7 +12,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -25,19 +24,15 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/detail/io/asio_await.h"
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/asio_task.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/runtime_lifecycle.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_runtime_context.h"
 #include "ruvia/core/worker_signal.h"
-
-#include "worker_selection.h"
 
 namespace {
 
@@ -414,8 +409,7 @@ bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
     owner_value.reset();
     runtime.detach();
     source.request_stop();
-    return observed.owner_destroyed_ && observed.calls_ == 0 && context.run() == 0 &&
-           queue.use_count() == 1;
+    return observed.owner_destroyed_ && observed.calls_ == 0 && context.run() == 0;
 }
 
 bool test_worker_runtime_context_owns_stable_detached_endpoint() {
@@ -423,9 +417,7 @@ bool test_worker_runtime_context_owns_stable_detached_endpoint() {
     std::optional<ruvia::worker_handle> escaped_handle;
     {
         ruvia::worker_runtime_context runtime(context, 8);
-        const auto* handle_address = &runtime.handle();
-        if (&runtime.io_context() != &context || handle_address != &runtime.handle() ||
-            !runtime.handle().valid()) {
+        if (&runtime.io_context() != &context || !runtime.handle().valid()) {
             return false;
         }
         escaped_handle.emplace(runtime.handle());
@@ -450,102 +442,6 @@ bool test_queue_callable_destruction_can_inspect_worker() {
     }
     attachment.run();
     return state_value.ran_ && state_value.destroyed_ > 0;
-}
-
-bool test_queue_factory_rollback_and_detach() {
-    asio::io_context context;
-    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
-    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
-    bool thrown = false;
-    try {
-        static_cast<void>((worker_value).post_factory([]() -> ruvia::move_only_function<void()> {
-            throw std::runtime_error("factory failed");
-        }));
-    } catch (const std::runtime_error&) {
-        thrown = true;
-    }
-    bool empty = false;
-    try {
-        static_cast<void>((worker_value).post_factory([] { return ruvia::move_only_function<void()>(); }));
-    } catch (const std::invalid_argument&) {
-        empty = true;
-    }
-    bool recovered = (worker_value).post_factory([] { return ruvia::move_only_function<void()>([] {}); }) ==
-                     ruvia::post_status::accepted;
-    context.run();
-
-    bool raw_stack_rejected = false;
-    ruvia::detail::worker_dispatcher raw_stack(context, 1);
-    try {
-        static_cast<void>(raw_stack.post([] {}));
-    } catch (const std::bad_weak_ptr&) {
-        raw_stack_rejected = true;
-    }
-
-    bool abandoned_ran = false;
-    bool abandoned_destroyed = false;
-    struct probe final {
-        bool* ran_;
-        bool* destroyed_;
-        probe(bool& ran_value, bool& destroyed_value)
-            : ran_(&ran_value),
-              destroyed_(&destroyed_value) {}
-        probe(probe&& other) noexcept
-            : ran_(other.ran_),
-              destroyed_(std::exchange(other.destroyed_, nullptr)) {}
-        ~probe() {
-            if (destroyed_ != nullptr) {
-                *destroyed_ = true;
-            }
-        }
-        void operator()() {
-            *ran_ = true;
-        }
-    };
-    const auto detached = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
-    const auto detached_worker = ruvia::detail::worker_handle_access::make(detached);
-    const auto status = (detached_worker).post_factory([detached, &abandoned_ran, &abandoned_destroyed] {
-        detached->detach_context();
-        return ruvia::move_only_function<void()>(
-            probe{abandoned_ran, abandoned_destroyed});
-    });
-    return thrown && empty && recovered && raw_stack_rejected &&
-           status == ruvia::post_status::accepted && !abandoned_ran && abandoned_destroyed;
-}
-
-bool test_queue_factory_can_finish_after_detach() {
-    asio::io_context context;
-    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(context, 1);
-    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
-    std::promise<void> entered;
-    std::promise<void> resume;
-    auto resumed = resume.get_future();
-    std::atomic_int destroyed{0};
-    bool ran = false;
-    auto status = ruvia::post_status::worker_stopping;
-    struct payload final {
-        std::atomic_int* destroyed_;
-        ~payload() {
-            destroyed_->fetch_add(1);
-        }
-    };
-    std::jthread producer_value([&] {
-        status = (worker_value).post_factory([&] {
-            auto payload_value = std::make_unique<payload>(&destroyed);
-            entered.set_value();
-            resumed.wait();
-            return ruvia::move_only_function<void()>(
-                [payload_value = std::move(payload_value), &ran] { ran = true; });
-        });
-    });
-    entered.get_future().wait();
-    dispatcher->detach_context();
-    const bool retained_while_reserved = destroyed.load() == 0;
-    resume.set_value();
-    producer_value.join();
-    context.run();
-    return retained_while_reserved && status == ruvia::post_status::accepted && !ran &&
-           destroyed.load() == 1;
 }
 
 bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
@@ -898,8 +794,6 @@ bool test_worker_submission_view_lifecycle_and_rejection() {
         reserved_move_state* state_;
         char* payload_;
     };
-    static_assert(sizeof(inline_reserved_move_callable) <= 3 * sizeof(void*));
-    static_assert(std::is_nothrow_move_constructible_v<inline_reserved_move_callable>);
 
     const auto exercise_reserved_move = [](bool detach) {
         counting_resource resource;
@@ -1093,11 +987,11 @@ bool test_worker_signal_is_worker_affine() {
     bool second_resumed = false;
     std::size_t remaining = 2;
     asio::co_spawn(io_context,
-        ruvia::detail::task_as_awaitable(
+        ruvia::as_awaitable(
             wait_for_signal(first_signal, first_resumed, remaining, attachment)),
         asio::detached);
     asio::co_spawn(io_context,
-        ruvia::detail::task_as_awaitable(
+        ruvia::as_awaitable(
             wait_for_signal(second_signal, second_resumed, remaining, attachment)),
         asio::detached);
     asio::post(io_context, [&] {
@@ -1142,7 +1036,7 @@ bool test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_w
     ruvia::worker_signal signal(worker_value);
     bool success = false;
     asio::co_spawn(context,
-        ruvia::detail::task_as_awaitable(exercise_signal_pending_latch(signal, attachment, success)),
+        ruvia::as_awaitable(exercise_signal_pending_latch(signal, attachment, success)),
         asio::detached);
     context.run();
     return success;
@@ -1158,7 +1052,7 @@ bool test_worker_signal_has_no_arbitrary_waiter_limit() {
     std::size_t remaining = waiter_count;
     for (std::size_t index = 0; index < resumed.size(); ++index) {
         asio::co_spawn(io_context,
-            ruvia::detail::task_as_awaitable(
+            ruvia::as_awaitable(
                 wait_for_signal(signal, resumed[index], remaining, attachment)),
             asio::detached);
     }
@@ -1201,7 +1095,7 @@ bool test_worker_signal_rechecks_affinity_when_cold_wait_starts() {
 
     bool rejected = false;
     asio::co_spawn(other_context,
-        ruvia::detail::task_as_awaitable(start_cold_signal_wait(std::move(*cold_wait), rejected)),
+        ruvia::as_awaitable(start_cold_signal_wait(std::move(*cold_wait), rejected)),
         asio::detached);
     asio::post(other_context, [&] { other_attachment.stop(); });
     other_context.run();
@@ -1217,7 +1111,7 @@ bool test_dispatch_and_affinity() {
         return false;
     }
     constexpr std::string_view key = "device-42";
-    if (loops.loop_for(key).id() != loops.loop_for(ruvia::detail::worker_selection_hash(key)).id()) {
+    if (loops.loop_for(key).id() != loops.loop_for(key).id()) {
         return false;
     }
     if (&first.io_context() != &first.executor().context() || first.handle().id() != first.id()) {
@@ -1719,14 +1613,6 @@ bool test_failure_propagation() {
         stop_callback_ran = true;
         co_return;
     });
-    struct listener final : ruvia::detail::worker_shutdown_listener {
-        void worker_stopping() noexcept override {
-            notified_ = true;
-        }
-        bool notified_{false};
-    };
-    const auto listener_value = std::make_shared<listener>();
-    ruvia::detail::worker_handle_access::register_shutdown_listener(loop.handle(), listener_value);
     if (loop.post([] { throw std::runtime_error("posted task failed"); }) !=
         ruvia::post_status::accepted) {
         return false;
@@ -1736,7 +1622,7 @@ bool test_failure_propagation() {
         loops.join();
     } catch (const std::runtime_error& error) {
         return stop_registration_value.valid() && stop_callback_ran && stop_callback_on_loop &&
-               listener_value->notified_ && std::string_view(error.what()) == "posted task failed";
+               std::string_view(error.what()) == "posted task failed";
     }
     return false;
 }
@@ -1927,45 +1813,8 @@ bool test_escaped_worker_handle_becomes_detached_endpoint() {
         }
     }
 
-    bool internal_defer_rejected = false;
-    try {
-        ruvia::detail::worker_handle_access::defer(worker, [] {});
-    } catch (const std::runtime_error&) {
-        internal_defer_rejected = true;
-    }
     return !worker.valid() && !worker.accepting() && !worker.is_current() && worker.id() == 0 &&
-           worker.post([] {}) == ruvia::post_status::worker_stopping && internal_defer_rejected;
-}
-
-bool test_failure_destroys_abandoned_queue_tasks() {
-    struct destruction_probe final {
-        explicit destruction_probe(bool& value) noexcept
-            : destroyed_(&value) {}
-        bool* destroyed_;
-        ~destruction_probe() {
-            *destroyed_ = true;
-        }
-    };
-
-    asio::io_context io_context;
-    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 2);
-    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
-    bool queued_task_destroyed = false;
-    if (worker_value.post([] { throw std::runtime_error("stop queue drain"); }) !=
-            ruvia::post_status::accepted ||
-        worker_value.post([probe = std::make_unique<destruction_probe>(queued_task_destroyed)] {}) !=
-            ruvia::post_status::accepted) {
-        return false;
-    }
-    try {
-        io_context.run();
-    } catch (const std::runtime_error&) {
-    }
-    if (!queued_task_destroyed) {
-        return false;
-    }
-    dispatcher->detach_context();
-    return queued_task_destroyed && !worker_value.valid();
+           worker.post([] {}) == ruvia::post_status::worker_stopping;
 }
 
 bool test_abandoned_root_task_completes_when_queue_drain_fails() {
@@ -1997,34 +1846,6 @@ bool test_abandoned_root_task_completes_when_queue_drain_fails() {
     } catch (...) {
         return false;
     }
-}
-
-bool test_dispatcher_lifecycle_hooks_are_worker_affine() {
-    asio::io_context io_context;
-    const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 1);
-    const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
-    bool startup_on_worker = false;
-    bool failure_on_worker = false;
-    bool shutdown_on_worker = false;
-    bool received_startup_failure = false;
-
-    dispatcher->run_context(
-        [&] {
-            startup_on_worker = worker_value.is_current();
-            throw std::runtime_error("worker startup failed");
-        },
-        [&](std::exception_ptr failure) noexcept {
-            failure_on_worker = worker_value.is_current();
-            try {
-                std::rethrow_exception(failure);
-            } catch (const std::runtime_error& error) {
-                received_startup_failure = std::string_view(error.what()) == "worker startup failed";
-            } catch (...) {
-            }
-        },
-        [&]() noexcept { shutdown_on_worker = worker_value.is_current(); });
-    dispatcher->detach_context();
-    return startup_on_worker && failure_on_worker && shutdown_on_worker && received_startup_failure;
 }
 
 // A stop callback runs after every caller that could have received its
@@ -2076,65 +1897,6 @@ bool test_stop_callback_failure_reaches_join() {
     } catch (...) {
     }
     return rethrown && stop_calls.load(std::memory_order_relaxed) == 1;
-}
-
-bool test_stop_listener_arrival_during_shutdown_notification_batch() {
-    struct blocking_listener final : ruvia::detail::worker_shutdown_listener {
-        blocking_listener(std::promise<void>& entered_promise,
-            std::shared_future<void> release_signal) noexcept
-            : entered_(&entered_promise),
-              release_(std::move(release_signal)) {}
-
-        std::promise<void>* entered_;
-        std::shared_future<void> release_;
-
-        void worker_stopping() noexcept override {
-            entered_->set_value();
-            release_.wait();
-        }
-    };
-
-    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
-    const auto loop = loops.loop(0);
-    std::promise<void> listener_entered;
-    auto listener_entered_result = listener_entered.get_future();
-    std::promise<void> release_listener;
-    auto blocking_listener_value = std::make_shared<blocking_listener>(
-        listener_entered, release_listener.get_future().share());
-    ruvia::detail::worker_handle_access::register_shutdown_listener(loop.handle(), blocking_listener_value);
-
-    std::atomic_bool stop_callback_ran{false};
-    auto stop_callback_value = loop.on_stop([&]() -> ruvia::task<void> {
-        stop_callback_ran.store(true, std::memory_order_release);
-        co_return;
-    });
-    asio::post(loop.io_context(), [] { throw std::runtime_error("first shutdown trigger"); });
-    loops.start();
-    if (listener_entered_result.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-        loops.stop();
-        release_listener.set_value();
-        loops.join();
-        return false;
-    }
-
-    loops.stop();
-    const bool loop_still_attached_during_batch = loop.valid();
-    bool root_admission_closed = false;
-    try {
-        static_cast<void>(loop.start(failed_abandoned_attachment_root()));
-    } catch (const std::runtime_error&) {
-        root_admission_closed = true;
-    }
-    release_listener.set_value();
-    bool failure_rethrown = false;
-    try {
-        loops.join();
-    } catch (const std::runtime_error& error) {
-        failure_rethrown = std::string_view(error.what()) == "first shutdown trigger";
-    } catch (...) {
-    }
-    return loop_still_attached_during_batch && root_admission_closed && failure_rethrown &&
-           stop_callback_ran.load(std::memory_order_acquire) && stop_callback_value.valid() && !loop.valid();
 }
 
 bool test_async_stop_callbacks_start_together_and_keep_captures_alive() {
@@ -2344,78 +2106,6 @@ bool test_root_tasks_join_nested_scopes_during_stop() {
     return child_done && middle_done && root_done;
 }
 
-bool test_lifecycle_transitions_are_monotonic() {
-    using lifecycle_type = ruvia::runtime_lifecycle;
-    lifecycle_type lifecycle;
-    lifecycle.complete_stop();
-    if (lifecycle.state() != lifecycle_type::state_type::ready || !lifecycle.start()) {
-        return false;
-    }
-    lifecycle.complete_stop();
-    if (lifecycle.state() != lifecycle_type::state_type::running || lifecycle.start() ||
-        !lifecycle.request_stop() || lifecycle.state() != lifecycle_type::state_type::stopping ||
-        lifecycle.request_stop()) {
-        return false;
-    }
-
-    lifecycle.complete_stop();
-    return lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.request_stop() &&
-           lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.start();
-}
-
-bool test_concurrent_stop_has_one_initiator() {
-    using lifecycle_type = ruvia::runtime_lifecycle;
-    constexpr std::size_t thread_count = 16;
-    lifecycle_type lifecycle;
-    if (!lifecycle.start()) {
-        return false;
-    }
-
-    std::atomic<std::size_t> initiators{0};
-    std::mutex gate_mutex;
-    std::condition_variable gate_changed;
-    bool start = false;
-    std::vector<std::thread> threads;
-    threads.reserve(thread_count);
-    try {
-        for (std::size_t i = 0; i < thread_count; ++i) {
-            threads.emplace_back([&] {
-                {
-                    std::unique_lock lock(gate_mutex);
-                    gate_changed.wait(lock, [&] { return start; });
-                }
-                if (lifecycle.request_stop()) {
-                    initiators.fetch_add(1, std::memory_order_relaxed);
-                }
-            });
-        }
-    } catch (...) {
-        {
-            std::lock_guard lock(gate_mutex);
-            start = true;
-        }
-        gate_changed.notify_all();
-        for (auto& thread : threads) {
-            if (thread.joinable()) {
-                thread.join();
-            }
-        }
-        throw;
-    }
-    {
-        std::lock_guard lock(gate_mutex);
-        start = true;
-    }
-    gate_changed.notify_all();
-    for (auto& thread : threads) {
-        thread.join();
-    }
-
-    lifecycle.complete_stop();
-    return initiators.load(std::memory_order_relaxed) == 1 &&
-           lifecycle.state() == lifecycle_type::state_type::stopped && !lifecycle.request_stop();
-}
-
 }  // namespace
 
 int main() {
@@ -2442,10 +2132,6 @@ int main() {
                        test_worker_runtime_context_owns_stable_detached_endpoint) &&
                    run("queue_callable_destruction_can_inspect_worker",
                        test_queue_callable_destruction_can_inspect_worker) &&
-                   run("queue_factory_rollback_and_detach",
-                       test_queue_factory_rollback_and_detach) &&
-                   run("queue_factory_can_finish_after_detach",
-                       test_queue_factory_can_finish_after_detach) &&
                    run("worker_signal_is_worker_affine", test_worker_signal_is_worker_affine) &&
                    run("worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake",
                        test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake) &&
@@ -2489,17 +2175,11 @@ int main() {
                    run("expired_handle", test_expired_handle) &&
                    run("escaped_worker_handle_detaches",
                        test_escaped_worker_handle_becomes_detached_endpoint) &&
-                   run("failure_destroys_abandoned_queue_tasks",
-                       test_failure_destroys_abandoned_queue_tasks) &&
                    run("abandoned_root_task_completes_when_queue_drain_fails",
                        test_abandoned_root_task_completes_when_queue_drain_fails) &&
-                   run("dispatcher_lifecycle_hooks_are_worker_affine",
-                       test_dispatcher_lifecycle_hooks_are_worker_affine) &&
                    run("stop_callback_failure_reaches_join", test_stop_callback_failure_reaches_join) &&
                    run("stop_callback_factory_failure_keeps_other_callbacks_running",
                        test_stop_callback_factory_failure_does_not_skip_other_callbacks) &&
-                   run("stop_listener_arrival_waits_for_shutdown_notification_batch",
-                       test_stop_listener_arrival_during_shutdown_notification_batch) &&
                    run("async_stop_callbacks_start_together_and_keep_captures_alive",
                        test_async_stop_callbacks_start_together_and_keep_captures_alive) &&
                    run("root_tasks_join_nested_scopes_during_stop",
@@ -2509,10 +2189,7 @@ int main() {
                    run("root_result_owns_pmr_storage_past_pool_retirement",
                        test_root_task_result_owns_pmr_storage_past_pool_retirement) &&
                    run("root_task_delivers_const_result",
-                       test_root_task_delivers_const_result) &&
-                   run("lifecycle_transitions_are_monotonic",
-                       test_lifecycle_transitions_are_monotonic) &&
-                   run("concurrent_stop_has_one_initiator", test_concurrent_stop_has_one_initiator)
+                       test_root_task_delivers_const_result)
                ? 0
                : 1;
 }

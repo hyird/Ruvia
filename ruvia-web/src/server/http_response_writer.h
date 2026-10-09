@@ -19,15 +19,9 @@
 
 namespace ruvia::detail {
 
-// Optimistic synchronous send for plain TCP. The socket is already
-// non-blocking (the session always reads asynchronously before it writes), so
-// write_some issues the same single send syscall async_write would -- but a
-// full write completes without suspending or re-entering the reactor, which
-// lets the session release its work set in the same tick instead of holding
-// it across a queued completion. Under high connection counts that collapses
-// the peak number of live work sets. Returns true when the attempt finished
-// the write or hit a hard error (outcome in ec/bytes_written); false when the
-// remainder must go through async_write (would_block or a partial write).
+// Try one non-blocking plain TCP write before suspending. Returns true when
+// the write completed or hit a hard error (outcome in ec/bytes_written), and
+// false when the remainder must go through async_write.
 template <typename const_buffer_sequence_type>
 [[nodiscard]] inline bool try_plain_tcp_sync_write(asio::ip::tcp::socket& socket,
     const const_buffer_sequence_type& buffers, std::size_t total_bytes, std::error_code& ec,
@@ -45,6 +39,15 @@ template <typename const_buffer_sequence_type>
     return false;
 #else
     ec.clear();
+    // Asio's internal native non-blocking mode is not enough: write_some()
+    // still polls indefinitely unless its user non-blocking mode is enabled.
+    if (!socket.non_blocking()) {
+        socket.non_blocking(true, ec);
+        if (ec) {
+            bytes_written = 0;
+            return true;
+        }
+    }
     bytes_written = socket.write_some(buffers, ec);
     if (!ec) {
         return bytes_written == total_bytes;

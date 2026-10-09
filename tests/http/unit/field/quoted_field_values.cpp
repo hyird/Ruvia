@@ -1,6 +1,10 @@
+#include <cstddef>
+#include <string_view>
+
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_field_values.h"
 
-#include "field_parsing_fixture.h"
+#include "test_harness.h"
 
 // A quoted-string in a field value is opaque: a delimiter inside it never splits the field.
 
@@ -27,45 +31,6 @@ RUVIA_TEST(public_quoted_field_visitors_preserve_quoted_delimiters) {
     RUVIA_CHECK_EQ(item_count, std::size_t{2});
 }
 
-RUVIA_TEST(semicolon_params_quoted_semicolon_in_value) {
-    using ruvia::detail::http_find_semicolon_parameter_quoted;
-    // A ';' inside a quoted value must not split the parameter.
-    const std::string_view v = R"(form-data; name="a;b"; filename="c;d.txt")";
-    RUVIA_CHECK_EQ(
-        http_find_semicolon_parameter_quoted(v, "name").value_or("?"), std::string_view(R"("a;b")"));
-    RUVIA_CHECK_EQ(http_find_semicolon_parameter_quoted(v, "filename").value_or("?"),
-        std::string_view(R"("c;d.txt")"));
-}
-
-RUVIA_TEST(semicolon_params_quoted_matches_plain_when_unquoted) {
-    using ruvia::detail::http_find_semicolon_parameter;
-    using ruvia::detail::http_find_semicolon_parameter_quoted;
-    const std::string_view v = "form-data; name=foo; filename=bar.txt";
-    RUVIA_CHECK_EQ(http_find_semicolon_parameter_quoted(v, "name").value_or("?"),
-        http_find_semicolon_parameter(v, "name").value_or("!"));
-    RUVIA_CHECK_EQ(
-        http_find_semicolon_parameter_quoted(v, "filename").value_or("?"), std::string_view("bar.txt"));
-}
-
-RUVIA_TEST(semicolon_params_quoted_uses_last_match) {
-    using ruvia::detail::http_find_semicolon_parameter_quoted;
-    const std::string_view v = R"(form-data; name="first"; filename=a.txt; name="second")";
-    RUVIA_CHECK_EQ(
-        http_find_semicolon_parameter_quoted(v, "name").value_or("?"), std::string_view(R"("second")"));
-}
-
-RUVIA_TEST(accept_quality_quoted_semicolon_param) {
-    using ruvia::detail::http_accepts_media_type;
-    // A ';' inside a quoted media-range parameter must NOT be read as a parameter
-    // separator when locating q (RFC 7231 §5.3.2). Before unifying onto the quote-aware
-    // scanner this mis-read "q=0" from inside the quotes and rejected the type.
-    RUVIA_CHECK(http_accepts_media_type(
-        R"(application/json;version="a;q=0";q=0.9)", R"(application/json;version="a;q=0")"));
-    // Regressions: a real q=0 still means "not accepted", and a normal q is honored.
-    RUVIA_CHECK(!http_accepts_media_type("application/json;q=0", "application/json"));
-    RUVIA_CHECK(http_accepts_media_type("text/html;q=0.8", "text/html"));
-}
-
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
     using ruvia::http_accepts_encoding;
     RUVIA_CHECK(http_accepts_encoding("", "identity"));
@@ -77,8 +42,5 @@ RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
 
 RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
     using ruvia::http_accepts_encoding;
-    using ruvia::detail::http_accepts_media_type;
-
-    RUVIA_CHECK(!http_accepts_media_type(R"(application/json;version="a,b";q=0)", "application/json"));
     RUVIA_CHECK(!http_accepts_encoding(R"(gzip;note="a,b";q=0)", "gzip"));
 }

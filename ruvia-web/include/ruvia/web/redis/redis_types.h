@@ -400,6 +400,7 @@ public:
     }
     [[nodiscard]] std::string_view id() const&& = delete;
 
+    // XREADGROUP retains the ID of a deleted pending message with no fields.
     [[nodiscard]] std::span<const redis_key_value> fields() const& noexcept {
         return fields_;
     }

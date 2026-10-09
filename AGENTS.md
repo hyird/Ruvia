@@ -127,6 +127,9 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 编译必须使用 `-j$(nproc)`，按可用 CPU 核心数并行构建。
 - 不修改父项目配置。Windows 使用 MSVC 和静态依赖/runtime。
 - 只保留功能单测。不保留历史缺陷、结构或安装/API guard。
+- 单元测试只通过非 detail 的公开 API 验证对外行为。
+- 删除直接测试内部 API、私有实现或内部状态的用例，不再新增此类测试。
+- 混合测试文件保留公开 API 功能用例，移除内部用例及其依赖。
 - 不新增长期 integration、conformance、benchmark 或 probe。
 - 临时验证完成即清理。交付前运行相关最小验证。
 - 生命周期改动验证成功、异常、取消和内存回收。

@@ -1,23 +1,12 @@
-#include <concepts>
 #include <cstdint>
 #include <memory_resource>
-#include <type_traits>
-#include <utility>
 
-#include "ruvia/http/detail/server/http_response_head_policy.h"
-#include "ruvia/http/detail/server/http_response_write_plan.h"
+#include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_stream.h"
 
 #include "test_harness.h"
-
-namespace {
-
-using ruvia::detail::get_response_write_policy;
-using ruvia::detail::response_write_policy;
-
-}  // namespace
 
 RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     std::pmr::monotonic_buffer_resource resource;
@@ -139,69 +128,6 @@ RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
     response.body("old");
     response.status(ruvia::http_status::already_reported);
     RUVIA_CHECK(!plan.matches_response(response));
-}
-
-RUVIA_TEST(response_policy_normal_status_allows_everything) {
-    for (const ruvia::http_status_code status :
-        {ruvia::http_status::ok, ruvia::http_status::partial_content,
-            ruvia::http_status::not_found, ruvia::http_status::internal_server_error}) {
-        const auto policy = get_response_write_policy(status);
-        RUVIA_CHECK(policy.normal() != nullptr);
-        RUVIA_CHECK(policy.body_forbidden() == nullptr);
-        RUVIA_CHECK(policy.zero_length() == nullptr);
-        RUVIA_CHECK(policy.not_modified() == nullptr);
-        RUVIA_CHECK(policy.body_allowed());
-        RUVIA_CHECK(policy.auto_content_length_allowed());
-        RUVIA_CHECK(policy.explicit_content_length_allowed());
-        RUVIA_CHECK(policy.transfer_encoding_allowed());
-    }
-}
-
-RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
-    // 1xx informational and 204 are terminated by the empty line regardless of
-    // headers (RFC 9112 §6.3 rule 1), so they carry no body and no framing headers.
-    for (const ruvia::http_status_code status :
-        {ruvia::http_status::continue_value, ruvia::http_status::switching_protocols,
-            ruvia::http_status_code::from_value(199), ruvia::http_status::no_content}) {
-        const auto policy = get_response_write_policy(status);
-        RUVIA_CHECK(policy.normal() == nullptr);
-        RUVIA_CHECK(policy.body_forbidden() != nullptr);
-        RUVIA_CHECK(policy.zero_length() == nullptr);
-        RUVIA_CHECK(policy.not_modified() == nullptr);
-        RUVIA_CHECK(!policy.body_allowed());
-        RUVIA_CHECK(!policy.auto_content_length_allowed());
-        RUVIA_CHECK(!policy.explicit_content_length_allowed());
-        RUVIA_CHECK(!policy.transfer_encoding_allowed());
-    }
-}
-
-RUVIA_TEST(response_policy_reset_content_owns_zero_length_framing) {
-    // RFC 9110 §15.3.6 forbids content in 205. HTTP/1 does not infer a zero
-    // length from that status, so the writer owns one canonical Content-Length:
-    // 0 and rejects both caller-owned length and transfer coding declarations.
-    const auto policy = get_response_write_policy(ruvia::http_status::reset_content);
-    RUVIA_CHECK(policy.normal() == nullptr);
-    RUVIA_CHECK(policy.body_forbidden() == nullptr);
-    RUVIA_CHECK(policy.zero_length() != nullptr);
-    RUVIA_CHECK(policy.not_modified() == nullptr);
-    RUVIA_CHECK(!policy.body_allowed());
-    RUVIA_CHECK(policy.auto_content_length_allowed());
-    RUVIA_CHECK(!policy.explicit_content_length_allowed());
-    RUVIA_CHECK(!policy.transfer_encoding_allowed());
-}
-
-RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
-    // 304 has no body, but may echo the Content-Length of the selected
-    // representation; auto length and transfer-encoding stay forbidden.
-    const auto policy = get_response_write_policy(ruvia::http_status::not_modified);
-    RUVIA_CHECK(policy.normal() == nullptr);
-    RUVIA_CHECK(policy.body_forbidden() == nullptr);
-    RUVIA_CHECK(policy.zero_length() == nullptr);
-    RUVIA_CHECK(policy.not_modified() != nullptr);
-    RUVIA_CHECK(!policy.body_allowed());
-    RUVIA_CHECK(!policy.auto_content_length_allowed());
-    RUVIA_CHECK(policy.explicit_content_length_allowed());
-    RUVIA_CHECK(!policy.transfer_encoding_allowed());
 }
 
 RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {

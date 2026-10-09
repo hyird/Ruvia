@@ -1,75 +1,85 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <exception>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
+#include <system_error>
 
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
 
-#include "router/router_impl.h"
-#include "server/native_accepted_socket_ticket.h"
-#include "server/web_worker_runtime.h"
+#include "http2_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
 struct observation {
+    std::mutex mutex_;
     std::string bytes_;
-    bool finish_first_{};
-    bool ended_{};
-    bool retained_stable_{true};
+    std::atomic<bool> finish_first_{};
+    std::atomic<bool> ended_{};
+    std::atomic<bool> retained_stable_{true};
 };
-ruvia::task<void> tunnel_handler(void* raw, ruvia::context& context_value) {
-    auto& observed_value = *static_cast<observation*>(raw);
-    auto& tunnel = context_value.tunnel();
-    if (observed_value.finish_first_) {
-        co_await tunnel.finish();
-    }
-    std::optional<std::pmr::string> retained;
-    while (auto bytes = co_await tunnel.read()) {
-        observed_value.bytes_.append(*bytes);
-        if (!retained) {
-            retained.emplace(*bytes, context_value.pool());
+const auto observed = std::make_shared<observation>();
+[[maybe_unused]] const bool observation_registered = [] {
+    ruvia::app().use_worker_state<std::shared_ptr<observation>>([] { return observed; });
+    return true;
+}();
+
+class http1_tunnel_routes final : public ruvia::controller<http1_tunnel_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_CONNECT("http1-target.test:443", tunnel);
+    RUVIA_ROUTES_END
+
+    ruvia::task<void> tunnel(ruvia::context& context_value) {
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<observation>>();
+        auto& tunnel_value = context_value.tunnel();
+        if (observed_value.finish_first_) {
+            co_await tunnel_value.finish();
         }
-        if (!observed_value.finish_first_) {
-            auto output = tunnel.write(std::string_view(*bytes));
-            bytes->assign("input changed before awaiting output");
-            co_await std::move(output);
+        std::optional<std::pmr::string> retained;
+        while (auto bytes = co_await tunnel_value.read()) {
+            {
+                std::lock_guard lock(observed_value.mutex_);
+                observed_value.bytes_.append(*bytes);
+            }
+            if (!retained) {
+                retained.emplace(*bytes, context_value.pool());
+            }
+            if (!observed_value.finish_first_) {
+                auto output = tunnel_value.write(std::string_view(*bytes));
+                bytes->assign("input changed before awaiting output");
+                co_await std::move(output);
+            }
+            observed_value.retained_stable_ = observed_value.retained_stable_ && retained->find_first_not_of('t') == std::string_view::npos;
         }
-        observed_value.retained_stable_ = observed_value.retained_stable_ && retained->find_first_not_of('t') == std::string_view::npos;
+        observed_value.ended_ = true;
+        co_await tunnel_value.finish();
     }
-    observed_value.ended_ = true;
-    co_await tunnel.finish();
-}
+};
+
 void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    observation observed;
-    observed.finish_first_ = finish_first;
-    ruvia::detail::router router;
-    auto& routes_value = ruvia::detail::router_impl::from(router);
-    routes_value.register_tunnel_route({}, std::pmr::string("target.test:443"), {&observed, &tunnel_handler}, {}, {});
-    routes_value.finalize();
-    ruvia::detail::web_worker_runtime server(asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes_value.route_table(), {});
-    server.start();
-    asio::ip::tcp::acceptor source_value(io, {asio::ip::address_v4::loopback(), 0});
+    {
+        std::lock_guard lock(observed->mutex_);
+        observed->bytes_.clear();
+    }
+    observed->finish_first_ = finish_first;
+    observed->ended_ = false;
+    observed->retained_stable_ = true;
+    ruvia::test::http2_server_fixture server(io);
     asio::ip::tcp::socket client(io);
-    client.connect(source_value.local_endpoint());
-    asio::ip::tcp::socket accepted(io);
-    source_value.accept(accepted);
-    std::error_code error;
-    auto native = accepted.release(error);
-    RUVIA_CHECK(!error);
-    auto ticket = ruvia::detail::native_accepted_socket_ticket(asio::ip::tcp::v4(), 0, native);
-    const auto posted = server.network_submission().post([&server, ticket = std::move(ticket)]() mutable {
-        server.accept_transferred_connection(std::move(ticket));
-    });
-    RUVIA_CHECK(posted.accepted());
+    client.connect(server.endpoint());
     const std::string initial_value(5007, 't');
     const std::string additional(100003, 't');
     std::exception_ptr failure;
@@ -83,7 +93,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
                     throw std::system_error(result_value.error_code());
                 }
             };
-            const std::string request = "CONNECT TARGET.TEST:0443 HTTP/1.1\r\nHost: TARGET.TEST:0443\r\n\r\n" + initial_value;
+            const std::string request = "CONNECT HTTP1-TARGET.TEST:0443 HTTP/1.1\r\nHost: HTTP1-TARGET.TEST:0443\r\n\r\n" + initial_value;
             co_await send(request);
             std::string head;
             char byte{};
@@ -128,19 +138,16 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    // A serving worker can still be consuming the bytes sent after its FIN.
-    // Closing admission does not destroy its pending connection coroutines.
-    const auto deadline_value = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (server.stats().active_connections_ != 0 && std::chrono::steady_clock::now() < deadline_value) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    server.stop();
-    server.join();
+    server.finish();
+    ruvia::close_socket(client);
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK(observed.ended_ && observed.retained_stable_);
-    RUVIA_CHECK(observed.bytes_ == initial_value + additional);
+    RUVIA_CHECK(observed->ended_ && observed->retained_stable_);
+    {
+        std::lock_guard lock(observed->mutex_);
+        RUVIA_CHECK(observed->bytes_ == initial_value + additional);
+    }
 }
 }  // namespace
 

@@ -1,4 +1,3 @@
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -11,10 +10,6 @@
 #include "ruvia/http/multipart_parser.h"
 
 #include "failing_memory_resource.h"
-#include "parser/multipart_delimiter.h"
-#include "parser/multipart_part_access.h"
-#include "parser/multipart_part_headers.h"
-#include "parser/multipart_stream_part_access.h"
 #include "test_harness.h"
 
 RUVIA_TEST(multipart_parser_retries_owned_metadata_without_consuming_limits) {
@@ -125,64 +120,6 @@ RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
         }
         RUVIA_CHECK(terminal);
     }
-}
-
-// A lone '-' after the boundary token is not the closing "--" delimiter.
-RUVIA_TEST(multipart_boundary_lone_dash_is_not_a_delimiter) {
-    using ruvia::detail::http_find_multipart_body_delimiter;
-    const std::string_view body = "\r\n--abc-x\r\n--abc\r\n";
-    const auto match = http_find_multipart_body_delimiter(
-        body, ruvia::multipart_boundary("abc"), /*input_finished=*/true);
-    const auto* part = match.part();
-    RUVIA_CHECK(part != nullptr);
-    if (part != nullptr) {
-        RUVIA_CHECK_EQ(part->offset(), body.find("\r\n--abc\r\n"));
-    }
-}
-
-RUVIA_TEST(multipart_boundary_prefix_of_longer_token_is_not_a_delimiter) {
-    using ruvia::detail::http_find_initial_multipart_delimiter;
-    using ruvia::detail::http_find_multipart_body_delimiter;
-    const std::string_view body = "\r\n--abcXYZ\r\n--abc\r\n";
-    const auto body_match = http_find_multipart_body_delimiter(
-        body, ruvia::multipart_boundary("abc"), /*input_finished=*/true);
-    const auto* body_part = body_match.part();
-    RUVIA_CHECK(body_part != nullptr);
-    if (body_part != nullptr) {
-        RUVIA_CHECK_EQ(body_part->offset(), body.find("\r\n--abc\r\n"));
-    }
-
-    // The initial delimiter must begin the entity or a new line; a matching
-    // token embedded in preamble text is not a delimiter.
-    const std::string_view preamble = "prefix--abc\r\ntext\r\n--abc\r\n";
-    const auto initial_value = http_find_initial_multipart_delimiter(
-        preamble, ruvia::multipart_boundary("abc"), /*input_finished=*/true);
-    const auto* initial_part = initial_value.part();
-    RUVIA_CHECK(initial_part != nullptr);
-    if (initial_part != nullptr) {
-        RUVIA_CHECK_EQ(initial_part->offset(), preamble.rfind("--abc\r\n"));
-    }
-}
-
-RUVIA_TEST(multipart_boundary_close_delimiter_still_matches) {
-    using ruvia::detail::http_match_multipart_delimiter_line;
-    const auto boundary = ruvia::multipart_boundary("abc");
-    const auto close = http_match_multipart_delimiter_line("--abc--\r\n", boundary, false);
-    RUVIA_CHECK(close.close() != nullptr);
-    const auto part = http_match_multipart_delimiter_line("--abc\r\nrest", boundary, false);
-    RUVIA_CHECK(part.part() != nullptr);
-
-    // RFC 2046 transport-padding is accepted on both delimiter forms.
-    const auto padded_part = http_match_multipart_delimiter_line("--abc \t\r\n", boundary, false);
-    RUVIA_CHECK(padded_part.part() != nullptr);
-    const auto padded_close = http_match_multipart_delimiter_line("--abc-- \t\r\n", boundary, false);
-    RUVIA_CHECK(padded_close.close() != nullptr);
-
-    // A close delimiter at the current chunk edge is ambiguous until EOF.
-    const auto ambiguous_close = http_match_multipart_delimiter_line("--abc--", boundary, false);
-    RUVIA_CHECK(ambiguous_close.need_input() != nullptr);
-    const auto eof_close = http_match_multipart_delimiter_line("--abc--", boundary, true);
-    RUVIA_CHECK(eof_close.close() != nullptr);
 }
 
 RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
@@ -313,46 +250,6 @@ RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
     RUVIA_CHECK(feed_after_finish_threw);
 }
 
-RUVIA_TEST(multipart_input_lifecycle_has_three_exclusive_states) {
-    ruvia::detail::multipart_input_lifecycle streaming(std::pmr::get_default_resource());
-    RUVIA_CHECK(streaming.streaming_open() != nullptr);
-    RUVIA_CHECK(streaming.streaming_eof() == nullptr);
-    RUVIA_CHECK(streaming.borrowed() == nullptr);
-    RUVIA_CHECK(!streaming.eof());
-
-    streaming.feed("abcdef");
-    streaming.consume(2);
-    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
-    streaming.finish_input();
-    RUVIA_CHECK(streaming.streaming_open() == nullptr);
-    RUVIA_CHECK(streaming.streaming_eof() != nullptr);
-    RUVIA_CHECK(streaming.eof());
-    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
-
-    // EOF is an idempotent transition and cannot discard pending bytes.
-    streaming.finish_input();
-    RUVIA_CHECK(streaming.streaming_eof() != nullptr);
-    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
-}
-
-RUVIA_TEST(multipart_borrowed_input_is_complete_and_rejects_feed) {
-    ruvia::detail::multipart_input_lifecycle borrowed(
-        ruvia::detail::multipart_borrowed_input{"--BOUNDARY--"});
-    RUVIA_CHECK(borrowed.borrowed() != nullptr);
-    RUVIA_CHECK(borrowed.eof());
-    RUVIA_CHECK_EQ(borrowed.view(), std::string_view("--BOUNDARY--"));
-
-    borrowed.finish_input();
-    RUVIA_CHECK(borrowed.borrowed() != nullptr);
-    bool feed_threw = false;
-    try {
-        borrowed.feed("ignored");
-    } catch (const std::logic_error&) {
-        feed_threw = true;
-    }
-    RUVIA_CHECK(feed_threw);
-}
-
 RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
     ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
@@ -376,64 +273,7 @@ RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
     }
 }
 
-// Part header parsing owns either the parsed views or a typed failure.
-RUVIA_TEST(multipart_part_header_result_is_discriminated) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
-    const auto parsed_value = http_parse_multipart_part_headers(
-        "Content-Disposition: form-data; name=\"field\"; filename=\"f.txt\"\r\n"
-        "Content-Type: text/plain");
-    const auto* headers = parsed_value.headers();
-    RUVIA_CHECK(headers != nullptr);
-    RUVIA_CHECK(parsed_value.failure() == nullptr);
-    if (headers != nullptr) {
-        RUVIA_CHECK_EQ(headers->name(), std::string_view("field"));
-        RUVIA_CHECK_EQ(headers->filename(), std::string_view("f.txt"));
-        RUVIA_CHECK(headers->has_filename());
-        RUVIA_CHECK_EQ(headers->content_type(), std::string_view("text/plain"));
-    }
-
-    // form-data with no name parameter.
-    const auto missing_name = http_parse_multipart_part_headers("Content-Disposition: form-data");
-    RUVIA_CHECK(missing_name.failure() != nullptr);
-    if (missing_name.failure() != nullptr) {
-        RUVIA_CHECK(
-            missing_name.failure()->parse_error() == ruvia::multipart_parse_error::missing_field_name);
-    }
-
-    // A non-form-data disposition, and no disposition at all, are invalid.
-    for (const std::string_view invalid :
-        {"Content-Disposition: attachment; name=\"x\"", "Content-Type: text/plain"}) {
-        const auto result_value = http_parse_multipart_part_headers(invalid);
-        RUVIA_CHECK(result_value.failure() != nullptr);
-        if (result_value.failure() != nullptr) {
-            RUVIA_CHECK(result_value.failure()->parse_error() ==
-                        ruvia::multipart_parse_error::invalid_content_disposition);
-        }
-    }
-}
-
 RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
-    const auto headers_only = http_parse_multipart_part_headers(
-        "Content-Disposition: form-data; name=\"upload\"; filename=\"\"");
-    const auto* headers = headers_only.headers();
-    RUVIA_CHECK(headers != nullptr);
-    if (headers != nullptr) {
-        RUVIA_CHECK(headers->has_filename());
-        RUVIA_CHECK_EQ(headers->filename(), std::string_view());
-    }
-
-    const auto no_filename =
-        http_parse_multipart_part_headers("Content-Disposition: form-data; name=\"upload\"");
-    const auto* no_filename_headers = no_filename.headers();
-    RUVIA_CHECK(no_filename_headers != nullptr);
-    if (no_filename_headers != nullptr) {
-        RUVIA_CHECK(!no_filename_headers->has_filename());
-        RUVIA_CHECK_EQ(no_filename_headers->filename(), std::string_view());
-    }
-
     const std::string body =
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n"
@@ -467,8 +307,6 @@ RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
 }
 
 RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
     for (const std::string_view invalid : {"Content-Disposition: form-data; name=\"unterminated",
              "Content-Disposition: form-data; name=unquoted value",
              "Content-Disposition: form-data; name=field; name=shadow",
@@ -478,13 +316,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=field; broken",
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Disposition: form-data; name=shadow"}) {
-        const auto parsed_value = http_parse_multipart_part_headers(invalid);
-        RUVIA_CHECK(parsed_value.failure() != nullptr);
-        if (parsed_value.failure() != nullptr) {
-            RUVIA_CHECK(parsed_value.failure()->parse_error() ==
-                        ruvia::multipart_parse_error::invalid_content_disposition);
-        }
-
         std::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
@@ -499,29 +330,9 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
                 std::string_view("invalid multipart content disposition"));
         }
     }
-
-    const auto escaped = http_parse_multipart_part_headers(
-        "Content-Disposition: form-data; name=\"a\\\"b\"; filename=\"x\\\\y\"");
-    RUVIA_CHECK(escaped.headers() != nullptr);
-    if (escaped.headers() != nullptr) {
-        RUVIA_CHECK_EQ(escaped.headers()->name(), std::string_view("a\\\"b"));
-        RUVIA_CHECK_EQ(escaped.headers()->filename(), std::string_view("x\\\\y"));
-    }
-
-    // MIME structured fields allow linear whitespace around separator
-    // characters; this differs from top-level HTTP media-type parameters.
-    const auto spaced = http_parse_multipart_part_headers(
-        "Content-Disposition: form-data; name = field; filename = \"a.txt\"");
-    RUVIA_CHECK(spaced.headers() != nullptr);
-    if (spaced.headers() != nullptr) {
-        RUVIA_CHECK_EQ(spaced.headers()->name(), std::string_view("field"));
-        RUVIA_CHECK_EQ(spaced.headers()->filename(), std::string_view("a.txt"));
-    }
 }
 
 RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
     for (const std::string_view invalid : {"Broken-Line\r\n"
                                            "Content-Disposition: form-data; name=field",
              " Content-Disposition: form-data; name=field",
@@ -531,13 +342,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Type: text/plain\r\n"
              "Content-Type: application/json"}) {
-        const auto parsed_value = http_parse_multipart_part_headers(invalid);
-        RUVIA_CHECK(parsed_value.failure() != nullptr);
-        if (parsed_value.failure() != nullptr) {
-            RUVIA_CHECK(
-                parsed_value.failure()->parse_error() == ruvia::multipart_parse_error::invalid_part_headers);
-        }
-
         std::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
@@ -552,119 +356,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
                 std::string_view("invalid multipart part headers"));
         }
     }
-}
-
-RUVIA_TEST(multipart_part_header_rejects_invalid_content_types) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
-    for (const std::string_view content_type :
-        {"", "text", "text/", "/plain", "*/plain", "text/*", "text/plain; charset",
-            "text/plain; charset=", "text/plain; charset=utf-8; CHARSET=latin1"}) {
-        std::string headers =
-            "Content-Disposition: form-data; name=field\r\n"
-            "Content-Type: ";
-        headers.append(content_type);
-        const auto parsed_value = http_parse_multipart_part_headers(headers);
-        RUVIA_CHECK(parsed_value.failure() != nullptr);
-        if (parsed_value.failure() != nullptr) {
-            RUVIA_CHECK(
-                parsed_value.failure()->parse_error() == ruvia::multipart_parse_error::invalid_part_headers);
-        }
-    }
-
-    const auto valid = http_parse_multipart_part_headers(
-        "Content-Disposition: form-data; name=field\r\n"
-        "Content-Type: text/plain; charset = \"UTF-8\"");
-    RUVIA_CHECK(valid.headers() != nullptr);
-    if (valid.headers() != nullptr) {
-        RUVIA_CHECK_EQ(
-            valid.headers()->content_type(), std::string_view("text/plain; charset = \"UTF-8\""));
-    }
-}
-
-RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
-    using ruvia::detail::http_parse_multipart_part_headers;
-
-    // HTTP field names are case-insensitive; a part that lowercases them (some
-    // clients do) must still be recognized, with name and content type extracted.
-    const auto parsed_value = http_parse_multipart_part_headers(
-        "content-disposition: form-data; name=\"field\"\r\n"
-        "content-type: image/png");
-    const auto* headers = parsed_value.headers();
-    RUVIA_CHECK(headers != nullptr);
-    if (headers != nullptr) {
-        RUVIA_CHECK_EQ(headers->name(), std::string_view("field"));
-        RUVIA_CHECK_EQ(headers->content_type(), std::string_view("image/png"));
-    }
-}
-
-RUVIA_TEST(multipart_header_value_in_block_lookup) {
-    using ruvia::detail::http_header_value_in_block;
-    const std::string_view block =
-        "Content-Disposition: form-data; name=\"a\"\r\n"
-        "Content-Type: text/plain";
-    // Case-insensitive name match with OWS-trimmed value; the last line has no
-    // trailing CRLF and must still be found.
-    RUVIA_CHECK(http_header_value_in_block(block, "content-type") == std::string_view("text/plain"));
-    RUVIA_CHECK(http_header_value_in_block(block, "CONTENT-TYPE") == std::string_view("text/plain"));
-    RUVIA_CHECK(http_header_value_in_block(block, "Content-Disposition") ==
-                std::string_view("form-data; name=\"a\""));
-    // Missing header -> nullopt.
-    RUVIA_CHECK(!http_header_value_in_block(block, "X-Absent").has_value());
-    // A line without a colon is skipped, not matched by name.
-    RUVIA_CHECK(!http_header_value_in_block("garbageline\r\nX: v", "garbageline").has_value());
-    // Surrounding OWS on the value is trimmed.
-    RUVIA_CHECK(http_header_value_in_block("X:   spaced   ", "X") == std::string_view("spaced"));
-}
-
-RUVIA_TEST(multipart_header_value_in_block_uses_last_match) {
-    using ruvia::detail::http_header_value_in_block;
-    const std::string_view block =
-        "Content-Type: text/plain\r\n"
-        "X-Other: value\r\n"
-        "content-type: image/png";
-
-    RUVIA_CHECK(http_header_value_in_block(block, "Content-Type") == std::string_view("image/png"));
-}
-
-RUVIA_TEST(multipart_disposition_parameter_extraction) {
-    using ruvia::detail::http_disposition_parameter;
-    const std::string_view disposition = "form-data; name=\"field\"; filename=\"a.txt\"";
-    RUVIA_CHECK(http_disposition_parameter(disposition, "name") == std::string_view("field"));
-    RUVIA_CHECK(http_disposition_parameter(disposition, "filename") == std::string_view("a.txt"));
-    // An unquoted parameter value is returned as-is.
-    RUVIA_CHECK(
-        http_disposition_parameter("form-data; name=plain", "name") == std::string_view("plain"));
-    // An absent parameter is nullopt.
-    RUVIA_CHECK(!http_disposition_parameter(disposition, "charset").has_value());
-    // Parameter names are case-insensitive (RFC 6266 §4.1), like the Content-Type
-    // boundary parameter -- `Name`/`FileName` must resolve, not be rejected.
-    const std::string_view mixed_case = "form-data; Name=\"field\"; FileName=\"a.txt\"";
-    RUVIA_CHECK(http_disposition_parameter(mixed_case, "name") == std::string_view("field"));
-    RUVIA_CHECK(http_disposition_parameter(mixed_case, "filename") == std::string_view("a.txt"));
-}
-
-RUVIA_TEST(multipart_is_form_data_disposition) {
-    using ruvia::detail::http_is_form_data_disposition;
-    RUVIA_CHECK(http_is_form_data_disposition("form-data; name=\"x\""));
-    RUVIA_CHECK(http_is_form_data_disposition("FORM-DATA"));                      // case-insensitive
-    RUVIA_CHECK(http_is_form_data_disposition("  form-data  ; filename=\"y\""));  // OWS-trimmed type
-    RUVIA_CHECK(!http_is_form_data_disposition("attachment; name=\"x\""));
-    RUVIA_CHECK(!http_is_form_data_disposition("form-data-extra"));  // whole type compared
-    RUVIA_CHECK(!http_is_form_data_disposition(""));
-}
-
-RUVIA_TEST(multipart_part_access_decodes_quoted_pairs) {
-    // The buffered parser builds parts via multipart_part_access::make, which must
-    // decode RFC 7230 §3.2.6 quoted-pairs in name/filename (they are part-owned so
-    // they may differ from the raw request bytes); content_type/body stay verbatim.
-    auto* resource = std::pmr::get_default_resource();
-    const auto part = ruvia::detail::multipart_part_access::make(
-        "a\\\"b", "x\\\\y.txt", "text/plain", "the body", resource);
-    RUVIA_CHECK_EQ(std::string(part.name()), std::string("a\"b"));
-    RUVIA_CHECK_EQ(std::string(part.filename()), std::string("x\\y.txt"));
-    RUVIA_CHECK_EQ(std::string(part.content_type()), std::string("text/plain"));
-    RUVIA_CHECK_EQ(std::string(part.body()), std::string("the body"));
 }
 
 RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {

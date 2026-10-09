@@ -8,7 +8,6 @@
 #include "ruvia/http/http3_qpack_connection.h"
 #include "ruvia/http/http3_request_writer.h"
 
-#include "http3/http3_field_section_encoder.h"
 #include "test_harness.h"
 
 namespace {
@@ -443,36 +442,6 @@ RUVIA_TEST(http3_qpack_dynamic_writer_result_uses_caller_resource) {
         RUVIA_CHECK(std::get<0>(section).get_allocator().resource() == &result_resource);
         RUVIA_CHECK(result_resource.live_bytes_ > 0);
         RUVIA_CHECK_EQ(encoder.insert_count(), 1u);
-    }
-    RUVIA_CHECK_EQ(result_resource.live_bytes_, 0u);
-    RUVIA_CHECK_EQ(encoder_resource.live_bytes_, 0u);
-}
-RUVIA_TEST(http3_qpack_result_allocation_failure_latches_terminal_error) {
-    qpack_resource encoder_resource;
-    qpack_resource result_resource;
-    {
-        ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 128, .max_blocked_streams_ = 1}, &encoder_resource);
-        const std::array previous{ruvia::http3_field_section_field_view{"x-prior", "value"}};
-        const auto prior = encoder.encode(0, previous);
-        RUVIA_CHECK((prior).index() == 0);
-        const std::array fields_value{ruvia::http3_field_section_field_view{
-            "x-long-name-to-force-the-final-output-vector-to-allocate", "a sufficiently long value for the allocation"}};
-        result_resource.fail_ = true;
-        bool threw = false;
-        try {
-            (void)ruvia::detail::encode_http3_fields(fields_value, &result_resource, {}, &encoder, 0);
-        } catch (const std::bad_alloc&) {
-            threw = true;
-        }
-        RUVIA_CHECK(threw);
-        result_resource.fail_ = false;
-        const auto encode_error = encoder.encode(0, previous);
-        RUVIA_CHECK((encode_error.index() != 0));
-        RUVIA_CHECK(std::get<1>(encode_error) == ruvia::http3_qpack_connection_error::decoder_stream_error);
-        const std::array<char, 1> acknowledgment{static_cast<char>(0x80)};
-        const auto decoder_error = encoder.consume_decoder(acknowledgment);
-        RUVIA_CHECK((decoder_error.index() != 0));
-        RUVIA_CHECK(std::get<1>(decoder_error) == ruvia::http3_qpack_connection_error::decoder_stream_error);
     }
     RUVIA_CHECK_EQ(result_resource.live_bytes_, 0u);
     RUVIA_CHECK_EQ(encoder_resource.live_bytes_, 0u);

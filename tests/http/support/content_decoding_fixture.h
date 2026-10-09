@@ -20,13 +20,14 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/http1/http1_server_request_parser.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_body_failure.h"
 #include "ruvia/http/http_request_content_decoding.h"
+#include "ruvia/http/http_transfer_coding.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
@@ -39,10 +40,10 @@ using ruvia::decode_http_request_content;
 using ruvia::encode_http_content;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::http1_request_body_plan;
+using ruvia::http1_server_request_parser;
 using ruvia::http_content_coding;
 using ruvia::http_content_decode_error;
 using ruvia::http_content_decode_failure;
-using ruvia::http_content_decode_options;
 using ruvia::http_content_decode_result;
 using ruvia::http_content_encode_error;
 using ruvia::http_content_encode_failure;
@@ -64,7 +65,6 @@ using ruvia::http_transfer_codings;
 using ruvia::http_unsupported_expectation_policy;
 using ruvia::parse_http_content_coding;
 using ruvia::protocol_byte_limit;
-using ruvia::detail::http1_server_request_parser;
 
 inline constexpr std::size_t decoded_body_limit = 16 * 1024 * 1024;
 

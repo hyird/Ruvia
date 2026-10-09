@@ -1,36 +1,63 @@
-#include <array>
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
-#include <system_error>
 
 #include <asio.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
 
-#include "http2/http2_sans_io_session.h"
-#include "http2_sansio_session_fixture.h"
-#include "memory_resource_fixture.h"
-#include "router/router_impl.h"
+#include "http2_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
 struct tunnel_observation {
+    std::mutex mutex_;
     std::string bytes_;
-    bool finish_first_{};
-    bool eof_{};
+    std::atomic<bool> finish_first_{};
+    std::atomic<bool> eof_{};
+    [[nodiscard]] std::string received() {
+        std::lock_guard lock(mutex_);
+        return bytes_;
+    }
 };
-ruvia::task<void> client_tunnel_echo(void* raw, ruvia::context& c) {
-    auto& observation_value = *static_cast<tunnel_observation*>(raw);
-    observation_value.bytes_.clear();
+const auto observation = std::make_shared<tunnel_observation>();
+[[maybe_unused]] const bool observation_registered = [] {
+    ruvia::app().use_worker_state<std::shared_ptr<tunnel_observation>>([] { return observation; });
+    return true;
+}();
+
+class client_tunnel_routes final : public ruvia::controller<client_tunnel_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_CONNECT("client-target.test:443", echo);
+    RUVIA_CONNECT_PROTOCOL("test-protocol", "/tunnel", echo);
+    RUVIA_CONNECT_PROTOCOL("test-capsules", "/capsules", capsules);
+    RUVIA_GET("/sibling", sibling);
+    RUVIA_ROUTES_END
+
+    ruvia::task<void> echo(ruvia::context& c);
+    ruvia::task<void> capsules(ruvia::context& c);
+    ruvia::task<ruvia::http_response> sibling(ruvia::context& c) {
+        co_return c.text("sibling");
+    }
+};
+ruvia::task<void> client_tunnel_routes::echo(ruvia::context& c) {
+    auto& observation_value = *c.worker_state<std::shared_ptr<tunnel_observation>>();
+    {
+        std::lock_guard lock(observation_value.mutex_);
+        observation_value.bytes_.clear();
+    }
     observation_value.eof_ = false;
     auto& tunnel = c.tunnel();
     if (observation_value.finish_first_) {
@@ -38,7 +65,10 @@ ruvia::task<void> client_tunnel_echo(void* raw, ruvia::context& c) {
         co_await tunnel.finish();
     }
     while (auto bytes = co_await tunnel.read()) {
-        observation_value.bytes_.append(*bytes);
+        {
+            std::lock_guard lock(observation_value.mutex_);
+            observation_value.bytes_.append(*bytes);
+        }
         if (!observation_value.finish_first_) {
             co_await tunnel.write(std::string_view(*bytes));
         }
@@ -46,43 +76,21 @@ ruvia::task<void> client_tunnel_echo(void* raw, ruvia::context& c) {
     observation_value.eof_ = true;
     co_await tunnel.finish();
 }
-ruvia::task<ruvia::http_response> client_tunnel_sibling(void*, ruvia::context& c) {
-    co_return c.text("sibling");
-}
-ruvia::task<void> serve_client_tunnel(asio::ip::tcp::acceptor& acceptor, const ruvia::worker_handle& worker_value, const ruvia::detail::route_table& routes_value, ruvia::worker_memory& memory) {
-    auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) { acceptor.async_accept(std::move(h)); });
-    if (accepted.error_code()) {
-        throw std::system_error(accepted.error_code());
-    }
-    auto socket = std::move(accepted.result());
-    ruvia::test::http2_sans_io_session_fixture fixture;
-    co_await ruvia::detail::run_http2_sans_io_session(socket, routes_value, memory, fixture.context(fixture.services(worker_value)));
-}
 }  // namespace
 RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblings) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::test::counting_memory_resource allocation;
     std::exception_ptr failure;
     std::optional<ruvia::http_client_tunnel> retained_tunnel;
+    ruvia::test::http2_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         const auto& worker_value = attachment.loop().handle();
-        asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
-        ruvia::worker_memory memory(allocation);
-        tunnel_observation observation;
-        ruvia::detail::router router;
-        auto& routes_value = ruvia::detail::router_impl::from(router);
-        routes_value.register_tunnel_route({}, std::pmr::string("target.test:443"), {&observation, client_tunnel_echo}, {}, {});
-        routes_value.register_tunnel_route("test-protocol", std::pmr::string("/tunnel"), {&observation, client_tunnel_echo}, {}, {});
-        routes_value.register_route(ruvia::http_known_method::get, std::pmr::string("/sibling"), {nullptr, client_tunnel_sibling}, ruvia::detail::request_body_mode::buffered, {}, {});
-        routes_value.finalize();
-        ruvia::task_scope tasks(worker_value);
-        tasks.spawn(serve_client_tunnel(acceptor, worker_value, routes_value.route_table(), memory));
-        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
+        auto& observation_value = *observation;
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = server.endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
             for (unsigned round = 0; round != 4; ++round) {
-                observation.finish_first_ = round >= 2;
-                std::string authority = round == 1 ? "proxy.test" : "target.test:443";
+                observation_value.finish_first_ = round >= 2;
+                std::string authority = round == 1 ? "proxy.test" : "client-target.test:443";
                 auto cold = client.open_tunnel({.authority_ = authority, .protocol_ = round == 1 ? "test-protocol" : "", .target_ = round == 1 ? "/tunnel" : ""});
                 authority.assign("mutated");
                 auto result_value = co_await std::move(cold);
@@ -99,7 +107,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
                         echoed.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                     }
                 };
-                if (observation.finish_first_) {
+                if (observation_value.finish_first_) {
                     co_await receive();
                     RUVIA_CHECK(echoed == "greeting");
                 }
@@ -124,7 +132,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
                     retained_tunnel.emplace(std::move(tunnel));
                     continue;
                 }
-                if (!observation.finish_first_) {
+                if (!observation_value.finish_first_) {
                     readers.spawn(receive());
                 }
                 std::string payload_value(100003, 't');
@@ -143,7 +151,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
                 }
                 co_await tunnel.finish();
                 co_await readers.join();
-                if (!observation.finish_first_) {
+                if (!observation_value.finish_first_) {
                     RUVIA_CHECK(echoed == payload_value);
                 }
                 auto sibling = co_await client.send({.target_ = "/sibling"});
@@ -152,7 +160,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
                     sibling_body.append(*bytes);
                 }
                 RUVIA_CHECK(sibling_body == "sibling");
-                RUVIA_CHECK(observation.bytes_ == payload_value && observation.eof_);
+                RUVIA_CHECK(observation_value.received() == payload_value && observation_value.eof_);
             }
         } catch (...) {
             failure = std::current_exception();
@@ -171,9 +179,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
             RUVIA_CHECK(late_write_rejected);
             retained_tunnel.reset();
         }
-        std::error_code ignored;
-        acceptor.close(ignored);
-        co_await tasks.join();
+        server.finish();
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
@@ -182,11 +188,10 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK_EQ(allocation.live_allocations(), std::size_t{0});
 }
 
 namespace {
-ruvia::task<void> capsule_echo(void*, ruvia::context& c) {
+ruvia::task<void> client_tunnel_routes::capsules(ruvia::context& c) {
     auto stream = c.tunnel().capsules();
     while (auto capsule = co_await stream.read()) {
         co_await stream.write(capsule->type(), capsule->payload());
@@ -197,22 +202,13 @@ ruvia::task<void> capsule_echo(void*, ruvia::context& c) {
 RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::test::counting_memory_resource allocation;
     std::exception_ptr failure;
+    ruvia::test::http2_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().handle();
-        asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
-        ruvia::worker_memory memory(allocation);
-        ruvia::detail::router router;
-        auto& routes_value = ruvia::detail::router_impl::from(router);
-        routes_value.register_tunnel_route("test-capsules", std::pmr::string("/capsules"), {nullptr, capsule_echo}, {}, {});
-        routes_value.finalize();
-        ruvia::task_scope tasks(worker_value);
-        tasks.spawn(serve_client_tunnel(acceptor, worker_value, routes_value.route_table(), memory));
         std::optional<ruvia::http_capsule> retained;
         std::unique_ptr<ruvia::scoped_operation<void>> cold;
         {
-            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
+            ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = server.endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
             try {
                 auto result_value = co_await client.open_tunnel({.authority_ = "proxy.test", .protocol_ = "test-capsules", .target_ = "/capsules"}, {.max_chunk_bytes_ = 1024});
                 if (!result_value.tunnel()) {
@@ -250,15 +246,7 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
         RUVIA_CHECK(retained && retained->payload() == std::string(4099, 'c'));
         cold.reset();
         retained.reset();
-        std::error_code ignored;
-        acceptor.close(ignored);
-        try {
-            co_await tasks.join();
-        } catch (...) {
-            if (!failure) {
-                failure = std::current_exception();
-            }
-        }
+        server.finish();
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
@@ -267,5 +255,4 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK_EQ(allocation.live_allocations(), std::size_t{0});
 }

@@ -15,7 +15,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/connection_scanner.h"
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/worker_runtime_context.h"
 
 namespace {
 
@@ -76,8 +76,8 @@ struct blocking_maintenance_probe final {
 
 int main() {
     asio::io_context io_context;
-    auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 16);
-    auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+    auto dispatcher = std::make_shared<ruvia::worker_runtime_context>(io_context, 16);
+    auto worker_value = dispatcher->handle();
     try {
         ruvia::connection_scanner invalid(ruvia::worker_handle{}, {});
         return 100;
@@ -149,12 +149,12 @@ int main() {
             off_worker_rejected = true;
         }
         if (!off_worker_rejected ||
-            dispatcher->post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
+            dispatcher->handle().post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
             return 6;
         }
         io_context.run_for(std::chrono::milliseconds(20));
         if (retry_probe.ticks_ == 0 ||
-            dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
+            dispatcher->handle().post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
             return 7;
         }
         if (io_context.stopped()) {
@@ -204,7 +204,7 @@ int main() {
             worker_registrations{};
         worker_maintenance_reset_probe worker_reset_probe{&worker_registrations[7]};
         ruvia::connection_scanner::worker_maintenance_registration_type worker_reset_registration;
-        if (dispatcher->post([&] {
+        if (dispatcher->handle().post([&] {
                 // start() initially has no work. Registrations added afterward
                 // must become visible without any coarse timeout being enabled.
                 scanner.start();
@@ -227,7 +227,7 @@ int main() {
         // window under a parallel Debug build. Give the 1 ms scanner enough
         // time to complete at least one deterministic pass.
         io_context.run_for(std::chrono::milliseconds(50));
-        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
+        if (dispatcher->handle().post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
             return 7;
         }
         if (io_context.stopped()) {
@@ -279,7 +279,7 @@ int main() {
             entries[i].set_phase(phases[i]);
         }
         entries[4].register_periodic_check(liveness_registration, &liveness, &periodic_probe::tick);
-        if (dispatcher->post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
+        if (dispatcher->handle().post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
             return 13;
         }
         io_context.run_for(std::chrono::milliseconds(50));
@@ -299,7 +299,7 @@ int main() {
         if (sockets[4].is_open() || sockets[5].is_open()) {
             return 16;
         }
-        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
+        if (dispatcher->handle().post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
             return 17;
         }
         io_context.run_for(std::chrono::milliseconds(5));
@@ -336,14 +336,14 @@ int main() {
             entries[i].set_phase(progress_value[i].phase_);
             entries[i].register_periodic_check(registrations[i], &progress_value[i], &progress::tick);
         }
-        if (dispatcher->post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
+        if (dispatcher->handle().post([&scanner] { scanner.start(); }) != ruvia::post_status::accepted) {
             return 18;
         }
         io_context.run_for(std::chrono::milliseconds(50));
         if (sockets[0].is_open() || sockets[1].is_open()) {
             return 19;
         }
-        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
+        if (dispatcher->handle().post([&scanner] { scanner.stop(); }) != ruvia::post_status::accepted) {
             return 20;
         }
         io_context.run_for(std::chrono::milliseconds(5));
@@ -365,15 +365,15 @@ int main() {
     bool scanner_lifetime_safe = true;
     {
         asio::io_context scanner_io;
-        auto scanner_dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(scanner_io, 16);
-        auto scanner_worker = ruvia::detail::worker_handle_access::make(scanner_dispatcher);
+        auto scanner_dispatcher = std::make_shared<ruvia::worker_runtime_context>(scanner_io, 16);
+        auto scanner_worker = scanner_dispatcher->handle();
         auto scanner = std::make_unique<ruvia::connection_scanner>(scanner_worker,
             ruvia::connection_scanner_options{.scan_interval_ = std::chrono::milliseconds(1)});
         blocking_maintenance_probe blocking_probe;
         ruvia::connection_scanner::worker_maintenance_registration_type maintenance;
         scanner->register_worker_maintenance(
             maintenance, &blocking_probe, &blocking_maintenance_probe::check);
-        if (scanner_dispatcher->post([&scanner] { scanner->start(); }) !=
+        if (scanner_dispatcher->handle().post([&scanner] { scanner->start(); }) !=
             ruvia::post_status::accepted) {
             scanner_lifetime_safe = false;
         }
@@ -409,7 +409,7 @@ int main() {
         destroyer.join();
         scanner_io.stop();
         scanner_thread.join();
-        scanner_dispatcher->detach_context();
+        scanner_dispatcher->detach();
     }
     if (!scanner_lifetime_safe) {
         return 12;

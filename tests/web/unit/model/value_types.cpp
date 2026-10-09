@@ -125,8 +125,6 @@ RUVIA_TEST(model_bytes_own_and_compare_without_allocator_identity) {
     ruvia::bytes second(bytes_value, {.resource_ = &second_resource});
 
     RUVIA_CHECK(first == second);
-    RUVIA_CHECK_EQ(first.resource(), &first_resource);
-    RUVIA_CHECK_EQ(second.resource(), &second_resource);
     first.assign_owned(std::span<const std::uint8_t>{});
     RUVIA_CHECK(first.empty());
 }

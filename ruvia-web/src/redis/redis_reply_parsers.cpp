@@ -181,6 +181,10 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
                     redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
             }
             auto parsed_entry = redis_types_access::stream_entry(redis_value_string(entry_parts[0]), resource);
+            if (entry_parts[1].null()) {
+                entries.emplace_back(std::move(parsed_entry));
+                continue;
+            }
             const auto field_values = redis_value_array(entry_parts[1]);
             if (field_values.size() % 2 != 0) {
                 throw redis_error(

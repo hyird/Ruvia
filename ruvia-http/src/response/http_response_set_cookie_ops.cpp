@@ -34,11 +34,12 @@ namespace {
 
 [[nodiscard]] bool set_cookie_value_matches_storage_key(std::string_view value,
     std::string_view wire_prefix, std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain) noexcept {
+    std::string_view domain, bool partitioned) noexcept {
     const auto parsed_value = parse_set_cookie(value);
     return parsed_value.has_value() && is_valid_http_header_name(parsed_value->name()) &&
            set_cookie_wire_name_matches(parsed_value->name(), wire_prefix, cookie_name) &&
            parsed_value->has(http_set_cookie_attribute::path) == has_path &&
+           parsed_value->has(http_set_cookie_attribute::partitioned) == partitioned &&
            (!has_path || parsed_value->path() == path) &&
            detail::http_ascii_equals_ignore_case(parsed_value->domain(), domain);
 }
@@ -47,7 +48,7 @@ namespace {
 
 void http_response::set_cookie(const set_cookie_plan& plan) {
     auto* retained = find_set_cookie_header(
-        plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain());
+        plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain(), plan.partitioned_);
     if (retained == nullptr) {
         auto& header_value = append_header_uninitialized_value(
             "Set-Cookie", plan.size(), detail::response_header_set_cookie);
@@ -74,7 +75,7 @@ void http_response::set_cookie(const set_cookie_plan& plan) {
     }
     detail::set_response_header_append(*retained, true);
     erase_later_set_cookie_headers(*retained, written.wire_name_, !written.path_.empty(),
-        written.path_, written.domain_);
+        written.path_, written.domain_, plan.partitioned_);
 }
 
 void http_response::upsert_set_cookie_header_validated(std::string_view value) {
@@ -88,7 +89,8 @@ void http_response::upsert_set_cookie_header_validated(std::string_view value) {
     }
 
     const auto has_path = parsed_value->has(http_set_cookie_attribute::path);
-    auto* retained = find_set_cookie_header({}, cookie_name, has_path, parsed_value->path(), parsed_value->domain());
+    const auto partitioned = parsed_value->has(http_set_cookie_attribute::partitioned);
+    auto* retained = find_set_cookie_header({}, cookie_name, has_path, parsed_value->path(), parsed_value->domain(), partitioned);
     if (retained == nullptr) {
         append_header_validated("Set-Cookie", value, detail::response_header_set_cookie);
         return;
@@ -106,16 +108,16 @@ void http_response::upsert_set_cookie_header_validated(std::string_view value) {
     detail::set_response_header_append(*retained, true);
     const auto copied_value = retained->value();
     erase_later_set_cookie_headers(*retained, copied_value.substr(name_offset, name_size), has_path,
-        copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size));
+        copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size), partitioned);
 }
 
 http_response_header* http_response::find_set_cookie_header(std::string_view wire_prefix,
     std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain) noexcept {
+    std::string_view domain, bool partitioned) noexcept {
     for (auto& header : headers_) {
         if (detail::response_header_known_bit(header) == detail::response_header_set_cookie &&
             set_cookie_value_matches_storage_key(
-                header.value(), wire_prefix, cookie_name, has_path, path, domain)) {
+                header.value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
             return &header;
         }
     }
@@ -124,7 +126,7 @@ http_response_header* http_response::find_set_cookie_header(std::string_view wir
 
 void http_response::erase_later_set_cookie_headers(http_response_header& retained,
     std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain) noexcept {
+    std::string_view domain, bool partitioned) noexcept {
     // A response might already contain duplicates introduced through the raw
     // header API. Once an authoritative cookie path owns this storage key,
     // collapse every later occurrence so the final response has one value.
@@ -134,7 +136,7 @@ void http_response::erase_later_set_cookie_headers(http_response_header& retaine
     for (auto* read = &retained + 1; read != end; ++read) {
         if (detail::response_header_known_bit(*read) == detail::response_header_set_cookie &&
             set_cookie_value_matches_storage_key(
-                read->value(), {}, cookie_name, has_path, path, domain)) {
+                read->value(), {}, cookie_name, has_path, path, domain, partitioned)) {
             headers_.release_header(*read);
             continue;
         }

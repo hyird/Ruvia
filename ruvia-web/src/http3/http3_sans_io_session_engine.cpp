@@ -571,13 +571,15 @@ bool http3_sans_io_session_engine::streaming_request(std::uint64_t stream_id) co
 
 bool http3_sans_io_session_engine::can_accept_input(std::uint64_t stream_id, std::size_t wire_bytes) const noexcept {
     const auto found = streams_.find(stream_id);
-    if (found == streams_.end() || !found->second->streaming_body_ || found->second->retired_ || found->second->body_failure_ != rejection_type::none) {
+    if (found == streams_.end() || (!found->second->streaming_body_ && !found->second->connect_request_) ||
+        found->second->retired_ || found->second->body_failure_ != rejection_type::none) {
         return true;
     }
-    return found->second->tunnel_buffered_bytes_ <= limits_.max_stream_backlog_bytes_ &&
+    const auto limit = found->second->connect_request_ ? limits_.max_tunnel_buffered_bytes_ : limits_.max_stream_backlog_bytes_;
+    return found->second->tunnel_buffered_bytes_ <= limit &&
            buffered_bytes_in_flight_ <= limits_.max_buffered_bytes_in_flight_ &&
            tunnel_bytes_in_flight_ <= limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ &&
-           wire_bytes <= limits_.max_stream_backlog_bytes_ - found->second->tunnel_buffered_bytes_ &&
+           wire_bytes <= limit - found->second->tunnel_buffered_bytes_ &&
            wire_bytes <= limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ - tunnel_bytes_in_flight_ &&
            (body_budget_ == nullptr || wire_bytes <= body_budget_->available());
 }

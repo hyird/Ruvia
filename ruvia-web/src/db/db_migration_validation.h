@@ -101,12 +101,12 @@ namespace ruvia::detail {
         return index;
     }
     if (driver == db_driver::mariadb && sql[index] == '#') {
-        return skip_sql_line_comment(sql, index + 1);
+        return skip_sql_line_comment(sql, index + 1, false);
     }
     if (driver == db_driver::mariadb
             ? is_mariadb_double_dash_comment(sql, index)
             : (sql[index] == '-' && index + 1 < sql.size() && sql[index + 1] == '-')) {
-        return skip_sql_line_comment(sql, index + 2);
+        return skip_sql_line_comment(sql, index + 2, driver == db_driver::postgresql);
     }
     if (sql[index] == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
         return driver == db_driver::postgresql ? skip_postgresql_block_comment(sql, index)

@@ -3,9 +3,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/field/http_expectations.h"
+#include "ruvia/http/http_expectations.h"
 
 #include "test_harness.h"
 
@@ -15,14 +13,6 @@ using ruvia::http_client_expectation_is_valid;
 using ruvia::http_request_content_indication;
 using ruvia::http_request_expectations;
 using ruvia::http_unsupported_expectation_policy;
-using ruvia::detail::http_connection_options;
-using ruvia::detail::http_field_list_parse_status;
-using ruvia::detail::http_field_list_role;
-using ruvia::detail::http_find_semicolon_parameter_ignore_case;
-using ruvia::detail::http_find_semicolon_parameter_quoted_ignore_case;
-using ruvia::detail::http_upgrade_protocols;
-using ruvia::detail::is_valid_http_expect_field_value;
-using ruvia::detail::is_valid_received_http_expect_field_value;
 
 }  // namespace
 
@@ -69,27 +59,4 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
     expectations.ignore_continue();
     RUVIA_CHECK(!expectations.has_continue());
     RUVIA_CHECK(expectations.has_unsupported());
-}
-
-RUVIA_TEST(expect_field_value_validates_sender_syntax) {
-    for (const std::string_view valid : {"100-continue", "custom=value", R"(custom="a,b")",
-             R"(custom="quoted\"value"; name=token)", R"(custom = "x" ; name = "y")"}) {
-        RUVIA_CHECK(is_valid_http_expect_field_value(valid));
-    }
-
-    for (const std::string_view invalid : {"", ",100-continue", "100-continue,", "bad value",
-             "custom=", "custom=bad value", R"(custom="unterminated)", R"(custom="bad\)",
-             "custom; name=value", "custom=value; bad-param"}) {
-        RUVIA_CHECK(!is_valid_http_expect_field_value(invalid));
-    }
-}
-
-RUVIA_TEST(received_expect_field_value_tolerates_empty_list_members_only) {
-    RUVIA_CHECK(is_valid_received_http_expect_field_value(" , 100-continue, custom-feature, "));
-    RUVIA_CHECK(is_valid_received_http_expect_field_value(""));
-
-    for (const std::string_view invalid : {"bad value", "custom=", "custom=bad value",
-             R"(custom="unterminated)", "custom; name=value"}) {
-        RUVIA_CHECK(!is_valid_received_http_expect_field_value(invalid));
-    }
 }

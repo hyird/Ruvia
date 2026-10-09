@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http1/http1_server_request_parser.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
@@ -14,15 +14,12 @@
 #include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "test_harness.h"
-#include "websocket/http_websocket_handshake_fields.h"
 
 namespace {
 
+using ruvia::http1_server_request_parser;
 using ruvia::http_request;
 using ruvia::validate_websocket_handshake;
-using ruvia::detail::choose_websocket_subprotocol;
-using ruvia::detail::http1_server_request_parser;
-using ruvia::detail::websocket_protocol_offered;
 
 http_request parse_request(std::string_view raw_request) {
     http1_server_request_parser parser;
@@ -44,14 +41,6 @@ http_request parse_request(std::string_view raw_request) {
 [[nodiscard]] bool rejects_request(std::string_view raw_request) {
     const auto result_value = validate_request(raw_request);
     return result_value.failure() != nullptr;
-}
-
-http_request offering() {
-    return parse_request(
-        "GET /ws HTTP/1.1\r\n"
-        "Host: example.test\r\n"
-        "Sec-WebSocket-Protocol: chat, superchat\r\n"
-        "\r\n");
 }
 
 std::string_view valid_handshake() {
@@ -143,41 +132,6 @@ RUVIA_TEST(ws_h1_handshake_preserves_application_request_headers) {
     RUVIA_CHECK(request.header("Sec-WebSocket-Extensions") == "permessage-deflate");
     RUVIA_CHECK(request.header("X-End-To-End") == "retained");
     RUVIA_CHECK(accepts_request(raw));
-}
-
-RUVIA_TEST(ws_subprotocol_negotiation_prefers_server_order) {
-    const auto request = offering();
-    constexpr std::array<std::string_view, 2> supported{"superchat", "chat"};
-    constexpr std::array<std::string_view, 1> chat{"chat"};
-    constexpr std::array<std::string_view, 1> binary{"binary"};
-    // Server preference wins: the first supported token the client also offered.
-    RUVIA_CHECK_EQ(choose_websocket_subprotocol(request, supported), std::string_view("superchat"));
-    RUVIA_CHECK_EQ(choose_websocket_subprotocol(request, chat), std::string_view("chat"));
-    // No overlap yields no subprotocol.
-    RUVIA_CHECK(choose_websocket_subprotocol(request, binary).empty());
-
-    // A request offering nothing yields no subprotocol.
-    const auto none = parse_request("GET /ws HTTP/1.1\r\nHost: example.test\r\n\r\n");
-    RUVIA_CHECK(choose_websocket_subprotocol(none, chat).empty());
-}
-
-RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
-    const auto request = offering();
-    RUVIA_CHECK(websocket_protocol_offered(request, "chat"));
-    RUVIA_CHECK(websocket_protocol_offered(request, "superchat"));
-    RUVIA_CHECK(!websocket_protocol_offered(request, "super"));  // prefix, not a whole token
-    RUVIA_CHECK(!websocket_protocol_offered(request, "binary"));
-
-    const auto malformed = parse_request(
-        "GET /ws HTTP/1.1\r\nHost: example.test\r\n"
-        "Sec-WebSocket-Protocol: chat, bad token\r\n\r\n");
-    RUVIA_CHECK(!websocket_protocol_offered(malformed, "chat"));
-    constexpr std::array<std::string_view, 1> chat{"chat"};
-    constexpr std::array<std::string_view, 2> malformed_supported{"chat", "bad token"};
-    constexpr std::array<std::string_view, 2> duplicate_supported{"chat", "chat"};
-    RUVIA_CHECK(choose_websocket_subprotocol(malformed, chat).empty());
-    RUVIA_CHECK(choose_websocket_subprotocol(request, malformed_supported).empty());
-    RUVIA_CHECK(choose_websocket_subprotocol(request, duplicate_supported).empty());
 }
 
 RUVIA_TEST(ws_public_subprotocol_set_validates_unique_tokens) {

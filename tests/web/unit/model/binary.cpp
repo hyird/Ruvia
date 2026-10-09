@@ -9,7 +9,6 @@
 
 #include "ruvia/web/model.h"
 #include "ruvia/web/model_json.h"
-#include "ruvia/web/validation.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -22,8 +21,6 @@ RUVIA_MODEL(binary_model,
 RUVIA_MODEL(binary_array_model,
     RUVIA_REQUIRED_FIELD(items, ruvia::array<ruvia::bytes>),
     RUVIA_REQUIRED_FIELD(boxed, ruvia::boxed_array<ruvia::bytes>));
-RUVIA_MODEL(binary_rules,
-    RUVIA_REQUIRED_FIELD(bytes, ruvia::bytes, RUVIA_MIN(2, "short"), RUVIA_MAX(3, "long")));
 class binary_failing_resource final : public std::pmr::memory_resource {
 public:
     // MSVC debug STL allocates small iterator-proxy nodes from the container
@@ -118,34 +115,14 @@ RUVIA_TEST(model_json_bytes_supports_nested_arrays_nullable_and_omit_empty) {
     }
 }
 
-RUVIA_TEST(model_json_bytes_rules_measure_decoded_bytes_only) {
-    auto short_value = ruvia::from_json<binary_rules>(R"({"bytes":"AQ=="})");
-    auto valid_value = ruvia::from_json<binary_rules>(R"({"bytes":"AQI="})");
-    auto long_value = ruvia::from_json<binary_rules>(R"({"bytes":"AQIDBA=="})");
-    RUVIA_CHECK(short_value && valid_value && long_value);
-    if (short_value && valid_value && long_value) {
-        ruvia::validator validator;
-        ruvia::detail::model_validation_access::validate_model(*short_value, validator);
-        RUVIA_CHECK(!validator.ok());
-        ruvia::validator valid_validator;
-        ruvia::detail::model_validation_access::validate_model(*valid_value, valid_validator);
-        RUVIA_CHECK(valid_validator.ok());
-        ruvia::validator long_validator;
-        ruvia::detail::model_validation_access::validate_model(*long_value, long_validator);
-        RUVIA_CHECK(!long_validator.ok());
-    }
-}
-
-RUVIA_TEST(model_bytes_set_and_move_normalize_resources) {
+RUVIA_TEST(model_bytes_set_and_move_preserve_values) {
     std::pmr::monotonic_buffer_resource source;
     std::pmr::monotonic_buffer_resource target;
     binary_model model({.resource_ = &target});
     const std::uint8_t raw[] = {1, 2, 3};
     model.set<"bytes">(std::span<const std::uint8_t>(raw));
-    RUVIA_CHECK_EQ(model.get<"bytes">().resource(), &target);
     std::pmr::vector<std::uint8_t> owned({4, 5}, &source);
     model.set<"bytes">(std::move(owned));
-    RUVIA_CHECK_EQ(model.get<"bytes">().resource(), &target);
     RUVIA_CHECK_EQ(model.get<"bytes">().view()[1], std::uint8_t{5});
 }
 
@@ -162,12 +139,7 @@ RUVIA_TEST(model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
             }
             RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
         }
-        const auto output_before = output_memory.allocation_count();
         const auto saved = ruvia::to_json(retained.get<"bytes">(), {.resource_ = &output_memory});
-        const auto produced = output_memory.allocation_count() - output_before;
-        // One result buffer. MSVC debug may also allocate iterator-proxy metadata
-        // from the same resource; a short reserve can grow the buffer once.
-        RUVIA_CHECK(produced >= 1 && produced <= 4);
         const auto baseline = memory.live_allocations();
         const auto output_baseline = output_memory.live_allocations();
         for (int i = 0; i < 32; ++i) {
@@ -186,9 +158,7 @@ RUVIA_TEST(model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
             RUVIA_CHECK_EQ(retained.get<"bytes">().view().front(), std::uint8_t{255});
         }
         std::pmr::vector<std::uint8_t> compatible(128, 7, &memory);
-        const auto* original = compatible.data();
         retained.set<"bytes">(std::move(compatible));
-        RUVIA_CHECK_EQ(retained.get<"bytes">().view().data(), original);
         retained.ensure<"bytes">().assign_owned(retained.get<"bytes">().view().subspan(1));
         RUVIA_CHECK_EQ(retained.get<"bytes">().size(), std::size_t{127});
         RUVIA_CHECK_EQ(retained.get<"bytes">().view().back(), std::uint8_t{7});

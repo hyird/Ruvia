@@ -1,9 +1,3 @@
-#include "test_harness.h"
-
-// Model fields deliberately use Ruvia model value types. Plain arithmetic
-// declarations are rejected at the trait layer so schema fields do not drift
-// away from the public model contract.
-
 #include <cstdint>
 #include <memory_resource>
 #include <string>
@@ -11,7 +5,8 @@
 
 #include "ruvia/web/model.h"
 #include "ruvia/web/model_json.h"
-#include "ruvia/web/validation.h"
+
+#include "test_harness.h"
 
 RUVIA_MODEL(wrapped_scalars, RUVIA_OPTIONAL_FIELD(count, ruvia::uint32),
     RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value),
@@ -64,14 +59,6 @@ RUVIA_TEST(model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_
 
     RUVIA_CHECK(!ruvia::from_form<wrapped_scalars>("count=not-a-number", {.resource_ = &resource})
             .has_value());
-    const auto partial_form =
-        ruvia::detail::model_parse_access::parse_form_borrowed_partial<wrapped_scalars>(
-            "count=not-a-number", &resource);
-    RUVIA_CHECK(partial_form.has_value());
-    if (partial_form) {
-        RUVIA_CHECK(ruvia::detail::model_validation_access::field_state<"count">(*partial_form) ==
-                    ruvia::detail::model_field_state::invalid_type);
-    }
 }
 
 RUVIA_TEST(model_wrapper_scalar_fields_round_trip_through_json) {

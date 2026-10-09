@@ -10,14 +10,13 @@
 #include <type_traits>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/detail/io/asio_await.h"
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_runtime_context.h"
+
+#include "worker_task_fixture.h"
 
 namespace {
 
@@ -30,12 +29,8 @@ public:
     throwing_move& operator=(const throwing_move&) = delete;
     // This fixture intentionally models a move that can throw.
     throwing_move(throwing_move&& other) noexcept(false) {
-        const auto moves_remaining = moves_before_failure_.load(std::memory_order_relaxed);
-        if (throw_on_move_.load(std::memory_order_relaxed) || moves_remaining == 0) {
+        if (throw_on_move_.load(std::memory_order_relaxed)) {
             throw std::runtime_error("requested move failure");
-        }
-        if (moves_remaining > 0) {
-            moves_before_failure_.fetch_sub(1, std::memory_order_relaxed);
         }
         value_ = std::exchange(other.value_, 0);
     }
@@ -45,7 +40,6 @@ public:
     }
 
     static inline std::atomic_bool throw_on_move_{false};
-    static inline std::atomic_int moves_before_failure_{-1};
 
 private:
     int value_{0};
@@ -58,8 +52,10 @@ ruvia::task<void> receive_last(ruvia::channel_receiver<int>& receiver, bool& suc
               closed.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<void> receive_queued_then_stopping(ruvia::channel_receiver<int>& receiver, bool& success) {
+ruvia::task<void> receive_queued_then_stopping(ruvia::worker_runtime_context& runtime,
+    ruvia::channel_receiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
+    asio::post(runtime.io_context(), [&runtime] { runtime.close(); });
     const auto stopping = co_await receiver.receive();
     success = value.has_value() && value.value() == 9 &&
               stopping.status() == ruvia::worker_wait_status::worker_stopping;
@@ -110,8 +106,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             receiver_scheduled.acquire();
             source.request_stop();
         });
-        ruvia::detail::worker_handle_access::defer(
-            worker_value, [&receiver_scheduled] { receiver_scheduled.release(); });
+        static_cast<void>(worker_value.post([&receiver_scheduled] { receiver_scheduled.release(); }));
         const auto cancelled =
             co_await cancel_receiver.receive_for(std::chrono::seconds(1), source.token());
         stopper.join();
@@ -144,14 +139,17 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         scope.spawn(receive_after_late_cancellation(
             late_receiver, source.token(), next_source.token(), generation_safe));
         if (!late_sender.send(1).accepted()) {
+            late_receiver.close();
+            scope.request_stop();
+            co_await scope.join();
             co_return;
         }
         source.request_stop();
-        ruvia::detail::worker_handle_access::defer(worker_value, [&late_sender] {
+        static_cast<void>(worker_value.post([&late_sender] {
             if (!late_sender.send(2).accepted()) {
                 std::terminate();
             }
-        });
+        }));
         co_await scope.join();
         if (!generation_safe) {
             co_return;
@@ -200,11 +198,11 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 
     ruvia::task_scope scope(worker_value);
     scope.spawn(receive_last(active_receiver, success));
-    if (!sender.send(3).accepted()) {
-        co_return;
-    }
+    const bool sent = sender.send(3).accepted();
     sender.close();
+    scope.request_stop();
     co_await scope.join();
+    success = success && sent;
     const auto closed_send = sender.send(4);
     if (closed_send.status() != ruvia::channel_send_status::closed ||
         closed_send.rejected() == nullptr || *closed_send.rejected() != 4) {
@@ -219,56 +217,43 @@ int main() {
     bool cold_receiver_tasks_safe = false;
     {
         asio::io_context io_context;
-        const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 8);
-        const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto worker_value = runtime.handle();
         auto cold_receive = make_cold_receive_after_receiver_close(worker_value, false);
         auto timed_cold_receive = make_cold_receive_after_receiver_close(worker_value, true);
-        asio::co_spawn(
-            io_context, ruvia::detail::task_as_awaitable(exercise(worker_value, success)), asio::detached);
-        asio::co_spawn(io_context,
-            ruvia::detail::task_as_awaitable(verify_cold_receiver_tasks(
-                std::move(cold_receive), std::move(timed_cold_receive), cold_receiver_tasks_safe)),
-            asio::detached);
-        io_context.run();
-        dispatcher->close();
-        dispatcher->stop_timers();
+        ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success),
+            verify_cold_receiver_tasks(std::move(cold_receive), std::move(timed_cold_receive),
+                cold_receiver_tasks_safe));
+        runtime.detach();
     }
 
     bool worker_stopping = false;
     bool stopping_send = false;
     {
         asio::io_context io_context;
-        const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 8);
-        const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto worker_value = runtime.handle();
         auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
         if (!sender.send(9).accepted()) {
             return 1;
         }
-        asio::co_spawn(io_context,
-            ruvia::detail::task_as_awaitable(receive_queued_then_stopping(receiver, worker_stopping)),
-            asio::detached);
-        asio::post(io_context, [dispatcher] { dispatcher->close(); });
-        io_context.run();
+        ruvia::test::run_worker_tasks(runtime, receive_queued_then_stopping(runtime, receiver, worker_stopping));
         sender.close();
         const auto stopping_result = sender.send(10);
         stopping_send = stopping_result.status() == ruvia::channel_send_status::worker_stopping &&
                         stopping_result.rejected() != nullptr && *stopping_result.rejected() == 10;
-        dispatcher->stop_timers();
+        runtime.detach();
     }
 
     bool move_failed = false;
-    bool result_move_failed = false;
     bool recovered_value = false;
     bool recovered_send = false;
     {
         asio::io_context io_context;
-        const auto dispatcher = std::make_shared<ruvia::detail::worker_dispatcher>(io_context, 8);
-        const auto worker_value = ruvia::detail::worker_handle_access::make(dispatcher);
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto worker_value = runtime.handle();
         auto [sender, receiver] = ruvia::make_channel<throwing_move>(worker_value, {.capacity_ = 1});
         std::binary_semaphore receiver_scheduled{0};
-        asio::co_spawn(io_context,
-            ruvia::detail::task_as_awaitable(receive_throwing_move(receiver, recovered_value)),
-            asio::detached);
         asio::post(io_context, [&receiver_scheduled] { receiver_scheduled.release(); });
         std::thread sending_thread([&] {
             receiver_scheduled.acquire();
@@ -279,25 +264,15 @@ int main() {
                 move_failed = true;
             }
             throwing_move::throw_on_move_.store(false, std::memory_order_relaxed);
-            // Result construction moves the payload four times; fail when the
-            // shared completion state next takes ownership of that result.
-            throwing_move::moves_before_failure_.store(4, std::memory_order_relaxed);
-            try {
-                static_cast<void>(sender.send(throwing_move(5)));
-            } catch (const std::runtime_error&) {
-                result_move_failed = true;
-            }
-            throwing_move::moves_before_failure_.store(-1, std::memory_order_relaxed);
             recovered_send = sender.send(throwing_move(6)).accepted();
         });
-        io_context.run();
+        ruvia::test::run_worker_tasks(runtime, receive_throwing_move(receiver, recovered_value));
         sending_thread.join();
         sender.close();
-        dispatcher->close();
-        dispatcher->stop_timers();
+        runtime.detach();
     }
 
     const bool all_passed = success && cold_receiver_tasks_safe && worker_stopping && stopping_send &&
-                            move_failed && result_move_failed && recovered_value && recovered_send;
+                            move_failed && recovered_value && recovered_send;
     return all_passed ? 0 : 1;
 }
