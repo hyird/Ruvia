@@ -1,91 +1,30 @@
 ruvia_fetch_web_dependencies("${RUVIA_ENABLE_MARIADB}" "${RUVIA_ENABLE_POSTGRESQL}" "${RUVIA_ENABLE_REDIS}")
 
 ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
-list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/(db|redis)/")
-list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
-
-if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbClient.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHostResolution.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbProcedure.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/query_compiler.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/query_validation.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryCache.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryResultCache.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchema.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchemaTimescale.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbValue.cpp)
+# Keep the shared database sources whenever either driver is enabled; only the
+# driver-specific translation units and disabled feature directories are omitted.
+if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
+    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/db/")
+else()
+    if(NOT RUVIA_ENABLE_MARIADB)
+        list(FILTER RUVIA_WEB_SOURCES EXCLUDE
+            REGEX "/src/db/(Db|DbMysqlRuntime|DbPoolIo|DbPoolLifecycle|DbSql)\\.cpp$")
+    endif()
+    if(NOT RUVIA_ENABLE_POSTGRESQL)
+        list(FILTER RUVIA_WEB_SOURCES EXCLUDE
+            REGEX "/src/db/(DbPostgreSql|Pg[^/]*)\\.cpp$")
+    endif()
 endif()
-
-if(RUVIA_ENABLE_MARIADB)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/Db.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMysqlRuntime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolIo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolLifecycle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
+if(NOT RUVIA_ENABLE_REDIS)
+    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/redis/")
 endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPostgreSql.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgDb.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgPoolIo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgPoolLifecycle.cpp)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/Redis.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisClient.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisClientRuntime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisCommandArgs.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleCommandOps.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleAdvanced.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleHashList.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleHelpers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleSetSorted.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPipeline.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPool.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolIo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolLifecycle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolSlots.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisProtocol.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisReplyParsers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisRepositoryCommands.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisTransaction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisTypes.cpp)
-endif()
-
-if(RUVIA_ENABLE_JWT)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/Jwt.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/JwtCommon.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/JwtCrypto.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/JwtEncoding.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/JwtJson.cpp)
+if(NOT RUVIA_ENABLE_JWT)
+    list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
 endif()
 
 add_library(ruvia-web ${RUVIA_WEB_SOURCES})
-add_library(ruvia::web ALIAS ruvia-web)
 
-set_target_properties(ruvia-web PROPERTIES
-    EXPORT_NAME web
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
-
-ruvia_configure_library(ruvia-web)
+ruvia_configure_library(ruvia-web web)
 ruvia_configure_runtime_library(ruvia-web)
 
 target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_WEB)
@@ -105,24 +44,14 @@ if(WIN32)
     target_link_libraries(ruvia-web PRIVATE Ws2_32)
 endif()
 
-if(RUVIA_ENABLE_MARIADB)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_MARIADB)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
-endif()
+foreach(_ruvia_feature IN ITEMS MARIADB POSTGRESQL REDIS JWT)
+    if(RUVIA_ENABLE_${_ruvia_feature})
+        target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_${_ruvia_feature})
+    endif()
+endforeach()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_DATABASE)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_REDIS)
-endif()
-
-if(RUVIA_ENABLE_JWT)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_JWT)
 endif()
 
 ruvia_install_target(ruvia-web web)
@@ -134,7 +63,8 @@ if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
 endif()
 if(NOT RUVIA_ENABLE_REDIS)
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-        file(GLOB _ruvia_redis_runtime_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+        file(GLOB _ruvia_redis_runtime_headers CONFIGURE_DEPENDS
+            RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/web/redis/*.h")
         list(REMOVE_ITEM _ruvia_redis_runtime_headers "include/ruvia/web/redis/RedisTypes.h")
         list(APPEND _ruvia_web_excluded_headers ${_ruvia_redis_runtime_headers})

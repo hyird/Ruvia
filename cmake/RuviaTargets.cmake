@@ -10,7 +10,11 @@ endfunction()
 # CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
 # paths against its own directory.
 
-function(ruvia_configure_library target)
+function(ruvia_configure_library target component)
+    add_library(ruvia::${component} ALIAS ${target})
+    set_target_properties(${target} PROPERTIES
+        EXPORT_NAME ${component}
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)
     target_compile_features(${target} PUBLIC cxx_std_20)
 
     target_include_directories(${target}
@@ -52,10 +56,6 @@ function(ruvia_configure_library target)
 endfunction()
 
 function(ruvia_configure_runtime_library target)
-    target_compile_definitions(${target}
-        PUBLIC
-            ASIO_STANDALONE
-    )
     target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
 endfunction()
 
@@ -106,9 +106,7 @@ function(ruvia_install_public_headers component)
         ruvia_assert_component_header_path(${component} "${_ruvia_header}")
         get_property(_ruvia_installed_header_paths GLOBAL PROPERTY
             RUVIA_INSTALLED_HEADER_PATHS)
-        list(FIND _ruvia_installed_header_paths "${_ruvia_header}"
-            _ruvia_installed_header_index)
-        if(NOT _ruvia_installed_header_index EQUAL -1)
+        if(_ruvia_header IN_LIST _ruvia_installed_header_paths)
             continue()
         endif()
         set_property(GLOBAL APPEND PROPERTY
@@ -141,36 +139,32 @@ function(ruvia_install_public_header_closure component relative_dir)
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.inl")
 
-    set(_ruvia_closure_queue)
-    foreach(_ruvia_candidate IN LISTS _ruvia_closure_candidates)
-        set(_ruvia_candidate_excluded FALSE)
-        if(_ruvia_candidate IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
-            set(_ruvia_candidate_excluded TRUE)
-        endif()
-        string(REPLACE "/" ";" _ruvia_candidate_components
-            "${_ruvia_candidate}")
-        foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
-            list(FIND _ruvia_candidate_components "${_ruvia_excluded_dir}"
-                _ruvia_excluded_dir_index)
-            if(NOT _ruvia_excluded_dir_index EQUAL -1)
-                set(_ruvia_candidate_excluded TRUE)
-            endif()
-        endforeach()
-        if(NOT _ruvia_candidate_excluded
-           AND NOT _ruvia_candidate MATCHES "(^|/)detail(/|$)")
-            list(APPEND _ruvia_closure_queue "${_ruvia_candidate}")
-        endif()
-    endforeach()
+    list(FILTER _ruvia_closure_candidates EXCLUDE REGEX "(^|/)detail(/|$)")
+    set(_ruvia_closure_queue ${_ruvia_closure_candidates})
 
     set(_ruvia_closure_headers)
     while(_ruvia_closure_queue)
         list(POP_FRONT _ruvia_closure_queue _ruvia_header)
-        list(FIND _ruvia_closure_headers "${_ruvia_header}"
-            _ruvia_header_index)
-        if(NOT _ruvia_header_index EQUAL -1)
+        if(_ruvia_header IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
+            continue()
+        endif()
+        string(REPLACE "/" ";" _ruvia_header_components "${_ruvia_header}")
+        set(_ruvia_header_excluded FALSE)
+        foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
+            if(_ruvia_excluded_dir IN_LIST _ruvia_header_components)
+                set(_ruvia_header_excluded TRUE)
+                break()
+            endif()
+        endforeach()
+        if(_ruvia_header_excluded)
+            continue()
+        endif()
+        if(_ruvia_header IN_LIST _ruvia_closure_headers)
             continue()
         endif()
         list(APPEND _ruvia_closure_headers "${_ruvia_header}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}")
 
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
             _ruvia_header_text)
@@ -187,24 +181,7 @@ function(ruvia_install_public_header_closure component relative_dir)
                 continue()
             endif()
 
-            set(_ruvia_included_excluded FALSE)
-            if(_ruvia_included_header IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
-                set(_ruvia_included_excluded TRUE)
-            endif()
-            string(REPLACE "/" ";" _ruvia_included_components
-                "${_ruvia_included_header}")
-            foreach(_ruvia_excluded_dir IN LISTS
-                    _ruvia_closure_EXCLUDE_DIRECTORIES)
-                list(FIND _ruvia_included_components "${_ruvia_excluded_dir}"
-                    _ruvia_excluded_dir_index)
-                if(NOT _ruvia_excluded_dir_index EQUAL -1)
-                    set(_ruvia_included_excluded TRUE)
-                endif()
-            endforeach()
-            if(NOT _ruvia_included_excluded)
-                list(APPEND _ruvia_closure_queue
-                    "${_ruvia_included_header}")
-            endif()
+            list(APPEND _ruvia_closure_queue "${_ruvia_included_header}")
         endforeach()
     endwhile()
 

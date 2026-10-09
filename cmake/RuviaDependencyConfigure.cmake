@@ -7,14 +7,10 @@ function(ruvia_native_dependency name)
     cmake_parse_arguments(PARSE_ARGV 1 native "" "" "LIBRARIES;DEPENDS;ARGUMENTS")
     FetchContent_MakeAvailable(ruvia_${name})
     FetchContent_GetProperties(ruvia_${name} SOURCE_DIR source)
-    if(name STREQUAL "openssl")
-        file(SHA256 "${source}/VERSION.dat" source_version)
-    elseif(name STREQUAL "postgresql")
-        file(SHA256 "${source}/configure.ac" source_version)
-    else()
-        file(SHA256 "${source}/CMakeLists.txt" source_version)
-    endif()
-    string(SHA256 build_id "${source_version};${CMAKE_C_COMPILER};${CMAKE_C_COMPILER_VERSION};${native_ARGUMENTS}")
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaDependencies.cmake" declarations)
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaDependencyBuild.cmake" builder)
+    string(SHA256 build_id
+        "${source};${declarations};${builder};${CMAKE_C_COMPILER};${CMAKE_C_COMPILER_VERSION};${CMAKE_AR};${CMAKE_GENERATOR};${CMAKE_GENERATOR_PLATFORM};${CMAKE_GENERATOR_TOOLSET};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P};${native_ARGUMENTS}")
     string(SUBSTRING "${build_id}" 0 12 build_id)
     set(root "${FETCHCONTENT_BASE_DIR}/ruvia-${name}-${build_id}")
     foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
@@ -35,13 +31,14 @@ function(ruvia_native_dependency name)
         COMMAND "${CMAKE_COMMAND}"
             "-Dkind=${name}" "-Dsource=${source}" "-Droot=${root}"
             "-Dconfig=${configuration}" "-Djobs=${jobs}"
-            "-Dcompiler=${CMAKE_C_COMPILER}" "-Dgenerator=${CMAKE_GENERATOR}"
-            "-Dplatform=${CMAKE_GENERATOR_PLATFORM}"
+            "-Dcompiler=${CMAKE_C_COMPILER}" "-Darchiver=${CMAKE_AR}"
+            "-Dgenerator=${CMAKE_GENERATOR}" "-Dplatform=${CMAKE_GENERATOR_PLATFORM}"
+            "-Dtoolset=${CMAKE_GENERATOR_TOOLSET}"
             "-Dlibrary_prefix=${CMAKE_STATIC_LIBRARY_PREFIX}"
             "-Dlibrary_suffix=${CMAKE_STATIC_LIBRARY_SUFFIX}"
             ${native_ARGUMENTS}
-            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaNativeBuild.cmake"
-        DEPENDS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaNativeBuild.cmake" ${native_DEPENDS}
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaDependencyBuild.cmake"
+        DEPENDS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuviaDependencyBuild.cmake" ${native_DEPENDS}
         VERBATIM USES_TERMINAL)
     add_custom_target(ruvia_build_${name} DEPENDS "${root}/${configuration}/complete.stamp")
     foreach(library IN LISTS native_LIBRARIES)
@@ -67,6 +64,7 @@ function(ruvia_fetch_openssl)
     find_package(Perl REQUIRED)
     if(WIN32)
         find_program(ruvia_jom NAMES jom REQUIRED)
+        find_program(ruvia_nasm NAMES nasm)
         set(make "${ruvia_jom}")
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64" OR CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
             set(target VC-WIN64-ARM)
@@ -82,12 +80,13 @@ function(ruvia_fetch_openssl)
     endif()
     ruvia_native_dependency(openssl
         LIBRARIES openssl_ssl openssl_crypto
-        ARGUMENTS "-Dperl=${PERL_EXECUTABLE}" "-Dmake=${make}" "-Dopenssl_target=${target}")
+        ARGUMENTS "-Dperl=${PERL_EXECUTABLE}" "-Dmake=${make}"
+            "-Dopenssl_target=${target}" "-Dnasm=${ruvia_nasm}")
     target_link_libraries(ruvia_openssl_ssl INTERFACE ruvia_openssl_crypto)
     if(WIN32)
         target_link_libraries(ruvia_openssl_crypto INTERFACE ws2_32 crypt32 advapi32 user32)
     else()
-        find_package(Threads REQUIRED)
+        find_package(Threads REQUIRED GLOBAL)
         target_link_libraries(ruvia_openssl_crypto INTERFACE Threads::Threads ${CMAKE_DL_LIBS})
     endif()
     set_property(GLOBAL PROPERTY RUVIA_OPENSSL_ROOT "${ruvia_openssl_ROOT}")
@@ -95,12 +94,15 @@ endfunction()
 
 function(ruvia_fetch_mariadb)
     get_property(openssl_root GLOBAL PROPERTY RUVIA_OPENSSL_ROOT)
-    FetchContent_GetProperties(ruvia_zlib SOURCE_DIR zlib_source)
+    FetchContent_GetProperties(ruvia_zlib SOURCE_DIR zlib_source BINARY_DIR zlib_binary)
+    # MariaDB checks TLS headers during configuration, after OpenSSL's native
+    # installation. Its isolated CMake build cannot run at parent configure time.
     ruvia_native_dependency(mariadb
         LIBRARIES mariadb_client
-        DEPENDS ruvia_build_openssl zlibstatic
-        ARGUMENTS "-Dopenssl_root=${openssl_root}" "-Dzlib_include=${zlib_source}"
-            "-Dzlib_library=$<TARGET_FILE:zlibstatic>")
+        DEPENDS ruvia_build_openssl "$<TARGET_FILE:ruvia_openssl_ssl>"
+            "$<TARGET_FILE:ruvia_openssl_crypto>" zlibstatic "$<TARGET_FILE:zlibstatic>"
+        ARGUMENTS "-Dopenssl_root=${openssl_root}" "-Dzlib_source=${zlib_source}"
+            "-Dzlib_binary=${zlib_binary}" "-Dzlib_library=$<TARGET_FILE:zlibstatic>")
     target_link_libraries(ruvia_mariadb_client INTERFACE ruvia_openssl_ssl zlibstatic)
     if(WIN32)
         target_link_libraries(ruvia_mariadb_client INTERFACE ws2_32 shlwapi secur32 bcrypt)
@@ -111,12 +113,19 @@ endfunction()
 
 function(ruvia_fetch_postgresql)
     find_program(ruvia_meson NAMES meson REQUIRED)
+    find_program(ruvia_ninja NAMES ninja ninja-build REQUIRED)
+    find_program(ruvia_pkgconfig NAMES pkg-config pkgconf REQUIRED)
+    find_program(ruvia_bison NAMES bison win_bison REQUIRED)
+    find_program(ruvia_flex NAMES flex win_flex REQUIRED)
     find_package(Perl REQUIRED)
     get_property(openssl_root GLOBAL PROPERTY RUVIA_OPENSSL_ROOT)
     ruvia_native_dependency(postgresql
         LIBRARIES postgresql_client postgresql_common postgresql_port postgresql_frontend
-        DEPENDS ruvia_build_openssl
-        ARGUMENTS "-Dopenssl_root=${openssl_root}" "-Dmeson=${ruvia_meson}" "-Dperl=${PERL_EXECUTABLE}")
+        DEPENDS ruvia_build_openssl "$<TARGET_FILE:ruvia_openssl_ssl>"
+            "$<TARGET_FILE:ruvia_openssl_crypto>"
+        ARGUMENTS "-Dopenssl_root=${openssl_root}" "-Dmeson=${ruvia_meson}"
+            "-Dninja=${ruvia_ninja}" "-Dpkgconfig=${ruvia_pkgconfig}" "-Ddl_library=${CMAKE_DL_LIBS}"
+            "-Dbison=${ruvia_bison}" "-Dflex=${ruvia_flex}" "-Dperl=${PERL_EXECUTABLE}")
     add_library(ruvia_postgresql_backend INTERFACE IMPORTED GLOBAL)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(ruvia_postgresql_backend INTERFACE

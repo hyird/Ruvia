@@ -1,6 +1,6 @@
 include_guard(GLOBAL)
 include(FetchContent)
-include("${CMAKE_CURRENT_LIST_DIR}/RuviaNativeDependencies.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/RuviaDependencyConfigure.cmake")
 
 # Release archives and hashes are updated together. Dependency options stay in
 # function scope so embedding Ruvia never changes the parent project's options.
@@ -35,7 +35,9 @@ FetchContent_Declare(ruvia_mariadb
 FetchContent_Declare(ruvia_postgresql
     URL https://ftp.postgresql.org/pub/source/v18.6/postgresql-18.6.tar.gz
     URL_HASH SHA256=983ee554ec53dbeb9b70797bef9fcf4e67e117e7e48ca1463cc80b3ff8e8ff3f
-    SOURCE_SUBDIR ruvia-no-cmake)
+    SOURCE_SUBDIR ruvia-no-cmake
+    PATCH_COMMAND "${CMAKE_COMMAND}" -Dkind=patch-postgresql "-Dsource=<SOURCE_DIR>"
+        -P "${CMAKE_CURRENT_LIST_DIR}/RuviaDependencyBuild.cmake")
 FetchContent_Declare(ruvia_hiredis
     URL https://github.com/redis/hiredis/archive/refs/tags/v1.4.1.tar.gz
     URL_HASH SHA256=ca3180359a8b1275838a45415851f8cd5c411e27bdbf18f4823012e45507d2e4
@@ -46,7 +48,7 @@ function(ruvia_fetch_core_dependencies)
         return()
     endif()
     FetchContent_MakeAvailable(ruvia_asio)
-    find_package(Threads REQUIRED)
+    find_package(Threads REQUIRED GLOBAL)
     add_library(ruvia_dependencies_core INTERFACE IMPORTED GLOBAL)
     set_target_properties(ruvia_dependencies_core PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${ruvia_asio_SOURCE_DIR}/include"
@@ -90,6 +92,12 @@ function(ruvia_fetch_http_dependencies)
     add_library(ruvia_dependencies_http INTERFACE IMPORTED GLOBAL)
     target_link_libraries(ruvia_dependencies_http INTERFACE
         zlibstatic brotlienc brotlidec brotlicommon libzstd_static ngtcp2_static)
+    ruvia_register_dependency_target(zlibstatic)
+    ruvia_register_dependency_target(brotlienc)
+    ruvia_register_dependency_target(brotlidec)
+    ruvia_register_dependency_target(brotlicommon)
+    ruvia_register_dependency_target(libzstd_static)
+    ruvia_register_dependency_target(ngtcp2_static)
 endfunction()
 
 function(ruvia_fetch_web_dependencies mariadb postgresql redis)
@@ -108,13 +116,16 @@ function(ruvia_fetch_web_dependencies mariadb postgresql redis)
     target_compile_definitions(ruvia_dependencies_web INTERFACE
         OPENSSL_API_COMPAT=40000 OPENSSL_NO_DEPRECATED)
     target_link_libraries(ruvia_dependencies_web INTERFACE ruvia_openssl_ssl)
+    ruvia_register_dependency_target(ruvia_build_openssl)
     if(mariadb)
         ruvia_fetch_mariadb()
         target_link_libraries(ruvia_dependencies_web INTERFACE ruvia_mariadb_client)
+        ruvia_register_dependency_target(ruvia_build_mariadb)
     endif()
     if(postgresql)
         ruvia_fetch_postgresql()
         target_link_libraries(ruvia_dependencies_web INTERFACE ruvia_postgresql_backend)
+        ruvia_register_dependency_target(ruvia_build_postgresql)
     endif()
     if(redis)
         set(DISABLE_TESTS ON)
@@ -125,5 +136,20 @@ function(ruvia_fetch_web_dependencies mariadb postgresql redis)
             target_compile_options(hiredis PRIVATE /utf-8)
         endif()
         target_link_libraries(ruvia_dependencies_web INTERFACE hiredis)
+        ruvia_register_dependency_target(hiredis)
     endif()
+endfunction()
+
+function(ruvia_register_dependency_target target)
+    if(TARGET ${target})
+        set_property(GLOBAL APPEND PROPERTY RUVIA_DEPENDENCY_TARGETS "${target}")
+    endif()
+endfunction()
+
+function(ruvia_define_dependencies_target)
+    if(TARGET ruvia_dependencies)
+        return()
+    endif()
+    get_property(targets GLOBAL PROPERTY RUVIA_DEPENDENCY_TARGETS)
+    add_custom_target(ruvia_dependencies DEPENDS ${targets})
 endfunction()

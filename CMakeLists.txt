@@ -29,7 +29,6 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -51,6 +50,7 @@ if(RUVIA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+ruvia_define_dependencies_target()
 configure_package_config_file(
     cmake/ruviaConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
@@ -66,8 +66,8 @@ install(
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfigVersion.cmake
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencies.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaNativeDependencies.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaNativeBuild.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencyConfigure.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencyBuild.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
     COMPONENT Development
 )
