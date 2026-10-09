@@ -367,7 +367,7 @@ DbQuery::Expr DbQuery::star(std::string_view table) {
     s.nodes.push_back(std::move(node));
     return Expr(&s, s.nodes.size() - 1);
 }
-DbQuery::Expr DbQuery::value(DbValue value) {
+DbQuery::Expr DbQuery::value(const DbValue& value) {
     auto& s = storage();
     detail::DbQueryNode node(DbNodeKind::kValue, s.resource);
     auto owned = detail::cloneDbValueForResource(value, s.resource);

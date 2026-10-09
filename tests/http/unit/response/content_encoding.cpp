@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <memory_resource>
 #include <new>
@@ -102,6 +103,65 @@ RUVIA_TEST(apply_content_encoding_rejects_empty_coding) {
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("\"v1\""));
     RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+}
+
+RUVIA_TEST(encoded_representation_update_rejects_invalid_coding_without_mutation) {
+    const std::array invalid_codings{std::string_view{}, std::string_view("gzip;level=9"),
+        std::string_view("bad coding"), std::string_view("gzip/deflate"),
+        std::string_view(",gzip"), std::string_view("gzip,"), std::string_view("gzip,,br"),
+        std::string_view("gzip\r\nX-Injected: yes"), std::string_view("gzip\0br", 7)};
+    for (const bool buffered : {false, true}) {
+        for (const auto coding : invalid_codings) {
+            auto response = makeResponse();
+            response.body("identity");
+            response.header("Content-Length", "8");
+            response.header("ETag", "\"v1\"");
+            response.header("Content-Encoding", "identity");
+            std::pmr::string encoded("compressed", std::pmr::new_delete_resource());
+            bool rejected = false;
+            try {
+                if (buffered) {
+                    response.replaceBodyWithContentEncoding(std::move(encoded), coding);
+                } else {
+                    response.applyContentEncoding(coding);
+                }
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("identity"));
+            RUVIA_CHECK_EQ(response.header("Content-Length"), std::string_view("8"));
+            RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("\"v1\""));
+            RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("identity"));
+            RUVIA_CHECK_EQ(encoded, std::string_view("compressed"));
+        }
+    }
+}
+
+RUVIA_TEST(encoded_representation_update_accepts_coding_lists_and_extension_codings) {
+    for (const bool buffered : {false, true}) {
+        for (const std::string_view coding : {"gzip, br", "custom-code", "gzip,\tbr"}) {
+            auto response = makeResponse();
+            response.body("identity");
+            response.header("Content-Length", "8");
+            response.header("ETag", "\"v1\"");
+            std::pmr::string encoded("compressed", std::pmr::new_delete_resource());
+            if (buffered) {
+                response.replaceBodyWithContentEncoding(std::move(encoded), coding);
+            } else {
+                response.applyContentEncoding(coding);
+            }
+            RUVIA_CHECK_EQ(response.header("Content-Encoding"), coding);
+            RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"v1\""));
+            if (buffered) {
+                RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("compressed"));
+                RUVIA_CHECK_EQ(response.header("Content-Length"), std::string_view("10"));
+            } else {
+                RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("identity"));
+                RUVIA_CHECK(!response.header("Content-Length"));
+            }
+        }
+    }
 }
 
 RUVIA_TEST(encoded_representation_update_preserves_values_at_each_allocation_failure) {

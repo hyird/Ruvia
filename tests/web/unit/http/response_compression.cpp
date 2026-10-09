@@ -22,6 +22,7 @@
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/HttpResponseStream.h"
 
+#include "failing_memory_resource.h"
 #include "server/HttpBufferedResponse.h"
 #include "server/HttpResponseCompression.h"
 #include "server/HttpStreamingResponseCompression.h"
@@ -37,36 +38,6 @@ using ruvia::HttpResponseCodingQualities;
 using ruvia::HttpResponseCodingSelection;
 using ruvia::detail::applyResponseCompression;
 using Compression = ruvia::CompressionConfig;
-
-class ToggleMemoryResource final : public std::pmr::memory_resource {
-public:
-    explicit ToggleMemoryResource(
-        std::pmr::memory_resource* upstream = std::pmr::new_delete_resource()) noexcept
-        : upstream_(upstream) {}
-
-    void failAllocations(bool fail) noexcept {
-        fail_ = fail;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail_) {
-            throw std::bad_alloc();
-        }
-        return upstream_->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        upstream_->deallocate(pointer, bytes, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::pmr::memory_resource* upstream_;
-    bool fail_{false};
-};
 
 [[nodiscard]] HttpResponseCodingSelection responseCoding(HttpContentCoding coding) {
     HttpResponseCodingQualities qualities;
@@ -447,7 +418,7 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
 }
 
 RUVIA_TEST(streaming_compression_failure_is_terminal) {
-    ToggleMemoryResource resource;
+    failing_memory_resource resource;
     auto response = responseWithBody(kCompressibleBody);
     ruvia::detail::HttpStreamingResponseCompression compression(&resource, gzipResponseCoding(),
         ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
@@ -457,7 +428,7 @@ RUVIA_TEST(streaming_compression_failure_is_terminal) {
         ruvia::planHttpResponseBody(HttpKnownMethod::kGet, response.status()));
     RUVIA_CHECK(compression.active());
 
-    resource.failAllocations(true);
+    resource.fail_after(0);
     const std::string chunk(4096, 'x');
     bool allocation_failed = false;
     try {
@@ -466,6 +437,7 @@ RUVIA_TEST(streaming_compression_failure_is_terminal) {
         allocation_failed = true;
     }
     RUVIA_CHECK(allocation_failed);
+    // Allocation is available again; retries must still reject a failed encoder.
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.write("retry"); }));
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.finish(); }));
     RUVIA_CHECK(compression.output().empty());
@@ -681,9 +653,6 @@ RUVIA_TEST(buffered_response_coding_is_independent_of_server_encoder_availabilit
     }
 }
 
-#if !defined(_MSC_VER)
-// These probes deliberately throw while buffered PMR strings are growing.
-// MSVC's debug pmr::string does not complete that synthetic failure path.
 RUVIA_TEST(buffered_response_compression_failure_is_not_negotiation_miss) {
     ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
@@ -691,13 +660,13 @@ RUVIA_TEST(buffered_response_compression_failure_is_not_negotiation_miss) {
         "Accept-Encoding: gzip, identity;q=0\r\n\r\n");
     RUVIA_CHECK(parsed.messageReady() != nullptr);
 
-    ToggleMemoryResource resource;
+    failing_memory_resource resource;
     auto response = HttpResponse({.resource = &resource});
     response.body(kCompressibleBody);
-    // Keep the already-owned identity body valid, then make the encoder's
-    // process-resource allocation fail. This reaches the typed encoder failure
+    // Keep the already-owned identity body valid, then fail the next encoder
+    // allocation. This reaches the typed encoder failure
     // branch without making response construction itself fail.
-    resource.failAllocations(true);
+    resource.fail_after(0);
 
     const auto negotiation = ruvia::detail::httpResponseCodingFor(parsed.request);
     RUVIA_CHECK(negotiation.selected() != nullptr);
@@ -723,13 +692,13 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     // The encoder result is already owned by the response resource. A failure
     // while staging Content-Length must not publish Content-Encoding first:
     // otherwise the identity body would be emitted as a gzip representation.
-    ToggleMemoryResource resource;
+    failing_memory_resource resource;
     auto response = HttpResponse({.resource = &resource});
     response.body("identity");
     response.header("Content-Length", "8");
     std::pmr::string encoded("compressed", &resource);
 
-    resource.failAllocations(true);
+    resource.fail_after(0);
     bool rejected = false;
     try {
         response.replaceBodyWithContentEncoding(std::move(encoded), "gzip");
@@ -743,12 +712,12 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
 
     // Strong-validator weakening is staged before the body and the encoding
     // field as well. A failure there leaves all identity metadata untouched.
-    resource.failAllocations(false);
+    resource.allow_allocations();
     auto withEtag = HttpResponse({.resource = &resource});
     withEtag.body("identity");
     withEtag.header("ETag", "\"v1\"");
     std::pmr::string encodedWithEtag("compressed", &resource);
-    resource.failAllocations(true);
+    resource.fail_after(0);
     rejected = false;
     try {
         withEtag.replaceBodyWithContentEncoding(std::move(encodedWithEtag), "gzip");
@@ -760,8 +729,6 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     RUVIA_CHECK(!withEtag.header("Content-Encoding").has_value());
     RUVIA_CHECK_EQ(withEtag.header("ETag"), std::string_view("\"v1\""));
 }
-#endif  // !_MSC_VER
-
 RUVIA_TEST(buffered_response_rejects_forbidden_identity_when_policy_skips_compression) {
     ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(

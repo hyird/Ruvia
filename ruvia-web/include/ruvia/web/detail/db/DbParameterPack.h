@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbValueAccess.h"
 
 namespace ruvia::detail {
 
@@ -27,13 +28,18 @@ concept DbParameter =
 template <typename... Params>
 concept DbParameterPack = sizeof...(Params) > 0 && (DbParameter<Params> && ...);
 
-// Variadic DB calls clone each value before returning. Convert an owning-string
-// temporary to a view only inside that synchronous boundary; DbValue itself
-// continues to reject such temporaries because it may otherwise be retained.
+// DB entry points clone each value into their own storage before returning.
+// Borrow owned DbValue text and owning-string temporaries only across that
+// synchronous boundary; DbValue itself still rejects retained string temporaries.
 template <typename Param>
     requires DbParameter<Param>
 [[nodiscard]] DbValue makeImmediateDbParameter(Param&& param) {
-    if constexpr (kDbOwningCharString<std::remove_cvref_t<Param>>) {
+    if constexpr (std::same_as<std::remove_cvref_t<Param>, DbValue>) {
+        if (DbValueAccess::type(param) == DbValueType::kString) {
+            return DbValue(DbValueAccess::text(param));
+        }
+        return DbValue(std::forward<Param>(param));
+    } else if constexpr (kDbOwningCharString<std::remove_cvref_t<Param>>) {
         return DbValue(std::string_view(param));
     } else {
         return DbValue(std::forward<Param>(param));

@@ -8,35 +8,10 @@
 
 #include "client/HttpOriginView.h"
 #include "parser/HttpRequestTarget.h"
+#include "parser/HttpUriGrammar.h"
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] bool isHttpClientUriScheme(std::string_view value) noexcept {
-    if (value.empty() || !((value.front() >= 'A' && value.front() <= 'Z') ||
-                             (value.front() >= 'a' && value.front() <= 'z'))) {
-        return false;
-    }
-    for (const char ch : value.substr(1)) {
-        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
-            ch == '+' || ch == '-' || ch == '.') {
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
-
-[[nodiscard]] bool isValidHttpClientUriFragment(std::string_view fragment) noexcept {
-    if (fragment.empty()) {
-        return true;
-    }
-    // RFC 3986 section 3.5 permits pchar, '/', and '?'. The shared
-    // request-target byte validator covers that grammar and percent encoding,
-    // except that its authority union also admits IP-literal brackets.
-    return fragment.find_first_of("[]") == std::string_view::npos &&
-           detail::isValidRequestTargetBytes(fragment);
-}
 
 void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     const auto slash = path.rfind('/');
@@ -94,7 +69,7 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
 }
 
 // Merges the reference's path/query with the current origin-form target per
-// RFC 3986 section 5.3 and validates the resolved origin-form target. Returns
+// RFC 3986 section 5.2 and validates the resolved origin-form target. Returns
 // false when the location's path or the merged product is not a valid target.
 // `reference` is the URI-reference with any scheme/authority prefix and the
 // fragment already removed.
@@ -106,6 +81,11 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     const auto referencePath = hasReferenceQuery ? reference.substr(0, queryAt) : reference;
     const auto referenceQuery =
         hasReferenceQuery ? reference.substr(queryAt + 1) : std::string_view{};
+    // Dot-segment removal must not hide malformed bytes in discarded segments.
+    if (!detail::isValidUriComponent(referencePath, true, false) ||
+        !detail::isValidUriComponent(referenceQuery, true, true)) {
+        return false;
+    }
 
     std::pmr::string mergedPath(targetResource);
     std::string_view selectedQuery;
@@ -143,7 +123,10 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
         }
     }
 
-    if (!normalizeHttpClientAbsolutePath(mergedPath, resolved)) {
+    if (!hasAuthority && referencePath.empty()) {
+        // RFC 3986 section 5.2.2 copies the base path for an empty reference path.
+        resolved = std::move(mergedPath);
+    } else if (!normalizeHttpClientAbsolutePath(mergedPath, resolved)) {
         return false;
     }
     if (hasSelectedQuery) {
@@ -233,7 +216,7 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
 
     location = detail::httpTrimOws(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
-        if (!isValidHttpClientUriFragment(location.substr(hash + 1))) {
+        if (!detail::isValidUriComponent(location.substr(hash + 1), true, true)) {
             return HttpClientRedirectResolutionResult::makeFailure(
                 HttpClientRedirectResolutionError::kInvalidLocation);
         }
@@ -248,7 +231,7 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
     if (colon != std::string_view::npos &&
         (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
         const auto scheme = reference.substr(0, colon);
-        if (!isHttpClientUriScheme(scheme)) {
+        if (!detail::isValidUriScheme(scheme)) {
             return HttpClientRedirectResolutionResult::makeFailure(
                 HttpClientRedirectResolutionError::kInvalidLocation);
         }

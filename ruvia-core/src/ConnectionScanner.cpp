@@ -53,6 +53,7 @@ void ConnectionScanner::PeriodicCheckRegistration::reset() noexcept {
     }
 }
 ConnectionScanner::Entry::~Entry() noexcept {
+    ConnectionScanner::detachEntry(*this);
     detachPeriodicChecks();
 }
 void ConnectionScanner::Entry::touch() noexcept {
@@ -123,16 +124,6 @@ void ConnectionScanner::Entry::detachPeriodicChecks() noexcept {
 }
 bool ConnectionScanner::Entry::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
-}
-void ConnectionScanner::Entry::runPeriodicChecks(std::int64_t now) noexcept {
-    periodicScanNext_ = periodicChecks_;
-    while (periodicScanNext_ != nullptr) {
-        auto* registration = periodicScanNext_;
-        periodicScanNext_ = registration->next_;
-        if (registration->tick_ != nullptr && registration->target_ != nullptr) {
-            registration->tick_(registration->target_, now);
-        }
-    }
 }
 ConnectionScanner::Guard::Guard(
     ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
@@ -206,16 +197,9 @@ void ConnectionScanner::closeAll() noexcept {
     impl_->closeAll();
 }
 void ConnectionScanner::detachEntry(Entry& entry) noexcept {
-    if (!entry.linked()) {
-        return;
+    if (entry.scanner_ != nullptr) {
+        entry.scanner_->impl_->unregisterEntry(entry);
     }
-    entry.prev_->next_ = entry.next_;
-    entry.next_->prev_ = entry.prev_;
-    entry.prev_ = entry.next_ = nullptr;
-    entry.socket_ = nullptr;
-    entry.nowMs_ = nullptr;
-    entry.detachPeriodicChecks();
-    entry.scanner_ = nullptr;
 }
 void ConnectionScanner::periodicCheckAdded() noexcept {
     impl_->periodicCheckAdded();
@@ -275,8 +259,14 @@ void ConnectionScanner::Impl::registerEntry(Entry& entry, asio::ip::tcp::socket*
     }
 }
 void ConnectionScanner::Impl::unregisterEntry(Entry& entry) noexcept {
-    if (!entry.linked()) {
+    if (entry.scanner_ != owner_ || !entry.linked()) {
         return;
+    }
+    if (scan_current_ == &entry) {
+        scan_current_ = nullptr;
+    }
+    if (scan_next_ == &entry) {
+        scan_next_ = entry.next_;
     }
     entry.prev_->next_ = entry.next_;
     entry.next_->prev_ = entry.prev_;
@@ -354,10 +344,15 @@ void ConnectionScanner::Impl::schedule() {
         if (scanner == nullptr || !scanner->running_) {
             return;
         }
+        // Expiry has consumed this timer. Release its token before callbacks,
+        // which may stop and restart the scanner with a new registration.
+        scanner->timer_.cancelQuietly();
         if (scanner->hasScanningWork()) {
             scanner->scan();
         }
-        scanner->schedule();
+        if (!scanner->timer_.registered()) {
+            scanner->schedule();
+        }
     });
 }
 void ConnectionScanner::Impl::scan() noexcept {
@@ -369,15 +364,25 @@ void ConnectionScanner::Impl::scan() noexcept {
         workerMaintenanceScanNext_ = registration->next_;
         registration->check_(registration->target_);
     }
-    auto* current = sentinel_.next_;
-    while (current != &sentinel_) {
-        auto* next = current->next_;
-        current->runPeriodicChecks(now);
-        if (current->socket_ != nullptr && isTimedOut(*current, now)) {
-            closeSocket(*current->socket_);
+    scan_next_ = sentinel_.next_;
+    while (scan_next_ != &sentinel_) {
+        scan_current_ = scan_next_;
+        scan_next_ = scan_current_->next_;
+        scan_current_->periodicScanNext_ = scan_current_->periodicChecks_;
+        // A callback can retire the current entry or a later one. Unregistration
+        // updates both scanner-owned cursors before the entry can be destroyed.
+        while (scan_current_ != nullptr && scan_current_->periodicScanNext_ != nullptr) {
+            auto* registration = scan_current_->periodicScanNext_;
+            scan_current_->periodicScanNext_ = registration->next_;
+            registration->tick_(registration->target_, now);
         }
-        current = next;
+        if (scan_current_ != nullptr && scan_current_->socket_ != nullptr &&
+            isTimedOut(*scan_current_, now)) {
+            closeSocket(*scan_current_->socket_);
+        }
+        scan_current_ = nullptr;
     }
+    scan_next_ = nullptr;
 }
 bool ConnectionScanner::Impl::isTimedOut(const Entry& entry, std::int64_t now) const noexcept {
     const auto inactiveMs = now - entry.lastActiveMs_;

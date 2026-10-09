@@ -19,7 +19,7 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots = std::to_underlying(HttpKnownMethod::kOptions) + 1;
+inline constexpr std::size_t kAllowHeaderMethodSlots = std::to_underlying(HttpKnownMethod::kUnknown);
 
 void appendHeaderValueLiteral(char*& cursor, std::string_view value) noexcept {
     std::memcpy(cursor, value.data(), value.size());
@@ -68,21 +68,27 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
 // requires Allow to list every supported method, and an extension method has no
 // bit to occupy, so it has to travel alongside the mask rather than inside it.
 [[nodiscard]] std::size_t allowHeaderValueSize(
-    std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) noexcept {
+    std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
     std::size_t size = 0;
     std::size_t count = 0;
+    const auto add_method = [&](std::size_t token_size) {
+        const auto separator_size = count == 0 ? std::size_t{0} : std::size_t{2};
+        detail::validateResponseHeaderStorageSize(std::string_view("Allow").size() + size, separator_size);
+        size += separator_size;
+        detail::validateResponseHeaderStorageSize(std::string_view("Allow").size() + size, token_size);
+        size += token_size;
+        ++count;
+    };
     for (std::size_t i = 0; i < kAllowHeaderMethodSlots; ++i) {
         if ((methodMask & (1U << i)) == 0) {
             continue;
         }
-        size += knownHttpMethodToken(static_cast<HttpKnownMethod>(i)).size();
-        ++count;
+        add_method(knownHttpMethodToken(static_cast<HttpKnownMethod>(i)).size());
     }
     for (const auto token : extensionMethods) {
-        size += token.size();
-        ++count;
+        add_method(token.size());
     }
-    return count > 1 ? size + (count - 1) * 2 : size;
+    return size;
 }
 
 void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask,
@@ -116,8 +122,44 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask,
 
 void HttpResponse::allow_methods(
     std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
+    const auto value_size = allowHeaderValueSize(method_mask, extension_methods);
+    for (const auto token : extension_methods) {
+        if (!isValidHttpMethodToken(token)) {
+            throw std::invalid_argument("invalid HTTP Allow method");
+        }
+    }
+    if (!extension_methods.empty()) {
+        if (auto* const retained = findHeaderForUpdate("Allow", detail::kResponseHeaderAllow)) {
+            bool borrows_allow = false;
+            for (const auto token : extension_methods) {
+                if (detail::response_header_storage_overlaps(*retained, token)) {
+                    borrows_allow = true;
+                    break;
+                }
+            }
+            if (borrows_allow) {
+                // Replacing or collapsing Allow can retire any of its input views.
+                // Format the replacement before publishing it or releasing old bytes.
+                auto prepared = headers_.makeUninitializedHeader(
+                    "Allow", value_size, detail::kResponseHeaderAllow);
+                try {
+                    writeAllowHeaderValue(prepared, method_mask, extension_methods);
+                } catch (...) {
+                    headers_.releaseHeader(prepared);
+                    throw;
+                }
+                const bool was_appended = detail::responseHeaderAppend(*retained);
+                headers_.releaseHeader(*retained);
+                *retained = prepared;
+                if (was_appended) {
+                    (void)collapseResponseHeaders(*retained, detail::kResponseHeaderAllow);
+                }
+                return;
+            }
+        }
+    }
     auto& header = prepareHeaderValueStorage(
-        "Allow", allowHeaderValueSize(method_mask, extension_methods), detail::kResponseHeaderAllow);
+        "Allow", value_size, detail::kResponseHeaderAllow);
     writeAllowHeaderValue(header, method_mask, extension_methods);
 }
 

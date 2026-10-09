@@ -54,6 +54,56 @@ RUVIA_TEST(http_priority_repeated_headers_combine_members_and_replace_invalid_va
     RUVIA_CHECK(ruvia::parseHttpPriority(std::span<const ruvia::HttpHeaderView>{})->requestPriority().urgency == 3);
 }
 
+RUVIA_TEST(http_priority_repeated_fields_match_their_comma_joined_dictionary) {
+    const std::array headers{ruvia::HttpHeaderView{"Priority", "extra=\"alpha"},
+        ruvia::HttpHeaderView{"X-Other", "ignored"},
+        ruvia::HttpHeaderView{"priority", "beta\", u=1, i"}};
+    const auto combined = ruvia::parseHttpPriority("extra=\"alpha, beta\", u=1, i");
+    RUVIA_CHECK(combined && combined->urgency == 1 && combined->incremental == true);
+    const auto parsed = ruvia::parseHttpPriority(headers);
+    RUVIA_CHECK(parsed.has_value());
+    if (parsed) {
+        RUVIA_CHECK(parsed->urgency == 1);
+        RUVIA_CHECK(parsed->incremental == true);
+    }
+
+    const std::array parameter_headers{ruvia::HttpHeaderView{"priority", "i;note=\"a"},
+        ruvia::HttpHeaderView{"priority", "b\", u=0"}};
+    const auto parameters = ruvia::parseHttpPriority(parameter_headers);
+    RUVIA_CHECK(parameters.has_value());
+    if (parameters) {
+        RUVIA_CHECK(parameters->urgency == 0);
+        RUVIA_CHECK(parameters->incremental == true);
+    }
+}
+
+RUVIA_TEST(http_priority_repeated_fields_preserve_separators_and_empty_values) {
+    const std::array with_empty{ruvia::HttpHeaderView{"Priority", "extra=\"alpha"},
+        ruvia::HttpHeaderView{"priority", ""},
+        ruvia::HttpHeaderView{"pRIORITY", "beta\", u=1, i"}};
+    const auto parsed = ruvia::parseHttpPriority(with_empty);
+    RUVIA_CHECK(parsed && parsed->urgency == 1 && parsed->incremental == true);
+
+    const std::array tab_separated{ruvia::HttpHeaderView{"priority", "u=0"},
+        ruvia::HttpHeaderView{"priority", "\ti"}};
+    const auto tab = ruvia::parseHttpPriority(tab_separated);
+    RUVIA_CHECK(tab && tab->urgency == 0 && tab->incremental == true);
+
+    const std::array fragments{
+        std::array<std::string_view, 2>{"u=1", ""},
+        std::array<std::string_view, 2>{"u=1", "\t"},
+        std::array<std::string_view, 2>{"u=1, i=?", "1"},
+        std::array<std::string_view, 2>{"u=1, i, x=:YQ", ":"},
+        std::array<std::string_view, 2>{"u=1", "2, i"},
+        std::array<std::string_view, 2>{"x=\"a\\", "\"b\", u=1, i"},
+    };
+    for (const auto& values : fragments) {
+        const std::array headers{ruvia::HttpHeaderView{"priority", values[0]},
+            ruvia::HttpHeaderView{"priority", values[1]}};
+        RUVIA_CHECK(!ruvia::parseHttpPriority(headers));
+    }
+}
+
 RUVIA_TEST(http_priority_http2_http3_frame_roundtrips_and_output_bounds) {
     std::array<char, 64> bytes{};
     auto h2 = ruvia::encodeHttp2PriorityUpdate(bytes, 5, {.urgency = 1, .incremental = true});

@@ -294,6 +294,7 @@ public:
 
 private:
     friend struct detail::DbResultAccess;
+    friend class DbRow;
 
     struct BorrowedTag final {};
 
@@ -320,6 +321,7 @@ private:
 public:
     DbRow(DbRow&& other) noexcept;
     // A different PMR resource can require allocation during assignment.
+    // Allocation failure leaves the destination unchanged.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     DbRow& operator=(DbRow&& other);
 

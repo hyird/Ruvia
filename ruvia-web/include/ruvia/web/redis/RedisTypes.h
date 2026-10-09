@@ -235,6 +235,9 @@ struct RedisScanOptions {
 
 class RedisKeyValue final {
 public:
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    RedisKeyValue(const RedisKeyValue& other, allocator_type allocator);
+    RedisKeyValue(RedisKeyValue&& other, allocator_type allocator);
     RedisKeyValue(const RedisKeyValue&) = default;
     RedisKeyValue& operator=(const RedisKeyValue&) = default;
     RedisKeyValue(RedisKeyValue&&) noexcept = default;
@@ -270,6 +273,9 @@ private:
 
 class RedisScoredValue final {
 public:
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    RedisScoredValue(const RedisScoredValue& other, allocator_type allocator);
+    RedisScoredValue(RedisScoredValue&& other, allocator_type allocator);
     RedisScoredValue(const RedisScoredValue&) = default;
     RedisScoredValue& operator=(const RedisScoredValue&) = default;
     RedisScoredValue(RedisScoredValue&&) noexcept = default;
@@ -379,6 +385,9 @@ private:
 
 class RedisStreamEntry final {
 public:
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    RedisStreamEntry(const RedisStreamEntry& other, allocator_type allocator);
+    RedisStreamEntry(RedisStreamEntry&& other, allocator_type allocator);
     RedisStreamEntry(const RedisStreamEntry&) = default;
     RedisStreamEntry& operator=(const RedisStreamEntry&) = default;
     RedisStreamEntry(RedisStreamEntry&&) noexcept = default;
@@ -409,6 +418,9 @@ private:
 
 class RedisStreamReadResult final {
 public:
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    RedisStreamReadResult(const RedisStreamReadResult& other, allocator_type allocator);
+    RedisStreamReadResult(RedisStreamReadResult&& other, allocator_type allocator);
     RedisStreamReadResult(const RedisStreamReadResult&) = default;
     RedisStreamReadResult& operator=(const RedisStreamReadResult&) = default;
     RedisStreamReadResult(RedisStreamReadResult&&) noexcept = default;
@@ -491,6 +503,10 @@ private:
 
 class RedisValue final {
 public:
+    // PMR containers construct every nested result in their own resource.
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    RedisValue(const RedisValue& other, allocator_type allocator);
+    RedisValue(RedisValue&& other, allocator_type allocator);
     enum class Kind : std::uint8_t { kNull,
         kString,
         kInteger,

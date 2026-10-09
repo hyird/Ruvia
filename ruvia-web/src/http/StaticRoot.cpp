@@ -9,12 +9,14 @@
 #include <memory>
 #include <memory_resource>
 #include <new>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpAscii.h"
@@ -597,10 +599,9 @@ StaticRoot::StaticRoot(PreparedConstruction prepared)
         if (std::filesystem::is_symlink(status)) {
             continue;
         }
-        auto relative = filePath.lexically_relative(canonicalRoot)
-                            .generic_string<char, std::char_traits<char>,
-                                std::pmr::polymorphic_allocator<char>>(
-                                std::pmr::polymorphic_allocator<char>(upstream));
+        const auto relative_utf8 = detail::static_file_utf8_path(
+            filePath.lexically_relative(canonicalRoot), upstream);
+        std::pmr::string relative(asChars(std::as_bytes(std::span(relative_utf8))), upstream);
         if (relative.empty() || relative.starts_with("../")) {
             continue;
         }

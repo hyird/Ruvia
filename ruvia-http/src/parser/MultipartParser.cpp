@@ -305,9 +305,6 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
         if (headersEnd + 4 > remaining_metadata_bytes_) {
             return std::unexpected(MultipartParseError::metadata_too_large);
         }
-        --remaining_parts_;
-        remaining_metadata_bytes_ -= headersEnd + 4;
-
         const auto headers = buffer.substr(0, headersEnd);
         const auto parsedHeaders = detail::httpParseMultipartPartHeaders(headers);
         if (const auto* failure = parsedHeaders.failure()) {
@@ -336,6 +333,8 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
                 currentContentTypeView_ = currentContentType_;
             }
         }
+        --remaining_parts_;
+        remaining_metadata_bytes_ -= headersEnd + 4;
         consume(headersEnd + 4);
         nextChunkIsFirst_ = true;
         state_ = ProgressState::kBody;

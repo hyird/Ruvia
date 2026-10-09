@@ -328,7 +328,8 @@ public:
     // this response or any header clone retains them.
     void header_stable_view(std::string_view key, std::string_view value);
     // Format Allow from known-method bits followed by extension method values.
-    // The resulting field is owned by this response.
+    // Extension methods must be nonempty HTTP tokens and may borrow current headers.
+    // The resulting field is owned by this response; refresh views after mutation.
     void allow_methods(
         std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
     // Remove a header set by an earlier step. header(key, std::nullopt) meant
@@ -366,7 +367,8 @@ public:
     void reserveHeaders(std::size_t count);
     [[nodiscard]] std::pmr::memory_resource* memoryResource() const noexcept;
     // Apply a streaming coding, or atomically replace a buffered representation
-    // and its coding-dependent metadata. A failed replacement leaves this
+    // and its coding-dependent metadata. The coding must be a nonempty HTTP coding list.
+    // A failed replacement leaves this
     // response unchanged.
     void applyContentEncoding(std::string_view contentEncoding);
     void replaceBodyWithContentEncoding(

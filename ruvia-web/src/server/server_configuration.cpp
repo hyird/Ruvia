@@ -46,14 +46,6 @@ HttpServerOptions normalize_server_options(const server_config& config, HttpServ
     return options;
 }
 
-void validateHttpServerTlsIdentity(
-    const HttpServerListenerDefinition::TlsIdentity& identity) {
-    if (identity.certificateChainFile.empty() || identity.privateKeyFile.empty()) {
-        throw std::invalid_argument(
-            "TLS certificate chain and private key files must not be empty");
-    }
-}
-
 void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) {
     const auto* refresh = options.documentRoot.refreshOptions();
     if (refresh == nullptr) {
@@ -139,16 +131,7 @@ void validateHttpServerTlsOptions(const HttpServerListenerDefinition::Tls& tls) 
         throw std::invalid_argument("HTTP/3 early data is unavailable with TLS client certificates");
     }
     if (tls.clientCertificates.has_value()) {
-        switch (tls.clientCertificates->requirement) {
-            case TlsClientCertificateRequirement::kOptional:
-            case TlsClientCertificateRequirement::kRequired:
-                break;
-            default:
-                throw std::invalid_argument("TLS client certificate requirement is invalid");
-        }
-        if (tls.clientCertificates->verifyFile.empty()) {
-            throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
-        }
+        validateHttpServerTlsClientCertificatePolicy(*tls.clientCertificates);
     }
     for (std::size_t i = 0; i < tls.sniIdentities.size(); ++i) {
         const auto& sni = tls.sniIdentities[i];

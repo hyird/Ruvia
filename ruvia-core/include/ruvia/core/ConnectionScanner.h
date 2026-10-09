@@ -78,8 +78,9 @@ public:
     };
 
     // Connection- or stream-owned node. touch()/setPhase() use the scanner's
-    // cached coarse time, not a per-request clock read. Destroying the scanner
-    // detaches its entries before releasing its internal timestamp storage.
+    // cached coarse time, not a per-request clock read. Destruction detaches the
+    // entry and its checks, including during a periodic callback. Destroying the
+    // scanner detaches its entries before releasing its timestamp storage.
     class Entry final {
     public:
         Entry() noexcept = default;
@@ -99,7 +100,6 @@ public:
         friend class PeriodicCheckRegistration;
         friend struct Impl;
         [[nodiscard]] bool linked() const noexcept;
-        void runPeriodicChecks(std::int64_t now) noexcept;
         void removePeriodicCheck(PeriodicCheckRegistration& registration) noexcept;
         void detachPeriodicChecks() noexcept;
         asio::ip::tcp::socket* socket_{nullptr};

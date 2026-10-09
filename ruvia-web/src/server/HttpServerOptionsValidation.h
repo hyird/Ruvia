@@ -17,12 +17,10 @@
 #include "http3/http3_capacity.h"
 #include "server/HttpServerListener.h"
 #include "server/HttpServerOptions.h"
+#include "server/HttpServerTlsIdentity.h"
 #include "tls/TlsHost.h"
 
 namespace ruvia::detail {
-
-void validateHttpServerTlsIdentity(
-    const HttpServerListenerDefinition::TlsIdentity& identity);
 
 void validateDocumentRootRuntimeConfig(const HttpServerOptions& options);
 

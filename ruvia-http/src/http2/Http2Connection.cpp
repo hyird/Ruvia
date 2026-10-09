@@ -498,6 +498,10 @@ bool Http2Connection::processPriorityUpdate(const Http2FrameHeader& header, std:
         const auto* stream = findStream(entry.first);
         return !isIdleStreamId(entry.first) && (!stream || http2StreamIsClosed(*stream));
     });
+    const auto update = decodeHttp2PriorityUpdate(std::span(payload.data(), payload.size()));
+    if (!update) {
+        return true;  // A malformed Priority field does not prioritize a stream.
+    }
     std::size_t idle = 0;
     for (const auto& entry : priorities_) {
         if (isIdleStreamId(entry.first)) {
@@ -514,10 +518,6 @@ bool Http2Connection::processPriorityUpdate(const Http2FrameHeader& header, std:
     if (active + idle + (newIdle ? 1u : 0u) > Http2LocalSettings::kMaxConcurrentStreams) {
         appendGoaway(Http2ErrorCode::kProtocolError, "too many prioritized idle streams");
         return false;
-    }
-    const auto update = decodeHttp2PriorityUpdate(std::span(payload.data(), payload.size()));
-    if (!update) {
-        return true;  // A malformed Priority field is ignored.
     }
     if (!isIdleStreamId(id)) {
         const auto* stream = findStream(id);

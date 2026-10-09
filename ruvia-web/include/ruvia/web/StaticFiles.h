@@ -68,6 +68,8 @@ struct StaticRootState;
 // An immutable index of the document root, built once by this constructor and
 // never refreshed directly. The Web runtime always rebuilds a configured
 // DocumentRoot replacement off the worker and publishes it between requests.
+// Relative URL keys use the generic UTF-8 form on every platform; filesystem
+// I/O keeps native paths.
 // Each entry records the file's size, ETag, Last-Modified and an
 // identity (device, inode, modification time); serving a request looks the file
 // up in that index rather than touching the directory again, so the immutable

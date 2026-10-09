@@ -437,6 +437,13 @@ RUVIA_TEST(parse_request_target_absolute_empty_path_preserves_method_semantics) 
     RUVIA_CHECK_EQ(out.path, std::string_view("/"));
     RUVIA_CHECK_EQ(out.query, std::string_view("scope=all"));
 
+    // A present but empty query is distinct from an absent query component.
+    for (const std::string_view target : {"http://example.com?", "https://example.com?"}) {
+        RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, target, out));
+        RUVIA_CHECK_EQ(out.path, std::string_view("/"));
+        RUVIA_CHECK(out.query.empty());
+    }
+
     // Generic URI schemes have no HTTP(S) rule that rewrites an empty path.
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "ftp://archive.example", out));
     RUVIA_CHECK(out.path.empty());
@@ -444,6 +451,9 @@ RUVIA_TEST(parse_request_target_absolute_empty_path_preserves_method_semantics) 
 
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "ftp://archive.example", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("*"));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "ftp://archive.example?", out));
+    RUVIA_CHECK(out.path.empty());
+    RUVIA_CHECK(out.query.empty());
 }
 
 RUVIA_TEST(parse_request_target_connect_authority_form) {

@@ -100,27 +100,43 @@ DbRow& DbRow::operator=(DbRow&& other) {
     if (this == &other) {
         return *this;
     }
-    if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
-        if (auto* destination = std::get_if<OwnedFields>(&storage_)) {
-            *destination = std::move(*owned);
-        } else {
-            OwnedFields replacement(std::move(*owned), resource_);
-            storage_.emplace<OwnedFields>(std::move(replacement));
-        }
-    } else {
-        storage_.emplace<BorrowedFields>(std::get<BorrowedFields>(other.storage_));
-    }
+
+    // Prepare both halves before publishing either one. A later allocation
+    // failure must not leave old column names indexing a shorter field array.
+    Storage next_fields(std::in_place_type<BorrowedFields>);
+    ColumnNameStorage next_names(std::in_place_type<BorrowedColumnNames>);
+    const bool same_resource = resource_ == other.resource_;
     if (auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
-        if (auto* destination = std::get_if<OwnedColumnNames>(&columnNames_)) {
-            *destination = std::move(*owned);
+        if (same_resource) {
+            next_names.emplace<OwnedColumnNames>(std::move(*owned));
         } else {
-            OwnedColumnNames replacement(std::move(*owned), resource_);
-            columnNames_.emplace<OwnedColumnNames>(std::move(replacement));
+            next_names.emplace<OwnedColumnNames>(*owned, resource_);
         }
     } else {
-        columnNames_.emplace<BorrowedColumnNames>(
+        next_names.emplace<BorrowedColumnNames>(
             std::get<BorrowedColumnNames>(other.columnNames_));
     }
+    if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
+        if (same_resource) {
+            next_fields.emplace<OwnedFields>(std::move(*owned));
+        } else {
+            OwnedFields fields(resource_);
+            fields.reserve(owned->size());
+            for (auto& field : *owned) {
+                // Moving the vector alone relocates its buffer but retains each
+                // field's allocator. Normalize through the field assignment.
+                DbField replacement(resource_);
+                replacement = std::move(field);
+                fields.push_back(std::move(replacement));
+            }
+            next_fields.emplace<OwnedFields>(std::move(fields));
+        }
+    } else {
+        next_fields.emplace<BorrowedFields>(std::get<BorrowedFields>(other.storage_));
+    }
+
+    storage_ = std::move(next_fields);
+    columnNames_ = std::move(next_names);
     other.storage_.emplace<OwnedFields>(other.resource_);
     other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
     return *this;
