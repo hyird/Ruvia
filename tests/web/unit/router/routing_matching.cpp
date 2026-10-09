@@ -1,4 +1,6 @@
 #include <array>
+#include <cstdint>
+#include <string>
 
 #include "ruvia/web/BodyLimit.h"
 #include "ruvia/web/Controller.h"
@@ -52,6 +54,79 @@ RUVIA_TEST(compiled_route_plan_is_shared_across_worker_bindings) {
     RUVIA_CHECK(dynamicResolution.resolved() != nullptr);
     RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().size(), std::size_t{1});
     RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().values()[0], std::string_view("42"));
+}
+
+RUVIA_TEST(routing_static_paths_preserve_method_and_path_identity) {
+    Router router;
+    std::array<std::string, 257> paths;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        paths[i] = "/api/resource/" + std::to_string(i) + "-" + std::to_string(i * 7919) + "/details";
+        addRoute(router.impl, paths[i]);
+        if (i % 2 == 0) {
+            addRoute(router.impl, HttpKnownMethod::kPost, paths[i]);
+        }
+        if (i % 3 == 0) {
+            addRoute(router.impl, HttpKnownMethod::kHead, paths[i]);
+        }
+    }
+    router.finalize();
+
+    const auto method_bit = [](HttpKnownMethod method) {
+        return std::uint32_t{1} << static_cast<unsigned>(method);
+    };
+    const auto& table = router.impl.routeTable();
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        for (const auto method : {HttpKnownMethod::kGet, HttpKnownMethod::kHead}) {
+            const auto result = table.resolve(method, paths[i]);
+            RUVIA_CHECK(result.resolved() != nullptr);
+            RUVIA_CHECK_EQ(result.resolved()->route().path(), std::string_view(paths[i]));
+            const auto registered_method = method == HttpKnownMethod::kHead && i % 3 != 0
+                                               ? HttpKnownMethod::kGet
+                                               : method;
+            RUVIA_CHECK(result.resolved()->route().method() == registered_method);
+        }
+        const auto post = table.resolve(HttpKnownMethod::kPost, paths[i]);
+        if (i % 2 == 0) {
+            RUVIA_CHECK(post.resolved() != nullptr);
+            RUVIA_CHECK(post.resolved()->route().method() == HttpKnownMethod::kPost);
+            RUVIA_CHECK_EQ(post.resolved()->route().path(), std::string_view(paths[i]));
+        } else {
+            RUVIA_CHECK(post.methodNotAllowed() != nullptr);
+        }
+        const auto unsupported = table.resolve(HttpKnownMethod::kPut, paths[i]);
+        RUVIA_CHECK(unsupported.methodNotAllowed() != nullptr);
+        const auto allowed = method_bit(HttpKnownMethod::kGet) | method_bit(HttpKnownMethod::kHead) |
+                             method_bit(HttpKnownMethod::kOptions) |
+                             (i % 2 == 0 ? method_bit(HttpKnownMethod::kPost) : 0);
+        RUVIA_CHECK_EQ(unsupported.methodNotAllowed()->allowedMethods(), allowed);
+        const auto missing = table.resolve(HttpKnownMethod::kGet, paths[i] + "/missing");
+        RUVIA_CHECK(missing.notFound() != nullptr);
+    }
+}
+
+RUVIA_TEST(compiled_route_plan_outlives_its_first_worker_binding) {
+    std::array<std::string, 65> paths;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        paths[i] = "/api/resource/" + std::to_string(i) + "/details";
+    }
+    auto plan = [&] {
+        Router original;
+        for (const auto& route_path : paths) {
+            addRoute(original.impl, route_path);
+        }
+        original.finalize();
+        return original.impl.releaseCompiledPlan();
+    }();
+    Router rebound;
+    for (const auto& route_path : paths) {
+        addRoute(rebound.impl, route_path);
+    }
+    rebound.impl.finalize(plan.get());
+    for (const auto& route_path : paths) {
+        const auto result = rebound.impl.routeTable().resolve(HttpKnownMethod::kGet, route_path);
+        RUVIA_CHECK(result.resolved() != nullptr);
+        RUVIA_CHECK_EQ(result.resolved()->route().path(), std::string_view(route_path));
+    }
 }
 
 RUVIA_TEST(compiled_route_plan_binds_replay_safe_route_contract) {
@@ -109,6 +184,9 @@ RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_route_shape) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
+    different.finalize();
+    const auto recovered = different.routeTable().resolve(HttpKnownMethod::kGet, "/different");
+    RUVIA_CHECK(recovered.resolved() != nullptr);
 }
 
 RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_endpoint_contract) {
@@ -387,6 +465,17 @@ RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
         std::string_view("/:section/:probe"));
 }
 
+RUVIA_TEST(routing_explicit_head_precedes_more_specific_get_fallback) {
+    Router router;
+    addRoute(router.impl, "/health/:probe");
+    addRoute(router.impl, HttpKnownMethod::kHead, "/:section/live");
+    router.finalize();
+    RUVIA_CHECK_EQ(router.routePathOf(HttpKnownMethod::kHead, "/health/live"),
+        std::string_view("/:section/live"));
+    RUVIA_CHECK_EQ(router.routePathOf(HttpKnownMethod::kHead, "/health/ready"),
+        std::string_view("/health/:probe"));
+}
+
 RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     // A request whose method has no route for an existing path is a 405, and the
     // Allow set (RFC 7231 6.5.5) must list exactly the methods that DO have a route
@@ -409,7 +498,7 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kGet)) != 0);
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPost)) != 0);
     RUVIA_CHECK(
-        (mask & bit(HttpKnownMethod::kHead)) != 0);         // auto-registered alongside the GET route
+        (mask & bit(HttpKnownMethod::kHead)) != 0);         // implicit fallback to the GET route
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPut)) == 0);  // belongs to /b, not /a
     RUVIA_CHECK(
         (mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back
@@ -461,6 +550,11 @@ RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
 RUVIA_TEST(routing_rejects_duplicate_route_registration) {
     Router r;
     addRoute(r.impl, HttpKnownMethod::kGet, "/x");
+    std::array<std::string, 128> paths;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        paths[i] = (i % 2 == 0 ? "/" : "/long/registration/path/") + std::to_string(i);
+        addRoute(r.impl, paths[i]);
+    }
     // The same method+path registered twice is a duplicate: ambiguous routing is
     // rejected at registration rather than one route silently shadowing the other.
     bool threw = false;
@@ -470,10 +564,22 @@ RUVIA_TEST(routing_rejects_duplicate_route_registration) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+    for (const auto& route_path : paths) {
+        bool rejected = false;
+        try {
+            addRoute(r.impl, route_path);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
     // The SAME path under a DIFFERENT method is not a duplicate.
     addRoute(r.impl, HttpKnownMethod::kPost, "/x");
     r.finalize();
     RUVIA_CHECK(r.matches("/x"));
+    for (const auto& route_path : paths) {
+        RUVIA_CHECK(r.matches(route_path));
+    }
 }
 
 RUVIA_TEST(routing_rejects_invalid_route_paths_at_registration) {

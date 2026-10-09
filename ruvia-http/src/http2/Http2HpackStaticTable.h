@@ -7,16 +7,13 @@
 
 #include "ruvia/http/HttpStatus.h"
 
+#include "field/static_field_lookup.h"
+
 namespace ruvia::detail {
 
 struct HpackStaticHeader final {
     std::string_view name;
     std::string_view value;
-};
-
-struct HpackStaticHeaderMatch final {
-    std::uint32_t exactIndex{0};
-    std::uint32_t nameIndex{0};
 };
 
 inline constexpr auto kHpackStatusOkToken = httpStatusCodeToken(http_status::kOk);
@@ -95,29 +92,10 @@ inline constexpr std::array<HpackStaticHeader, 61> kHpackStaticTable{{
 }};
 
 inline constexpr std::size_t kHpackStaticTableSize = kHpackStaticTable.size();
+inline constexpr static_field_lookup<kHpackStaticTable> hpack_static_fields;
 
 [[nodiscard]] inline const HpackStaticHeader& hpackStaticHeaderAt(std::uint32_t index) noexcept {
     return kHpackStaticTable[index - 1];
-}
-
-[[nodiscard]] inline HpackStaticHeaderMatch hpackFindStaticHeaderMatch(
-    std::string_view name, std::string_view value) noexcept {
-    HpackStaticHeaderMatch match;
-    for (std::size_t i = 0; i < kHpackStaticTable.size(); ++i) {
-        const auto& header = kHpackStaticTable[i];
-        if (header.name != name) {
-            continue;
-        }
-        const auto index = static_cast<std::uint32_t>(i + 1);
-        if (match.nameIndex == 0) {
-            match.nameIndex = index;
-        }
-        if (header.value == value) {
-            match.exactIndex = index;
-            return match;
-        }
-    }
-    return match;
 }
 
 }  // namespace ruvia::detail

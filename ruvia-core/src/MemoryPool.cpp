@@ -23,8 +23,12 @@ std::pmr::memory_resource* processResource() noexcept {
     // teardown before those detached threads necessarily finish.
     // Bind the upstream explicitly: first use may occur while an embedding
     // application has temporarily replaced the global PMR default resource.
-    static auto* const resource =
-        new std::pmr::synchronized_pool_resource(std::pmr::new_delete_resource());
+    // Pool small reusable objects, but return bulk arrays directly upstream.
+    // An implementation's default can pool even multi-megabyte arrays, reserving
+    // several equally large spare blocks and retaining them for process life.
+    static auto* const resource = new std::pmr::synchronized_pool_resource(
+        std::pmr::pool_options{.largest_required_pool_block = 64 * 1024},
+        std::pmr::new_delete_resource());
     return resource;
 }
 

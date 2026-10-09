@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <array>
+#include <expected>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,14 +39,16 @@ public:
     std::size_t deallocations{};
 
     bool fail_allocations_{};
+    std::optional<std::size_t> fail_after_allocations_;
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail_allocations_) {
+        if (fail_allocations_ || (fail_after_allocations_ && allocations >= *fail_after_allocations_)) {
             throw std::bad_alloc();
         }
+        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        return result;
     }
     void do_deallocate(void* ptr, std::size_t bytes, std::size_t alignment) override {
         ++deallocations;
@@ -57,6 +61,128 @@ private:
     const void* equality_group_;
 };
 }  // namespace
+
+RUVIA_TEST(http3_response_head_forms_release_storage_after_each_allocation_failure) {
+    enum class form { raw,
+        buffered,
+        interim,
+        streaming };
+    const std::string long_value(80, 'v');
+    const std::array headers{
+        ruvia::HttpHeaderView{"Date", "Fri, 09 Oct 2026 00:00:00 GMT"},
+        ruvia::HttpHeaderView{"X-Mixed-Name", long_value},
+        ruvia::HttpHeaderView{"Another-Field", "second"}};
+    const std::array raw_fields{
+        ruvia::Http3FieldSectionFieldView{"date", headers[0].value()},
+        ruvia::Http3FieldSectionFieldView{"x-mixed-name", long_value},
+        ruvia::Http3FieldSectionFieldView{"another-field", "second"}};
+
+    for (const auto kind : {form::raw, form::buffered, form::interim, form::streaming}) {
+        for (const bool connection_owned : {false, true}) {
+            const auto encode = [&](CountingResource& memory) -> std::expected<ruvia::Http3ResponseHead, ruvia::Http3ResponseHeadFailure> {
+                ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
+                constexpr auto method = ruvia::HttpKnownMethod::kGet;
+                if (kind == form::raw) {
+                    return connection_owned
+                               ? ruvia::encodeHttp3ResponseHead(encoder, 0, ruvia::http_status::kOk, method, raw_fields, {}, &memory)
+                               : ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk, method, raw_fields, {}, &memory);
+                }
+                if (kind == form::interim) {
+                    const ruvia::HttpInterimResponseHead response(ruvia::http_status::kEarlyHints, headers);
+                    return connection_owned
+                               ? ruvia::encodeHttp3InterimResponseHead(encoder, 0, response, {}, &memory)
+                               : ruvia::encodeHttp3InterimResponseHead(response, {}, &memory);
+                }
+                ruvia::HttpResponse response;
+                for (const auto& header : headers) {
+                    response.header(header.name(), header.value());
+                }
+                if (kind == form::buffered) {
+                    response.staticBody("body");
+                    const auto plan = ruvia::planBufferedHttpResponseWrite(method, response);
+                    return connection_owned
+                               ? ruvia::encodeHttp3ResponseHead(encoder, 0, response, plan, {}, &memory)
+                               : ruvia::encodeHttp3ResponseHead(response, plan, {}, &memory);
+                }
+                auto result = connection_owned
+                                  ? ruvia::encodeHttp3StreamingResponseHead(encoder, 0, std::move(response), method,
+                                        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory)
+                                  : ruvia::encodeHttp3StreamingResponseHead(std::move(response), method,
+                                        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                return std::move(result->head);
+            };
+            CountingResource complete;
+            {
+                const auto result = encode(complete);
+                RUVIA_CHECK(result.has_value());
+                if (result) {
+                    Fields decoded;
+                    RUVIA_CHECK(ruvia::decodeHttp3FieldSection(result->field_section.fieldSection, collect, &decoded).has_value());
+                    const auto count = kind == form::buffered ? 5U : 4U;
+                    RUVIA_CHECK_EQ(decoded.names.size(), count);
+                    if (decoded.names.size() == count) {
+                        RUVIA_CHECK_EQ(decoded.names[0], ":status");
+                        RUVIA_CHECK_EQ(decoded.values[0], kind == form::interim ? "103" : "200");
+                        for (std::size_t index = 0; index < raw_fields.size(); ++index) {
+                            RUVIA_CHECK_EQ(decoded.names[index + 1], raw_fields[index].name);
+                            RUVIA_CHECK_EQ(decoded.values[index + 1], raw_fields[index].value);
+                        }
+                        if (kind == form::buffered) {
+                            RUVIA_CHECK_EQ(decoded.names.back(), "content-length");
+                            RUVIA_CHECK_EQ(decoded.values.back(), "4");
+                        }
+                    }
+                }
+            }
+            RUVIA_CHECK_EQ(complete.allocations, complete.deallocations);
+            for (std::size_t failure = 0; failure < complete.allocations; ++failure) {
+                CountingResource limited;
+                limited.fail_after_allocations_ = failure;
+                bool threw = false;
+                try {
+                    (void)encode(limited);
+                } catch (const std::bad_alloc&) {
+                    threw = true;
+                }
+                RUVIA_CHECK(threw);
+                RUVIA_CHECK_EQ(limited.allocations, limited.deallocations);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http3_response_head_field_errors_precede_aggregate_size_errors_without_qpack_mutation) {
+    const auto check = [&](ruvia::Http3FieldSectionFieldView invalid, ruvia::Http3ResponseHeadError expected) {
+        const std::array fields{
+            ruvia::Http3FieldSectionFieldView{"x-first", "new-dynamic-value"},
+            invalid};
+        ruvia::Http3FieldSectionLimits limits;
+        limits.maxDecodedBytes = 0;
+        for (const bool connection_owned : {false, true}) {
+            ruvia::Http3QpackEncoder encoder({});
+            const auto initial_output = encoder.pendingEncoderOutput();
+            const std::vector<char> pending_before(initial_output.begin(), initial_output.end());
+            const auto result = connection_owned
+                                    ? ruvia::encodeHttp3ResponseHead(encoder, 0, ruvia::http_status::kOk,
+                                          ruvia::HttpKnownMethod::kGet, fields, limits)
+                                    : ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
+                                          ruvia::HttpKnownMethod::kGet, fields, limits);
+            RUVIA_CHECK(!result);
+            if (!result) {
+                RUVIA_CHECK(result.error().kind == expected);
+            }
+            RUVIA_CHECK_EQ(encoder.insertCount(), 0U);
+            RUVIA_CHECK(std::ranges::equal(encoder.pendingEncoderOutput(), pending_before));
+        }
+    };
+    check({"bad name", "value"}, ruvia::Http3ResponseHeadError::kInvalidField);
+    check({"x-value", "bad\r\nvalue"}, ruvia::Http3ResponseHeadError::kInvalidField);
+    check({"connection", "close"}, ruvia::Http3ResponseHeadError::kForbiddenField);
+    check({"content-length", "invalid"}, ruvia::Http3ResponseHeadError::kInvalidField);
+}
 
 RUVIA_TEST(http3_interim_and_streaming_heads_project_mixed_case_names_in_order) {
     const std::array headers{

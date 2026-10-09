@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <memory_resource>
 #include <span>
@@ -6,6 +7,8 @@
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
+#include "ruvia/http/Http3Qpack.h"
+#include "ruvia/http/Http3QpackConnection.h"
 
 #include "test_harness.h"
 
@@ -67,6 +70,121 @@ RUVIA_TEST(http3_field_section_round_trips_all_static_zero_capacity_representati
             RUVIA_CHECK_EQ(captured.names[index], fields[index].name);
             RUVIA_CHECK_EQ(captured.values[index], fields[index].value);
             RUVIA_CHECK_EQ(captured.neverIndexed[index], fields[index].neverIndexed);
+        }
+    }
+}
+
+RUVIA_TEST(http3_qpack_encoders_preserve_static_indexes_and_never_indexed_fields) {
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 4096, .maxBlockedStreams = 1});
+    for (std::size_t index = 0; index < 99; ++index) {
+        const auto entry = ruvia::http3QpackStaticEntry(index);
+        RUVIA_CHECK(entry.has_value());
+        if (!entry) {
+            continue;
+        }
+        std::size_t first_name = index;
+        std::size_t first_exact = index;
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+            const auto other = ruvia::http3QpackStaticEntry(earlier);
+            if (other->name == entry->name) {
+                first_name = std::min(first_name, earlier);
+                if (other->value == entry->value) {
+                    first_exact = std::min(first_exact, earlier);
+                }
+            }
+        }
+        for (const bool never_indexed : {false, true}) {
+            const std::array fields{ruvia::Http3FieldSectionFieldView{entry->name, entry->value, never_indexed}};
+            const auto static_section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
+            const auto connection_section = encoder.encode(0, fields);
+            RUVIA_CHECK(static_section.has_value());
+            RUVIA_CHECK(connection_section.has_value());
+            if (!static_section || !connection_section) {
+                continue;
+            }
+            RUVIA_CHECK(*static_section == *connection_section);
+            const auto encoded = std::span<const char>(*static_section).subspan(2);
+            const auto reference = ruvia::decodeHttp3QpackInteger(encoded, never_indexed ? 4 : 6);
+            RUVIA_CHECK(reference.has_value());
+            if (reference) {
+                RUVIA_CHECK_EQ(reference->value, never_indexed ? first_name : first_exact);
+            }
+            RUVIA_CHECK_EQ(static_cast<unsigned char>(encoded[0]) & (never_indexed ? 0xf0 : 0xc0),
+                never_indexed ? 0x70 : 0xc0);
+            CapturedFields captured;
+            const auto decoded = ruvia::decodeHttp3FieldSection(*static_section, capture, &captured);
+            RUVIA_CHECK(decoded.has_value());
+            RUVIA_CHECK_EQ(captured.names.size(), 1U);
+            if (captured.names.size() == 1) {
+                RUVIA_CHECK_EQ(captured.names.front(), entry->name);
+                RUVIA_CHECK_EQ(captured.values.front(), entry->value);
+                RUVIA_CHECK_EQ(captured.neverIndexed.front(), never_indexed);
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(encoder.insertCount(), 0U);
+}
+
+RUVIA_TEST(http3_qpack_encoders_distinguish_literal_names_and_static_name_only_matches) {
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0});
+    const std::array fields{
+        ruvia::Http3FieldSectionFieldView{":method", "CUSTOM", false},
+        ruvia::Http3FieldSectionFieldView{"accept", "application/ruvia", false},
+        ruvia::Http3FieldSectionFieldView{"Accept", "*/*", false},
+        ruvia::Http3FieldSectionFieldView{"x-custom", "value", true},
+        ruvia::Http3FieldSectionFieldView{"accept-longer", "*/*", false},
+        ruvia::Http3FieldSectionFieldView{"access-control-allow-credentials-extra", "value", false},
+        ruvia::Http3FieldSectionFieldView{"", "empty-name-codec-input", false},
+    };
+    const auto static_section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
+    const auto connection_section = encoder.encode(0, fields);
+    RUVIA_CHECK(static_section.has_value());
+    RUVIA_CHECK(connection_section.has_value());
+    if (!static_section || !connection_section) {
+        return;
+    }
+    RUVIA_CHECK(*static_section == *connection_section);
+    CapturedFields captured;
+    const auto decoded = ruvia::decodeHttp3FieldSection(*static_section, capture, &captured);
+    RUVIA_CHECK(decoded.has_value());
+    RUVIA_CHECK_EQ(captured.names.size(), fields.size());
+    if (captured.names.size() == fields.size()) {
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+            RUVIA_CHECK_EQ(captured.names[index], fields[index].name);
+            RUVIA_CHECK_EQ(captured.values[index], fields[index].value);
+            RUVIA_CHECK_EQ(captured.neverIndexed[index], fields[index].neverIndexed);
+        }
+    }
+}
+
+RUVIA_TEST(http3_qpack_encoders_compare_complete_names_before_using_static_references) {
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0});
+    for (std::size_t index = 0; index < 99; ++index) {
+        const auto entry = ruvia::http3QpackStaticEntry(index);
+        if (!entry || entry->name.size() < 3) {
+            continue;
+        }
+        // A different interior byte must not alias a known name with the same
+        // length, first byte and last byte. QPACK treats names as opaque bytes.
+        std::string name(entry->name);
+        name[1] = '~';
+        const std::array fields{ruvia::Http3FieldSectionFieldView{name, entry->value}};
+        const auto static_section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
+        const auto connection_section = encoder.encode(0, fields);
+        RUVIA_CHECK(static_section.has_value());
+        RUVIA_CHECK(connection_section.has_value());
+        if (!static_section || !connection_section) {
+            continue;
+        }
+        RUVIA_CHECK(*static_section == *connection_section);
+        RUVIA_CHECK_EQ(static_cast<unsigned char>((*static_section)[2]) & 0xe0, 0x20);
+        CapturedFields captured;
+        const auto decoded = ruvia::decodeHttp3FieldSection(*static_section, capture, &captured);
+        RUVIA_CHECK(decoded.has_value());
+        RUVIA_CHECK_EQ(captured.names.size(), 1U);
+        if (captured.names.size() == 1) {
+            RUVIA_CHECK_EQ(captured.names.front(), name);
+            RUVIA_CHECK_EQ(captured.values.front(), entry->value);
         }
     }
 }

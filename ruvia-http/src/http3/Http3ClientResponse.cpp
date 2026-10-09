@@ -22,14 +22,14 @@ Http3ClientResponseResult connectionError(Http3ConnectionErrorCode code) noexcep
     return {Http3ClientResponseStatus::kConnectionError, Http3ConnectionErrorScope::kConnection, code};
 }
 
-bool valid_response_trailer(Http3FieldSectionFieldView field) noexcept {
-    return detail::responseTrailerFieldValid(field.name, field.value);
+bool valid_response_trailer_policy(Http3FieldSectionFieldView field) noexcept {
+    return detail::response_trailer_content_valid(field.name, field.value);
 }
 
 }  // namespace
 
 struct Http3ClientResponse::Impl final {
-    using trailer_collector = detail::http3_trailer_collector<valid_response_trailer>;
+    using trailer_collector = detail::http3_trailer_collector<valid_response_trailer_policy>;
 
     Impl(std::uint64_t stream, HttpKnownMethod method, std::pmr::memory_resource* resource,
         Http3ClientResponseLimits configured, Http3QpackDecoder* sharedDecoder)

@@ -68,10 +68,11 @@ Next::Awaitable Next::operator()() & {
     return Awaitable(state, invoke_);
 }
 
-detail::RouterImpl::RouterImpl(Router& router) noexcept
+detail::RouterImpl::RouterImpl(Router& router)
     : owner(router),
       resource_(registrationResource()),
       pendingRoutes_(resource_),
+      pending_route_indices_(std::in_place, resource_),
       middlewareLifetimes_(resource_),
       globalMiddlewareDescriptors_(resource_),
       globalMiddlewareFrames_(resource_),
@@ -214,13 +215,6 @@ void detail::RouterImpl::validateRouteTarget(
         } else if (path.contains('?') || !isValidHttpOriginFormTarget(path)) {
             throw std::invalid_argument("extended CONNECT route requires an origin-form path");
         }
-        for (const auto& route : pendingRoutes_) {
-            const auto* registered = route.endpoint().tunnel();
-            if (registered != nullptr && registered->protocol() == tunnel->protocol() &&
-                (tunnel->protocol().empty() ? (path == route.path() || httpAuthoritiesEqual(path, route.path(), 0)) : path == route.path())) {
-                throw std::invalid_argument("duplicate CONNECT route registration");
-            }
-        }
         return;
     }
     // An extension route carries kUnknown plus a token; anything else must sit
@@ -235,13 +229,6 @@ void detail::RouterImpl::validateRouteTarget(
     }
     if (path.contains('?') || !ruvia::isValidHttpOriginFormTarget(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
-    }
-
-    for (const auto& route : pendingRoutes_) {
-        if (route.method() == method && route.methodToken() == methodToken &&
-            route.path() == path) {
-            throw std::invalid_argument("duplicate route registration");
-        }
     }
 }
 
@@ -291,6 +278,8 @@ void detail::RouterImpl::finalize(const CompiledRoutePlan* compiledPlan) {
         table->setPrefixNotFoundHandlers(views);
     }
     routeTable_ = std::move(table);
+    pending_route_indices_.reset();
+    std::pmr::vector<PendingRoute>(resource_).swap(pendingRoutes_);
 }
 
 const detail::RouteTable& detail::RouterImpl::routeTable() const {

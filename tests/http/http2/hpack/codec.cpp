@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "field/hpack_huffman_tables.h"
 #include "http2/Http2Hpack.h"
-#include "http2/Http2HpackHuffmanTables.h"
 #include "http2/Http2RequestHeaders.h"
 #include "test_harness.h"
 
@@ -326,10 +326,10 @@ RUVIA_TEST(hpack_long_value_round_trips) {
 
 RUVIA_TEST(hpack_huffman_decodes_every_byte_symbol) {
     for (std::size_t symbol = 0; symbol < 256; ++symbol) {
-        const auto bitCount = ruvia::detail::kHpackHuffmanLengths[symbol];
+        const auto bitCount = ruvia::detail::hpack_huffman_lengths[symbol];
         const auto byteCount = (bitCount + 7) / 8;
         const auto padding = byteCount * 8 - bitCount;
-        const auto encoded = (ruvia::detail::kHpackHuffmanCodes[symbol] << padding) |
+        const auto encoded = (ruvia::detail::hpack_huffman_codes[symbol] << padding) |
                              ((std::uint32_t{1} << padding) - 1);
         std::string block;
         block.push_back('\x41');
@@ -343,6 +343,16 @@ RUVIA_TEST(hpack_huffman_decodes_every_byte_symbol) {
         if (out.headers.size() == 1) {
             RUVIA_CHECK_EQ(out.headers[0].second, std::string(1, static_cast<char>(symbol)));
         }
+    }
+}
+
+RUVIA_TEST(hpack_huffman_empty_value_follows_nonempty_value) {
+    Collector out;
+    RUVIA_CHECK(decodeBlock(bytes({0x01, 0x81, 0x1f, 0x01, 0x80}), out));
+    RUVIA_CHECK_EQ(out.headers.size(), std::size_t{2});
+    if (out.headers.size() == 2) {
+        RUVIA_CHECK_EQ(out.headers[0], (std::pair{std::string(":authority"), std::string("a")}));
+        RUVIA_CHECK_EQ(out.headers[1], (std::pair{std::string(":authority"), std::string()}));
     }
 }
 

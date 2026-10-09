@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <string>
 
 #include "http2/Http2OutputBuffer.h"
@@ -13,6 +14,10 @@ class FailingResource final : public std::pmr::memory_resource {
 public:
     void fail(bool value) noexcept {
         fail_ = value;
+        fail_after_.reset();
+    }
+    void fail_after(std::size_t allocations) noexcept {
+        fail_after_ = allocations;
     }
     [[nodiscard]] std::size_t allocations() const noexcept {
         return allocations_;
@@ -23,11 +28,12 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail_) {
+        if (fail_ || (fail_after_ && allocations_ == *fail_after_)) {
             throw std::bad_alloc();
         }
+        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        return result;
     }
     void do_deallocate(void* p, std::size_t bytes, std::size_t alignment) override {
         ++deallocations_;
@@ -37,6 +43,7 @@ private:
         return this == &other;
     }
     bool fail_{false};
+    std::optional<std::size_t> fail_after_;
     std::size_t allocations_{0};
     std::size_t deallocations_{0};
 };
@@ -90,25 +97,124 @@ RUVIA_TEST(http2_output_batch_soft_limit_and_data_stream_metadata) {
     RUVIA_CHECK_EQ(output.pendingDataBytes(5), std::size_t{4});
 }
 
-RUVIA_TEST(http2_output_batch_segment_allocation_failure_is_atomic) {
-    FailingResource resource;
-    {
-        ruvia::detail::Http2OutputBuffer output(&resource);
-        for (int i = 0; i < 8; ++i) {
-            output.appendFrame(ruvia::Http2FrameType::kPing, 0, 0, "12345678");
+RUVIA_TEST(http2_output_batch_tracks_split_and_empty_payloads_after_partial_consumption) {
+    ruvia::detail::Http2OutputBuffer output(std::pmr::get_default_resource());
+    output.appendFrame(ruvia::Http2FrameType::kData, 0, 3, "ab", "cd");
+    output.appendFrame(ruvia::Http2FrameType::kData, ruvia::detail::kHttp2FlagEndStream, 5, {});
+    RUVIA_CHECK_EQ(output.pending().substr(ruvia::kHttp2FrameHeaderBytes, 4), "abcd");
+    RUVIA_CHECK_EQ(output.pendingDataBytes(3), std::size_t{4});
+    RUVIA_CHECK_EQ(output.pendingDataBytes(5), std::size_t{0});
+    RUVIA_CHECK_EQ(output.consume(5), ruvia::Http2OutputConsumeStatus::kPending);
+    RUVIA_CHECK_EQ(output.pendingDataBytes(3), std::size_t{4});
+    RUVIA_CHECK_EQ(output.consume(6), ruvia::Http2OutputConsumeStatus::kPending);
+    RUVIA_CHECK_EQ(output.pendingDataBytes(3), std::size_t{2});
+    output.appendFrame(ruvia::Http2FrameType::kPing, 0, 0, "12345678");
+    RUVIA_CHECK_EQ(output.consume(2), ruvia::Http2OutputConsumeStatus::kPending);
+    RUVIA_CHECK_EQ(output.pendingDataBytes(3), std::size_t{0});
+
+    Observation seen;
+    std::pmr::string batch;
+    const auto empty_data = output.takeBatch(1, batch, observe, &seen);
+    RUVIA_CHECK_EQ(empty_data.status, ruvia::Http2OutputBatchStatus::kTaken);
+    RUVIA_CHECK_EQ(empty_data.bytes, ruvia::kHttp2FrameHeaderBytes);
+    RUVIA_CHECK_EQ(seen.calls, std::size_t{1});
+    RUVIA_CHECK_EQ(seen.stream, std::uint32_t{5});
+    RUVIA_CHECK_EQ(seen.bytes, std::size_t{0});
+    const auto ping = output.takeBatch(1, batch, observe, &seen);
+    RUVIA_CHECK_EQ(ping.status, ruvia::Http2OutputBatchStatus::kTaken);
+    RUVIA_CHECK_EQ(ping.bytes, std::size_t{17});
+    RUVIA_CHECK_EQ(seen.calls, std::size_t{1});
+    RUVIA_CHECK(!output.wantsWrite());
+}
+
+RUVIA_TEST(http2_output_batch_append_failure_preserves_pending_data_and_retry) {
+    const auto seed = [&ruvia_ctx](ruvia::detail::Http2OutputBuffer& output, int mode) {
+        if (mode == 0) {
+            return;
         }
-        const auto before = std::string(output.pending());
-        resource.fail(true);
-        bool threw = false;
-        try {
+        for (int i = 0; i < 64; ++i) {
             output.appendFrame(ruvia::Http2FrameType::kData, 0, 9, "body");
-        } catch (const std::bad_alloc&) {
-            threw = true;
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(output.pending(), std::string_view(before));
+        // Exercise descriptor compaction both at a frame boundary and inside
+        // the first remaining DATA payload, without byte-buffer compaction.
+        const auto consumed = std::size_t{40 * 13} + (mode == 2 ? 10 : 0);
+        RUVIA_CHECK_EQ(output.consume(consumed), ruvia::Http2OutputConsumeStatus::kPending);
+    };
+    const auto append = [](ruvia::detail::Http2OutputBuffer& output, int index) {
+        if (index % 2 == 0) {
+            output.appendFrame(ruvia::Http2FrameType::kPing, 0, 0, "12345678");
+        } else {
+            output.appendFrame(ruvia::Http2FrameType::kData, 0, 9, "body");
+        }
+    };
+    for (int mode = 0; mode < 3; ++mode) {
+        FailingResource baseline_resource;
+        std::size_t append_allocations = 0;
+        std::string expected;
+        {
+            ruvia::detail::Http2OutputBuffer output(&baseline_resource);
+            seed(output, mode);
+            const auto before = baseline_resource.allocations();
+            for (int i = 0; i < 64; ++i) {
+                append(output, i);
+            }
+            append_allocations = baseline_resource.allocations() - before;
+            expected = output.pending();
+        }
+        RUVIA_CHECK(append_allocations != 0);
+        RUVIA_CHECK_EQ(baseline_resource.allocations(), baseline_resource.deallocations());
+        for (std::size_t allocation = 0; allocation < append_allocations; ++allocation) {
+            FailingResource resource;
+            {
+                ruvia::detail::Http2OutputBuffer output(&resource);
+                seed(output, mode);
+                resource.fail_after(resource.allocations() + allocation);
+                bool threw = false;
+                for (int i = 0; i < 64; ++i) {
+                    const auto before = std::string(output.pending());
+                    const auto data_before = output.pendingDataBytes(9);
+                    const auto checkpoint = output.checkpoint();
+                    try {
+                        append(output, i);
+                    } catch (const std::bad_alloc&) {
+                        RUVIA_CHECK(!threw);
+                        threw = true;
+                        RUVIA_CHECK_EQ(output.pending(), std::string_view(before));
+                        RUVIA_CHECK_EQ(output.pendingDataBytes(9), data_before);
+                        RUVIA_CHECK_EQ(output.checkpoint(), checkpoint);
+                        resource.fail(false);
+                        append(output, i);
+                    }
+                }
+                RUVIA_CHECK(threw);
+                RUVIA_CHECK_EQ(output.pending(), std::string_view(expected));
+                if (mode == 2) {
+                    // Complete the partially consumed DATA frame before taking
+                    // whole-frame batches; its remaining payload is three bytes.
+                    RUVIA_CHECK_EQ(output.pendingDataBytes(9), std::size_t{223});
+                    RUVIA_CHECK_EQ(output.consume(3), ruvia::Http2OutputConsumeStatus::kPending);
+                }
+                Observation seen;
+                std::pmr::string batch(&resource);
+                while (output.wantsWrite()) {
+                    const auto result = output.takeBatch(37, batch, observe, &seen);
+                    RUVIA_CHECK_EQ(result.status, ruvia::Http2OutputBatchStatus::kTaken);
+                    RUVIA_CHECK(result.bytes != 0);
+                    if (result.status != ruvia::Http2OutputBatchStatus::kTaken) {
+                        break;
+                    }
+                }
+                RUVIA_CHECK_EQ(std::string_view(batch), std::string_view(expected).substr(mode == 2 ? 3 : 0));
+                const auto data_frames = std::size_t{32} + (mode == 0 ? 0 : mode == 1 ? 24
+                                                                                      : 23);
+                RUVIA_CHECK_EQ(seen.calls, data_frames);
+                RUVIA_CHECK_EQ(seen.bytes, data_frames * 4);
+                RUVIA_CHECK_EQ(seen.stream, std::uint32_t{9});
+                RUVIA_CHECK_EQ(output.pendingDataBytes(9), std::size_t{0});
+            }
+            RUVIA_CHECK_EQ(resource.allocations(), resource.deallocations());
+        }
     }
-    RUVIA_CHECK_EQ(resource.allocations(), resource.deallocations());
 }
 
 RUVIA_TEST(http2_output_batch_compacts_long_lived_interleaved_output) {

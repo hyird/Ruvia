@@ -396,24 +396,28 @@ RUVIA_TEST(http3_connection_maps_qpack_decompression_and_reserved_frames_to_conn
 }
 
 RUVIA_TEST(http3_connection_validates_all_trailers_before_delivering_any) {
-    std::pmr::monotonic_buffer_resource resource;
-    ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource);
-    Captured captured;
-    const auto initial = requestWire(&resource, "GET", "/bad-trailer", "");
-    RUVIA_CHECK(connection.feed(0, initial, false, false, capture, &captured).status ==
-                ruvia::Http3ConnectionStatus::kNeedMoreData);
-    const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{"x-valid", "yes"}, {"connection", "close"}}};
-    const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
-    std::array<char, 16> frame{};
-    const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
-    std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*header));
-    wire.insert(wire.end(), section->begin(), section->end());
-    const auto result = connection.feed(0, wire, true, false, capture, &captured);
-    RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
-    RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
-    RUVIA_CHECK(captured.trailers.empty());
-    RUVIA_CHECK(captured.ended.empty());
-    RUVIA_CHECK_EQ(connection.activeRequestCount(), 0U);
+    constexpr std::array<std::string_view, 6> invalid_names{
+        "connection", "X-Test", "x bad", ":path", std::string_view("x\0bad", 5), "\x80-name"};
+    for (const auto name : invalid_names) {
+        std::pmr::monotonic_buffer_resource resource;
+        ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource);
+        Captured captured;
+        const auto initial = requestWire(&resource, "GET", "/bad-trailer", "");
+        RUVIA_CHECK(connection.feed(0, initial, false, false, capture, &captured).status ==
+                    ruvia::Http3ConnectionStatus::kNeedMoreData);
+        const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{"x-valid", "yes"}, {name, "close"}}};
+        const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
+        std::array<char, 16> frame{};
+        const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
+        std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*header));
+        wire.insert(wire.end(), section->begin(), section->end());
+        const auto result = connection.feed(0, wire, true, false, capture, &captured);
+        RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
+        RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
+        RUVIA_CHECK(captured.trailers.empty());
+        RUVIA_CHECK(captured.ended.empty());
+        RUVIA_CHECK_EQ(connection.activeRequestCount(), 0U);
+    }
 }
 
 struct Reentry final {

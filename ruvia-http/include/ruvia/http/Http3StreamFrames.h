@@ -106,7 +106,7 @@ private:
         kEnded,
     };
 
-    [[nodiscard]] Http3StreamFrameStatus beginFrame();
+    [[nodiscard]] Http3StreamFrameStatus beginFrame(std::uint64_t type, std::uint64_t length);
     [[nodiscard]] std::size_t fieldSectionBufferLimit() const noexcept;
     Http3StreamFrameStatus finishFrame() noexcept;
 
@@ -118,8 +118,6 @@ private:
     std::uint64_t frameType_{0};
     std::uint64_t frameLength_{0};
     std::uint64_t remaining_{0};
-    std::uint8_t firstHeaderByte_{0};
-    std::size_t headerBytesNeeded_{0};
     std::size_t headerBytesUsed_{0};
     char header_[16]{};
     bool paused_{false};

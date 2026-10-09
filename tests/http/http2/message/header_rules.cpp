@@ -1,3 +1,4 @@
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
@@ -7,8 +8,6 @@
 
 namespace {
 
-using ruvia::detail::http2FieldValueHasLeadingOrTrailingWhitespace;
-using ruvia::detail::http2HeaderNameHasUppercase;
 using ruvia::detail::http2IsValidDecodedResponseHeader;
 using ruvia::detail::http2IsValidRegularHeader;
 using ruvia::detail::is_forbidden_http_binary_connection_field;
@@ -17,12 +16,27 @@ using ruvia::detail::isForbiddenHttpRequestTrailerName;
 
 }  // namespace
 
-RUVIA_TEST(http2_header_name_uppercase_detection) {
-    RUVIA_CHECK(http2HeaderNameHasUppercase("Content-Type"));
-    RUVIA_CHECK(http2HeaderNameHasUppercase("x-Custom"));
-    RUVIA_CHECK(!http2HeaderNameHasUppercase("content-type"));
-    RUVIA_CHECK(!http2HeaderNameHasUppercase("x-custom-header"));
-    RUVIA_CHECK(!http2HeaderNameHasUppercase(""));
+RUVIA_TEST(http2_regular_field_name_syntax) {
+    RUVIA_CHECK(!http2IsValidRegularHeader("Content-Type", ""));
+    RUVIA_CHECK(!http2IsValidRegularHeader("x-Custom", ""));
+    RUVIA_CHECK(http2IsValidRegularHeader("content-type", ""));
+    RUVIA_CHECK(http2IsValidRegularHeader("x-custom-header", ""));
+    RUVIA_CHECK(!http2IsValidRegularHeader("", ""));
+}
+
+RUVIA_TEST(http2_regular_field_names_accept_only_lowercase_token_bytes) {
+    constexpr std::string_view punctuation = "!#$%&'*+-.^_`|~";
+    for (const std::size_t position : {0U, 4U, 31U, 63U}) {
+        std::string name(64, 'x');
+        for (unsigned byte = 0; byte < 256; ++byte) {
+            name[position] = static_cast<char>(byte);
+            const bool allowed = (byte >= 'a' && byte <= 'z') ||
+                                 (byte >= '0' && byte <= '9') ||
+                                 punctuation.find(static_cast<char>(byte)) != std::string_view::npos;
+            RUVIA_CHECK_EQ(http2IsValidRegularHeader(name, "value"), allowed);
+            RUVIA_CHECK_EQ(http2IsValidDecodedResponseHeader(name, "value"), allowed);
+        }
+    }
 }
 
 RUVIA_TEST(http2_forbidden_connection_headers) {
@@ -50,15 +64,12 @@ RUVIA_TEST(http2_forbidden_connection_headers) {
 RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(http2IsValidRegularHeader("content-type", "text/html"));
     RUVIA_CHECK(http2IsValidRegularHeader("x-custom", "value"));
-    RUVIA_CHECK(!http2FieldValueHasLeadingOrTrailingWhitespace(""));
-    RUVIA_CHECK(!http2FieldValueHasLeadingOrTrailingWhitespace("value"));
-    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace(" value"));
-    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("value "));
-    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("\tvalue"));
-    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("value\t"));
+    RUVIA_CHECK(http2IsValidRegularHeader("x-custom", ""));
     // RFC 9113 §8.2.1: HTTP/2 field values cannot start or end with SP/HTAB.
     RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", " value"));
     RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", "value "));
+    RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", "\tvalue"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", "value\t"));
     // A pseudo-header or an empty name is not a valid regular header.
     RUVIA_CHECK(!http2IsValidRegularHeader(":path", "/"));
     RUVIA_CHECK(!http2IsValidRegularHeader("", "value"));

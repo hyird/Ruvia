@@ -7,46 +7,10 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
 
-#include "router/PathSegments.h"
 #include "router/RouterImpl.h"
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] bool dynamicRouteMatchesPath(
-    std::string_view pattern, std::string_view path) noexcept {
-    for (;;) {
-        std::string_view patternSegment;
-        std::string_view patternRest;
-        const auto hasPattern = detail::splitRoutePathSegment(pattern, patternSegment, patternRest);
-        if (!hasPattern) {
-            std::string_view pathSegment;
-            std::string_view pathRest;
-            return !detail::splitRequestPathSegment(path, pathSegment, pathRest);
-        }
-
-        if (patternSegment == "*") {
-            return patternRest.empty();
-        }
-
-        std::string_view pathSegment;
-        std::string_view pathRest;
-        if (!detail::splitRequestPathSegment(path, pathSegment, pathRest)) {
-            return false;
-        }
-
-        if (!patternSegment.empty() && patternSegment.front() == ':') {
-            if (pathSegment.empty()) {
-                return false;
-            }
-        } else if (patternSegment != pathSegment) {
-            return false;
-        }
-
-        pattern = patternRest;
-        path = pathRest;
-    }
-}
 
 [[nodiscard]] bool webSocketSubprotocolsEqual(const std::pmr::vector<std::pmr::string>& owned,
     std::span<const std::string_view> borrowed) noexcept {
@@ -286,24 +250,13 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     }
 }
 
-// HEAD mirrors only buffered GET routes. Streaming, SSE, and WebSocket handlers
-// have explicit stream lifecycles and must not be entered by an implicit HEAD
-// shadow.
-[[nodiscard]] static bool eligibleForHeadShadow(const detail::RouteEndpoint& endpoint) noexcept {
-    return endpoint.buffered() != nullptr;
-}
-
 void detail::RouterImpl::buildRouteTable(
     RouteTable& table, const CompiledRoutePlan* compiledPlan) const {
-    std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
-        if (route.method() == HttpKnownMethod::kGet && eligibleForHeadShadow(route.endpoint())) {
-            ++headShadowCandidateCount;
-        }
         middlewareCount += globalMiddlewareFrames_.size() + route.middlewares().size();
     }
-    table.routes_.reserve(pendingRoutes_.size() + headShadowCandidateCount);
+    table.routes_.reserve(pendingRoutes_.size());
     table.middlewareFrames_.reserve(middlewareCount);
 
     for (const auto& pending : pendingRoutes_) {
@@ -352,55 +305,6 @@ void detail::RouterImpl::buildRouteTable(
     table.unmatchedMiddlewareCount_ =
         table.middlewareFrames_.size() - table.unmatchedMiddlewareOffset_;
 
-    const auto originalRouteCount = table.routes_.size();
-    const auto conflictsWithHeadRoute = [](const RouteEntry& source,
-                                            const RouteEntry& headRoute) noexcept {
-        if (source.dynamic() && headRoute.dynamic()) {
-            return RouteTable::sameDynamicShape(source.path(), headRoute.path());
-        }
-        if (!source.dynamic() && headRoute.dynamic()) {
-            return dynamicRouteMatchesPath(headRoute.path(), source.path());
-        }
-        if (!source.dynamic() && !headRoute.dynamic()) {
-            return headRoute.path() == source.path();
-        }
-        return false;
-    };
-
-    std::pmr::vector<const RouteEntry*> explicitHeadRoutes(table.resource_);
-    for (std::size_t i = 0; i < originalRouteCount; ++i) {
-        if (table.routes_[i].method() == HttpKnownMethod::kHead) {
-            explicitHeadRoutes.push_back(&table.routes_[i]);
-        }
-    }
-
-    for (std::size_t i = 0; i < originalRouteCount; ++i) {
-        const auto& source = table.routes_[i];
-        if (source.method() != HttpKnownMethod::kGet || !eligibleForHeadShadow(source.endpoint())) {
-            continue;
-        }
-        bool conflictsWithExistingHead = false;
-        for (const auto* headRoute : explicitHeadRoutes) {
-            if (conflictsWithHeadRoute(source, *headRoute)) {
-                conflictsWithExistingHead = true;
-                break;
-            }
-        }
-        if (conflictsWithExistingHead) {
-            continue;
-        }
-        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_,
-            RouteEntry::Init{.method = HttpKnownMethod::kHead,
-                .path = source.path(),
-                .endpoint = source.endpoint().clone(table.resource_),
-                .dynamic = source.dynamic(),
-                .maxRequestBodyBytes = source.maxRequestBodyBytes(),
-                .deadlineMs = source.deadlineMs(),
-                .middlewareOffset = source.middlewareOffset(),
-                .middlewareCount = source.middlewareCount()});
-        table.routes_.push_back(std::move(shadow));
-    }
-
     if (compiledPlan != nullptr) {
         table.bindCompiledPlan(*compiledPlan);
         return;
@@ -416,7 +320,7 @@ void detail::RouterImpl::buildRouteTable(
     }
     table.captureRouteIdentities();
     table.buildAllowedMethodMask();
-    table.buildPerfectHash();
+    table.build_static_index();
     table.buildDynamicRoutes();
 }
 

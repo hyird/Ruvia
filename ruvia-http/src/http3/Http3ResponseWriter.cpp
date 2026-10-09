@@ -20,6 +20,7 @@
 
 #include "coding/HttpContentLength.h"
 #include "field/HttpInterimResponseValidation.h"
+#include "field/binary_field_name.h"
 #include "http3/Http3FieldSectionEncoder.h"
 #include "server/HttpDateCache.h"
 
@@ -66,10 +67,102 @@ private:
 };
 
 bool validField(const Http3FieldSectionFieldView& field) noexcept {
-    if (!detail::isValidHttpHeaderName(field.name) || has_uppercase(field.name)) {
+    if (!detail::is_valid_binary_field_name(field.name)) {
         return false;
     }
     return detail::is_valid_http_field_value_bytes(field.value);
+}
+
+// Keep per-field validation in its callers. MSVC otherwise outlines this
+// helper inside the response projection loop.
+#if defined(_MSC_VER)
+#define RUVIA_HTTP3_RESPONSE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define RUVIA_HTTP3_RESPONSE_INLINE inline __attribute__((always_inline))
+#else
+#define RUVIA_HTTP3_RESPONSE_INLINE inline
+#endif
+
+// Own the one projected field list and its generated status bytes together.
+// Other names and values are borrowed only through the synchronous encode call.
+class response_fields final {
+public:
+    response_fields(HttpStatusCode status, HttpKnownMethod method, std::size_t capacity,
+        Http3FieldSectionLimits limits, std::pmr::memory_resource* resource)
+        : body_plan_(planHttpResponseBody(method, status)),
+          limits_(limits),
+          fields_(resource != nullptr ? resource : std::pmr::get_default_resource()) {
+        const auto token = detail::httpStatusCodeToken(status);
+        std::copy_n(token.begin(), status_bytes_.size(), status_bytes_.begin());
+        const auto status_value = std::string_view(status_bytes_.data(), status_bytes_.size());
+        fields_.reserve(capacity);
+        fields_.push_back({":status", status_value, false});
+    }
+
+    response_fields(const response_fields&) = delete;
+    response_fields& operator=(const response_fields&) = delete;
+    response_fields(response_fields&&) = delete;
+    response_fields& operator=(response_fields&&) = delete;
+
+    [[nodiscard]] RUVIA_HTTP3_RESPONSE_INLINE std::optional<Http3ResponseHeadFailure> append(const Http3FieldSectionFieldView& field) {
+        if (!validField(field)) {
+            return Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField};
+        }
+        if (detail::is_forbidden_http_binary_response_field(field.name)) {
+            return Http3ResponseHeadFailure{Http3ResponseHeadError::kForbiddenField};
+        }
+        if (httpAsciiEqualsIgnoreCase(field.name, "content-length")) {
+            if (content_length_.parse_single_value(field.value) != detail::HttpContentLengthParseStatus::kOk ||
+                (!body_plan_.explicitContentLengthAllowed() &&
+                    !(body_plan_.responseStatus() == http_status::kResetContent && *content_length_.value() == 0))) {
+                return Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField};
+            }
+        }
+        fields_.push_back(field);
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encode(
+        Http3QpackEncoder* encoder, std::uint64_t stream_id) const {
+        // Validate the aggregate only after every field's grammar and framing.
+        detail::HttpHeaderSectionSize section_size(limits_.maxDecodedBytes);
+        for (const auto& field : fields_) {
+            if (!section_size.add(field.name, field.value)) {
+                return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                    Http3FieldSectionError::kFieldListTooLarge});
+            }
+        }
+        auto encoded = detail::encodeHttp3Fields(fields_, fields_.get_allocator().resource(), limits_, encoder, stream_id);
+        if (!encoded) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, encoded.error()});
+        }
+        if (encoded->size() > limits_.maxEncodedBytes) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kFieldSectionTooLarge});
+        }
+        return Http3ResponseHead(std::move(*encoded), body_plan_, section_size.bytes(), content_length_.value());
+    }
+
+private:
+    HttpResponseBodyPlan body_plan_;
+    Http3FieldSectionLimits limits_;
+    detail::HttpContentLengthState<std::uint64_t> content_length_;
+    std::array<char, 3> status_bytes_{};
+    std::pmr::vector<Http3FieldSectionFieldView> fields_;
+};
+
+#undef RUVIA_HTTP3_RESPONSE_INLINE
+
+std::optional<Http3ResponseHeadFailure> response_head_preflight(
+    HttpStatusCode status, std::size_t header_count, Http3FieldSectionLimits limits) noexcept {
+    if (status == http_status::kSwitchingProtocols) {
+        return Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus};
+    }
+    if (header_count >= limits.maxFields) {
+        return Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+            Http3FieldSectionError::kTooManyFields};
+    }
+    return std::nullopt;
 }
 
 bool validResponseHeader(std::string_view name, std::string_view value) noexcept {
@@ -89,8 +182,8 @@ static std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encode
     detail::HttpHeaderSectionSize sectionSize(limits.maxDecodedBytes);
     std::size_t lowercase_bytes = 0;
     for (const auto& field : fields) {
-        if (!detail::isValidResponseTrailerName(field.name) ||
-            !detail::isValidResponseTrailerValue(field.value)) {
+        if (!detail::is_valid_http_field_name(field.name) ||
+            !detail::is_valid_http_field_value(field.value)) {
             return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
         }
         if (detail::isForbiddenResponseTrailerName(field.name)) {
@@ -133,58 +226,16 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
     HttpStatusCode status, HttpKnownMethod requestMethod,
     std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits,
     std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
-    if (status == http_status::kSwitchingProtocols) {
-        return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus});
+    if (const auto failure = response_head_preflight(status, fields.size(), limits)) {
+        return std::unexpected(*failure);
     }
-
-    const auto bodyPlan = planHttpResponseBody(requestMethod, status);
-    std::array<char, 3> statusBytes{};
-    const auto statusToken = detail::httpStatusCodeToken(status);
-    for (std::size_t i = 0; i < statusBytes.size(); ++i) {
-        statusBytes[i] = statusToken[i];
-    }
-
-    if (fields.size() >= limits.maxFields) {
-        return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
-            Http3FieldSectionError::kTooManyFields});
-    }
-    std::pmr::vector<Http3FieldSectionFieldView> outputFields(
-        resource != nullptr ? resource : std::pmr::get_default_resource());
-    outputFields.reserve(fields.size() + 1);
-    outputFields.push_back({":status", std::string_view(statusBytes.data(), statusBytes.size()), false});
-    detail::HttpContentLengthState<std::uint64_t> contentLength;
+    response_fields projected(status, requestMethod, fields.size() + 1, limits, resource);
     for (const auto& field : fields) {
-        if (!validField(field)) {
-            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
-        }
-        if (detail::is_forbidden_http_binary_response_field(field.name)) {
-            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kForbiddenField});
-        }
-        if (httpAsciiEqualsIgnoreCase(field.name, "content-length")) {
-            if (contentLength.parse_single_value(field.value) != detail::HttpContentLengthParseStatus::kOk ||
-                (!bodyPlan.explicitContentLengthAllowed() &&
-                    !(status == http_status::kResetContent && *contentLength.value() == 0))) {
-                return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
-            }
-        }
-        outputFields.push_back(field);
-    }
-    detail::HttpHeaderSectionSize sectionSize(limits.maxDecodedBytes);
-    for (const auto& field : outputFields) {
-        if (!sectionSize.add(field.name, field.value)) {
-            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
-                Http3FieldSectionError::kFieldListTooLarge});
+        if (const auto failure = projected.append(field)) {
+            return std::unexpected(*failure);
         }
     }
-    auto encoded = detail::encodeHttp3Fields(outputFields, resource ? resource : std::pmr::get_default_resource(), limits, encoder, streamId);
-    if (!encoded) {
-        return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, encoded.error()});
-    }
-    if (encoded->size() > limits.maxEncodedBytes) {
-        return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
-            Http3FieldSectionError::kFieldSectionTooLarge});
-    }
-    return Http3ResponseHead(std::move(*encoded), bodyPlan, sectionSize.bytes(), contentLength.value());
+    return projected.encode(encoder, streamId);
 }
 
 static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(
@@ -281,10 +332,11 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
         canonicalLengthSize = static_cast<std::size_t>(end - lengthBytes.data());
     }
     lowercase_field_names lowercase(memory, nameBytes);
-    std::pmr::vector<Http3FieldSectionFieldView> projected(memory);
-    projected.reserve(projectedCount - 1);
+    response_fields projected(status, writePlan.requestMethod(), projectedCount, limits, memory);
     if (!generatedDate.empty()) {
-        projected.push_back({"date", generatedDate, false});
+        if (const auto failure = projected.append({"date", generatedDate, false})) {
+            return std::unexpected(*failure);
+        }
     }
     for (const auto& header : headers) {
         const auto original_name = header.name();
@@ -294,12 +346,16 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
         if (contentLengthField) {
             value = std::string_view(lengthBytes.data(), canonicalLengthSize);
         }
-        projected.push_back({name, value, false});
+        if (const auto failure = projected.append({name, value, false})) {
+            return std::unexpected(*failure);
+        }
     }
     if (synthesizeLength) {
-        projected.push_back({"content-length", std::string_view(lengthBytes.data(), canonicalLengthSize), false});
+        if (const auto failure = projected.append({"content-length", std::string_view(lengthBytes.data(), canonicalLengthSize), false})) {
+            return std::unexpected(*failure);
+        }
     }
-    auto encoded = encodeResponseHead(status, writePlan.requestMethod(), projected, limits, memory, encoder, streamId);
+    auto encoded = projected.encode(encoder, streamId);
     if (!encoded) {
         return encoded;
     }
@@ -313,6 +369,9 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimR
     if (detail::validateHttpInterimResponseHeaders(response) != detail::HttpInterimResponseHeaderValidationStatus::kOk) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
     }
+    if (const auto failure = response_head_preflight(response.status(), response.headers().size(), limits)) {
+        return std::unexpected(*failure);
+    }
     std::size_t lowercase_bytes = 0;
     for (const auto& field : response.headers()) {
         if (!add_lowercase_name_bytes(lowercase_bytes, field.name())) {
@@ -321,12 +380,13 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimR
         }
     }
     lowercase_field_names lowercase(memory, lowercase_bytes);
-    std::pmr::vector<Http3FieldSectionFieldView> fields(memory);
-    fields.reserve(response.headers().size());
+    response_fields fields(response.status(), HttpKnownMethod::kGet, response.headers().size() + 1, limits, memory);
     for (const auto& field : response.headers()) {
-        fields.push_back({lowercase.project(field.name()), field.value(), false});
+        if (const auto failure = fields.append({lowercase.project(field.name()), field.value(), false})) {
+            return std::unexpected(*failure);
+        }
     }
-    return encodeResponseHead(response.status(), HttpKnownMethod::kGet, fields, limits, memory, encoder, streamId);
+    return fields.encode(encoder, streamId);
 }
 
 static std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
@@ -341,27 +401,37 @@ encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method,
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
     }
     auto prepared = prepare_http_response_stream_head(std::move(response), kind, plan);
+    if (const auto failure = response_head_preflight(prepared.response().status(), prepared.response().headers().size(), limits)) {
+        return std::unexpected(*failure);
+    }
     auto* memory = resource != nullptr ? resource : std::pmr::get_default_resource();
     std::size_t lowercase_bytes = 0;
+    bool hasDate = false;
     for (const auto& header : prepared.response().headers()) {
+        hasDate = hasDate || httpAsciiEqualsIgnoreCase(header.name(), "date");
         if (!add_lowercase_name_bytes(lowercase_bytes, header.name())) {
             return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
                 Http3FieldSectionError::kFieldListTooLarge});
         }
     }
+    const auto header_count = prepared.response().headers().size() + (hasDate ? 0U : 1U);
+    if (const auto failure = response_head_preflight(prepared.response().status(), header_count, limits)) {
+        return std::unexpected(*failure);
+    }
     lowercase_field_names lowercase(memory, lowercase_bytes);
-    std::pmr::vector<Http3FieldSectionFieldView> fields(memory);
-    fields.reserve(prepared.response().headers().size() + 1);
-    bool hasDate = false;
+    response_fields fields(prepared.response().status(), method, header_count + 1, limits, memory);
     for (const auto& header : prepared.response().headers()) {
         const auto name = lowercase.project(header.name());
-        fields.push_back({name, header.value(), false});
-        hasDate = hasDate || name == "date";
+        if (const auto failure = fields.append({name, header.value(), false})) {
+            return std::unexpected(*failure);
+        }
     }
     if (!hasDate) {
-        fields.push_back({"date", detail::cachedDateValue(), false});
+        if (const auto failure = fields.append({"date", detail::cachedDateValue(), false})) {
+            return std::unexpected(*failure);
+        }
     }
-    auto encoded = encodeResponseHead(prepared.response().status(), method, fields, limits, memory, encoder, streamId);
+    auto encoded = fields.encode(encoder, streamId);
     if (!encoded) {
         return std::unexpected(encoded.error());
     }

@@ -18,11 +18,11 @@
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 
+#include "field/hpack_huffman_tables.h"
 #include "http2/Http2Connection.h"
 #include "http2/Http2FrameCodec.h"
 #include "http2/Http2HeaderBlock.h"
 #include "http2/Http2Hpack.h"
-#include "http2/Http2HpackHuffmanTables.h"
 #include "http2/Http2ReceiveWindowCredit.h"
 #include "http2/Http2WindowUpdate.h"
 #include "http2_wire_fixture.h"
@@ -209,8 +209,8 @@ inline void encodeRepeatedHuffmanHeader(
     appendHpackInteger(block, name.size(), 7, 0);
     block.append(name.data(), name.size());
 
-    const auto code = ruvia::detail::kHpackHuffmanCodes[value];
-    const auto bitLength = ruvia::detail::kHpackHuffmanLengths[value];
+    const auto code = ruvia::detail::hpack_huffman_codes[value];
+    const auto bitLength = ruvia::detail::hpack_huffman_lengths[value];
     const auto encodedBytes = (count * bitLength + 7) / 8;
     appendHpackInteger(block, encodedBytes, 7, 0x80);
 

@@ -32,7 +32,7 @@ public:
           extensionRouteIndices_(resource_),
           connectRouteIndices_(resource_),
           connectProtocols_(resource_),
-          exactSlots_(resource_),
+          static_slots_(resource_),
           dynamicRoots_{DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
               DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
               DynamicNode(resource_)},
@@ -92,8 +92,9 @@ private:
         std::pmr::vector<RouteMiddleware::Invoke> middlewareInvokes;
     };
 
-    struct PerfectSlot final {
-        std::size_t routeIndex{kNoRouteIndex};
+    struct static_route_slot final {
+        std::uint64_t hash_{};
+        std::size_t route_index_{kNoRouteIndex};
     };
 
     struct DynamicNode;
@@ -125,15 +126,14 @@ private:
     std::pmr::vector<std::size_t> extensionRouteIndices_;
     std::pmr::vector<std::size_t> connectRouteIndices_;
     std::pmr::vector<ConnectProtocolIndex> connectProtocols_;
-    std::pmr::vector<PerfectSlot> exactSlots_;
+    std::pmr::vector<static_route_slot> static_slots_;
     std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_;
     std::pmr::vector<DynamicNode> dynamicNodeArena_;
     std::pmr::vector<RouteMiddleware::Invoke> unmatchedMiddlewareInvokes_;
     std::uint32_t staticMethodMask_{0};
     std::uint32_t dynamicMethodMask_{0};
     std::uint32_t allowedMethodMask_{0};
-    std::uint64_t exactSeed_{0};
-    std::size_t exactMask_{0};
+    std::size_t static_slot_mask_{};
     bool hasRouteRateLimit_{false};
 };
 

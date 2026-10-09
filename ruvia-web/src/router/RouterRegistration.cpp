@@ -1,3 +1,4 @@
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 
@@ -189,8 +190,40 @@ void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
         throw std::logic_error("cannot register route after router finalize");
     }
     validateRouteTarget(route.method(), route.methodToken(), route.path(), route.endpoint());
-    route.setDynamic((route.endpoint().tunnel() == nullptr || !route.endpoint().tunnel()->protocol().empty()) && RouteTable::isDynamicPath(route.path()));
+    const auto* tunnel = route.endpoint().tunnel();
+    // Authority equality includes case and numeric-port normalization. Tunnel
+    // candidates therefore share a protocol hash and use that equality below.
+    auto hash = RouteTable::route_hash(route.method(),
+        RouteTable::path_hash(tunnel == nullptr ? route.path() : tunnel->protocol()));
+    if (!route.methodToken().empty()) {
+        hash ^= RouteTable::path_hash(route.methodToken());
+    }
+    const auto [first, last] = pending_route_indices_->equal_range(hash);
+    for (auto it = first; it != last; ++it) {
+        const auto& registered = pendingRoutes_[it->second];
+        if (registered.method() != route.method() || registered.methodToken() != route.methodToken()) {
+            continue;
+        }
+        if (tunnel != nullptr) {
+            const auto* registered_tunnel = registered.endpoint().tunnel();
+            if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() &&
+                (route.path() == registered.path() ||
+                    (tunnel->protocol().empty() && httpAuthoritiesEqual(route.path(), registered.path(), 0)))) {
+                throw std::invalid_argument("duplicate CONNECT route registration");
+            }
+        } else if (registered.path() == route.path()) {
+            throw std::invalid_argument("duplicate route registration");
+        }
+    }
+    route.setDynamic((tunnel == nullptr || !tunnel->protocol().empty()) && RouteTable::isDynamicPath(route.path()));
+    const auto index = pendingRoutes_.size();
     pendingRoutes_.push_back(std::move(route));
+    try {
+        pending_route_indices_->emplace(hash, index);
+    } catch (...) {
+        pendingRoutes_.pop_back();
+        throw;
+    }
 }
 
 }  // namespace ruvia

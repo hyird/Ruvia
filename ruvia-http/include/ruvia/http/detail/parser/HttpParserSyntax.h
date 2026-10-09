@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -94,15 +95,65 @@ inline constexpr std::array<bool, 256> kHttpFieldValueCharTable = [] {
     return kHttpFieldValueCharTable[c];
 }
 
+// Find the first non-token byte. Independent table loads let valid runs avoid
+// one loop branch per byte; the final scan preserves the exact stop position.
+[[nodiscard]] inline std::size_t http_token_prefix_size(std::string_view value) noexcept {
+    std::size_t index = 0;
+    while (value.size() - index >= 4) {
+        const auto* bytes = value.data() + index;
+        if (!(isHttpTokenChar(static_cast<unsigned char>(bytes[0])) &
+                isHttpTokenChar(static_cast<unsigned char>(bytes[1])) &
+                isHttpTokenChar(static_cast<unsigned char>(bytes[2])) &
+                isHttpTokenChar(static_cast<unsigned char>(bytes[3])))) {
+            break;
+        }
+        index += 4;
+    }
+    while (index < value.size() && isHttpTokenChar(static_cast<unsigned char>(value[index]))) {
+        ++index;
+    }
+    return index;
+}
+
+[[nodiscard]] inline bool is_valid_http_field_name(std::string_view name) noexcept {
+    if (name.empty()) {
+        return false;
+    }
+    return http_token_prefix_size(name) == name.size();
+}
+
+// Keep bulk-scan register use outside inlined short-value callers.
+[[nodiscard]] bool is_valid_long_http_field_value_bytes(
+    const char* data, std::size_t size) noexcept;
+
 // Byte repertoire only. Protocol boundaries separately decide whether leading
 // or trailing OWS is permitted (HTTP/3 currently accepts it, HTTP/2 does not).
 [[nodiscard]] inline bool is_valid_http_field_value_bytes(std::string_view value) noexcept {
-    for (const unsigned char ch : value) {
-        if (!isHttpFieldValueChar(ch)) {
+    if (value.size() > 32) {
+        return is_valid_long_http_field_value_bytes(value.data(), value.size());
+    }
+    // Preserve a compile-time loop bound for short-value unrolling.
+    const auto size = std::min<std::size_t>(32, value.size());
+    for (std::size_t index = 0; index < size; ++index) {
+        if (!isHttpFieldValueChar(static_cast<unsigned char>(value[index]))) {
             return false;
         }
     }
     return true;
+}
+
+// Normalized field values exclude leading and trailing OWS. Wire parsers
+// that accept field-line OWS trim it before using this shared contract.
+[[nodiscard]] inline bool is_valid_http_field_value(std::string_view value) noexcept {
+    if (value.empty()) {
+        return true;
+    }
+    const auto first = static_cast<unsigned char>(value.front());
+    const auto last = static_cast<unsigned char>(value.back());
+    if (first == ' ' || first == '\t' || last == ' ' || last == '\t') {
+        return false;
+    }
+    return is_valid_http_field_value_bytes(value);
 }
 
 [[nodiscard]] RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept;

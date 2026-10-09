@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
@@ -7,75 +8,39 @@
 
 namespace ruvia {
 
-void detail::RouteTable::buildPerfectHash() {
+void detail::RouteTable::build_static_index() {
     auto& plan = *ownedPlan_;
-    plan.exactSlots_.clear();
-    plan.exactSeed_ = 0;
-    plan.exactMask_ = 0;
+    plan.static_slots_.clear();
+    plan.static_slot_mask_ = 0;
 
-    std::pmr::vector<std::size_t> exactRoutes(resource_);
-    exactRoutes.reserve(routes_.size());
-    for (std::size_t routeIndex = 0; routeIndex < routes_.size(); ++routeIndex) {
-        const auto& route = routes_[routeIndex];
-        // Extension routes are resolved by the cold token scan, never by this
-        // index. They must also stay out of it: the hash is keyed on the method
-        // ENUM and the path, so two extension routes on one path -- which is
-        // ordinary, e.g. PROPFIND and PURGE on the same resource -- would be
-        // indistinguishable and no seed could ever separate them.
-        if (!route.dynamic() && isRoutableMethod(route.method())) {
-            exactRoutes.push_back(routeIndex);
-        }
-    }
-
-    if (exactRoutes.empty()) {
+    // Extension tokens and CONNECT have separate routing semantics.
+    const auto is_indexed = [](const RouteEntry& route) {
+        return !route.dynamic() && isRoutableMethod(route.method());
+    };
+    const auto route_count = static_cast<std::size_t>(std::ranges::count_if(routes_, is_indexed));
+    if (route_count == 0) {
         return;
     }
-
-    auto slotCount = nextPowerOfTwo(exactRoutes.size());
-    std::pmr::vector<std::size_t> candidate(resource_);
-    std::pmr::vector<std::uint32_t> candidateMarks(resource_);
-    std::uint32_t generation = 0;
-
-    for (std::size_t attempt = 0; attempt < 16; ++attempt) {
-        const auto mask = slotCount - 1;
-        candidate.resize(slotCount);
-        candidateMarks.resize(slotCount);
-        for (std::uint64_t seed = 0; seed < 4096; ++seed) {
-            ++generation;
-            bool collision = false;
-
-            for (const auto routeIndex : exactRoutes) {
-                const auto& route = routes_[routeIndex];
-                const auto index =
-                    static_cast<std::size_t>(routeHash(route.method(), route.path(), seed)) & mask;
-                if (candidateMarks[index] == generation) {
-                    collision = true;
-                    break;
-                }
-                candidateMarks[index] = generation;
-                candidate[index] = routeIndex;
-            }
-
-            if (!collision) {
-                plan.exactSlots_.resize(slotCount);
-                for (std::size_t i = 0; i < slotCount; ++i) {
-                    plan.exactSlots_[i].routeIndex =
-                        candidateMarks[i] == generation ? candidate[i] : kNoRouteIndex;
-                }
-                plan.exactSeed_ = seed;
-                plan.exactMask_ = mask;
-                return;
-            }
-        }
-
-        slotCount <<= 1U;
+    if (route_count > plan.static_slots_.max_size() / 2) {
+        throw std::length_error("too many static routes");
     }
 
-    // The static index has no fallback, so an unbuildable table must fail the
-    // build rather than leave every static route silently unroutable. Reaching
-    // here needs 16 doublings (a table 32768x the route count) to have collided
-    // under all 4096 seeds, which no real route set can do.
-    throw std::logic_error("failed to build the static route index");
+    // At most half full: storage stays linear and a probe always reaches an
+    // empty slot. Finalization owns the only allocation; lookups only borrow.
+    plan.static_slots_.resize(std::bit_ceil(route_count * 2));
+    plan.static_slot_mask_ = plan.static_slots_.size() - 1;
+    for (std::size_t route_index = 0; route_index < routes_.size(); ++route_index) {
+        const auto& route = routes_[route_index];
+        if (!is_indexed(route)) {
+            continue;
+        }
+        const auto hash = route_hash(route.method(), path_hash(route.path()));
+        auto slot_index = static_cast<std::size_t>(hash) & plan.static_slot_mask_;
+        while (plan.static_slots_[slot_index].route_index_ != kNoRouteIndex) {
+            slot_index = (slot_index + 1) & plan.static_slot_mask_;
+        }
+        plan.static_slots_[slot_index] = {hash, route_index};
+    }
 }
 
 void detail::RouteTable::buildAllowedMethodMask() {
@@ -86,6 +51,9 @@ void detail::RouteTable::buildAllowedMethodMask() {
         if (isRoutableMethod(route.method())) {
             const auto methodBit = 1U << methodIndex(route.method());
             plan.allowedMethodMask_ |= methodBit;
+            if (supports_head_fallback(route)) {
+                plan.allowedMethodMask_ |= 1U << methodIndex(HttpKnownMethod::kHead);
+            }
             if (!route.dynamic()) {
                 plan.staticMethodMask_ |= methodBit;
             }

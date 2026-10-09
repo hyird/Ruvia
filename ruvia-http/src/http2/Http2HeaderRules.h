@@ -6,34 +6,13 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
+#include "field/binary_field_name.h"
+
 namespace ruvia::detail {
-
-[[nodiscard]] inline bool http2HeaderNameHasUppercase(std::string_view name) noexcept {
-    for (const auto ch : name) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte >= 'A' && byte <= 'Z') {
-            return true;
-        }
-    }
-    return false;
-}
-
-[[nodiscard]] inline bool http2FieldValueHasLeadingOrTrailingWhitespace(
-    std::string_view value) noexcept {
-    const auto asciiWhitespace = [](char ch) noexcept { return ch == ' ' || ch == '\t'; };
-    return !value.empty() && (asciiWhitespace(value.front()) || asciiWhitespace(value.back()));
-}
 
 [[nodiscard]] inline bool http2IsValidRegularHeader(
     std::string_view name, std::string_view value) noexcept {
-    if (name.empty() || name.front() == ':') {
-        return false;
-    }
-    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
-        http2FieldValueHasLeadingOrTrailingWhitespace(value)) {
-        return false;
-    }
-    if (http2HeaderNameHasUppercase(name)) {
+    if (!is_valid_binary_field_name(name) || !isValidHttpHeaderValue(value)) {
         return false;
     }
     if (is_forbidden_http_binary_connection_field(name)) {

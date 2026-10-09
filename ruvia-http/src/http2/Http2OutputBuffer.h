@@ -29,10 +29,10 @@ using ruvia::Http2OutputConsumeStatus;
 class Http2OutputBuffer final {
 public:
     struct Segment final {
+        // DATA payload spans [begin + kHttp2FrameHeaderBytes, end). Raw byte
+        // segments have no DATA metadata.
         std::size_t begin;
         std::size_t end;
-        std::size_t payloadBegin;
-        std::size_t payloadEnd;
         std::uint32_t streamId;
         bool isData;
     };
@@ -103,7 +103,7 @@ public:
             reserveSegment();
             const auto begin = bytes_.size();
             bytes_.append(bytes.data(), bytes.size());
-            segments_.push_back(Segment{begin, bytes_.size(), begin, bytes_.size(), 0, false});
+            segments_.push_back(Segment{begin, bytes_.size(), 0, false});
         }
     }
 
@@ -123,7 +123,14 @@ public:
         }
         const auto required = segments_.size() + additional;
         if (required > segments_.capacity()) {
-            segments_.reserve(required);
+            // Individual frame submissions share the same growth policy as a
+            // preflighted batch, so a burst does not reallocate for every frame.
+            const auto capacity = segments_.capacity();
+            const auto increment = capacity / 2;
+            const auto grown = capacity > segments_.max_size() - increment
+                                   ? segments_.max_size()
+                                   : capacity + increment;
+            segments_.reserve(std::max(required, grown));
         }
     }
 
@@ -153,8 +160,7 @@ public:
         appendRaw(std::string_view(header.data(), header.size()));
         appendRaw(first);
         appendRaw(second);
-        segments_.push_back(Segment{begin, bytes_.size(), begin + kHttp2FrameHeaderBytes,
-            bytes_.size(), streamId, type == Http2FrameType::kData});
+        segments_.push_back(Segment{begin, bytes_.size(), streamId, type == Http2FrameType::kData});
     }
     void appendGoawayFrame(
         std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug = {});
@@ -194,7 +200,7 @@ public:
                 const auto& segment = segments_[segmentOffset_ + i];
                 if (segment.isData) {
                     observer(observerContext, segment.streamId,
-                        segment.payloadEnd - segment.payloadBegin);
+                        segment.end - segment.begin - kHttp2FrameHeaderBytes);
                 }
             }
         }
@@ -206,11 +212,11 @@ public:
         std::size_t total = 0;
         for (std::size_t index = segmentOffset_; index < segments_.size(); ++index) {
             const auto& segment = segments_[index];
-            if (!segment.isData || segment.streamId != streamId || consumed_ >= segment.payloadEnd) {
+            if (!segment.isData || segment.streamId != streamId || consumed_ >= segment.end) {
                 continue;
             }
-            const auto begin = std::max(consumed_, segment.payloadBegin);
-            total += segment.payloadEnd - begin;
+            const auto begin = std::max(consumed_, segment.begin + kHttp2FrameHeaderBytes);
+            total += segment.end - begin;
         }
         return total;
     }
@@ -240,9 +246,6 @@ private:
             auto& segment = segments_[index];
             segment.begin = segment.begin > prefix ? segment.begin - prefix : 0;
             segment.end -= prefix;
-            segment.payloadBegin =
-                segment.payloadBegin > prefix ? segment.payloadBegin - prefix : 0;
-            segment.payloadEnd -= prefix;
         }
         segments_.erase(segments_.begin(),
             segments_.begin() + static_cast<std::ptrdiff_t>(segmentOffset_));

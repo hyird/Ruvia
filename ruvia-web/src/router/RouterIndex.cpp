@@ -9,8 +9,8 @@
 namespace ruvia {
 namespace {
 
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
-constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+constexpr std::uint64_t fnv_offset = 1469598103934665603ULL;
+constexpr std::uint64_t fnv_prime = 1099511628211ULL;
 
 }  // namespace
 
@@ -91,7 +91,8 @@ detail::RouteResolution detail::RouteTable::resolveExtensionMethod(
     // The path exists under other methods, so this is 405 rather than 404. The
     // mask cannot carry extension tokens; dispatch adds them to Allow from
     // extensionMethodsFor().
-    auto methodMask = allowedMethods(path, HttpKnownMethod::kUnknown);
+    const auto hash = plan_->staticMethodMask_ != 0 ? path_hash(path) : 0;
+    auto methodMask = allowedMethods(path, HttpKnownMethod::kUnknown, hash);
     const bool extensionRoutes = hasExtensionRoutesFor(path);
     if (methodMask != 0 || extensionRoutes) {
         methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
@@ -158,8 +159,13 @@ detail::RouteResolution detail::RouteTable::resolve(
     if (method == HttpKnownMethod::kOptions && path == "*") {
         return RouteResolution{};
     }
-    if (const auto* route = findStaticRoute(method, path); route != nullptr) {
-        return RouteResolution::resolved(*route);
+    const bool has_static_method = isRoutableMethod(method) &&
+                                   (plan_->staticMethodMask_ & (1U << methodIndex(method))) != 0;
+    auto hash = has_static_method ? path_hash(path) : 0;
+    if (has_static_method) {
+        if (const auto* route = findStaticRoute(method, path, hash); route != nullptr) {
+            return RouteResolution::resolved(*route);
+        }
     }
 
     RouteMatch match;
@@ -168,7 +174,21 @@ detail::RouteResolution detail::RouteTable::resolve(
         return RouteResolution::resolved(*dynamicRoute, std::move(match));
     }
 
-    auto methodMask = allowedMethods(path, method);
+    if (!has_static_method && plan_->staticMethodMask_ != 0) {
+        hash = path_hash(path);
+    }
+    if (method == HttpKnownMethod::kHead) {
+        const auto* fallback = (plan_->staticMethodMask_ & (1U << methodIndex(HttpKnownMethod::kGet))) != 0
+                                   ? findStaticRoute(HttpKnownMethod::kGet, path, hash)
+                                   : nullptr;
+        if (fallback == nullptr) {
+            fallback = findDynamicRoute(HttpKnownMethod::kGet, path, match);
+        }
+        if (fallback != nullptr && supports_head_fallback(*fallback)) {
+            return RouteResolution::resolved(*fallback, std::move(match));
+        }
+    }
+    auto methodMask = allowedMethods(path, method, hash);
     // A resource may be served only by extension methods. It still exists, so
     // an unsupported known method is 405 and OPTIONS must answer with Allow --
     // the mask alone cannot tell that apart from no resource at all.
@@ -187,59 +207,54 @@ bool detail::RouteTable::isRoutableMethod(HttpKnownMethod method) noexcept {
     return methodIndex(method) < kRoutableMethodCount;
 }
 
-std::uint64_t detail::RouteTable::routeHash(
-    HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept {
-    auto hash = kFnvOffset ^ seed;
-    hash ^= static_cast<std::uint64_t>(method);
-    hash *= kFnvPrime;
+bool detail::RouteTable::supports_head_fallback(const RouteEntry& route) noexcept {
+    // Streaming, SSE and WebSocket endpoints require an explicit HEAD handler;
+    // the ordinary GET handler borrows the original HEAD request unchanged.
+    return route.method() == HttpKnownMethod::kGet && route.endpoint().buffered() != nullptr;
+}
+
+std::uint64_t detail::RouteTable::path_hash(std::string_view path) noexcept {
+    auto hash = fnv_offset;
 
     for (const unsigned char c : path) {
         hash ^= c;
-        hash *= kFnvPrime;
+        hash *= fnv_prime;
     }
 
+    // MurmurHash3's public-domain fmix64 spreads common path prefixes across
+    // the low bits used by the power-of-two table.
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
     return hash;
 }
 
-std::size_t detail::RouteTable::nextPowerOfTwo(std::size_t value) noexcept {
-    return std::bit_ceil(value);
+std::uint64_t detail::RouteTable::route_hash(
+    HttpKnownMethod method, std::uint64_t hash) noexcept {
+    return hash ^ (static_cast<std::uint64_t>(method) * fnv_prime);
 }
 
 const detail::RouteEntry* detail::RouteTable::findStaticRoute(
-    HttpKnownMethod method, std::string_view path) const noexcept {
-    if (!isRoutableMethod(method)) {
-        return nullptr;
-    }
-    if ((plan_->staticMethodMask_ & (1U << methodIndex(method))) == 0) {
-        return nullptr;
-    }
-
-    // buildPerfectHash covers every static route or fails the build outright, so
-    // a miss here is a miss: there is no second static index to consult.
-    return findPerfect(method, path);
-}
-
-const detail::RouteEntry* detail::RouteTable::findPerfect(
-    HttpKnownMethod method, std::string_view path) const noexcept {
-    if (plan_->exactSlots_.empty()) {
-        return nullptr;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(routeHash(method, path, plan_->exactSeed_)) & plan_->exactMask_;
-    const auto routeIndex = plan_->exactSlots_[index].routeIndex;
-    if (routeIndex != kNoRouteIndex) {
-        const auto& route = routes_[routeIndex];
-        if (route.method() == method && route.path() == path) {
+    HttpKnownMethod method, std::string_view path, std::uint64_t hash) const noexcept {
+    const auto key_hash = route_hash(method, hash);
+    auto slot_index = static_cast<std::size_t>(key_hash) & plan_->static_slot_mask_;
+    for (;;) {
+        const auto& slot = plan_->static_slots_[slot_index];
+        if (slot.route_index_ == kNoRouteIndex) {
+            return nullptr;
+        }
+        const auto& route = routes_[slot.route_index_];
+        if (slot.hash_ == key_hash && route.method() == method && route.path() == path) {
             return &route;
         }
+        slot_index = (slot_index + 1) & plan_->static_slot_mask_;
     }
-
-    return nullptr;
 }
 
 std::uint32_t detail::RouteTable::allowedMethods(
-    std::string_view path, HttpKnownMethod requestedMethod) const noexcept {
+    std::string_view path, HttpKnownMethod requestedMethod, std::uint64_t hash) const noexcept {
     std::uint32_t mask = 0;
     auto candidateMask = plan_->staticMethodMask_ | plan_->dynamicMethodMask_;
     // Keep OPTIONS in the candidate mask: a path whose only registered method is
@@ -260,12 +275,17 @@ std::uint32_t detail::RouteTable::allowedMethods(
         // resolve() already proved requestedMethod has no route for this path, so it
         // was cleared from the candidate mask above.
         const bool hasStaticRoutes = (plan_->staticMethodMask_ & methodBit) != 0;
-        const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path) : nullptr;
-        const auto dynamicRouteIndex = (plan_->dynamicMethodMask_ & methodBit) != 0
+        const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path, hash) : nullptr;
+        const auto dynamicRouteIndex = staticRoute == nullptr && (plan_->dynamicMethodMask_ & methodBit) != 0
                                            ? findDynamicNodeNoParams(plan_->dynamicRoots_[i], path)
                                            : kNoRouteIndex;
-        if (staticRoute != nullptr || dynamicRouteIndex != kNoRouteIndex) {
+        const auto* route = staticRoute != nullptr ? staticRoute
+                                                   : (dynamicRouteIndex != kNoRouteIndex ? &routes_[dynamicRouteIndex] : nullptr);
+        if (route != nullptr) {
             mask |= 1U << i;
+            if (supports_head_fallback(*route)) {
+                mask |= 1U << methodIndex(HttpKnownMethod::kHead);
+            }
         }
     }
     return mask;

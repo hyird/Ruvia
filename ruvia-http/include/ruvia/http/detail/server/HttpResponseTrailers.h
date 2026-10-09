@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <concepts>
 #include <exception>
 #include <expected>
@@ -12,43 +11,16 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponseTrailerSection.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
+#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
-
-// A valid field name is a non-empty RFC 9110 token. isHttpTokenChar rejects ':',
-// which also keeps HTTP/2 pseudo-headers out of a trailer section (RFC 9113
-// §8.1). Reuses the parser's shared tchar table.
-[[nodiscard]] inline bool isValidResponseTrailerName(std::string_view name) noexcept {
-    if (name.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(
-        name, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
-}
-
-[[nodiscard]] inline bool responseTrailerValueHasLeadingOrTrailingWhitespace(
-    std::string_view value) noexcept {
-    const auto whitespace = [](char ch) noexcept { return ch == ' ' || ch == '\t'; };
-    return !value.empty() && (whitespace(value.front()) || whitespace(value.back()));
-}
-
-// A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
-// (VCHAR / obs-text) plus HTAB, and nothing else. The public API value also
-// represents the parsed field value, not field-line OWS; rejecting leading and
-// trailing SP/HTAB keeps the HTTP/1 chunked-trailer and HTTP/2 trailing-HEADERS
-// sinks on the same normalized contract.
-[[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    return !responseTrailerValueHasLeadingOrTrailingWhitespace(value) &&
-           std::ranges::all_of(value, [](char ch) noexcept {
-               return isHttpFieldValueChar(static_cast<unsigned char>(ch));
-           });
-}
 
 // Fields that must never appear in a trailer section because they govern message
 // framing, routing, authentication, response controls, or content format
@@ -109,13 +81,18 @@ namespace ruvia::detail {
         [](std::string_view name) noexcept { return isForbiddenResponseTrailerName(name); });
 }
 
+// Name syntax is established by the field API or the wire parser's token scan.
+[[nodiscard]] inline bool response_trailer_content_valid(
+    std::string_view name, std::string_view value) noexcept {
+    return !isForbiddenResponseTrailerName(name) && is_valid_http_field_value(value);
+}
+
 // True if (name, value) is an acceptable response trailer field. Shared by the
 // HTTP/1.1 chunked-trailer and HTTP/2 trailing-HEADERS sinks so both transports
 // enforce the same rules.
 [[nodiscard]] inline bool responseTrailerFieldValid(
     std::string_view name, std::string_view value) noexcept {
-    return isValidResponseTrailerName(name) && !isForbiddenResponseTrailerName(name) &&
-           isValidResponseTrailerValue(value);
+    return is_valid_http_field_name(name) && response_trailer_content_valid(name, value);
 }
 
 // Visit a parsed HTTP/1 chunked response trailer block. The input is the bytes
@@ -142,18 +119,15 @@ template <typename Visitor>
         const auto line = lineEnd == std::string_view::npos
                               ? trailers.substr(cursor)
                               : trailers.substr(cursor, lineEnd - cursor);
-        if (line.empty() || line.front() == ' ' || line.front() == '\t') {
-            return false;
-        }
-
-        const auto colon = line.find(':');
-        if (colon == std::string_view::npos || colon == 0) {
+        // Finding the separator also proves that the complete name is a token.
+        const auto colon = http_token_prefix_size(line);
+        if (colon == 0 || colon == line.size() || line[colon] != ':') {
             return false;
         }
 
         const auto name = line.substr(0, colon);
         const auto value = httpTrimOws(line.substr(colon + 1));
-        if (!responseTrailerFieldValid(name, value) || !visitor(name, value)) {
+        if (!response_trailer_content_valid(name, value) || !visitor(name, value)) {
             return false;
         }
 
