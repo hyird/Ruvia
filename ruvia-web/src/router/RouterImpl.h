@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -46,7 +49,7 @@ class RouterImpl final {
 public:
     Router& owner;
 
-    explicit RouterImpl(Router& router) noexcept;
+    explicit RouterImpl(Router& router);
 
     RouterImpl(const RouterImpl&) = delete;
     RouterImpl& operator=(const RouterImpl&) = delete;
@@ -215,6 +218,7 @@ private:
 
     std::pmr::memory_resource* resource_{nullptr};
     std::pmr::vector<PendingRoute> pendingRoutes_;
+    std::optional<std::pmr::unordered_multimap<std::uint64_t, std::size_t>> pending_route_indices_;
     std::pmr::vector<MiddlewareLifetime> middlewareLifetimes_;
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewareDescriptors_;
     std::pmr::vector<RouteMiddleware> globalMiddlewareFrames_;

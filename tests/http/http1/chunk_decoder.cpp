@@ -206,6 +206,30 @@ RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
     RUVIA_CHECK(pending.empty());
 }
 
+RUVIA_TEST(chunked_request_trailer_names_preserve_fragment_and_pipeline_boundaries) {
+    for (const std::size_t length : {1U, 3U, 4U, 9U, 128U}) {
+        const std::string name(length, 'X');
+        const std::string trailers = name + ": \tfirst:second\t \r\nX-Next: done";
+        const std::string message = "0\r\n" + trailers + "\r\n\r\n";
+        const std::string wire = message + "NEXT";
+        for (std::size_t split = 0; split < message.size(); ++split) {
+            Http1ChunkedBodyDecoder decoder;
+            const auto first = decoder.decode(std::string_view(wire).substr(0, split));
+            RUVIA_CHECK(first.needMore() != nullptr);
+            RUVIA_CHECK(first.consumedBytes() <= split);
+            const auto last = decoder.decode(std::string_view(wire).substr(first.consumedBytes()));
+            RUVIA_CHECK(last.complete() != nullptr);
+            if (const auto* complete = last.complete()) {
+                RUVIA_CHECK_EQ(complete->trailers(), std::string_view(trailers));
+                RUVIA_CHECK_EQ(complete->trailers().data(), wire.data() + 3);
+                const auto consumed = first.consumedBytes() + complete->consumedBytes();
+                RUVIA_CHECK_EQ(consumed, message.size());
+                RUVIA_CHECK_EQ(std::string_view(wire).substr(consumed), std::string_view("NEXT"));
+            }
+        }
+    }
+}
+
 RUVIA_TEST(chunked_body_decoder_handles_deterministic_arbitrary_fragmented_bytes) {
     std::uint64_t state = 0x4348'554E'4B45'4455ULL;
     const auto next = [&state]() {

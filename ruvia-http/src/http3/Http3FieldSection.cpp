@@ -8,6 +8,8 @@
 
 #include "ruvia/http/Http3Qpack.h"
 
+#include "http3/qpack_static_table.h"
+
 namespace ruvia {
 namespace {
 
@@ -154,36 +156,18 @@ std::expected<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
 
 std::expected<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSection(
     std::span<const Http3FieldSectionFieldView> fields, std::pmr::memory_resource* resource) {
-    std::pmr::vector<char> output(resource != nullptr ? resource : std::pmr::get_default_resource());
-    output.push_back('\0');
-    output.push_back('\0');
+    std::pmr::vector<char> output(2, '\0', resource != nullptr ? resource : std::pmr::get_default_resource());
     for (const auto& field : fields) {
-        std::size_t exactIndex = 0;
-        std::size_t nameIndex = 0;
-        bool exactMatch = false;
-        bool nameMatch = false;
-        for (std::size_t index = 0; index < 99; ++index) {
-            const auto entry = http3QpackStaticEntry(index);
-            if (entry->name == field.name) {
-                if (!nameMatch) {
-                    nameIndex = index;
-                    nameMatch = true;
-                }
-                if (entry->value == field.value) {
-                    exactIndex = index;
-                    exactMatch = true;
-                    break;
-                }
-            }
-        }
-        if (exactMatch && !field.neverIndexed) {
-            const auto encoded = appendInteger(output, 6, 0xc0, exactIndex);
+        const auto match = detail::qpack_static_fields.find(field.name,
+            field.neverIndexed ? std::nullopt : std::optional(field.value));
+        if (match && match->exact_index) {
+            const auto encoded = appendInteger(output, 6, 0xc0, *match->exact_index);
             if (!encoded) {
                 return std::unexpected(encoded.error());
             }
-        } else if (nameMatch) {
+        } else if (match) {
             const auto encoded = appendInteger(output, 4,
-                static_cast<std::uint8_t>(0x50U | (field.neverIndexed ? 0x20U : 0U)), nameIndex);
+                static_cast<std::uint8_t>(0x50U | (field.neverIndexed ? 0x20U : 0U)), match->name_index);
             if (!encoded) {
                 return std::unexpected(encoded.error());
             }

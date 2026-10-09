@@ -1,6 +1,7 @@
 #include <array>
 #include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/Http3Qpack.h"
@@ -166,4 +167,44 @@ RUVIA_TEST(http3_qpack_string_literals_support_raw_and_shared_huffman) {
                 ruvia::Http3QpackError::kOutputTooSmall);
     RUVIA_CHECK(ruvia::encodeHttp3QpackInteger(shortOutput, 7, 0, 1000).error() ==
                 ruvia::Http3QpackError::kOutputTooSmall);
+}
+
+RUVIA_TEST(http3_qpack_huffman_strings_support_each_prefix_width_and_output_reuse) {
+    // RFC 7541 C.4.1, reused by QPACK with the representation's own prefix width.
+    constexpr std::array<char, 12> payload{
+        '\xf1', '\xe3', '\xc2', '\xe5', '\xf2', '\x3a',
+        '\x6b', '\xa0', '\xab', '\x90', '\xf4', '\xff'};
+    std::pmr::string decoded;
+    for (std::uint8_t prefix_bits = 1; prefix_bits <= 7; ++prefix_bits) {
+        std::array<char, 16> prefix{};
+        const auto written = ruvia::encodeHttp3QpackInteger(
+            prefix, prefix_bits, static_cast<std::uint8_t>(1U << prefix_bits), payload.size());
+        RUVIA_CHECK(written.has_value());
+        if (!written) {
+            continue;
+        }
+        std::string encoded(prefix.data(), *written);
+        encoded.append(payload.data(), payload.size());
+        decoded = "old output";
+        const auto consumed = ruvia::decodeHttp3QpackString(encoded, prefix_bits, decoded);
+        RUVIA_CHECK(consumed.has_value());
+        if (consumed) {
+            RUVIA_CHECK_EQ(*consumed, encoded.size());
+        }
+        RUVIA_CHECK_EQ(decoded, std::string_view("www.example.com"));
+
+        encoded.back() = '\xfe';
+        const auto invalid = ruvia::decodeHttp3QpackString(encoded, prefix_bits, decoded);
+        RUVIA_CHECK(!invalid.has_value());
+        if (!invalid) {
+            RUVIA_CHECK(invalid.error() == ruvia::Http3QpackError::kInvalidHuffman);
+        }
+        RUVIA_CHECK(decoded.empty());
+
+        decoded = "old output";
+        const std::array<char, 1> empty{static_cast<char>(1U << prefix_bits)};
+        const auto consumed_empty = ruvia::decodeHttp3QpackString(empty, prefix_bits, decoded);
+        RUVIA_CHECK(consumed_empty.has_value());
+        RUVIA_CHECK(decoded.empty());
+    }
 }

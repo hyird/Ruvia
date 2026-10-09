@@ -1,12 +1,14 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpParseError.h"
 
 #include "failing_memory_resource.h"
@@ -274,6 +276,44 @@ RUVIA_TEST(header_block_parses_valid_request) {
     RUVIA_CHECK(result.hasHost);
     RUVIA_CHECK(result.hasContentLength);
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
+}
+
+RUVIA_TEST(header_block_parser_preserves_short_and_long_field_values) {
+    for (const std::size_t length : {0U, 1U, 7U, 8U, 15U, 16U, 31U, 32U, 4096U}) {
+        std::string value(length, 'a');
+        for (std::size_t index = 1; index + 1 < length; ++index) {
+            value[index] = index % 3 == 0 ? '\t' : index % 3 == 1 ? ' '
+                                                                  : '\xe9';
+        }
+        std::string input = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Value: \t";
+        input += value;
+        input += " \t\r\nX-Next: done\r\n\r\n";
+        const auto expected_header_bytes = input.size();
+        input.push_back('\0');
+        input.push_back('\x7f');
+        ParsedRequestHeaderBlock block{};
+        const auto header_bytes = findHttpHeaderEnd(input, 0);
+        RUVIA_CHECK_EQ(header_bytes, expected_header_bytes);
+        RUVIA_CHECK(!parseHttpHeaderBlock(input, header_bytes, block).has_value());
+        RUVIA_CHECK_EQ(block.headerCount, std::size_t{3});
+        RUVIA_CHECK_EQ(block.headers[1].name.bind(input), std::string_view("X-Value"));
+        RUVIA_CHECK_EQ(block.headers[1].value.bind(input), std::string_view(value));
+        RUVIA_CHECK_EQ(block.headers[2].value.bind(input), std::string_view("done"));
+    }
+}
+
+RUVIA_TEST(header_block_parser_rejects_controls_at_field_value_word_boundaries) {
+    for (const unsigned invalid : {0U, 10U, 13U, 31U, 127U}) {
+        for (const std::size_t position : {0U, 1U, 6U, 7U, 8U, 9U, 14U, 15U, 16U, 31U,
+                 32U, 63U, 64U, 4095U}) {
+            std::string value(4096, 'a');
+            value[position] = static_cast<char>(invalid);
+            const std::string input = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Value: " + value + "\r\n\r\n";
+            ParsedRequestHeaderBlock block{};
+            const auto error = parseHttpHeaderBlock(input, findHttpHeaderEnd(input, 0), block);
+            RUVIA_CHECK(error == HttpParseError::kInvalidHeader);
+        }
+    }
 }
 
 RUVIA_TEST(header_block_parser_handles_deterministic_arbitrary_header_bytes) {
@@ -676,4 +716,41 @@ RUVIA_TEST(find_http_header_end_incremental_search) {
     for (std::size_t offset = 0; offset < req.size(); ++offset) {
         RUVIA_CHECK_EQ(findHttpHeaderEnd(req, offset), req.size());
     }
+}
+
+RUVIA_TEST(find_http_header_end_respects_fragment_bounds) {
+    RUVIA_CHECK_EQ(findHttpHeaderEnd({}, 0), std::string_view::npos);
+    for (std::size_t length = 0; length < 65; ++length) {
+        std::string wire(length, 'x');
+        if (length > 3) {
+            wire[length / 2] = '\n';
+        }
+        wire.push_back('\0');
+        wire.append("\r\n\r\n");
+        for (std::size_t split = 0; split < wire.size(); ++split) {
+            RUVIA_CHECK_EQ(findHttpHeaderEnd(std::string_view(wire).substr(0, split), 0), std::string_view::npos);
+            RUVIA_CHECK_EQ(findHttpHeaderEnd(wire, split), wire.size());
+        }
+    }
+}
+
+RUVIA_TEST(find_http_header_end_selects_next_pipeline_message) {
+    const std::string_view request = "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n";
+    const std::string wire = std::string(request) + std::string(request);
+    for (std::size_t offset = 0; offset < wire.size(); ++offset) {
+        RUVIA_CHECK_EQ(findHttpHeaderEnd(wire, offset), offset < request.size() ? request.size() : wire.size());
+    }
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(wire, wire.size()), std::string_view::npos);
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(wire, std::numeric_limits<std::size_t>::max()), std::string_view::npos);
+}
+
+RUVIA_TEST(find_http_header_end_enforces_header_byte_limit) {
+    const std::string within_limit = std::string(ruvia::kMaxHttpHeaderBytes - 4, 'x') + "\r\n\r\n";
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(within_limit, 0), ruvia::kMaxHttpHeaderBytes);
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(within_limit, within_limit.size() - 1), ruvia::kMaxHttpHeaderBytes);
+    const std::string with_body = within_limit + "body\r\n\r\n";
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(with_body, 0), ruvia::kMaxHttpHeaderBytes);
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(with_body, within_limit.size()), std::string_view::npos);
+    const std::string over_limit = "x" + within_limit;
+    RUVIA_CHECK_EQ(findHttpHeaderEnd(over_limit, 0), std::string_view::npos);
 }

@@ -213,16 +213,21 @@ RUVIA_TEST(http3_client_response_validates_all_trailers_before_callback) {
     RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kExcessiveLoad);
     RUVIA_CHECK(limitedEvents.trailers.empty());
 
-    const std::array<ruvia::Http3FieldSectionFieldView, 2> invalidFields{{{"x-good", "ok", false}, {"host", "bad", false}}};
-    auto invalidEncoded = fieldSection(invalidFields);
-    auto invalidFrame = frame(1, head);
-    auto invalidTrailerFrame = frame(1, invalidEncoded);
-    invalidFrame.insert(invalidFrame.end(), invalidTrailerFrame.begin(), invalidTrailerFrame.end());
-    Events rejectedEvents;
-    ruvia::Http3ClientResponse rejected(4, ruvia::HttpKnownMethod::kGet, &memory);
-    result = rejected.feed(invalidFrame, false, false, collect, &rejectedEvents);
-    RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kStreamError);
-    RUVIA_CHECK(rejectedEvents.trailers.empty());
+    constexpr std::array<std::string_view, 6> invalid_names{
+        "host", "X-Test", "x bad", ":status", std::string_view("x\0bad", 5), "\x80-name"};
+    for (const auto name : invalid_names) {
+        const std::array<ruvia::Http3FieldSectionFieldView, 2> invalid_fields{{{"x-good", "ok", false}, {name, "bad", false}}};
+        const auto invalid_encoded = fieldSection(invalid_fields);
+        auto invalid_frame = frame(1, head);
+        const auto invalid_trailer_frame = frame(1, invalid_encoded);
+        invalid_frame.insert(invalid_frame.end(), invalid_trailer_frame.begin(), invalid_trailer_frame.end());
+        Events rejected_events;
+        ruvia::Http3ClientResponse rejected(4, ruvia::HttpKnownMethod::kGet, &memory);
+        result = rejected.feed(invalid_frame, false, false, collect, &rejected_events);
+        RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kStreamError);
+        RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
+        RUVIA_CHECK(rejected_events.trailers.empty());
+    }
 }
 
 RUVIA_TEST(http3_client_response_trailer_storage_is_atomic_and_reclaimed_on_allocation_failure) {

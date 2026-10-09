@@ -19,55 +19,96 @@ using ruvia::detail::HttpResponseTrailerSectionError;
 using ruvia::detail::HttpResponseTrailerSectionFailure;
 using ruvia::detail::HttpResponseTrailerSectionResult;
 using ruvia::detail::isForbiddenResponseTrailerName;
-using ruvia::detail::isValidResponseTrailerName;
-using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::visitHttpResponseTrailerFields;
 
 }  // namespace
 
 RUVIA_TEST(response_trailer_name_is_a_token) {
-    RUVIA_CHECK(isValidResponseTrailerName("X-Trace-Id"));
-    RUVIA_CHECK(isValidResponseTrailerName("ETag"));
+    RUVIA_CHECK(responseTrailerFieldValid("X-Trace-Id", ""));
+    RUVIA_CHECK(responseTrailerFieldValid("ETag", ""));
     // Empty, whitespace, and control bytes are not tokens.
-    RUVIA_CHECK(!isValidResponseTrailerName(""));
-    RUVIA_CHECK(!isValidResponseTrailerName("bad name"));
-    RUVIA_CHECK(!isValidResponseTrailerName(std::string_view("x\x01y", 3)));
+    RUVIA_CHECK(!responseTrailerFieldValid("", ""));
+    RUVIA_CHECK(!responseTrailerFieldValid("bad name", ""));
+    RUVIA_CHECK(!responseTrailerFieldValid(std::string_view("x\x01y", 3), ""));
     // A colon is not a tchar, so pseudo-headers can never pass (RFC 9113 8.1).
-    RUVIA_CHECK(!isValidResponseTrailerName(":status"));
+    RUVIA_CHECK(!responseTrailerFieldValid(":status", ""));
 }
 
 RUVIA_TEST(response_trailer_value_rejects_splitting_bytes) {
-    RUVIA_CHECK(isValidResponseTrailerValue("plain-value"));
-    RUVIA_CHECK(isValidResponseTrailerValue(""));
-    // obs-text (high bytes) is permitted.
-    RUVIA_CHECK(isValidResponseTrailerValue(std::string_view("v\x80z", 3)));
-    // CR, LF, and NUL are forbidden — this is what stops response splitting.
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\rb", 3)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\nb", 3)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\r\nb", 4)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\0b", 3)));
-    // HTAB and SP are field-value bytes and stay allowed.
-    RUVIA_CHECK(isValidResponseTrailerValue(std::string_view("a\tb c", 5)));
-    // The other control bytes are not field-vchar either (RFC 9110 §5.5), so a
-    // non-splitting control like 0x01, VT (0x0B), FF (0x0C), or DEL (0x7F) must
-    // also be rejected -- matching the request-trailer and header-value checks.
-    RUVIA_CHECK(
-        !isValidResponseTrailerValue(std::string_view("a\x01"
-                                                      "b",
-            3)));
-    RUVIA_CHECK(
-        !isValidResponseTrailerValue(std::string_view("a\x0b"
-                                                      "b",
-            3)));
-    RUVIA_CHECK(
-        !isValidResponseTrailerValue(std::string_view("a\x0c"
-                                                      "b",
-            3)));
-    RUVIA_CHECK(
-        !isValidResponseTrailerValue(std::string_view("a\x7f"
-                                                      "b",
-            3)));
+    for (const auto value : {std::string_view("plain-value"), std::string_view{},
+             std::string_view("v\x80z", 3), std::string_view("a\tb c", 5)}) {
+        RUVIA_CHECK(responseTrailerFieldValid("x-trace", value));
+    }
+    // CR, LF, NUL, other controls and DEL are forbidden; internal HTAB,
+    // SP and obs-text above retain the common field-value contract.
+    for (const auto value : {std::string_view("a\rb", 3), std::string_view("a\nb", 3),
+             std::string_view("a\r\nb", 4), std::string_view("a\0b", 3),
+             std::string_view("a\x01"
+                              "b",
+                 3),
+             std::string_view("a\x0b"
+                              "b",
+                 3),
+             std::string_view("a\x0c"
+                              "b",
+                 3),
+             std::string_view("a\x7f"
+                              "b",
+                 3)}) {
+        RUVIA_CHECK(!responseTrailerFieldValid("x-trace", value));
+    }
+}
+
+RUVIA_TEST(response_trailer_values_validate_short_and_long_field_bytes) {
+    for (const std::size_t length : {1U, 2U, 3U, 31U, 32U, 33U, 34U, 35U, 64U, 4096U}) {
+        for (const auto position : {std::size_t{0}, length / 2, length - 1}) {
+            std::string value(length, 'x');
+            for (unsigned byte = 0; byte < 256; ++byte) {
+                value[position] = static_cast<char>(byte);
+                const bool whitespace = byte == '\t' || byte == ' ';
+                const bool allowed_byte = byte == '\t' || (byte >= 32 && byte != 127);
+                const bool allowed = allowed_byte &&
+                                     (!(position == 0 || position + 1 == length) || !whitespace);
+                RUVIA_CHECK_EQ(ruvia::isValidHttpHeaderValue(value), allowed);
+                RUVIA_CHECK_EQ(responseTrailerFieldValid("x-checksum", value), allowed);
+                const std::array fields{ruvia::HttpHeaderView("x-checksum", value)};
+                const auto section = httpResponseTrailerSection(fields);
+                RUVIA_CHECK_EQ(section.section() != nullptr, allowed);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(response_trailer_wire_names_require_tokens_before_the_separator) {
+    constexpr std::string_view punctuation = "!#$%&'*+-.^_`|~";
+    for (const std::size_t length : {1U, 2U, 3U, 4U, 5U, 8U, 9U, 16U, 64U, 128U}) {
+        for (const auto position : {std::size_t{0}, length / 2, length - 1}) {
+            for (unsigned byte = 0; byte < 256; ++byte) {
+                std::string name(length, 'x');
+                name[position] = static_cast<char>(byte);
+                const bool allowed = (byte >= '0' && byte <= '9') ||
+                                     (byte >= 'A' && byte <= 'Z') ||
+                                     (byte >= 'a' && byte <= 'z') ||
+                                     punctuation.find(static_cast<char>(byte)) != std::string_view::npos;
+                RUVIA_CHECK_EQ(ruvia::isValidHttpHeaderName(name), allowed);
+                if (byte == ':') {
+                    continue;  // A colon is the separator, not a candidate name byte.
+                }
+                const auto block = name + ": \tvalue\t \r\n";
+                std::size_t delivered = 0;
+                const auto valid = ruvia::detail::visitHttpResponseTrailerFields(
+                    block, [&](std::string_view parsed_name, std::string_view parsed_value) {
+                        ++delivered;
+                        RUVIA_CHECK_EQ(parsed_name, std::string_view(name));
+                        RUVIA_CHECK_EQ(parsed_value, "value");
+                        return true;
+                    });
+                RUVIA_CHECK_EQ(valid, allowed);
+                RUVIA_CHECK_EQ(delivered, allowed ? std::size_t{1} : std::size_t{0});
+            }
+        }
+    }
 }
 
 RUVIA_TEST(response_trailer_forbidden_names) {

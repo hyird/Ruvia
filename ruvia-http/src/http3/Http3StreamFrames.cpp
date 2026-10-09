@@ -43,13 +43,9 @@ Http3StreamFrames::Http3StreamFrames(Http3StreamKind kind, std::pmr::memory_reso
       resource_(resource),
       fieldSection_(resource) {}
 
-Http3StreamFrameStatus Http3StreamFrames::beginFrame() {
-    const auto decoded = decodeHttp3FrameHeader(std::span<const char>(header_, headerBytesUsed_));
-    if (!decoded) {
-        return Http3StreamFrameStatus::kFrameError;
-    }
-    frameType_ = decoded->type;
-    frameLength_ = decoded->length;
+Http3StreamFrameStatus Http3StreamFrames::beginFrame(std::uint64_t type, std::uint64_t length) {
+    frameType_ = type;
+    frameLength_ = length;
     remaining_ = frameLength_;
 
     // HTTP/2 frame types are reserved in HTTP/3 and cannot be skipped as extensions.
@@ -117,7 +113,6 @@ Http3StreamFrameStatus Http3StreamFrames::finishFrame() noexcept {
     }
     phase_ = Phase::kFrameHeader;
     headerBytesUsed_ = 0;
-    headerBytesNeeded_ = 0;
     frameLength_ = 0;
     remaining_ = 0;
     return Http3StreamFrameStatus::kNeedMoreData;
@@ -151,21 +146,30 @@ Http3StreamFrameStatus Http3StreamFrames::feed(std::span<const char> input, bool
             if (offset == input.size()) {
                 break;
             }
+            // Complete headers borrow the current input. Only a fragmented
+            // header needs to survive this feed in decoder-owned storage.
+            if (headerBytesUsed_ == 0) {
+                if (const auto decoded = decodeHttp3FrameHeader(input.subspan(offset))) {
+                    offset += decoded->encodedBytes;
+                    const auto status = beginFrame(decoded->type, decoded->length);
+                    if (status != Http3StreamFrameStatus::kNeedMoreData) {
+                        phase_ = Phase::kFailed;
+                        return status;
+                    }
+                    continue;
+                }
+            }
             header_[headerBytesUsed_++] = input[offset++];
-            const auto typeWidth = std::size_t{1} << (static_cast<std::uint8_t>(header_[0]) >> 6);
-            if (headerBytesUsed_ < typeWidth) {
+            const auto type_width = std::size_t{1} << (static_cast<std::uint8_t>(header_[0]) >> 6);
+            if (headerBytesUsed_ <= type_width) {
                 continue;
             }
-            if (headerBytesUsed_ == typeWidth) {
+            const auto length_width = std::size_t{1} << (static_cast<std::uint8_t>(header_[type_width]) >> 6);
+            if (headerBytesUsed_ < type_width + length_width) {
                 continue;
             }
-            const auto lengthOffset = typeWidth;
-            const auto lengthWidth = std::size_t{1} << (static_cast<std::uint8_t>(header_[lengthOffset]) >> 6);
-            headerBytesNeeded_ = typeWidth + lengthWidth;
-            if (headerBytesUsed_ < headerBytesNeeded_) {
-                continue;
-            }
-            const auto status = beginFrame();
+            const auto decoded = decodeHttp3FrameHeader(std::span<const char>(header_, headerBytesUsed_));
+            const auto status = beginFrame(decoded->type, decoded->length);
             if (status != Http3StreamFrameStatus::kNeedMoreData) {
                 phase_ = Phase::kFailed;
                 return status;

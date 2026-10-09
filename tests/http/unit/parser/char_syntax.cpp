@@ -1,5 +1,7 @@
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/util/Hex.h"
@@ -47,6 +49,59 @@ RUVIA_TEST(http_field_value_char_table) {
     for (const int c : {0x00, 0x0d, 0x0a, 0x01, 0x08, 0x0b, 0x0c, 0x1f, 0x7f}) {
         RUVIA_CHECK(!fieldValue(c));
     }
+}
+
+RUVIA_TEST(http_field_value_validation_classifies_adjacent_bytes_at_each_alignment) {
+    const auto allowed = [](unsigned byte) {
+        return byte == 9 || (byte >= 32 && byte != 127);
+    };
+    std::string value(96, 'a');
+    for (std::size_t alignment = 0; alignment < 8; ++alignment) {
+        const auto position = 32 + alignment;
+        for (unsigned first = 0; first < 256; ++first) {
+            value[position] = static_cast<char>(first);
+            for (unsigned second = 0; second < 256; ++second) {
+                value[position + 1] = static_cast<char>(second);
+                RUVIA_CHECK_EQ(ruvia::detail::is_valid_http_field_value_bytes(value),
+                    allowed(first) && allowed(second));
+            }
+        }
+        value[position] = 'a';
+        value[position + 1] = 'a';
+    }
+}
+
+RUVIA_TEST(http_field_value_validation_respects_borrowed_ranges) {
+    RUVIA_CHECK(ruvia::detail::is_valid_http_field_value_bytes({}));
+    for (std::size_t begin = 0; begin < 8; ++begin) {
+        for (std::size_t length = 0; length < 96; ++length) {
+            std::string storage(begin + length + 8, '\x7f');
+            for (std::size_t index = 0; index < length; ++index) {
+                storage[begin + index] = 'a';
+            }
+            const std::string_view input(storage.data() + begin, length);
+            RUVIA_CHECK(ruvia::detail::is_valid_http_field_value_bytes(input));
+            if (length != 0) {
+                storage[begin + length - 1] = '\0';
+                RUVIA_CHECK(!ruvia::detail::is_valid_http_field_value_bytes(input));
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http_field_value_validation_accepts_tabs_and_obs_text_in_long_values) {
+    std::string value(4096, 'a');
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        value[index] = static_cast<char>(0x80 + index % 128);
+    }
+    for (const std::size_t position : {0U, 31U, 32U, 33U, 63U, 64U, 4095U}) {
+        value[position] = '\t';
+    }
+    RUVIA_CHECK(ruvia::detail::is_valid_http_field_value_bytes(value));
+    value[3072] = '\x7f';
+    RUVIA_CHECK(!ruvia::detail::is_valid_http_field_value_bytes(value));
+    value.assign(4096, '\t');
+    RUVIA_CHECK(ruvia::detail::is_valid_http_field_value_bytes(value));
 }
 
 RUVIA_TEST(http_hex_digit_and_value) {

@@ -19,6 +19,7 @@
 #include "coding/HttpContentLength.h"
 #include "field/HttpCorsFields.h"
 #include "field/HttpOriginFields.h"
+#include "field/binary_field_name.h"
 #include "parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -87,11 +88,6 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         return false;
     }
 
-    for (const unsigned char ch : field.name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            return fail(state);
-        }
-    }
     if (field.name.front() == ':') {
         if (state.ordinarySeen) {
             return fail(state);
@@ -144,7 +140,7 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     }
 
     state.ordinarySeen = true;
-    if (!detail::isValidHttpHeaderName(field.name)) {
+    if (!detail::is_valid_binary_field_name(field.name)) {
         return fail(state);
     }
     if (detail::is_forbidden_http_binary_connection_field(field.name)) {

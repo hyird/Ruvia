@@ -57,19 +57,18 @@ void HpackEncoder::encodeHeader(
     // rejecting it here keeps the output unchanged when the input is invalid.
     validateHpackStringLength(name);
     validateHpackStringLength(value);
-    const auto match = hpackFindStaticHeaderMatch(name, value);
-    if (match.exactIndex != 0) {
+    const auto match = hpack_static_fields.find(name, value);
+    if (match && match->exact_index) {
         // A fully indexed static-table entry carries no field value on the wire, so
         // there is nothing for an intermediary to index; the never-indexed hint does
         // not apply.
-        encodeIndexed(out, match.exactIndex);
+        encodeIndexed(out, static_cast<std::uint32_t>(*match->exact_index) + 1);
         return;
     }
 
     const bool neverIndexed = hpackHeaderNameIsSensitive(name);
-    const auto nameIndex = match.nameIndex;
-    if (nameIndex != 0) {
-        encodeHeaderWithNameIndex(out, nameIndex, value, neverIndexed);
+    if (match) {
+        encodeHeaderWithNameIndex(out, static_cast<std::uint32_t>(match->name_index) + 1, value, neverIndexed);
         return;
     }
     encodeInteger(

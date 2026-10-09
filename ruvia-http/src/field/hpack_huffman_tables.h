@@ -6,7 +6,7 @@
 namespace ruvia::detail {
 
 // Normative HPACK Huffman code table from RFC 7541 Appendix B.
-inline constexpr std::array<std::uint32_t, 257> kHpackHuffmanCodes{{
+inline constexpr std::array<std::uint32_t, 257> hpack_huffman_codes{{
     0x1ff8,
     0x7fffd8,
     0xfffffe2,
@@ -266,7 +266,7 @@ inline constexpr std::array<std::uint32_t, 257> kHpackHuffmanCodes{{
     0x3fffffff,
 }};
 
-inline constexpr std::array<std::uint8_t, 257> kHpackHuffmanLengths{{
+inline constexpr std::array<std::uint8_t, 257> hpack_huffman_lengths{{
     13,
     23,
     28,

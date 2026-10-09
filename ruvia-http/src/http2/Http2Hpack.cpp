@@ -5,6 +5,7 @@
 
 #include "ruvia/http/detail/util/PmrResource.h"
 
+#include "field/hpack_huffman.h"
 #include "util/PmrString.h"
 
 namespace ruvia::detail {
@@ -106,13 +107,15 @@ HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor
 
     const std::string_view encoded(reinterpret_cast<const char*>(cursor), size);
     cursor += size;
-    if (!huffman) {
+    if (!huffman || encoded.empty()) {
         value = encoded;
         return std::nullopt;
     }
 
-    if (const auto error = decodeHuffman(encoded, scratch); error.has_value()) {
-        return error;
+    scratch.clear();
+    scratch.reserve(encoded.size());
+    if (!append_hpack_huffman(encoded, scratch)) {
+        return HpackDecodeError::kInvalidHuffman;
     }
     value = scratch;
     return std::nullopt;

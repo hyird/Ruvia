@@ -14,6 +14,8 @@
 #include "ruvia/http/Http3Qpack.h"
 #include "ruvia/http/Http3VarInt.h"
 
+#include "http3/qpack_static_table.h"
+
 namespace ruvia {
 namespace {
 using Error = Http3QpackConnectionError;
@@ -112,22 +114,14 @@ struct Table {
         return true;
     }
 };
-std::optional<std::size_t> staticIndex(std::string_view name, std::optional<std::string_view> value) {
-    for (std::size_t i = 0; i < 99; ++i) {
-        auto e = http3QpackStaticEntry(i);
-        if (e->name == name && (!value || *value == e->value)) {
-            return i;
-        }
-    }
-    return {};
-}
-void staticLiteral(std::pmr::vector<char>& out, Http3FieldSectionFieldView field) {
-    if (auto exact = staticIndex(field.name, field.value); exact && !field.neverIndexed) {
-        integer(out, 6, 0xc0, *exact);
+void staticLiteral(std::pmr::vector<char>& out, Http3FieldSectionFieldView field,
+    std::optional<detail::static_field_match> match) {
+    if (match && match->exact_index) {
+        integer(out, 6, 0xc0, *match->exact_index);
         return;
     }
-    if (auto name = staticIndex(field.name, {})) {
-        integer(out, 4, field.neverIndexed ? 0x70 : 0x50, *name);
+    if (match) {
+        integer(out, 4, field.neverIndexed ? 0x70 : 0x50, match->name_index);
     } else {
         literal(out, 3, field.neverIndexed ? 0x30 : 0x20, field.name);
     }
@@ -587,8 +581,10 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
     std::pmr::vector<std::uint64_t> references(0, resource_);
     std::uint64_t required = 0;
     for (const auto& f : fields) {
-        if (!mayReference || f.neverIndexed || staticIndex(f.name, f.value)) {
-            staticLiteral(body, f);
+        const auto static_match = detail::qpack_static_fields.find(f.name,
+            f.neverIndexed ? std::nullopt : std::optional(f.value));
+        if (!mayReference || f.neverIndexed || (static_match && static_match->exact_index)) {
+            staticLiteral(body, f, static_match);
             continue;
         }
         Entry* selected = nullptr;
@@ -608,7 +604,7 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
             selected = &s.table.entries.back();
         }
         if (!selected) {
-            staticLiteral(body, f);
+            staticLiteral(body, f, static_match);
             continue;
         }
         // Base is zero, so all dynamic references use post-base indexing.
@@ -617,9 +613,24 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         references.push_back(selected->absolute);
         ++selected->references;
     }
+    std::array<char, 22> prefix;
+    const auto insert_count_size = encodeHttp3QpackInteger(prefix, 8, 0,
+        required ? required % (2 * (s.config.maxTableCapacity / 32)) + 1 : 0);
+    if (!insert_count_size) {
+        throw std::logic_error("QPACK field section prefix encoding failed");
+    }
+    const auto base_size = encodeHttp3QpackInteger(std::span(prefix).subspan(*insert_count_size),
+        7, required ? 0x80 : 0, required ? required - 1 : 0);
+    if (!base_size) {
+        throw std::logic_error("QPACK field section prefix encoding failed");
+    }
+    const auto prefix_size = *insert_count_size + *base_size;
     std::pmr::vector<char> output(0, output_resource);
-    integer(output, 8, 0, required ? required % (2 * (s.config.maxTableCapacity / 32)) + 1 : 0);
-    integer(output, 7, required ? 0x80 : 0, required ? required - 1 : 0);
+    if (body.size() > output.max_size() - prefix_size) {
+        throw std::length_error("QPACK field section exceeds the output size limit");
+    }
+    output.reserve(prefix_size + body.size());
+    output.insert(output.end(), prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(prefix_size));
     output.insert(output.end(), body.begin(), body.end());
     if (output.size() > limits.maxEncodedBytes) {
         for (auto index : references) {

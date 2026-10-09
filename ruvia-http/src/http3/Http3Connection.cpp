@@ -76,8 +76,8 @@ Http3ConnectionErrorCode mapControlError(Http3ControlStreamStatus status) noexce
     return Http3ConnectionErrorCode::kNoError;
 }
 
-bool valid_request_trailer(Http3FieldSectionFieldView field) noexcept {
-    return isValidHttpHeaderName(field.name) && isValidHttpHeaderValue(field.value) &&
+bool valid_request_trailer_policy(Http3FieldSectionFieldView field) noexcept {
+    return isValidHttpHeaderValue(field.value) &&
            !detail::isForbiddenHttpRequestTrailerName(field.name);
 }
 
@@ -122,7 +122,7 @@ struct Http3Connection::Impl final {
         void* callbackContext{nullptr};
     };
 
-    using trailer_collector = detail::http3_trailer_collector<valid_request_trailer>;
+    using trailer_collector = detail::http3_trailer_collector<valid_request_trailer_policy>;
 
     struct FeedGuard final {
         explicit FeedGuard(Impl& impl)

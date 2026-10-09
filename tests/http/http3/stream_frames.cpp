@@ -1,4 +1,5 @@
 #include <array>
+#include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -33,6 +34,40 @@ void collect(void* context, Http3StreamFrameEvent event) {
     events.ends.push_back(event.endFrame);
     events.fins.push_back(event.fin);
     events.trailers.push_back(event.trailers);
+}
+
+void append_varint(std::vector<char>& wire, std::uint64_t value, std::size_t width) {
+    const auto begin = wire.size();
+    wire.resize(begin + width);
+    for (std::size_t i = width; i != 0; --i) {
+        wire[begin + i - 1] = static_cast<char>(value & 0xff);
+        value >>= 8;
+    }
+    wire[begin] |= static_cast<char>(width == 1 ? 0 : width == 2 ? 0x40
+                                                  : width == 4   ? 0x80
+                                                                 : 0xc0);
+}
+
+void append_frame(std::vector<char>& wire, std::uint64_t type, std::string_view payload,
+    std::size_t type_width, std::size_t length_width) {
+    append_varint(wire, type, type_width);
+    append_varint(wire, payload.size(), length_width);
+    wire.insert(wire.end(), payload.begin(), payload.end());
+}
+
+struct paused_headers final {
+    Http3StreamFrames& decoder;
+    Events events;
+    bool pause_next = true;
+};
+
+void collect_and_pause(void* context, Http3StreamFrameEvent event) {
+    auto& state = *static_cast<paused_headers*>(context);
+    collect(&state.events, event);
+    if (event.kind == Http3StreamFrameEventKind::kHeaders && state.pause_next) {
+        state.pause_next = false;
+        state.decoder.pause();
+    }
 }
 
 }  // namespace
@@ -189,4 +224,94 @@ RUVIA_TEST(http3_stream_frames_skips_unknown_payload_without_buffering) {
         RUVIA_CHECK(decoder.feed(payload, false, collect, &events) == Http3StreamFrameStatus::kNeedMoreData);
     }
     RUVIA_CHECK_EQ(events.kinds.size(), std::size_t{1});
+}
+
+RUVIA_TEST(http3_stream_frames_accepts_all_varint_widths_at_every_input_split) {
+    std::pmr::unsynchronized_pool_resource resource;
+    for (std::size_t type_width : {1, 2, 4, 8}) {
+        for (std::size_t length_width : {1, 2, 4, 8}) {
+            std::vector<char> storage{'!'};
+            append_frame(storage, 1, "head", type_width, length_width);
+            append_frame(storage, 0, "body", type_width, length_width);
+            append_frame(storage, 1, "tail", type_width, length_width);
+            const auto wire = std::span<const char>(storage).subspan(1);
+            for (std::size_t split = 0; split <= wire.size(); ++split) {
+                Http3StreamFrames decoder(Http3StreamKind::kRequest, &resource);
+                Events events;
+                RUVIA_CHECK(decoder.feed(wire.first(split), false, collect, &events) == Http3StreamFrameStatus::kNeedMoreData);
+                RUVIA_CHECK_EQ(decoder.consumedBytes(), split);
+                RUVIA_CHECK(decoder.feed(wire.subspan(split), true, collect, &events) == Http3StreamFrameStatus::kMessageEnd);
+                RUVIA_CHECK_EQ(decoder.consumedBytes(), wire.size() - split);
+                std::string body;
+                std::size_t headers = 0;
+                std::size_t data_ends = 0;
+                for (std::size_t i = 0; i < events.kinds.size(); ++i) {
+                    if (events.kinds[i] == Http3StreamFrameEventKind::kHeaders) {
+                        RUVIA_CHECK_EQ(events.payloads[i], headers == 0 ? std::string("head") : std::string("tail"));
+                        RUVIA_CHECK_EQ(events.trailers[i], headers != 0);
+                        RUVIA_CHECK(events.ends[i]);
+                        ++headers;
+                    } else {
+                        RUVIA_CHECK(events.kinds[i] == Http3StreamFrameEventKind::kData);
+                        body += events.payloads[i];
+                        data_ends += events.ends[i];
+                    }
+                }
+                RUVIA_CHECK_EQ(headers, std::size_t{2});
+                RUVIA_CHECK_EQ(data_ends, std::size_t{1});
+                RUVIA_CHECK_EQ(body, std::string("body"));
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http3_stream_frames_rejects_fin_inside_any_frame_header_width) {
+    std::pmr::monotonic_buffer_resource resource;
+    for (std::size_t type_width : {1, 2, 4, 8}) {
+        for (std::size_t length_width : {1, 2, 4, 8}) {
+            std::vector<char> wire;
+            append_frame(wire, 1, "", type_width, length_width);
+            for (std::size_t prefix = 1; prefix < wire.size(); ++prefix) {
+                Http3StreamFrames decoder(Http3StreamKind::kRequest, &resource);
+                Events events;
+                RUVIA_CHECK(decoder.feed(std::span<const char>(wire).first(prefix), true, collect, &events) == Http3StreamFrameStatus::kFrameError);
+                RUVIA_CHECK_EQ(decoder.consumedBytes(), prefix);
+                RUVIA_CHECK(events.kinds.empty());
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http3_stream_frames_retains_paused_headers_before_consuming_following_frames) {
+    std::pmr::unsynchronized_pool_resource resource;
+    for (std::size_t width : {1, 2, 4, 8}) {
+        const auto header_size = 2 * width;
+        for (std::size_t split = 0; split < header_size; ++split) {
+            std::vector<char> wire;
+            append_frame(wire, 1, "head", width, width);
+            const auto first_frame_size = wire.size();
+            append_frame(wire, 0, "body", width, width);
+            Http3StreamFrames decoder(Http3StreamKind::kRequest, &resource);
+            paused_headers state{decoder};
+            RUVIA_CHECK(decoder.feed(std::span<const char>(wire).first(split), false, collect_and_pause, &state) == Http3StreamFrameStatus::kNeedMoreData);
+            RUVIA_CHECK(decoder.feed(std::span<const char>(wire).subspan(split), true, collect_and_pause, &state) == Http3StreamFrameStatus::kPaused);
+            RUVIA_CHECK_EQ(decoder.consumedBytes(), first_frame_size - split);
+            RUVIA_CHECK(decoder.paused());
+            for (std::size_t i = 0; i < first_frame_size; ++i) {
+                wire[i] = '!';
+            }
+            RUVIA_CHECK(decoder.feed(std::span<const char>(wire).subspan(first_frame_size), true, collect_and_pause, &state) == Http3StreamFrameStatus::kMessageEnd);
+            RUVIA_CHECK_EQ(decoder.consumedBytes(), wire.size() - first_frame_size);
+            RUVIA_CHECK(!decoder.paused());
+            RUVIA_CHECK_EQ(state.events.kinds.size(), std::size_t{3});
+            if (state.events.kinds.size() == 3) {
+                RUVIA_CHECK_EQ(state.events.payloads[0], std::string("head"));
+                RUVIA_CHECK_EQ(state.events.payloads[1], std::string("head"));
+                RUVIA_CHECK_EQ(state.events.payloads[2], std::string("body"));
+                RUVIA_CHECK(!state.events.fins[0]);
+                RUVIA_CHECK(!state.events.fins[1]);
+                RUVIA_CHECK(state.events.fins[2]);
+            }
+        }
+    }
 }

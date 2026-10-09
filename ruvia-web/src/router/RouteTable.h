@@ -180,7 +180,7 @@ private:
     using DynamicNode = CompiledRoutePlan::DynamicNode;
     using DynamicStaticChild = CompiledRoutePlan::DynamicStaticChild;
 
-    void buildPerfectHash();
+    void build_static_index();
     void buildDynamicRoutes();
     void buildAllowedMethodMask();
     void bindCompiledPlan(const CompiledRoutePlan& plan);
@@ -191,10 +191,11 @@ private:
 
     [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
     [[nodiscard]] static bool isRoutableMethod(HttpKnownMethod method) noexcept;
+    [[nodiscard]] static bool supports_head_fallback(const RouteEntry& route) noexcept;
     [[nodiscard]] static bool isDynamicPath(std::string_view path) noexcept;
-    [[nodiscard]] static std::uint64_t routeHash(
-        HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept;
-    [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept;
+    [[nodiscard]] static std::uint64_t path_hash(std::string_view path) noexcept;
+    [[nodiscard]] static std::uint64_t route_hash(
+        HttpKnownMethod method, std::uint64_t hash) noexcept;
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicParamNameUpperBound(std::string_view path) noexcept;
     void insertDynamic(DynamicNode& root, RouteEntry& route, std::size_t routeIndex);
@@ -211,15 +212,13 @@ private:
         std::string_view left, std::string_view right) noexcept;
 
     [[nodiscard]] const RouteEntry* findStaticRoute(
-        HttpKnownMethod method, std::string_view path) const noexcept;
+        HttpKnownMethod method, std::string_view path, std::uint64_t hash) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamicRoute(
         HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
-    [[nodiscard]] const RouteEntry* findPerfect(
-        HttpKnownMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamic(
         HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(
-        std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
+        std::string_view path, HttpKnownMethod requestedMethod, std::uint64_t hash) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
     [[nodiscard]] Task<HttpResponse> dispatchRequest(const HttpRequest& request,
         const RouteResolution& resolution, RequestMemory& memory, ContextServices services,

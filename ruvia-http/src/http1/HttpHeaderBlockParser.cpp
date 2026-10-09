@@ -1,7 +1,6 @@
 #include "parser/HttpHeaderBlockParser.h"
 
 #include <algorithm>
-#include <cstring>
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
@@ -11,6 +10,7 @@
 #include "field/HttpMediaType.h"
 #include "field/HttpOriginFields.h"
 #include "field/HttpTeFields.h"
+#include "field/field_value_scan.h"
 #include "parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
@@ -242,10 +242,7 @@ namespace {
             ++cursor;
         }
         const auto valueStart = cursor;
-        while (cursor < headersEnd &&
-               isHttpFieldValueChar(static_cast<unsigned char>(buffer[cursor]))) {
-            ++cursor;
-        }
+        cursor += http_field_value_prefix_size({buffer.data() + cursor, headersEnd - cursor});
         if (cursor + 1 >= headersEnd || buffer[cursor] != '\r' || buffer[cursor + 1] != '\n') {
             return HttpParseError::kInvalidHeader;
         }
@@ -293,19 +290,17 @@ namespace {
 }  // namespace
 
 std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset) noexcept {
-    const auto limit = std::min(buffer.size(), kMaxHttpHeaderBytes);
-    if (limit < 4) {
+    buffer = buffer.substr(0, kMaxHttpHeaderBytes);
+    if (buffer.size() < 4) {
         return std::string_view::npos;
     }
 
-    auto cursor = searchOffset >= limit ? limit : std::max<std::size_t>(3, searchOffset);
-    while (cursor < limit) {
-        const auto* hit =
-            static_cast<const char*>(std::memchr(buffer.data() + cursor, '\n', limit - cursor));
-        if (hit == nullptr) {
+    auto cursor = std::max<std::size_t>(3, searchOffset);
+    while (cursor < buffer.size()) {
+        const auto i = buffer[cursor] == '\n' ? cursor : buffer.find('\n', cursor + 1);
+        if (i == std::string_view::npos) {
             return std::string_view::npos;
         }
-        const auto i = static_cast<std::size_t>(hit - buffer.data());
         if (buffer[i - 1] == '\r' && buffer[i - 2] == '\n' && buffer[i - 3] == '\r') {
             return i + 1;
         }

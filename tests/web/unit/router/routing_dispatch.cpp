@@ -100,7 +100,7 @@ RUVIA_TEST(head_only_stream_completion_is_success_not_error) {
     RUVIA_CHECK(!g_headOnlyHandlerResumedPastFirstWrite);
 }
 
-RUVIA_TEST(streaming_get_routes_do_not_gain_head_shadow) {
+RUVIA_TEST(streaming_get_routes_require_explicit_head_handlers) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/page"), RouteHandler(nullptr, &dummyHandler),
@@ -119,7 +119,7 @@ RUVIA_TEST(streaming_get_routes_do_not_gain_head_shadow) {
     RUVIA_CHECK(page.resolved() != nullptr);
 
     // Streaming/SSE routes have explicit stream lifecycles and must not be
-    // entered by an implicit HEAD shadow. WebSocket remains GET-only too.
+    // entered by an implicit HEAD fallback. WebSocket remains GET-only too.
     const auto events = table.resolve(HttpKnownMethod::kHead, "/events");
     RUVIA_CHECK(events.resolved() == nullptr);
     RUVIA_CHECK(events.methodNotAllowed() != nullptr);

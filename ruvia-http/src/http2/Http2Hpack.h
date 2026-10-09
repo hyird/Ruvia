@@ -42,11 +42,6 @@ struct HpackStaticIndex final {
     static constexpr std::uint32_t kVary = 59;
 };
 
-struct HpackHuffmanNode final {
-    std::int16_t child[2]{-1, -1};
-    std::int16_t symbol{-1};
-};
-
 // HPACK literal representation prefixes (RFC 7541 §6.2).
 inline constexpr std::uint8_t kHpackLiteralWithoutIndexing = 0x00;  // §6.2.2
 inline constexpr std::uint8_t kHpackLiteralNeverIndexed = 0x10;     // §6.2.3
@@ -159,7 +154,6 @@ private:
     [[nodiscard]] StepResult decodeLiteralHeader(const unsigned char*& cursor,
         const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic,
         void* target, HeaderCallback callback, bool& rejected);
-    [[nodiscard]] StepResult decodeHuffman(std::string_view encoded, std::pmr::string& output);
     void releaseScratch();
     [[nodiscard]] StepResult indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;
     [[nodiscard]] StepResult indexedName(

@@ -26,8 +26,23 @@ struct UrlDecodeOptions final {
 
 // Percent mode treats '+' literally; form mode decodes '+' as a space.
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
-    return std::ranges::any_of(value,
-        [mode](char c) noexcept { return c == '%' || (mode == UrlDecodeMode::kForm && c == '+'); });
+    // Keep short components and early escapes on the scalar path; library searches
+    // can scan the remaining literal text in larger chunks.
+    constexpr std::size_t scalar_scan_limit = 64;
+    constexpr std::size_t scalar_prefix_size = 32;
+    const auto prefix = value.substr(0, value.size() <= scalar_scan_limit ? value.size() : scalar_prefix_size);
+    const bool encoded = mode == UrlDecodeMode::kForm
+                             ? std::ranges::any_of(prefix, [](char c) noexcept { return c == '%' || c == '+'; })
+                             : std::ranges::any_of(prefix, [](char c) noexcept { return c == '%'; });
+    if (encoded) {
+        return true;
+    }
+    if (prefix.size() == value.size()) {
+        return false;
+    }
+    value.remove_prefix(prefix.size());
+    return (mode == UrlDecodeMode::kForm ? value.find_first_of("%+") : value.find('%')) !=
+           std::string_view::npos;
 }
 
 namespace detail {

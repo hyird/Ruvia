@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "ruvia/http/Http3Qpack.h"
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3RequestWriter.h"
 
@@ -347,6 +348,61 @@ RUVIA_TEST(http3_qpack_decoder_allocation_failure_latches_error_and_releases_sto
         RUVIA_CHECK_EQ(resource.liveBytes, 0u);
     }
     RUVIA_CHECK(decoded);
+}
+
+RUVIA_TEST(http3_qpack_field_section_prefixes_grow_and_wrap_across_acknowledged_insertions) {
+    QpackResource result_resource;
+    bool saw_wide_insert_count = false;
+    bool saw_wide_base = false;
+    bool saw_wrapped_insert_count = false;
+    {
+        ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 8192, .maxBlockedStreams = 1});
+        ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 8192, .maxBlockedStreams = 1});
+        for (std::uint64_t sequence = 0; sequence < 600; ++sequence) {
+            const auto value = std::string("value-") + std::to_string(sequence);
+            const std::array fields{ruvia::Http3FieldSectionFieldView{"x-sequence", value}};
+            const auto stream_id = sequence * 4;
+            const auto section = encoder.encode(stream_id, fields, {}, &result_resource);
+            RUVIA_CHECK(section.has_value());
+            if (!section) {
+                return;
+            }
+            RUVIA_CHECK(section->get_allocator().resource() == &result_resource);
+            const auto insert_count = ruvia::decodeHttp3QpackInteger(*section, 8);
+            RUVIA_CHECK(insert_count.has_value());
+            if (!insert_count) {
+                return;
+            }
+            const auto base = ruvia::decodeHttp3QpackInteger(std::span(*section).subspan(insert_count->encodedBytes), 7);
+            RUVIA_CHECK(base.has_value());
+            if (!base) {
+                return;
+            }
+            saw_wide_insert_count = saw_wide_insert_count || insert_count->encodedBytes > 1;
+            saw_wide_base = saw_wide_base || base->encodedBytes > 1;
+            saw_wrapped_insert_count = saw_wrapped_insert_count || (sequence > 0 && insert_count->value == 1);
+
+            const auto instructions = encoder.pendingEncoderOutput();
+            RUVIA_CHECK(decoder.consumeEncoder(instructions));
+            RUVIA_CHECK(encoder.consumeEncoderOutput(instructions.size()));
+            std::vector<std::pair<std::string, std::string>> received;
+            const auto decoded = decoder.decode(stream_id, *section, collect, &received);
+            RUVIA_CHECK(decoded && decoded->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+            RUVIA_CHECK_EQ(received.size(), 1U);
+            if (received.size() == 1) {
+                RUVIA_CHECK_EQ(received.front().first, std::string("x-sequence"));
+                RUVIA_CHECK_EQ(received.front().second, value);
+            }
+            const auto acknowledgments = decoder.pendingDecoderOutput();
+            RUVIA_CHECK(encoder.consumeDecoder(acknowledgments));
+            RUVIA_CHECK(decoder.consumeDecoderOutput(acknowledgments.size()));
+            RUVIA_CHECK_EQ(encoder.knownReceivedCount(), sequence + 1);
+        }
+    }
+    RUVIA_CHECK(saw_wide_insert_count);
+    RUVIA_CHECK(saw_wide_base);
+    RUVIA_CHECK(saw_wrapped_insert_count);
+    RUVIA_CHECK_EQ(result_resource.liveBytes, 0U);
 }
 
 RUVIA_TEST(http3_qpack_results_use_caller_resource_and_outlive_encoder) {

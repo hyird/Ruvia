@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/HttpParseError.h"
@@ -41,6 +42,77 @@ RUVIA_TEST(chunk_trailer_parser_exposes_validated_borrowed_fields) {
     }
     const auto terminal = parser.next();
     RUVIA_CHECK(terminal.end() != nullptr);
+}
+
+RUVIA_TEST(chunk_trailer_names_require_tokens_before_the_separator) {
+    constexpr std::string_view punctuation = "!#$%&'*+-.^_`|~";
+    for (const std::size_t length : {1U, 2U, 3U, 4U, 5U, 8U, 9U, 16U, 64U, 128U}) {
+        for (const std::size_t position : {std::size_t{0}, length / 2, length - 1}) {
+            for (unsigned byte = 0; byte < 256; ++byte) {
+                if (byte == ':') {
+                    continue;
+                }
+                const auto character = static_cast<char>(byte);
+                const bool valid = (byte >= '0' && byte <= '9') ||
+                                   (byte >= 'A' && byte <= 'Z') ||
+                                   (byte >= 'a' && byte <= 'z') ||
+                                   punctuation.find(character) != std::string_view::npos;
+                std::string name(length, 'x');
+                name[position] = character;
+                const std::string wire = name + ": \tvalue:with:colons\t \r\nX-Next: done\r\n";
+                HttpChunkTrailerParser parser(wire);
+                const auto result = parser.next();
+                RUVIA_CHECK_EQ(result.field() != nullptr, valid);
+                if (valid && result.field()) {
+                    RUVIA_CHECK_EQ(result.field()->name(), std::string_view(name));
+                    RUVIA_CHECK_EQ(result.field()->name().data(), wire.data());
+                    RUVIA_CHECK_EQ(result.field()->value(), std::string_view("value:with:colons"));
+                    const auto next = parser.next();
+                    RUVIA_CHECK(next.field() != nullptr);
+                    if (next.field()) {
+                        RUVIA_CHECK_EQ(next.field()->name(), std::string_view("X-Next"));
+                    }
+                    const auto end = parser.next();
+                    RUVIA_CHECK(end.end() != nullptr);
+                } else {
+                    RUVIA_CHECK(result.failure() != nullptr);
+                    if (result.failure()) {
+                        RUVIA_CHECK(result.failure()->error() == HttpChunkScanError::kInvalidTrailer);
+                    }
+                    const auto repeated = parser.next();
+                    RUVIA_CHECK(repeated.failure() != nullptr);
+                }
+            }
+        }
+    }
+}
+
+RUVIA_TEST(chunk_trailer_values_trim_ows_and_preserve_accepted_bytes) {
+    for (const std::size_t length : {1U, 2U, 3U, 31U, 32U, 33U, 64U, 4096U}) {
+        for (const std::size_t position : {std::size_t{0}, length / 2, length - 1}) {
+            for (unsigned byte = 0; byte < 256; ++byte) {
+                const bool valid = byte == '\t' || (byte >= 32 && byte != 127);
+                std::string value(length, 'x');
+                value[position] = static_cast<char>(byte);
+                const std::string wire = "X-Value: \t" + value + "\t \r\n";
+                HttpChunkTrailerParser parser(wire);
+                const auto result = parser.next();
+                RUVIA_CHECK_EQ(result.field() != nullptr, valid);
+                if (valid && result.field()) {
+                    const auto first = value.find_first_not_of(" \t");
+                    const auto last = value.find_last_not_of(" \t");
+                    const auto expected = first == std::string::npos ? std::string_view{} : std::string_view(value).substr(first, last - first + 1);
+                    RUVIA_CHECK_EQ(result.field()->value(), expected);
+                } else {
+                    RUVIA_CHECK(result.failure() != nullptr);
+                    if (result.failure()) {
+                        RUVIA_CHECK(result.failure()->error() == HttpChunkScanError::kInvalidTrailer);
+                    }
+                }
+            }
+        }
+    }
+    RUVIA_CHECK(!validateHttpChunkTrailers("X-Empty:\r\nX-Ows: \t \r\n").has_value());
 }
 
 RUVIA_TEST(chunk_trailers_reject_malformed) {

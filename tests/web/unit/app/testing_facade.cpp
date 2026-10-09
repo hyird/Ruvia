@@ -3,7 +3,7 @@
 // The public in-memory testing facade must dispatch through the production
 // pipeline: controller macros, route params, query/cookie access, model
 // bodies with their 415/400 split, global middleware, prefix and app-wide
-// fallbacks, urlFor, worker state, and the automatic HEAD shadow -- all
+// fallbacks, urlFor, worker state, and the automatic HEAD fallback -- all
 // without a socket. These tests use ONLY public headers, exactly like an
 // application's own test suite would.
 
@@ -63,6 +63,7 @@ public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
         c.header("X-Test-Stamp", "on");
+        c.header("X-Middleware-Method", c.req().method());
     }
 };
 
@@ -153,6 +154,7 @@ public:
     RUVIA_ON((::ruvia::HttpKnownMethod::kPut, ::ruvia::HttpKnownMethod::kDelete),
         (countedOnPath()), hello);
     RUVIA_GET("/users/:id", user);
+    RUVIA_GET("/head/:id", head_metadata, TestingFacadeStamp);
     RUVIA_GET("/greet", greet);
     RUVIA_GET("/link", link);
     RUVIA_GET("/count", count);
@@ -184,6 +186,12 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         co_return c.body(c.req().param("id").value_or("?"));
+    }
+
+    ruvia::Task<ruvia::HttpResponse> head_metadata(ruvia::Context& c) {
+        c.header("X-Handler-Method", c.req().method());
+        c.header("X-Route-Param", c.req().param("id").value_or("?"));
+        co_return c.text("payload");
     }
 
     ruvia::Task<ruvia::HttpResponse> greet(ruvia::Context& c) {
@@ -356,12 +364,29 @@ RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
     const auto deadline = app.request(ruvia::TestRequest::get("/t/deadline"));
     RUVIA_CHECK_EQ(deadline.body(), std::string_view("deadline"));
 
-    // The automatic HEAD shadow answers with the GET status and no body.
+    // The automatic HEAD fallback answers with the GET status and no body.
     // Writer-synthesized framing headers (Content-Length, Date) are not part
     // of the in-memory dispatch product.
     const auto head = app.request(ruvia::TestRequest::head("/t/hello"));
     RUVIA_CHECK(head.status() == ruvia::http_status::kOk);
     RUVIA_CHECK(head.body().empty());
+}
+
+RUVIA_TEST(testing_facade_head_fallback_preserves_request_method_and_route_params) {
+    ruvia::TestApp app;
+    const auto get = app.request(ruvia::TestRequest::get("/t/head/42"));
+    RUVIA_CHECK(get.status() == ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(get.body(), std::string_view("payload"));
+    RUVIA_CHECK_EQ(get.header("X-Handler-Method").value_or(""), std::string_view("GET"));
+    RUVIA_CHECK_EQ(get.header("X-Middleware-Method").value_or(""), std::string_view("GET"));
+
+    const auto head = app.request(ruvia::TestRequest::head("/t/head/42"));
+    RUVIA_CHECK(head.status() == ruvia::http_status::kOk);
+    RUVIA_CHECK(head.body().empty());
+    RUVIA_CHECK_EQ(head.header("X-Handler-Method").value_or(""), std::string_view("HEAD"));
+    RUVIA_CHECK_EQ(head.header("X-Middleware-Method").value_or(""), std::string_view("HEAD"));
+    RUVIA_CHECK_EQ(head.header("X-Route-Param").value_or(""), std::string_view("42"));
+    RUVIA_CHECK_EQ(head.header("X-Test-Stamp").value_or(""), std::string_view("on"));
 }
 
 RUVIA_TEST(testing_facade_rejects_invalid_request_line_targets) {

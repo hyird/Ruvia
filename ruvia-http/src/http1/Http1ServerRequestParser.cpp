@@ -69,8 +69,8 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     // exact wire token: method registration is extensible, while HttpKnownMethod is
     // only the framework's routing/response-semantics classification.
     const auto method = block.method.bind(buffer);
-    const auto knownMethod = classifyHttpMethod(method);
     HttpRequestAccess::setMethod(state.request, method);
+    const auto knownMethod = state.request.knownMethod();
 
     const auto target = block.target.bind(buffer);
     const auto version = block.version.bind(buffer);

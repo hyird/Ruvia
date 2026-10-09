@@ -35,16 +35,14 @@ HttpChunkTrailerParseResult HttpChunkTrailerParser::next() noexcept {
     const auto line = lineEnd == std::string_view::npos
                           ? trailers_.substr(cursor_)
                           : trailers_.substr(cursor_, lineEnd - cursor_);
-    if (line.empty() || line.front() == ' ' || line.front() == '\t') {
-        return fail(HttpChunkScanError::kInvalidTrailer);
-    }
-    const auto colon = line.find(':');
-    if (colon == std::string_view::npos || colon == 0) {
+    const auto colon = http_token_prefix_size(line);
+    if (colon == 0 || colon == line.size() || line[colon] != ':') {
         return fail(HttpChunkScanError::kInvalidTrailer);
     }
     const auto name = line.substr(0, colon);
     const auto value = httpTrimOws(line.substr(colon + 1));
-    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
+    // The prefix scan proved the name syntax; trimming removed boundary OWS.
+    if (!is_valid_http_field_value_bytes(value) ||
         isForbiddenHttpRequestTrailerName(name)) {
         return fail(HttpChunkScanError::kInvalidTrailer);
     }

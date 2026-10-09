@@ -107,6 +107,44 @@ RUVIA_TEST(http3_message_head_rejects_pseudo_header_order_duplicates_and_unknown
     RUVIA_CHECK(!invalidPath && invalidPath.error() == ruvia::Http3MessageHeadError::kMessageError);
 }
 
+RUVIA_TEST(http3_message_head_field_names_accept_only_lowercase_token_bytes) {
+    constexpr std::string_view punctuation = "!#$%&'*+-.^_`|~";
+    for (const std::size_t position : {0U, 4U, 31U, 63U}) {
+        std::string name(64, 'x');
+        for (unsigned byte = 0; byte < 256; ++byte) {
+            name[position] = static_cast<char>(byte);
+            const bool allowed = (byte >= 'a' && byte <= 'z') ||
+                                 (byte >= '0' && byte <= '9') ||
+                                 punctuation.find(static_cast<char>(byte)) != std::string_view::npos;
+            const auto response = decode({{":status", "200"}, {name, "value"}},
+                ruvia::Http3MessageHeadKind::kResponse);
+            RUVIA_CHECK_EQ(response.has_value(), allowed);
+            if (response) {
+                RUVIA_CHECK_EQ(response->headers.front().name, std::string_view(name));
+            } else {
+                RUVIA_CHECK(response.error() == ruvia::Http3MessageHeadError::kMessageError);
+            }
+            const auto request = decode({{":method", "GET"}, {":scheme", "https"},
+                                            {":authority", "example.test"}, {":path", "/"}, {name, "value"}},
+                ruvia::Http3MessageHeadKind::kRequest);
+            RUVIA_CHECK_EQ(request.has_value(), allowed);
+            if (!request) {
+                RUVIA_CHECK(request.error() == ruvia::Http3MessageHeadError::kMessageError);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http3_message_head_pseudo_names_are_case_sensitive) {
+    for (const auto name : {":Method", ":Protocol", ":Scheme", ":Authority", ":Path"}) {
+        const auto request = decode({{name, "GET"}, {":scheme", "https"}, {":path", "/"}},
+            ruvia::Http3MessageHeadKind::kRequest);
+        RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+    const auto response = decode({{":Status", "200"}}, ruvia::Http3MessageHeadKind::kResponse);
+    RUVIA_CHECK(!response && response.error() == ruvia::Http3MessageHeadError::kMessageError);
+}
+
 RUVIA_TEST(http3_message_head_rejects_host_field_content_length_and_status_errors) {
     const auto hostMismatch = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"},
                                          {":authority", "one.test"}, {"host", "two.test"}},
