@@ -337,7 +337,7 @@ namespace {
         path = hierarchy;
     }
 
-    if (path.empty() && method == HttpKnownMethod::kOptions && query.empty()) {
+    if (path.empty() && method == HttpKnownMethod::kOptions && querySeparator == std::string_view::npos) {
         // RFC 9112 section 3.2.4: a proxy forwarding an absolute-form
         // OPTIONS target with an empty path and no query to the final origin
         // must use asterisk-form. Expose that route semantic directly even

@@ -7,13 +7,26 @@
 
 namespace ruvia {
 
+namespace {
+
+[[nodiscard]] bool is_compress_coding_token(std::string_view token) noexcept {
+    return detail::httpAsciiEqualsIgnoreCase(token, "compress") ||
+           detail::httpAsciiEqualsIgnoreCase(token, "x-compress");
+}
+
+}  // namespace
+
 void HttpAcceptedEncodingQuality::update(
     std::string_view acceptEncoding, std::string_view coding) noexcept {
     const bool gzip_coding = http_is_gzip_coding_token(coding);
+    const bool compress_coding = is_compress_coding_token(coding);
     detail::httpVisitCommaSeparatedQuoted(acceptEncoding,
-        [coding, gzip_coding, this](std::string_view item) noexcept {
+        [coding, gzip_coding, compress_coding, this](std::string_view item) noexcept {
             const auto token = detail::httpHeaderTokenBeforeParameters(item);
-            if (gzip_coding ? http_is_gzip_coding_token(token) : detail::httpAsciiEqualsIgnoreCase(token, coding)) {
+            const bool explicit_match = gzip_coding       ? http_is_gzip_coding_token(token)
+                                        : compress_coding ? is_compress_coding_token(token)
+                                                          : detail::httpAsciiEqualsIgnoreCase(token, coding);
+            if (explicit_match) {
                 detail::httpAccumulateAcceptedQuality(
                     detail::http_weight_parameter(item), explicitQuality);
             } else if (token == "*") {

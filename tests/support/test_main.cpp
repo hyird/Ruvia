@@ -83,6 +83,10 @@ int main() {
         totalFailures += ctx.failures;
         ++caseIndex;
     }
+    if (executedCases == 0) {
+        std::fputs("No test cases were selected. Check RUVIA_TEST_FILTER, RUVIA_TEST_FIRST, and RUVIA_TEST_LAST.\n", stderr);
+        return 1;
+    }
     std::printf("\n%zu tests, %d failed cases, %d failed checks\n", executedCases, failedCases,
         totalFailures);
     return totalFailures == 0 ? 0 : 1;

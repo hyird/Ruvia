@@ -101,7 +101,8 @@ public:
     [[nodiscard]] HttpPriority priority() const noexcept;
 
     // Accept uses media ranges; language uses RFC 4647 basic filtering;
-    // encoding and charset match tokens or '*'.
+    // charset matches tokens or '*'; encoding also handles coding aliases and
+    // the default acceptability of identity.
     enum class Negotiable : std::uint8_t { kMediaType,
         kLanguage,
         kEncoding,

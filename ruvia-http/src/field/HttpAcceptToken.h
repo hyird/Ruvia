@@ -10,8 +10,9 @@
 #include "field/HttpQualityValue.h"
 
 // Negotiation for the Accept-* fields whose members are plain tokens rather than
-// media ranges: Accept-Language, Accept-Encoding and Accept-Charset (RFC 9110
-// sections 12.5.2-12.5.4). The weight grammar is shared with Accept and lives in
+// media ranges: Accept-Language and Accept-Charset (RFC 9110 sections 12.5.2 and
+// 12.5.4). Accept-Encoding uses its dedicated identity and coding-alias rules.
+// The weight grammar is shared with Accept and lives in
 // HttpQualityValue.h; what differs is only how a member matches an offered
 // value, which is what this header owns.
 
@@ -34,8 +35,8 @@ enum class HttpAcceptTokenMatch : int {
 
 // RFC 4647 section 3.3.1 basic filtering: a language range matches a tag that
 // equals it or extends it at a subtag boundary, so "en" matches "en-US" but
-// never "english". Only Accept-Language uses this; encodings and charsets match
-// exactly or by wildcard.
+// never "english". Only Accept-Language uses this; charsets match exactly or by
+// wildcard.
 [[nodiscard]] inline HttpAcceptTokenMatch httpAcceptTokenMatches(
     std::string_view range, std::string_view offered, bool prefixMatching) noexcept {
     if (range == "*") {

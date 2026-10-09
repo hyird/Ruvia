@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -279,6 +280,76 @@ RUVIA_TEST(static_root_rejects_permission_errors_in_index) {
 
 // Serving a file: preconditions, ranges, precompressed variants, type policy
 // and the traversal-safe path resolution behind them.
+
+RUVIA_TEST(static_root_serves_utf8_file_and_directory_urls) {
+    namespace fs = std::filesystem;
+    const auto temp_root = fs::canonical(fs::temp_directory_path());
+    const auto dir = temp_root /
+                     ("ruvia_static_utf8_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!fs::create_directory(dir)) {
+        throw std::runtime_error("temporary static root already exists");
+    }
+    struct DirectoryCleanup final {
+        fs::path parent;
+        fs::path path;
+        ruvia::testing::TestContext& test_context;
+        ~DirectoryCleanup() {
+            std::error_code error;
+            const auto resolved = fs::weakly_canonical(path, error);
+            const bool owned = !error && resolved.parent_path() == parent;
+            ruvia::testing::reportCheck(test_context, !owned, __FILE__, __LINE__, "owned temporary directory");
+            if (owned) {
+                fs::remove_all(path, error);
+                ruvia::testing::reportCheck(test_context, static_cast<bool>(error), __FILE__, __LINE__, "temporary directory removed");
+            }
+        }
+    } cleanup{temp_root, dir, ruvia_ctx};
+
+    const auto filename = fs::path(u8"\u6587\u6863-\U0001F4C4.txt");
+    const auto directory = fs::path(u8"\u76EE\u5F55-\U0001F4C1");
+    fs::create_directory(dir / directory);
+    for (const auto& [path, body] : std::array{
+             std::pair{dir / filename, std::string_view("unicode-file-body")},
+             std::pair{dir / directory / "index.html", std::string_view("unicode-index-body")}}) {
+        std::ofstream output(path, std::ios::binary);
+        output << body;
+        if (!output) {
+            throw std::runtime_error("failed to write Unicode static file");
+        }
+    }
+
+    ruvia::StaticRoot root(dir, {.indexFile = "index.html"});
+    struct Case final {
+        std::string_view relative_url;
+        std::string_view body;
+        std::string_view content_type;
+    };
+    const Case cases[]{
+        {"%E6%96%87%E6%A1%A3-%F0%9F%93%84.txt", "unicode-file-body", "text/plain; charset=utf-8"},
+        {"%E7%9B%AE%E5%BD%95-%F0%9F%93%81/", "unicode-index-body", "text/html; charset=utf-8"},
+    };
+    for (const auto& item : cases) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        StaticFileTestRequest request(memory.resource());
+        const std::string target = "/" + std::string(item.relative_url);
+        request.setTarget(target);
+        auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+        const auto response = context.staticFile(root, {.relativePath = item.relative_url});
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        RUVIA_CHECK_EQ(response.header("Content-Type"), std::optional<std::string_view>{item.content_type});
+        const auto file = response.fileBody();
+        RUVIA_CHECK(file.has_value());
+        if (file) {
+            RUVIA_CHECK_EQ(file->length(), static_cast<std::uint64_t>(item.body.size()));
+            auto input = ruvia::detail::openResponseFileInput(*file);
+            std::string body(item.body.size(), '\0');
+            input.read(body.data(), static_cast<std::streamsize>(body.size()));
+            RUVIA_CHECK_EQ(input.gcount(), static_cast<std::streamsize>(body.size()));
+            RUVIA_CHECK_EQ(body, item.body);
+        }
+    }
+}
 
 RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_conditions) {
     namespace fs = std::filesystem;

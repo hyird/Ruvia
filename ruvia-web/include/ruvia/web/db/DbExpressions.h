@@ -25,7 +25,7 @@ public:
     Expr star(std::string_view table = {}) {
         return query_.star(table);
     }
-    Expr value(DbValue value) {
+    Expr value(const DbValue& value) {
         return query_.value(value);
     }
     template <detail::DbParameter Value>

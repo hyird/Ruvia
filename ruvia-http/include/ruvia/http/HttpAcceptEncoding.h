@@ -18,15 +18,25 @@ struct HttpAcceptedEncodingQuality {
 
     void update(std::string_view acceptEncoding, std::string_view coding) noexcept;
 
+    // HTTP qvalue on a thousand-point scale, with 0 for an unacceptable coding.
+    // Explicit weights override the wildcard. Without an explicit identity
+    // weight, identity defaults to 1000 unless a zero wildcard excludes it.
+    [[nodiscard]] int quality(bool is_identity = false) const noexcept {
+        if (explicitQuality >= 0) {
+            return explicitQuality;
+        }
+        if (is_identity) {
+            return wildcardQuality == 0 ? 0 : 1000;
+        }
+        return wildcardQuality > 0 ? wildcardQuality : 0;
+    }
+
     [[nodiscard]] bool accepts() const noexcept {
-        return explicitQuality >= 0 ? explicitQuality > 0 : wildcardQuality > 0;
+        return quality() > 0;
     }
 
     [[nodiscard]] bool accepts(bool isIdentity) const noexcept {
-        if (isIdentity) {
-            return explicitQuality >= 0 ? explicitQuality > 0 : wildcardQuality != 0;
-        }
-        return accepts();
+        return quality(isIdentity) > 0;
     }
 };
 
@@ -61,12 +71,7 @@ private:
                 if (fieldPresent && !hasNonEmptyItem) {
                     return 1000;
                 }
-                if (identity.explicitQuality >= 0) {
-                    return identity.explicitQuality > 0 ? identity.explicitQuality : -1;
-                }
-                // RFC 9110 section 12.5.3: identity is acceptable by
-                // default. A wildcard only excludes it when q=0.
-                return identity.wildcardQuality == 0 ? -1 : 1000;
+                return identity.quality(true) > 0 ? identity.quality(true) : -1;
             case HttpContentCoding::kGzip:
                 coding_quality = &gzip;
                 break;
@@ -86,7 +91,7 @@ private:
         if (!fieldPresent) {
             return 999;
         }
-        return coding_quality->accepts() ? (coding_quality->explicitQuality >= 0 ? coding_quality->explicitQuality : coding_quality->wildcardQuality) : -1;
+        return coding_quality->quality() > 0 ? coding_quality->quality() : -1;
     }
 };
 

@@ -45,6 +45,8 @@ struct ConnectionScanner::Impl final {
     ConnectionScannerOptions options_;
     std::int64_t cachedNowMs_{0};
     Entry sentinel_{};
+    Entry* scan_current_{nullptr};
+    Entry* scan_next_{nullptr};
     WorkerMaintenanceRegistration* workerMaintenance_{nullptr};
     WorkerMaintenanceRegistration* workerMaintenanceScanNext_{nullptr};
     std::size_t periodicCheckCount_{0};

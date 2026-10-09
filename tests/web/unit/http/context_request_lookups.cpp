@@ -1,3 +1,7 @@
+#include <initializer_list>
+#include <memory_resource>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "context_request_fixture.h"
@@ -31,6 +35,17 @@ RUVIA_TEST(context_request_priority_tracks_live_update_and_response_keeps_partia
     const auto response = context.text(std::string_view("priority"));
     const auto value = response.header("Priority");
     RUVIA_CHECK(value && *value == "i=?0");
+}
+
+RUVIA_TEST(context_request_priority_combines_repeated_field_values_before_parsing) {
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(), "/",
+        {HttpHeaderView{"Priority", "extra=\"alpha"}, HttpHeaderView{"X-Other", "ignored"},
+            HttpHeaderView{"priority", "beta\", u=1, i"}});
+    RequestMemory request_memory(worker);
+    auto context = ContextAccess::make(request_memory, request, ruvia::test::testContextServices());
+    RUVIA_CHECK(context.req().priority().urgency == 1);
+    RUVIA_CHECK(context.req().priority().incremental);
 }
 
 // Reading a request through Context: cookies, query, route params and headers, and the caches each
@@ -122,6 +137,30 @@ RUVIA_TEST(context_request_query_unencoded_fields_borrow_the_query_string) {
     const auto page = context.req().query("page");
     RUVIA_CHECK(page.has_value());
     RUVIA_CHECK(page->data() == request.queryString().data() + 11);
+}
+
+RUVIA_TEST(context_request_query_preserves_short_decoded_names_and_values) {
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(), "/?%61=%31&%62=%32&%61=%33");
+    RequestMemory request_memory(worker);
+    auto context = ContextAccess::make(request_memory, request, ruvia::test::testContextServices());
+
+    const auto& fields = context.req().queryFields();
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(fields[0].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(fields[0].value(), std::string_view("1"));
+    RUVIA_CHECK_EQ(fields[1].name(), std::string_view("b"));
+    RUVIA_CHECK_EQ(fields[1].value(), std::string_view("2"));
+    RUVIA_CHECK_EQ(fields[2].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(fields[2].value(), std::string_view("3"));
+    RUVIA_CHECK_EQ(context.req().query("a").value_or("missing"), std::string_view("3"));
+    RUVIA_CHECK_EQ(context.req().query("b").value_or("missing"), std::string_view("2"));
+    const auto values = context.req().queries("a");
+    RUVIA_CHECK_EQ(values.size(), std::size_t{2});
+    if (values.size() == 2) {
+        RUVIA_CHECK_EQ(values[0], std::string_view("1"));
+        RUVIA_CHECK_EQ(values[1], std::string_view("3"));
+    }
 }
 
 RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
@@ -405,6 +444,44 @@ RUVIA_TEST(context_request_bulk_accessors_share_the_named_lookup_cache) {
 // answers "which of mine does the client want most?". Looping accepts() cannot
 // substitute -- it yields the server's first acceptable option, not the
 // client's preferred one.
+
+namespace {
+
+std::optional<std::string_view> negotiate_encoding(
+    std::initializer_list<HttpHeaderView> headers,
+    std::initializer_list<std::string_view> supported) {
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(), "/", headers);
+    RequestMemory request_memory(worker);
+    auto context = ContextAccess::make(request_memory, request, ruvia::test::testContextServices());
+    return context.req().negotiate(ruvia::ContextRequest::Negotiable::kEncoding, supported);
+}
+
+}  // namespace
+
+RUVIA_TEST(context_request_negotiate_encoding_preserves_identity_defaults) {
+    RUVIA_CHECK_EQ(negotiate_encoding({}, {"gzip", "identity"}).value_or("missing"), std::string_view("gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", ""}}, {"gzip", "identity"}).value_or("missing"), std::string_view("identity"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip"}}, {"identity"}).value_or("missing"), std::string_view("identity"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip;q=0.5, *;q=0.2"}}, {"gzip", "identity"}).value_or("missing"), std::string_view("identity"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip;q=0.5, identity;q=0.1"}}, {"identity", "gzip"}).value_or("missing"), std::string_view("gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip;q=0.5"}, {"accept-encoding", "identity;q=0"}}, {"identity", "gzip"}).value_or("missing"), std::string_view("gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "*;q=0"}, {"Accept-Encoding", "identity;q=0.7"}}, {"gzip", "identity"}).value_or("missing"), std::string_view("identity"));
+    RUVIA_CHECK(!negotiate_encoding({{"Accept-Encoding", "*;q=0"}}, {"identity"}).has_value());
+    RUVIA_CHECK(!negotiate_encoding({{"Accept-Encoding", ""}}, {"gzip"}).has_value());
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "extension;q=0.8, identity;q=0.2"}}, {"identity", "extension"}).value_or("missing"), std::string_view("extension"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip, identity"}}, {"identity", "gzip"}).value_or("missing"), std::string_view("identity"));
+}
+
+RUVIA_TEST(context_request_negotiate_encoding_preserves_coding_aliases) {
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "x-gzip"}}, {"gzip"}).value_or("missing"), std::string_view("gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip"}}, {"x-gzip"}).value_or("missing"), std::string_view("x-gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "x-gzip;q=0, *;q=1"}}, {"gzip", "br"}).value_or("missing"), std::string_view("br"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "gzip;q=0.3"}, {"Accept-Encoding", "X-GZIP;q=0.9, br;q=0.5"}}, {"br", "gzip"}).value_or("missing"), std::string_view("gzip"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "x-compress"}}, {"compress"}).value_or("missing"), std::string_view("compress"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "compress"}}, {"x-compress"}).value_or("missing"), std::string_view("x-compress"));
+    RUVIA_CHECK_EQ(negotiate_encoding({{"Accept-Encoding", "x-compress;q=0, *;q=1"}}, {"compress", "gzip"}).value_or("missing"), std::string_view("gzip"));
+}
 
 RUVIA_TEST(context_request_negotiate_picks_the_client_preferred_media_type) {
     WorkerMemory worker;

@@ -776,3 +776,93 @@ RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
     }
     RUVIA_CHECK(allocationFailure);
 }
+
+RUVIA_TEST(redis_value_array_move_assignment_uses_destination_resource) {
+    ruvia::test::CountingMemoryResource source_resource;
+    ruvia::test::CountingMemoryResource destination_resource;
+    const std::string value(128, 'v');
+    {
+        auto destination = ruvia::detail::RedisTypesAccess::nullValue(&destination_resource);
+        {
+            std::pmr::vector<ruvia::RedisValue> values(&source_resource);
+            values.push_back(ruvia::detail::RedisTypesAccess::stringValue(value, &source_resource));
+            auto source = ruvia::detail::RedisTypesAccess::arrayValue(std::move(values), &source_resource);
+            destination = std::move(source);
+        }
+        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(destination.array().size(), std::size_t{1});
+        if (destination.array().size() == 1) {
+            RUVIA_CHECK_EQ(destination.array().front().string(), std::string_view(value));
+        }
+    }
+    RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+}
+
+namespace {
+template <typename Factory, typename Populate, typename Check>
+void check_redis_resource_transfer(ruvia::testing::TestContext& ruvia_ctx,
+    Factory factory, Populate populate, Check check) {
+    for (const bool copy : {false, true}) {
+        ruvia::test::CountingMemoryResource source_resource;
+        ruvia::test::CountingMemoryResource destination_resource;
+        {
+            auto destination = factory(&destination_resource);
+            {
+                auto source = factory(&source_resource);
+                populate(source, &source_resource);
+                if (copy) {
+                    destination = source;
+                } else {
+                    destination = std::move(source);
+                }
+            }
+            RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+            check(destination);
+        }
+        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+    }
+}
+}  // namespace
+
+RUVIA_TEST(redis_typed_result_transfers_use_destination_resource) {
+    using Access = ruvia::detail::RedisTypesAccess;
+    const std::string key(128, 'k');
+    const std::string value(128, 'v');
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::hashScanResult(resource); }, [&](auto& result, auto* resource) { Access::entries(result).push_back(Access::keyValue(key, value, resource)); }, [&](const auto& result) {
+            RUVIA_CHECK_EQ(result.entries().size(), std::size_t{1});
+            if (result.entries().size() == 1) {
+                RUVIA_CHECK_EQ(result.entries().front().key(), std::string_view(key));
+                RUVIA_CHECK_EQ(result.entries().front().value(), std::string_view(value));
+            } });
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::zScanResult(resource); }, [&](auto& result, auto* resource) { Access::entries(result).push_back(Access::scoredValue(value, 2.5, resource)); }, [&](const auto& result) {
+            RUVIA_CHECK_EQ(result.entries().size(), std::size_t{1});
+            if (result.entries().size() == 1) {
+                RUVIA_CHECK_EQ(result.entries().front().value(), std::string_view(value));
+                RUVIA_CHECK_EQ(result.entries().front().score(), 2.5);
+            } });
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::xreadGroupResult(resource); }, [&](auto& result, auto* resource) {
+            auto stream = Access::streamReadResult(key, resource);
+            auto entry = Access::streamEntry(value, resource);
+            Access::fields(entry).push_back(Access::keyValue(key, value, resource));
+            Access::entries(stream).push_back(std::move(entry));
+            Access::streams(result).push_back(std::move(stream)); }, [&](const auto& result) {
+            RUVIA_CHECK_EQ(result.streams().size(), std::size_t{1});
+            if (result.streams().size() != 1) {
+                return;
+            }
+            const auto& stream = result.streams().front();
+            RUVIA_CHECK_EQ(stream.stream(), std::string_view(key));
+            RUVIA_CHECK_EQ(stream.entries().size(), std::size_t{1});
+            if (stream.entries().size() != 1) {
+                return;
+            }
+            const auto& entry = stream.entries().front();
+            RUVIA_CHECK_EQ(entry.id(), std::string_view(value));
+            RUVIA_CHECK_EQ(entry.fields().size(), std::size_t{1});
+            if (entry.fields().size() == 1) {
+                RUVIA_CHECK_EQ(entry.fields().front().key(), std::string_view(key));
+                RUVIA_CHECK_EQ(entry.fields().front().value(), std::string_view(value));
+            } });
+}

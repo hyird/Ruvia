@@ -14,11 +14,65 @@
 namespace ruvia {
 namespace {
 using Item = detail::HttpStructuredItem;
-using Parser = detail::HttpStructuredParser;
-std::expected<void, HttpPriorityError> parsePriorityMembers(std::string_view value, HttpPriorityFields& fields) noexcept {
-    Parser parser{value};
+
+class priority_header_input final {
+public:
+    explicit priority_header_input(std::span<const HttpHeaderView> headers) noexcept
+        : headers_(headers) {
+        (void)select_next(remaining_);
+        normalize();
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return remaining_.empty();
+    }
+    [[nodiscard]] char peek() const noexcept {
+        return remaining_.front();
+    }
+    [[nodiscard]] const char* data() const noexcept {
+        return remaining_.data();
+    }
+    void advance() noexcept {
+        remaining_.remove_prefix(1);
+        normalize();
+    }
+
+private:
+    [[nodiscard]] bool select_next(std::string_view& value) noexcept {
+        while (next_header_ != headers_.size()) {
+            const auto& header = headers_[next_header_++];
+            if (httpAsciiEqualsIgnoreCase(header.name(), "priority")) {
+                value = header.value();
+                return true;
+            }
+        }
+        return false;
+    }
+    void normalize() noexcept {
+        while (remaining_.empty()) {
+            if (separator_) {
+                separator_ = false;
+                remaining_ = pending_;
+            } else if (select_next(pending_)) {
+                // HTTP combines repeated field lines before Structured Field parsing.
+                remaining_ = ", ";
+                separator_ = true;
+            } else {
+                return;
+            }
+        }
+    }
+
+    std::span<const HttpHeaderView> headers_;
+    std::string_view remaining_;
+    std::string_view pending_;
+    std::size_t next_header_{0};
+    bool separator_{false};
+};
+
+template <typename input_type>
+std::expected<void, HttpPriorityError> parsePriorityMembers(detail::HttpStructuredParser<input_type> parser, HttpPriorityFields& fields) noexcept {
     parser.spaces();
-    while (parser.at < value.size()) {
+    while (!parser.empty()) {
         const auto key = parser.key();
         if (key.empty()) {
             return std::unexpected(HttpPriorityError::kInvalidSyntax);
@@ -41,14 +95,14 @@ std::expected<void, HttpPriorityError> parsePriorityMembers(std::string_view val
             fields.incremental = item.kind == Item::Kind::kBoolean ? std::optional(item.boolean) : std::nullopt;
         }
         parser.ows();
-        if (parser.at == value.size()) {
+        if (parser.empty()) {
             break;
         }
         if (!parser.take(',')) {
             return std::unexpected(HttpPriorityError::kInvalidSyntax);
         }
         parser.ows();
-        if (parser.at == value.size()) {
+        if (parser.empty()) {
             return std::unexpected(HttpPriorityError::kInvalidSyntax);
         }
     }
@@ -58,29 +112,15 @@ std::expected<void, HttpPriorityError> parsePriorityMembers(std::string_view val
 
 std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept {
     HttpPriorityFields fields;
-    if (auto parsed = parsePriorityMembers(value, fields); !parsed) {
+    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{detail::http_structured_text_input{value}}, fields); !parsed) {
         return std::unexpected(parsed.error());
     }
     return fields;
 }
 std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept {
     HttpPriorityFields fields;
-    bool seen = false;
-    bool empty = false;
-    for (const auto& header : headers) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "priority")) {
-            continue;
-        }
-        const auto value = header.value();
-        const bool thisEmpty = value.find_first_not_of(" \t") == std::string_view::npos;
-        if (seen && (empty || thisEmpty)) {
-            return std::unexpected(HttpPriorityError::kInvalidSyntax);
-        }
-        if (auto parsed = parsePriorityMembers(value, fields); !parsed) {
-            return std::unexpected(parsed.error());
-        }
-        seen = true;
-        empty = thisEmpty;
+    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{priority_header_input{headers}}, fields); !parsed) {
+        return std::unexpected(parsed.error());
     }
     return fields;
 }

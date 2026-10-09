@@ -18,6 +18,9 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpRequestTarget.h"
 
+#include "tls/TlsFilePaths.h"
+#include "tls/TlsPasswordScope.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -120,6 +123,7 @@ void validateClientTransportConfig(ClientTransportConfigView config) {
         throw std::invalid_argument("client TLS peer verification policy is invalid");
     }
     ruvia::validateTcpSocketPolicies(config.tcpNoDelay, config.tcpKeepAlive);
+    validate_tls_file_paths({config.caFile, config.certificateChainFile, config.privateKeyFile});
     if (config.certificateChainFile.empty() != config.privateKeyFile.empty()) {
         throw std::invalid_argument(
             "client certificate chain and private key must be configured together");
@@ -150,25 +154,10 @@ void configure_client_tls_context(SSL_CTX& context, ClientTransportConfigView co
     if (config.certificateChainFile.empty()) {
         return;
     }
+    const tls_password_scope password_scope(context, config.privateKeyPassword);
     if (SSL_CTX_use_certificate_chain_file(&context, std::pmr::string(config.certificateChainFile, processResource()).c_str()) != 1) {
         throw std::runtime_error("failed to load client TLS certificate chain");
     }
-    SSL_CTX_set_default_passwd_cb(&context, [](char* buffer, int size, int, void* argument) noexcept {
-        const auto password = static_cast<const ClientTransportConfigView*>(argument)->privateKeyPassword;
-        if (size <= 0 || password.size() > static_cast<std::size_t>(size)) {
-            return 0;
-        }
-        std::copy(password.begin(), password.end(), buffer);
-        return static_cast<int>(password.size());
-    });
-    SSL_CTX_set_default_passwd_cb_userdata(&context, &config);
-    struct password_binding final {
-        SSL_CTX& context;
-        ~password_binding() {
-            SSL_CTX_set_default_passwd_cb(&context, nullptr);
-            SSL_CTX_set_default_passwd_cb_userdata(&context, nullptr);
-        }
-    } binding{context};
     if (SSL_CTX_use_PrivateKey_file(&context, std::pmr::string(config.privateKeyFile, processResource()).c_str(), SSL_FILETYPE_PEM) != 1 ||
         SSL_CTX_check_private_key(&context) != 1) {
         throw std::runtime_error("failed to load or match client TLS private key");

@@ -73,9 +73,11 @@ struct HttpClientConfig final {
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
+    // TLS file paths must not contain NUL bytes.
     std::string caFile{};
     std::string certificateChainFile{};
     std::string privateKeyFile{};
+    // Binary password bytes, including embedded NUL, are preserved.
     std::string privateKeyPassword{};
     std::string userAgent{"Ruvia"};
     std::vector<std::pair<std::string, std::string>> cookies{};

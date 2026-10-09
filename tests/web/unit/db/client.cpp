@@ -26,6 +26,7 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbExpressions.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
@@ -1390,6 +1391,195 @@ RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
         allocationFailure = true;
     }
     RUVIA_CHECK(allocationFailure);
+}
+
+RUVIA_TEST(db_row_move_assignment_preserves_destination_on_allocation_failure) {
+    RejectingMemoryResource destination_resource;
+    auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
+    auto& destination_fields = ruvia::detail::DbResultAccess::ownedFields(destination);
+    auto& destination_names = ruvia::detail::DbResultAccess::ownedColumnNames(destination);
+    destination_fields.push_back(ruvia::detail::DbResultAccess::ownedField("old first", &destination_resource));
+    destination_fields.push_back(ruvia::detail::DbResultAccess::ownedField("old second", &destination_resource));
+    destination_names.emplace_back("first");
+    destination_names.emplace_back("second");
+
+    auto source = ruvia::detail::DbResultAccess::ownedRow(std::pmr::get_default_resource());
+    ruvia::detail::DbResultAccess::ownedFields(source).push_back(
+        ruvia::detail::DbResultAccess::ownedField("incoming", std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::ownedColumnNames(source).emplace_back(64, 'n');
+    destination_resource.rejectAllocations();
+
+    bool allocation_failed = false;
+    try {
+        destination = std::move(source);
+    } catch (const std::bad_alloc&) {
+        allocation_failed = true;
+    }
+    RUVIA_CHECK(allocation_failed);
+    RUVIA_CHECK_EQ(destination.size(), std::size_t{2});
+    if (destination.size() != 2) {
+        return;
+    }
+    RUVIA_CHECK_EQ(destination["first"].value().value_or("missing"), std::string_view("old first"));
+    RUVIA_CHECK_EQ(destination["second"].value().value_or("missing"), std::string_view("old second"));
+}
+
+RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource) {
+    const std::string column(64, 'c');
+    const std::string value(128, 'v');
+    const std::string borrowed_value(128, 'b');
+    for (const bool same_resource : {false, true}) {
+        ruvia::test::CountingMemoryResource source_resource;
+        ruvia::test::CountingMemoryResource destination_resource;
+        {
+            auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
+            {
+                auto* const resource = same_resource ? &destination_resource : &source_resource;
+                auto source = ruvia::detail::DbResultAccess::ownedRow(resource);
+                auto& fields = ruvia::detail::DbResultAccess::ownedFields(source);
+                auto& names = ruvia::detail::DbResultAccess::ownedColumnNames(source);
+                fields.push_back(ruvia::detail::DbResultAccess::ownedField(value, resource));
+                fields.push_back(ruvia::detail::DbResultAccess::borrowedField(borrowed_value, resource));
+                fields.push_back(ruvia::detail::DbResultAccess::nullField(resource));
+                names.emplace_back(column);
+                names.emplace_back("borrowed");
+                names.emplace_back("null");
+                destination = std::move(source);
+                RUVIA_CHECK(source.empty());
+            }
+            RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(destination.size(), std::size_t{3});
+            RUVIA_CHECK_EQ(destination[column].value().value_or("missing"), std::string_view(value));
+            const auto borrowed = destination["borrowed"].value();
+            RUVIA_CHECK_EQ(borrowed.value_or("missing"), std::string_view(borrowed_value));
+            RUVIA_CHECK(borrowed && borrowed->data() == borrowed_value.data());
+            RUVIA_CHECK(!destination["null"].value().has_value());
+        }
+        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(db_row_move_assignment_preserves_borrowed_row_views) {
+    ruvia::test::CountingMemoryResource backing_resource;
+    ruvia::test::CountingMemoryResource destination_resource;
+    const std::string value(128, 'v');
+    {
+        auto backing = ruvia::detail::DbResultAccess::makeResult(&backing_resource);
+        auto& fields = ruvia::detail::DbResultAccess::fields(backing);
+        auto& names = ruvia::detail::DbResultAccess::columnNames(backing);
+        fields.push_back(ruvia::detail::DbResultAccess::borrowedField(value, &backing_resource));
+        fields.push_back(ruvia::detail::DbResultAccess::nullField(&backing_resource));
+        names.emplace_back("value");
+        names.emplace_back("null");
+        auto source = ruvia::detail::DbResultAccess::borrowedRow(
+            fields.data(), fields.size(), names.data(), names.size(), &backing_resource);
+        auto destination = ruvia::detail::DbResultAccess::ownedRow(&destination_resource);
+        destination = std::move(source);
+        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK_EQ(destination.size(), std::size_t{2});
+        const auto borrowed = destination["value"].value();
+        RUVIA_CHECK_EQ(borrowed.value_or("missing"), std::string_view(value));
+        RUVIA_CHECK(borrowed && borrowed->data() == value.data());
+        RUVIA_CHECK(!destination["null"].value().has_value());
+    }
+    RUVIA_CHECK_EQ(backing_resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+}
+
+namespace {
+struct default_resource_guard final {
+    explicit default_resource_guard(std::pmr::memory_resource* resource) noexcept
+        : previous(std::pmr::set_default_resource(resource)) {}
+    ~default_resource_guard() {
+        std::pmr::set_default_resource(previous);
+    }
+    std::pmr::memory_resource* previous;
+};
+}  // namespace
+
+RUVIA_TEST(db_expression_values_use_explicit_resource_for_owned_parameters) {
+    ruvia::test::CountingMemoryResource source_resource;
+    const std::string value(128, 'v');
+    ruvia::DbQuery source(&source_resource);
+    source.select(source.value(value));
+    const auto statement = source.compile(ruvia::DbDriver::kPostgreSql, &source_resource);
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+    if (statement.params().size() != 1) {
+        return;
+    }
+
+    for (const bool through_expressions : {false, true}) {
+        ruvia::test::CountingMemoryResource destination_resource;
+        ruvia::DbQuery destination(&destination_resource);
+        ruvia::DbExpressions expressions(&destination_resource);
+        RejectingMemoryResource rejecting_default;
+        rejecting_default.rejectAllocations();
+        bool unexpected_allocation = false;
+        try {
+            default_resource_guard guard(&rejecting_default);
+            destination.select(through_expressions
+                                   ? destination.importExpression(expressions.value(statement.params()[0]))
+                                   : destination.value(statement.params()[0]));
+        } catch (const std::bad_alloc&) {
+            unexpected_allocation = true;
+        }
+        RUVIA_CHECK(!unexpected_allocation);
+        if (!unexpected_allocation) {
+            const auto compiled = destination.compile(ruvia::DbDriver::kPostgreSql, &destination_resource);
+            RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{1});
+            if (compiled.params().size() == 1) {
+                RUVIA_CHECK_EQ(ruvia::detail::DbValueAccess::text(compiled.params()[0]), std::string_view(value));
+            }
+        }
+    }
+}
+
+RUVIA_TEST(db_variadic_calls_use_explicit_resource_for_owned_parameters) {
+    ruvia::test::CountingMemoryResource source_resource;
+    const std::string value(128, 'v');
+    ruvia::DbQuery source(&source_resource);
+    source.select(source.value(value));
+    const auto statement = source.compile(ruvia::DbDriver::kPostgreSql, &source_resource);
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+    if (statement.params().size() != 1) {
+        return;
+    }
+
+    DbRegistryTestRuntime runtime;
+    ruvia::test::CountingMemoryResource destination_resource;
+    const auto config = testDbConfig();
+    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker, &destination_resource, config);
+    ruvia::operation_scope scope;
+    auto handle = registry.get(scope);
+    const std::string_view sql = config.driver == ruvia::DbDriver::kPostgreSql ? "SELECT $1" : "SELECT ?";
+    const auto baseline = destination_resource.liveAllocations();
+
+    for (int operation_kind = 0; operation_kind != 3; ++operation_kind) {
+        RejectingMemoryResource rejecting_default;
+        rejecting_default.rejectAllocations();
+        bool unexpected_allocation = false;
+        try {
+            default_resource_guard guard(&rejecting_default);
+            if (operation_kind == 0) {
+                auto operation = handle.query(sql, statement.params()[0]);
+                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                static_cast<void>(operation);
+            } else if (operation_kind == 1) {
+                auto operation = handle.execute(sql, statement.params()[0]);
+                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                static_cast<void>(operation);
+            } else {
+                auto operation = handle.queryStream(sql, statement.params()[0]);
+                RUVIA_CHECK(destination_resource.liveAllocations() > baseline);
+                static_cast<void>(operation);
+            }
+        } catch (const std::bad_alloc&) {
+            unexpected_allocation = true;
+        }
+        RUVIA_CHECK(!unexpected_allocation);
+        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), baseline);
+    }
 }
 
 RUVIA_TEST(db_sql_literal_cold_operations_release_owned_parameters) {

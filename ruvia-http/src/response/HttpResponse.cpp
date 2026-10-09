@@ -20,6 +20,7 @@
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
+#include "coding/HttpContentCoding.h"
 #include "field/HttpEntityTag.h"
 #include "response/HttpResponseHeaderAccess.h"
 #include "response/HttpResponseStaticHeaders.h"
@@ -347,22 +348,20 @@ private:
 };
 
 void HttpResponse::applyContentEncoding(std::string_view contentEncoding) {
-    if (contentEncoding.empty()) {
-        throw std::invalid_argument("encoded response requires a content coding");
-    }
     apply_encoded_representation(contentEncoding, nullptr);
 }
 
 void HttpResponse::replaceBodyWithContentEncoding(
     std::pmr::string&& value, std::string_view contentEncoding) {
-    if (contentEncoding.empty()) {
-        throw std::invalid_argument("encoded response body requires a content coding");
-    }
     apply_encoded_representation(contentEncoding, &value);
 }
 
 void HttpResponse::apply_encoded_representation(
     std::string_view content_encoding, std::pmr::string* body) {
+    detail::validateResponseHeaderStorageSize(std::string_view("Content-Encoding").size(), content_encoding.size());
+    if (!detail::isValidHttpContentEncodingFieldValue(content_encoding, detail::HttpFieldListRole::kSender)) {
+        throw std::invalid_argument("invalid HTTP Content-Encoding header");
+    }
     constexpr std::size_t encoding_header = 0;
     constexpr std::size_t etag_header = 1;
     constexpr std::size_t length_header = 2;

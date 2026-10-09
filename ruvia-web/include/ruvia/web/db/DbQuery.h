@@ -293,7 +293,8 @@ public:
     }
     Expr column(std::string_view name, std::string_view table = {});
     Expr star(std::string_view table = {});
-    Expr value(DbValue value);
+    // Owns the value in this query's resource before returning.
+    Expr value(const DbValue& value);
     template <detail::DbParameter Value>
         requires(!std::same_as<std::remove_cvref_t<Value>, DbValue>)
     Expr value(Value&& value) {

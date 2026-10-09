@@ -512,6 +512,8 @@ public:
     void feed(std::string_view chunk);
     void finishInput() noexcept;
 
+    // If owning part metadata throws, the part stays pending without consuming
+    // its limits. poll() may be retried after allocations become available.
     [[nodiscard]] MultipartPollResult poll();
 
 private:

@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory_resource>
@@ -275,7 +276,6 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
 // A not-found handler whose response carries a header value large enough that the
 // HPACK-encoded response header block exceeds the default 16384-byte max frame size,
 // forcing the server onto its HEADERS + CONTINUATION path.
-#if !defined(_WIN32)
 ruvia::Task<ruvia::HttpResponse> largeHeaderNotFoundHandler(ruvia::Context& context) {
     (void)context;
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
@@ -299,14 +299,50 @@ struct EmittedFrame {
 std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::vector<EmittedFrame> frames;
+    bool server_completed = false;
+    bool client_completed = false;
+    bool watchdog_completed = false;
+    bool watchdog_cancelled = false;
+    bool timed_out = false;
+    std::exception_ptr server_failure;
+    std::exception_ptr client_failure;
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
+    tcp::socket server_socket(io);
+    tcp::socket client_socket(io);
+    asio::steady_timer watchdog(io);
+    const auto finish = [&] {
+        if (server_completed && client_completed) {
+            if (!watchdog_cancelled) {
+                watchdog_cancelled = true;
+                watchdog.cancel();
+            }
+            if (watchdog_completed) {
+                io.stop();
+            }
+        }
+    };
+    watchdog.expires_after(std::chrono::seconds(5));
+    watchdog.async_wait([&](const asio::error_code& error) {
+        watchdog_completed = true;
+        if (!error) {
+            timed_out = true;
+            asio::error_code ignored;
+            acceptor.close(ignored);
+            client_socket.close(ignored);
+            server_socket.close(ignored);
+        }
+        finish();
+    });
 
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
-            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            if (timed_out) {
+                co_return;
+            }
+            server_socket = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             auto handler = &largeHeaderNotFoundHandler;
@@ -314,14 +350,23 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(
                     ruvia::Context&)>(handler));
             co_await ruvia::asAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+                ruvia::test::runBarePlainHttp2SansIoSession(server_socket, routes, worker, "127.0.0.1"));
         },
-        asio::detached);
+        [&](std::exception_ptr failure) {
+            server_failure = failure;
+            server_completed = true;
+            asio::error_code ignored;
+            server_socket.close(ignored);
+            finish();
+        });
 
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
-            tcp::socket sock(io);
+            if (timed_out) {
+                co_return;
+            }
+            auto& sock = client_socket;
             co_await sock.async_connect(
                 tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
@@ -359,16 +404,8 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 co_return;
             }
 
-            asio::steady_timer watchdog(io);
-            watchdog.expires_after(std::chrono::seconds(5));
-            watchdog.async_wait([&sock](const asio::error_code& ec) {
-                if (!ec) {
-                    asio::error_code ignore;
-                    sock.close(ignore);
-                }
-            });
-
-            std::size_t completedResponses = 0;
+            bool first_completed = false;
+            bool second_completed = false;
             for (;;) {
                 char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
@@ -387,22 +424,39 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 frames.push_back(EmittedFrame{
                     static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
                 if ((header.type == 0x1 /*HEADERS*/ || header.type == 0x9 /*CONTINUATION*/) &&
-                    (header.flags & kFlagEndHeaders) != 0 &&
-                    (header.streamId == 1 || header.streamId == 3) && ++completedResponses == 2) {
-                    break;
+                    (header.flags & kFlagEndHeaders) != 0) {
+                    first_completed |= header.streamId == 1;
+                    second_completed |= header.streamId == 3;
+                    if (first_completed && second_completed) {
+                        break;
+                    }
                 }
             }
-            watchdog.cancel();
-            asio::error_code ignore;
-            sock.close(ignore);
-            io.stop();
         },
-        asio::detached);
+        [&](std::exception_ptr failure) {
+            client_failure = failure;
+            client_completed = true;
+            asio::error_code ignored;
+            client_socket.close(ignored);
+            acceptor.close(ignored);
+            finish();
+        });
 
-    io.run();
+    do {
+        io.restart();
+        io.run();
+    } while (!server_completed || !client_completed || !watchdog_completed);
+    if (timed_out) {
+        throw std::runtime_error("HTTP/2 header fixture timed out");
+    }
+    if (client_failure) {
+        std::rethrow_exception(client_failure);
+    }
+    if (server_failure) {
+        std::rethrow_exception(server_failure);
+    }
     return frames;
 }
-#endif
 
 // The on-disk path of the short file the truncated-file-body handler serves. Set by
 // rstErrorForTruncatedFileBody() before the server runs; the single-threaded io_context
@@ -602,7 +656,6 @@ RUVIA_TEST(http2_dropped_data_credits_connection_flow_window) {
     RUVIA_CHECK(credited);
 }
 
-#if !defined(_WIN32)
 RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
     const auto frames = framesForConcurrentLargeHeaderResponses();
 
@@ -614,6 +667,16 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
         }
     }
     RUVIA_CHECK(sawContinuation);
+    bool first_completed = false;
+    bool second_completed = false;
+    for (const auto& emitted : frames) {
+        if ((emitted.type == 0x1 || emitted.type == 0x9) &&
+            (emitted.flags & kFlagEndHeaders) != 0) {
+            first_completed |= emitted.streamId == 1;
+            second_completed |= emitted.streamId == 3;
+        }
+    }
+    RUVIA_CHECK(first_completed && second_completed);
 
     // RFC 9113 6.10: once a HEADERS frame without END_HEADERS opens a header block,
     // every frame until END_HEADERS must be a CONTINUATION on the SAME stream -- no
@@ -637,7 +700,6 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
     RUVIA_CHECK(!interleaved);
     RUVIA_CHECK_EQ(openStream, std::uint32_t{0});
 }
-#endif
 
 RUVIA_TEST(http2_truncated_file_body_aborts_stream_with_rst) {
     // The response advertises content-length 40000 but the file on disk is 5 bytes, so

@@ -272,6 +272,39 @@ RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
         ruvia_ctx, origin, "*", "/next", HttpClientRedirectResolutionError::kInvalidCurrentTarget);
 }
 
+RUVIA_TEST(http_client_redirect_validates_path_before_dot_segment_removal) {
+    const auto origin = HttpOriginView::http({.host = "example.com"});
+    constexpr std::string_view invalid_locations[] = {
+        "/bad space/../next", "/%/../next", "/%zz/../next", "/[bad]/../next",
+        "/bad\\path/../next", "/bad\tpath/../next", "/bad\r\npath/../next",
+        std::string_view("/bad\0path/../next", 17), "/bad\x7f/../next", "/caf\xc3\xa9/../next",
+        "bad space/../next", "%zz/../next", "[bad]/../next",
+        "http://example.com/%zz/../next", "//example.com/[bad]/../next"};
+    for (const auto invalid : invalid_locations) {
+        checkRedirectTargetFailure(ruvia_ctx, origin, "/base/page", invalid,
+            HttpClientRedirectResolutionError::kInvalidLocation);
+    }
+    for (const std::string_view valid : {
+             "/bad%20space/../next", "/%25/../next", "/%5Bbad%5D/../next",
+             "http://example.com/%25/../next", "//example.com/%25/../next"}) {
+        checkResolvedTarget(ruvia_ctx, origin, "/base/page", valid, "/next");
+    }
+}
+
+RUVIA_TEST(http_client_redirect_empty_reference_path_preserves_base_path) {
+    const auto origin = HttpOriginView::http({.host = "example.com"});
+    for (const std::string_view path : {"/a/./page", "/a/../page", "/a//.", "/a/.."}) {
+        const std::string current = std::string(path) + "?old=1";
+        for (const std::string_view location : {"", "#fragment"}) {
+            checkResolvedTarget(ruvia_ctx, origin, current, location, current);
+        }
+        checkResolvedTarget(ruvia_ctx, origin, current, "?new=2", std::string(path) + "?new=2");
+        checkResolvedTarget(ruvia_ctx, origin, current, "?", std::string(path) + "?");
+    }
+    checkResolvedTarget(ruvia_ctx, origin, "/a/../page?old=1", "//example.com", "/");
+    checkResolvedTarget(ruvia_ctx, origin, "/a/../page?old=1", "next", "/next");
+}
+
 RUVIA_TEST(http_client_same_origin_redirect_supports_ipvfuture) {
     const auto origin = HttpOriginView::http({.host = "[v1.future]"});
     checkResolvedTarget(ruvia_ctx, origin, "/current", "http://[V1.FUTURE]:/next", "/next");

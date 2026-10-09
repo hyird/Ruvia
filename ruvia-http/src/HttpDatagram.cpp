@@ -10,14 +10,14 @@
 
 namespace ruvia {
 std::expected<bool, Http3CodecError> parseHttpCapsuleProtocol(std::string_view value) noexcept {
-    detail::HttpStructuredParser parser{value};
+    detail::HttpStructuredParser parser{detail::http_structured_text_input{value}};
     parser.spaces();
     detail::HttpStructuredItem item;
     if (!parser.item(item) || !parser.parameters()) {
         return std::unexpected(Http3CodecError::kValueOutOfRange);
     }
     parser.ows();
-    if (parser.at != value.size() || item.kind != detail::HttpStructuredItem::Kind::kBoolean) {
+    if (!parser.empty() || item.kind != detail::HttpStructuredItem::Kind::kBoolean) {
         return std::unexpected(Http3CodecError::kValueOutOfRange);
     }
     return item.boolean;

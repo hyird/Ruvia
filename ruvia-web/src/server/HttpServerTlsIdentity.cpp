@@ -1,6 +1,5 @@
 #include "server/HttpServerTlsIdentity.h"
 
-#include <cstring>
 #include <stdexcept>
 
 #include <asio/error.hpp>
@@ -10,25 +9,11 @@
 #include <openssl/ssl.h>
 
 #include "server/HttpServerTlsVerify.h"
+#include "tls/TlsFilePaths.h"
+#include "tls/TlsPasswordScope.h"
 
 namespace ruvia::detail {
 namespace {
-
-int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) noexcept {
-    if (buffer == nullptr || bufferSize <= 0 || userData == nullptr) {
-        return 0;
-    }
-
-    const auto& password = *static_cast<const std::pmr::string*>(userData);
-    const auto capacity = static_cast<std::size_t>(bufferSize);
-    if (password.size() >= capacity) {
-        return 0;
-    }
-
-    std::memcpy(buffer, password.data(), password.size());
-    buffer[password.size()] = '\0';
-    return static_cast<int>(password.size());
-}
 
 [[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
@@ -45,6 +30,30 @@ int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) no
 
 }  // namespace
 
+void validateHttpServerTlsIdentity(
+    const HttpServerListenerDefinition::TlsIdentity& identity) {
+    if (identity.certificateChainFile.empty() || identity.privateKeyFile.empty()) {
+        throw std::invalid_argument(
+            "TLS certificate chain and private key files must not be empty");
+    }
+    validate_tls_file_paths({identity.certificateChainFile, identity.privateKeyFile});
+}
+
+void validateHttpServerTlsClientCertificatePolicy(
+    const HttpServerListenerDefinition::TlsClientCertificatePolicy& policy) {
+    switch (policy.requirement) {
+        case TlsClientCertificateRequirement::kOptional:
+        case TlsClientCertificateRequirement::kRequired:
+            break;
+        default:
+            throw std::invalid_argument("TLS client certificate requirement is invalid");
+    }
+    if (policy.verifyFile.empty()) {
+        throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
+    }
+    validate_tls_file_paths({policy.verifyFile});
+}
+
 void configureHttpServerTlsIdentity(SSL_CTX* context,
     const HttpServerListenerDefinition::TlsIdentity& identity,
     const std::optional<HttpServerListenerDefinition::TlsClientCertificatePolicy>&
@@ -52,16 +61,12 @@ void configureHttpServerTlsIdentity(SSL_CTX* context,
     if (context == nullptr) {
         throw std::invalid_argument("TLS context must not be null");
     }
-    if (identity.certificateChainFile.empty() || identity.privateKeyFile.empty()) {
-        throw std::invalid_argument("TLS requires certificate chain and private key files");
+    validateHttpServerTlsIdentity(identity);
+    if (clientCertificates) {
+        validateHttpServerTlsClientCertificatePolicy(*clientCertificates);
     }
 
-    if (!identity.privateKeyPassword.empty()) {
-        SSL_CTX_set_default_passwd_cb(context, copyPrivateKeyPassword);
-        // SSL_CTX retains this borrowed pointer. The identity storage must outlive the context.
-        SSL_CTX_set_default_passwd_cb_userdata(
-            context, const_cast<std::pmr::string*>(&identity.privateKeyPassword));
-    }
+    const tls_password_scope password_scope(*context, identity.privateKeyPassword);
 
     ::ERR_clear_error();
     if (::SSL_CTX_use_certificate_chain_file(context, identity.certificateChainFile.c_str()) != 1) {
@@ -82,10 +87,6 @@ void configureHttpServerTlsIdentity(SSL_CTX* context,
     if (!clientCertificates.has_value()) {
         return;
     }
-    if (clientCertificates->verifyFile.empty()) {
-        throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
-    }
-
     ::ERR_clear_error();
     if (::SSL_CTX_load_verify_locations(context, clientCertificates->verifyFile.c_str(), nullptr) !=
         1) {

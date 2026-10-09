@@ -14,6 +14,15 @@
 
 namespace ruvia::detail {
 
+// URL index keys and extension policy use UTF-8 on every platform rather than
+// the system narrow encoding of filesystem::path::generic_string<char>().
+[[nodiscard]] inline std::pmr::u8string static_file_utf8_path(
+    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
+    return path.generic_string<char8_t, std::char_traits<char8_t>,
+        std::pmr::polymorphic_allocator<char8_t>>(
+        std::pmr::polymorphic_allocator<char8_t>(resource));
+}
+
 template <typename Char>
 [[nodiscard]] inline std::basic_string_view<Char> staticFileExtension(
     std::basic_string_view<Char> path) noexcept {
@@ -54,7 +63,7 @@ template <typename Char>
     // type (for example U+0168 has the same low byte as 'h'). Convert the full
     // path to UTF-8 first so extension policy and MIME lookup compare the
     // actual filename bytes on every platform.
-    const auto utf8Path = path.generic_u8string();
+    const auto utf8Path = static_file_utf8_path(path, resource);
     const auto source = staticFileExtension(std::u8string_view(utf8Path.data(), utf8Path.size()));
     if (source.empty()) {
         return std::pmr::string(resource);

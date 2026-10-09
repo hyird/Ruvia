@@ -14,12 +14,56 @@ RedisError::Code RedisError::code() const noexcept {
     return code_;
 }
 
+RedisKeyValue::RedisKeyValue(const RedisKeyValue& other, allocator_type allocator)
+    : key_(other.key_, allocator.resource()),
+      value_(other.value_, allocator.resource()) {}
+
+RedisKeyValue::RedisKeyValue(RedisKeyValue&& other, allocator_type allocator)
+    : key_(std::move(other.key_), allocator.resource()),
+      value_(std::move(other.value_), allocator.resource()) {}
+
+RedisScoredValue::RedisScoredValue(const RedisScoredValue& other, allocator_type allocator)
+    : value_(other.value_, allocator.resource()),
+      score_(other.score_) {}
+
+RedisScoredValue::RedisScoredValue(RedisScoredValue&& other, allocator_type allocator)
+    : value_(std::move(other.value_), allocator.resource()),
+      score_(other.score_) {}
+
+RedisStreamEntry::RedisStreamEntry(const RedisStreamEntry& other, allocator_type allocator)
+    : id_(other.id_, allocator.resource()),
+      fields_(other.fields_, allocator.resource()) {}
+
+RedisStreamEntry::RedisStreamEntry(RedisStreamEntry&& other, allocator_type allocator)
+    : id_(std::move(other.id_), allocator.resource()),
+      fields_(std::move(other.fields_), allocator.resource()) {}
+
+RedisStreamReadResult::RedisStreamReadResult(const RedisStreamReadResult& other, allocator_type allocator)
+    : stream_(other.stream_, allocator.resource()),
+      entries_(other.entries_, allocator.resource()) {}
+
+RedisStreamReadResult::RedisStreamReadResult(RedisStreamReadResult&& other, allocator_type allocator)
+    : stream_(std::move(other.stream_), allocator.resource()),
+      entries_(std::move(other.entries_), allocator.resource()) {}
+
 RedisValue::RedisValue(std::pmr::memory_resource* resource)
     : RedisValue(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
 RedisValue::RedisValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : string_(resource),
       array_(resource) {}
+
+RedisValue::RedisValue(const RedisValue& other, allocator_type allocator)
+    : kind_(other.kind_),
+      string_(other.string_, allocator.resource()),
+      integer_(other.integer_),
+      array_(other.array_, allocator.resource()) {}
+
+RedisValue::RedisValue(RedisValue&& other, allocator_type allocator)
+    : kind_(other.kind_),
+      string_(std::move(other.string_), allocator.resource()),
+      integer_(other.integer_),
+      array_(std::move(other.array_), allocator.resource()) {}
 
 RedisValue::Kind RedisValue::kind() const noexcept {
     return kind_;

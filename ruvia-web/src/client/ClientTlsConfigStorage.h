@@ -9,6 +9,8 @@
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/ClientTlsConfig.h"
 
+#include "tls/TlsFilePaths.h"
+
 namespace ruvia::detail {
 
 inline void validate_client_tls_config(const client_tls_config& config) {
@@ -18,10 +20,9 @@ inline void validate_client_tls_config(const client_tls_config& config) {
     if (config.certificate_file.empty() != config.private_key_file.empty()) {
         throw std::invalid_argument("client TLS certificate and private key must be configured together");
     }
-    for (const std::string_view value : {std::string_view(config.ca_file), std::string_view(config.certificate_file), std::string_view(config.private_key_file), std::string_view(config.server_name)}) {
-        if (value.contains('\0')) {
-            throw std::invalid_argument("client TLS configuration must not contain NUL bytes");
-        }
+    validate_tls_file_paths({config.ca_file, config.certificate_file, config.private_key_file});
+    if (config.server_name.contains('\0')) {
+        throw std::invalid_argument("client TLS configuration must not contain NUL bytes");
     }
     if (!config.server_name.empty()) {
         ensureConfigHost(config.server_name, "TLS server name must not be empty", "TLS server name is invalid", kSeparatedPortHostRules);

@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -9,11 +10,71 @@
 
 #include "ruvia/http/MultipartParser.h"
 
+#include "failing_memory_resource.h"
 #include "parser/MultipartDelimiter.h"
 #include "parser/MultipartPartAccess.h"
 #include "parser/MultipartPartHeaders.h"
 #include "parser/MultipartStreamPartAccess.h"
 #include "test_harness.h"
+
+RUVIA_TEST(multipart_parser_retries_owned_metadata_without_consuming_limits) {
+    const std::string name(160, 'n');
+    const std::string filename(160, 'f');
+    const std::string content_type = "application/" + std::string(160, 't');
+    const std::string headers = "Content-Disposition: form-data; name=\"" + name +
+                                "\"; filename=\"" + filename + "\"\r\nContent-Type: " +
+                                content_type + "\r\n\r\n";
+    const std::string body = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
+
+    for (const bool limit_parts : {false, true}) {
+        bool reached_success = false;
+        std::size_t failed_allocations = 0;
+        for (std::size_t failure_index = 0; failure_index < 64; ++failure_index) {
+            failing_memory_resource resource;
+            bool allocation_failed = false;
+            {
+                ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("abc"),
+                    .resource = &resource,
+                    .max_parts = limit_parts ? 1U : 2U,
+                    .max_metadata_bytes = limit_parts ? headers.size() * 2 : headers.size()});
+                parser.feed(body);
+                parser.finishInput();
+                resource.fail_after(failure_index);
+                try {
+                    const auto result = parser.poll();
+                    RUVIA_CHECK(result.part() != nullptr);
+                    reached_success = true;
+                } catch (const std::bad_alloc&) {
+                    allocation_failed = true;
+                    ++failed_allocations;
+                }
+                resource.allow_allocations();
+                if (allocation_failed) {
+                    const auto retried = parser.poll();
+                    const auto* part = retried.part();
+                    RUVIA_CHECK(part != nullptr);
+                    RUVIA_CHECK(retried.failure() == nullptr);
+                    if (part != nullptr) {
+                        RUVIA_CHECK_EQ(part->name(), std::string_view(name));
+                        RUVIA_CHECK_EQ(part->filename(), std::string_view(filename));
+                        RUVIA_CHECK(part->hasFilename());
+                        RUVIA_CHECK_EQ(part->contentType(), std::string_view(content_type));
+                        RUVIA_CHECK_EQ(part->body(), std::string_view("value"));
+                        RUVIA_CHECK(part->phase() == ruvia::MultipartChunkPhase::kComplete);
+                    }
+                }
+                const auto done = parser.poll();
+                RUVIA_CHECK(done.done() != nullptr);
+            }
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+            if (reached_success) {
+                break;
+            }
+        }
+        RUVIA_CHECK(reached_success);
+        RUVIA_CHECK(failed_allocations != 0);
+    }
+}
 
 RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state = 0x4D55'4C54'4950'4152ULL;

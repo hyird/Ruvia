@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/Bytes.h"
+#include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpAcceptMatch.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpContentCoding.h"
@@ -96,6 +97,16 @@ void Context::ensureRequestQuery() const {
     // Percent-encoding is validated while decoding each component. Unencoded
     // names and values borrow the request query string instead of copying.
     std::pmr::vector<std::pmr::string> storage(arena());
+    // Publish views only after capacity is fixed: moving a short string during
+    // vector growth invalidates views into its inline buffer. Count decoded
+    // owners exactly so unencoded fields do not reserve unused string storage.
+    std::size_t decoded_component_count = 0;
+    (void)visitUrlEncodedPairs(request_.queryString(),
+        [&decoded_component_count](std::string_view name, std::string_view value) {
+            decoded_component_count += hasUrlEncoding(name, UrlDecodeMode::kForm);
+            decoded_component_count += hasUrlEncoding(value, UrlDecodeMode::kForm);
+        });
+    storage.reserve(decoded_component_count);
     auto query = detail::RequestNameValueListAccess::make(arena());
     bool valid = true;
     const bool completed = visitUrlEncodedPairs(request_.queryString(),
@@ -299,8 +310,8 @@ std::optional<std::string_view> Context::requestNegotiate(
 
     const auto headerName = negotiationHeaderName(field);
     const bool mediaType = field == ContextRequest::Negotiable::kMediaType;
-    // Only Accept-Language does RFC 4647 prefix matching; an encoding or charset
-    // either is the offered token or is "*".
+    const bool encoding = field == ContextRequest::Negotiable::kEncoding;
+    // Only Accept-Language needs prefix matching in the generic token parser.
     const auto tokenMode = field == ContextRequest::Negotiable::kLanguage
                                ? HttpAcceptTokenMatchMode::kLanguagePrefix
                                : HttpAcceptTokenMatchMode::kExact;
@@ -320,21 +331,29 @@ std::optional<std::string_view> Context::requestNegotiate(
         fieldValues[fieldValueCount++] = header.value();
     }
 
+    if (!sawField) {
+        return supported.front();
+    }
+
     std::optional<std::string_view> best;
     int bestQuality = 0;
     for (const auto offered : supported) {
         HttpAcceptMatch match;
+        HttpAcceptedEncodingQuality encoding_quality;
         for (std::size_t i = 0; i < fieldValueCount; ++i) {
             if (mediaType) {
                 match.updateMediaType(fieldValues[i], offered);
+            } else if (encoding) {
+                encoding_quality.update(fieldValues[i], offered);
             } else {
                 match.updateToken(fieldValues[i], offered, tokenMode);
             }
         }
-        if (!match.matched()) {
+        const auto quality = encoding ? encoding_quality.quality(httpAsciiEqualsIgnoreCase(offered, "identity"))
+                                      : match.quality();
+        if (quality == 0) {
             continue;
         }
-        const auto quality = match.quality();
         // Strictly greater, so `supported` order breaks the client's ties and
         // reads as the server's own preference.
         if (quality > bestQuality) {
@@ -343,11 +362,8 @@ std::optional<std::string_view> Context::requestNegotiate(
         }
     }
 
-    // Absence alone means no preference; a present but empty field is an empty
-    // list that matches nothing, exactly as in requestAccepts.
-    if (!sawField) {
-        return supported.front();
-    }
+    // An empty Accept-Encoding accepts identity; other empty negotiation fields
+    // match no representation.
     return best;
 }
 

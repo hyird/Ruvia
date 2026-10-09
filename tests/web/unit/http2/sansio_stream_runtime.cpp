@@ -39,6 +39,7 @@
 
 #include "context/ContextAccess.h"
 #include "context_services_fixture.h"
+#include "failing_memory_resource.h"
 #include "http2/Http2BufferedResponseWrite.h"
 #include "http2/Http2DataOutputBudget.h"
 #include "http2/Http2SansIoRequestBody.h"
@@ -70,38 +71,6 @@ private:
         return this == &other;
     }
 };
-
-#if !defined(_MSC_VER)
-class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations{0};
-    std::size_t deallocations{0};
-
-    void rejectAllocations(bool value) noexcept {
-        rejecting_ = value;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (rejecting_) {
-            throw std::bad_alloc();
-        }
-        ++allocations;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        ++deallocations;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool rejecting_{false};
-};
-#endif  // !_MSC_VER
 
 using ruvia::HttpResponseCodingSelection;
 using ruvia::ProtocolByteLimit;
@@ -703,8 +672,7 @@ RUVIA_TEST(http2_web_body_queue_aggregates_one_byte_data_credits) {
     RUVIA_CHECK(connection.pendingOutput().size() > 0);
     (void)connection.consumeOutput(connection.pendingOutput().size());
 
-#if !defined(_MSC_VER)
-    ToggleRejectingMemoryResource rejectingResource;
+    failing_memory_resource rejectingResource;
     {
         Http2SansIoBodyQueue failedQueue(&rejectingResource);
         const std::string failedPayload(16384, 'z');
@@ -720,38 +688,48 @@ RUVIA_TEST(http2_web_body_queue_aggregates_one_byte_data_credits) {
         }
         RUVIA_CHECK_EQ(failedQueue.queuedBytes(), kUpdateThreshold);
 
-        const auto failedFrame = http2_connection_test::dataFrame(
-            std::pmr::get_default_resource(), 1, 0, payload);
-        RUVIA_CHECK(connection.feed(failedFrame) == ruvia::Http2FeedResult::kAccepted);
         bool appendFailed = false;
-        while (auto event = connection.nextEvent()) {
-            if (auto* data = event->messageBodyChunk()) {
-                rejectingResource.rejectAllocations(true);
-                try {
-                    failedQueue.enqueue(data->bytes(), data->takeCredit());
-                } catch (const std::bad_alloc&) {
-                    appendFailed = true;
+        std::size_t retained_bytes = kUpdateThreshold;
+        rejectingResource.fail_after(0);
+        // Leave failure armed until an append actually needs storage. PMR string
+        // growth can retain different spare capacity on different implementations.
+        for (std::size_t additional = 0; additional < kUpdateThreshold && !appendFailed;
+            additional += payload.size()) {
+            const auto failedFrame = http2_connection_test::dataFrame(
+                std::pmr::get_default_resource(), 1, 0, payload);
+            RUVIA_CHECK(connection.feed(failedFrame) == ruvia::Http2FeedResult::kAccepted);
+            while (auto event = connection.nextEvent()) {
+                if (auto* data = event->messageBodyChunk()) {
+                    try {
+                        failedQueue.enqueue(data->bytes(), data->takeCredit());
+                        retained_bytes += data->bytes().size();
+                    } catch (const std::bad_alloc&) {
+                        appendFailed = true;
+                    }
                 }
             }
         }
         RUVIA_CHECK(appendFailed);
-        RUVIA_CHECK_EQ(failedQueue.queuedBytes(), kUpdateThreshold);
-        RUVIA_CHECK_EQ(failedQueue.pop().size(), kUpdateThreshold);
+        RUVIA_CHECK_EQ(failedQueue.queuedBytes(), retained_bytes);
+        const auto retained_payload = failedQueue.pop();
+        RUVIA_CHECK_EQ(retained_payload.size(), retained_bytes);
+        if (retained_payload.size() >= kUpdateThreshold) {
+            const auto initial = retained_payload.substr(0, kUpdateThreshold);
+            const auto appended = retained_payload.substr(kUpdateThreshold);
+            RUVIA_CHECK(std::ranges::all_of(initial, [](char byte) { return byte == 'z'; }));
+            RUVIA_CHECK(std::ranges::all_of(appended, [](char byte) { return byte == 'x'; }));
+        }
     }
-    RUVIA_CHECK_EQ(rejectingResource.allocations, rejectingResource.deallocations);
+    RUVIA_CHECK_EQ(rejectingResource.live_allocations(), std::size_t{0});
     RUVIA_CHECK(connection.pendingOutput().size() > 0);
-#endif
 }
 
-#if !defined(_MSC_VER)
-// The queue probe injects failure through PMR string growth; MSVC's debug
-// implementation does not complete that synthetic throwing path.
 RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
     const std::string allocationSizedChunk(256, 'x');
 
-    ToggleRejectingMemoryResource firstChunkResource;
+    failing_memory_resource firstChunkResource;
     Http2SansIoBodyQueue emptyQueue(&firstChunkResource);
-    firstChunkResource.rejectAllocations(true);
+    firstChunkResource.fail_after(0);
     bool firstChunkRejected = false;
     try {
         emptyQueue.enqueue(allocationSizedChunk);
@@ -762,10 +740,10 @@ RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
     RUVIA_CHECK(emptyQueue.empty());
     RUVIA_CHECK_EQ(emptyQueue.queuedBytes(), std::size_t{0});
 
-    ToggleRejectingMemoryResource overflowResource;
+    failing_memory_resource overflowResource;
     Http2SansIoBodyQueue populatedQueue(&overflowResource);
     populatedQueue.enqueue("retained");
-    overflowResource.rejectAllocations(true);
+    overflowResource.fail_after(0);
     bool overflowRejected = false;
     try {
         populatedQueue.enqueue(allocationSizedChunk);
@@ -855,7 +833,7 @@ RUVIA_TEST(http2_websocket_transport_empty_end_completes_with_zero_send_window) 
 }
 
 RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_allocation_fails) {
-    ToggleRejectingMemoryResource resource;
+    failing_memory_resource resource;
     auto connection = ruvia::Http2Connection::server({.resource = &resource});
     handshake(connection);
     std::pmr::string requestBlock(&resource);
@@ -894,7 +872,7 @@ RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_al
     RUVIA_CHECK_EQ(connection.pendingOutput().size(),
         static_cast<std::size_t>(ruvia::kHttp2FrameHeaderBytes));
 
-    resource.rejectAllocations(true);
+    resource.fail_after(0);
     bool aborted = false;
     bool readCompleted = false;
     std::optional<ruvia::detail::HttpStreamReadResult> readResult;
@@ -932,7 +910,7 @@ RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_al
 }
 
 RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allocation_fails) {
-    ToggleRejectingMemoryResource resource;
+    failing_memory_resource resource;
     auto connection = ruvia::Http2Connection::server({.resource = &resource});
     handshake(connection);
     [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
@@ -962,7 +940,7 @@ RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allo
     RUVIA_CHECK_EQ(connection.pendingOutput().size(),
         static_cast<std::size_t>(ruvia::kHttp2FrameHeaderBytes));
 
-    resource.rejectAllocations(true);
+    resource.fail_after(0);
     bool threw = false;
     std::optional<ruvia::detail::Http2BufferedResponseWriteResult> result;
     asio::co_spawn(
@@ -986,8 +964,6 @@ RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allo
                     result->failedAfterCommit() != nullptr);
     }
 }
-#endif  // !_MSC_VER
-
 RUVIA_TEST(http2BufferedResponseWriterSendsMultipartFileSlicesAndEndsStream) {
     namespace fs = std::filesystem;
     const auto path = fs::temp_directory_path() / "ruvia-http2-multipart-writer.bin";
