@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpAscii.h"
@@ -136,11 +137,11 @@ std::optional<Http3SansIoSessionEngine::RequestLease> Http3SansIoSessionEngine::
     return RequestLease(*this, *found->second);
 }
 
-std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3SansIoSessionEngine::admitPushStream(
+std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3SansIoSessionEngine::admitPushStream(
     std::uint64_t streamId, std::uint64_t pushId) {
     const auto* head = connection_.promisedRequest(pushId);
     if (terminated_ || head == nullptr || streams_.contains(streamId) || streams_.size() >= limits_.maxLiveStreams) {
-        return std::unexpected(Http3ConnectionErrorCode::kRequestRejected);
+        return Http3ConnectionErrorCode::kRequestRejected;
     }
     std::pmr::polymorphic_allocator<Stream> allocator(worker_.resource());
     auto* rawStream = allocator.allocate(1);
@@ -167,7 +168,7 @@ std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3SansIoSessi
     }
     try {
         auto prefix = connection_.preparePushStream(streamId, pushId);
-        if (!prefix) {
+        if ((prefix.index() != 0)) {
             streams_.erase(inserted);
         }
         return prefix;
@@ -208,10 +209,10 @@ bool Http3SansIoSessionEngine::queueOriginAdvertisement(std::span<const std::str
         return false;
     }
     auto frame = connection_.prepareOriginAdvertisement(origins);
-    if (!frame || frame->size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
+    if ((frame.index() != 0) || std::get<0>(frame).size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
         return false;
     }
-    controlOutput_.append(frame->data(), frame->size());
+    controlOutput_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     if (controlWake_ != nullptr) {
         controlWake_(controlWakeContext_);
     }
@@ -463,7 +464,7 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
             return;
         }
         case Http3ConnectionEventKind::kTrailerField:
-            if (!stream.trailers.append(event.trailer.name, event.trailer.value)) {
+            if (stream.trailers.append(event.trailer.name, event.trailer.value).index() != 0) {
                 throw std::logic_error("HTTP/3 decoder published invalid request trailers");
             }
             return;
@@ -631,10 +632,10 @@ Http3DatagramReceiveStatus Http3SansIoSessionEngine::receiveDatagram(Http3Datagr
         // by the network/connection owner and is reconstructed for the adapter.
         std::array<char, 8> prefix{};
         auto size = encodeHttp3DatagramPrefix(prefix, datagram.streamId);
-        if (!size) {
+        if ((size.index() != 0)) {
             throw std::runtime_error("invalid HTTP Datagram stream ID");
         }
-        std::pmr::string bytes(prefix.data(), *size, worker_.resource());
+        std::pmr::string bytes(prefix.data(), std::get<0>(size), worker_.resource());
         bytes.append(datagram.payload.data(), datagram.payload.size());
         if (!stream->datagrams) {
             stream->datagrams.emplace(worker_.resource());

@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -26,8 +27,8 @@ std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
     std::vector<char> output(16);
     const auto header = ruvia::encodeHttp3VarInt(output, type);
     const auto length = ruvia::encodeHttp3VarInt(
-        std::span<char>(output).subspan(*header), payload.size());
-    output.resize(*header + *length);
+        std::span<char>(output).subspan(std::get<0>(header)), payload.size());
+    output.resize(std::get<0>(header) + std::get<0>(length));
     output.insert(output.end(), payload.begin(), payload.end());
     return output;
 }
@@ -36,7 +37,7 @@ std::vector<char> responseHead() {
     constexpr std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"},
         ruvia::Http3FieldSectionFieldView{"x-received", "owned"}};
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &temp);
-    return frame(1, *encoded);
+    return frame(1, std::get<0>(encoded));
 }
 struct FakeRead final {
     std::vector<char> wire;
@@ -303,12 +304,12 @@ RUVIA_TEST(http3ClientReceiveDriverRetainsBlockedSuffixAndResumesAfterEncoderIns
     ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, &resource);
     constexpr std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-dynamic", "retained"}};
     const auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
-    if (!section) {
+    RUVIA_CHECK((section.index() == 0));
+    if ((section.index() != 0)) {
         return;
     }
     FakeRead input;
-    input.wire = frame(1, *section);
+    input.wire = frame(1, std::get<0>(section));
     const auto data = frame(0, std::span<const char>("payload", 7));
     input.wire.insert(input.wire.end(), data.begin(), data.end());
     input.maxChunk = input.wire.size();
@@ -336,7 +337,7 @@ RUVIA_TEST(http3ClientReceiveDriverRetainsBlockedSuffixAndResumesAfterEncoderIns
         }
     }
     RUVIA_CHECK(!engine.pendingDecoderOutput().empty());
-    RUVIA_CHECK(encoder.consumeDecoder(engine.pendingDecoderOutput()));
+    RUVIA_CHECK(encoder.consumeDecoder(engine.pendingDecoderOutput()).index() == 0);
     RUVIA_CHECK(engine.consumeDecoderOutput(engine.pendingDecoderOutput().size()));
     RUVIA_CHECK(engine.release(0));
     RUVIA_CHECK(engine.release(4));
@@ -350,8 +351,8 @@ RUVIA_TEST(http3ClientReceiveDriverPeerResetRetiresQpackBlockedSuffixWithoutEnco
     ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, &resource);
     const std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-custom", "retained"}};
     const auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
-    auto wire = frame(1, *section);
+    RUVIA_CHECK((section.index() == 0));
+    auto wire = frame(1, std::get<0>(section));
     const auto data = frame(0, std::span<const char>("payload", 7));
     wire.insert(wire.end(), data.begin(), data.end());
     const auto pending = driver.drive(0, [&](std::uint64_t, std::span<char> bytes) -> Read { std::copy(wire.begin(), wire.end(), bytes.begin()); return {.status = ruvia::quic_stream_read_status::data, .size = wire.size()}; });

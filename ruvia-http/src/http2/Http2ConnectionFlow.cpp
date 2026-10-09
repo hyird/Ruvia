@@ -308,7 +308,7 @@ void Http2Connection::releaseAllReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    return std::ranges::contains(pendingSends_, streamId, &Http2PendingSend::streamId);
+    return std::ranges::find(pendingSends_, streamId, &Http2PendingSend::streamId) != pendingSends_.end();
 }
 
 Http2DataQueueState Http2Connection::dataQueueState(std::uint32_t streamId) const noexcept {

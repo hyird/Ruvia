@@ -3,6 +3,7 @@
 #include <array>
 #include <memory_resource>
 #include <unordered_set>
+#include <variant>
 
 #include "ruvia/http/Http3VarInt.h"
 
@@ -21,7 +22,7 @@ constexpr std::uint64_t kH3Datagram = 0x33;
 
 }  // namespace
 
-std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
+std::variant<Http3Settings, Http3SettingsError> decodeHttp3Settings(
     std::span<const char> payload, std::pmr::memory_resource* resource) {
     if (resource == nullptr) {
         resource = std::pmr::get_default_resource();
@@ -31,43 +32,43 @@ std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
     std::size_t offset = 0;
     while (offset < payload.size()) {
         const auto identifier = decodeHttp3VarInt(payload.subspan(offset));
-        if (!identifier) {
-            return std::unexpected(Http3SettingsError::kNeedMoreData);
+        if ((identifier.index() != 0)) {
+            return Http3SettingsError::kNeedMoreData;
         }
-        offset += identifier->encodedBytes;
+        offset += std::get<0>(identifier).encodedBytes;
         const auto value = decodeHttp3VarInt(payload.subspan(offset));
-        if (!value) {
-            return std::unexpected(Http3SettingsError::kNeedMoreData);
+        if ((value.index() != 0)) {
+            return Http3SettingsError::kNeedMoreData;
         }
-        offset += value->encodedBytes;
+        offset += std::get<0>(value).encodedBytes;
 
-        if (!identifiers.insert(identifier->value).second) {
-            return std::unexpected(Http3SettingsError::kDuplicateIdentifier);
+        if (!identifiers.insert(std::get<0>(identifier).value).second) {
+            return Http3SettingsError::kDuplicateIdentifier;
         }
-        if (isForbiddenSetting(identifier->value)) {
-            return std::unexpected(Http3SettingsError::kForbiddenIdentifier);
+        if (isForbiddenSetting(std::get<0>(identifier).value)) {
+            return Http3SettingsError::kForbiddenIdentifier;
         }
-        switch (identifier->value) {
+        switch (std::get<0>(identifier).value) {
             case kQpackMaxTableCapacity:
-                settings.qpackMaxTableCapacity = value->value;
+                settings.qpackMaxTableCapacity = std::get<0>(value).value;
                 break;
             case kMaxFieldSectionSize:
-                settings.maxFieldSectionSize = value->value;
+                settings.maxFieldSectionSize = std::get<0>(value).value;
                 break;
             case kQpackBlockedStreams:
-                settings.qpackBlockedStreams = value->value;
+                settings.qpackBlockedStreams = std::get<0>(value).value;
                 break;
             case kEnableConnectProtocol:
-                if (value->value > 1) {
-                    return std::unexpected(Http3SettingsError::kValueOutOfRange);
+                if (std::get<0>(value).value > 1) {
+                    return Http3SettingsError::kValueOutOfRange;
                 }
-                settings.enableConnectProtocol = value->value == 1;
+                settings.enableConnectProtocol = std::get<0>(value).value == 1;
                 break;
             case kH3Datagram:
-                if (value->value > 1) {
-                    return std::unexpected(Http3SettingsError::kValueOutOfRange);
+                if (std::get<0>(value).value > 1) {
+                    return Http3SettingsError::kValueOutOfRange;
                 }
-                settings.h3Datagram = value->value == 1;
+                settings.h3Datagram = std::get<0>(value).value == 1;
                 break;
             default:
                 break;
@@ -76,7 +77,7 @@ std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
     return settings;
 }
 
-std::expected<std::size_t, Http3SettingsError> encodeHttp3Settings(
+std::variant<std::size_t, Http3SettingsError> encodeHttp3Settings(
     std::span<char> output, const Http3Settings& settings) noexcept {
     constexpr std::array<std::uint64_t, 5> identifiers{
         kQpackMaxTableCapacity, kMaxFieldSectionSize, kQpackBlockedStreams, kEnableConnectProtocol, kH3Datagram};
@@ -90,12 +91,12 @@ std::expected<std::size_t, Http3SettingsError> encodeHttp3Settings(
             continue;
         }
         if (*values[i] > kHttp3VarIntMax) {
-            return std::unexpected(Http3SettingsError::kValueOutOfRange);
+            return Http3SettingsError::kValueOutOfRange;
         }
         required += http3VarIntEncodedSize(identifiers[i]) + http3VarIntEncodedSize(*values[i]);
     }
     if (output.size() < required) {
-        return std::unexpected(Http3SettingsError::kOutputTooSmall);
+        return Http3SettingsError::kOutputTooSmall;
     }
 
     std::size_t offset = 0;
@@ -105,10 +106,10 @@ std::expected<std::size_t, Http3SettingsError> encodeHttp3Settings(
         }
         for (const auto value : {identifiers[i], *values[i]}) {
             const auto written = encodeHttp3VarInt(output.subspan(offset), value);
-            if (!written) {
-                return std::unexpected(Http3SettingsError::kValueOutOfRange);
+            if ((written.index() != 0)) {
+                return Http3SettingsError::kValueOutOfRange;
             }
-            offset += *written;
+            offset += std::get<0>(written);
         }
     }
     return offset;

@@ -110,7 +110,7 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role r
             const bool identity_configured = SSL_get_verify_mode(ssl_.get()) != SSL_VERIFY_PEER ||
                                              (ip_address
                                                      ? X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl_.get()), normalized.c_str())
-                                                     : SSL_set1_host(ssl_.get(), normalized.c_str())) == 1;
+                                                     : SSL_set1_dnsname(ssl_.get(), normalized.c_str())) == 1;
             if (!sni_configured || !identity_configured) {
                 throw std::runtime_error("failed to configure QUIC TLS peer identity");
             }

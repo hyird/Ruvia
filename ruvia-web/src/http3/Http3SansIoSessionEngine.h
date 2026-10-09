@@ -126,13 +126,13 @@ public:
     [[nodiscard]] std::size_t maxRememberedPushes() const noexcept {
         return limits_.connection.maxRememberedPushes;
     }
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushPromise(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushPromise(
         std::uint64_t parentStreamId, std::uint64_t pushId, HttpPushRequestView request) {
         return connection_.preparePushPromise(parentStreamId, pushId, request);
     }
     // Copies validated promise metadata into an ordinary request lease on the
     // actual server UNI stream. Prefix publication remains the driver's job.
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> admitPushStream(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> admitPushStream(
         std::uint64_t streamId, std::uint64_t pushId);
     void observePushCancellation(void* context, void (*cancel)(void*, std::uint64_t) noexcept);
     [[nodiscard]] const Http3ServerRequest* request(std::uint64_t streamId) const noexcept;
@@ -162,19 +162,19 @@ public:
     // Effective peer response field-section limit. nullopt means the peer has
     // not sent the setting or omitted it (RFC 9114 default: unlimited).
     [[nodiscard]] std::optional<std::uint64_t> peerMaxFieldSectionSize() const noexcept;
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId, const HttpResponse& response) {
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId, const HttpResponse& response) {
         return connection_.encodeConnectResponseHead(streamId, response);
     }
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan) {
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan) {
         return connection_.encodeResponseHead(streamId, response, plan);
     }
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
+    [[nodiscard]] std::variant<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
         return connection_.encodeStreamingResponseHead(streamId, std::move(response), method, kind, trailers);
     }
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId, const HttpInterimResponseHead& response) {
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId, const HttpInterimResponseHead& response) {
         return connection_.encodeInterimResponseHead(streamId, response);
     }
-    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields) {
+    [[nodiscard]] std::variant<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields) {
         return connection_.encodeResponseTrailers(streamId, fields);
     }
     [[nodiscard]] std::span<const char> pendingQpackEncoderOutput() const noexcept {

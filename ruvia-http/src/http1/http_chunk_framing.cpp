@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -12,13 +13,13 @@
 namespace ruvia::detail {
 
 chunk_framing_result http_chunk_framing::decode(std::string_view available, std::size_t max_body_bytes) noexcept {
-    if (!state_) {
-        return chunk_framing_failure{0, state_.error()};
+    if ((state_.index() != 0)) {
+        return chunk_framing_failure{0, std::get<1>(state_)};
     }
 
     std::size_t cursor = 0;
     for (;;) {
-        switch (*state_) {
+        switch (std::get<0>(state_)) {
             case progress::size_line: {
                 const auto line_end = available.find("\r\n", cursor);
                 if (line_end == std::string_view::npos) {
@@ -157,7 +158,7 @@ std::optional<chunk_framing_error> http_chunk_framing::validate_trailers(std::st
 }
 
 chunk_framing_result http_chunk_framing::fail(std::size_t consumed_bytes, chunk_framing_error error) noexcept {
-    state_ = std::unexpected(error);
+    state_ = error;
     return chunk_framing_failure{consumed_bytes, error};
 }
 

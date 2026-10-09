@@ -200,7 +200,7 @@ struct HttpUpgradeProtocol final {
         slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
     if (!isValidHttpHeaderName(name) ||
         (slash != std::string_view::npos &&
-            (!isValidHttpHeaderName(version) || version.contains('/')))) {
+            (!isValidHttpHeaderName(version) || (version.find('/') != std::string_view::npos)))) {
         return false;
     }
     output = HttpUpgradeProtocol{.name = name, .version = version};

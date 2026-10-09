@@ -31,16 +31,16 @@ RUVIA_TEST(request_trailers_own_fields_preserve_duplicates_and_bound_section_siz
     {
         ruvia::HttpRequestTrailers trailers(&resource);
         std::string source(512, 'a');
-        RUVIA_CHECK(trailers.append("X-Checksum", source).has_value());
+        RUVIA_CHECK((trailers.append("X-Checksum", source).index() == 0));
         source.assign("mutated");
         RUVIA_CHECK_EQ(trailers.field("x-checksum").value_or(""), std::string(512, 'a'));
-        RUVIA_CHECK(trailers.appendHttp1("x-checksum: final\r\nx-extra: yes\r\n\r\n").has_value());
+        RUVIA_CHECK((trailers.appendHttp1("x-checksum: final\r\nx-extra: yes\r\n\r\n").index() == 0));
         RUVIA_CHECK_EQ(trailers.field("X-Checksum").value_or(""), "final");
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
-        RUVIA_CHECK(!trailers.append("Content-Length", "3"));
-        RUVIA_CHECK(!trailers.append("bad name", "x"));
-        RUVIA_CHECK(!trailers.append("x-ok", "bad\r\nvalue"));
-        RUVIA_CHECK(!trailers.append("x-large", std::string(65536, 'x')));
+        RUVIA_CHECK((trailers.append("Content-Length", "3").index() != 0));
+        RUVIA_CHECK((trailers.append("bad name", "x").index() != 0));
+        RUVIA_CHECK((trailers.append("x-ok", "bad\r\nvalue").index() != 0));
+        RUVIA_CHECK((trailers.append("x-large", std::string(65536, 'x')).index() != 0));
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
     }
     RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);

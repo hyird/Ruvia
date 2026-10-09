@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstring>
 #include <stdexcept>
+#include <variant>
 
 #include "util/PmrString.h"
 

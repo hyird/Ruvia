@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <ctime>
+#include <variant>
 
 #include "field/HttpImfFixdate.h"
 
@@ -39,10 +40,10 @@ std::string_view cachedDateHeader(std::time_t now) noexcept {
         cache.size = 0;
         // RFC 9110 section 6.6.1: do not generate Date without a usable clock.
         if (now != std::time_t{-1}) {
-            if (const auto date = httpFormatDate(now)) {
+            if (const auto date = httpFormatDate(now); date.index() == 0) {
                 std::memcpy(cache.line.data(), kDateHeaderPrefix.data(), kDateHeaderPrefix.size());
-                std::memcpy(cache.line.data() + kDateHeaderPrefix.size(), date->data(), date->size());
-                cache.size = kDateHeaderPrefix.size() + date->size();
+                std::memcpy(cache.line.data() + kDateHeaderPrefix.size(), std::get<0>(date).data(), std::get<0>(date).size());
+                cache.size = kDateHeaderPrefix.size() + std::get<0>(date).size();
                 cache.line[cache.size++] = kDateHeaderSuffix[0];
                 cache.line[cache.size++] = kDateHeaderSuffix[1];
             }

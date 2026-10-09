@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <memory_resource>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -75,15 +77,15 @@ RUVIA_TEST(websocket_client_extended_connect_requires_peer_setting_and_emits_pro
     const std::array protocols{std::string_view("chat")};
     ruvia::WebSocketClientNegotiation client({.subprotocols = protocols, .deflate = {.enabled = true}});
     auto disabled = client.encodeHttp3Request("https", "example.com", "/chat", false);
-    RUVIA_CHECK(!disabled.has_value());
-    RUVIA_CHECK(disabled.error().kind == ruvia::Http3ClientRequestHeadError::kConnectProtocolDisabled);
+    RUVIA_CHECK(!(disabled.index() == 0));
+    RUVIA_CHECK(std::get<1>(disabled).kind == ruvia::Http3ClientRequestHeadError::kConnectProtocolDisabled);
     auto encoded = client.encodeHttp3Request("https", "example.com", "/chat", true);
-    RUVIA_CHECK(encoded.has_value());
-    auto head = ruvia::decodeHttp3MessageHead(encoded->fieldSection, ruvia::Http3MessageHeadKind::kRequest);
-    RUVIA_CHECK(head.has_value());
-    RUVIA_CHECK_EQ(std::string_view(head->protocol), std::string_view("websocket"));
-    RUVIA_CHECK_EQ(std::string_view(head->method), std::string_view("CONNECT"));
-    RUVIA_CHECK(!head->contentLength);
+    RUVIA_CHECK((encoded.index() == 0));
+    auto head = ruvia::decodeHttp3MessageHead(std::get<0>(encoded).fieldSection, ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK((head.index() == 0));
+    RUVIA_CHECK_EQ(std::string_view(std::get<0>(head).protocol), std::string_view("websocket"));
+    RUVIA_CHECK_EQ(std::string_view(std::get<0>(head).method), std::string_view("CONNECT"));
+    RUVIA_CHECK(!std::get<0>(head).contentLength);
     auto connection = ruvia::Http2Connection::client();
     auto submitted = client.submitHttp2Request(connection, "https", "example.com", "/chat");
     RUVIA_CHECK(submitted.failure() != nullptr);
@@ -110,13 +112,13 @@ RUVIA_TEST(websocket_client_negotiation_accepts_asymmetric_context_and_window_pa
     add(head, "sec-websocket-protocol", "chat");
     add(head, "sec-websocket-extensions", "permessage-deflate; client_no_context_takeover; server_max_window_bits=10; client_max_window_bits=12");
     auto accepted = client.validateResponse(head, true);
-    RUVIA_CHECK(accepted.has_value());
-    RUVIA_CHECK_EQ(accepted->selectedSubprotocol, std::string_view("chat"));
-    RUVIA_CHECK(!accepted->compression.serverNoContextTakeover);
-    RUVIA_CHECK(accepted->compression.clientNoContextTakeover);
-    RUVIA_CHECK_EQ(accepted->compression.serverMaxWindowBits.value(), 10);
-    RUVIA_CHECK_EQ(accepted->compression.clientMaxWindowBits.value(), 12);
-    RUVIA_CHECK(!client.validateResponse(head, false).has_value());
+    RUVIA_CHECK((accepted.index() == 0));
+    RUVIA_CHECK_EQ(std::get<0>(accepted).selectedSubprotocol, std::string_view("chat"));
+    RUVIA_CHECK(!std::get<0>(accepted).compression.serverNoContextTakeover);
+    RUVIA_CHECK(std::get<0>(accepted).compression.clientNoContextTakeover);
+    RUVIA_CHECK_EQ(std::get<0>(accepted).compression.serverMaxWindowBits.value(), 10);
+    RUVIA_CHECK_EQ(std::get<0>(accepted).compression.clientMaxWindowBits.value(), 12);
+    RUVIA_CHECK(!(client.validateResponse(head, false).index() == 0));
 }
 RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_selection) {
     ruvia::WebSocketClientNegotiation client({.deflate = {.enabled = true, .serverMaxWindowBits = 10, .offerClientMaxWindowBits = false}});
@@ -124,7 +126,7 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         ruvia::Http3MessageHead head(std::pmr::get_default_resource());
         head.status = 200;
         add(head, "sec-websocket-extensions", extension);
-        RUVIA_CHECK(!client.validateResponse(head, true).has_value());
+        RUVIA_CHECK(!(client.validateResponse(head, true).index() == 0));
     }
     // A server may add its own window bound without an offer.
     ruvia::WebSocketClientNegotiation noServerWindowClient({.deflate = {.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false}});
@@ -132,7 +134,7 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         ruvia::Http3MessageHead head(std::pmr::get_default_resource());
         head.status = 200;
         add(head, "sec-websocket-extensions", "permessage-deflate; server_max_window_bits=10");
-        RUVIA_CHECK(noServerWindowClient.validateResponse(head, true).has_value());
+        RUVIA_CHECK((noServerWindowClient.validateResponse(head, true).index() == 0));
     }
     // The client window in an offer is a hint; the server may choose a larger one.
     ruvia::WebSocketClientNegotiation limitedClientWindow({.deflate = {.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false, .clientMaxWindowBits = 9}});
@@ -140,7 +142,7 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         ruvia::Http3MessageHead head(std::pmr::get_default_resource());
         head.status = 200;
         add(head, "sec-websocket-extensions", "permessage-deflate; client_max_window_bits=10");
-        RUVIA_CHECK(limitedClientWindow.validateResponse(head, true).has_value());
+        RUVIA_CHECK((limitedClientWindow.validateResponse(head, true).index() == 0));
     }
     // A client takeover preference in an offer is a hint.
     ruvia::WebSocketClientNegotiation requireClientNoTakeover({.deflate = {.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = true}});
@@ -148,12 +150,12 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         ruvia::Http3MessageHead head(std::pmr::get_default_resource());
         head.status = 200;
         add(head, "sec-websocket-extensions", "permessage-deflate");
-        RUVIA_CHECK(requireClientNoTakeover.validateResponse(head, true).has_value());
+        RUVIA_CHECK((requireClientNoTakeover.validateResponse(head, true).index() == 0));
     }
     ruvia::Http3MessageHead head(std::pmr::get_default_resource());
     head.status = 200;
     add(head, "sec-websocket-protocol", "unoffered");
-    RUVIA_CHECK(!client.validateResponse(head, true).has_value());
+    RUVIA_CHECK(!(client.validateResponse(head, true).index() == 0));
 }
 RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     constexpr std::array<std::uint8_t, 16> nonce{'t', 'h', 'e', ' ', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'n', 'o', 'n', 'c', 'e'};
@@ -161,13 +163,13 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     std::array<char, 2048> buffer{};
     auto prepared = client.prepareRequest(ruvia::HttpOriginView::https({.host = "example.com"}), "/", buffer);
     RUVIA_CHECK(prepared.prepared() != nullptr);
-    RUVIA_CHECK(prepared.prepared()->head().contains("sec-websocket-extensions: permessage-deflate"));
+    RUVIA_CHECK((prepared.prepared()->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
     ruvia::Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     auto response = parser.parse("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n\r\n");
     RUVIA_CHECK(response.parsed() != nullptr);
     auto accepted = client.validateResponse(*response.parsed());
-    RUVIA_CHECK(accepted.has_value());
-    RUVIA_CHECK(accepted->compression.enabled);
+    RUVIA_CHECK((accepted.index() == 0));
+    RUVIA_CHECK(std::get<0>(accepted).compression.enabled);
 }
 RUVIA_TEST(websocket_deflate_asymmetric_context_and_eight_bit_window_round_trip) {
     ruvia::detail::WebSocketDeflate sender(6, true, false, 8, 15);
@@ -209,16 +211,16 @@ RUVIA_TEST(websocket_client_negotiation_preserves_owned_offers_and_retained_resu
         const std::array<std::string_view, 1> protocols{"channel.protocol.v1"};
         ruvia::WebSocketClientNegotiation negotiation({.subprotocols = protocols, .deflate = {.enabled = true}}, &resource);
         const auto retained = negotiation.encodeHttp3Request("https", "example.test", "/socket", true);
-        RUVIA_CHECK(retained.has_value());
-        const std::vector<char> snapshot(retained->fieldSection.begin(), retained->fieldSection.end());
+        RUVIA_CHECK((retained.index() == 0));
+        const std::vector<char> snapshot(std::get<0>(retained).fieldSection.begin(), std::get<0>(retained).fieldSection.end());
         const auto baseline = resource.live;
         for (std::size_t i = 0; i < 32; ++i) {
             {
                 const auto head = negotiation.encodeHttp3Request("https", "example.test", "/other", true);
-                RUVIA_CHECK(head.has_value());
+                RUVIA_CHECK((head.index() == 0));
             }
             RUVIA_CHECK_EQ(resource.live, baseline);
-            RUVIA_CHECK(std::equal(snapshot.begin(), snapshot.end(), retained->fieldSection.begin(), retained->fieldSection.end()));
+            RUVIA_CHECK(std::equal(snapshot.begin(), snapshot.end(), std::get<0>(retained).fieldSection.begin(), std::get<0>(retained).fieldSection.end()));
         }
         resource.fail = true;
         bool threw = false;

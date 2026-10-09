@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/HttpHeader.h"
 
@@ -34,14 +34,14 @@ struct HttpPriorityUpdate final {
 // RFC 9218 / RFC 8941 Dictionary parsing. Unknown members, invalid parameter
 // types and out-of-range values are ignored; malformed structured syntax fails.
 // Missing response parameters remain absent for intermediary merging.
-[[nodiscard]] std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept;
+[[nodiscard]] std::variant<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept;
 // Reads all Priority field lines in wire order without allocating. A later
 // dictionary member replaces the earlier member, including an invalid value.
-[[nodiscard]] std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept;
-[[nodiscard]] std::expected<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char> output, HttpPriorityFields fields) noexcept;
-[[nodiscard]] std::expected<HttpPriorityUpdate, HttpPriorityError> decodeHttp2PriorityUpdate(std::span<const char> payload) noexcept;
-[[nodiscard]] std::expected<std::size_t, HttpPriorityError> encodeHttp2PriorityUpdate(std::span<char> output, std::uint32_t streamId, HttpPriorityFields fields) noexcept;
-[[nodiscard]] std::expected<HttpPriorityUpdate, HttpPriorityError> decodeHttp3PriorityUpdate(std::uint64_t frameType, std::span<const char> payload) noexcept;
-[[nodiscard]] std::expected<std::size_t, HttpPriorityError> encodeHttp3PriorityUpdate(std::span<char> output, HttpPriorityUpdate update) noexcept;
+[[nodiscard]] std::variant<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept;
+[[nodiscard]] std::variant<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char> output, HttpPriorityFields fields) noexcept;
+[[nodiscard]] std::variant<HttpPriorityUpdate, HttpPriorityError> decodeHttp2PriorityUpdate(std::span<const char> payload) noexcept;
+[[nodiscard]] std::variant<std::size_t, HttpPriorityError> encodeHttp2PriorityUpdate(std::span<char> output, std::uint32_t streamId, HttpPriorityFields fields) noexcept;
+[[nodiscard]] std::variant<HttpPriorityUpdate, HttpPriorityError> decodeHttp3PriorityUpdate(std::uint64_t frameType, std::span<const char> payload) noexcept;
+[[nodiscard]] std::variant<std::size_t, HttpPriorityError> encodeHttp3PriorityUpdate(std::span<char> output, HttpPriorityUpdate update) noexcept;
 
 }  // namespace ruvia

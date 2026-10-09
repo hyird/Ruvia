@@ -88,10 +88,11 @@ SelfSignedPem makeSelfSignedPem() {
     X509_gmtime_adj(X509_getm_notBefore(x509), 0);
     X509_gmtime_adj(X509_getm_notAfter(x509), 60 * 60);  // 1 hour
     X509_set_pubkey(x509, pkey);
-    X509_NAME* name = X509_get_subject_name(x509);
+    const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
     X509_NAME_add_entry_by_txt(
-        name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
-    X509_set_issuer_name(x509, name);
+        name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_set_subject_name(x509, name.get());
+    X509_set_issuer_name(x509, name.get());
     X509_sign(x509, pkey, EVP_sha256());
 
     SelfSignedPem out;

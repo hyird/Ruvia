@@ -468,11 +468,11 @@ Http2SubmitStatus Http2Connection::submitPriorityUpdate(std::uint32_t streamId, 
     }
     std::array<char, 32> encoded{};
     const auto size = encodeHttp2PriorityUpdate(encoded, streamId, fields);
-    if (!size) {
+    if ((size.index() != 0)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
     output_.appendFrame(Http2FrameType::kPriorityUpdate, 0, 0,
-        std::string_view(encoded.data() + kHttp2FrameHeaderBytes, *size - kHttp2FrameHeaderBytes));
+        std::string_view(encoded.data() + kHttp2FrameHeaderBytes, std::get<0>(size) - kHttp2FrameHeaderBytes));
     return Http2SubmitStatus::kAccepted;
 }
 
@@ -499,7 +499,7 @@ bool Http2Connection::processPriorityUpdate(const Http2FrameHeader& header, std:
         return !isIdleStreamId(entry.first) && (!stream || http2StreamIsClosed(*stream));
     });
     const auto update = decodeHttp2PriorityUpdate(std::span(payload.data(), payload.size()));
-    if (!update) {
+    if ((update.index() != 0)) {
         return true;  // A malformed Priority field does not prioritize a stream.
     }
     std::size_t idle = 0;
@@ -526,14 +526,14 @@ bool Http2Connection::processPriorityUpdate(const Http2FrameHeader& header, std:
         }
     }
     reserveEventSlots(1);
-    priorities_.insert_or_assign(id, update->fields);
-    events_.push_back(Http2Event::priorityUpdate(*update));
+    priorities_.insert_or_assign(id, std::get<0>(update).fields);
+    events_.push_back(Http2Event::priorityUpdate(std::get<0>(update)));
     return true;
 }
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != std::to_underlying(Http2FrameType::kSettings)) {
+        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }

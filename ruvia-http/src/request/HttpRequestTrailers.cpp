@@ -13,23 +13,23 @@ namespace ruvia {
 HttpRequestTrailers::HttpRequestTrailers(std::pmr::memory_resource* resource)
     : fields_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
-std::expected<void, HttpRequestTrailerError> HttpRequestTrailers::append(std::string_view name, std::string_view value) {
+std::variant<std::monostate, HttpRequestTrailerError> HttpRequestTrailers::append(std::string_view name, std::string_view value) {
     if (!detail::isValidHttpHeaderName(name) || !std::ranges::all_of(value, [](unsigned char ch) { return detail::isHttpFieldValueChar(ch); }) || detail::httpTrimOws(value) != value) {
-        return std::unexpected(HttpRequestTrailerError::kInvalidField);
+        return HttpRequestTrailerError::kInvalidField;
     }
     if (detail::isForbiddenHttpRequestTrailerName(name)) {
-        return std::unexpected(HttpRequestTrailerError::kForbiddenField);
+        return HttpRequestTrailerError::kForbiddenField;
     }
     if (fields_.size() == kMaxHttpHeaderFields || bytes_ > kMaxHttpHeaderBytes - 4 || name.size() > kMaxHttpHeaderBytes - bytes_ - 4 ||
         value.size() > kMaxHttpHeaderBytes - bytes_ - 4 - name.size()) {
-        return std::unexpected(HttpRequestTrailerError::kSectionTooLarge);
+        return HttpRequestTrailerError::kSectionTooLarge;
     }
     fields_.push_back(HttpHeader::copyOf(name, value, fields_.get_allocator().resource()));
     bytes_ += name.size() + value.size() + 4;
     return {};
 }
 
-std::expected<void, HttpRequestTrailerError> HttpRequestTrailers::appendHttp1(std::string_view block) {
+std::variant<std::monostate, HttpRequestTrailerError> HttpRequestTrailers::appendHttp1(std::string_view block) {
     if (block.ends_with("\r\n\r\n")) {
         block.remove_suffix(4);
     } else if (block.ends_with("\r\n")) {
@@ -39,14 +39,14 @@ std::expected<void, HttpRequestTrailerError> HttpRequestTrailers::appendHttp1(st
     for (;;) {
         const auto result = parser.next();
         if (const auto* failure = result.failure()) {
-            return std::unexpected(failure->error() == detail::HttpChunkScanError::kTooLarge ? HttpRequestTrailerError::kSectionTooLarge : HttpRequestTrailerError::kInvalidField);
+            return failure->error() == detail::HttpChunkScanError::kTooLarge ? HttpRequestTrailerError::kSectionTooLarge : HttpRequestTrailerError::kInvalidField;
         }
         if (result.end()) {
             return {};
         }
         const auto* field = result.field();
         const auto appended = append(field->name(), field->value());
-        if (!appended) {
+        if ((appended.index() != 0)) {
             return appended;
         }
     }

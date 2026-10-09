@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "ruvia/http/HttpConnectionAdvertisement.h"
 
 #include "http2/Http2Connection.h"
@@ -12,15 +14,15 @@ bool Http2Connection::processAdvertisement(const Http2FrameHeader& header, std::
             return true;
         }
         auto advertisement = decodeHttpOriginAdvertisement({payload.data(), payload.size()}, resource_);
-        if (advertisement) {
+        if ((advertisement.index() == 0)) {
             reserveEventSlots(1);
-            events_.push_back(Http2Event::originAdvertisement(std::move(*advertisement)));
+            events_.push_back(Http2Event::originAdvertisement(std::move(std::get<0>(advertisement))));
         }
     } else {
         auto advertisement = decodeHttp2AlternativeService(header.streamId, {payload.data(), payload.size()}, resource_);
-        if (advertisement) {
+        if ((advertisement.index() == 0)) {
             reserveEventSlots(1);
-            events_.push_back(Http2Event::alternativeServiceAdvertisement(std::move(*advertisement)));
+            events_.push_back(Http2Event::alternativeServiceAdvertisement(std::move(std::get<0>(advertisement))));
         }
     }
     return true;
@@ -36,10 +38,10 @@ Http2SubmitStatus Http2Connection::submitOriginAdvertisement(std::span<const std
         return Http2SubmitStatus::kInvalidState;
     }
     const auto bytes = encodeHttp2OriginFrame(origins, peerSettings_.maxFrameSize(), resource_);
-    if (!bytes) {
+    if ((bytes.index() != 0)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    output_.appendBytes({bytes->data(), bytes->size()});
+    output_.appendBytes({std::get<0>(bytes).data(), std::get<0>(bytes).size()});
     return Http2SubmitStatus::kAccepted;
 }
 Http2SubmitStatus Http2Connection::submitAlternativeServiceAdvertisement(std::uint32_t streamId,
@@ -54,10 +56,10 @@ Http2SubmitStatus Http2Connection::submitAlternativeServiceAdvertisement(std::ui
         return Http2SubmitStatus::kInvalidState;
     }
     const auto bytes = encodeHttp2AlternativeServiceFrame(streamId, origin, value, peerSettings_.maxFrameSize(), resource_);
-    if (!bytes) {
+    if ((bytes.index() != 0)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    output_.appendBytes({bytes->data(), bytes->size()});
+    output_.appendBytes({std::get<0>(bytes).data(), std::get<0>(bytes).size()});
     return Http2SubmitStatus::kAccepted;
 }
 }  // namespace ruvia::detail

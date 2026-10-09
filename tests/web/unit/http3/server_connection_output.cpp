@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_server_connection_fixture.h"
 
 namespace {
@@ -389,8 +391,8 @@ ruvia::Task<void> exerciseDynamicQpackPublication(Fixture& fixture, const ruvia:
     Connection connection(fixture.routes.implementation.routeTable(), fixture.worker, fixture.services, fixture.options, outbound, scheduler,
         {.epoch = kEpoch, .connectionGeneration = generation, .session = {.connection = {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2, .enableConnectProtocol = true}}, .maxTrackedStreams = 8});
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2});
-    RUVIA_CHECK(prefixes.has_value());
-    const auto settings = prefixes->controlPrefix();
+    RUVIA_CHECK((prefixes.index() == 0));
+    const auto settings = std::get<0>(prefixes).controlPrefix();
     RUVIA_CHECK(acceptWireBytes(connection, inbound, {kEpoch, generation, 2}, settings).status == Connection::EventStatus::kAccepted);
     ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, fixture.worker.resource());
     const std::array fields{
@@ -398,8 +400,8 @@ ruvia::Task<void> exerciseDynamicQpackPublication(Fixture& fixture, const ruvia:
         ruvia::Http3FieldSectionFieldView{":authority", "example.test"}, ruvia::Http3FieldSectionFieldView{":path", "/body"},
         ruvia::Http3FieldSectionFieldView{"content-length", "7"}, ruvia::Http3FieldSectionFieldView{"x-custom", "value"}};
     const auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
-    const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(section->data(), section->size())) +
+    RUVIA_CHECK((section.index() == 0));
+    const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(std::get<0>(section).data(), std::get<0>(section).size())) +
                       frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData), "payload");
     const auto head = acceptWireBytes(connection, inbound, requestId, std::span(wire.data(), wire.size()));
     RUVIA_CHECK(head.input.status == Connection::Input::Status::kDeferredQpack);
@@ -493,9 +495,9 @@ ruvia::Task<void> exercise_peer_input_with_held_request_credit(
         {.epoch = kEpoch, .connectionGeneration = generation, .session = {.connection = {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2, .enableConnectProtocol = true}}, .maxTrackedStreams = 8});
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create(
         {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2});
-    RUVIA_CHECK(prefixes.has_value());
+    RUVIA_CHECK((prefixes.index() == 0));
     RUVIA_CHECK(connection.accept_peer_stream_data({kEpoch, generation, 2},
-                              std::as_bytes(prefixes->controlPrefix()))
+                              std::as_bytes(std::get<0>(prefixes).controlPrefix()))
                     .status == Connection::EventStatus::kAccepted);
     ruvia::Http3QpackEncoder encoder(
         {.maxTableCapacity = 256, .maxBlockedStreams = 2}, fixture.worker.resource());
@@ -507,8 +509,8 @@ ruvia::Task<void> exercise_peer_input_with_held_request_credit(
         ruvia::Http3FieldSectionFieldView{"content-length", "7"},
         ruvia::Http3FieldSectionFieldView{"x-custom", "value"}};
     const auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
-    const auto head_wire = frame(1, {section->data(), section->size()});
+    RUVIA_CHECK((section.index() == 0));
+    const auto head_wire = frame(1, {std::get<0>(section).data(), std::get<0>(section).size()});
     RUVIA_CHECK(acceptWireBytes(connection, inbound, request_id,
                     std::span(head_wire.data(), head_wire.size()))
                     .input.status == Connection::Input::Status::kDeferredQpack);
@@ -589,7 +591,7 @@ ruvia::Task<void> exerciseOriginPublication(Fixture& fixture, const ruvia::Worke
     RUVIA_CHECK(sawBlocked && responseFin && controlWire.size() > buffer::max_block_bytes);
     ruvia::Http3Connection peer(ruvia::Http3PeerRole::kClient, fixture.worker.resource(), {.receiveOriginAdvertisements = true});
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create({});
-    const auto prefix = prefixes->controlPrefix();
+    const auto prefix = std::get<0>(prefixes).controlPrefix();
     controlWire.insert(0, prefix.data(), prefix.size());
     std::size_t receivedOrigins{};
     const auto receive = [](void* raw, const ruvia::Http3ConnectionEvent& event) {
@@ -699,8 +701,8 @@ ruvia::Task<void> exerciseContinueBeforeBody(Fixture& fixture, const ruvia::Work
         {.epoch = kEpoch, .connectionGeneration = generation, .session = {.max_buffered_body_bytes = mode == 2 ? 3u : 16u}, .maxTrackedStreams = 8});
     const std::array fields{ruvia::Http3FieldSectionFieldView{"expect", "100-continue"}};
     const auto head = ruvia::encodeHttp3ClientRequestHead({.method = "POST", .scheme = "https", .authority = "example.test", .path = "/body", .fields = fields, .bodyLength = mode == 2 ? std::nullopt : std::optional<std::uint64_t>{mode == 3 ? 0u : 7u}}, {}, fixture.worker.resource());
-    RUVIA_CHECK(head.has_value());
-    const auto wire = frame(1, {head->fieldSection.data(), head->fieldSection.size()});
+    RUVIA_CHECK((head.index() == 0));
+    const auto wire = frame(1, {std::get<0>(head).fieldSection.data(), std::get<0>(head).fieldSection.size()});
     const auto received = acceptWireBytes(connection, inbound, id, std::span(wire.data(), wire.size()));
     RUVIA_CHECK(received.status == Connection::EventStatus::kAccepted);
     RUVIA_CHECK_EQ(connection.activeTaskCount(), std::size_t{0});
@@ -836,8 +838,8 @@ ruvia::Task<void> exercisePushPublication(Fixture& fixture, const ruvia::WorkerH
                 if (!cancelledActivePush && mode == 9 && fixture.routes.handlers.slowStartedObserved) {
                     std::array<char, 32> priority{};
                     const auto encoded = ruvia::encodeHttp3PriorityUpdate(priority, {.elementId = 0, .push = true, .fields = {.urgency = 1, .incremental = true}});
-                    RUVIA_CHECK(encoded.has_value());
-                    RUVIA_CHECK(acceptWireBytes(connection, inbound, {kEpoch, kGeneration, 2}, std::span(priority).first(*encoded)).status == Connection::EventStatus::kAccepted);
+                    RUVIA_CHECK((encoded.index() == 0));
+                    RUVIA_CHECK(acceptWireBytes(connection, inbound, {kEpoch, kGeneration, 2}, std::span(priority).first(std::get<0>(encoded))).status == Connection::EventStatus::kAccepted);
                     constexpr std::array<char, 3> cancel{3, 1, 0};
                     RUVIA_CHECK(acceptWireBytes(connection, inbound, {kEpoch, kGeneration, 2}, cancel).status == Connection::EventStatus::kAccepted);
                     cancelledActivePush = true;

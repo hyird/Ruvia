@@ -2,6 +2,7 @@
 
 #include <memory_resource>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/HttpMediaType.h"
@@ -264,7 +265,7 @@ Http3MessageHead::Http3MessageHead(std::pmr::memory_resource* resource)
       path(resource),
       headers(resource) {}
 
-std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+std::variant<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     std::span<const char> fieldSection, Http3MessageHeadKind kind, std::pmr::memory_resource* resource,
     Http3MessageHeadLimits limits) {
     auto* owner = resource != nullptr ? resource : std::pmr::get_default_resource();
@@ -273,49 +274,49 @@ std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     const Http3FieldSectionLimits decoderLimits{limits.maxEncodedBytes, limits.maxFieldSectionSize,
         limits.maxFields};
     const auto decoded = decodeHttp3FieldSection(fieldSection, receiveField, &state, decoderLimits, owner);
-    if (!decoded) {
-        if (decoded.error() == Http3FieldSectionError::kFieldListTooLarge ||
-            decoded.error() == Http3FieldSectionError::kFieldSectionTooLarge ||
-            decoded.error() == Http3FieldSectionError::kTooManyFields) {
-            return std::unexpected(Http3MessageHeadError::kFieldSectionTooLarge);
+    if ((decoded.index() != 0)) {
+        if (std::get<1>(decoded) == Http3FieldSectionError::kFieldListTooLarge ||
+            std::get<1>(decoded) == Http3FieldSectionError::kFieldSectionTooLarge ||
+            std::get<1>(decoded) == Http3FieldSectionError::kTooManyFields) {
+            return Http3MessageHeadError::kFieldSectionTooLarge;
         }
         if (state.callbackRejected) {
-            return std::unexpected(state.error);
+            return state.error;
         }
-        return std::unexpected(Http3MessageHeadError::kQpackDecompressionFailed);
+        return Http3MessageHeadError::kQpackDecompressionFailed;
     }
     if (auto error = finishHead(state)) {
-        return std::unexpected(*error);
+        return *error;
     }
     return head;
 }
 
-std::expected<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+std::variant<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     Http3QpackDecoder& decoder, std::uint64_t streamId, std::span<const char> fieldSection,
     Http3MessageHeadKind kind, std::pmr::memory_resource* resource, Http3MessageHeadLimits limits) {
     auto* owner = resource ? resource : std::pmr::get_default_resource();
     Http3MessageHead head(owner);
     DecodeState state{head, kind, owner, limits.maxFieldSectionSize};
     if (fieldSection.size() > limits.maxEncodedBytes) {
-        return std::unexpected(Http3MessageHeadError::kFieldSectionTooLarge);
+        return Http3MessageHeadError::kFieldSectionTooLarge;
     }
     const auto result = decoder.decode(streamId, fieldSection, receiveField, &state);
-    if (!result) {
-        return std::unexpected(result.error() == Http3QpackConnectionError::kLimit
-                                   ? Http3MessageHeadError::kFieldSectionTooLarge
-                                   : Http3MessageHeadError::kQpackDecompressionFailed);
+    if ((result.index() != 0)) {
+        return std::get<1>(result) == Http3QpackConnectionError::kLimit
+                   ? Http3MessageHeadError::kFieldSectionTooLarge
+                   : Http3MessageHeadError::kQpackDecompressionFailed;
     }
-    if (result->status == Http3QpackDecodeStatus::kBlocked) {
+    if (std::get<0>(result).status == Http3QpackDecodeStatus::kBlocked) {
         return Http3DecodedMessageHead{Http3QpackBlocked{}};
     }
     if (state.callbackRejected) {
-        return std::unexpected(state.error);
+        return state.error;
     }
-    if (result->fields > limits.maxFields) {
-        return std::unexpected(Http3MessageHeadError::kFieldSectionTooLarge);
+    if (std::get<0>(result).fields > limits.maxFields) {
+        return Http3MessageHeadError::kFieldSectionTooLarge;
     }
     if (auto error = finishHead(state)) {
-        return std::unexpected(*error);
+        return *error;
     }
     return Http3DecodedMessageHead{std::move(head)};
 }

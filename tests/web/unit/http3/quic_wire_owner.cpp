@@ -16,6 +16,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
@@ -123,10 +124,10 @@ Http3QuicWireOwner::ProtocolPumpResult pump_version_negotiation(void* context,
         const auto local = ruvia::detail::to_http3_quic_datagram_address(
             received->local_destination);
         const auto peer = ruvia::detail::to_http3_quic_datagram_address(received->peer);
-        if (!local || !peer) {
+        if ((local.index() != 0) || (peer.index() != 0)) {
             throw std::runtime_error("test QUIC datagram has invalid endpoint addresses");
         }
-        auto route = transport.route_datagram(received->bytes, *local, *peer);
+        auto route = transport.route_datagram(received->bytes, std::get<0>(local), std::get<0>(peer));
         state.routed_ = route.kind == ruvia::quic_server_route_kind::version_negotiation;
         if (state.routed_) {
             const auto result = ruvia::detail::send_http3_version_negotiation(
@@ -182,10 +183,10 @@ Http3QuicWireOwner::ProtocolPumpResult pump_connection(void* context,
         if (const auto received = endpoint.receive_slot()) {
             const auto local = ruvia::detail::to_http3_quic_datagram_address(received->local_destination);
             const auto peer = ruvia::detail::to_http3_quic_datagram_address(received->peer);
-            if (!local || !peer) {
+            if ((local.index() != 0) || (peer.index() != 0)) {
                 throw std::runtime_error("test QUIC datagram has invalid endpoint addresses");
             }
-            auto route = transport.route_datagram(received->bytes, *local, *peer);
+            auto route = transport.route_datagram(received->bytes, std::get<0>(local), std::get<0>(peer));
             if (route.kind == ruvia::quic_server_route_kind::initial_offer && !state.connection) {
                 const auto admitted = transport.admit_initial(route.offer, now);
                 if (admitted.status == ruvia::quic_operation_status::accepted) {
@@ -193,7 +194,7 @@ Http3QuicWireOwner::ProtocolPumpResult pump_connection(void* context,
                 }
             } else if (route.kind == ruvia::quic_server_route_kind::existing_connection) {
                 const auto status = transport.server().receive(route.connection,
-                    {received->bytes, ruvia::detail::to_quic_address(*local), ruvia::detail::to_quic_address(*peer)}, now);
+                    {received->bytes, ruvia::detail::to_quic_address(std::get<0>(local)), ruvia::detail::to_quic_address(std::get<0>(peer))}, now);
                 if (status == ruvia::quic_operation_status::accepted ||
                     status == ruvia::quic_operation_status::need_input) {
                     state.full_receives += full;
@@ -214,10 +215,10 @@ Http3QuicWireOwner::ProtocolPumpResult pump_connection(void* context,
                 } else {
                     const auto source = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.local));
                     const auto peer = ruvia::detail::to_udp_endpoint(ruvia::detail::from_quic_address(packet.peer));
-                    if (!source || !peer) {
+                    if ((source.index() != 0) || (peer.index() != 0)) {
                         throw std::runtime_error("test QUIC packet has invalid endpoint addresses");
                     }
-                    if (endpoint.send_datagram(output.first(packet.size), *source, *peer) != http3_worker_datagram_endpoint::pump_result::pending) {
+                    if (endpoint.send_datagram(output.first(packet.size), std::get<0>(source), std::get<0>(peer)) != http3_worker_datagram_endpoint::pump_result::pending) {
                         throw std::runtime_error("test QUIC endpoint did not accept reserved packet");
                     }
                     ++state.packets_sent;
@@ -312,10 +313,10 @@ struct TestIdentityFiles final {
 
 http3_quic_datagram_address quic_address(const Udp::endpoint& endpoint) {
     const auto address = ruvia::detail::to_http3_quic_datagram_address(endpoint);
-    if (!address) {
+    if ((address.index() != 0)) {
         throw std::runtime_error("test UDP endpoint cannot be converted to QUIC address");
     }
-    return *address;
+    return std::get<0>(address);
 }
 
 bool is_long_header_type(std::span<const std::byte> packet, std::uint8_t type) {
@@ -356,12 +357,12 @@ std::size_t pump_peer(http3_quic_client_transport& client, Udp::socket& socket) 
         }
         const auto destination = ruvia::detail::to_udp_endpoint(
             ruvia::detail::from_quic_address(packet.peer));
-        if (!destination) {
+        if ((destination.index() != 0)) {
             throw std::runtime_error("test QUIC client packet has invalid destination");
         }
         asio::error_code error;
         const auto size = socket.send_to(asio::buffer(output.data(), packet.size),
-            *destination, 0, error);
+            std::get<0>(destination), 0, error);
         if (error || size != packet.size) {
             throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                 "send test QUIC client packet");

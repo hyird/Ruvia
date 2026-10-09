@@ -2,10 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
@@ -44,14 +44,14 @@ using Http3FieldSectionCallback = bool (*)(void*, Http3FieldSectionFieldView);
 
 // Decodes a QPACK field section with a permanently empty dynamic table. Callback
 // views borrow the input and remain valid only for the duration of the callback.
-[[nodiscard]] std::expected<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
+[[nodiscard]] std::variant<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
     std::span<const char> input, Http3FieldSectionCallback callback, void* context,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 // Encodes fields using exact static-table matches, static name references, or
 // literals. The returned bytes are owned by the supplied PMR resource.
-[[nodiscard]] std::expected<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSection(
+[[nodiscard]] std::variant<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSection(
     std::span<const Http3FieldSectionFieldView> fields, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia

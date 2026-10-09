@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http2Connection.h"
@@ -60,16 +60,16 @@ public:
         return fields_;
     }
     std::span<const HttpHeader> requestFields() const&& = delete;
-    [[nodiscard]] std::expected<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
+    [[nodiscard]] std::variant<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
     validateFields(std::span<const HttpHeader> fields) const;
     [[nodiscard]] Http2RequestHeadSubmitResult submitHttp2Request(Http2Connection& connection,
         std::string_view scheme, std::string_view authority, std::string_view target) const;
-    [[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3Request(
+    [[nodiscard]] std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3Request(
         std::string_view scheme, std::string_view authority, std::string_view target,
         bool peerEnableConnectProtocol, Http3FieldSectionLimits limits = {}) const;
-    [[nodiscard]] std::expected<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
+    [[nodiscard]] std::variant<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
     validateResponse(const HttpClientResponseHead& head, bool streamOpen) const;
-    [[nodiscard]] std::expected<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
+    [[nodiscard]] std::variant<WebSocketClientNegotiationResultView, WebSocketClientNegotiationError>
     validateResponse(const Http3MessageHead& head, bool streamOpen) const;
 
 private:

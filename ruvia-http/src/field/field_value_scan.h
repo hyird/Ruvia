@@ -16,7 +16,10 @@ namespace ruvia::detail {
     std::uint64_t bytes;
     std::memcpy(&bytes, data, sizeof(bytes));
     if constexpr (std::endian::native == std::endian::big) {
-        bytes = std::byteswap(bytes);
+        bytes = 0;
+        for (std::size_t index = 0; index < sizeof(bytes); ++index) {
+            bytes |= static_cast<std::uint64_t>(static_cast<unsigned char>(data[index])) << (index * 8);
+        }
     }
     return bytes;
 }

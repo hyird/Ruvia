@@ -99,28 +99,22 @@ template <typename Visitor>
 [[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(
     std::string_view input, UrlDecodeOptions options = {}) {
     std::pmr::string output(detail::httpPmrResourceOrDefault(options.resource));
-    bool valid = true;
-    output.resize_and_overwrite(input.size(), [&](char* bytes, std::size_t) noexcept {
-        std::size_t written = 0;
-        for (std::size_t i = 0; i < input.size(); ++i) {
-            char c = input[i];
-            if (options.mode == UrlDecodeMode::kForm && c == '+') {
-                c = ' ';
-            } else if (c == '%') {
-                const int byte = detail::decodePercentByte(input, i);
-                if (byte < 0) {
-                    valid = false;
-                    return std::size_t{0};
-                }
-                c = static_cast<char>(byte);
+    output.resize(input.size());
+    std::size_t written = 0;
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (options.mode == UrlDecodeMode::kForm && c == '+') {
+            c = ' ';
+        } else if (c == '%') {
+            const int byte = detail::decodePercentByte(input, i);
+            if (byte < 0) {
+                return std::nullopt;
             }
-            bytes[written++] = c;
+            c = static_cast<char>(byte);
         }
-        return written;
-    });
-    if (!valid) {
-        return std::nullopt;
+        output[written++] = c;
     }
+    output.resize(written);
     return output;
 }
 

@@ -489,7 +489,7 @@ void acceptor::fail(std::exception_ptr error) noexcept {
 void acceptor::close_listeners() noexcept {
     for (auto& configured : listeners_) {
         asio::error_code ignored;
-        configured->retry.cancel(ignored);
+        configured->retry.cancel();
         ignored.clear();
         configured->socket.cancel(ignored);
         ignored.clear();

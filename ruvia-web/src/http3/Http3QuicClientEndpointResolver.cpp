@@ -143,7 +143,7 @@ public:
 private:
     void cancelOutstanding() noexcept {
         asio::error_code ignored;
-        (void)timer_.cancel(ignored);
+        (void)timer_.cancel();
         resolver_.cancel();
     }
 
@@ -266,7 +266,7 @@ Task<Http3QuicClientEndpointResolver::Result> Http3QuicClientEndpointResolver::r
     if (result.status == Status::kResolved) {
         for (const auto& entry : outcome.results) {
             const auto endpoint = entry.endpoint();
-            if (!to_http3_quic_datagram_address(endpoint) ||
+            if ((to_http3_quic_datagram_address(endpoint).index() != 0) ||
                 std::find(result.endpoints.begin(), result.endpoints.end(), endpoint) !=
                     result.endpoints.end()) {
                 continue;
@@ -290,7 +290,7 @@ void Http3QuicClientEndpointResolver::requestStop() noexcept {
     stopping_ = true;
     resolver_.cancel();
     asio::error_code ignored;
-    (void)deadlineTimer_.cancel(ignored);
+    (void)deadlineTimer_.cancel();
 }
 
 void Http3QuicClientEndpointResolver::interrupt() noexcept {
@@ -303,7 +303,7 @@ void Http3QuicClientEndpointResolver::interrupt() noexcept {
     ++generation_;
     resolver_.cancel();
     asio::error_code ignored;
-    (void)deadlineTimer_.cancel(ignored);
+    (void)deadlineTimer_.cancel();
 }
 
 }  // namespace ruvia::detail

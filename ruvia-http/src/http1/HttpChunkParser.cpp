@@ -1,7 +1,9 @@
 #include "parser/HttpChunkParser.h"
 
+#include <exception>
 #include <limits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -96,7 +98,7 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                 case chunk_framing_error::framing_limit_exceeded:
                     return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
             }
-            std::unreachable();
+            std::terminate();
         }
         if (std::holds_alternative<chunk_framing_need_more>(result)) {
             return HttpChunkScanResult::makeNeedMore();

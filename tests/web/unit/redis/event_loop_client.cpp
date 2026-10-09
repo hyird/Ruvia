@@ -6,6 +6,7 @@
 #include <istream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -409,13 +410,13 @@ ruvia::Task<void> check_owned_transaction(ruvia::RedisClient& client, RedisPeer:
         RUVIA_CHECK(mode != RedisPeer::Mode::transaction_success);
         RUVIA_CHECK(error.code() == expected_code);
         if (mode == RedisPeer::Mode::transaction_queue_error) {
-            RUVIA_CHECK(std::string_view(error.what()).contains("reply 4"));
-            RUVIA_CHECK(std::string_view(error.what()).contains("queue failed"));
+            RUVIA_CHECK((std::string_view(error.what()).find("reply 4") != std::string_view::npos));
+            RUVIA_CHECK((std::string_view(error.what()).find("queue failed") != std::string_view::npos));
         } else if (mode == RedisPeer::Mode::transaction_watch_error) {
-            RUVIA_CHECK(std::string_view(error.what()).contains("reply 0"));
-            RUVIA_CHECK(std::string_view(error.what()).contains("watch failed"));
+            RUVIA_CHECK((std::string_view(error.what()).find("reply 0") != std::string_view::npos));
+            RUVIA_CHECK((std::string_view(error.what()).find("watch failed") != std::string_view::npos));
         } else if (mode == RedisPeer::Mode::transaction_exec_error) {
-            RUVIA_CHECK(std::string_view(error.what()).contains("EXECABORT"));
+            RUVIA_CHECK((std::string_view(error.what()).find("EXECABORT") != std::string_view::npos));
         }
         accepted = true;
     }

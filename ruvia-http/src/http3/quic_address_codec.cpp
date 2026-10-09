@@ -11,7 +11,7 @@ namespace {
 
 std::uint16_t to_network_port(std::uint16_t port) noexcept {
     if constexpr (std::endian::native == std::endian::little) {
-        return std::byteswap(port);
+        return static_cast<std::uint16_t>((port >> 8) | (port << 8));
     } else {
         return port;
     }

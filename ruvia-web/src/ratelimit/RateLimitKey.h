@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string_view>
+#include <variant>
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/address_v4.hpp>
@@ -29,14 +30,14 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
 // does not gain an asio dependency.
 [[nodiscard]] inline std::string_view rateLimitKeyFor(
     std::string_view remoteAddress, char (&buffer)[kRateLimitKeyBufferBytes]) noexcept {
-    if (!remoteAddress.contains(':')) {
+    if (!(remoteAddress.find(':') != std::string_view::npos)) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }
     const auto parsed = ruvia::parseIpAddress(remoteAddress);
-    if (!parsed || !parsed->is_v6()) {
+    if ((parsed.index() != 0) || !std::get<0>(parsed).is_v6()) {
         return remoteAddress;
     }
-    const auto address = parsed->to_v6();
+    const auto address = std::get<0>(parsed).to_v6();
     if (address.scope_id() != 0) {
         return remoteAddress;  // unparseable or scoped -> a full host key
     }

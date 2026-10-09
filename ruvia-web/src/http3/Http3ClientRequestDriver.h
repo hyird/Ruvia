@@ -5,6 +5,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/quic_connection.h"
 
@@ -78,20 +79,20 @@ public:
             registered_ = true;
         }
         const auto segment = request_->next();
-        if (!segment) {
+        if ((segment.index() != 0)) {
             return fail();
         }
-        if (!segment->empty()) {
-            const auto result = write(*streamId_, *segment);
+        if (!std::get<0>(segment).empty()) {
+            const auto result = write(*streamId_, std::get<0>(segment));
             switch (result.status) {
                 case ruvia::quic_operation_status::accepted:
-                    if (result.accepted > segment->size() || !request_->acknowledge(result.accepted)) {
+                    if (result.accepted > std::get<0>(segment).size() || (request_->acknowledge(result.accepted).index() != 0)) {
                         return fail();
                     }
                     return progress || result.accepted != 0 ? Result::kProgress : Result::kBlocked;
                 case ruvia::quic_operation_status::would_block:
                 case ruvia::quic_operation_status::need_input:
-                    if (!request_->acknowledge(0)) {
+                    if ((request_->acknowledge(0).index() != 0)) {
                         return fail();
                     }
                     return progress ? Result::kProgress : Result::kBlocked;
@@ -104,7 +105,7 @@ public:
         }
         const auto error = finish(*streamId_);
         if (error == ruvia::quic_operation_status::accepted) {
-            if (!request_->acknowledgeFin(true)) {
+            if ((request_->acknowledgeFin(true).index() != 0)) {
                 return fail();
             }
             return Result::kFinished;
@@ -151,11 +152,11 @@ public:
         }
         auto replay = Http3ClientRequestWrite::create(
             std::move(*original), scheme, authority, resource);
-        if (!replay) {
+        if ((replay.index() != 0)) {
             return false;
         }
         request_.reset();
-        request_.emplace(std::move(*replay));
+        request_.emplace(std::move(std::get<0>(replay)));
         streamId_.reset();
         registered_ = false;
         failed_ = false;

@@ -3,6 +3,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3Connection.h"
@@ -90,8 +91,8 @@ ruvia::Http3MessageHead makeGet(std::pmr::memory_resource* resource) {
             {":authority", "example.test"}, {"x-first", "1"}, {"cookie", "a=1"},
             {"cookie", "b=2"}}},
         std::pmr::get_default_resource());
-    auto decoded = ruvia::decodeHttp3MessageHead(*encoded, ruvia::Http3MessageHeadKind::kRequest, resource);
-    return std::move(*decoded);
+    auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(encoded), ruvia::Http3MessageHeadKind::kRequest, resource);
+    return std::move(std::get<0>(decoded));
 }
 
 }  // namespace
@@ -108,19 +109,19 @@ RUVIA_TEST(http3_server_request_owns_connection_callback_head_until_message_end)
         ruvia::Http3FieldSectionFieldView{"content-length", "2"},
     };
     const auto section = ruvia::encodeHttp3FieldSection(fields, &protocolResource);
-    RUVIA_CHECK(section.has_value());
-    if (!section) {
+    RUVIA_CHECK((section.index() == 0));
+    if ((section.index() != 0)) {
         return;
     }
     std::array<char, 16> headPrefix{};
-    const auto prefixSize = ruvia::encodeHttp3FrameHeader(headPrefix, 1, section->size());
-    RUVIA_CHECK(prefixSize.has_value());
-    if (!prefixSize) {
+    const auto prefixSize = ruvia::encodeHttp3FrameHeader(headPrefix, 1, std::get<0>(section).size());
+    RUVIA_CHECK((prefixSize.index() == 0));
+    if ((prefixSize.index() != 0)) {
         return;
     }
     std::pmr::vector<char> headWire(&protocolResource);
-    headWire.insert(headWire.end(), headPrefix.begin(), headPrefix.begin() + *prefixSize);
-    headWire.insert(headWire.end(), section->begin(), section->end());
+    headWire.insert(headWire.end(), headPrefix.begin(), headPrefix.begin() + std::get<0>(prefixSize));
+    headWire.insert(headWire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
 
     RequestEvents captured{&requestResource, &bodyPool, std::nullopt};
     {
@@ -136,12 +137,12 @@ RUVIA_TEST(http3_server_request_owns_connection_callback_head_until_message_end)
         RUVIA_CHECK(captured.owner->request().bodyBytes().empty());
         std::array<char, 16> dataPrefix{};
         const auto dataPrefixSize = ruvia::encodeHttp3FrameHeader(dataPrefix, 0, 2);
-        RUVIA_CHECK(dataPrefixSize.has_value());
-        if (!dataPrefixSize) {
+        RUVIA_CHECK((dataPrefixSize.index() == 0));
+        if ((dataPrefixSize.index() != 0)) {
             return;
         }
         std::pmr::vector<char> dataWire(&protocolResource);
-        dataWire.insert(dataWire.end(), dataPrefix.begin(), dataPrefix.begin() + *dataPrefixSize);
+        dataWire.insert(dataWire.end(), dataPrefix.begin(), dataPrefix.begin() + std::get<0>(dataPrefixSize));
         dataWire.insert(dataWire.end(), {'o', 'k'});
         RUVIA_CHECK(connection.feed(0, dataWire, true, false, receiveRequest, &captured).status ==
                     ruvia::Http3ConnectionStatus::kMessageEnd);
@@ -192,12 +193,12 @@ RUVIA_TEST(http3_server_request_adapts_standard_connect_authority_target) {
         std::array<ruvia::Http3FieldSectionFieldView, 2>{{{":method", "CONNECT"},
             {":authority", "example.test:443"}}},
         std::pmr::get_default_resource());
-    auto decoded = ruvia::decodeHttp3MessageHead(*encoded, ruvia::Http3MessageHeadKind::kRequest, &resource);
-    RUVIA_CHECK(decoded.has_value());
-    if (!decoded) {
+    auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(encoded), ruvia::Http3MessageHeadKind::kRequest, &resource);
+    RUVIA_CHECK((decoded.index() == 0));
+    if ((decoded.index() != 0)) {
         return;
     }
-    ruvia::Http3ServerRequest owner(*decoded, &resource, &resource);
+    ruvia::Http3ServerRequest owner(std::get<0>(decoded), &resource, &resource);
     owner.finishBody();
     RUVIA_CHECK_EQ(owner.request().target(), "example.test:443");
     RUVIA_CHECK_EQ(owner.request().path(), "");
@@ -225,18 +226,18 @@ RUVIA_TEST(http3_server_request_preserves_extended_connect_wire_metadata) {
         ruvia::Http3FieldSectionFieldView{"cookie", "b=2"},
     };
     const auto section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
-    RUVIA_CHECK(section.has_value());
-    if (!section) {
+    RUVIA_CHECK((section.index() == 0));
+    if ((section.index() != 0)) {
         return;
     }
-    const auto head = ruvia::decodeHttp3MessageHead(*section,
+    const auto head = ruvia::decodeHttp3MessageHead(std::get<0>(section),
         ruvia::Http3MessageHeadKind::kRequest, &resource);
-    RUVIA_CHECK(head.has_value());
-    if (!head) {
+    RUVIA_CHECK((head.index() == 0));
+    if ((head.index() != 0)) {
         return;
     }
 
-    ruvia::Http3ServerRequest owner(*head, &resource, &resource);
+    ruvia::Http3ServerRequest owner(std::get<0>(head), &resource, &resource);
     owner.finishBody();
     const auto& request = owner.request();
     RUVIA_CHECK_EQ(request.method(), "CONNECT");
@@ -265,11 +266,11 @@ RUVIA_TEST(http3_server_request_preserves_extended_connect_wire_metadata) {
     };
     const auto otherSection = ruvia::encodeHttp3FieldSection(
         otherProtocolFields, std::pmr::get_default_resource());
-    const auto otherHead = ruvia::decodeHttp3MessageHead(*otherSection,
+    const auto otherHead = ruvia::decodeHttp3MessageHead(std::get<0>(otherSection),
         ruvia::Http3MessageHeadKind::kRequest, &resource);
-    RUVIA_CHECK(otherHead.has_value());
-    if (otherHead) {
-        ruvia::Http3ServerRequest other(*otherHead, &resource, &resource);
+    RUVIA_CHECK((otherHead.index() == 0));
+    if ((otherHead.index() == 0)) {
+        ruvia::Http3ServerRequest other(std::get<0>(otherHead), &resource, &resource);
         RUVIA_CHECK_EQ(other.extendedConnectProtocol(), "other-protocol");
         RUVIA_CHECK_EQ(other.request().method(), "CONNECT");
     }

@@ -17,6 +17,7 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include <asio/system_executor.hpp>
 
@@ -507,10 +508,10 @@ struct TunnelCallbacksState final {
 inline std::string frame(std::uint64_t type, std::string_view payload) {
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto size = ruvia::encodeHttp3FrameHeader(header, type, payload.size());
-    if (!size) {
+    if ((size.index() != 0)) {
         throw std::runtime_error("HTTP/3 fixture frame encoding failed");
     }
-    std::string result(header.data(), *size);
+    std::string result(header.data(), std::get<0>(size));
     result.append(payload);
     return result;
 }
@@ -527,11 +528,11 @@ inline std::string requestWire(ruvia::WorkerMemory& worker, std::string_view met
                                                                                    ? std::nullopt
                                                                                    : std::optional<std::uint64_t>(body.size())},
         {}, worker.resource());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 fixture request-head encoding failed");
     }
     std::string result = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(encoded->fieldSection.data(), encoded->fieldSection.size()));
+        std::string_view(std::get<0>(encoded).fieldSection.data(), std::get<0>(encoded).fieldSection.size()));
     if (!body.empty()) {
         result += frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData), body);
     }
@@ -566,11 +567,11 @@ inline void feedWebSocketRequest(Engine& session, ruvia::WorkerMemory& worker,
         fieldsToEncode.push_back(field);
     }
     const auto fieldSection = ruvia::encodeHttp3FieldSection(fieldsToEncode, worker.resource());
-    if (!fieldSection) {
+    if ((fieldSection.index() != 0)) {
         throw std::runtime_error("HTTP/3 WebSocket fixture field section encoding failed");
     }
     const std::string wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(fieldSection->data(), fieldSection->size()));
+        std::string_view(std::get<0>(fieldSection).data(), std::get<0>(fieldSection).size()));
     const auto result = session.feed(streamId, wire);
     if (result.scope != ruvia::Http3ConnectionErrorScope::kNone ||
         session.streamState(streamId) != Engine::StreamState::kReady) {
@@ -823,12 +824,12 @@ inline void feedPeerSettings(Fixture& fixture, std::optional<std::uint64_t> maxF
     settings.maxFieldSectionSize = maxFieldSectionSize;
     settings.h3Datagram = nativeDatagrams;
     const auto encoded = ruvia::encodeHttp3Settings(payload, settings);
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 fixture SETTINGS encoding failed");
     }
     std::string controlWire(1, '\0');  // Peer unidirectional control stream type.
     controlWire += frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kSettings),
-        std::string_view(payload.data(), *encoded));
+        std::string_view(payload.data(), std::get<0>(encoded)));
     const auto result = fixture.session.feed(2, controlWire);
     if (result.scope != ruvia::Http3ConnectionErrorScope::kNone ||
         result.status != ruvia::Http3ConnectionStatus::kNeedMoreData) {

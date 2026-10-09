@@ -69,13 +69,13 @@ std::vector<char> responseMessage(std::pmr::memory_resource* resource, std::uint
     const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{":status", statusText}, {"content-length", lengthText}}};
     const auto section = ruvia::encodeHttp3FieldSection(std::span(fields).first(contentLength ? 2 : 1), resource);
     std::vector<char> result(16);
-    const auto head = ruvia::encodeHttp3FrameHeader(result, 1, section->size());
-    result.resize(*head);
-    result.insert(result.end(), section->begin(), section->end());
+    const auto head = ruvia::encodeHttp3FrameHeader(result, 1, std::get<0>(section).size());
+    result.resize(std::get<0>(head));
+    result.insert(result.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     if (sendData) {
         std::array<char, 16> frame{};
         const auto data = ruvia::encodeHttp3FrameHeader(frame, 0, body.size());
-        result.insert(result.end(), frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*data));
+        result.insert(result.end(), frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(data)));
         result.insert(result.end(), body.begin(), body.end());
     }
     return result;
@@ -146,12 +146,12 @@ std::vector<char> requestWire(std::pmr::memory_resource* resource, std::string_v
     const std::array<ruvia::Http3FieldSectionFieldView, 4> fields{{{":method", method}, {":scheme", "https"}, {":authority", "example.test"}, {":path", path}}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, resource);
     std::vector<char> result(128);
-    auto header = ruvia::encodeHttp3FrameHeader(result, 1, section->size());
-    result.resize(*header + section->size());
-    std::copy(section->begin(), section->end(), result.begin() + static_cast<std::ptrdiff_t>(*header));
+    auto header = ruvia::encodeHttp3FrameHeader(result, 1, std::get<0>(section).size());
+    result.resize(std::get<0>(header) + std::get<0>(section).size());
+    std::copy(std::get<0>(section).begin(), std::get<0>(section).end(), result.begin() + static_cast<std::ptrdiff_t>(std::get<0>(header)));
     std::array<char, 16> frameHeader{};
     const auto bodyHeader = ruvia::encodeHttp3FrameHeader(frameHeader, 0, body.size());
-    result.insert(result.end(), frameHeader.begin(), frameHeader.begin() + static_cast<std::ptrdiff_t>(*bodyHeader));
+    result.insert(result.end(), frameHeader.begin(), frameHeader.begin() + static_cast<std::ptrdiff_t>(std::get<0>(bodyHeader)));
     result.insert(result.end(), body.begin(), body.end());
     return result;
 }
@@ -179,13 +179,13 @@ RUVIA_TEST(http3_connection_single_request_capacity_accepts_all_peer_critical_st
     ruvia::Http3Connection connection(ruvia::Http3PeerRole::kClient, &resource, {.maxActiveStreams = 1});
     RUVIA_CHECK(connection.registerClientRequest(0, ruvia::HttpKnownMethod::kConnect).status == ruvia::Http3ConnectionStatus::kNeedMoreData);
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.enableConnectProtocol = true});
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    RUVIA_CHECK(connection.feed(3, prefixes->controlPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
-    RUVIA_CHECK(connection.feed(7, prefixes->qpackEncoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
-    RUVIA_CHECK(connection.feed(11, prefixes->qpackDecoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.feed(3, std::get<0>(prefixes).controlPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.feed(7, std::get<0>(prefixes).qpackEncoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.feed(11, std::get<0>(prefixes).qpackDecoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(connection.peerSettings() && connection.peerSettings()->enableConnectProtocol);
     RUVIA_CHECK(connection.registerClientRequest(4, ruvia::HttpKnownMethod::kGet).status == ruvia::Http3ConnectionStatus::kStreamError);
     RUVIA_CHECK(connection.activeRequestCount() == 1);
@@ -230,18 +230,18 @@ RUVIA_TEST(http3_connection_delivers_extended_connect_request_heads) {
         ruvia::Http3FieldSectionFieldView{":path", "/socket?channel=42"},
     };
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
-    RUVIA_CHECK(section.has_value());
-    if (!section) {
+    RUVIA_CHECK((section.index() == 0));
+    if ((section.index() != 0)) {
         return;
     }
     std::array<char, 16> prefix{};
-    const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
-    RUVIA_CHECK(prefixSize.has_value());
-    if (!prefixSize) {
+    const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(section).size());
+    RUVIA_CHECK((prefixSize.index() == 0));
+    if ((prefixSize.index() != 0)) {
         return;
     }
-    std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(*prefixSize));
-    wire.insert(wire.end(), section->begin(), section->end());
+    std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(std::get<0>(prefixSize)));
+    wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     ruvia::Http3Connection disabled(ruvia::Http3PeerRole::kServer, &resource);
     RUVIA_CHECK(disabled.feed(0, wire, false, false, ignoreEvent, nullptr).code ==
                 ruvia::Http3ConnectionErrorCode::kMessageError);
@@ -264,18 +264,18 @@ RUVIA_TEST(http3_connection_delivers_extended_connect_request_heads) {
         ruvia::Http3FieldSectionFieldView{":path", "/socket"},
     };
     const auto invalidSection = ruvia::encodeHttp3FieldSection(invalidFields, &resource);
-    RUVIA_CHECK(invalidSection.has_value());
-    if (!invalidSection) {
+    RUVIA_CHECK((invalidSection.index() == 0));
+    if ((invalidSection.index() != 0)) {
         return;
     }
-    const auto invalidPrefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, invalidSection->size());
-    RUVIA_CHECK(invalidPrefixSize.has_value());
-    if (!invalidPrefixSize) {
+    const auto invalidPrefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(invalidSection).size());
+    RUVIA_CHECK((invalidPrefixSize.index() == 0));
+    if ((invalidPrefixSize.index() != 0)) {
         return;
     }
     std::vector<char> invalidWire(prefix.begin(),
-        prefix.begin() + static_cast<std::ptrdiff_t>(*invalidPrefixSize));
-    invalidWire.insert(invalidWire.end(), invalidSection->begin(), invalidSection->end());
+        prefix.begin() + static_cast<std::ptrdiff_t>(std::get<0>(invalidPrefixSize)));
+    invalidWire.insert(invalidWire.end(), std::get<0>(invalidSection).begin(), std::get<0>(invalidSection).end());
     ruvia::Http3Connection invalidConnection(ruvia::Http3PeerRole::kServer, &resource);
     const auto invalidResult = invalidConnection.feed(0, invalidWire, false, false, capture, &captured);
     RUVIA_CHECK(invalidResult.status == ruvia::Http3ConnectionStatus::kStreamError);
@@ -323,9 +323,9 @@ RUVIA_TEST(http3_connection_delivers_trailers_synchronously_and_finishes_the_mes
     const std::array<ruvia::Http3FieldSectionFieldView, 1> fields{{{name, value, true}}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
     std::array<char, 16> frame{};
-    const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
-    std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*header));
-    wire.insert(wire.end(), section->begin(), section->end());
+    const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, std::get<0>(section).size());
+    std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(header)));
+    wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     RUVIA_CHECK(connection.feed(0, wire, true, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kMessageEnd);
     RUVIA_CHECK_EQ(captured.trailers.size(), 1U);
@@ -347,9 +347,9 @@ RUVIA_TEST(http3_connection_rejects_forbidden_request_trailer_fields) {
         const std::array fields{field};
         const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
         std::array<char, 16> prefix{};
-        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
-        std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(*prefixSize));
-        wire.insert(wire.end(), section->begin(), section->end());
+        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(section).size());
+        std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(std::get<0>(prefixSize)));
+        wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
         const auto result = connection.feed(0, wire, true, false, capture, &captured);
         RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
         RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
@@ -408,9 +408,9 @@ RUVIA_TEST(http3_connection_validates_all_trailers_before_delivering_any) {
         const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{"x-valid", "yes"}, {name, "close"}}};
         const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
         std::array<char, 16> frame{};
-        const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
-        std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*header));
-        wire.insert(wire.end(), section->begin(), section->end());
+        const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, std::get<0>(section).size());
+        std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(header)));
+        wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
         const auto result = connection.feed(0, wire, true, false, capture, &captured);
         RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
         RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
@@ -454,9 +454,9 @@ RUVIA_TEST(http3_connection_rejects_callback_reentry_for_all_request_events) {
     const std::array<ruvia::Http3FieldSectionFieldView, 1> fields{{{"x-end", "yes"}}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
     std::array<char, 16> frame{};
-    const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
-    std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(*header));
-    wire.insert(wire.end(), section->begin(), section->end());
+    const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, std::get<0>(section).size());
+    std::vector<char> wire(frame.begin(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(header)));
+    wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     RUVIA_CHECK(connection.feed(4, wire, true, false, reenter, &state).status ==
                 ruvia::Http3ConnectionStatus::kMessageEnd);
     RUVIA_CHECK_EQ(state.count, 3U);
@@ -542,11 +542,11 @@ RUVIA_TEST(http3_connection_rejects_content_length_mismatch_and_releases_request
         const std::array<ruvia::Http3FieldSectionFieldView, 5> fields{{{":method", "POST"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}, {"content-length", "4"}}};
         const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
         std::array<char, 128> wire{};
-        const auto header = ruvia::encodeHttp3FrameHeader(wire, 1, section->size());
-        std::copy(section->begin(), section->end(), wire.begin() + static_cast<std::ptrdiff_t>(*header));
+        const auto header = ruvia::encodeHttp3FrameHeader(wire, 1, std::get<0>(section).size());
+        std::copy(std::get<0>(section).begin(), std::get<0>(section).end(), wire.begin() + static_cast<std::ptrdiff_t>(std::get<0>(header)));
         Captured captured;
         const auto result = connection.feed(0,
-            std::span<const char>(wire).first(*header + section->size()), true, false, capture, &captured);
+            std::span<const char>(wire).first(std::get<0>(header) + std::get<0>(section).size()), true, false, capture, &captured);
         RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
         RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
         RUVIA_CHECK_EQ(connection.activeRequestCount(), 0U);
@@ -562,10 +562,10 @@ RUVIA_TEST(http3_connection_prioritizes_connection_frame_error_over_same_input_s
             {":path", "/"}, {"content-length", "0"}}};
         const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
         std::array<char, 16> prefix{};
-        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
+        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(section).size());
         std::pmr::vector<char> wire(&resource);
-        wire.insert(wire.end(), prefix.begin(), prefix.begin() + *prefixSize);
-        wire.insert(wire.end(), section->begin(), section->end());
+        wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(prefixSize));
+        wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
         wire.insert(wire.end(), {0x0, 0x1, 'x', 0x2, 0x0});
         Captured captured;
         const auto result = connection.feed(0, wire, false, false, capture, &captured);
@@ -591,10 +591,10 @@ RUVIA_TEST(http3_client_connection_prioritizes_frame_error_over_same_input_respo
         const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{":status", "200"}, {"content-length", "0"}}};
         const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
         std::array<char, 16> prefix{};
-        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
+        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(section).size());
         std::pmr::vector<char> wire(&resource);
-        wire.insert(wire.end(), prefix.begin(), prefix.begin() + *prefixSize);
-        wire.insert(wire.end(), section->begin(), section->end());
+        wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(prefixSize));
+        wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
         wire.insert(wire.end(), {0x0, 0x1, 'x', 0x2, 0x0});
         ClientCaptured captured;
         const auto result = connection.feed(0, wire, false, false, captureClient, &captured);
@@ -766,10 +766,10 @@ RUVIA_TEST(http3_connection_server_extended_connect_emits_tunnel_data_and_reject
     };
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
     std::array<char, 16> headPrefix{};
-    const auto headSize = ruvia::encodeHttp3FrameHeader(headPrefix, 1, section->size());
+    const auto headSize = ruvia::encodeHttp3FrameHeader(headPrefix, 1, std::get<0>(section).size());
     std::vector<char> headWire(headPrefix.begin(), headPrefix.begin() +
-                                                       static_cast<std::ptrdiff_t>(*headSize));
-    headWire.insert(headWire.end(), section->begin(), section->end());
+                                                       static_cast<std::ptrdiff_t>(std::get<0>(headSize)));
+    headWire.insert(headWire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     RUVIA_CHECK(server.feed(0, headWire, false, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kNeedMoreData);
     RUVIA_CHECK_EQ(captured.methods.size(), 1U);
@@ -777,7 +777,7 @@ RUVIA_TEST(http3_connection_server_extended_connect_emits_tunnel_data_and_reject
     std::array<char, 16> dataPrefix{};
     const auto dataSize = ruvia::encodeHttp3FrameHeader(dataPrefix, 0, 3);
     std::vector<char> dataWire(dataPrefix.begin(), dataPrefix.begin() +
-                                                       static_cast<std::ptrdiff_t>(*dataSize));
+                                                       static_cast<std::ptrdiff_t>(std::get<0>(dataSize)));
     dataWire.insert(dataWire.end(), {'w', 's', '!'});
     RUVIA_CHECK(server.feed(0, dataWire, true, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kMessageEnd);
@@ -788,10 +788,10 @@ RUVIA_TEST(http3_connection_server_extended_connect_emits_tunnel_data_and_reject
     const auto trailerSection = ruvia::encodeHttp3FieldSection(
         std::array<ruvia::Http3FieldSectionFieldView, 1>{{{"x-trailer", "forbidden"}}}, &resource);
     std::array<char, 16> trailerPrefix{};
-    const auto trailerSize = ruvia::encodeHttp3FrameHeader(trailerPrefix, 1, trailerSection->size());
+    const auto trailerSize = ruvia::encodeHttp3FrameHeader(trailerPrefix, 1, std::get<0>(trailerSection).size());
     std::vector<char> trailerWire(trailerPrefix.begin(), trailerPrefix.begin() +
-                                                             static_cast<std::ptrdiff_t>(*trailerSize));
-    trailerWire.insert(trailerWire.end(), trailerSection->begin(), trailerSection->end());
+                                                             static_cast<std::ptrdiff_t>(std::get<0>(trailerSize)));
+    trailerWire.insert(trailerWire.end(), std::get<0>(trailerSection).begin(), std::get<0>(trailerSection).end());
     Captured trailerCapture;
     RUVIA_CHECK(server.feed(4, headWire, false, false, capture, &trailerCapture).status ==
                 ruvia::Http3ConnectionStatus::kNeedMoreData);
@@ -815,12 +815,12 @@ RUVIA_TEST(http3_connection_client_reset_and_stream_errors_are_isolated) {
     const std::array<ruvia::Http3FieldSectionFieldView, 2> badFields{{{":status", "200"}, {"content-length", "2"}}};
     const auto badSection = ruvia::encodeHttp3FieldSection(badFields, &resource);
     std::array<char, 16> badFrameHeader{};
-    const auto badHeaderLength = ruvia::encodeHttp3FrameHeader(badFrameHeader, 1, badSection->size());
-    std::vector<char> badWire(badFrameHeader.begin(), badFrameHeader.begin() + static_cast<std::ptrdiff_t>(*badHeaderLength));
-    badWire.insert(badWire.end(), badSection->begin(), badSection->end());
+    const auto badHeaderLength = ruvia::encodeHttp3FrameHeader(badFrameHeader, 1, std::get<0>(badSection).size());
+    std::vector<char> badWire(badFrameHeader.begin(), badFrameHeader.begin() + static_cast<std::ptrdiff_t>(std::get<0>(badHeaderLength)));
+    badWire.insert(badWire.end(), std::get<0>(badSection).begin(), std::get<0>(badSection).end());
     std::array<char, 16> dataHeader{};
     const auto dataHeaderLength = ruvia::encodeHttp3FrameHeader(dataHeader, 0, 1);
-    badWire.insert(badWire.end(), dataHeader.begin(), dataHeader.begin() + static_cast<std::ptrdiff_t>(*dataHeaderLength));
+    badWire.insert(badWire.end(), dataHeader.begin(), dataHeader.begin() + static_cast<std::ptrdiff_t>(std::get<0>(dataHeaderLength)));
     badWire.push_back('x');
     const auto badStream = client.feed(4, badWire, true, false, captureClient, &captured);
     RUVIA_CHECK(badStream.scope == ruvia::Http3ConnectionErrorScope::kStream);
@@ -1020,9 +1020,9 @@ RUVIA_TEST(http3_connection_unprocessed_evidence_excludes_observed_responses_and
     const std::array informationalFields{ruvia::Http3FieldSectionFieldView{":status", "103"}};
     const auto section = ruvia::encodeHttp3FieldSection(informationalFields, &resource);
     std::vector<char> informational(16);
-    const auto prefix = ruvia::encodeHttp3FrameHeader(informational, 1, section->size());
-    informational.resize(*prefix);
-    informational.insert(informational.end(), section->begin(), section->end());
+    const auto prefix = ruvia::encodeHttp3FrameHeader(informational, 1, std::get<0>(section).size());
+    informational.resize(std::get<0>(prefix));
+    informational.insert(informational.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     RUVIA_CHECK(client.feed(12, informational, false, false, ignoreEvent, nullptr).scope ==
                 ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(!client.peerReportsUnprocessed(8, rejected));
@@ -1124,14 +1124,14 @@ RUVIA_TEST(http3_connection_dynamic_headers_pause_at_frame_boundary_for_both_rol
                           ? std::span<const ruvia::Http3FieldSectionFieldView>(requestFields)
                           : std::span<const ruvia::Http3FieldSectionFieldView>(responseFields);
         auto section = encoder.encode(0, fields);
-        RUVIA_CHECK(section.has_value());
+        RUVIA_CHECK((section.index() == 0));
         std::array<char, 16> header{};
-        const auto headerSize = ruvia::encodeHttp3FrameHeader(header, 1, section->size());
-        std::vector<char> wire(header.begin(), header.begin() + *headerSize);
-        wire.insert(wire.end(), section->begin(), section->end());
+        const auto headerSize = ruvia::encodeHttp3FrameHeader(header, 1, std::get<0>(section).size());
+        std::vector<char> wire(header.begin(), header.begin() + std::get<0>(headerSize));
+        wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
         const auto boundary = wire.size();
         const auto dataSize = ruvia::encodeHttp3FrameHeader(header, 0, 2);
-        wire.insert(wire.end(), header.begin(), header.begin() + *dataSize);
+        wire.insert(wire.end(), header.begin(), header.begin() + std::get<0>(dataSize));
         wire.insert(wire.end(), {'o', 'k'});
         ClientCaptured captured;
         const auto blocked = connection.feed(0, wire, true, false, captureClient, &captured);
@@ -1148,7 +1148,7 @@ RUVIA_TEST(http3_connection_dynamic_headers_pause_at_frame_boundary_for_both_rol
                     ruvia::Http3ConnectionStatus::kMessageEnd);
         RUVIA_CHECK(captured.bodies[0] == "ok");
         RUVIA_CHECK_EQ(connection.activeRequestCount(), 0u);
-        RUVIA_CHECK(encoder.consumeDecoder(connection.pendingQpackDecoderOutput()).has_value());
+        RUVIA_CHECK((encoder.consumeDecoder(connection.pendingQpackDecoderOutput()).index() == 0));
         RUVIA_CHECK(connection.consumeQpackDecoderOutput(connection.pendingQpackDecoderOutput().size()));
     }
 }
@@ -1157,17 +1157,17 @@ namespace {
 std::vector<char> controlSettings(ruvia::Http3Settings settings) {
     std::array<char, 128> bytes{};
     const auto size = ruvia::encodeHttp3Settings(std::span(bytes).subspan(16), settings);
-    const auto frame = ruvia::encodeHttp3FrameHeader(bytes, 4, *size);
+    const auto frame = ruvia::encodeHttp3FrameHeader(bytes, 4, std::get<0>(size));
     std::vector<char> wire{0};
-    wire.insert(wire.end(), bytes.begin(), bytes.begin() + *frame);
-    wire.insert(wire.end(), bytes.begin() + 16, bytes.begin() + 16 + *size);
+    wire.insert(wire.end(), bytes.begin(), bytes.begin() + std::get<0>(frame));
+    wire.insert(wire.end(), bytes.begin() + 16, bytes.begin() + 16 + std::get<0>(size));
     return wire;
 }
 std::vector<char> idFrame(std::uint64_t type, std::uint64_t id) {
     std::array<char, 24> bytes{};
     const auto frame = ruvia::encodeHttp3FrameHeader(bytes, type, ruvia::http3VarIntEncodedSize(id));
-    const auto encoded = ruvia::encodeHttp3VarInt(std::span(bytes).subspan(*frame), id);
-    return {bytes.begin(), bytes.begin() + *frame + *encoded};
+    const auto encoded = ruvia::encodeHttp3VarInt(std::span(bytes).subspan(std::get<0>(frame)), id);
+    return {bytes.begin(), bytes.begin() + std::get<0>(frame) + std::get<0>(encoded)};
 }
 }  // namespace
 RUVIA_TEST(http3_push_stream_before_promise_resumes_without_buffering_body) {
@@ -1181,7 +1181,7 @@ RUVIA_TEST(http3_push_stream_before_promise_resumes_without_buffering_body) {
         control.insert(control.end(), maximum.begin(), maximum.end());
         RUVIA_CHECK(server.feed(2, control, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
         auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
-        RUVIA_CHECK(promise.has_value());
+        RUVIA_CHECK((promise.index() == 0));
         RUVIA_CHECK(server.promisedRequest(0) != nullptr);
         RUVIA_CHECK_EQ(server.promisedRequest(0)->path, "/asset");
         RUVIA_CHECK(server.promisedRequest(1) == nullptr);
@@ -1191,7 +1191,7 @@ RUVIA_TEST(http3_push_stream_before_promise_resumes_without_buffering_body) {
         const auto blocked = client.feed(3, pushed, true, false, captureClient, &captured);
         RUVIA_CHECK(blocked.status == ruvia::Http3ConnectionStatus::kPushPromisePending);
         RUVIA_CHECK_EQ(blocked.consumedBytes, 2u);
-        RUVIA_CHECK(client.feed(0, *promise, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(client.feed(0, std::get<0>(promise), false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPushPromise);
         RUVIA_CHECK(client.feed(3, std::span(pushed).subspan(blocked.consumedBytes), true, false, captureClient, &captured).status == ruvia::Http3ConnectionStatus::kMessageEnd);
         RUVIA_CHECK_EQ(captured.bodies[3], "asset");
@@ -1222,11 +1222,11 @@ RUVIA_TEST(http3_connection_owned_qpack_encoder_accepts_decoder_acknowledgments)
     RUVIA_CHECK(server.feed(2, settings, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
     const std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-reused", "value"}};
     const auto section = server.encodeFieldSection(0, fields);
-    RUVIA_CHECK(section.has_value());
+    RUVIA_CHECK((section.index() == 0));
     std::array<char, 16> frame{};
-    const auto size = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
-    std::vector<char> wire(frame.begin(), frame.begin() + *size);
-    wire.insert(wire.end(), section->begin(), section->end());
+    const auto size = ruvia::encodeHttp3FrameHeader(frame, 1, std::get<0>(section).size());
+    std::vector<char> wire(frame.begin(), frame.begin() + std::get<0>(size));
+    wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(client.feed(0, wire, true, false, ignoreEvent, nullptr).status == ruvia::Http3ConnectionStatus::kQpackBlocked);
     const auto pending = server.pendingQpackEncoderOutput();
@@ -1240,7 +1240,7 @@ RUVIA_TEST(http3_connection_owned_qpack_encoder_accepts_decoder_acknowledgments)
     instructions.insert(instructions.end(), acknowledgments.begin(), acknowledgments.end());
     RUVIA_CHECK(server.feed(6, instructions, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(client.consumeQpackDecoderOutput(acknowledgments.size()));
-    RUVIA_CHECK(server.encodeFieldSection(4, fields).has_value());
+    RUVIA_CHECK((server.encodeFieldSection(4, fields).index() == 0));
 }
 
 RUVIA_TEST(http3_control_output_updates_push_authorization_cancellation_and_priorities) {
@@ -1252,27 +1252,27 @@ RUVIA_TEST(http3_control_output_updates_push_authorization_cancellation_and_prio
     RUVIA_CHECK(server.feed(2, control, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
     const auto maximum = client.prepareMaxPushId(2);
-    RUVIA_CHECK(maximum.has_value());
-    RUVIA_CHECK(server.feed(2, *maximum, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK((maximum.index() == 0));
+    RUVIA_CHECK(server.feed(2, std::get<0>(maximum), false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(server.peerMaxPushId() == 2);
-    RUVIA_CHECK(!client.prepareMaxPushId(1));
+    RUVIA_CHECK((client.prepareMaxPushId(1).index() != 0));
     const auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
-    RUVIA_CHECK(promise.has_value());
-    RUVIA_CHECK(client.feed(0, *promise, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK((promise.index() == 0));
+    RUVIA_CHECK(client.feed(0, std::get<0>(promise), false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     const auto priority = client.preparePriorityUpdate({.elementId = 0, .push = true, .fields = {.urgency = 1}});
-    RUVIA_CHECK(priority.has_value());
-    RUVIA_CHECK(server.feed(2, *priority, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK((priority.index() == 0));
+    RUVIA_CHECK(server.feed(2, std::get<0>(priority), false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPriorityUpdate);
     auto stream = server.preparePushStream(3, 0);
-    RUVIA_CHECK(stream && stream->size() == 2);
-    RUVIA_CHECK(!server.preparePushStream(7, 0));
+    RUVIA_CHECK((stream.index() == 0) && std::get<0>(stream).size() == 2);
+    RUVIA_CHECK((server.preparePushStream(7, 0).index() != 0));
     const auto cancel = client.prepareCancelPush(0);
-    RUVIA_CHECK(cancel.has_value());
-    RUVIA_CHECK(server.feed(2, *cancel, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK((cancel.index() == 0));
+    RUVIA_CHECK(server.feed(2, std::get<0>(cancel), false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(captured.kinds[3].back() == ruvia::Http3ConnectionEventKind::kPushCanceled);
-    RUVIA_CHECK(!server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"}));
-    RUVIA_CHECK(server.prepareGoaway(4));
-    RUVIA_CHECK(!server.prepareGoaway(8));
+    RUVIA_CHECK((server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"}).index() != 0));
+    RUVIA_CHECK((server.prepareGoaway(4)).index() == 0);
+    RUVIA_CHECK((server.prepareGoaway(8).index() != 0));
     const auto result = server.feed(4, requestWire(&resource, "GET", "/", ""), true, false, ignoreEvent, nullptr);
     RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kRequestRejected);
 }
@@ -1287,8 +1287,8 @@ RUVIA_TEST(http3_priority_update_requires_client_control_stream_and_promised_pus
         }
         std::array<char, 32> output{};
         const auto size = ruvia::encodeHttp3PriorityUpdate(output, {.elementId = 0, .push = true, .fields = {.urgency = 0}});
-        RUVIA_CHECK(size.has_value());
-        wire.insert(wire.end(), output.begin(), output.begin() + *size);
+        RUVIA_CHECK((size.index() == 0));
+        wire.insert(wire.end(), output.begin(), output.begin() + std::get<0>(size));
         const auto result = receiver.feed(clientRole ? 3 : 2, wire, false, false, ignoreEvent, nullptr);
         RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kConnection);
         RUVIA_CHECK(result.code == (clientRole ? ruvia::Http3ConnectionErrorCode::kFrameUnexpected : ruvia::Http3ConnectionErrorCode::kIdError));
@@ -1301,13 +1301,13 @@ RUVIA_TEST(http3_connection_ordinary_connect_uses_tunnel_events_without_extended
     const std::array fields{ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
         ruvia::Http3FieldSectionFieldView{":authority", "example.test:443"}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
-    RUVIA_CHECK(section.has_value());
+    RUVIA_CHECK((section.index() == 0));
     std::array<char, 16> prefix{};
-    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
-    std::vector<char> bytes(prefix.begin(), prefix.begin() + *size);
-    bytes.insert(bytes.end(), section->begin(), section->end());
+    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 1, std::get<0>(section).size());
+    std::vector<char> bytes(prefix.begin(), prefix.begin() + std::get<0>(size));
+    bytes.insert(bytes.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     const auto dataSize = ruvia::encodeHttp3FrameHeader(prefix, 0, 6);
-    bytes.insert(bytes.end(), prefix.begin(), prefix.begin() + *dataSize);
+    bytes.insert(bytes.end(), prefix.begin(), prefix.begin() + std::get<0>(dataSize));
     bytes.insert(bytes.end(), {'t', 'u', 'n', 'n', 'e', 'l'});
     struct Events {
         std::size_t tunnel{0};
@@ -1330,7 +1330,7 @@ RUVIA_TEST(http3_connection_origin_advertisement_is_incremental_and_requires_ori
     std::pmr::monotonic_buffer_resource resource;
     ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
     const auto frame = server.prepareOriginAdvertisement(std::array<std::string_view, 1>{"https://example.test"});
-    RUVIA_CHECK(frame.has_value());
+    RUVIA_CHECK((frame.index() == 0));
     for (const bool enabled : {false, true}) {
         ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource, {.receiveOriginAdvertisements = enabled});
         const std::array<char, 3> prefix{0, 4, 0};
@@ -1345,7 +1345,7 @@ RUVIA_TEST(http3_connection_origin_advertisement_is_incremental_and_requires_ori
                 result.emplace_back(origin);
             }
         };
-        for (const auto& byte : *frame) {
+        for (const auto& byte : std::get<0>(frame)) {
             RUVIA_CHECK(client.feed(3, {&byte, 1}, false, false, callback, &origins).scope == ruvia::Http3ConnectionErrorScope::kNone);
         }
         RUVIA_CHECK_EQ(origins.size(), static_cast<std::size_t>(enabled));
@@ -1362,16 +1362,16 @@ RUVIA_TEST(http3_push_promise_field_section_limit_excludes_its_varint_push_ident
         ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
         ruvia::Http3FieldSectionFieldView{":path", "/"}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
-    RUVIA_CHECK(section.has_value());
+    RUVIA_CHECK((section.index() == 0));
     ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource,
-        {.maxEncodedFieldSectionBytes = section->size(), .maxPushId = 0});
+        {.maxEncodedFieldSectionBytes = std::get<0>(section).size(), .maxPushId = 0});
     RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
     std::array<char, 16> prefix{};
-    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 5, 8 + section->size());
-    std::vector<char> wire(prefix.begin(), prefix.begin() + *size);
+    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 5, 8 + std::get<0>(section).size());
+    std::vector<char> wire(prefix.begin(), prefix.begin() + std::get<0>(size));
     // The same Push ID zero may legally occupy eight bytes.
     wire.insert(wire.end(), {static_cast<char>(0xc0), 0, 0, 0, 0, 0, 0, 0});
-    wire.insert(wire.end(), section->begin(), section->end());
+    wire.insert(wire.end(), std::get<0>(section).begin(), std::get<0>(section).end());
     ClientCaptured captured;
     RUVIA_CHECK(client.feed(0, wire, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPushPromise);

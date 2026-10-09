@@ -8,6 +8,7 @@
 #include <limits>
 #include <optional>
 #include <string_view>
+#include <variant>
 
 #include "field/HttpImfFixdate.h"
 
@@ -27,13 +28,13 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool httpIsShortWeekday(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 7> weekdays{
         "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    return std::ranges::contains(weekdays, value);
+    return std::ranges::find(weekdays, value) != weekdays.end();
 }
 
 [[nodiscard]] inline bool httpIsLongWeekday(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 7> weekdays{
         "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
-    return std::ranges::contains(weekdays, value);
+    return std::ranges::find(weekdays, value) != weekdays.end();
 }
 
 [[nodiscard]] inline std::optional<int> httpParseFixedDigits(std::string_view value) noexcept {
@@ -170,16 +171,16 @@ namespace ruvia::detail {
         return std::nullopt;
     }
     const auto currentUtc = httpUtcTm(now);
-    if (!currentUtc) {
+    if ((currentUtc.index() != 0)) {
         return std::nullopt;
     }
-    const int currentYear = currentUtc->tm_year + 1900;
+    const int currentYear = std::get<0>(currentUtc).tm_year + 1900;
     auto year = httpResolveRfc850Year(*shortYear, currentYear);
     // RFC 9110 section 5.6.7 applies the rolling 50-year pivot to the full
     // timestamp. Equal years alone do not establish that a date is in range.
     const std::array date_fields{month, *day, *hour, *minute, *second};
-    const std::array reference_fields{currentUtc->tm_mon + 1, currentUtc->tm_mday,
-        currentUtc->tm_hour, currentUtc->tm_min, currentUtc->tm_sec};
+    const std::array reference_fields{std::get<0>(currentUtc).tm_mon + 1, std::get<0>(currentUtc).tm_mday,
+        std::get<0>(currentUtc).tm_hour, std::get<0>(currentUtc).tm_min, std::get<0>(currentUtc).tm_sec};
     if (year == currentYear + 50 && date_fields > reference_fields) {
         year -= 100;
     }

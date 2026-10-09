@@ -32,10 +32,10 @@ struct FailureGuard {
 void integer(std::pmr::vector<char>& out, std::uint8_t bits, std::uint8_t flags, std::uint64_t value) {
     std::array<char, 11> data{};
     auto size = encodeHttp3QpackInteger(data, bits, flags, value);
-    if (!size) {
+    if ((size.index() != 0)) {
         throw std::logic_error("QPACK integer encoding failed");
     }
-    out.insert(out.end(), data.begin(), data.begin() + *size);
+    out.insert(out.end(), data.begin(), data.begin() + std::get<0>(size));
 }
 void literal(std::pmr::vector<char>& out, std::uint8_t bits, std::uint8_t flags, std::string_view text) {
     integer(out, bits, flags, text.size());
@@ -149,7 +149,7 @@ struct Http3QpackDecoder::Impl {
           input(0, r),
           output(0, r),
           blocked(r) {}
-    std::expected<bool, Error> instruction() {
+    std::variant<bool, Error> instruction() {
         if (input.empty()) {
             return false;
         }
@@ -157,82 +157,82 @@ struct Http3QpackDecoder::Impl {
         auto first = static_cast<std::uint8_t>(bytes[0]);
         auto index = decodeHttp3QpackInteger(bytes, (first & 0x80) ? 6 : (first & 0x40) ? 5
                                                                                         : 5);
-        if (!index) {
-            return index.error() == Http3QpackError::kNeedMoreData ? std::expected<bool, Error>(false) : std::unexpected(Error::kEncoderStreamError);
+        if ((index.index() != 0)) {
+            return std::get<1>(index) == Http3QpackError::kNeedMoreData ? std::variant<bool, Error>(false) : Error::kEncoderStreamError;
         }
-        std::size_t offset = index->encodedBytes;
+        std::size_t offset = std::get<0>(index).encodedBytes;
         if ((first & 0xe0) == 0x20) {
-            if (index->value > config.maxTableCapacity || !table.evictTo(static_cast<std::size_t>(index->value))) {
-                return std::unexpected(Error::kEncoderStreamError);
+            if (std::get<0>(index).value > config.maxTableCapacity || !table.evictTo(static_cast<std::size_t>(std::get<0>(index).value))) {
+                return Error::kEncoderStreamError;
             }
-            table.capacity = static_cast<std::size_t>(index->value);
+            table.capacity = static_cast<std::size_t>(std::get<0>(index).value);
         } else if ((first & 0xe0) == 0) {
-            if (index->value >= table.count) {
-                return std::unexpected(Error::kEncoderStreamError);
+            if (std::get<0>(index).value >= table.count) {
+                return Error::kEncoderStreamError;
             }
-            auto entry = table.at(table.count - index->value - 1);
+            auto entry = table.at(table.count - std::get<0>(index).value - 1);
             if (!entry || !table.insert(entry->name, entry->value)) {
-                return std::unexpected(Error::kEncoderStreamError);
+                return Error::kEncoderStreamError;
             }
         } else {
             // Wait for both literals before decoding either one: otherwise a
             // fragmented value repeatedly allocates and decodes its complete name.
             const auto bound = std::min(config.maxTableCapacity, (std::numeric_limits<std::size_t>::max() - 64) / 4) * 4 + 64;
             if (!(first & 0x80)) {
-                if (index->value > bound) {
-                    return std::unexpected(Error::kEncoderStreamError);
+                if (std::get<0>(index).value > bound) {
+                    return Error::kEncoderStreamError;
                 }
-                if (index->value > bytes.size() - offset) {
+                if (std::get<0>(index).value > bytes.size() - offset) {
                     return false;
                 }
-                offset += static_cast<std::size_t>(index->value);
+                offset += static_cast<std::size_t>(std::get<0>(index).value);
             }
             auto valueLength = decodeHttp3QpackInteger(bytes.subspan(offset), 7);
-            if (!valueLength) {
-                return valueLength.error() == Http3QpackError::kNeedMoreData
-                           ? std::expected<bool, Error>(false)
-                           : std::unexpected(Error::kEncoderStreamError);
+            if ((valueLength.index() != 0)) {
+                return std::get<1>(valueLength) == Http3QpackError::kNeedMoreData
+                           ? std::variant<bool, Error>(false)
+                           : Error::kEncoderStreamError;
             }
-            if (valueLength->value > bound) {
-                return std::unexpected(Error::kEncoderStreamError);
+            if (std::get<0>(valueLength).value > bound) {
+                return Error::kEncoderStreamError;
             }
-            if (valueLength->value > bytes.size() - offset - valueLength->encodedBytes) {
+            if (std::get<0>(valueLength).value > bytes.size() - offset - std::get<0>(valueLength).encodedBytes) {
                 return false;
             }
-            offset = index->encodedBytes;
+            offset = std::get<0>(index).encodedBytes;
             std::pmr::string name(0, '\0', input.get_allocator().resource());
             std::pmr::string value(0, '\0', input.get_allocator().resource());
             if (first & 0x80) {
                 if (first & 0x40) {
-                    auto e = http3QpackStaticEntry(index->value);
-                    if (!e) {
-                        return std::unexpected(Error::kEncoderStreamError);
+                    auto e = http3QpackStaticEntry(std::get<0>(index).value);
+                    if ((e.index() != 0)) {
+                        return Error::kEncoderStreamError;
                     }
-                    name = e->name;
+                    name = std::get<0>(e).name;
                 } else {
-                    if (index->value >= table.count) {
-                        return std::unexpected(Error::kEncoderStreamError);
+                    if (std::get<0>(index).value >= table.count) {
+                        return Error::kEncoderStreamError;
                     }
-                    auto e = table.at(table.count - index->value - 1);
+                    auto e = table.at(table.count - std::get<0>(index).value - 1);
                     if (!e) {
-                        return std::unexpected(Error::kEncoderStreamError);
+                        return Error::kEncoderStreamError;
                     }
                     name = e->name;
                 }
             } else {
                 auto size = decodeHttp3QpackString(bytes, 5, name);
-                if (!size) {
-                    return size.error() == Http3QpackError::kNeedMoreData ? std::expected<bool, Error>(false) : std::unexpected(Error::kEncoderStreamError);
+                if ((size.index() != 0)) {
+                    return std::get<1>(size) == Http3QpackError::kNeedMoreData ? std::variant<bool, Error>(false) : Error::kEncoderStreamError;
                 }
-                offset = *size;
+                offset = std::get<0>(size);
             }
             auto size = decodeHttp3QpackString(bytes.subspan(offset), value);
-            if (!size) {
-                return size.error() == Http3QpackError::kNeedMoreData ? std::expected<bool, Error>(false) : std::unexpected(Error::kEncoderStreamError);
+            if ((size.index() != 0)) {
+                return std::get<1>(size) == Http3QpackError::kNeedMoreData ? std::variant<bool, Error>(false) : Error::kEncoderStreamError;
             }
-            offset += *size;
+            offset += std::get<0>(size);
             if (!table.insert(name, value)) {
-                return std::unexpected(Error::kEncoderStreamError);
+                return Error::kEncoderStreamError;
             }
         }
         input.erase(input.begin(), input.begin() + offset);
@@ -249,17 +249,17 @@ Http3QpackDecoder::Http3QpackDecoder(Http3QpackDecoderConfig config, std::pmr::m
 Http3QpackDecoder::~Http3QpackDecoder() {
     std::pmr::polymorphic_allocator<Impl>(resource_).delete_object(impl_);
 }
-std::expected<void, Error> Http3QpackDecoder::consumeEncoder(std::span<const char> bytes, bool fin) {
+std::variant<std::monostate, Error> Http3QpackDecoder::consumeEncoder(std::span<const char> bytes, bool fin) {
     auto& s = *impl_;
     if (s.decoding) {
         throw std::logic_error("reentrant QPACK operation");
     }
     if (s.failure) {
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     if (fin) {
         s.failure = Error::kClosedCriticalStream;
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     FailureGuard guard{s.failure, Error::kEncoderStreamError};
     auto before = s.table.count;
@@ -268,59 +268,59 @@ std::expected<void, Error> Http3QpackDecoder::consumeEncoder(std::span<const cha
     for (char byte : bytes) {
         if (s.input.size() >= std::min(s.config.maxTableCapacity, (std::numeric_limits<std::size_t>::max() - 64) / 4) * 4 + 64) {
             s.failure = Error::kEncoderStreamError;
-            return std::unexpected(*s.failure);
+            return *s.failure;
         }
         s.input.push_back(byte);
         auto result = s.instruction();
-        if (!result) {
-            s.failure = result.error();
-            return std::unexpected(*s.failure);
+        if ((result.index() != 0)) {
+            s.failure = std::get<1>(result);
+            return *s.failure;
         }
     }
     if (s.table.count > before) {
         if (s.output.size() > s.config.maxPendingOutputBytes || s.config.maxPendingOutputBytes - s.output.size() < 11) {
             s.failure = Error::kLimit;
-            return std::unexpected(*s.failure);
+            return *s.failure;
         }
         integer(s.output, 6, 0, s.table.count - before);
     }
     std::erase_if(s.blocked, [&](const auto& item) { return item.second <= s.table.count; });
     return {};
 }
-std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint64_t streamId, std::span<const char> section,
+std::variant<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint64_t streamId, std::span<const char> section,
     Http3FieldSectionCallback callback, void* context) {
     auto& s = *impl_;
     if (s.decoding) {
         throw std::logic_error("reentrant QPACK operation");
     }
     if (s.failure) {
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     if (streamId > kHttp3VarIntMax) {
-        return std::unexpected(Error::kInvalidStreamId);
+        return Error::kInvalidStreamId;
     }
-    auto fail = [&](Error e) -> std::expected<Http3QpackDecodeResult, Error> {s.failure=e;return std::unexpected(e); };
+    auto fail = [&](Error e) -> std::variant<Http3QpackDecodeResult, Error> {s.failure=e;return e; };
     if (section.size() > s.config.fields.maxEncodedBytes) {
         return fail(Error::kLimit);
     }
     FailureGuard exceptionGuard{s.failure, Error::kDecompressionFailed};
     auto encoded = decodeHttp3QpackInteger(section, 8);
-    if (!encoded || encoded->encodedBytes >= section.size()) {
+    if ((encoded.index() != 0) || std::get<0>(encoded).encodedBytes >= section.size()) {
         return fail(Error::kDecompressionFailed);
     }
-    auto delta = decodeHttp3QpackInteger(section.subspan(encoded->encodedBytes), 7);
-    if (!delta) {
+    auto delta = decodeHttp3QpackInteger(section.subspan(std::get<0>(encoded).encodedBytes), 7);
+    if ((delta.index() != 0)) {
         return fail(Error::kDecompressionFailed);
     }
     std::uint64_t required = 0;
-    if (encoded->value) {
+    if (std::get<0>(encoded).value) {
         auto maxEntries = s.config.maxTableCapacity / 32;
         auto fullRange = 2 * maxEntries;
-        if (!fullRange || encoded->value > fullRange) {
+        if (!fullRange || std::get<0>(encoded).value > fullRange) {
             return fail(Error::kDecompressionFailed);
         }
         auto maxValue = s.table.count + maxEntries;
-        required = (maxValue / fullRange) * fullRange + encoded->value - 1;
+        required = (maxValue / fullRange) * fullRange + std::get<0>(encoded).value - 1;
         if (required > maxValue) {
             if (required <= fullRange) {
                 return fail(Error::kDecompressionFailed);
@@ -331,11 +331,11 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
             return fail(Error::kDecompressionFailed);
         }
     }
-    bool negative = (static_cast<std::uint8_t>(section[encoded->encodedBytes]) & 0x80) != 0;
-    if ((negative && delta->value >= required) || (!negative && delta->value > kHttp3VarIntMax - required)) {
+    bool negative = (static_cast<std::uint8_t>(section[std::get<0>(encoded).encodedBytes]) & 0x80) != 0;
+    if ((negative && std::get<0>(delta).value >= required) || (!negative && std::get<0>(delta).value > kHttp3VarIntMax - required)) {
         return fail(Error::kDecompressionFailed);
     }
-    auto base = negative ? required - delta->value - 1 : required + delta->value;
+    auto base = negative ? required - std::get<0>(delta).value - 1 : required + std::get<0>(delta).value;
     if (required > s.table.count) {
         if (!s.blocked.contains(streamId) && s.blocked.size() >= s.config.maxBlockedStreams) {
             return fail(Error::kDecompressionFailed);
@@ -360,7 +360,7 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
             }
         }
     } guard(s.decoding, s.failure);
-    std::size_t offset = encoded->encodedBytes + delta->encodedBytes, count = 0, total = 0;
+    std::size_t offset = std::get<0>(encoded).encodedBytes + std::get<0>(delta).encodedBytes, count = 0, total = 0;
     bool callbackStopped = false;
     std::uint64_t highest = 0;
     std::pmr::string name(0, '\0', resource_);
@@ -389,19 +389,19 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
             auto index = decodeHttp3QpackInteger(bytes, indexed ? 6 : nameReference ? 4
                                                                   : postIndexed     ? 4
                                                                                     : 3);
-            if (!index) {
+            if ((index.index() != 0)) {
                 return fail(Error::kDecompressionFailed);
             }
-            offset += index->encodedBytes;
+            offset += std::get<0>(index).encodedBytes;
             bool isStatic = indexed ? (first & 0x40) != 0 : nameReference && (first & 0x10) != 0;
             if (isStatic) {
-                auto e = http3QpackStaticEntry(index->value);
-                if (!e) {
+                auto e = http3QpackStaticEntry(std::get<0>(index).value);
+                if ((e.index() != 0)) {
                     return fail(Error::kDecompressionFailed);
                 }
-                field = {e->name, e->value, false};
+                field = {std::get<0>(e).name, std::get<0>(e).value, false};
             } else {
-                auto e = dynamic(index->value, postIndexed || (!indexed && !nameReference));
+                auto e = dynamic(std::get<0>(index).value, postIndexed || (!indexed && !nameReference));
                 if (!e) {
                     return fail(Error::kDecompressionFailed);
                 }
@@ -409,24 +409,24 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
             }
             if (!indexed && !postIndexed) {
                 auto consumed = decodeHttp3QpackString(section.subspan(offset), value);
-                if (!consumed) {
+                if ((consumed.index() != 0)) {
                     return fail(Error::kDecompressionFailed);
                 }
-                offset += *consumed;
+                offset += std::get<0>(consumed);
                 field.value = value;
                 field.neverIndexed = (first & (nameReference ? 0x20 : 0x08)) != 0;
             }
         } else {
             auto n = decodeHttp3QpackString(bytes, 3, name);
-            if (!n) {
+            if ((n.index() != 0)) {
                 return fail(Error::kDecompressionFailed);
             }
-            offset += *n;
+            offset += std::get<0>(n);
             auto v = decodeHttp3QpackString(section.subspan(offset), value);
-            if (!v) {
+            if ((v.index() != 0)) {
                 return fail(Error::kDecompressionFailed);
             }
-            offset += *v;
+            offset += std::get<0>(v);
             field = {name, value, (first & 0x10) != 0};
         }
         if (count >= s.config.fields.maxFields || total > s.config.fields.maxDecodedBytes ||
@@ -451,16 +451,16 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
     }
     return Http3QpackDecodeResult{callbackStopped ? Http3QpackDecodeStatus::kCallbackStopped : Http3QpackDecodeStatus::kDecoded, count};
 }
-std::expected<void, Error> Http3QpackDecoder::cancel(std::uint64_t streamId) {
+std::variant<std::monostate, Error> Http3QpackDecoder::cancel(std::uint64_t streamId) {
     auto& s = *impl_;
     if (s.decoding) {
         throw std::logic_error("reentrant QPACK operation");
     }
     if (s.failure) {
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     if (streamId > kHttp3VarIntMax) {
-        return std::unexpected(Error::kInvalidStreamId);
+        return Error::kInvalidStreamId;
     }
     s.blocked.erase(streamId);
     if (s.config.maxTableCapacity == 0) {
@@ -468,7 +468,7 @@ std::expected<void, Error> Http3QpackDecoder::cancel(std::uint64_t streamId) {
     }
     if (s.output.size() > s.config.maxPendingOutputBytes || s.config.maxPendingOutputBytes - s.output.size() < 11) {
         s.failure = Error::kLimit;
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     FailureGuard guard{s.failure, Error::kDecompressionFailed};
     integer(s.output, 6, 0x40, streamId);
@@ -546,26 +546,26 @@ Http3QpackEncoder::Http3QpackEncoder(Http3QpackEncoderConfig config, std::pmr::m
 Http3QpackEncoder::~Http3QpackEncoder() {
     std::pmr::polymorphic_allocator<Impl>(resource_).delete_object(impl_);
 }
-std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits, std::pmr::memory_resource* result_resource) {
+std::variant<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits, std::pmr::memory_resource* result_resource) {
     auto& s = *impl_;
     if (s.failure) {
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
     if (streamId > kHttp3VarIntMax) {
-        return std::unexpected(Error::kInvalidStreamId);
+        return Error::kInvalidStreamId;
     }
     limits.maxFields = std::min(limits.maxFields, s.config.fields.maxFields);
     limits.maxDecodedBytes = std::min(limits.maxDecodedBytes, s.config.fields.maxDecodedBytes);
     limits.maxEncodedBytes = std::min(limits.maxEncodedBytes, s.config.fields.maxEncodedBytes);
     std::size_t total = 0;
     if (fields.size() > limits.maxFields) {
-        return std::unexpected(Error::kLimit);
+        return Error::kLimit;
     }
     for (const auto& f : fields) {
         if (total > limits.maxDecodedBytes || limits.maxDecodedBytes - total < 32 ||
             f.name.size() > limits.maxDecodedBytes - total - 32 ||
             f.value.size() > limits.maxDecodedBytes - total - 32 - f.name.size()) {
-            return std::unexpected(Error::kLimit);
+            return Error::kLimit;
         }
         total += 32 + f.name.size() + f.value.size();
     }
@@ -616,15 +616,15 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
     std::array<char, 22> prefix;
     const auto insert_count_size = encodeHttp3QpackInteger(prefix, 8, 0,
         required ? required % (2 * (s.config.maxTableCapacity / 32)) + 1 : 0);
-    if (!insert_count_size) {
+    if (insert_count_size.index() != 0) {
         throw std::logic_error("QPACK field section prefix encoding failed");
     }
-    const auto base_size = encodeHttp3QpackInteger(std::span(prefix).subspan(*insert_count_size),
+    const auto base_size = encodeHttp3QpackInteger(std::span(prefix).subspan(std::get<0>(insert_count_size)),
         7, required ? 0x80 : 0, required ? required - 1 : 0);
-    if (!base_size) {
+    if (base_size.index() != 0) {
         throw std::logic_error("QPACK field section prefix encoding failed");
     }
-    const auto prefix_size = *insert_count_size + *base_size;
+    const auto prefix_size = std::get<0>(insert_count_size) + std::get<0>(base_size);
     std::pmr::vector<char> output(0, output_resource);
     if (body.size() > output.max_size() - prefix_size) {
         throw std::length_error("QPACK field section exceeds the output size limit");
@@ -636,20 +636,20 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         for (auto index : references) {
             --s.table.at(index)->references;
         }
-        return std::unexpected(Error::kLimit);
+        return Error::kLimit;
     }
     if (required) {
         s.sections[streamId].emplace_back(required, std::move(references));
         ++s.outstandingSections;
     }
-    return std::expected<std::pmr::vector<char>, Error>(std::in_place, std::move(output), output.get_allocator());
+    return std::variant<std::pmr::vector<char>, Error>(std::in_place_index<0>, std::move(output), output.get_allocator());
 }
-std::expected<void, Error> Http3QpackEncoder::consumeDecoder(std::span<const char> bytes, bool fin) {
+std::variant<std::monostate, Error> Http3QpackEncoder::consumeDecoder(std::span<const char> bytes, bool fin) {
     auto& s = *impl_;
     if (s.failure) {
-        return std::unexpected(*s.failure);
+        return *s.failure;
     }
-    auto fail = [&](Error e) -> std::expected<void, Error> {s.failure=e;return std::unexpected(e); };
+    auto fail = [&](Error e) -> std::variant<std::monostate, Error> {s.failure=e;return e; };
     if (fin) {
         return fail(Error::kClosedCriticalStream);
     }
@@ -661,13 +661,13 @@ std::expected<void, Error> Http3QpackEncoder::consumeDecoder(std::span<const cha
         s.input.push_back(byte);
         auto first = static_cast<std::uint8_t>(s.input[0]);
         auto decoded = decodeHttp3QpackInteger(s.input, (first & 0x80) ? 7 : 6);
-        if (!decoded) {
-            if (decoded.error() == Http3QpackError::kNeedMoreData) {
+        if ((decoded.index() != 0)) {
+            if (std::get<1>(decoded) == Http3QpackError::kNeedMoreData) {
                 continue;
             }
             return fail(Error::kDecoderStreamError);
         }
-        auto value = decoded->value;
+        auto value = std::get<0>(decoded).value;
         if (first & 0x80) {
             auto found = s.sections.find(value);
             if (found == s.sections.end() || found->second.empty()) {

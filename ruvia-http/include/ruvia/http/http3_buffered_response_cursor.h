@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3DataWritePlan.h"
@@ -42,13 +42,13 @@ public:
         complete,
         failed };
 
-    [[nodiscard]] static std::expected<http3_buffered_response_cursor, error> create(
+    [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
         const HttpResponse& response, const HttpBufferedResponseWritePlan& write_plan,
         std::pmr::memory_resource* resource) noexcept;
 
     // encoded_head must describe the same response and write plan. Its storage
     // is consumed during creation; the cursor retains no borrow from it.
-    [[nodiscard]] static std::expected<http3_buffered_response_cursor, error> create(
+    [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
         const HttpResponse& response, const HttpBufferedResponseWritePlan& write_plan,
         Http3ResponseHead encoded_head, std::pmr::memory_resource* resource) noexcept;
 
@@ -60,16 +60,16 @@ public:
 
     // Ordered output: one complete HEADERS frame, then zero or more DATA frame
     // headers and borrowed payload spans. An empty segment means FIN is ready.
-    [[nodiscard]] std::expected<segment, error> next() noexcept;
+    [[nodiscard]] std::variant<segment, error> next() noexcept;
     // Pure query: does not plan, offer, acknowledge, allocate, free or mutate
     // any cursor state.
     // Each next DATA chunk is planned when the preceding segment is acknowledged,
     // so headers-only output reports FIN immediately after its HEADERS ack.
     [[nodiscard]] step next_step() const noexcept;
-    [[nodiscard]] std::expected<void, error> acknowledge(std::size_t count) noexcept;
+    [[nodiscard]] std::variant<std::monostate, error> acknowledge(std::size_t count) noexcept;
     // FIN is a separate transport operation. Only acknowledge_fin(true) commits
     // the protocol plan; false terminates the cursor without claiming success.
-    [[nodiscard]] std::expected<void, error> acknowledge_fin(bool successful) noexcept;
+    [[nodiscard]] std::variant<std::monostate, error> acknowledge_fin(bool successful) noexcept;
     [[nodiscard]] bool fin_ready() const noexcept;
     [[nodiscard]] bool finished() const noexcept;
     [[nodiscard]] bool failed() const noexcept;
@@ -87,9 +87,9 @@ private:
         failed };
 
     explicit http3_buffered_response_cursor(std::pmr::memory_resource* resource);
-    [[nodiscard]] std::expected<void, error> prepare_data() noexcept;
+    [[nodiscard]] std::variant<std::monostate, error> prepare_data() noexcept;
     [[nodiscard]] segment active_segment() const noexcept;
-    [[nodiscard]] std::expected<void, error> fail_data_plan() noexcept;
+    [[nodiscard]] std::variant<std::monostate, error> fail_data_plan() noexcept;
     [[nodiscard]] static http3_buffered_response_cursor& require_no_outstanding_segment(
         http3_buffered_response_cursor& other);
 

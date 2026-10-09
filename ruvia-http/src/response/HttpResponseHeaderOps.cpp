@@ -1,6 +1,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <system_error>
@@ -196,39 +197,40 @@ void HttpResponse::setHeaderValidated(
 
 void HttpResponse::appendHeaderValidated(
     std::string_view key, std::string_view value, std::uint32_t knownBit) {
-    detail::validateResponseHeaderStorageSize(key.size(), value.size());
+    auto& header = appendHeaderUninitializedValue(key, value.size(), knownBit);
+    // Appending can move descriptors, but existing header byte blocks stay
+    // stable, including any bytes borrowed by value.
+    if (!value.empty()) {
+        std::memcpy(detail::responseHeaderValueBegin(header), value.data(), value.size());
+    }
+}
+
+HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
+    std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(key.size(), valueSize);
     if (detail::responseHeaderAppendForbidden(knownBit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
     }
     // The index cache intentionally points at the first occurrence. Mark that
     // retained slot as plural too, so a later plain set can detect multiplicity
     // in O(1) and collapse the field without scanning every normal update. Do
-    // not set it until the new descriptor has been published: headers_.add()
+    // not set it until the new descriptor has been published: the new header
     // owns bytes before it may allocate the backing table, and a failed append
     // must leave the existing response exactly as it was.
     const auto* const existing = findHeaderForRead(key, knownBit);
-    const auto existingIndex = existing == nullptr
-                                   ? std::optional<std::size_t>{}
-                                   : std::optional{static_cast<std::size_t>(existing - headers_.begin())};
+    const auto existing_index = existing == nullptr
+                                    ? std::optional<std::size_t>{}
+                                    : std::optional{static_cast<std::size_t>(existing - headers_.begin())};
     const auto index = headers_.size();
-    auto& header = headers_.add(key, value, knownBit);
-    if (existingIndex) {
-        // add() may move the descriptor table. Preserve an index, not a pointer,
+    auto& header = headers_.addUninitializedValue(key, valueSize, knownBit);
+    if (existing_index) {
+        // Appending may move the descriptor table. Preserve an index, not a pointer,
         // to mark the existing entry without repeating the header lookup.
-        detail::setResponseHeaderAppend(headers_.begin()[*existingIndex], true);
+        detail::setResponseHeaderAppend(headers_.begin()[*existing_index], true);
     }
     // Mark the append flag so a later merge of this response keeps every appended
     // value instead of treating the field as single-valued and dropping all but the
     // first.
-    detail::setResponseHeaderAppend(header, true);
-    recordKnownHeaderIndex(knownBit, index);
-}
-
-HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
-    std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
-    detail::validateResponseHeaderStorageSize(key.size(), valueSize);
-    const auto index = headers_.size();
-    auto& header = headers_.addUninitializedValue(key, valueSize, knownBit);
     detail::setResponseHeaderAppend(header, true);
     recordKnownHeaderIndex(knownBit, index);
     return header;

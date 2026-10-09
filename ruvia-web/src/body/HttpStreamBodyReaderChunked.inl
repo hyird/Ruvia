@@ -23,7 +23,7 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readCh
             co_return ::ruvia::asBytes(bodyChunk->bytes());
         }
         if (const auto* complete = result.complete()) {
-            if (!trailers_.appendHttp1(complete->trailers())) {
+            if ((trailers_.appendHttp1(complete->trailers()).index() != 0)) {
                 throw std::logic_error("HTTP/1 decoder published invalid request trailers");
             }
             compactPending();

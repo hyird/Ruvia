@@ -3,6 +3,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
@@ -52,18 +53,18 @@ RUVIA_TEST(http3RequestResolvesAtHeadersAndDispatchesAfterIncrementalBodyComplet
         ruvia::Http3FieldSectionFieldView{"cookie", "session=one"},
         ruvia::Http3FieldSectionFieldView{"cookie", "other=two"}};
     const auto wire = ruvia::encodeHttp3ClientRequestHead({.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7});
-    RUVIA_CHECK(wire.has_value());
-    if (!wire) {
+    RUVIA_CHECK((wire.index() == 0));
+    if ((wire.index() != 0)) {
         return;
     }
     {
-        auto decoded = ruvia::decodeHttp3MessageHead(wire->fieldSection,
+        auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(wire).fieldSection,
             ruvia::Http3MessageHeadKind::kRequest, worker.resource());
-        RUVIA_CHECK(decoded.has_value());
-        if (!decoded) {
+        RUVIA_CHECK((decoded.index() == 0));
+        if ((decoded.index() != 0)) {
             return;
         }
-        owner.emplace(*decoded, memory.resource(), memory.upstreamResource());
+        owner.emplace(std::get<0>(decoded), memory.resource(), memory.upstreamResource());
     }
     const auto& request = owner->request();
     RUVIA_CHECK(!owner->bodyComplete());
@@ -107,20 +108,20 @@ RUVIA_TEST(http3RequestUsesNormalWebBufferedRouteAndOwnsBodyThroughDispatch) {
         ruvia::Http3FieldSectionFieldView{"cookie", "session=one"},
         ruvia::Http3FieldSectionFieldView{"cookie", "other=two"}};
     const auto wire = ruvia::encodeHttp3ClientRequestHead({.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7});
-    RUVIA_CHECK(wire.has_value());
-    if (!wire) {
+    RUVIA_CHECK((wire.index() == 0));
+    if ((wire.index() != 0)) {
         return;
     }
-    auto decoded = ruvia::decodeHttp3MessageHead(wire->fieldSection,
+    auto decoded = ruvia::decodeHttp3MessageHead(std::get<0>(wire).fieldSection,
         ruvia::Http3MessageHeadKind::kRequest, memory.resource());
-    RUVIA_CHECK(decoded.has_value());
-    if (!decoded) {
+    RUVIA_CHECK((decoded.index() == 0));
+    if ((decoded.index() != 0)) {
         return;
     }
 
     std::array body{std::byte{'p'}, std::byte{'a'}, std::byte{'y'}, std::byte{'l'},
         std::byte{'o'}, std::byte{'a'}, std::byte{'d'}};
-    ruvia::Http3ServerRequest owner(*decoded, memory.resource(), memory.upstreamResource());
+    ruvia::Http3ServerRequest owner(std::get<0>(decoded), memory.resource(), memory.upstreamResource());
     owner.appendBody(body);
     owner.finishBody();
     body.fill(std::byte{'x'});  // The handler must not borrow the caller's transport buffer.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -22,12 +23,12 @@ DbResolvedAddresses collectDbResolvedAddresses(const asio::ip::tcp::resolver::re
     const auto resolved = pmrResourceOrDefault(resource);
     DbResolvedAddresses addresses(resolved);
     for (const auto& result : results) {
-        std::error_code error;
-        const auto address = result.endpoint().address().to_string(error);
-        if (error) {
+        std::string address;
+        try {
+            address = result.endpoint().address().to_string();
+        } catch (const std::system_error& error) {
             throw DbError(DbError::Code::kResolveFailed, driver,
-                std::system_error(error, "formatting resolved database address failed").what(),
-                error.value());
+                error.what(), error.code().value());
         }
         if (std::ranges::none_of(addresses, [&address](const std::pmr::string& existing) {
                 return std::string_view(existing) == address;
@@ -49,7 +50,7 @@ std::pmr::string makeMariaDbResolvedHostList(
     const bool multiple = addresses.size() > 1;
     for (const auto& address : addresses) {
         appendListSeparator(output);
-        if (multiple && address.contains(':')) {
+        if (multiple && (address.find(':') != std::string_view::npos)) {
             output.push_back('[');
             output.append(address);
             output.push_back(']');

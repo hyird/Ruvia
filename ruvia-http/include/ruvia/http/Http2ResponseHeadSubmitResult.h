@@ -1,7 +1,7 @@
 #pragma once
 
-#include <expected>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpResponseServer.h"
@@ -35,23 +35,23 @@ private:
 class Http2ResponseHeadSubmitResult final {
 public:
     [[nodiscard]] const HttpBufferedResponseWritePlan* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const HttpBufferedResponseWritePlan* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
     friend class detail::Http2Connection;
-    using Value = std::expected<HttpBufferedResponseWritePlan, Http2ResponseHeadSubmitFailure>;
+    using Value = std::variant<HttpBufferedResponseWritePlan, Http2ResponseHeadSubmitFailure>;
 
     explicit Http2ResponseHeadSubmitResult(HttpBufferedResponseWritePlan plan)
         : value_(std::move(plan)) {}
     explicit Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeSubmitted(
         HttpBufferedResponseWritePlan plan) {
@@ -68,23 +68,23 @@ private:
 class Http2StreamingResponseHeadSubmitResult final {
 public:
     [[nodiscard]] const http_response_stream_commit_plan* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const http_response_stream_commit_plan* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
     friend class detail::Http2Connection;
-    using Value = std::expected<http_response_stream_commit_plan, Http2ResponseHeadSubmitFailure>;
+    using Value = std::variant<http_response_stream_commit_plan, Http2ResponseHeadSubmitFailure>;
 
     explicit Http2StreamingResponseHeadSubmitResult(http_response_stream_commit_plan plan)
         : value_(std::move(plan)) {}
     explicit Http2StreamingResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static Http2StreamingResponseHeadSubmitResult makeSubmitted(
         http_response_stream_commit_plan plan) {

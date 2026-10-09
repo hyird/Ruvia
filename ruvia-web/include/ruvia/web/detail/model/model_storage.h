@@ -6,6 +6,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/web/Attributes.h"
 #include "ruvia/web/detail/model/ModelSchema.h"

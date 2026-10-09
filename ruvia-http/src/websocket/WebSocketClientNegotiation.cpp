@@ -82,7 +82,7 @@ std::optional<WebSocketCompression> parseResponseExtension(std::string_view text
     return result;
 }
 template <class Fields, class Name, class Value>
-std::expected<WebSocketClientNegotiationResultView, Error> validate(const Fields& fields, Name name, Value value,
+std::variant<WebSocketClientNegotiationResultView, Error> validate(const Fields& fields, Name name, Value value,
     const std::pmr::vector<std::pmr::string>& protocols, WebSocketClientDeflateOffer offer, bool extended) {
     WebSocketClientNegotiationResultView result;
     std::size_t selected = 0, extensions = 0;
@@ -97,20 +97,20 @@ std::expected<WebSocketClientNegotiationResultView, Error> validate(const Fields
                 found = found || protocol == result.selectedSubprotocol;
             }
             if (selected > 1 || !found) {
-                return std::unexpected(Error::kSubprotocol);
+                return Error::kSubprotocol;
             }
         } else if (equal(n, "sec-websocket-extensions")) {
             ++extensions;
             if (extensions > 1) {
-                return std::unexpected(Error::kExtensions);
+                return Error::kExtensions;
             }
             auto negotiation = parseResponseExtension(detail::httpTrimOws(v), offer);
             if (!negotiation) {
-                return std::unexpected(Error::kExtensions);
+                return Error::kExtensions;
             }
             result.compression = *negotiation;
         } else if (extended && (equal(n, "sec-websocket-accept") || equal(n, "sec-websocket-key") || equal(n, "upgrade") || equal(n, "connection"))) {
-            return std::unexpected(Error::kForbiddenField);
+            return Error::kForbiddenField;
         }
     }
     return result;
@@ -212,7 +212,7 @@ WebSocketClientNegotiation::WebSocketClientNegotiation(WebSocketClientNegotiatio
             fields_.push_back(detail::HttpHeaderAccess::make(
                 std::move(normalized_name), std::move(materialized))); });
 }
-std::expected<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateFields(std::span<const HttpHeader> fields) const {
+std::variant<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateFields(std::span<const HttpHeader> fields) const {
     return validate(fields, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);
 }
 Http2RequestHeadSubmitResult WebSocketClientNegotiation::submitHttp2Request(Http2Connection& connection, std::string_view scheme, std::string_view authority, std::string_view target) const {
@@ -222,9 +222,9 @@ Http2RequestHeadSubmitResult WebSocketClientNegotiation::submitHttp2Request(Http
     }
     return connection.submitRequestHead(Http2ExtendedConnectRequestHeadView{.protocol = "websocket", .scheme = scheme, .authority = authority, .target = target, .headers = headers});
 }
-std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> WebSocketClientNegotiation::encodeHttp3Request(std::string_view scheme, std::string_view authority, std::string_view target, bool peerEnableConnectProtocol, Http3FieldSectionLimits limits) const {
+std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> WebSocketClientNegotiation::encodeHttp3Request(std::string_view scheme, std::string_view authority, std::string_view target, bool peerEnableConnectProtocol, Http3FieldSectionLimits limits) const {
     if (scheme != "https" && scheme != "http") {
-        return std::unexpected(Http3ClientRequestHeadFailure{Http3ClientRequestHeadError::kInvalidTarget});
+        return Http3ClientRequestHeadFailure{Http3ClientRequestHeadError::kInvalidTarget};
     }
     std::pmr::vector<Http3FieldSectionFieldView> fields(resource_);
     for (const auto& field : fields_) {
@@ -232,21 +232,21 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> WebSocketCl
     }
     return encodeHttp3ClientRequestHead({.method = "CONNECT", .scheme = scheme, .authority = authority, .path = target, .fields = fields, .protocol = "websocket", .peerEnableConnectProtocol = peerEnableConnectProtocol}, limits, resource_);
 }
-std::expected<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateResponse(const HttpClientResponseHead& head, bool streamOpen) const {
+std::variant<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateResponse(const HttpClientResponseHead& head, bool streamOpen) const {
     if (head.status().value() < 200 || head.status().value() >= 300) {
-        return std::unexpected(Error::kResponseStatus);
+        return Error::kResponseStatus;
     }
     if (!streamOpen) {
-        return std::unexpected(Error::kStreamClosed);
+        return Error::kStreamClosed;
     }
     return validate(head.headers(), [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, true);
 }
-std::expected<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateResponse(const Http3MessageHead& head, bool streamOpen) const {
+std::variant<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateResponse(const Http3MessageHead& head, bool streamOpen) const {
     if (head.status < 200 || head.status >= 300) {
-        return std::unexpected(Error::kResponseStatus);
+        return Error::kResponseStatus;
     }
     if (!streamOpen) {
-        return std::unexpected(Error::kStreamClosed);
+        return Error::kStreamClosed;
     }
     return validate(head.headers, [](const auto& field) -> std::string_view { return field.name; }, [](const auto& field) -> std::string_view { return field.value; }, protocols_, deflate_, true);
 }

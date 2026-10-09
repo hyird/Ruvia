@@ -29,22 +29,22 @@ Http3FieldSectionError mapError(Http3QpackError error) noexcept {
     return Http3FieldSectionError::kInvalidPrefix;
 }
 
-std::expected<std::size_t, Http3FieldSectionError> appendInteger(std::pmr::vector<char>& output,
+std::variant<std::size_t, Http3FieldSectionError> appendInteger(std::pmr::vector<char>& output,
     std::uint8_t prefixBits, std::uint8_t prefix, std::uint64_t value) {
     std::array<char, 11> bytes{};
     const auto encoded = encodeHttp3QpackInteger(bytes, prefixBits, prefix, value);
-    if (!encoded) {
-        return std::unexpected(mapError(encoded.error()));
+    if ((encoded.index() != 0)) {
+        return mapError(std::get<1>(encoded));
     }
-    output.insert(output.end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(*encoded));
-    return *encoded;
+    output.insert(output.end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(std::get<0>(encoded)));
+    return std::get<0>(encoded);
 }
 
-std::expected<void, Http3FieldSectionError> appendLiteral(std::pmr::vector<char>& output,
+std::variant<std::monostate, Http3FieldSectionError> appendLiteral(std::pmr::vector<char>& output,
     std::string_view value, std::uint8_t prefixBits, std::uint8_t firstByteFlags) {
     const auto length = appendInteger(output, prefixBits, firstByteFlags, value.size());
-    if (!length) {
-        return std::unexpected(length.error());
+    if ((length.index() != 0)) {
+        return std::get<1>(length);
     }
     output.insert(output.end(), value.begin(), value.end());
     return {};
@@ -52,20 +52,20 @@ std::expected<void, Http3FieldSectionError> appendLiteral(std::pmr::vector<char>
 
 }  // namespace
 
-std::expected<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
+std::variant<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
     std::span<const char> input, Http3FieldSectionCallback callback, void* context,
     Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     if (input.size() > limits.maxEncodedBytes) {
-        return std::unexpected(Http3FieldSectionError::kFieldSectionTooLarge);
+        return Http3FieldSectionError::kFieldSectionTooLarge;
     }
     if (input.size() < 2) {
-        return std::unexpected(Http3FieldSectionError::kNeedMoreData);
+        return Http3FieldSectionError::kNeedMoreData;
     }
     if (static_cast<std::uint8_t>(input[0]) != 0) {
-        return std::unexpected(Http3FieldSectionError::kNonzeroRequiredInsertCount);
+        return Http3FieldSectionError::kNonzeroRequiredInsertCount;
     }
     if (static_cast<std::uint8_t>(input[1]) != 0) {
-        return std::unexpected(Http3FieldSectionError::kInvalidBase);
+        return Http3FieldSectionError::kInvalidBase;
     }
 
     std::size_t offset = 2;
@@ -74,21 +74,21 @@ std::expected<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
     std::pmr::string name(resource != nullptr ? resource : std::pmr::get_default_resource());
     std::pmr::string value(resource != nullptr ? resource : std::pmr::get_default_resource());
     const auto remaining = [&] { return input.subspan(offset); };
-    const auto addField = [&](Http3FieldSectionFieldView field) -> std::expected<void, Http3FieldSectionError> {
+    const auto addField = [&](Http3FieldSectionFieldView field) -> std::variant<std::monostate, Http3FieldSectionError> {
         if (fieldCount >= limits.maxFields) {
-            return std::unexpected(Http3FieldSectionError::kTooManyFields);
+            return Http3FieldSectionError::kTooManyFields;
         }
         constexpr std::size_t kFieldOverhead = 32;
         const auto remainingBudget = limits.maxDecodedBytes - decodedBytes;
         if (remainingBudget < kFieldOverhead ||
             field.name.size() > remainingBudget - kFieldOverhead ||
             field.value.size() > remainingBudget - kFieldOverhead - field.name.size()) {
-            return std::unexpected(Http3FieldSectionError::kFieldListTooLarge);
+            return Http3FieldSectionError::kFieldListTooLarge;
         }
         decodedBytes += kFieldOverhead + field.name.size() + field.value.size();
         ++fieldCount;
         if (callback != nullptr && !callback(context, field)) {
-            return std::unexpected(Http3FieldSectionError::kCallbackStopped);
+            return Http3FieldSectionError::kCallbackStopped;
         }
         return {};
     };
@@ -98,63 +98,63 @@ std::expected<std::size_t, Http3FieldSectionError> decodeHttp3FieldSection(
         Http3FieldSectionFieldView field{};
         if ((first & 0x80U) != 0) {
             if ((first & 0x40U) == 0) {
-                return std::unexpected(Http3FieldSectionError::kDynamicReference);
+                return Http3FieldSectionError::kDynamicReference;
             }
             const auto index = decodeHttp3QpackInteger(remaining(), 6);
-            if (!index) {
-                return std::unexpected(mapError(index.error()));
+            if ((index.index() != 0)) {
+                return mapError(std::get<1>(index));
             }
-            const auto entry = http3QpackStaticEntry(index->value);
-            if (!entry) {
-                return std::unexpected(Http3FieldSectionError::kInvalidIndex);
+            const auto entry = http3QpackStaticEntry(std::get<0>(index).value);
+            if ((entry.index() != 0)) {
+                return Http3FieldSectionError::kInvalidIndex;
             }
-            offset += index->encodedBytes;
-            field = {entry->name, entry->value, false};
+            offset += std::get<0>(index).encodedBytes;
+            field = {std::get<0>(entry).name, std::get<0>(entry).value, false};
         } else if ((first & 0xc0U) == 0x40U) {
             const bool neverIndexed = (first & 0x20U) != 0;
             if ((first & 0x10U) == 0) {
-                return std::unexpected(Http3FieldSectionError::kDynamicReference);
+                return Http3FieldSectionError::kDynamicReference;
             }
             const auto index = decodeHttp3QpackInteger(remaining(), 4);
-            if (!index) {
-                return std::unexpected(mapError(index.error()));
+            if ((index.index() != 0)) {
+                return mapError(std::get<1>(index));
             }
-            const auto entry = http3QpackStaticEntry(index->value);
-            if (!entry) {
-                return std::unexpected(Http3FieldSectionError::kInvalidIndex);
+            const auto entry = http3QpackStaticEntry(std::get<0>(index).value);
+            if ((entry.index() != 0)) {
+                return Http3FieldSectionError::kInvalidIndex;
             }
-            offset += index->encodedBytes;
+            offset += std::get<0>(index).encodedBytes;
             const auto consumed = decodeHttp3QpackString(remaining(), value);
-            if (!consumed) {
-                return std::unexpected(mapError(consumed.error()));
+            if ((consumed.index() != 0)) {
+                return mapError(std::get<1>(consumed));
             }
-            offset += *consumed;
-            field = {entry->name, value, neverIndexed};
+            offset += std::get<0>(consumed);
+            field = {std::get<0>(entry).name, value, neverIndexed};
         } else if ((first & 0xe0U) == 0x20U) {
             const bool neverIndexed = (first & 0x10U) != 0;
             const auto nameSize = decodeHttp3QpackString(remaining(), 3, name);
-            if (!nameSize) {
-                return std::unexpected(mapError(nameSize.error()));
+            if ((nameSize.index() != 0)) {
+                return mapError(std::get<1>(nameSize));
             }
-            offset += *nameSize;
+            offset += std::get<0>(nameSize);
             const auto valueSize = decodeHttp3QpackString(remaining(), value);
-            if (!valueSize) {
-                return std::unexpected(mapError(valueSize.error()));
+            if ((valueSize.index() != 0)) {
+                return mapError(std::get<1>(valueSize));
             }
-            offset += *valueSize;
+            offset += std::get<0>(valueSize);
             field = {name, value, neverIndexed};
         } else {
-            return std::unexpected(Http3FieldSectionError::kInvalidPrefix);
+            return Http3FieldSectionError::kInvalidPrefix;
         }
         const auto accepted = addField(field);
-        if (!accepted) {
-            return std::unexpected(accepted.error());
+        if ((accepted.index() != 0)) {
+            return std::get<1>(accepted);
         }
     }
     return fieldCount;
 }
 
-std::expected<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSection(
+std::variant<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSection(
     std::span<const Http3FieldSectionFieldView> fields, std::pmr::memory_resource* resource) {
     std::pmr::vector<char> output(2, '\0', resource != nullptr ? resource : std::pmr::get_default_resource());
     for (const auto& field : fields) {
@@ -162,28 +162,28 @@ std::expected<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3FieldSe
             field.neverIndexed ? std::nullopt : std::optional(field.value));
         if (match && match->exact_index) {
             const auto encoded = appendInteger(output, 6, 0xc0, *match->exact_index);
-            if (!encoded) {
-                return std::unexpected(encoded.error());
+            if ((encoded.index() != 0)) {
+                return std::get<1>(encoded);
             }
         } else if (match) {
             const auto encoded = appendInteger(output, 4,
                 static_cast<std::uint8_t>(0x50U | (field.neverIndexed ? 0x20U : 0U)), match->name_index);
-            if (!encoded) {
-                return std::unexpected(encoded.error());
+            if ((encoded.index() != 0)) {
+                return std::get<1>(encoded);
             }
             const auto value = appendLiteral(output, field.value, 7, 0);
-            if (!value) {
-                return std::unexpected(value.error());
+            if ((value.index() != 0)) {
+                return std::get<1>(value);
             }
         } else {
             const auto name = appendLiteral(output, field.name, 3,
                 static_cast<std::uint8_t>(0x20U | (field.neverIndexed ? 0x10U : 0U)));
-            if (!name) {
-                return std::unexpected(name.error());
+            if ((name.index() != 0)) {
+                return std::get<1>(name);
             }
             const auto value = appendLiteral(output, field.value, 7, 0);
-            if (!value) {
-                return std::unexpected(value.error());
+            if ((value.index() != 0)) {
+                return std::get<1>(value);
             }
         }
     }

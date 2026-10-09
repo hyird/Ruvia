@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <utility>
+#include <variant>
 
 #include <asio/post.hpp>
 
@@ -107,11 +108,11 @@ Task<void> WebSocketHttp3Transport::connect() {
                                                                           .fields = fields,
                                                                           .protocol = "websocket",
                                                                           .peerEnableConnectProtocol = true});
-    if (!head) {
+    if ((head.index() != 0)) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "could not encode HTTP/3 WebSocket Extended CONNECT");
     }
-    prepareFrame(1, head->fieldSection);
+    prepareFrame(1, std::get<0>(head).fieldSection);
     wake();
     while (!response_) {
         checkFailure();
@@ -123,12 +124,12 @@ Task<void> WebSocketHttp3Transport::connect() {
     }
     checkFailure();
     const auto negotiated = negotiation.validateResponse(*response_, !eof_);
-    if (!negotiated) {
+    if ((negotiated.index() != 0)) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "invalid HTTP/3 WebSocket handshake response");
     }
-    owner_.selectedSubprotocol_.assign(negotiated->selectedSubprotocol);
-    owner_.negotiatedCompression_ = negotiated->compression;
+    owner_.selectedSubprotocol_.assign(std::get<0>(negotiated).selectedSubprotocol);
+    owner_.negotiatedCompression_ = std::get<0>(negotiated).compression;
     response_.reset();
     co_await waitForOutput();
 }
@@ -161,11 +162,11 @@ void WebSocketHttp3Transport::prepareFrame(std::uint64_t type, std::span<const c
     }
     std::array<char, 16> header{};
     const auto encoded = encodeHttp3FrameHeader(header, type, payload.size());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         std::terminate();
     }
-    outbound_.reserve(*encoded + payload.size());
-    outbound_.append(header.data(), *encoded);
+    outbound_.reserve(std::get<0>(encoded) + payload.size());
+    outbound_.append(header.data(), std::get<0>(encoded));
     outbound_.append(payload.data(), payload.size());
     writeOffset_ = 0;
 }

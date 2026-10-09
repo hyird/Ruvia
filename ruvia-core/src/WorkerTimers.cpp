@@ -200,9 +200,8 @@ void WorkerDispatcher::stopTimers() noexcept {
     }
     ++impl_->timerGeneration;
     impl_->timerArmed = false;
-    std::error_code ignored;
     if (impl_->timer) {
-        impl_->timer->cancel(ignored);
+        impl_->timer->cancel();
         // The timer object is bound to the worker io_context service.  A
         // WorkerHandle may keep the dispatcher endpoint alive after shutdown,
         // so stopping timers must release the Asio object while the context is
@@ -235,11 +234,10 @@ void WorkerDispatcher::stopTimers() noexcept {
 void WorkerDispatcher::armTimer() {
     ++impl_->timerGeneration;
     const auto generation = impl_->timerGeneration;
-    std::error_code ignored;
     if (!impl_->timer) {
         return;
     }
-    impl_->timer->cancel(ignored);
+    impl_->timer->cancel();
     impl_->timerArmed = false;
     while (!impl_->timers.empty() &&
            !hasTimer(impl_->timers.front().slot, impl_->timers.front().generation)) {

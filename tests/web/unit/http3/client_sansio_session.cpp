@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -51,8 +52,8 @@ private:
 std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
     std::vector<char> result(16);
     const auto typeBytes = ruvia::encodeHttp3VarInt(result, type);
-    const auto lengthBytes = ruvia::encodeHttp3VarInt(std::span<char>(result).subspan(*typeBytes), payload.size());
-    result.resize(*typeBytes + *lengthBytes);
+    const auto lengthBytes = ruvia::encodeHttp3VarInt(std::span<char>(result).subspan(std::get<0>(typeBytes)), payload.size());
+    result.resize(std::get<0>(typeBytes) + std::get<0>(lengthBytes));
     result.insert(result.end(), payload.begin(), payload.end());
     return result;
 }
@@ -64,7 +65,7 @@ std::vector<char> responseHead(std::string_view status = "200",
         fields.push_back({"content-length", *contentLength});
     }
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &resource);
-    return frame(1, *encoded);
+    return frame(1, std::get<0>(encoded));
 }
 std::vector<char> body(std::string_view text) {
     return frame(0, std::span<const char>(text.data(), text.size()));
@@ -74,7 +75,7 @@ std::vector<char> responseTrailers() {
     constexpr std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{"x-one", "first"},
         {"x-two", "second"}}};
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &resource);
-    return frame(1, *encoded);
+    return frame(1, std::get<0>(encoded));
 }
 
 bool planMatches(const std::optional<ruvia::HttpResponseBodyPlan>& plan,
@@ -338,7 +339,7 @@ RUVIA_TEST(http3ClientSansIoSessionStreamedMalformedFinCannotPublishCompletion) 
         constexpr std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"},
             ruvia::Http3FieldSectionFieldView{"content-length", "3"}};
         const auto encoded = ruvia::encodeHttp3FieldSection(fields, &scratch);
-        RUVIA_CHECK(session.feed(0, frame(1, *encoded)).scope ==
+        RUVIA_CHECK(session.feed(0, frame(1, std::get<0>(encoded))).scope ==
                     ruvia::Http3ConnectionErrorScope::kNone);
         const auto mismatch = session.feed(0, body("no"), true);
         RUVIA_CHECK(mismatch.scope == ruvia::Http3ConnectionErrorScope::kStream);
@@ -509,7 +510,7 @@ RUVIA_TEST(http3ClientSansIoSessionBodyLimitCannotBeHiddenBySameBatchLengthMisma
         constexpr std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"},
             ruvia::Http3FieldSectionFieldView{"content-length", "4"}};
         const auto encoded = ruvia::encodeHttp3FieldSection(fields, &scratch);
-        const auto head = frame(1, *encoded);
+        const auto head = frame(1, std::get<0>(encoded));
         // Establish that the identical DATA+FIN would independently fail the
         // Content-Length contract; the body-limit check must not lose to it.
         {
@@ -1002,13 +1003,13 @@ RUVIA_TEST(http3_client_push_events_associate_out_of_order_streams_and_control_f
         RUVIA_CHECK(server.peerMaxPushId() == 0);
         RUVIA_CHECK(client.consumeControlOutput(client.pendingControlOutput().size()));
         auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
-        RUVIA_CHECK(promise.has_value());
+        RUVIA_CHECK((promise.index() == 0));
         const char pushPrefix[]{1, 0};
         auto pending = client.feed(3, pushPrefix);
         RUVIA_CHECK(pending.status == ruvia::detail::Http3ClientSansIoSessionStatus::kPushPromisePending);
         RUVIA_CHECK(observed.events.size() == 1 && observed.events[0] == ruvia::Http3ConnectionEventKind::kPushStream);
         RUVIA_CHECK(observed.stream == 3 && observed.push == 0);
-        RUVIA_CHECK(client.feed(0, *promise).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(client.feed(0, std::get<0>(promise)).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(observed.path == "/asset" && observed.reentryRejected);
         auto wire = responseHead("200", "5");
         auto payload = body("asset");

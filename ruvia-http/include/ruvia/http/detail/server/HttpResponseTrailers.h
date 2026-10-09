@@ -2,11 +2,11 @@
 
 #include <concepts>
 #include <exception>
-#include <expected>
 #include <ranges>
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
@@ -188,12 +188,12 @@ private:
 class HttpResponseTrailerSectionResult final {
 public:
     [[nodiscard]] const HttpResponseTrailerSection* section() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     [[nodiscard]] const HttpResponseTrailerSection* section() const&& = delete;
 
     [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const&& = delete;
 
@@ -201,13 +201,13 @@ private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
         std::span<const HttpHeaderView>) noexcept;
 
-    using Value = std::expected<HttpResponseTrailerSection, HttpResponseTrailerSectionFailure>;
+    using Value = std::variant<HttpResponseTrailerSection, HttpResponseTrailerSectionFailure>;
 
     explicit HttpResponseTrailerSectionResult(HttpResponseTrailerSection section) noexcept
         : value_(section) {}
 
     explicit HttpResponseTrailerSectionResult(HttpResponseTrailerSectionFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     Value value_;
 };

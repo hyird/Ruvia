@@ -6,6 +6,7 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/core/DecimalNumber.h"
 #include "ruvia/web/detail/json/JsonLex.h"
@@ -79,10 +80,10 @@ template <typename NumberT>
     const auto number = input.substr(0, length);
     if constexpr (std::is_floating_point_v<NumberT>) {
         const auto parsed = ruvia::parseDecimalNumber<NumberT>(number);
-        if (!parsed || !std::isfinite(*parsed)) {
+        if ((parsed.index() != 0) || !std::isfinite(std::get<0>(parsed))) {
             return false;
         }
-        value = *parsed;
+        value = std::get<0>(parsed);
     } else {
         const auto [ptr, ec] = std::from_chars(number.data(), number.data() + number.size(), value);
         if (ec != std::errc{} || ptr != number.data() + number.size()) {

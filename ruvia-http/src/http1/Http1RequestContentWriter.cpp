@@ -21,21 +21,21 @@ void Http1RequestContentWriter::abort() noexcept {
     writing_ = false;
     finishing_ = false;
 }
-std::expected<Http1RequestContentWriter::Chunk, Error> Http1RequestContentWriter::planChunk(std::span<const char> payload) noexcept {
+std::variant<Http1RequestContentWriter::Chunk, Error> Http1RequestContentWriter::planChunk(std::span<const char> payload) noexcept {
     if (stopped_ || finished_) {
-        return std::unexpected(Error::kStopped);
+        return Error::kStopped;
     }
     if (gated_) {
-        return std::unexpected(Error::kAwaitingContinue);
+        return Error::kAwaitingContinue;
     }
     if (writing_ || finishing_) {
-        return std::unexpected(Error::kWritePending);
+        return Error::kWritePending;
     }
     if (payload.size() > std::numeric_limits<std::uint64_t>::max() - committed_) {
-        return std::unexpected(Error::kLengthOverflow);
+        return Error::kLengthOverflow;
     }
     if (length_ && payload.size() > *length_ - committed_) {
-        return std::unexpected(Error::kLengthMismatch);
+        return Error::kLengthMismatch;
     }
     Chunk chunk{.payload = payload};
     if (!length_ && !payload.empty()) {
@@ -49,54 +49,54 @@ std::expected<Http1RequestContentWriter::Chunk, Error> Http1RequestContentWriter
     pending_ = payload.size();
     return chunk;
 }
-std::expected<void, Error> Http1RequestContentWriter::commitChunk(std::size_t payloadBytes) noexcept {
+std::variant<std::monostate, Error> Http1RequestContentWriter::commitChunk(std::size_t payloadBytes) noexcept {
     if (stopped_ || finished_) {
-        return std::unexpected(Error::kStopped);
+        return Error::kStopped;
     }
     if (!writing_) {
-        return std::unexpected(Error::kNoWritePending);
+        return Error::kNoWritePending;
     }
     if (payloadBytes != pending_) {
-        return std::unexpected(Error::kCommitMismatch);
+        return Error::kCommitMismatch;
     }
     committed_ += pending_;
     pending_ = 0;
     writing_ = false;
     return {};
 }
-std::expected<std::string_view, Error> Http1RequestContentWriter::planFinish(std::span<char> buffer, std::span<const HttpHeaderView> trailers) noexcept {
+std::variant<std::string_view, Error> Http1RequestContentWriter::planFinish(std::span<char> buffer, std::span<const HttpHeaderView> trailers) noexcept {
     if (stopped_ || finished_) {
-        return std::unexpected(Error::kStopped);
+        return Error::kStopped;
     }
     if (gated_) {
-        return std::unexpected(Error::kAwaitingContinue);
+        return Error::kAwaitingContinue;
     }
     if (writing_ || finishing_) {
-        return std::unexpected(Error::kWritePending);
+        return Error::kWritePending;
     }
     if (length_ && committed_ != *length_) {
-        return std::unexpected(Error::kLengthMismatch);
+        return Error::kLengthMismatch;
     }
     if (length_ && !trailers.empty()) {
-        return std::unexpected(Error::kTrailersRequireChunked);
+        return Error::kTrailersRequireChunked;
     }
     if (trailers.size() > kMaxHttpHeaderFields) {
-        return std::unexpected(Error::kTrailerLimit);
+        return Error::kTrailerLimit;
     }
     std::size_t required = length_ ? 0 : 5;
     for (const auto& field : trailers) {
         if (!isValidHttpHeaderName(field.name()) || !isValidHttpHeaderValue(field.value()) || detail::isForbiddenHttpRequestTrailerName(field.name())) {
-            return std::unexpected(Error::kInvalidTrailer);
+            return Error::kInvalidTrailer;
         }
         if (required > kMaxHttpHeaderBytes || field.name().size() > kMaxHttpHeaderBytes - required ||
             field.value().size() > kMaxHttpHeaderBytes - required - field.name().size() ||
             kMaxHttpHeaderBytes - required - field.name().size() - field.value().size() < 4) {
-            return std::unexpected(Error::kTrailerLimit);
+            return Error::kTrailerLimit;
         }
         required += field.name().size() + field.value().size() + 4;
     }
     if (buffer.size() < required) {
-        return std::unexpected(Error::kOutputTooSmall);
+        return Error::kOutputTooSmall;
     }
     char* cursor = buffer.data();
     auto append = [&](std::string_view value) {if (!value.empty()){std::memcpy(cursor,value.data(),value.size());cursor+=value.size();} };
@@ -113,12 +113,12 @@ std::expected<std::string_view, Error> Http1RequestContentWriter::planFinish(std
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};
 }
-std::expected<void, Error> Http1RequestContentWriter::commitFinish() noexcept {
+std::variant<std::monostate, Error> Http1RequestContentWriter::commitFinish() noexcept {
     if (stopped_ || finished_) {
-        return std::unexpected(Error::kStopped);
+        return Error::kStopped;
     }
     if (!finishing_) {
-        return std::unexpected(Error::kNoWritePending);
+        return Error::kNoWritePending;
     }
     finishing_ = false;
     finished_ = true;

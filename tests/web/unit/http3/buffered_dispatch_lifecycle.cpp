@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_buffered_dispatch_fixture.h"
 
 namespace {
@@ -152,20 +154,20 @@ ruvia::Task<void> exercise_buffer_close_during_data(
 
     const std::span<const char> published(wire.bytes.data(), wire.bytes.size());
     const auto headersFrame = ruvia::decodeHttp3Frame(published);
-    if (!headersFrame) {
+    if ((headersFrame.index() != 0)) {
         RUVIA_CHECK(false);
         co_return;
     }
-    RUVIA_CHECK_EQ(headersFrame->type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
+    RUVIA_CHECK_EQ(std::get<0>(headersFrame).type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
     const auto dataFrameHeader = ruvia::decodeHttp3FrameHeader(
-        published.subspan(headersFrame->encodedBytes));
-    if (!dataFrameHeader) {
+        published.subspan(std::get<0>(headersFrame).encodedBytes));
+    if ((dataFrameHeader.index() != 0)) {
         RUVIA_CHECK(false);
         co_return;
     }
-    RUVIA_CHECK_EQ(dataFrameHeader->type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kData));
-    RUVIA_CHECK(dataFrameHeader->length > 0);
-    RUVIA_CHECK_EQ(headersFrame->encodedBytes + dataFrameHeader->encodedBytes, published.size());
+    RUVIA_CHECK_EQ(std::get<0>(dataFrameHeader).type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kData));
+    RUVIA_CHECK(std::get<0>(dataFrameHeader).length > 0);
+    RUVIA_CHECK_EQ(std::get<0>(headersFrame).encodedBytes + std::get<0>(dataFrameHeader).encodedBytes, published.size());
     RUVIA_CHECK(!wire.finalWireBytes.has_value());
 
     const auto beforeFailure = dispatch.publishedWireBytes();
@@ -207,17 +209,17 @@ ruvia::Task<void> exercise_buffer_close_during_fin(
     for (unsigned frameIndex = 0; offset < wire.bytes.size() && frameIndex < 4; ++frameIndex) {
         const auto decoded = ruvia::decodeHttp3Frame(
             std::span<const char>(wire.bytes.data() + offset, wire.bytes.size() - offset));
-        if (!decoded) {
+        if ((decoded.index() != 0)) {
             RUVIA_CHECK(false);
             co_return;
         }
-        if (decoded->type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders)) {
+        if (std::get<0>(decoded).type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders)) {
             ++headersFrames;
-        } else if (decoded->type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kData)) {
+        } else if (std::get<0>(decoded).type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kData)) {
             ++dataFrames;
-            body.append(decoded->payload.data(), decoded->payload.size());
+            body.append(std::get<0>(decoded).payload.data(), std::get<0>(decoded).payload.size());
         }
-        offset += decoded->encodedBytes;
+        offset += std::get<0>(decoded).encodedBytes;
     }
     RUVIA_CHECK_EQ(offset, wire.bytes.size());
     RUVIA_CHECK_EQ(headersFrames, std::size_t{1});

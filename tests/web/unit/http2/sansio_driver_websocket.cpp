@@ -1,4 +1,5 @@
 #include <chrono>
+#include <string_view>
 #include <utility>
 
 #include <asio/steady_timer.hpp>
@@ -170,10 +171,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                         });
                     hpackDecodeSucceeded = decoded.decoded();
                     gotAutomaticAltSvc =
-                        fields.joined.contains("alt-svc=h3=\":443\"; ma=86400;");
-                    sawForbiddenHandshakeField = fields.joined.contains("connection=") ||
-                                                 fields.joined.contains("upgrade=") ||
-                                                 fields.joined.contains("sec-websocket-accept=");
+                        (fields.joined.find("alt-svc=h3=\":443\"; ma=86400;") != std::string_view::npos);
+                    sawForbiddenHandshakeField = (fields.joined.find("connection=") != std::string_view::npos) ||
+                                                 (fields.joined.find("upgrade=") != std::string_view::npos) ||
+                                                 (fields.joined.find("sec-websocket-accept=") != std::string_view::npos);
                     break;
                 }
             }
@@ -346,8 +347,8 @@ RUVIA_TEST(sansio_driver_h2_websocket_success_ignores_accept_encoding_rejection)
         asio::detached);
 
     io.run();
-    RUVIA_CHECK(handshakeFields.contains(":status=200;"));
-    RUVIA_CHECK(!handshakeFields.contains("content-encoding="));
+    RUVIA_CHECK((handshakeFields.find(":status=200;") != std::string_view::npos));
+    RUVIA_CHECK(!(handshakeFields.find("content-encoding=") != std::string_view::npos));
 }
 
 RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {

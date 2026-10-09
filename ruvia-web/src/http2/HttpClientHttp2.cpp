@@ -274,7 +274,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                         for (const auto& field : state.headers) {
                             fields.emplace_back(field.name(), field.value());
                         }
-                        if (!validateHttpConnectUdpResponse(state.protocolVersion, state.status.value(), fields)) {
+                        if ((validateHttpConnectUdpResponse(state.protocolVersion, state.status.value(), fields).index() != 0)) {
                             throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid CONNECT-UDP response head");
                         }
                     }

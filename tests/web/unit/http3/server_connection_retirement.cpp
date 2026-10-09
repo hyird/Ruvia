@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_server_connection_fixture.h"
 
 namespace {
@@ -226,11 +228,11 @@ ruvia::Task<void> exercisePersistentProtocolResetIntent(Fixture& fixture,
 
     const std::array<ruvia::Http3FieldSectionFieldView, 4> invalidFields{{{":method", "GET"}, {":scheme", "https"}, {"x-before-path", "bad"}, {":path", "/"}}};
     const auto section = ruvia::encodeHttp3FieldSection(invalidFields, fixture.worker.resource());
-    if (!section) {
+    if ((section.index() != 0)) {
         throw std::runtime_error("HTTP/3 malformed-field fixture encoding failed");
     }
     const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(section->data(), section->size()));
+        std::string_view(std::get<0>(section).data(), std::get<0>(section).size()));
     {
         const auto failure = acceptWireBytes(connection, inbound, id, wire);
         RUVIA_CHECK(failure.status == Connection::EventStatus::kProtocolError);
@@ -343,12 +345,12 @@ ruvia::Task<Connection::TransportIntentToken> createPeerLimitIntent(
     ruvia::Http3Settings settings;
     settings.maxFieldSectionSize = 0;
     const auto settingsSize = ruvia::encodeHttp3Settings(settingsPayload, settings);
-    if (!settingsSize) {
+    if ((settingsSize.index() != 0)) {
         throw std::runtime_error("HTTP/3 peer-settings fixture encoding failed");
     }
     std::string controlWire(1, '\0');
     controlWire += frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kSettings),
-        std::string_view(settingsPayload.data(), *settingsSize));
+        std::string_view(settingsPayload.data(), std::get<0>(settingsSize)));
     const MessageId controlId{epoch, generation, 2};
     const auto controlBytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(controlWire.data()), controlWire.size());

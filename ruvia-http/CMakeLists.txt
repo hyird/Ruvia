@@ -1,18 +1,4 @@
-include(cmake/NgTcp2Core.cmake)
-
-ruvia_find_ngtcp2_core()
-
-find_package(ZLIB REQUIRED)
-find_package(unofficial-brotli CONFIG REQUIRED)
-find_package(zstd CONFIG REQUIRED)
-
-if(TARGET zstd::libzstd)
-    set(RUVIA_ZSTD_TARGET zstd::libzstd)
-elseif(TARGET zstd::libzstd_static)
-    set(RUVIA_ZSTD_TARGET zstd::libzstd_static)
-else()
-    set(RUVIA_ZSTD_TARGET zstd::libzstd_shared)
-endif()
+ruvia_fetch_http_dependencies()
 
 ruvia_collect_cpp_sources(RUVIA_HTTP_SOURCES src)
 add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
@@ -62,12 +48,7 @@ target_link_libraries(ruvia-http
         # protocol library does no TLS -- client transports are supplied externally and
         # the server driver lives in web -- while WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
         # http consumer would otherwise pull OpenSSL in for nothing.
-        ZLIB::ZLIB
-        unofficial::brotli::brotlienc
-        unofficial::brotli::brotlidec
-        unofficial::brotli::brotlicommon
-        ${RUVIA_ZSTD_TARGET}
-        ruvia_http_ngtcp2_core
+        ruvia_dependencies_http
 )
 
 ruvia_install_target(ruvia-http http)

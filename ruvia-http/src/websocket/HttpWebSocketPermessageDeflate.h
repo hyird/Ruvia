@@ -325,7 +325,7 @@ private:
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         if (HttpRequestAccess::headerKind(request, i) !=
-            std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions)) {
+            static_cast<std::uint8_t>(RequestHeaderKind::kSecWebSocketExtensions)) {
             continue;
         }
         const auto negotiation = webSocketScanDeflateOffers(headers[i].value(), config.contextTakeover);

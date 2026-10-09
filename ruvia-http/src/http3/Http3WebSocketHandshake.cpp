@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -48,13 +49,13 @@ void Http3WebSocketHandshakeFailure::applyRequiredResponseHeaders(HttpResponse& 
     }
 }
 
-std::expected<void, Http3WebSocketHandshakeFailure> validateHttp3WebSocketHandshake(
+std::variant<std::monostate, Http3WebSocketHandshakeFailure> validateHttp3WebSocketHandshake(
     const HttpRequest& request, std::string_view protocol, bool streamOpen) noexcept {
     if (!streamOpen || request.knownMethod() != HttpKnownMethod::kConnect ||
         request.protocolVersion() != HttpProtocolVersion::kHttp3 ||
         !httpAsciiEqualsIgnoreCase(protocol, "websocket")) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
 
     std::size_t versionCount = 0;
@@ -65,8 +66,8 @@ std::expected<void, Http3WebSocketHandshakeFailure> validateHttp3WebSocketHandsh
             headerNameEquals(name, "sec-websocket-key") ||
             headerNameEquals(name, "sec-websocket-accept") ||
             headerNameEquals(name, "connection") || headerNameEquals(name, "upgrade")) {
-            return std::unexpected(Http3WebSocketHandshakeFailure(
-                Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+            return Http3WebSocketHandshakeFailure(
+                Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
         }
         if (headerNameEquals(name, "sec-websocket-version")) {
             ++versionCount;
@@ -75,22 +76,22 @@ std::expected<void, Http3WebSocketHandshakeFailure> validateHttp3WebSocketHandsh
     }
     if (versionCount != 1 || !detail::webSocketSubprotocolOffersValid(request) ||
         !detail::webSocketExtensionOffersValid(request)) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
     if (version != "13") {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kUnsupportedVersion));
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kUnsupportedVersion);
     }
     return {};
 }
 
-std::expected<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
+std::variant<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
 makeHttp3WebSocketHandshake(const HttpRequest& request, std::string_view protocol,
     bool streamOpen, Http3WebSocketHandshakeOptions options) {
     const auto validation = validateHttp3WebSocketHandshake(request, protocol, streamOpen);
-    if (!validation) {
-        return std::unexpected(validation.error());
+    if ((validation.index() != 0)) {
+        return std::get<1>(validation);
     }
 
     auto* resource = normalizedResource(options.resource);
@@ -110,8 +111,8 @@ makeHttp3WebSocketHandshake(const HttpRequest& request, std::string_view protoco
         [](const HttpHeader& header) { return headerNameEquals(header.name(), "date"); });
     const auto date = options.date.empty() ? detail::cachedDateValue() : options.date;
     if (!date.empty() && !isValidHttpHeaderValue(date)) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
 
     std::pmr::vector<Http3FieldSectionFieldView> fields(resource);
@@ -132,23 +133,23 @@ makeHttp3WebSocketHandshake(const HttpRequest& request, std::string_view protoco
     }
 
     auto section = encodeHttp3FieldSection(fields, resource);
-    if (!section) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+    if ((section.index() != 0)) {
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
     constexpr auto headerCapacity = 2 * kHttp3VarIntMaxBytes;
-    if (section->size() > std::numeric_limits<std::size_t>::max() - headerCapacity) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+    if (std::get<0>(section).size() > std::numeric_limits<std::size_t>::max() - headerCapacity) {
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
-    result.headersFrame_.resize(headerCapacity + section->size());
+    result.headersFrame_.resize(headerCapacity + std::get<0>(section).size());
     const auto encoded = encodeHttp3Frame(result.headersFrame_,
-        static_cast<std::uint64_t>(Http3FrameType::kHeaders), *section);
-    if (!encoded) {
-        return std::unexpected(Http3WebSocketHandshakeFailure(
-            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest));
+        static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(section));
+    if ((encoded.index() != 0)) {
+        return Http3WebSocketHandshakeFailure(
+            Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
-    result.headersFrame_.resize(*encoded);
+    result.headersFrame_.resize(std::get<0>(encoded));
     return result;
 }
 

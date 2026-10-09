@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_buffered_dispatch_fixture.h"
 
 namespace {
@@ -111,11 +113,11 @@ ruvia::Task<void> exerciseHeadAndFile(Fixture& fixture,
     RUVIA_CHECK(emptyFileResponse.body.empty());
     const auto emptyFileFrame = ruvia::decodeHttp3Frame(
         std::span<const char>(emptyFileWire.bytes.data(), emptyFileWire.bytes.size()));
-    RUVIA_CHECK(emptyFileFrame.has_value());
-    if (emptyFileFrame) {
-        RUVIA_CHECK_EQ(emptyFileFrame->type,
+    RUVIA_CHECK((emptyFileFrame.index() == 0));
+    if ((emptyFileFrame.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(emptyFileFrame).type,
             static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
-        RUVIA_CHECK_EQ(emptyFileFrame->encodedBytes, emptyFileWire.bytes.size());
+        RUVIA_CHECK_EQ(std::get<0>(emptyFileFrame).encodedBytes, emptyFileWire.bytes.size());
     }
     RUVIA_CHECK(emptyFile.complete());
 }

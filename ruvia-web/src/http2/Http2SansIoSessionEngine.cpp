@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
@@ -208,17 +209,17 @@ Task<bool> Http2SansIoSessionEngine::pushRequest(std::uint32_t associatedStreamI
         throw std::invalid_argument("push request must use its associated request origin");
     }
     auto promised = connection_.submitPushRequest(associatedStreamId, request);
-    if (!promised) {
-        if (promised.error() == Http2PushSubmitError::kInvalidRequest) {
+    if ((promised.index() != 0)) {
+        if (std::get<1>(promised) == Http2PushSubmitError::kInvalidRequest) {
             throw std::invalid_argument("invalid HTTP/2 push request");
         }
         co_return false;
     }
-    const auto id = promised->streamId();
+    const auto id = std::get<0>(promised).streamId();
     try {
         const auto requestView = connection_.server_request_view(id);
         auto* runtime = requestView ? http2SelectStreamRoute(routes_, *requestView, streamRuntimes_, id) : nullptr;
-        if (runtime == nullptr || !runtime->holdRequestHead(std::move(*promised))) {
+        if (runtime == nullptr || !runtime->holdRequestHead(std::move(std::get<0>(promised)))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
     } catch (...) {
@@ -270,19 +271,19 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     }
     auto requestBuild = makeHttp2ServerRequest(connection_, streamId, requestMemory.resource(),
         bufferedBody == nullptr ? std::string_view{} : bufferedBody->bytes());
-    if (!requestBuild) {
+    if ((requestBuild.index() != 0)) {
         auto request = makeParsedHttpRequest(
             "GET", "/", {}, {}, requestMemory.resource())
                            .first;
         auto response = co_await routes_.handleError(request, requestMemory,
-            copyHttpProtocolErrorInfo(requestMemory.resource(), requestBuild.error()),
+            copyHttpProtocolErrorInfo(requestMemory.resource(), std::get<1>(requestBuild)),
             baseServices);
         (void)co_await bufferedResponseWriter_.write(streamId, response,
             planBufferedHttpResponseWrite(requestMethod, response));
         co_return;
     }
 
-    HttpRequest request = std::move(*requestBuild);
+    HttpRequest request = std::move(std::get<0>(requestBuild));
     HttpResponse response({.resource = requestMemory.resource()});
     // Request negotiation must retain precompressed static sidecars even when
     // this worker cannot create a runtime encoder. The capability is enforced
@@ -402,7 +403,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         }
         if (const auto* tunnelEndpoint = resolved == nullptr ? nullptr : resolved->route().endpoint().tunnel()) {
             const bool udp = tunnelEndpoint->protocol() == "connect-udp";
-            if (udp && !validateHttpConnectUdpRequest(request)) {
+            if (udp && (validateHttpConnectUdpRequest(request).index() != 0)) {
                 response = co_await routes_.handleError(request, requestMemory,
                     HttpErrorInfo({.status = http_status::kBadRequest, .message = "invalid CONNECT-UDP request head"}), requestServices);
                 break;
@@ -418,10 +419,10 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 auto head = ContextAccess::streamingHead(context);
                 if (udp) {
                     auto negotiated = prepareHttpConnectUdpResponse(std::move(head), HttpProtocolVersion::kHttp2);
-                    if (!negotiated) {
+                    if ((negotiated.index() != 0)) {
                         throw std::invalid_argument("invalid CONNECT-UDP response metadata");
                     }
-                    head = std::move(*negotiated);
+                    head = std::move(std::get<0>(negotiated));
                 }
                 const auto committed = connection_.submitConnectResponseHead(streamId, head);
                 if (committed != Http2SubmitStatus::kAccepted) {
@@ -772,7 +773,7 @@ void Http2SansIoSessionEngine::drainEvents() {
             return;
         }
         for (const auto& field : messageEnd->trailers()) {
-            if (!streamRuntime->trailers().append(field.name(), field.value())) {
+            if (streamRuntime->trailers().append(field.name(), field.value()).index() != 0) {
                 throw std::logic_error("HTTP/2 decoder published invalid request trailers");
             }
         }

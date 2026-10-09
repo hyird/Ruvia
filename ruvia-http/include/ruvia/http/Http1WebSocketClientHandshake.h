@@ -2,12 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
@@ -62,7 +62,7 @@ public:
     [[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(
         const HttpOriginView& origin, std::string_view target, std::span<char> headBuffer) const;
 
-    [[nodiscard]] std::expected<Http1WebSocketClientHandshakeResultView,
+    [[nodiscard]] std::variant<Http1WebSocketClientHandshakeResultView,
         Http1WebSocketClientHandshakeError>
     validateResponse(const Http1ParsedClientResponseHead& response) const;
 

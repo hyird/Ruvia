@@ -148,13 +148,13 @@ WebSocketHandshakeValidationResult validateWebSocketHandshake(
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto kind = detail::HttpRequestAccess::headerKind(request, i);
         const auto& header = headers[i];
-        if (kind == std::to_underlying(detail::RequestHeaderKind::kConnection)) {
+        if (kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kConnection)) {
             if (connectionOptions.parseField(
                     header.value(), detail::HttpFieldListRole::kRecipient) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kUpgrade)) {
+        } else if (kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kUpgrade)) {
             if (upgradeProtocols.parseField(header.value(), detail::HttpFieldListRole::kRecipient,
                     [&webSocketUpgrade](const detail::HttpUpgradeProtocol& protocol) noexcept {
                         if (protocol.version.empty() &&
@@ -165,10 +165,10 @@ WebSocketHandshakeValidationResult validateWebSocketHandshake(
                     }) != detail::HttpFieldListParseStatus::kOk) {
                 return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kSecWebSocketKey)) {
+        } else if (kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kSecWebSocketKey)) {
             key = header.value();
             ++keyCount;
-        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kSecWebSocketVersion)) {
+        } else if (kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kSecWebSocketVersion)) {
             version = header.value();
             ++versionCount;
         }

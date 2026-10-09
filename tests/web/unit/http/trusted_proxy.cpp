@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "context_services_fixture.h"
 #include "test_harness.h"
 
@@ -48,8 +50,8 @@ TrustedProxySet setOf(std::initializer_list<std::string_view> cidrs) {
     TrustedProxySet set;
     set.trust_x_forwarded_proto(true);
     for (const auto cidr : cidrs) {
-        if (const auto block = ruvia::detail::parseTrustedProxyBlock(cidr)) {
-            set.add(*block);
+        if (const auto block = ruvia::detail::parseTrustedProxyBlock(cidr); block.index() == 0) {
+            set.add(std::get<0>(block));
         }
     }
     return set;
@@ -58,30 +60,30 @@ TrustedProxySet setOf(std::initializer_list<std::string_view> cidrs) {
 }  // namespace
 
 RUVIA_TEST(trusted_proxy_cidr_parsing_accepts_addresses_and_blocks) {
-    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("10.0.0.0/8"));
-    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("127.0.0.1"));
-    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("2001:db8::/32"));
+    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("10.0.0.0/8").index() == 0);
+    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("127.0.0.1").index() == 0);
+    RUVIA_CHECK(ruvia::detail::parseTrustedProxyBlock("2001:db8::/32").index() == 0);
 
     // A typo must fail configuration rather than silently trust nothing.
-    RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock("10.0.0.0/33"));
-    RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock("2001:db8::/129"));
-    RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock("not-an-address"));
-    RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock("10.0.0.0/"));
+    RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock("10.0.0.0/33").index() != 0));
+    RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock("2001:db8::/129").index() != 0));
+    RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock("not-an-address").index() != 0));
+    RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock("10.0.0.0/").index() != 0));
 }
 
 RUVIA_TEST(trusted_proxy_parsing_returns_typed_errors_and_complete_networks) {
     using ruvia::detail::parseTrustedProxyBlock;
     using ruvia::detail::TrustedProxyParseError;
     const auto invalidAddress = parseTrustedProxyBlock("invalid/8");
-    RUVIA_CHECK(!invalidAddress && invalidAddress.error() == TrustedProxyParseError::kInvalidAddress);
+    RUVIA_CHECK((invalidAddress.index() != 0) && std::get<1>(invalidAddress) == TrustedProxyParseError::kInvalidAddress);
     for (const auto cidr : {"10.0.0.0/33", "10.0.0.0/-1", "10.0.0.0/", "2001:db8::/129"}) {
         const auto invalidPrefix = parseTrustedProxyBlock(cidr);
-        RUVIA_CHECK(!invalidPrefix && invalidPrefix.error() == TrustedProxyParseError::kInvalidPrefix);
+        RUVIA_CHECK((invalidPrefix.index() != 0) && std::get<1>(invalidPrefix) == TrustedProxyParseError::kInvalidPrefix);
     }
     const auto v4 = parseTrustedProxyBlock("10.1.2.3/8");
-    RUVIA_CHECK(v4 && v4->prefixBits == 104 && v4->network[12] == 10);
+    RUVIA_CHECK((v4.index() == 0) && std::get<0>(v4).prefixBits == 104 && std::get<0>(v4).network[12] == 10);
     const auto v6 = parseTrustedProxyBlock("2001:db8::/32");
-    RUVIA_CHECK(v6 && v6->prefixBits == 32 && v6->network[0] == 0x20);
+    RUVIA_CHECK((v6.index() == 0) && std::get<0>(v6).prefixBits == 32 && std::get<0>(v6).network[0] == 0x20);
 }
 
 RUVIA_TEST(trusted_proxy_matching_spans_both_families) {
@@ -115,20 +117,20 @@ RUVIA_TEST(trusted_proxy_set_matches_later_blocks_and_partial_prefixes) {
 RUVIA_TEST(trusted_proxy_address_parsing_consumes_the_complete_view) {
     const auto set = setOf({"10.0.0.0/8", "2001:db8::/32"});
     const auto block = ruvia::detail::parseTrustedProxyBlock("10.0.0.0/8");
-    RUVIA_CHECK(block.has_value());
-    if (!block) {
+    RUVIA_CHECK((block.index() == 0));
+    if ((block.index() != 0)) {
         return;
     }
     for (const auto prefix : {"10.1.2.3", "::ffff:10.1.2.3", "2001:db8::1"}) {
         std::string malformed(prefix);
         malformed.push_back('\0');
         RUVIA_CHECK(!set.trusts(malformed));
-        RUVIA_CHECK(!ruvia::detail::trustedProxyBlockContains(*block, malformed));
+        RUVIA_CHECK(!ruvia::detail::trustedProxyBlockContains(std::get<0>(block), malformed));
         malformed.append("unparsed");
         RUVIA_CHECK(!set.trusts(malformed));
-        RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock(malformed));
+        RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock(malformed).index() != 0));
         malformed.append("/8");
-        RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock(malformed));
+        RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock(malformed).index() != 0));
     }
     constexpr std::string_view storage = "10.1.2.3suffix";
     RUVIA_CHECK(set.trusts(storage.substr(0, 8)));
@@ -143,7 +145,7 @@ RUVIA_TEST(trusted_proxy_matching_handles_long_and_scoped_address_text) {
     for (const std::size_t size : {63u, 64u, 65u, 1024u}) {
         const std::string malformed(size, 'x');
         RUVIA_CHECK(!set.trusts(malformed));
-        RUVIA_CHECK(!ruvia::detail::parseTrustedProxyBlock(malformed));
+        RUVIA_CHECK((ruvia::detail::parseTrustedProxyBlock(malformed).index() != 0));
     }
 }
 

@@ -1,6 +1,7 @@
 #include "ruvia/web/db/DbTypes.h"
 
 #include <utility>
+#include <variant>
 
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/db/DbRows.h"
@@ -11,6 +12,15 @@ namespace ruvia {
 DbField::DbField(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
       storage_(std::monostate{}) {}
+
+DbField::DbField(const DbField& other, std::pmr::memory_resource* resource)
+    : DbField(resource) {
+    if (const auto* owned = std::get_if<std::pmr::string>(&other.storage_)) {
+        storage_.emplace<std::pmr::string>(*owned, resource_);
+    } else if (const auto* borrowed = std::get_if<BorrowedText>(&other.storage_)) {
+        storage_.emplace<BorrowedText>(*borrowed);
+    }
+}
 
 DbField::DbField(std::nullptr_t, std::pmr::memory_resource* resource)
     : DbField(resource) {}
@@ -91,8 +101,8 @@ DbRow::DbRow(DbRow&& other) noexcept
           return ColumnNameStorage(std::in_place_type<BorrowedColumnNames>,
               std::get<BorrowedColumnNames>(other.columnNames_));
       }()) {
-    other.storage_.emplace<OwnedFields>(other.resource_);
-    other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
+    other.storage_.emplace<BorrowedFields>();
+    other.columnNames_.emplace<BorrowedColumnNames>();
 }
 
 // NOLINTNEXTLINE(performance-noexcept-move-constructor)
@@ -100,45 +110,35 @@ DbRow& DbRow::operator=(DbRow&& other) {
     if (this == &other) {
         return *this;
     }
-
-    // Prepare both halves before publishing either one. A later allocation
-    // failure must not leave old column names indexing a shorter field array.
-    Storage next_fields(std::in_place_type<BorrowedFields>);
-    ColumnNameStorage next_names(std::in_place_type<BorrowedColumnNames>);
-    const bool same_resource = resource_ == other.resource_;
-    if (auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
-        if (same_resource) {
-            next_names.emplace<OwnedColumnNames>(std::move(*owned));
-        } else {
-            next_names.emplace<OwnedColumnNames>(*owned, resource_);
-        }
+    if (resource_ == other.resource_) {
+        storage_.swap(other.storage_);
+        columnNames_.swap(other.columnNames_);
     } else {
-        next_names.emplace<BorrowedColumnNames>(
-            std::get<BorrowedColumnNames>(other.columnNames_));
-    }
-    if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
-        if (same_resource) {
-            next_fields.emplace<OwnedFields>(std::move(*owned));
-        } else {
-            OwnedFields fields(resource_);
-            fields.reserve(owned->size());
-            for (auto& field : *owned) {
-                // Moving the vector alone relocates its buffer but retains each
-                // field's allocator. Normalize through the field assignment.
-                DbField replacement(resource_);
-                replacement = std::move(field);
-                fields.push_back(std::move(replacement));
+        // Prepare both halves before changing either row. Moving vector elements
+        // across allocators would retain each DbField's source resource.
+        auto fields = [&]() -> Storage {
+            if (const auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
+                OwnedFields replacement(resource_);
+                replacement.reserve(owned->size());
+                for (const auto& field : *owned) {
+                    replacement.push_back(DbField(field, resource_));
+                }
+                return Storage(std::in_place_type<OwnedFields>, std::move(replacement));
             }
-            next_fields.emplace<OwnedFields>(std::move(fields));
-        }
-    } else {
-        next_fields.emplace<BorrowedFields>(std::get<BorrowedFields>(other.storage_));
+            return Storage(std::in_place_type<BorrowedFields>, std::get<BorrowedFields>(other.storage_));
+        }();
+        auto names = [&]() -> ColumnNameStorage {
+            if (const auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
+                return ColumnNameStorage(std::in_place_type<OwnedColumnNames>, *owned, resource_);
+            }
+            return ColumnNameStorage(std::in_place_type<BorrowedColumnNames>,
+                std::get<BorrowedColumnNames>(other.columnNames_));
+        }();
+        storage_.swap(fields);
+        columnNames_.swap(names);
     }
-
-    storage_ = std::move(next_fields);
-    columnNames_ = std::move(next_names);
-    other.storage_.emplace<OwnedFields>(other.resource_);
-    other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
+    other.storage_.emplace<BorrowedFields>();
+    other.columnNames_.emplace<BorrowedColumnNames>();
     return *this;
 }
 

@@ -102,7 +102,7 @@ HpackDecoder::StepResult HpackDecoder::indexedHeader(
 HpackDecoder::StepResult HpackDecoder::indexedName(
     std::uint32_t index, std::string_view& name) const noexcept {
     HeaderView header;
-    if (const auto error = indexedHeader(index, header); error.has_value()) {
+    if (const auto error = indexedHeader(index, header); (error.has_value())) {
         return error;
     }
     name = header.name;

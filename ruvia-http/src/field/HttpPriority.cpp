@@ -70,21 +70,21 @@ private:
 };
 
 template <typename input_type>
-std::expected<void, HttpPriorityError> parsePriorityMembers(detail::HttpStructuredParser<input_type> parser, HttpPriorityFields& fields) noexcept {
+std::variant<std::monostate, HttpPriorityError> parsePriorityMembers(detail::HttpStructuredParser<input_type> parser, HttpPriorityFields& fields) noexcept {
     parser.spaces();
     while (!parser.empty()) {
         const auto key = parser.key();
         if (key.empty()) {
-            return std::unexpected(HttpPriorityError::kInvalidSyntax);
+            return HttpPriorityError::kInvalidSyntax;
         }
         Item item{.kind = Item::Kind::kBoolean, .boolean = true};
         if (parser.take('=')) {
             item = {};
             if (!parser.member(item)) {
-                return std::unexpected(HttpPriorityError::kInvalidSyntax);
+                return HttpPriorityError::kInvalidSyntax;
             }
         } else if (!parser.parameters()) {
-            return std::unexpected(HttpPriorityError::kInvalidSyntax);
+            return HttpPriorityError::kInvalidSyntax;
         }
         if (key == "u") {
             fields.urgency = item.kind == Item::Kind::kInteger && item.integer >= 0 && item.integer <= 7
@@ -99,34 +99,34 @@ std::expected<void, HttpPriorityError> parsePriorityMembers(detail::HttpStructur
             break;
         }
         if (!parser.take(',')) {
-            return std::unexpected(HttpPriorityError::kInvalidSyntax);
+            return HttpPriorityError::kInvalidSyntax;
         }
         parser.ows();
         if (parser.empty()) {
-            return std::unexpected(HttpPriorityError::kInvalidSyntax);
+            return HttpPriorityError::kInvalidSyntax;
         }
     }
     return {};
 }
 }  // namespace
 
-std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept {
+std::variant<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept {
     HttpPriorityFields fields;
-    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{detail::http_structured_text_input{value}}, fields); !parsed) {
-        return std::unexpected(parsed.error());
+    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{detail::http_structured_text_input{value}}, fields); parsed.index() != 0) {
+        return std::get<1>(parsed);
     }
     return fields;
 }
-std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept {
+std::variant<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept {
     HttpPriorityFields fields;
-    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{priority_header_input{headers}}, fields); !parsed) {
-        return std::unexpected(parsed.error());
+    if (auto parsed = parsePriorityMembers(detail::HttpStructuredParser{priority_header_input{headers}}, fields); parsed.index() != 0) {
+        return std::get<1>(parsed);
     }
     return fields;
 }
-std::expected<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char> output, HttpPriorityFields fields) noexcept {
+std::variant<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char> output, HttpPriorityFields fields) noexcept {
     if (fields.urgency && *fields.urgency > 7) {
-        return std::unexpected(HttpPriorityError::kInvalidValue);
+        return HttpPriorityError::kInvalidValue;
     }
     std::array<char, 12> bytes{};
     std::size_t count = 0;
@@ -146,71 +146,71 @@ std::expected<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char>
         bytes[count++] = *fields.incremental ? '1' : '0';
     }
     if (output.size() < count) {
-        return std::unexpected(HttpPriorityError::kOutputTooSmall);
+        return HttpPriorityError::kOutputTooSmall;
     }
     std::copy_n(bytes.begin(), count, output.begin());
     return count;
 }
-std::expected<HttpPriorityUpdate, HttpPriorityError> decodeHttp2PriorityUpdate(std::span<const char> payload) noexcept {
+std::variant<HttpPriorityUpdate, HttpPriorityError> decodeHttp2PriorityUpdate(std::span<const char> payload) noexcept {
     if (payload.size() < 4) {
-        return std::unexpected(HttpPriorityError::kInvalidFrame);
+        return HttpPriorityError::kInvalidFrame;
     }
     const auto id = detail::http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));
     if (!id) {
-        return std::unexpected(HttpPriorityError::kInvalidValue);
+        return HttpPriorityError::kInvalidValue;
     }
     auto fields = parseHttpPriority({payload.data() + 4, payload.size() - 4});
-    if (!fields) {
-        return std::unexpected(fields.error());
+    if ((fields.index() != 0)) {
+        return std::get<1>(fields);
     }
-    return HttpPriorityUpdate{id, (id & 1U) == 0, *fields};
+    return HttpPriorityUpdate{id, (id & 1U) == 0, std::get<0>(fields)};
 }
-std::expected<std::size_t, HttpPriorityError> encodeHttp2PriorityUpdate(std::span<char> output, std::uint32_t id, HttpPriorityFields fields) noexcept {
+std::variant<std::size_t, HttpPriorityError> encodeHttp2PriorityUpdate(std::span<char> output, std::uint32_t id, HttpPriorityFields fields) noexcept {
     if (!id || id > 0x7fffffffU) {
-        return std::unexpected(HttpPriorityError::kInvalidValue);
+        return HttpPriorityError::kInvalidValue;
     }
     std::array<char, 12> value{};
     const auto length = encodeHttpPriority(value, fields);
-    if (!length) {
-        return std::unexpected(length.error());
+    if ((length.index() != 0)) {
+        return std::get<1>(length);
     }
-    if (output.size() < 13 + *length) {
-        return std::unexpected(HttpPriorityError::kOutputTooSmall);
+    if (output.size() < 13 + std::get<0>(length)) {
+        return HttpPriorityError::kOutputTooSmall;
     }
-    detail::http2EncodeFrameHeader(output.data(), static_cast<std::uint32_t>(4 + *length), static_cast<detail::Http2FrameType>(0x10), 0, 0);
+    detail::http2EncodeFrameHeader(output.data(), static_cast<std::uint32_t>(4 + std::get<0>(length)), static_cast<detail::Http2FrameType>(0x10), 0, 0);
     detail::http2Write32(output.data() + 9, id);
-    std::copy_n(value.begin(), *length, output.begin() + 13);
-    return 13 + *length;
+    std::copy_n(value.begin(), std::get<0>(length), output.begin() + 13);
+    return 13 + std::get<0>(length);
 }
-std::expected<HttpPriorityUpdate, HttpPriorityError> decodeHttp3PriorityUpdate(std::uint64_t type, std::span<const char> payload) noexcept {
+std::variant<HttpPriorityUpdate, HttpPriorityError> decodeHttp3PriorityUpdate(std::uint64_t type, std::span<const char> payload) noexcept {
     if (type != 0xf0700 && type != 0xf0701) {
-        return std::unexpected(HttpPriorityError::kInvalidFrame);
+        return HttpPriorityError::kInvalidFrame;
     }
     const auto id = decodeHttp3VarInt(payload);
-    if (!id || (type == 0xf0700 && !isHttp3RequestStreamId(id->value))) {
-        return std::unexpected(HttpPriorityError::kInvalidValue);
+    if ((id.index() != 0) || (type == 0xf0700 && !isHttp3RequestStreamId(std::get<0>(id).value))) {
+        return HttpPriorityError::kInvalidValue;
     }
-    const auto value = payload.subspan(id->encodedBytes);
+    const auto value = payload.subspan(std::get<0>(id).encodedBytes);
     auto fields = parseHttpPriority({value.data(), value.size()});
-    if (!fields) {
-        return std::unexpected(fields.error());
+    if ((fields.index() != 0)) {
+        return std::get<1>(fields);
     }
-    return HttpPriorityUpdate{id->value, type == 0xf0701, *fields};
+    return HttpPriorityUpdate{std::get<0>(id).value, type == 0xf0701, std::get<0>(fields)};
 }
-std::expected<std::size_t, HttpPriorityError> encodeHttp3PriorityUpdate(std::span<char> output, HttpPriorityUpdate update) noexcept {
+std::variant<std::size_t, HttpPriorityError> encodeHttp3PriorityUpdate(std::span<char> output, HttpPriorityUpdate update) noexcept {
     if (update.elementId > kHttp3VarIntMax || (!update.push && !isHttp3RequestStreamId(update.elementId))) {
-        return std::unexpected(HttpPriorityError::kInvalidValue);
+        return HttpPriorityError::kInvalidValue;
     }
     std::array<char, 20> payload{};
     const auto id = encodeHttp3VarInt(payload, update.elementId);
-    const auto value = encodeHttpPriority(std::span(payload).subspan(*id), update.fields);
-    if (!value) {
-        return std::unexpected(value.error());
+    const auto value = encodeHttpPriority(std::span(payload).subspan(std::get<0>(id)), update.fields);
+    if ((value.index() != 0)) {
+        return std::get<1>(value);
     }
-    const auto size = encodeHttp3Frame(output, update.push ? 0xf0701 : 0xf0700, std::span(payload).first(*id + *value));
-    if (!size) {
-        return std::unexpected(HttpPriorityError::kOutputTooSmall);
+    const auto size = encodeHttp3Frame(output, update.push ? 0xf0701 : 0xf0700, std::span(payload).first(std::get<0>(id) + std::get<0>(value)));
+    if ((size.index() != 0)) {
+        return HttpPriorityError::kOutputTooSmall;
     }
-    return *size;
+    return std::get<0>(size);
 }
 }  // namespace ruvia

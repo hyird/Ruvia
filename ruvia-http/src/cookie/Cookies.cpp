@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpSetCookiePlan.h"
 
@@ -36,11 +37,11 @@ SetCookiePlan::SetCookiePlan(
             throw std::invalid_argument("cookie Expires is not representable");
         }
         const auto date = detail::httpFormatDate(static_cast<std::time_t>(seconds));
-        if (!date) {
+        if ((date.index() != 0)) {
             throw std::invalid_argument("cookie Expires is not representable");
         }
-        expiresSize_ = date->size();
-        std::memcpy(expiresBuffer_.data(), date->data(), expiresSize_);
+        expiresSize_ = std::get<0>(date).size();
+        std::memcpy(expiresBuffer_.data(), std::get<0>(date).data(), expiresSize_);
     }
     if (hasMaxAge_) {
         maxAgeValue_ = static_cast<std::uint64_t>(options.maxAge->count());

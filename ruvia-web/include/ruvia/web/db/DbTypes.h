@@ -299,6 +299,7 @@ private:
     struct BorrowedTag final {};
 
     explicit DbField(std::pmr::memory_resource* resource);
+    DbField(const DbField& other, std::pmr::memory_resource* resource);
     DbField(std::nullptr_t, std::pmr::memory_resource* resource);
     DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource);
@@ -320,8 +321,8 @@ private:
 
 public:
     DbRow(DbRow&& other) noexcept;
-    // A different PMR resource can require allocation during assignment.
-    // Allocation failure leaves the destination unchanged.
+    // Assignment retains the destination PMR resource. Allocation failure
+    // leaves both rows unchanged.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     DbRow& operator=(DbRow&& other);
 

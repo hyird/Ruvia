@@ -160,10 +160,10 @@ private:
         }
         const auto decodedLength = readWebSocketUint64(
             std::span<const char, 8>(buffer.data() + offset + headerSize, 8));
-        if (!decodedLength) {
-            return WebSocketFrameReadResult::makeFailure(decodedLength.error());
+        if ((decodedLength.index() != 0)) {
+            return WebSocketFrameReadResult::makeFailure(std::get<1>(decodedLength));
         }
-        length = *decodedLength;
+        length = std::get<0>(decodedLength);
         headerSize += 8;
         // RFC 6455 §5.2 minimal-length rule: a value fitting the 16-bit form may
         // not use the 64-bit form.

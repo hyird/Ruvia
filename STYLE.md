@@ -3,8 +3,7 @@
 Mechanical rules for C++ in this repository. Architecture, layering, and
 performance contracts live in `AGENTS.md`; do not repeat them here.
 
-Format with clang-format 21 using the root `.clang-format` (`Standard: Latest`,
-which is the C++23 language dialect this formatter accepts). Do not re-wrap to a
+Format with clang-format 21 using the root `.clang-format` (`Standard: c++20`). Do not re-wrap to a
 column limit: `ColumnLimit` stays 0.
 
 ```bash
@@ -66,13 +65,13 @@ error. Use one error-handling shape per API family:
 | --- | --- | --- |
 | Normal protocol progress | status enum / progress result | need input, queued, backpressured, completed |
 | Operation cannot complete its assigned task | exception | invalid complete message, encoding failure, invalid configuration |
-| Explicit requirement to return failure as data | `std::expected<T, E>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
+| Explicit requirement to return failure as data | `std::variant<T, E>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
 | Unrecoverable lifecycle contract violation | `std::terminate()` | destroying a started `Task` |
 
 Queuing and backpressure states are not failures and stay in a status enum.
 An operation may return these normal states while throwing for a genuine
-failure. `std::expected` is for operations that either produce a value or fail.
-Returning `std::expected` does not itself promise `noexcept` or require
+failure. Result variants place the value (or `std::monostate`) first and the error second.
+Returning a result variant does not itself promise `noexcept` or require
 allocation failures to be translated into its error type.
 
 Returned-error contracts must state the concrete requirement that makes them

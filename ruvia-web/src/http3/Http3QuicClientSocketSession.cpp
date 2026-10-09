@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include <asio/error.hpp>
 
@@ -19,10 +20,10 @@ namespace {
 
 http3_quic_datagram_address datagram_address(const asio::ip::udp::endpoint& endpoint) {
     auto result = to_http3_quic_datagram_address(endpoint);
-    if (!result) {
+    if ((result.index() != 0)) {
         throw std::invalid_argument("QUIC UDP endpoint is not a supported concrete address");
     }
-    return *result;
+    return std::get<0>(result);
 }
 
 ruvia::quic_connection_config client_connection_config(
@@ -235,8 +236,8 @@ private:
     }
     void cancelOutstanding() noexcept {
         asio::error_code ignored;
-        (void)timer_.cancel(ignored);
-        (void)workTimer_.cancel(ignored);
+        (void)timer_.cancel();
+        (void)workTimer_.cancel();
         (void)socket_.cancel(ignored);
         if (candidate_socket_ != nullptr) {
             (void)candidate_socket_->cancel(ignored);
@@ -368,10 +369,10 @@ Http3QuicClientSocketSession::Http3QuicClientSocketSession(asio::io_context& io,
       rejected_early_streams_(resource != nullptr ? resource : std::pmr::get_default_resource()),
       early_data_enabled_(transport_.early_data_enabled()) {
     const auto prefixes = Http3LocalCriticalStreams::create(settings_);
-    if (!prefixes) {
+    if ((prefixes.index() != 0)) {
         throw std::logic_error("failed to prepare local HTTP/3 critical streams");
     }
-    criticalStreams_.emplace(*prefixes);
+    criticalStreams_.emplace(std::get<0>(prefixes));
     if (early_data_enabled_) {
         rejected_early_streams_.reserve(ruvia::quic_limits{}.max_streams);
     }
@@ -414,10 +415,10 @@ void Http3QuicClientSocketSession::reset_rejected_early_streams() {
     }
     if (critical_stream_rejected) {
         const auto prefixes = Http3LocalCriticalStreams::create(settings_);
-        if (!prefixes) {
+        if ((prefixes.index() != 0)) {
             throw std::logic_error("failed to rebuild HTTP/3 critical stream prefixes after 0-RTT rejection");
         }
-        criticalStreams_->restart(*prefixes);
+        criticalStreams_->restart(std::get<0>(prefixes));
     }
 }
 
@@ -588,8 +589,8 @@ void Http3QuicClientSocketSession::requestStop() noexcept {
     }
     stopping_ = true;
     asio::error_code ignored;
-    (void)eventTimer_.cancel(ignored);
-    (void)workTimer_.cancel(ignored);
+    (void)eventTimer_.cancel();
+    (void)workTimer_.cancel();
     (void)socket_.cancel(ignored);
     if (candidate_socket_) {
         (void)candidate_socket_->cancel(ignored);
@@ -602,7 +603,7 @@ void Http3QuicClientSocketSession::notifyWork() noexcept {
     }
     workPending_ = true;
     asio::error_code ignored;
-    (void)workTimer_.cancel(ignored);
+    (void)workTimer_.cancel();
 }
 
 bool Http3QuicClientSocketSession::consumeWorkNotification() noexcept {

@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_client_connection_fixture.h"
 
 namespace {
@@ -66,11 +68,11 @@ ruvia::Task<void> exerciseEarlyDataRejectionRecovery(asio::io_context& io,
                         reservation.local_endpoint());
                     const auto peer = ruvia::detail::to_http3_quic_datagram_address(
                         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), ticketPeer.port()));
-                    RUVIA_CHECK(local.has_value() && peer.has_value());
-                    if (local && peer) {
+                    RUVIA_CHECK((local.index() == 0) && (peer.index() == 0));
+                    if ((local.index() == 0) && (peer.index() == 0)) {
                         ruvia::quic_connection_config quic_config;
-                        quic_config.local_address = ruvia::detail::to_quic_address(*local);
-                        quic_config.peer_address = ruvia::detail::to_quic_address(*peer);
+                        quic_config.local_address = ruvia::detail::to_quic_address(std::get<0>(local));
+                        quic_config.peer_address = ruvia::detail::to_quic_address(std::get<0>(peer));
                         ruvia::detail::http3_quic_client_transport transport(
                             no_early_tls, quic_config, "127.0.0.1",
                             std::chrono::steady_clock::now(), &memory, true);

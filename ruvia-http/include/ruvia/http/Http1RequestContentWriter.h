@@ -3,10 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/HttpHeader.h"
@@ -42,13 +42,13 @@ public:
     explicit Http1RequestContentWriter(const Http1ClientStreamingRequestContent& plan) noexcept;
     void releaseContent() noexcept;
     void abort() noexcept;
-    [[nodiscard]] std::expected<Chunk, Http1RequestContentWriteError> planChunk(std::span<const char> payload) noexcept;
-    [[nodiscard]] std::expected<void, Http1RequestContentWriteError> commitChunk(std::size_t payloadBytes) noexcept;
+    [[nodiscard]] std::variant<Chunk, Http1RequestContentWriteError> planChunk(std::span<const char> payload) noexcept;
+    [[nodiscard]] std::variant<std::monostate, Http1RequestContentWriteError> commitChunk(std::size_t payloadBytes) noexcept;
     // Returns a view into buffer. Transmit it, then commitFinish(). Known-length
     // bodies return an empty view and still require a successful commitFinish().
-    [[nodiscard]] std::expected<std::string_view, Http1RequestContentWriteError> planFinish(
+    [[nodiscard]] std::variant<std::string_view, Http1RequestContentWriteError> planFinish(
         std::span<char> buffer, std::span<const HttpHeaderView> trailers = {}) noexcept;
-    [[nodiscard]] std::expected<void, Http1RequestContentWriteError> commitFinish() noexcept;
+    [[nodiscard]] std::variant<std::monostate, Http1RequestContentWriteError> commitFinish() noexcept;
     [[nodiscard]] bool finished() const noexcept {
         return finished_;
     }

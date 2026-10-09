@@ -3,6 +3,7 @@
 #include <memory_resource>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "app/AppConfigMutation.h"
 #include "app/AppListenerOptions.h"
@@ -171,13 +172,13 @@ App& App::trustedProxies(TrustedProxyConfig config) {
             parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto);
             for (const auto& cidr : config.cidrs) {
                 const auto block = detail::parseTrustedProxyBlock(cidr);
-                if (!block) {
+                if ((block.index() != 0)) {
                     // A typo here would silently trust nothing and leave every
                     // client identified as the proxy, so it fails startup instead.
                     throw std::invalid_argument(
                         "trusted proxy must be an IP address or CIDR block");
                 }
-                parsed.add(*block);
+                parsed.add(std::get<0>(block));
             }
             state.options.trustedProxies = std::move(parsed);
         });

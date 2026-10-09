@@ -45,10 +45,8 @@ public:
         }
         reserveAdditional(size);
         const auto previousSize = heap_.size();
-        heap_.resize_and_overwrite(previousSize + size, [&](char* bytes, std::size_t) noexcept {
-            writer(bytes + previousSize);
-            return previousSize + size;
-        });
+        heap_.resize(previousSize + size);
+        writer(heap_.data() + previousSize);
     }
 
     [[nodiscard]] char* stackCursor(std::size_t bound) & noexcept {

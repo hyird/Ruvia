@@ -1,6 +1,6 @@
-#include <expected>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpClientResponseHead.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
@@ -215,7 +215,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
             response.contentLengthFieldPresent || response.sawTransferEncoding ||
             !requestAllowsProtocolSwitch(exchangeState, response, requestContentPhase)) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidProtocolSwitch);
+            return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
         return Http1ClientResponsePlanAccess::protocolUpgrade(std::nullopt);
     }
@@ -232,7 +232,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const bool resetContentRequiresEmpty = response.statusCode == http_status::kResetContent;
     const auto contentLength = response.contentLength.value();
     if (resetContentRequiresEmpty && contentLength.has_value() && *contentLength != 0) {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidContentLength);
+        return Http1ClientResponseParseError::kInvalidContentLength;
     }
 
     const auto persistence = finalResponsePersistence(exchangeState, response);
@@ -245,11 +245,10 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const auto& transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
-            return std::unexpected(
-                Http1ClientResponseParseError::kContentLengthAndTransferEncoding);
+            return Http1ClientResponseParseError::kContentLengthAndTransferEncoding;
         }
         if (!transferEncoding.has_value()) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidTransferEncoding);
+            return Http1ClientResponseParseError::kInvalidTransferEncoding;
         }
         if (const auto* finalChunked = transferEncoding->finalChunked()) {
             if (resetContentRequiresEmpty) {

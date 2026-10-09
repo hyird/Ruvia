@@ -4,15 +4,12 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
-
-namespace ruvia {
-class HttpClientResponse;
-}
 
 namespace ruvia::detail {
 struct HttpClientConfigStorage;
@@ -25,7 +22,7 @@ public:
     client_request_policy(const HttpClientConfigStorage& config, std::pmr::memory_resource* resource);
     void append_headers(const HttpClientRequestStorage& request,
         std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookie_header);
-    void retain_response_cookies(const HttpClientRequestStorage& request, const HttpClientResponse& response);
+    void retain_response_cookies(const HttpClientRequestStorage& request, std::span<const HttpHeader> headers);
 
 private:
     struct stored_cookie final {
@@ -45,6 +42,7 @@ private:
         bool persistent{true};
     };
     void add_cookie(std::string_view name, std::string_view value);
+    void discard_expired(std::chrono::system_clock::time_point now);
     [[nodiscard]] static std::size_t storage_bytes(std::string_view name,
         std::string_view value, std::string_view path, std::string_view domain) noexcept;
     [[nodiscard]] bool has_capacity(std::size_t replaced_bytes,

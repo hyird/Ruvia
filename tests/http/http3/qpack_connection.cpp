@@ -1,6 +1,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3Qpack.h"
@@ -22,43 +23,43 @@ RUVIA_TEST(http3_qpack_dynamic_blocking_and_acknowledgment) {
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 1});
     const std::array fields{ruvia::Http3FieldSectionFieldView{"x-name", "one"}};
     auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
+    RUVIA_CHECK((section.index() == 0));
     std::vector<std::pair<std::string, std::string>> received;
-    auto blocked = decoder.decode(0, *section, collect, &received);
-    RUVIA_CHECK(blocked.has_value());
-    RUVIA_CHECK(blocked->status == ruvia::Http3QpackDecodeStatus::kBlocked);
+    auto blocked = decoder.decode(0, std::get<0>(section), collect, &received);
+    RUVIA_CHECK((blocked.index() == 0));
+    RUVIA_CHECK(std::get<0>(blocked).status == ruvia::Http3QpackDecodeStatus::kBlocked);
     RUVIA_CHECK(received.empty());
     RUVIA_CHECK_EQ(decoder.blockedStreamCount(), 1u);
     auto instructions = encoder.pendingEncoderOutput();
     for (const char& byte : instructions) {
-        RUVIA_CHECK(decoder.consumeEncoder({&byte, 1}).has_value());
+        RUVIA_CHECK((decoder.consumeEncoder({&byte, 1}).index() == 0));
     }
     RUVIA_CHECK(encoder.consumeEncoderOutput(instructions.size()));
     RUVIA_CHECK_EQ(decoder.blockedStreamCount(), 0u);
-    auto decoded = decoder.decode(0, *section, collect, &received);
-    RUVIA_CHECK(decoded.has_value());
-    RUVIA_CHECK(decoded->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+    auto decoded = decoder.decode(0, std::get<0>(section), collect, &received);
+    RUVIA_CHECK((decoded.index() == 0));
+    RUVIA_CHECK(std::get<0>(decoded).status == ruvia::Http3QpackDecodeStatus::kDecoded);
     RUVIA_CHECK_EQ(received.size(), 1u);
     RUVIA_CHECK_EQ(received.front().first, std::string("x-name"));
     RUVIA_CHECK_EQ(received.front().second, std::string("one"));
-    RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()).has_value());
+    RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput()).index() == 0));
     RUVIA_CHECK_EQ(encoder.knownReceivedCount(), 1u);
     auto second = encoder.encode(4, fields);
-    RUVIA_CHECK(second.has_value());
+    RUVIA_CHECK((second.index() == 0));
     RUVIA_CHECK(encoder.pendingEncoderOutput().empty());
-    RUVIA_CHECK(decoder.decode(4, *second, collect, &received).has_value());
+    RUVIA_CHECK((decoder.decode(4, std::get<0>(second), collect, &received).index() == 0));
 }
 RUVIA_TEST(http3_qpack_zero_blocked_allowance_uses_literals) {
     ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 128, .maxBlockedStreams = 0});
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 0});
     const std::array fields{ruvia::Http3FieldSectionFieldView{"private", "secret", true}, ruvia::Http3FieldSectionFieldView{"other", "data"}};
     auto section = encoder.encode(0, fields);
-    RUVIA_CHECK(section.has_value());
+    RUVIA_CHECK((section.index() == 0));
     RUVIA_CHECK_EQ(encoder.insertCount(), 0u);
     std::vector<std::pair<std::string, std::string>> received;
-    auto result = decoder.decode(0, *section, collect, &received);
-    RUVIA_CHECK(result.has_value());
-    RUVIA_CHECK(result->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+    auto result = decoder.decode(0, std::get<0>(section), collect, &received);
+    RUVIA_CHECK((result.index() == 0));
+    RUVIA_CHECK(std::get<0>(result).status == ruvia::Http3QpackDecodeStatus::kDecoded);
     RUVIA_CHECK_EQ(received.size(), 2u);
 }
 RUVIA_TEST(http3_qpack_cancellation_releases_references) {
@@ -66,26 +67,26 @@ RUVIA_TEST(http3_qpack_cancellation_releases_references) {
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 64, .maxBlockedStreams = 1});
     const std::array first{ruvia::Http3FieldSectionFieldView{"a", "one"}};
     auto section = encoder.encode(0, first);
-    RUVIA_CHECK(section.has_value());
-    RUVIA_CHECK(decoder.consumeEncoder(encoder.pendingEncoderOutput()).has_value());
+    RUVIA_CHECK((section.index() == 0));
+    RUVIA_CHECK((decoder.consumeEncoder(encoder.pendingEncoderOutput()).index() == 0));
     RUVIA_CHECK(encoder.consumeEncoderOutput(encoder.pendingEncoderOutput().size()));
-    RUVIA_CHECK(decoder.cancel(0).has_value());
-    RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()).has_value());
+    RUVIA_CHECK((decoder.cancel(0).index() == 0));
+    RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput()).index() == 0));
     const std::array second{ruvia::Http3FieldSectionFieldView{"b", "two"}};
     auto next = encoder.encode(4, second);
-    RUVIA_CHECK(next.has_value());
+    RUVIA_CHECK((next.index() == 0));
     RUVIA_CHECK_EQ(encoder.insertCount(), 2u);
 }
 RUVIA_TEST(http3_qpack_decoder_rejects_invalid_instructions_and_critical_fin) {
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 0});
     const std::array bytes{char(0x21)};
     auto invalid = decoder.consumeEncoder(bytes);
-    RUVIA_CHECK(!invalid.has_value());
-    RUVIA_CHECK(invalid.error() == ruvia::Http3QpackConnectionError::kEncoderStreamError);
+    RUVIA_CHECK(!(invalid.index() == 0));
+    RUVIA_CHECK(std::get<1>(invalid) == ruvia::Http3QpackConnectionError::kEncoderStreamError);
     ruvia::Http3QpackEncoder encoder({});
     auto ended = encoder.consumeDecoder({}, true);
-    RUVIA_CHECK(!ended.has_value());
-    RUVIA_CHECK(ended.error() == ruvia::Http3QpackConnectionError::kClosedCriticalStream);
+    RUVIA_CHECK(!(ended.index() == 0));
+    RUVIA_CHECK(std::get<1>(ended) == ruvia::Http3QpackConnectionError::kClosedCriticalStream);
 }
 
 RUVIA_TEST(http3_qpack_decoder_allows_required_insert_count_greater_than_highest_reference) {
@@ -93,14 +94,14 @@ RUVIA_TEST(http3_qpack_decoder_allows_required_insert_count_greater_than_highest
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 2});
     const std::array fields1{ruvia::Http3FieldSectionFieldView{"x-first", "one"}};
     auto sec1 = encoder.encode(0, fields1);
-    RUVIA_CHECK(sec1.has_value());
-    RUVIA_CHECK(decoder.consumeEncoder(encoder.pendingEncoderOutput()).has_value());
+    RUVIA_CHECK((sec1.index() == 0));
+    RUVIA_CHECK((decoder.consumeEncoder(encoder.pendingEncoderOutput()).index() == 0));
     RUVIA_CHECK(encoder.consumeEncoderOutput(encoder.pendingEncoderOutput().size()));
 
     const std::array fields2{ruvia::Http3FieldSectionFieldView{"x-second", "two"}};
     auto sec2 = encoder.encode(4, fields2);
-    RUVIA_CHECK(sec2.has_value());
-    RUVIA_CHECK(decoder.consumeEncoder(encoder.pendingEncoderOutput()).has_value());
+    RUVIA_CHECK((sec2.index() == 0));
+    RUVIA_CHECK((decoder.consumeEncoder(encoder.pendingEncoderOutput()).index() == 0));
     RUVIA_CHECK(encoder.consumeEncoderOutput(encoder.pendingEncoderOutput().size()));
 
     RUVIA_CHECK_EQ(decoder.insertCount(), 2u);
@@ -110,8 +111,8 @@ RUVIA_TEST(http3_qpack_decoder_allows_required_insert_count_greater_than_highest
     const std::array<char, 3> sectionBytes{'\x03', '\x81', '\x10'};
     std::vector<std::pair<std::string, std::string>> received;
     auto result = decoder.decode(8, sectionBytes, collect, &received);
-    RUVIA_CHECK(result.has_value());
-    RUVIA_CHECK(result->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+    RUVIA_CHECK((result.index() == 0));
+    RUVIA_CHECK(std::get<0>(result).status == ruvia::Http3QpackDecodeStatus::kDecoded);
     RUVIA_CHECK_EQ(received.size(), 1u);
     if (received.size() != 1) {
         return;
@@ -157,26 +158,26 @@ RUVIA_TEST(http3_qpack_repeated_operations_release_sections_and_preserve_retaine
         ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 2}, &resource);
         const std::array fields{ruvia::Http3FieldSectionFieldView{"x-name", "one"}};
         auto retained = encoder.encode(512, fields);
-        RUVIA_CHECK(retained.has_value());
-        const std::vector<char> snapshot(retained->begin(), retained->end());
-        RUVIA_CHECK(decoder.consumeEncoder(encoder.pendingEncoderOutput()));
+        RUVIA_CHECK((retained.index() == 0));
+        const std::vector<char> snapshot(std::get<0>(retained).begin(), std::get<0>(retained).end());
+        RUVIA_CHECK((decoder.consumeEncoder(encoder.pendingEncoderOutput())).index() == 0);
         RUVIA_CHECK(encoder.consumeEncoderOutput(encoder.pendingEncoderOutput().size()));
         std::vector<std::pair<std::string, std::string>> received;
-        RUVIA_CHECK(decoder.decode(512, *retained, collect, &received));
-        RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()));
+        RUVIA_CHECK((decoder.decode(512, std::get<0>(retained), collect, &received)).index() == 0);
+        RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput())).index() == 0);
         RUVIA_CHECK(decoder.consumeDecoderOutput(decoder.pendingDecoderOutput().size()));
         const auto baseline = resource.liveBytes;
         for (std::uint64_t i = 1; i <= 64; ++i) {
             {
                 auto section = encoder.encode(i * 4, fields);
-                RUVIA_CHECK(section.has_value());
+                RUVIA_CHECK((section.index() == 0));
                 received.clear();
-                RUVIA_CHECK(decoder.decode(i * 4, *section, collect, &received));
-                RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()));
+                RUVIA_CHECK((decoder.decode(i * 4, std::get<0>(section), collect, &received)).index() == 0);
+                RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput())).index() == 0);
                 RUVIA_CHECK(decoder.consumeDecoderOutput(decoder.pendingDecoderOutput().size()));
             }
             RUVIA_CHECK_EQ(resource.liveBytes, baseline);
-            RUVIA_CHECK(std::equal(retained->begin(), retained->end(), snapshot.begin(), snapshot.end()));
+            RUVIA_CHECK(std::equal(std::get<0>(retained).begin(), std::get<0>(retained).end(), snapshot.begin(), snapshot.end()));
         }
     }
     RUVIA_CHECK_EQ(resource.liveBytes, 0u);
@@ -188,13 +189,13 @@ RUVIA_TEST(http3_qpack_cancels_blocked_section_before_table_capacity_instruction
         ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 1}, &resource);
         const std::array fields{ruvia::Http3FieldSectionFieldView{"x-name", "one"}};
         const auto section = encoder.encode(0, fields);
-        RUVIA_CHECK(section.has_value());
-        const auto blocked = decoder.decode(0, *section, nullptr, nullptr);
-        RUVIA_CHECK(blocked && blocked->status == ruvia::Http3QpackDecodeStatus::kBlocked);
-        RUVIA_CHECK(decoder.cancel(0));
+        RUVIA_CHECK((section.index() == 0));
+        const auto blocked = decoder.decode(0, std::get<0>(section), nullptr, nullptr);
+        RUVIA_CHECK((blocked.index() == 0) && std::get<0>(blocked).status == ruvia::Http3QpackDecodeStatus::kBlocked);
+        RUVIA_CHECK((decoder.cancel(0)).index() == 0);
         RUVIA_CHECK_EQ(decoder.blockedStreamCount(), 0u);
         RUVIA_CHECK(!decoder.pendingDecoderOutput().empty());
-        RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()));
+        RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput())).index() == 0);
     }
     RUVIA_CHECK_EQ(resource.liveBytes, 0u);
 }
@@ -212,7 +213,7 @@ RUVIA_TEST(http3_qpack_allocator_failure_latches_error_and_releases_all_storage)
         }
         RUVIA_CHECK(threw);
         resource.fail = false;
-        RUVIA_CHECK(!encoder.encode(4, fields));
+        RUVIA_CHECK((encoder.encode(4, fields).index() != 0));
     }
     RUVIA_CHECK_EQ(resource.liveBytes, 0u);
 }
@@ -221,12 +222,12 @@ RUVIA_TEST(http3_qpack_outstanding_budget_falls_back_to_literal_sections) {
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 128, .maxBlockedStreams = 2});
     const std::array fields{ruvia::Http3FieldSectionFieldView{"x-name", "one"}};
     const auto first = encoder.encode(0, fields);
-    RUVIA_CHECK(first.has_value());
+    RUVIA_CHECK((first.index() == 0));
     const auto second = encoder.encode(4, fields);
-    RUVIA_CHECK(second && (*second)[0] == 0);
+    RUVIA_CHECK((second.index() == 0) && (std::get<0>(second))[0] == 0);
     std::vector<std::pair<std::string, std::string>> received;
-    const auto decoded = decoder.decode(4, *second, collect, &received);
-    RUVIA_CHECK(decoded && decoded->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+    const auto decoded = decoder.decode(4, std::get<0>(second), collect, &received);
+    RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).status == ruvia::Http3QpackDecodeStatus::kDecoded);
     RUVIA_CHECK_EQ(received.size(), 1u);
 }
 
@@ -235,31 +236,31 @@ RUVIA_TEST(http3_qpack_encoded_limit_preserves_insertions_and_instruction_sync) 
     ruvia::Http3QpackDecoder decoder({.maxTableCapacity = 64, .maxBlockedStreams = 1});
     const std::array first{ruvia::Http3FieldSectionFieldView{"x-name", "one"}};
     auto limited = encoder.encode(0, first, {.maxEncodedBytes = 2});
-    RUVIA_CHECK(!limited);
-    RUVIA_CHECK(limited.error() == ruvia::Http3QpackConnectionError::kLimit);
+    RUVIA_CHECK((limited.index() != 0));
+    RUVIA_CHECK(std::get<1>(limited) == ruvia::Http3QpackConnectionError::kLimit);
     RUVIA_CHECK_EQ(encoder.insertCount(), 1u);
     RUVIA_CHECK(!encoder.pendingEncoderOutput().empty());
 
     auto instructions = encoder.pendingEncoderOutput();
-    RUVIA_CHECK(decoder.consumeEncoder(instructions));
+    RUVIA_CHECK((decoder.consumeEncoder(instructions)).index() == 0);
     RUVIA_CHECK(encoder.consumeEncoderOutput(instructions.size()));
     RUVIA_CHECK_EQ(decoder.insertCount(), 1u);
 
     const auto usable = encoder.encode(0, first);
-    RUVIA_CHECK(usable);
+    RUVIA_CHECK((usable).index() == 0);
     std::vector<std::pair<std::string, std::string>> received;
-    const auto decoded = decoder.decode(0, *usable, collect, &received);
-    RUVIA_CHECK(decoded && decoded->status == ruvia::Http3QpackDecodeStatus::kDecoded);
-    RUVIA_CHECK(encoder.consumeDecoder(decoder.pendingDecoderOutput()));
+    const auto decoded = decoder.decode(0, std::get<0>(usable), collect, &received);
+    RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).status == ruvia::Http3QpackDecodeStatus::kDecoded);
+    RUVIA_CHECK((encoder.consumeDecoder(decoder.pendingDecoderOutput())).index() == 0);
     RUVIA_CHECK(decoder.consumeDecoderOutput(decoder.pendingDecoderOutput().size()));
 
     const std::array replacement{ruvia::Http3FieldSectionFieldView{"x-other", "two"}};
     const auto replaced = encoder.encode(4, replacement);
-    RUVIA_CHECK(replaced);
+    RUVIA_CHECK((replaced).index() == 0);
     RUVIA_CHECK_EQ(encoder.insertCount(), 2u);
     RUVIA_CHECK(!encoder.pendingEncoderOutput().empty());
     instructions = encoder.pendingEncoderOutput();
-    RUVIA_CHECK(decoder.consumeEncoder(instructions));
+    RUVIA_CHECK((decoder.consumeEncoder(instructions)).index() == 0);
     RUVIA_CHECK_EQ(decoder.insertCount(), 2u);
 }
 RUVIA_TEST(http3_qpack_late_allocator_failure_latches_terminal_error_and_releases_storage) {
@@ -280,12 +281,12 @@ RUVIA_TEST(http3_qpack_late_allocator_failure_latches_terminal_error_and_release
                 found_late_failure = true;
                 resource.failAtAllocation.reset();
                 const auto encode_error = encoder.encode(4, fields);
-                RUVIA_CHECK(!encode_error);
-                RUVIA_CHECK(encode_error.error() == ruvia::Http3QpackConnectionError::kDecoderStreamError);
+                RUVIA_CHECK((encode_error.index() != 0));
+                RUVIA_CHECK(std::get<1>(encode_error) == ruvia::Http3QpackConnectionError::kDecoderStreamError);
                 const std::array<char, 1> acknowledgment{static_cast<char>(0x80)};
                 const auto decoder_error = encoder.consumeDecoder(acknowledgment);
-                RUVIA_CHECK(!decoder_error);
-                RUVIA_CHECK(decoder_error.error() == ruvia::Http3QpackConnectionError::kDecoderStreamError);
+                RUVIA_CHECK((decoder_error.index() != 0));
+                RUVIA_CHECK(std::get<1>(decoder_error) == ruvia::Http3QpackConnectionError::kDecoderStreamError);
             }
         }
         RUVIA_CHECK_EQ(resource.liveBytes, 0u);
@@ -324,7 +325,7 @@ RUVIA_TEST(http3_qpack_decoder_allocation_failure_latches_error_and_releases_sto
             try {
                 std::vector<std::pair<std::string, std::string>> received;
                 const auto result = decoder.decode(0, section, collect, &received);
-                RUVIA_CHECK(result && result->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+                RUVIA_CHECK((result.index() == 0) && std::get<0>(result).status == ruvia::Http3QpackDecodeStatus::kDecoded);
                 RUVIA_CHECK_EQ(received.size(), std::size_t{1});
                 if (!received.empty()) {
                     RUVIA_CHECK_EQ(received.front().first, std::string(":method"));
@@ -334,14 +335,14 @@ RUVIA_TEST(http3_qpack_decoder_allocation_failure_latches_error_and_releases_sto
             } catch (const std::bad_alloc&) {
                 resource.failAtAllocation.reset();
                 const auto result = decoder.decode(4, section, nullptr, nullptr);
-                RUVIA_CHECK(!result);
-                if (!result) {
-                    RUVIA_CHECK(result.error() == ruvia::Http3QpackConnectionError::kDecompressionFailed);
+                RUVIA_CHECK((result.index() != 0));
+                if ((result.index() != 0)) {
+                    RUVIA_CHECK(std::get<1>(result) == ruvia::Http3QpackConnectionError::kDecompressionFailed);
                 }
                 const auto encoder_result = decoder.consumeEncoder({});
-                RUVIA_CHECK(!encoder_result);
-                if (!encoder_result) {
-                    RUVIA_CHECK(encoder_result.error() == ruvia::Http3QpackConnectionError::kDecompressionFailed);
+                RUVIA_CHECK((encoder_result.index() != 0));
+                if ((encoder_result.index() != 0)) {
+                    RUVIA_CHECK(std::get<1>(encoder_result) == ruvia::Http3QpackConnectionError::kDecompressionFailed);
                 }
             }
         }
@@ -363,38 +364,38 @@ RUVIA_TEST(http3_qpack_field_section_prefixes_grow_and_wrap_across_acknowledged_
             const std::array fields{ruvia::Http3FieldSectionFieldView{"x-sequence", value}};
             const auto stream_id = sequence * 4;
             const auto section = encoder.encode(stream_id, fields, {}, &result_resource);
-            RUVIA_CHECK(section.has_value());
-            if (!section) {
+            RUVIA_CHECK((section.index() == 0));
+            if ((section.index() != 0)) {
                 return;
             }
-            RUVIA_CHECK(section->get_allocator().resource() == &result_resource);
-            const auto insert_count = ruvia::decodeHttp3QpackInteger(*section, 8);
-            RUVIA_CHECK(insert_count.has_value());
-            if (!insert_count) {
+            RUVIA_CHECK(std::get<0>(section).get_allocator().resource() == &result_resource);
+            const auto insert_count = ruvia::decodeHttp3QpackInteger(std::get<0>(section), 8);
+            RUVIA_CHECK((insert_count.index() == 0));
+            if ((insert_count.index() != 0)) {
                 return;
             }
-            const auto base = ruvia::decodeHttp3QpackInteger(std::span(*section).subspan(insert_count->encodedBytes), 7);
-            RUVIA_CHECK(base.has_value());
-            if (!base) {
+            const auto base = ruvia::decodeHttp3QpackInteger(std::span(std::get<0>(section)).subspan(std::get<0>(insert_count).encodedBytes), 7);
+            RUVIA_CHECK((base.index() == 0));
+            if ((base.index() != 0)) {
                 return;
             }
-            saw_wide_insert_count = saw_wide_insert_count || insert_count->encodedBytes > 1;
-            saw_wide_base = saw_wide_base || base->encodedBytes > 1;
-            saw_wrapped_insert_count = saw_wrapped_insert_count || (sequence > 0 && insert_count->value == 1);
+            saw_wide_insert_count = saw_wide_insert_count || std::get<0>(insert_count).encodedBytes > 1;
+            saw_wide_base = saw_wide_base || std::get<0>(base).encodedBytes > 1;
+            saw_wrapped_insert_count = saw_wrapped_insert_count || (sequence > 0 && std::get<0>(insert_count).value == 1);
 
             const auto instructions = encoder.pendingEncoderOutput();
-            RUVIA_CHECK(decoder.consumeEncoder(instructions));
+            RUVIA_CHECK(decoder.consumeEncoder(instructions).index() == 0);
             RUVIA_CHECK(encoder.consumeEncoderOutput(instructions.size()));
             std::vector<std::pair<std::string, std::string>> received;
-            const auto decoded = decoder.decode(stream_id, *section, collect, &received);
-            RUVIA_CHECK(decoded && decoded->status == ruvia::Http3QpackDecodeStatus::kDecoded);
+            const auto decoded = decoder.decode(stream_id, std::get<0>(section), collect, &received);
+            RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).status == ruvia::Http3QpackDecodeStatus::kDecoded);
             RUVIA_CHECK_EQ(received.size(), 1U);
             if (received.size() == 1) {
                 RUVIA_CHECK_EQ(received.front().first, std::string("x-sequence"));
                 RUVIA_CHECK_EQ(received.front().second, value);
             }
             const auto acknowledgments = decoder.pendingDecoderOutput();
-            RUVIA_CHECK(encoder.consumeDecoder(acknowledgments));
+            RUVIA_CHECK(encoder.consumeDecoder(acknowledgments).index() == 0);
             RUVIA_CHECK(decoder.consumeDecoderOutput(acknowledgments.size()));
             RUVIA_CHECK_EQ(encoder.knownReceivedCount(), sequence + 1);
         }
@@ -418,10 +419,10 @@ RUVIA_TEST(http3_qpack_results_use_caller_resource_and_outlive_encoder) {
         {
             ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0}, &encoder_resource);
             auto section = encoder.encode(0, fields, {}, &result_resource);
-            RUVIA_CHECK(section);
-            RUVIA_CHECK(section->get_allocator().resource() == &result_resource);
-            snapshot.assign(section->begin(), section->end());
-            retained = std::move(*section);
+            RUVIA_CHECK((section).index() == 0);
+            RUVIA_CHECK(std::get<0>(section).get_allocator().resource() == &result_resource);
+            snapshot.assign(std::get<0>(section).begin(), std::get<0>(section).end());
+            retained = std::move(std::get<0>(section));
         }
         RUVIA_CHECK(result_resource.liveBytes > 0);
         RUVIA_CHECK(!retained.empty());
@@ -438,8 +439,8 @@ RUVIA_TEST(http3_qpack_dynamic_writer_result_uses_caller_resource) {
     {
         ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 128, .maxBlockedStreams = 1}, &encoder_resource);
         auto section = ruvia::encodeHttp3RequestTrailers(encoder, 0, fields, {}, &result_resource);
-        RUVIA_CHECK(section);
-        RUVIA_CHECK(section->get_allocator().resource() == &result_resource);
+        RUVIA_CHECK((section).index() == 0);
+        RUVIA_CHECK(std::get<0>(section).get_allocator().resource() == &result_resource);
         RUVIA_CHECK(result_resource.liveBytes > 0);
         RUVIA_CHECK_EQ(encoder.insertCount(), 1u);
     }
@@ -453,7 +454,7 @@ RUVIA_TEST(http3_qpack_result_allocation_failure_latches_terminal_error) {
         ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 128, .maxBlockedStreams = 1}, &encoder_resource);
         const std::array previous{ruvia::Http3FieldSectionFieldView{"x-prior", "value"}};
         const auto prior = encoder.encode(0, previous);
-        RUVIA_CHECK(prior);
+        RUVIA_CHECK((prior).index() == 0);
         const std::array fields{ruvia::Http3FieldSectionFieldView{
             "x-long-name-to-force-the-final-output-vector-to-allocate", "a sufficiently long value for the allocation"}};
         result_resource.fail = true;
@@ -466,12 +467,12 @@ RUVIA_TEST(http3_qpack_result_allocation_failure_latches_terminal_error) {
         RUVIA_CHECK(threw);
         result_resource.fail = false;
         const auto encode_error = encoder.encode(0, previous);
-        RUVIA_CHECK(!encode_error);
-        RUVIA_CHECK(encode_error.error() == ruvia::Http3QpackConnectionError::kDecoderStreamError);
+        RUVIA_CHECK((encode_error.index() != 0));
+        RUVIA_CHECK(std::get<1>(encode_error) == ruvia::Http3QpackConnectionError::kDecoderStreamError);
         const std::array<char, 1> acknowledgment{static_cast<char>(0x80)};
         const auto decoder_error = encoder.consumeDecoder(acknowledgment);
-        RUVIA_CHECK(!decoder_error);
-        RUVIA_CHECK(decoder_error.error() == ruvia::Http3QpackConnectionError::kDecoderStreamError);
+        RUVIA_CHECK((decoder_error.index() != 0));
+        RUVIA_CHECK(std::get<1>(decoder_error) == ruvia::Http3QpackConnectionError::kDecoderStreamError);
     }
     RUVIA_CHECK_EQ(result_resource.liveBytes, 0u);
     RUVIA_CHECK_EQ(encoder_resource.liveBytes, 0u);
@@ -489,11 +490,11 @@ RUVIA_TEST(http3_qpack_rfc9204_appendix_dynamic_instruction_vectors) {
     // Appendix B.2: capacity, static-name insertions, post-base references.
     const auto first = hex("3fbd01c00f7777772e6578616d706c652e636f6dc10c2f73616d706c652f70617468");
     for (const char& byte : first) {
-        RUVIA_CHECK(decoder.consumeEncoder({&byte, 1}));
+        RUVIA_CHECK((decoder.consumeEncoder({&byte, 1})).index() == 0);
     }
     std::vector<std::pair<std::string, std::string>> received;
     const auto section = hex("03811011");
-    RUVIA_CHECK(decoder.decode(4, section, collect, &received));
+    RUVIA_CHECK((decoder.decode(4, section, collect, &received)).index() == 0);
     RUVIA_CHECK_EQ(received.size(), 2u);
     if (received.size() != 2) {
         return;
@@ -502,17 +503,17 @@ RUVIA_TEST(http3_qpack_rfc9204_appendix_dynamic_instruction_vectors) {
     RUVIA_CHECK_EQ(received[0].second, std::string("www.example.com"));
     RUVIA_CHECK_EQ(received[1].second, std::string("/sample/path"));
     // Appendix B.3-B.4: literal name, duplicate, blocked relative references.
-    RUVIA_CHECK(decoder.consumeEncoder(hex("4a637573746f6d2d6b65790c637573746f6d2d76616c7565")));
+    RUVIA_CHECK((decoder.consumeEncoder(hex("4a637573746f6d2d6b65790c637573746f6d2d76616c7565"))).index() == 0);
     received.clear();
     const auto blocked = decoder.decode(8, hex("050080c181"), collect, &received);
-    RUVIA_CHECK(blocked && blocked->status == ruvia::Http3QpackDecodeStatus::kBlocked);
-    RUVIA_CHECK(decoder.consumeEncoder(hex("02")));
-    RUVIA_CHECK(decoder.decode(8, hex("050080c181"), collect, &received));
+    RUVIA_CHECK((blocked.index() == 0) && std::get<0>(blocked).status == ruvia::Http3QpackDecodeStatus::kBlocked);
+    RUVIA_CHECK((decoder.consumeEncoder(hex("02"))).index() == 0);
+    RUVIA_CHECK((decoder.decode(8, hex("050080c181"), collect, &received)).index() == 0);
     RUVIA_CHECK_EQ(received.size(), 3u);
     // Appendix B.5: insertion referencing a dynamic name and table eviction.
-    RUVIA_CHECK(decoder.consumeEncoder(hex("810d637573746f6d2d76616c756532")));
+    RUVIA_CHECK((decoder.consumeEncoder(hex("810d637573746f6d2d76616c756532"))).index() == 0);
     received.clear();
-    RUVIA_CHECK(decoder.decode(12, hex("060080"), collect, &received));
+    RUVIA_CHECK((decoder.decode(12, hex("060080"), collect, &received)).index() == 0);
     RUVIA_CHECK_EQ(received.size(), 1u);
     if (received.size() == 1) {
         RUVIA_CHECK_EQ(received[0].second, std::string("custom-value2"));

@@ -4,9 +4,9 @@
 #include <chrono>
 #include <cstddef>
 #include <ctime>
-#include <expected>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpDate.h"
 
@@ -17,12 +17,12 @@ enum class HttpDateFormatError { kOutOfRange };
 // Civil conversion is independent of the C runtime's date range and locale.
 // In particular, Windows gmtime_s cannot represent pre-1970 UTC timestamps.
 // Check before calendar conversion so huge time_t values cannot overflow it.
-[[nodiscard]] inline std::expected<std::tm, HttpDateFormatError> httpUtcTm(std::time_t time) noexcept {
+[[nodiscard]] inline std::variant<std::tm, HttpDateFormatError> httpUtcTm(std::time_t time) noexcept {
     using namespace std::chrono;
     constexpr auto first = duration_cast<seconds>(sys_days{year{0} / January / 1}.time_since_epoch()).count();
     constexpr auto end = duration_cast<seconds>(sys_days{year{10000} / January / 1}.time_since_epoch()).count();
     if (std::cmp_less(time, first) || std::cmp_greater_equal(time, end)) {
-        return std::unexpected(HttpDateFormatError::kOutOfRange);
+        return HttpDateFormatError::kOutOfRange;
     }
     const sys_seconds instant{seconds{static_cast<seconds::rep>(time)}};
     const auto date = floor<days>(instant);
@@ -43,13 +43,13 @@ enum class HttpDateFormatError { kOutOfRange };
 // Allocation-free wire value; an unrepresentable date must not be truncated or
 // substituted with a different timestamp. Fixed English names are independent
 // of the process locale, as required by RFC 9110 section 5.6.7.
-[[nodiscard]] inline std::expected<std::array<char, kHttpImfFixdateSize>, HttpDateFormatError>
+[[nodiscard]] inline std::variant<std::array<char, kHttpImfFixdateSize>, HttpDateFormatError>
 httpFormatDate(std::time_t time) noexcept {
     const auto converted = httpUtcTm(time);
-    if (!converted) {
-        return std::unexpected(converted.error());
+    if ((converted.index() != 0)) {
+        return std::get<1>(converted);
     }
-    const auto& utc = *converted;
+    const auto& utc = std::get<0>(converted);
     std::array<char, kHttpImfFixdateSize> output{};
     auto* out = output.data();
     static constexpr std::array<std::string_view, 7> dayNames{

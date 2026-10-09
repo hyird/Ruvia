@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -33,15 +34,15 @@ bool makeRequest(std::span<const ruvia::Http3FieldSectionFieldView> fields,
     std::pmr::memory_resource* resource,
     std::optional<ruvia::Http3ServerRequest>& request) {
     auto section = ruvia::encodeHttp3FieldSection(fields, resource);
-    if (!section) {
+    if ((section.index() != 0)) {
         return false;
     }
     auto head = ruvia::decodeHttp3MessageHead(
-        *section, ruvia::Http3MessageHeadKind::kRequest, resource);
-    if (!head) {
+        std::get<0>(section), ruvia::Http3MessageHeadKind::kRequest, resource);
+    if ((head.index() != 0)) {
         return false;
     }
-    request.emplace(*head, resource, resource);
+    request.emplace(std::get<0>(head), resource, resource);
     return true;
 }
 
@@ -100,23 +101,23 @@ RUVIA_TEST(http3_websocket_handshake_builds_canonical_extended_connect_response)
                                                       .deflate = {.enabled = true},
                                                       .date = "Tue, 15 Nov 1994 08:12:31 GMT",
                                                   });
-    RUVIA_CHECK(handshake.has_value());
-    if (!handshake) {
+    RUVIA_CHECK((handshake.index() == 0));
+    if ((handshake.index() != 0)) {
         return;
     }
-    RUVIA_CHECK_EQ(handshake->subprotocol(), "superchat");
-    RUVIA_CHECK(handshake->compression() != (ruvia::WebSocketCompression{}));
+    RUVIA_CHECK_EQ(std::get<0>(handshake).subprotocol(), "superchat");
+    RUVIA_CHECK(std::get<0>(handshake).compression() != (ruvia::WebSocketCompression{}));
 
-    const auto frame = ruvia::decodeHttp3Frame(handshake->headersFrame());
-    RUVIA_CHECK(frame.has_value());
-    if (!frame) {
+    const auto frame = ruvia::decodeHttp3Frame(std::get<0>(handshake).headersFrame());
+    RUVIA_CHECK((frame.index() == 0));
+    if ((frame.index() != 0)) {
         return;
     }
-    RUVIA_CHECK(frame->type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
-    RUVIA_CHECK_EQ(frame->encodedBytes, handshake->headersFrame().size());
+    RUVIA_CHECK(std::get<0>(frame).type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
+    RUVIA_CHECK_EQ(std::get<0>(frame).encodedBytes, std::get<0>(handshake).headersFrame().size());
     CapturedFields captured;
-    const auto decoded = ruvia::decodeHttp3FieldSection(frame->payload, collectField, &captured);
-    RUVIA_CHECK(decoded.has_value());
+    const auto decoded = ruvia::decodeHttp3FieldSection(std::get<0>(frame).payload, collectField, &captured);
+    RUVIA_CHECK((decoded.index() == 0));
     RUVIA_CHECK_EQ(findHeader(captured, ":status"), "200");
     RUVIA_CHECK_EQ(findHeader(captured, "date"), "Tue, 15 Nov 1994 08:12:31 GMT");
     RUVIA_CHECK_EQ(findHeader(captured, "sec-websocket-protocol"), "superchat");
@@ -144,25 +145,25 @@ RUVIA_TEST(http3_websocket_handshake_rejects_invalid_version_framing_and_half_cl
     if (!valid) {
         return;
     }
-    RUVIA_CHECK(ruvia::validateHttp3WebSocketHandshake(
-        valid->request(), valid->extendedConnectProtocol(), true)
-            .has_value());
+    RUVIA_CHECK((ruvia::validateHttp3WebSocketHandshake(
+                     valid->request(), valid->extendedConnectProtocol(), true)
+                     .index() == 0));
     const auto halfClosed = ruvia::validateHttp3WebSocketHandshake(
         valid->request(), valid->extendedConnectProtocol(), false);
-    RUVIA_CHECK(!halfClosed);
-    RUVIA_CHECK(halfClosed.error().kind() ==
+    RUVIA_CHECK((halfClosed.index() != 0));
+    RUVIA_CHECK(std::get<1>(halfClosed).kind() ==
                 ruvia::Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
-    const auto invalidProtocolError = halfClosed.error().protocolError();
+    const auto invalidProtocolError = std::get<1>(halfClosed).protocolError();
     RUVIA_CHECK_EQ(invalidProtocolError.status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(std::string_view(invalidProtocolError.what()), "invalid WebSocket handshake");
     ruvia::HttpResponse invalidResponse;
-    halfClosed.error().applyRequiredResponseHeaders(invalidResponse);
+    std::get<1>(halfClosed).applyRequiredResponseHeaders(invalidResponse);
     RUVIA_CHECK(!invalidResponse.header("Sec-WebSocket-Version").has_value());
     const auto wrongProtocol = ruvia::validateHttp3WebSocketHandshake(
         valid->request(), "not-websocket", true);
-    RUVIA_CHECK(!wrongProtocol);
-    if (!wrongProtocol) {
-        RUVIA_CHECK(wrongProtocol.error().kind() ==
+    RUVIA_CHECK((wrongProtocol.index() != 0));
+    if ((wrongProtocol.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(wrongProtocol).kind() ==
                     ruvia::Http3WebSocketHandshakeFailure::Kind::kInvalidRequest);
     }
 
@@ -179,18 +180,18 @@ RUVIA_TEST(http3_websocket_handshake_rejects_invalid_version_framing_and_half_cl
     if (wrongVersion) {
         const auto result = ruvia::validateHttp3WebSocketHandshake(
             wrongVersion->request(), wrongVersion->extendedConnectProtocol(), true);
-        RUVIA_CHECK(!result);
-        RUVIA_CHECK(result.error().kind() ==
+        RUVIA_CHECK((result.index() != 0));
+        RUVIA_CHECK(std::get<1>(result).kind() ==
                     ruvia::Http3WebSocketHandshakeFailure::Kind::kUnsupportedVersion);
-        const auto protocolError = result.error().protocolError();
+        const auto protocolError = std::get<1>(result).protocolError();
         RUVIA_CHECK_EQ(protocolError.status(), ruvia::http_status::kBadRequest);
         RUVIA_CHECK_EQ(std::string_view(protocolError.what()), "unsupported WebSocket version");
 
         const auto handshake = ruvia::makeHttp3WebSocketHandshake(
             wrongVersion->request(), wrongVersion->extendedConnectProtocol(), true);
-        RUVIA_CHECK(!handshake);
-        if (!handshake) {
-            RUVIA_CHECK(handshake.error().kind() ==
+        RUVIA_CHECK((handshake.index() != 0));
+        if ((handshake.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(handshake).kind() ==
                         ruvia::Http3WebSocketHandshakeFailure::Kind::kUnsupportedVersion);
         }
 
@@ -198,7 +199,7 @@ RUVIA_TEST(http3_websocket_handshake_rejects_invalid_version_framing_and_half_cl
         errorResponse.status(protocolError.status());
         errorResponse.header("Sec-WebSocket-Version", "8");
         errorResponse.header("X-Application-Error", "retained");
-        result.error().applyRequiredResponseHeaders(errorResponse);
+        std::get<1>(result).applyRequiredResponseHeaders(errorResponse);
         RUVIA_CHECK_EQ(errorResponse.header("Sec-WebSocket-Version").value_or(""), "13");
         RUVIA_CHECK_EQ(errorResponse.header("X-Application-Error").value_or(""), "retained");
     }
@@ -217,7 +218,7 @@ RUVIA_TEST(http3_websocket_handshake_rejects_invalid_version_framing_and_half_cl
     if (framed) {
         const auto result = ruvia::validateHttp3WebSocketHandshake(
             framed->request(), framed->extendedConnectProtocol(), true);
-        RUVIA_CHECK(!result);
+        RUVIA_CHECK((result.index() != 0));
     }
 }
 
@@ -235,8 +236,9 @@ RUVIA_TEST(http3_websocket_handshake_rejects_duplicate_version_and_h1_handshake_
     std::optional<ruvia::Http3ServerRequest> duplicate;
     RUVIA_CHECK(makeRequest(duplicateVersion, &resource, duplicate));
     if (duplicate) {
-        RUVIA_CHECK(!ruvia::validateHttp3WebSocketHandshake(
-            duplicate->request(), duplicate->extendedConnectProtocol(), true));
+        RUVIA_CHECK((ruvia::validateHttp3WebSocketHandshake(
+                         duplicate->request(), duplicate->extendedConnectProtocol(), true)
+                         .index() != 0));
     }
 
     for (const auto forbidden : {"sec-websocket-key", "sec-websocket-accept", "content-length"}) {
@@ -253,8 +255,9 @@ RUVIA_TEST(http3_websocket_handshake_rejects_duplicate_version_and_h1_handshake_
         std::optional<ruvia::Http3ServerRequest> request;
         RUVIA_CHECK(makeRequest(base, &resource, request));
         if (request) {
-            RUVIA_CHECK(!ruvia::validateHttp3WebSocketHandshake(
-                request->request(), request->extendedConnectProtocol(), true));
+            RUVIA_CHECK((ruvia::validateHttp3WebSocketHandshake(
+                             request->request(), request->extendedConnectProtocol(), true)
+                             .index() != 0));
         }
     }
 
@@ -269,11 +272,11 @@ RUVIA_TEST(http3_websocket_handshake_rejects_duplicate_version_and_h1_handshake_
             ruvia::Http3FieldSectionFieldView{forbidden, "websocket"},
         };
         auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
-        RUVIA_CHECK(section.has_value());
-        if (section) {
+        RUVIA_CHECK((section.index() == 0));
+        if ((section.index() == 0)) {
             const auto head = ruvia::decodeHttp3MessageHead(
-                *section, ruvia::Http3MessageHeadKind::kRequest, &resource);
-            RUVIA_CHECK(!head);
+                std::get<0>(section), ruvia::Http3MessageHeadKind::kRequest, &resource);
+            RUVIA_CHECK((head.index() != 0));
         }
     }
 }

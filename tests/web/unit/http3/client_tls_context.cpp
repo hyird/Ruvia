@@ -80,7 +80,7 @@ struct IdentityFiles final {
             X509_set_pubkey(certificate.get(), key.get()) != 1) {
             throw std::runtime_error("could not initialize test certificate");
         }
-        X509_NAME* const name = X509_get_subject_name(certificate.get());
+        const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
         constexpr char commonName[] = "client.ruvia-test.local";
         X509V3_CTX extensionContext;
         X509V3_set_ctx(&extensionContext, certificate.get(), certificate.get(), nullptr, nullptr, 0);
@@ -89,10 +89,11 @@ struct IdentityFiles final {
                 const_cast<char*>("DNS:client.ruvia-test.local")),
             X509_EXTENSION_free);
         if (name == nullptr || !san ||
-            X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+            X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC,
                 reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
             X509_add_ext(certificate.get(), san.get(), -1) != 1 ||
-            X509_set_issuer_name(certificate.get(), name) != 1 ||
+            X509_set_subject_name(certificate.get(), name.get()) != 1 ||
+            X509_set_issuer_name(certificate.get(), name.get()) != 1 ||
             X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
             throw std::runtime_error("could not sign test certificate");
         }

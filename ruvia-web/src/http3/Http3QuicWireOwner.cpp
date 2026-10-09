@@ -317,7 +317,7 @@ void Http3QuicWireOwner::reconcileTimer() noexcept {
             ++timerGeneration_;
             timerCancelRequested_ = true;
             asio::error_code error;
-            timer_.cancel(error);
+            timer_.cancel();
             if (error) {
                 try {
                     throw std::system_error(error, "cancel HTTP/3 server network QUIC timer");
@@ -458,7 +458,7 @@ void Http3QuicWireOwner::beginStop() noexcept {
             !timerCompletionDelivered_) {
             timerCancelRequested_ = true;
             asio::error_code error;
-            timer_.cancel(error);
+            timer_.cancel();
             if (error) {
                 try {
                     throw std::system_error(error, "cancel HTTP/3 server network QUIC timer");

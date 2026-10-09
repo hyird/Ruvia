@@ -8,6 +8,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/IpAddress.h"
 #include "ruvia/core/NativePath.h"
@@ -41,10 +42,10 @@ asio::ip::address normalizeListenAddress(std::string_view address) {
         throw std::invalid_argument("listen address must not be empty");
     }
     const auto normalized = ruvia::parseIpAddress(address);
-    if (!normalized) {
+    if ((normalized.index() != 0)) {
         throw std::invalid_argument("listen address must be a numeric IP address");
     }
-    return *normalized;
+    return std::get<0>(normalized);
 }
 
 bool hasTlsConfiguration(const TlsConfig& config) noexcept {

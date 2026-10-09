@@ -108,7 +108,7 @@ struct TestIdentityFiles final {
             X509_set_pubkey(certificate.get(), key.get()) != 1) {
             throw std::runtime_error("could not initialize self-signed certificate");
         }
-        X509_NAME* name = X509_get_subject_name(certificate.get());
+        const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
         X509V3_CTX extensionContext;
         X509V3_set_ctx(&extensionContext, certificate.get(), certificate.get(), nullptr, nullptr, 0);
         const std::string san = std::string("DNS:") + commonName;
@@ -116,10 +116,10 @@ struct TestIdentityFiles final {
             X509V3_EXT_conf_nid(nullptr, &extensionContext, NID_subject_alt_name,
                 const_cast<char*>(san.c_str())),
             X509_EXTENSION_free);
-        if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
+        if (!name || X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
             X509_add_ext(certificate.get(), sanExtension.get(), -1) != 1 ||
-            X509_set_issuer_name(certificate.get(), name) != 1 ||
+            X509_set_subject_name(certificate.get(), name.get()) != 1 ||
+            X509_set_issuer_name(certificate.get(), name.get()) != 1 ||
             X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
             throw std::runtime_error("could not sign self-signed certificate");
         }
@@ -183,10 +183,16 @@ RUVIA_TEST(http3QuicTlsContextConfiguresTlsAndCertificatePolicies) {
 
         X509* const default_certificate = SSL_CTX_get0_certificate(default_context);
         RUVIA_CHECK(default_certificate != nullptr);
-        char default_name[128]{};
-        RUVIA_CHECK(X509_NAME_get_text_by_NID(X509_get_subject_name(default_certificate),
-                        NID_commonName, default_name, static_cast<int>(sizeof(default_name))) > 0);
-        RUVIA_CHECK(std::string_view(default_name) == "default.ruvia-test.local");
+        const auto* subject = X509_get_subject_name(default_certificate);
+        const int name_index = X509_NAME_get_index_by_NID(subject, NID_commonName, -1);
+        RUVIA_CHECK(name_index >= 0);
+        if (name_index >= 0) {
+            const auto* name = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject, name_index));
+            const auto default_name = std::string_view(
+                reinterpret_cast<const char*>(ASN1_STRING_get0_data(name)),
+                static_cast<std::size_t>(ASN1_STRING_length(name)));
+            RUVIA_CHECK(default_name == "default.ruvia-test.local");
+        }
     }
 
     HttpServerListenerDefinition::Tls missingCertificate;

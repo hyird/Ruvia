@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <variant>
 
 #include "ruvia/http/detail/util/PmrResource.h"
 
@@ -98,7 +99,7 @@ HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor
     }
     const bool huffman = (*cursor & 0x80U) != 0;
     std::uint32_t size = 0;
-    if (const auto error = decodeInteger(cursor, end, 7, size); error.has_value()) {
+    if (const auto error = decodeInteger(cursor, end, 7, size); (error.has_value())) {
         return error;
     }
     if (static_cast<std::size_t>(end - cursor) < size) {
@@ -126,21 +127,21 @@ HpackDecoder::StepResult HpackDecoder::decodeLiteralHeader(const unsigned char*&
     HeaderCallback callback, bool& rejected) {
     std::uint32_t nameIndex = 0;
     if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex);
-        error.has_value()) {
+        (error.has_value())) {
         return error;
     }
 
     std::string_view name;
     if (nameIndex == 0) {
-        if (const auto error = decodeString(cursor, end, nameScratch_, name); error.has_value()) {
+        if (const auto error = decodeString(cursor, end, nameScratch_, name); (error.has_value())) {
             return error;
         }
-    } else if (const auto error = indexedName(nameIndex, name); error.has_value()) {
+    } else if (const auto error = indexedName(nameIndex, name); (error.has_value())) {
         return error;
     }
 
     std::string_view value;
-    if (const auto error = decodeString(cursor, end, valueScratch_, value); error.has_value()) {
+    if (const auto error = decodeString(cursor, end, valueScratch_, value); (error.has_value())) {
         return error;
     }
     // Suppress the callback once rejected, but ALWAYS apply the dynamic-table insertion
@@ -218,11 +219,11 @@ HpackDecodeResult HpackDecoder::decodeBlock(
         const auto first = *cursor;
         if ((first & 0x80U) != 0) {
             std::uint32_t index = 0;
-            if (const auto error = decodeInteger(cursor, end, 7, index); error.has_value()) {
+            if (const auto error = decodeInteger(cursor, end, 7, index); (error.has_value())) {
                 return HpackDecodeResult(*error);
             }
             HeaderView header;
-            if (const auto error = indexedHeader(index, header); error.has_value()) {
+            if (const auto error = indexedHeader(index, header); (error.has_value())) {
                 return HpackDecodeResult(*error);
             }
             if (!rejected && callback != nullptr && !callback(target, header.name, header.value)) {
@@ -235,7 +236,7 @@ HpackDecodeResult HpackDecoder::decodeBlock(
         if ((first & 0x40U) != 0) {
             if (const auto error =
                     decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected);
-                error.has_value()) {
+                (error.has_value())) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;
@@ -247,7 +248,7 @@ HpackDecodeResult HpackDecoder::decodeBlock(
                 return HpackDecodeResult(HpackDecodeError::kDynamicTableSize);
             }
             std::uint32_t size = 0;
-            if (const auto error = decodeInteger(cursor, end, 5, size); error.has_value()) {
+            if (const auto error = decodeInteger(cursor, end, 5, size); (error.has_value())) {
                 return HpackDecodeResult(*error);
             }
             // RFC 7541 section 4.2 permits at most two updates at the start
@@ -269,7 +270,7 @@ HpackDecodeResult HpackDecoder::decodeBlock(
         if ((first & 0xf0U) == 0x00U || (first & 0xf0U) == 0x10U) {
             if (const auto error =
                     decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected);
-                error.has_value()) {
+                (error.has_value())) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;

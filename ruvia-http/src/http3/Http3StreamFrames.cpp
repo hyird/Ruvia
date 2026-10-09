@@ -149,9 +149,9 @@ Http3StreamFrameStatus Http3StreamFrames::feed(std::span<const char> input, bool
             // Complete headers borrow the current input. Only a fragmented
             // header needs to survive this feed in decoder-owned storage.
             if (headerBytesUsed_ == 0) {
-                if (const auto decoded = decodeHttp3FrameHeader(input.subspan(offset))) {
-                    offset += decoded->encodedBytes;
-                    const auto status = beginFrame(decoded->type, decoded->length);
+                if (const auto decoded = decodeHttp3FrameHeader(input.subspan(offset)); decoded.index() == 0) {
+                    offset += std::get<0>(decoded).encodedBytes;
+                    const auto status = beginFrame(std::get<0>(decoded).type, std::get<0>(decoded).length);
                     if (status != Http3StreamFrameStatus::kNeedMoreData) {
                         phase_ = Phase::kFailed;
                         return status;
@@ -169,7 +169,7 @@ Http3StreamFrameStatus Http3StreamFrames::feed(std::span<const char> input, bool
                 continue;
             }
             const auto decoded = decodeHttp3FrameHeader(std::span<const char>(header_, headerBytesUsed_));
-            const auto status = beginFrame(decoded->type, decoded->length);
+            const auto status = beginFrame(std::get<0>(decoded).type, std::get<0>(decoded).length);
             if (status != Http3StreamFrameStatus::kNeedMoreData) {
                 phase_ = Phase::kFailed;
                 return status;
@@ -181,9 +181,9 @@ Http3StreamFrameStatus Http3StreamFrames::feed(std::span<const char> input, bool
             if (remaining_ == 0) {
                 if (frameType_ == 0x5) {
                     const auto id = decodeHttp3VarInt(fieldSection_);
-                    if (!id || fieldSection_.size() - id->encodedBytes > config_.maxFieldSectionSize) {
+                    if ((id.index() != 0) || fieldSection_.size() - std::get<0>(id).encodedBytes > config_.maxFieldSectionSize) {
                         phase_ = Phase::kFailed;
-                        return id ? Http3StreamFrameStatus::kLimit : Http3StreamFrameStatus::kFrameError;
+                        return (id.index() == 0) ? Http3StreamFrameStatus::kLimit : Http3StreamFrameStatus::kFrameError;
                     }
                 }
                 if (frameType_ == 0x0 || frameType_ == 0x1 || frameType_ == 0x4 ||

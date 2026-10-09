@@ -19,7 +19,7 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots = std::to_underlying(HttpKnownMethod::kUnknown);
+inline constexpr std::size_t kAllowHeaderMethodSlots = static_cast<std::size_t>(HttpKnownMethod::kUnknown);
 
 void appendHeaderValueLiteral(char*& cursor, std::string_view value) noexcept {
     std::memcpy(cursor, value.data(), value.size());

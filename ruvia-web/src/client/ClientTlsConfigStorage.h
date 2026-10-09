@@ -21,7 +21,7 @@ inline void validate_client_tls_config(const client_tls_config& config) {
         throw std::invalid_argument("client TLS certificate and private key must be configured together");
     }
     validate_tls_file_paths({config.ca_file, config.certificate_file, config.private_key_file});
-    if (config.server_name.contains('\0')) {
+    if (config.server_name.find('\0') != std::string_view::npos) {
         throw std::invalid_argument("client TLS configuration must not contain NUL bytes");
     }
     if (!config.server_name.empty()) {

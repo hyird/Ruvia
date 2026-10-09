@@ -5,6 +5,7 @@
 #include <memory>
 #include <span>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 
@@ -51,9 +52,8 @@ public:
 
 ruvia::detail::http3_quic_datagram_address address(std::uint16_t port) {
     using namespace ruvia::detail;
-    return to_http3_quic_datagram_address(
-        asio::ip::udp::endpoint(asio::ip::address_v4({127, 0, 0, 1}), port))
-        .value();
+    return std::get<0>(to_http3_quic_datagram_address(
+        asio::ip::udp::endpoint(asio::ip::address_v4({127, 0, 0, 1}), port)));
 }
 
 }  // namespace
@@ -80,7 +80,7 @@ RUVIA_TEST(http3_quic_packet_io_writes_directly_into_reserved_transport_lease) {
     std::span<std::byte> packet;
     const auto result = worker.invoke([&] {
         channel.worker_start();
-        endpoint = std::make_unique<http3_worker_datagram_endpoint>(channel, to_udp_endpoint(local).value(),
+        endpoint = std::make_unique<http3_worker_datagram_endpoint>(channel, std::get<0>(to_udp_endpoint(local)),
             http3_worker_datagram_endpoint::notification{
                 nullptr, [](void*, http3_worker_datagram_endpoint::notification_kind) noexcept {}});
         endpoint->prepare();
@@ -95,7 +95,7 @@ RUVIA_TEST(http3_quic_packet_io_writes_directly_into_reserved_transport_lease) {
         RUVIA_CHECK(written.peer.port == expected_peer.port);
         RUVIA_CHECK(written.peer.family == expected_peer.family);
         RUVIA_CHECK(endpoint->send_datagram(packet.first(written.size),
-                        to_udp_endpoint(local).value(), to_udp_endpoint(peer).value()) ==
+                        std::get<0>(to_udp_endpoint(local)), std::get<0>(to_udp_endpoint(peer))) ==
                     http3_worker_datagram_endpoint::pump_result::pending);
         RUVIA_CHECK(!endpoint->outbound_capacity());
         RUVIA_CHECK(endpoint->packet_buffer().empty());

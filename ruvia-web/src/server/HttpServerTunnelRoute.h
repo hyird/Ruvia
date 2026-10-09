@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 #include <asio.hpp>
 
@@ -29,7 +30,7 @@ template <typename Stream>
     Http1RouteDispatch<Stream> d, const ResolvedRoute& resolved, std::string_view pending) {
     const auto& endpoint = *resolved.route().endpoint().tunnel();
     const bool udp = endpoint.protocol() == "connect-udp";
-    if (d.parsed.bodyPlan.requiresConsumption() || (udp && !validateHttpConnectUdpRequest(d.parsed.request))) {
+    if (d.parsed.bodyPlan.requiresConsumption() || (udp && (validateHttpConnectUdpRequest(d.parsed.request).index() != 0))) {
         d.response = co_await d.routes.handleError(d.parsed.request, d.requestMemory,
             HttpErrorInfo({.status = http_status::kBadRequest, .message = "CONNECT route does not accept HTTP request content"}), d.baseRouteServices);
         co_return Http1SessionRequestCompletion::makeBufferedClosing(
@@ -41,26 +42,26 @@ template <typename Stream>
         auto headResponse = ContextAccess::streamingHead(context);
         if (udp) {
             auto negotiated = prepareHttpConnectUdpResponse(std::move(headResponse), d.parsed.request.protocolVersion());
-            if (!negotiated) {
+            if ((negotiated.index() != 0)) {
                 throw std::invalid_argument("invalid CONNECT-UDP response metadata");
             }
-            headResponse = std::move(*negotiated);
+            headResponse = std::move(std::get<0>(negotiated));
         }
-        const auto plan = [&]() -> std::expected<Http1ResponseHeadPlan, HttpProtocolError> {
+        const auto plan = [&]() -> std::variant<Http1ResponseHeadPlan, HttpProtocolError> {
             if (!udp) {
                 return prepareHttp1ConnectResponseHead(headResponse, d.parsed.request.protocolVersion());
             }
             const auto upgrade = prepareHttp1ConnectUdpResponseHead(headResponse);
-            if (!upgrade) {
-                return std::unexpected(HttpProtocolError(http_status::kInternalServerError, "invalid CONNECT-UDP response head"));
+            if ((upgrade.index() != 0)) {
+                return HttpProtocolError(http_status::kInternalServerError, "invalid CONNECT-UDP response head");
             }
-            return *upgrade;
+            return std::get<0>(upgrade);
         }();
-        if (!plan) {
-            throw plan.error();
+        if (plan.index() != 0) {
+            throw std::get<1>(plan);
         }
         HttpResponseHeadBuffer head(std::pmr::polymorphic_allocator<char>(d.memory.resource()));
-        appendHttp1ResponseHead(headResponse, head, *plan);
+        appendHttp1ResponseHead(headResponse, head, std::get<0>(plan));
         ContextAccess::markTunnelHandshakeStarted(context);
         const auto written = co_await asyncAsio<std::size_t>([&](auto handler) {
             asio::async_write(d.stream, asio::buffer(head.view()), std::move(handler));

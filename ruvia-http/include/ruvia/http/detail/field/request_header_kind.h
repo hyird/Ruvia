@@ -42,7 +42,7 @@ enum class RequestHeaderKind : std::uint8_t {
 };
 
 inline constexpr std::size_t kRequestHeaderKindCount =
-    std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions) + 1;
+    static_cast<std::uint8_t>(RequestHeaderKind::kSecWebSocketExtensions) + 1;
 
 [[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(
     RequestHeaderKind kind) noexcept {

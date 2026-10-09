@@ -3,6 +3,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/DecimalNumber.h"
@@ -58,11 +59,11 @@ template <typename Visitor>
         fractionalText.remove_suffix(1);
     }
     const auto parsedFractional = ruvia::parseDecimalNumber(fractionalText);
-    if (!parsedFractional || !std::isfinite(*parsedFractional)) {
+    if ((parsedFractional.index() != 0) || !std::isfinite(std::get<0>(parsedFractional))) {
         return std::nullopt;
     }
 
-    const auto fractional = *parsedFractional;
+    const auto fractional = std::get<0>(parsedFractional);
 
     using Clock = std::chrono::system_clock;
     const auto maxSeconds = std::chrono::duration<long double>(Clock::duration::max()).count();

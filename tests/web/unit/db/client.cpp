@@ -1640,3 +1640,134 @@ RUVIA_TEST(database_tls_configuration_enforces_backend_identity_constraints) {
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(postgres); }));
 #endif
 }
+
+RUVIA_TEST(db_row_move_assignment_owns_fields_in_destination_resource_after_source_resource_release) {
+    using access = ruvia::detail::DbResultAccess;
+    const std::string first_value(256, 'a');
+    const std::string second_value(256, 'b');
+    constexpr std::string_view borrowed = "borrowed";
+    for (const bool populated : {false, true}) {
+        TrackingResource source_resource;
+        ruvia::test::CountingMemoryResource destination_resource;
+        {
+            auto destination = access::ownedRow(&destination_resource);
+            if (populated) {
+                access::ownedFields(destination).push_back(access::ownedField("old", &destination_resource));
+                access::ownedColumnNames(destination).emplace_back("old");
+            }
+            {
+                auto source = access::ownedRow(&source_resource);
+                auto& fields = access::ownedFields(source);
+                fields.push_back(access::ownedField(first_value, &source_resource));
+                fields.push_back(access::ownedField(second_value, &source_resource));
+                fields.push_back(access::borrowedField(borrowed, &source_resource));
+                fields.push_back(access::nullField(&source_resource));
+                auto& names = access::ownedColumnNames(source);
+                for (const auto name : {"first", "second", "borrowed", "null"}) {
+                    names.emplace_back(name);
+                }
+                destination = std::move(source);
+                RUVIA_CHECK(source.empty());
+            }
+            source_resource.release();
+            RUVIA_CHECK(destination["first"].value() == std::optional<std::string_view>(first_value));
+            RUVIA_CHECK(destination["second"].value() == std::optional<std::string_view>(second_value));
+            RUVIA_CHECK(destination["borrowed"].value()->data() == borrowed.data());
+            RUVIA_CHECK(!destination["null"].value());
+        }
+        RUVIA_CHECK(!source_resource.deallocatedAfterRelease());
+        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(db_row_move_assignment_keeps_rows_consistent_when_allocation_fails) {
+    using access = ruvia::detail::DbResultAccess;
+    for (const bool fail_field : {false, true}) {
+        const std::string incoming_value = fail_field ? std::string(256, 'v') : "new";
+        RejectingMemoryResource destination_resource;
+        auto destination = access::ownedRow(&destination_resource);
+        auto& destination_fields = access::ownedFields(destination);
+        auto& destination_names = access::ownedColumnNames(destination);
+        for (const auto name : {"old_first", "old_second"}) {
+            destination_fields.push_back(access::ownedField(name, &destination_resource));
+            destination_names.emplace_back(name);
+        }
+        auto source = access::ownedRow(std::pmr::get_default_resource());
+        access::ownedFields(source).push_back(access::ownedField(incoming_value, std::pmr::get_default_resource()));
+        access::ownedColumnNames(source).emplace_back(std::string(256, 'n'));
+        destination_resource.rejectAllocations(true, 256);
+
+        bool allocation_failed = false;
+        try {
+            destination = std::move(source);
+        } catch (const std::bad_alloc&) {
+            allocation_failed = true;
+        }
+        RUVIA_CHECK(allocation_failed);
+        RUVIA_CHECK_EQ(destination.size(), std::size_t{2});
+        RUVIA_CHECK_EQ(access::columnNames(destination).size(), destination.size());
+        if (destination.size() == 2) {
+            RUVIA_CHECK(destination["old_first"].value() == std::optional<std::string_view>("old_first"));
+            RUVIA_CHECK(destination["old_second"].value() == std::optional<std::string_view>("old_second"));
+        }
+        RUVIA_CHECK_EQ(source.size(), std::size_t{1});
+        RUVIA_CHECK(source[0].value() == std::optional<std::string_view>(incoming_value));
+    }
+}
+
+RUVIA_TEST(db_row_move_assignment_with_shared_resource_does_not_allocate) {
+    using access = ruvia::detail::DbResultAccess;
+    RejectingMemoryResource resource;
+    auto destination = access::ownedRow(&resource);
+    auto source = access::ownedRow(&resource);
+    access::ownedFields(source).push_back(access::ownedField("value", &resource));
+    access::ownedColumnNames(source).emplace_back("name");
+    resource.rejectAllocations();
+
+    bool completed = false;
+    try {
+        destination = std::move(source);
+        completed = true;
+    } catch (const std::bad_alloc&) {
+    }
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(completed);
+    if (completed) {
+        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK(destination["name"].value() == std::optional<std::string_view>("value"));
+    }
+}
+
+RUVIA_TEST(db_row_moves_preserve_borrowed_and_owned_storage) {
+    using access = ruvia::detail::DbResultAccess;
+    std::array backing_fields{access::ownedField("borrowed value", nullptr)};
+    std::array backing_names{std::pmr::string("borrowed_name")};
+    const std::string owned_value(256, 'x');
+    for (const bool shared_resource : {false, true}) {
+        RejectingMemoryResource destination_resource;
+        auto* source_resource = shared_resource ? &destination_resource : std::pmr::get_default_resource();
+        auto destination = access::ownedRow(&destination_resource);
+        auto borrowed = access::borrowedRow(backing_fields.data(), backing_fields.size(),
+            backing_names.data(), backing_names.size(), source_resource);
+        destination_resource.rejectAllocations();
+        destination = std::move(borrowed);
+        auto moved_borrowed = std::move(destination);
+        RUVIA_CHECK(destination.empty());
+        RUVIA_CHECK(borrowed.empty());
+        RUVIA_CHECK(&moved_borrowed["borrowed_name"] == backing_fields.data());
+        destination = std::move(moved_borrowed);
+        destination_resource.rejectAllocations(false);
+
+        auto owned = access::ownedRow(source_resource);
+        access::ownedFields(owned).push_back(access::ownedField(owned_value, source_resource));
+        access::ownedColumnNames(owned).emplace_back("owned_name");
+        destination = std::move(owned);
+        auto moved_owned = std::move(destination);
+        RUVIA_CHECK(destination.empty());
+        RUVIA_CHECK(owned.empty());
+        RUVIA_CHECK(moved_owned["owned_name"].value() == std::optional<std::string_view>(owned_value));
+        auto empty = access::ownedRow(source_resource);
+        moved_owned = std::move(empty);
+        RUVIA_CHECK(moved_owned.empty());
+    }
+}

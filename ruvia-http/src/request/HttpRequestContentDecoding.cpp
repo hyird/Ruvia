@@ -19,7 +19,7 @@ HttpContentCodingFieldResult requestContentCoding(
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         if (detail::HttpRequestAccess::headerKind(request, i) ==
-            std::to_underlying(detail::RequestHeaderKind::kContentEncoding)) {
+            static_cast<std::uint8_t>(detail::RequestHeaderKind::kContentEncoding)) {
             parser.update(headers[i].value());
         }
     }

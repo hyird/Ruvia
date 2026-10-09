@@ -133,7 +133,7 @@ public:
     [[nodiscard]] std::size_t maxLiveStreams() const noexcept {
         return limits_.maxLiveStreams;
     }
-    [[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
+    [[nodiscard]] std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
         std::uint64_t streamId, Http3ClientRequestHeadView view) {
         Http3FieldSectionLimits limits{};
         if (const auto& settings = connection_.peerSettings(); settings && settings->maxFieldSectionSize) {

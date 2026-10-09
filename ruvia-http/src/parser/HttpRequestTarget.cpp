@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <string_view>
 #include <system_error>
+#include <variant>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -125,7 +127,7 @@ bool isValidHttpHost(std::string_view value) noexcept {
         const auto literal = value.substr(1, value.size() - 2);
         return isValidIpv6Literal(literal) || isValidIpvFuture(literal);
     }
-    return !value.contains(':') && isValidRegName(value);
+    return !(value.find(':') != std::string_view::npos) && isValidRegName(value);
 }
 
 std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept {
@@ -170,10 +172,10 @@ std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noex
     }
 
     const auto port = parsePortValue(portText);
-    if (!port) {
+    if ((port.index() != 0)) {
         return std::nullopt;
     }
-    return HttpAuthorityViewAccess::make(host, HttpAuthorityPortKind::kValue, *port);
+    return HttpAuthorityViewAccess::make(host, HttpAuthorityPortKind::kValue, std::get<0>(port));
 }
 
 bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {
@@ -235,7 +237,7 @@ bool isValidUriAuthority(std::string_view value) noexcept {
         if (delimiter != std::string_view::npos) {
             hasPort = true;
             port = hostAndPort.substr(delimiter + 1);
-            if (port.contains(':')) {
+            if ((port.find(':') != std::string_view::npos)) {
                 return false;
             }
         }

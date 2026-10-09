@@ -101,11 +101,12 @@ public:
             X509_set_pubkey(certificate_.get(), key_.get()) != 1) {
             throw std::runtime_error("failed to create QUIC test certificate");
         }
-        auto* subject = X509_get_subject_name(certificate_.get());
+        const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
         if (subject == nullptr ||
-            X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+            X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC,
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) != 1 ||
-            X509_set_issuer_name(certificate_.get(), subject) != 1 ||
+            X509_set_subject_name(certificate_.get(), subject.get()) != 1 ||
+            X509_set_issuer_name(certificate_.get(), subject.get()) != 1 ||
             X509_sign(certificate_.get(), key_.get(), EVP_sha256()) <= 0) {
             throw std::runtime_error("failed to sign QUIC test certificate");
         }

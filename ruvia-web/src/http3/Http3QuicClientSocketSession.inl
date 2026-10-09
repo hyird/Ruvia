@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <variant>
 
 #include <asio/error.hpp>
 
@@ -11,10 +12,10 @@ namespace {
 
 ruvia::quic_address quic_address_from_endpoint(const asio::ip::udp::endpoint& endpoint) {
     const auto address = to_http3_quic_datagram_address(endpoint);
-    if (!address) {
+    if ((address.index() != 0)) {
         throw std::invalid_argument("QUIC UDP endpoint is not a supported concrete address");
     }
-    return to_quic_address(*address);
+    return to_quic_address(std::get<0>(address));
 }
 
 }  // namespace
@@ -161,17 +162,17 @@ Http3QuicClientSocketSession::pump_with_send(Send& send) {
         }
         const auto target = to_udp_endpoint(from_quic_address(output.peer));
         const auto local = to_udp_endpoint(from_quic_address(output.local));
-        if (!target || *target != peer_ || !local) {
+        if ((target.index() != 0) || std::get<0>(target) != peer_ || (local.index() != 0)) {
             result.status = PumpStatus::kFatal;
             return result;
         }
         if (failed_migration_local_endpoint_ &&
-            *local == *failed_migration_local_endpoint_) {
+            std::get<0>(local) == *failed_migration_local_endpoint_) {
             continue;
         }
-        if (*local == localEndpoint_) {
+        if (std::get<0>(local) == localEndpoint_) {
             pending_candidate_ = false;
-        } else if (candidate_local_endpoint_ && *local == *candidate_local_endpoint_) {
+        } else if (candidate_local_endpoint_ && std::get<0>(local) == *candidate_local_endpoint_) {
             pending_candidate_ = true;
         } else {
             result.status = PumpStatus::kFatal;

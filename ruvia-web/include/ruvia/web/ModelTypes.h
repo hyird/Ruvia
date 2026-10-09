@@ -824,6 +824,8 @@ private:
         using pointer = std::conditional_t<Const, const T*, T*>;
         using iterator_category = std::forward_iterator_tag;
 
+        Iterator() noexcept = default;
+
         explicit Iterator(InnerIterator current) noexcept
             : current_(current) {}
 
@@ -851,7 +853,7 @@ private:
         }
 
     private:
-        InnerIterator current_;
+        InnerIterator current_{};
     };
 
     T& emplaceParsed(T&& value) {

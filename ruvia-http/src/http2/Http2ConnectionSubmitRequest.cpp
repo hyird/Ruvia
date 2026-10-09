@@ -359,7 +359,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     });
 }
 
-std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
+std::variant<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
     std::uint32_t associatedStreamId, HttpPushRequestView request) {
     using Error = Http2PushSubmitError;
     const auto* parent = findStream(associatedStreamId);
@@ -367,15 +367,15 @@ std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPr
         localConnectionState_.open() == nullptr || peerGoaway_ || !parent || parent->isAborted() ||
         (associatedStreamId & 1U) == 0 || parent->localSend().endStreamCommitted() ||
         parent->localSend().endStreamQueued() || nextPushStreamId_ > 0x7fffffffU) {
-        return std::unexpected(Error::kInvalidState);
+        return Error::kInvalidState;
     }
     if (!peerSettings_.enablePush()) {
-        return std::unexpected(Error::kPushDisabled);
+        return Error::kPushDisabled;
     }
     if ((request.method != "GET" && request.method != "HEAD") ||
         !http2IsValidOutboundRegularRequestHead(request.method, request.scheme, request.authority, request.path,
             request.headers, false, HttpRequestContentIndication::kNoContent, {}, HttpClientRequestExpectation::kNone)) {
-        return std::unexpected(Error::kInvalidRequest);
+        return Error::kInvalidRequest;
     }
     std::pmr::string block(resource_);
     // PUSH_PROMISE begins a field block and therefore carries pending HPACK
@@ -390,7 +390,7 @@ std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPr
     http2EncodeOutboundRequestHeaders(block, request.headers);
     auto* stream = createStream(nextPushStreamId_);
     if (!stream) {
-        return std::unexpected(Error::kStreamLimit);
+        return Error::kStreamLimit;
     }
     const auto checkpoint = output_.checkpoint();
     try {

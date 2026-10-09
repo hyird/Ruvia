@@ -6,15 +6,12 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
-      - "vcpkg.json"
-      - "vcpkg-configuration.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
       - "examples/**"
       - "tests/**"
-      - "scripts/**"
       - "README.md"
       - "AGENTS.md"
       - "STYLE.md"
@@ -24,15 +21,12 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
-      - "vcpkg.json"
-      - "vcpkg-configuration.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
       - "examples/**"
       - "tests/**"
-      - "scripts/**"
       - "README.md"
       - "AGENTS.md"
       - "STYLE.md"
@@ -46,29 +40,21 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# Format plus one full Debug matrix on each supported compiler: Linux GCC and
-# Windows MSVC. Both platform jobs build the complete feature set with tests
-# and examples.
 jobs:
   style:
     name: clang-format
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
       - name: Install clang-format 21
         run: |
-          set -euo pipefail
           python3 -m pip install --user clang-format==21.1.2
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Check formatting
         run: |
           set -euo pipefail
-          clang-format --version
           mapfile -t files < <(git ls-files '*.h' '*.hpp' '*.inl' '*.cpp')
           printf '%s\0' "${files[@]}" | xargs -0 -n 80 clang-format --dry-run --Werror
 
@@ -78,16 +64,10 @@ jobs:
     env:
       CC: gcc-13
       CXX: g++-13
-      GIT_CONFIG_COUNT: 1
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_COMMIT: 617ef1c0c422737d117eda00a471ea1be5bad088
       BUILD_TYPE: Debug
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_USER: ruvia
           POSTGRES_PASSWORD: ruvia
@@ -114,63 +94,30 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Install toolchain
+      - name: Install build tools
         run: |
-          set -euo pipefail
-          # GCC 13 and Ninja ship with the image; only the tools vcpkg needs to
-          # fetch and unpack its ports have to be installed.
           sudo apt-get update
-          sudo apt-get install -y ninja-build curl zip unzip tar
-          gcc-13 --version
-          g++-13 --version
-
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v6
+          sudo apt-get install -y ninja-build perl bison flex pkg-config
+          python3 -m pip install --user meson
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Restore dependency builds
+        uses: actions/cache@v6
         with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ruvia-web/vcpkg-overlay/**', 'triplets/**', 'CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
-
-      - name: Bootstrap vcpkg
-        run: |
-          set -euo pipefail
-          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-          git init "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT"
-          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
+          path: build/test/_deps
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ hashFiles('cmake/Ruvia*Dependencies.cmake', 'cmake/RuviaNativeBuild.cmake') }}
       - name: Configure
         run: |
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DCMAKE_CXX_COMPILER="$CXX" \
-            -DRUVIA_ENABLE_MARIADB=ON \
-            -DRUVIA_ENABLE_POSTGRESQL=ON \
-            -DRUVIA_ENABLE_REDIS=ON \
-            -DRUVIA_ENABLE_JWT=ON \
-            -DRUVIA_BUILD_EXAMPLES=ON \
-            -DRUVIA_BUILD_TESTS=ON
-
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
-
+            -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON \
+            -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON \
+            -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
       - name: Build
-        run: cmake --build build/test --config "$BUILD_TYPE"
-
+        run: cmake --build build/test --config "$BUILD_TYPE" -j$(nproc)
       - name: Test
         env:
           RUVIA_RUN_POSTGRESQL_INTEGRATION: 1
@@ -182,63 +129,39 @@ jobs:
     name: Windows
     runs-on: windows-2025
     env:
-      GIT_CONFIG_COUNT: 1
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
-      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
-      VCPKG_COMMIT: 617ef1c0c422737d117eda00a471ea1be5bad088
       BUILD_TYPE: Debug
     steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v6
+      - uses: actions/setup-python@v6
         with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ruvia-web/vcpkg-overlay/**', 'triplets/**', 'CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-
-
-      - name: Bootstrap vcpkg
+          python-version: '3.x'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install build tools
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          git init $env:VCPKG_ROOT
-          git -C $env:VCPKG_ROOT remote add origin https://github.com/microsoft/vcpkg.git
-          git -C $env:VCPKG_ROOT fetch --depth 1 origin $env:VCPKG_COMMIT
-          git -C $env:VCPKG_ROOT checkout --detach FETCH_HEAD
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-
+          choco install strawberryperl winflexbison3 jom pkgconfiglite --yes --no-progress
+          python -m pip install meson
+          "C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
+      - name: Restore dependency builds
+        uses: actions/cache@v6
+        with:
+          path: build/test/_deps
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-${{ hashFiles('cmake/Ruvia*Dependencies.cmake', 'cmake/RuviaNativeBuild.cmake') }}
       - name: Configure
         shell: pwsh
         run: |
           cmake -S . -B build/test `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
-            -DRUVIA_ENABLE_MARIADB=ON `
-            -DRUVIA_ENABLE_POSTGRESQL=ON `
-            -DRUVIA_ENABLE_REDIS=ON `
-            -DRUVIA_ENABLE_JWT=ON `
-            -DRUVIA_BUILD_EXAMPLES=ON `
-            -DRUVIA_BUILD_TESTS=ON
-
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
-
+            -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
+            -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
+            -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
       - name: Build
         shell: pwsh
-        run: cmake --build build/test --config $env:BUILD_TYPE --parallel
-
+        run: |
+          function nproc { [Environment]::ProcessorCount }
+          cmake --build build/test --config $env:BUILD_TYPE "-j$(nproc)"
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/test -C $env:BUILD_TYPE --output-on-failure

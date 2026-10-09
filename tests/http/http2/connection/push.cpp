@@ -2,6 +2,7 @@
 #include <cstring>
 #include <memory_resource>
 #include <string>
+#include <variant>
 
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Connection.h"
@@ -39,8 +40,8 @@ RUVIA_TEST(http2_push_promise_fragmentation_response_and_detached_metadata) {
     const std::string value(20'000, 'x');
     const std::array fields{ruvia::HttpHeaderView{"x-long", value}};
     const auto push = server.submitPushPromise(1, {.authority = "example.test", .path = "/asset", .headers = fields});
-    RUVIA_CHECK(push.has_value());
-    RUVIA_CHECK_EQ(*push, 2u);
+    RUVIA_CHECK((push.index() == 0));
+    RUVIA_CHECK_EQ(std::get<0>(push), 2u);
     transfer(server, client);
     auto promise = client.nextEvent();
     RUVIA_CHECK(promise && promise->pushPromise());
@@ -80,17 +81,17 @@ RUVIA_TEST(http2_push_disabled_peer_and_client_cancellation) {
         auto end = server.nextEvent();
         const auto push = server.submitPushPromise(1, {.authority = "example.test"});
         if (!enabled) {
-            RUVIA_CHECK(!push && push.error() == ruvia::Http2PushSubmitError::kPushDisabled);
+            RUVIA_CHECK((push.index() != 0) && std::get<1>(push) == ruvia::Http2PushSubmitError::kPushDisabled);
             continue;
         }
-        RUVIA_CHECK(push.has_value());
+        RUVIA_CHECK((push.index() == 0));
         transfer(server, client);
         RUVIA_CHECK(client.nextEvent()->pushPromise());
-        RUVIA_CHECK(client.submitReset(*push, ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
+        RUVIA_CHECK(client.submitReset(std::get<0>(push), ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
         transfer(client, server);
         auto closed = server.nextEvent();
         RUVIA_CHECK(closed && closed->streamClosed());
-        RUVIA_CHECK_EQ(closed->streamClosed()->streamId(), *push);
+        RUVIA_CHECK_EQ(closed->streamClosed()->streamId(), std::get<0>(push));
     }
 }
 
@@ -170,16 +171,16 @@ RUVIA_TEST(http2_push_reservation_does_not_consume_peer_concurrency_until_respon
     setLimit(0);
     const auto first = server.submitPushPromise(1, {.authority = "example.test", .path = "/one"});
     const auto second = server.submitPushPromise(1, {.authority = "example.test", .path = "/two"});
-    RUVIA_CHECK(first && second);
-    if (!first || !second) {
+    RUVIA_CHECK((first.index() == 0) && (second.index() == 0));
+    if ((first.index() != 0) || (second.index() != 0)) {
         return;
     }
-    RUVIA_CHECK(server.submitStreamingResponseHead(*first, ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kPeerCapabilityUnavailable);
+    RUVIA_CHECK(server.submitStreamingResponseHead(std::get<0>(first), ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kPeerCapabilityUnavailable);
     setLimit(1);
-    RUVIA_CHECK(server.submitStreamingResponseHead(*first, ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kAccepted);
-    RUVIA_CHECK(server.submitStreamingResponseHead(*second, ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kPeerCapabilityUnavailable);
-    RUVIA_CHECK(server.submitData(*first, {}, ruvia::Http2EndStream::kEndStream) == ruvia::Http2DataSubmitStatus::kAccepted);
-    RUVIA_CHECK(server.submitStreamingResponseHead(*second, ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kAccepted);
+    RUVIA_CHECK(server.submitStreamingResponseHead(std::get<0>(first), ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kAccepted);
+    RUVIA_CHECK(server.submitStreamingResponseHead(std::get<0>(second), ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kPeerCapabilityUnavailable);
+    RUVIA_CHECK(server.submitData(std::get<0>(first), {}, ruvia::Http2EndStream::kEndStream) == ruvia::Http2DataSubmitStatus::kAccepted);
+    RUVIA_CHECK(server.submitStreamingResponseHead(std::get<0>(second), ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kAccepted);
 }
 
 RUVIA_TEST(http2_server_goaway_releases_unprocessed_local_push_streams) {
@@ -194,14 +195,14 @@ RUVIA_TEST(http2_server_goaway_releases_unprocessed_local_push_streams) {
     auto head = server.nextEvent();
     auto end = server.nextEvent();
     const auto push = server.submitPushPromise(1, {.authority = "example.test"});
-    RUVIA_CHECK(push.has_value());
+    RUVIA_CHECK((push.index() == 0));
     const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     RUVIA_CHECK(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::Http2FeedResult::kAccepted);
     auto draining = server.nextEvent();
     auto closed = server.nextEvent();
     RUVIA_CHECK(draining && draining->goaway());
-    RUVIA_CHECK(closed && closed->streamClosed() && closed->streamClosed()->streamId() == *push);
-    RUVIA_CHECK(server.submitStreamingResponseHead(*push, ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kClosed);
+    RUVIA_CHECK(closed && closed->streamClosed() && closed->streamClosed()->streamId() == std::get<0>(push));
+    RUVIA_CHECK(server.submitStreamingResponseHead(std::get<0>(push), ruvia::HttpResponse{}) == ruvia::Http2SubmitStatus::kClosed);
 }
 
 namespace {
@@ -247,11 +248,11 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
         auto request = server.nextEvent();
         auto requestEnd = server.nextEvent();
         const auto first = server.submitPushPromise(1, {.authority = "example.test", .path = "/retained"});
-        RUVIA_CHECK(first);
+        RUVIA_CHECK(first.index() == 0);
         transfer(server, client);
         auto retained = client.nextEvent();
         RUVIA_CHECK(retained && retained->pushPromise());
-        RUVIA_CHECK(client.submitReset(*first, ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
+        RUVIA_CHECK(client.submitReset(std::get<0>(first), ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
         transfer(client, server);
         auto closed = server.nextEvent();
         closed.reset();
@@ -260,19 +261,19 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
         for (std::size_t i = 0; i < 32; ++i) {
             {
                 const auto push = server.submitPushPromise(1, {.authority = "example.test", .path = "/asset"});
-                RUVIA_CHECK(push);
+                RUVIA_CHECK(push.index() == 0);
                 transfer(server, client);
                 auto promise = client.nextEvent();
                 RUVIA_CHECK(promise && promise->pushPromise());
                 if (i % 2 == 0) {
-                    RUVIA_CHECK(client.submitReset(*push, ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
+                    RUVIA_CHECK(client.submitReset(std::get<0>(push), ruvia::Http2ErrorCode::kCancel) == ruvia::Http2SubmitStatus::kAccepted);
                     transfer(client, server);
                     auto canceled = server.nextEvent();
                     RUVIA_CHECK(canceled && canceled->streamClosed());
                 } else {
                     ruvia::HttpResponse response({.resource = &resource});
                     response.body("asset");
-                    RUVIA_CHECK(server.submitBufferedResponse(*push, response) == ruvia::Http2SubmitStatus::kAccepted);
+                    RUVIA_CHECK(server.submitBufferedResponse(std::get<0>(push), response) == ruvia::Http2SubmitStatus::kAccepted);
                     transfer(server, client);
                     auto head = client.nextEvent();
                     auto data = client.nextEvent();
@@ -320,7 +321,7 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
 
         resource.reject_at_least = 0;
         const auto retry = server.submitPushPromise(1, {.authority = "example.test", .path = request_path});
-        RUVIA_CHECK(retry);
+        RUVIA_CHECK(retry.index() == 0);
         transfer(server, client);
         auto retried_promise = client.nextEvent();
         RUVIA_CHECK(retried_promise && retried_promise->pushPromise());

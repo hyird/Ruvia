@@ -152,8 +152,7 @@ ruvia::Task<void> closeNotification(ruvia::WorkerNotification& notification) {
 
 ruvia::Task<void> closeAndStopRuntime(ruvia::WorkerNotification& notification,
     ruvia::WorkerRuntimeContext& runtime, asio::steady_timer& watchdog) {
-    asio::error_code ignored;
-    watchdog.cancel(ignored);
+    watchdog.cancel();
     notification.close();
     runtime.close();
     co_return;

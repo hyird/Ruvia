@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -82,10 +83,10 @@ Output makeOutput(const ruvia::HttpResponse& response,
     const ruvia::HttpBufferedResponseWritePlan& plan, ruvia::WorkerMemory& worker,
     buffer& buffer, std::optional<std::uint64_t> peerLimit = std::nullopt) {
     auto output = Output::create(response, plan, worker, buffer, kMessageId, peerLimit);
-    if (!output) {
+    if ((output.index() != 0)) {
         throw std::runtime_error("failed to create buffered HTTP/3 response output");
     }
-    return std::move(*output);
+    return std::move(std::get<0>(output));
 }
 
 void collectOne(buffer& buffer, std::string& wire, ruvia::testing::TestContext& ruvia_ctx,
@@ -226,9 +227,9 @@ RUVIA_TEST(http3BufferedResponseOutputRejectsPeerFieldLimitBeforePublishingHeade
         ruvia::HttpResponse response;
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
         auto output = Output::create(response, plan, worker, buffer, kMessageId, 0);
-        RUVIA_CHECK(!output);
-        if (!output) {
-            RUVIA_CHECK(output.error() == Output::Error::kPeerFieldSectionLimit);
+        RUVIA_CHECK((output.index() != 0));
+        if ((output.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(output) == Output::Error::kPeerFieldSectionLimit);
         }
         buffer::borrowed_block block;
         Control control;

@@ -1,8 +1,8 @@
 #include "ruvia/http/HttpClientResponseHead.h"
 
 #include <charconv>
-#include <expected>
 #include <system_error>
+#include <variant>
 
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -22,36 +22,36 @@ namespace {
     std::string_view statusLine) noexcept {
     const auto separator = statusLine.find(' ');
     if (separator == std::string_view::npos) {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidStatusLine);
+        return Http1ClientResponseParseError::kInvalidStatusLine;
     }
 
     const auto version = statusLine.substr(0, separator);
     if (version != "HTTP/1.0" && version != "HTTP/1.1") {
-        return std::unexpected(Http1ClientResponseParseError::kUnsupportedHttpVersion);
+        return Http1ClientResponseParseError::kUnsupportedHttpVersion;
     }
 
     // status-line = HTTP-version SP status-code SP [ reason-phrase ]. The
     // separator after the three digits is mandatory even for an empty phrase.
     if (statusLine.size() < separator + 5 || statusLine[separator + 4] != ' ') {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidStatusCode);
+        return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
     int statusCode = 0;
     const auto code = statusLine.substr(separator + 1, 3);
     const auto [end, ec] = std::from_chars(code.data(), code.data() + code.size(), statusCode);
     if (ec != std::errc{} || end != code.data() + code.size()) {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidStatusCode);
+        return Http1ClientResponseParseError::kInvalidStatusCode;
     }
     const auto parsedStatus = HttpStatusCode::tryFromValue(static_cast<std::uint16_t>(statusCode));
     if (!parsedStatus) {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidStatusCode);
+        return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
     // Unlike a field value, reason-phrase can legitimately begin or end with
     // SP/HTAB. Validate bytes directly instead of applying OWS trimming rules.
     for (const auto ch : statusLine.substr(separator + 5)) {
         if (!isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidReasonPhrase);
+            return Http1ClientResponseParseError::kInvalidReasonPhrase;
         }
     }
 
@@ -69,10 +69,10 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
     const auto firstLine =
         firstLineEnd == std::string_view::npos ? headSection : headSection.substr(0, firstLineEnd);
     const auto statusLine = parseStatusLine(firstLine);
-    if (!statusLine) {
-        return std::unexpected(statusLine.error());
+    if ((statusLine.index() != 0)) {
+        return std::get<1>(statusLine);
     }
-    Http1ClientParsedResponseHead output(*statusLine, resource);
+    Http1ClientParsedResponseHead output(std::get<0>(statusLine), resource);
 
     const auto contentSemantics = httpResponseContentSemantics(
         Http1ClientExchangeStateAccess::method(exchangeState), output.statusCode);
@@ -90,7 +90,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
             lineEnd == std::string_view::npos ? remaining : remaining.substr(0, lineEnd);
         const auto colon = line.find(':');
         if (colon == std::string_view::npos) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+            return Http1ClientResponseParseError::kInvalidHeader;
         }
 
         const auto name = line.substr(0, colon);
@@ -100,17 +100,17 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                                            HttpInterimResponseHeaderValidationStatus::kOk
                                      : isValidHttpHeaderName(name) && isValidHttpHeaderValue(value);
         if (!fieldsValid) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+            return Http1ClientResponseParseError::kInvalidHeader;
         }
         if (output.headerCount == kMaxHttpHeaderFields) {
-            return std::unexpected(Http1ClientResponseParseError::kTooManyHeaders);
+            return Http1ClientResponseParseError::kTooManyHeaders;
         }
         output.headers[output.headerCount++] = HttpHeaderView{name, value};
 
         if (httpAsciiEqualsIgnoreCase(name, "Content-Length")) {
             output.contentLengthFieldPresent = true;
             if (output.statusCode == http_status::kNoContent) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidContentLength);
+                return Http1ClientResponseParseError::kInvalidContentLength;
             }
             // RFC 9112 section 6.3 applies method/status precedence before
             // Content-Length framing. HEAD and 304 still carry representation
@@ -124,23 +124,23 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                     case HttpContentLengthParseStatus::kOk:
                         break;
                     case HttpContentLengthParseStatus::kInvalid:
-                        return std::unexpected(Http1ClientResponseParseError::kInvalidContentLength);
+                        return Http1ClientResponseParseError::kInvalidContentLength;
                     case HttpContentLengthParseStatus::kConflicting:
-                        return std::unexpected(Http1ClientResponseParseError::kConflictingContentLength);
+                        return Http1ClientResponseParseError::kConflictingContentLength;
                 }
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
             if (output.contentTypeFieldPresent || !isValidHttpContentTypeFieldValue(value)) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+                return Http1ClientResponseParseError::kInvalidHeader;
             }
             output.contentTypeFieldPresent = true;
         } else if (httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
             if (!isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+                return Http1ClientResponseParseError::kInvalidHeader;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
             if (!isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+                return Http1ClientResponseParseError::kInvalidHeader;
             }
             if (!httpFindHeaderToken(value, [](std::string_view) noexcept {
                     return true;
@@ -148,18 +148,18 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                 output.nonEmptyTrailerHeaderPresent = true;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "TE")) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+            return Http1ClientResponseParseError::kInvalidHeader;
         } else if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(
                     value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept {
                         return !httpConnectionOptionConflictsWithManagedField(option);
                     }) != HttpFieldListParseStatus::kOk) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidConnection);
+                return Http1ClientResponseParseError::kInvalidConnection;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
             output.sawTransferEncoding = true;
             if (output.statusCode == http_status::kNoContent) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidTransferEncoding);
+                return Http1ClientResponseParseError::kInvalidTransferEncoding;
             }
             // RFC 9112 method/status precedence decides whether this field can
             // frame this message. HEAD/304 may legitimately carry representation
@@ -169,7 +169,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                     case HttpTransferEncodingParseStatus::kOk:
                         break;
                     case HttpTransferEncodingParseStatus::kMalformed:
-                        return std::unexpected(Http1ClientResponseParseError::kInvalidTransferEncoding);
+                        return Http1ClientResponseParseError::kInvalidTransferEncoding;
                     case HttpTransferEncodingParseStatus::kUnsupported:
                         break;
                 }
@@ -178,7 +178,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
             if (output.upgradeProtocols.parseField(value, HttpFieldListRole::kRecipient,
                     [](const HttpUpgradeProtocol&) noexcept { return true; }) !=
                 HttpFieldListParseStatus::kOk) {
-                return std::unexpected(Http1ClientResponseParseError::kInvalidUpgrade);
+                return Http1ClientResponseParseError::kInvalidUpgrade;
             }
         }
 
@@ -189,18 +189,18 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
     }
 
     if (output.transferEncoding.unsupported()) {
-        return std::unexpected(Http1ClientResponseParseError::kUnsupportedTransferEncoding);
+        return Http1ClientResponseParseError::kUnsupportedTransferEncoding;
     }
     if (output.protocolVersion == HttpProtocolVersion::kHttp10 && output.sawTransferEncoding) {
-        return std::unexpected(Http1ClientResponseParseError::kTransferEncodingInHttp10);
+        return Http1ClientResponseParseError::kTransferEncodingInHttp10;
     }
     if (output.upgradeProtocols.hasField() && !output.connectionOptions.upgrade()) {
-        return std::unexpected(Http1ClientResponseParseError::kInvalidConnection);
+        return Http1ClientResponseParseError::kInvalidConnection;
     }
     if (output.nonEmptyTrailerHeaderPresent) {
         const auto& transferEncoding = output.transferEncoding.value();
         if (!transferEncoding.has_value() || transferEncoding->finalChunked() == nullptr) {
-            return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
+            return Http1ClientResponseParseError::kInvalidHeader;
         }
     }
     return output;

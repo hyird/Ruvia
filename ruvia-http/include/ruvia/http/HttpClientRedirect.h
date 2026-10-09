@@ -8,7 +8,6 @@
 // method/content rewrite rules, and resolve one same-origin URI-reference.
 
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -267,12 +266,12 @@ public:
     HttpClientRedirectResolutionResult& operator=(HttpClientRedirectResolutionResult&&) = delete;
 
     [[nodiscard]] const HttpClientResolvedRedirect* resolved() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const HttpClientResolvedRedirect* resolved() const&& = delete;
 
     [[nodiscard]] constexpr const HttpClientRedirectResolutionFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const HttpClientRedirectResolutionFailure* failure() const&& = delete;
 
@@ -280,14 +279,14 @@ private:
     friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
         const HttpOriginView&, HttpClientRedirectTargetOptions);
 
-    using Value = std::expected<HttpClientResolvedRedirect, HttpClientRedirectResolutionFailure>;
+    using Value = std::variant<HttpClientResolvedRedirect, HttpClientRedirectResolutionFailure>;
 
     explicit HttpClientRedirectResolutionResult(HttpClientResolvedRedirect resolved) noexcept
         : value_(std::move(resolved)) {}
 
     explicit constexpr HttpClientRedirectResolutionResult(
         HttpClientRedirectResolutionFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static HttpClientRedirectResolutionResult makeResolved(HttpScheme scheme,
         std::pmr::string host, std::uint16_t port, std::pmr::string target,

@@ -4,6 +4,7 @@
 #include <array>
 #include <cstring>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/WebSocketClientNegotiation.h"
@@ -75,12 +76,12 @@ Task<void> WebSocketHttp2Transport::connect() {
     }
     checkFailure();
     const auto negotiated = negotiation.validateResponse(*response_, !eof_);
-    if (!negotiated) {
+    if ((negotiated.index() != 0)) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "invalid HTTP/2 WebSocket handshake response");
     }
-    owner_.selectedSubprotocol_.assign(negotiated->selectedSubprotocol);
-    owner_.negotiatedCompression_ = negotiated->compression;
+    owner_.selectedSubprotocol_.assign(std::get<0>(negotiated).selectedSubprotocol);
+    owner_.negotiatedCompression_ = std::get<0>(negotiated).compression;
     response_.reset();
     co_await flush();
 }

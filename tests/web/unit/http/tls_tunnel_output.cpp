@@ -35,10 +35,12 @@ void certificate(asio::ssl::context& context) {
     require(X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60) != nullptr);
     require(X509_gmtime_adj(X509_getm_notAfter(cert.get()), 3600) != nullptr);
     require(X509_set_pubkey(cert.get(), key.get()) == 1);
-    auto* name = X509_get_subject_name(cert.get());
-    require(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+    const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+    require(name != nullptr);
+    require(X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC,
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) == 1);
-    require(X509_set_issuer_name(cert.get(), name) == 1);
+    require(X509_set_subject_name(cert.get(), name.get()) == 1);
+    require(X509_set_issuer_name(cert.get(), name.get()) == 1);
     require(X509_sign(cert.get(), key.get(), EVP_sha256()) > 0);
     require(SSL_CTX_use_certificate(context.native_handle(), cert.get()) == 1);
     require(SSL_CTX_use_PrivateKey(context.native_handle(), key.get()) == 1);

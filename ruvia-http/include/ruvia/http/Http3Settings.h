@@ -2,10 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <variant>
 
 namespace ruvia {
 
@@ -30,13 +30,13 @@ struct Http3Settings final {
 
 // Decodes a complete SETTINGS payload (RFC 9114 §7.2.4.1). Unknown settings are
 // validated and ignored; `resource` owns temporary duplicate-detection storage.
-[[nodiscard]] std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
+[[nodiscard]] std::variant<Http3Settings, Http3SettingsError> decodeHttp3Settings(
     std::span<const char> payload,
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 // Always emits both QPACK settings; emits the field-section limit only if present
 // and ENABLE_CONNECT_PROTOCOL only when enabled.
-[[nodiscard]] std::expected<std::size_t, Http3SettingsError> encodeHttp3Settings(
+[[nodiscard]] std::variant<std::size_t, Http3SettingsError> encodeHttp3Settings(
     std::span<char> output, const Http3Settings& settings) noexcept;
 
 }  // namespace ruvia

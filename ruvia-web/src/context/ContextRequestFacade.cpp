@@ -1,5 +1,6 @@
 #include <array>
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/Context.h"
@@ -63,15 +64,15 @@ HttpPriority ContextRequest::priority() const noexcept {
         return **context_->services().requestPriorityUpdate();
     }
     const auto parsed = parseHttpPriority(context_->request_.headers());
-    return parsed ? parsed->requestPriority() : HttpPriority{};
+    return (parsed.index() == 0) ? std::get<0>(parsed).requestPriority() : HttpPriority{};
 }
 void Context::priority(HttpPriorityFields fields) {
     std::array<char, 12> value{};
     const auto encoded = encodeHttpPriority(value, fields);
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::invalid_argument("invalid HTTP priority parameters");
     }
-    header("Priority", std::string_view(value.data(), *encoded));
+    header("Priority", std::string_view(value.data(), std::get<0>(encoded)));
 }
 
 std::optional<std::string_view> ContextRequest::header(std::string_view name) const {

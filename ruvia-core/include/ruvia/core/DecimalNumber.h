@@ -3,11 +3,11 @@
 #include <charconv>
 #include <concepts>
 #include <cstddef>
-#include <expected>
 #include <limits>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <variant>
 
 namespace ruvia {
 
@@ -18,7 +18,7 @@ enum class DecimalParseError { kInvalidFormat,
 // decimal is an error. Callers decide whether non-finite values are allowed.
 template <std::floating_point T = double>
     requires std::same_as<T, std::remove_cv_t<T>>
-[[nodiscard]] std::expected<T, DecimalParseError> parseDecimalNumber(std::string_view text) noexcept {
+[[nodiscard]] std::variant<T, DecimalParseError> parseDecimalNumber(std::string_view text) noexcept {
     if (text == "inf" || text == "infinity") {
         return std::numeric_limits<T>::infinity();
     }
@@ -48,11 +48,11 @@ template <std::floating_point T = double>
         ++index;
         fractionalDigits = consumeDigits();
         if (fractionalDigits == 0) {
-            return std::unexpected(DecimalParseError::kInvalidFormat);
+            return DecimalParseError::kInvalidFormat;
         }
     }
     if (integralDigits == 0 && fractionalDigits == 0) {
-        return std::unexpected(DecimalParseError::kInvalidFormat);
+        return DecimalParseError::kInvalidFormat;
     }
     if (index < text.size() && (text[index] == 'e' || text[index] == 'E')) {
         ++index;
@@ -64,11 +64,11 @@ template <std::floating_point T = double>
             ++index;
         }
         if (index == exponentBegin) {
-            return std::unexpected(DecimalParseError::kInvalidFormat);
+            return DecimalParseError::kInvalidFormat;
         }
     }
     if (index != text.size()) {
-        return std::unexpected(DecimalParseError::kInvalidFormat);
+        return DecimalParseError::kInvalidFormat;
     }
     if (!sawNonZero) {
         return negative ? -T{0} : T{0};
@@ -78,10 +78,10 @@ template <std::floating_point T = double>
     const auto* end = text.data() + text.size();
     const auto converted = std::from_chars(text.data(), end, value, std::chars_format::general);
     if (converted.ec == std::errc::result_out_of_range) {
-        return std::unexpected(DecimalParseError::kOutOfRange);
+        return DecimalParseError::kOutOfRange;
     }
     if (converted.ec != std::errc{} || converted.ptr != end) {
-        return std::unexpected(DecimalParseError::kInvalidFormat);
+        return DecimalParseError::kInvalidFormat;
     }
     return value;
 }

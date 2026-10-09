@@ -2,10 +2,10 @@
 
 #include <charconv>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <system_error>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
@@ -87,12 +87,12 @@ static_assert(sizeof(Http2ResponseHeadPlan) <= 24);
 class Http2ResponseHeadPlanResult final {
 public:
     [[nodiscard]] const Http2ResponseHeadPlan* plan() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     [[nodiscard]] const Http2ResponseHeadPlan* plan() const&& = delete;
 
     [[nodiscard]] const Http2ResponseHeadPlanFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     [[nodiscard]] const Http2ResponseHeadPlanFailure* failure() const&& = delete;
 
@@ -104,13 +104,13 @@ private:
     friend Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(
         const HttpResponseBodyPlan&) noexcept;
 
-    using Value = std::expected<Http2ResponseHeadPlan, Http2ResponseHeadPlanFailure>;
+    using Value = std::variant<Http2ResponseHeadPlan, Http2ResponseHeadPlanFailure>;
 
     explicit Http2ResponseHeadPlanResult(Http2ResponseHeadPlan plan) noexcept
         : value_(plan) {}
 
     explicit Http2ResponseHeadPlanResult(Http2ResponseHeadPlanFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static Http2ResponseHeadPlanResult canonical(
         HttpResponseBodyPlan bodyPlan, std::uint64_t value) noexcept {

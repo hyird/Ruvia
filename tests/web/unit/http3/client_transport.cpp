@@ -1,4 +1,5 @@
 #include <string>
+#include <variant>
 
 #include "http3/Http3QuicClientTlsContext.h"
 #include "http3/Http3QuicClientTransport.h"
@@ -9,9 +10,8 @@ namespace {
 
 ruvia::detail::http3_quic_datagram_address clientAddress(std::uint16_t port) {
     using namespace ruvia::detail;
-    return to_http3_quic_datagram_address(
-        asio::ip::udp::endpoint(asio::ip::address_v4({127, 0, 0, 1}), port))
-        .value();
+    return std::get<0>(to_http3_quic_datagram_address(
+        asio::ip::udp::endpoint(asio::ip::address_v4({127, 0, 0, 1}), port)));
 }
 
 }  // namespace

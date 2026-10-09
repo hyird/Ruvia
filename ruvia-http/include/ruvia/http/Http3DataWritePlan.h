@@ -3,9 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
@@ -55,13 +55,13 @@ public:
     // retain that chunk until every partial SSL_write_ex write has completed.
     // To end a headers-only body, plan an empty finishing chunk and commit it;
     // no zero-length DATA frame is emitted.
-    [[nodiscard]] std::expected<Chunk, Http3DataWriteError> planChunk(
+    [[nodiscard]] std::variant<Chunk, Http3DataWriteError> planChunk(
         std::span<const char> payload, bool finishing) noexcept;
 
     // Call only after the planned frame header and all payload bytes have been
     // fully written. The runtime must signal FIN with SSL_stream_conclude or
     // SSL_write_ex2; on transport failure do not commit and RESET_STREAM instead.
-    [[nodiscard]] std::expected<void, Http3DataWriteError> commitPayload(
+    [[nodiscard]] std::variant<std::monostate, Http3DataWriteError> commitPayload(
         std::uint64_t bytes, bool finishing) noexcept;
 
 private:
