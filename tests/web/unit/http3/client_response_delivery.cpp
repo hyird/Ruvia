@@ -18,1164 +18,1164 @@
 
 #include <asio/co_spawn.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/TaskScope.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/http/Http3FieldSection.h"
-#include "ruvia/http/Http3VarInt.h"
-#include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http3_var_int.h"
+#include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/web/http_client_types.h"
 
-#include "client/HttpClientResponseDecoding.h"
-#include "client/HttpClientResponseState.h"
-#include "client/HttpClientResultBudget.h"
-#include "http3/Http3ClientBodyBudget.h"
-#include "http3/Http3ClientReceiveDriver.h"
-#include "http3/Http3ClientResponseDelivery.h"
+#include "client/http_client_response_decoding.h"
+#include "client/http_client_response_state.h"
+#include "client/http_client_result_budget.h"
+#include "http3/http3_client_body_budget.h"
+#include "http3/http3_client_receive_driver.h"
+#include "http3/http3_client_response_delivery.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
-using Delivery = ruvia::detail::Http3ClientResponseDelivery;
-using Driver = ruvia::detail::Http3ClientReceiveDriver;
-using Engine = ruvia::detail::Http3ClientSansIoSessionEngine;
-using Read = ruvia::quic_stream_read_result;
-using State = ruvia::detail::HttpClientResponseState;
-using BodyBudgetLease = ruvia::detail::Http3ClientBodyBudget::Lease;
+using delivery_type = ruvia::detail::http3_client_response_delivery;
+using driver_type = ruvia::detail::http3_client_receive_driver;
+using engine_type = ruvia::detail::http3_client_sans_io_session_engine;
+using read_type = ruvia::quic_stream_read_result;
+using state_type = ruvia::detail::http_client_response_state;
+using body_budget_lease_type = ruvia::detail::http3_client_body_budget::lease_type;
 
-static_assert(!std::is_copy_constructible_v<BodyBudgetLease>);
-static_assert(!std::is_copy_assignable_v<BodyBudgetLease>);
-static_assert(std::is_nothrow_move_constructible_v<BodyBudgetLease>);
-static_assert(std::is_nothrow_move_assignable_v<BodyBudgetLease>);
+static_assert(!std::is_copy_constructible_v<body_budget_lease_type>);
+static_assert(!std::is_copy_assignable_v<body_budget_lease_type>);
+static_assert(std::is_nothrow_move_constructible_v<body_budget_lease_type>);
+static_assert(std::is_nothrow_move_assignable_v<body_budget_lease_type>);
 
-class TestWorker final {
+class test_worker final {
 public:
-    explicit TestWorker(asio::io_context& io)
-        : attachment(ruvia::attachEventLoop(io, {.queue_capacity = 8})),
-          handle(attachment.loop().handle()) {}
+    explicit test_worker(asio::io_context& io)
+        : attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8})),
+          handle_(attachment_.loop().handle()) {}
 
-    ruvia::EventLoopAttachment attachment;
-    ruvia::WorkerHandle handle;
+    ruvia::event_loop_attachment attachment_;
+    ruvia::worker_handle handle_;
 };
 
-template <typename Operation>
-void runOperation(TestWorker& worker, asio::io_context& io, Operation&& operation) {
+template <typename operation_type>
+void run_operation(test_worker& worker_value, asio::io_context& io, operation_type&& operation) {
     std::exception_ptr failure;
-    asio::co_spawn(io, ruvia::asAwaitable(operation()),
-        [&worker, &failure](std::exception_ptr error) {
+    asio::co_spawn(io, ruvia::as_awaitable(operation()),
+        [&worker_value, &failure](std::exception_ptr error) {
             failure = error;
-            worker.attachment.stop();
+            worker_value.attachment_.stop();
         });
-    worker.attachment.run();
+    worker_value.attachment_.run();
     io.restart();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
 }
 
-std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
+std::vector<char> frame(std::uint64_t type, std::span<const char> payload_value) {
     std::vector<char> output(16);
-    const auto header = ruvia::encodeHttp3VarInt(output, type);
-    const auto length = ruvia::encodeHttp3VarInt(
-        std::span<char>(output).subspan(std::get<0>(header)), payload.size());
-    output.resize(std::get<0>(header) + std::get<0>(length));
-    output.insert(output.end(), payload.begin(), payload.end());
+    const auto header_value = ruvia::encode_http3_var_int(output, type);
+    const auto length = ruvia::encode_http3_var_int(
+        std::span<char>(output).subspan(std::get<0>(header_value)), payload_value.size());
+    output.resize(std::get<0>(header_value) + std::get<0>(length));
+    output.insert(output.end(), payload_value.begin(), payload_value.end());
     return output;
 }
 
-void appendFrame(std::vector<char>& wire, std::uint64_t type, std::string_view payload) {
-    const auto encoded = frame(type, std::span<const char>(payload.data(), payload.size()));
+void append_frame(std::vector<char>& wire, std::uint64_t type, std::string_view payload_value) {
+    const auto encoded = frame(type, std::span<const char>(payload_value.data(), payload_value.size()));
     wire.insert(wire.end(), encoded.begin(), encoded.end());
 }
 
-std::vector<char> responseHead(std::string_view status = "200",
-    std::optional<std::string_view> contentLength = {},
-    std::optional<std::string_view> contentEncoding = {}) {
+std::vector<char> response_head(std::string_view status = "200",
+    std::optional<std::string_view> content_length = {},
+    std::optional<std::string_view> content_encoding = {}) {
     std::pmr::monotonic_buffer_resource temp;
-    std::vector<ruvia::Http3FieldSectionFieldView> fields{{":status", status}, {"x-owned", "copied"}};
-    if (contentLength) {
-        fields.push_back({"content-length", *contentLength});
+    std::vector<ruvia::http3_field_section_field_view> fields_value{{":status", status}, {"x-owned", "copied"}};
+    if (content_length) {
+        fields_value.push_back({"content-length", *content_length});
     }
-    if (contentEncoding) {
-        fields.push_back({"content-encoding", *contentEncoding});
+    if (content_encoding) {
+        fields_value.push_back({"content-encoding", *content_encoding});
     }
-    const auto encoded = ruvia::encodeHttp3FieldSection(fields, &temp);
+    const auto encoded = ruvia::encode_http3_field_section(fields_value, &temp);
     return frame(1, std::get<0>(encoded));
 }
 
-std::vector<char> responseTrailer() {
+std::vector<char> response_trailer() {
     std::pmr::monotonic_buffer_resource temp;
-    constexpr std::array fields{ruvia::Http3FieldSectionFieldView{"x-trailer", "done"}};
-    const auto encoded = ruvia::encodeHttp3FieldSection(fields, &temp);
+    constexpr std::array fields_value{ruvia::http3_field_section_field_view{"x-trailer", "done"}};
+    const auto encoded = ruvia::encode_http3_field_section(fields_value, &temp);
     return frame(1, std::get<0>(encoded));
 }
 
-struct FakeRead final {
-    std::vector<char> wire;
-    std::size_t position{};
-    std::size_t maxChunk{4096};
-    bool fin{};
-    bool reset{};
+struct fake_read final {
+    std::vector<char> wire_;
+    std::size_t position_{};
+    std::size_t max_chunk_{4096};
+    bool fin_{};
+    bool reset_{};
 
-    Read operator()(std::uint64_t, std::span<char> destination) {
-        if (reset) {
-            return {.status = ruvia::quic_stream_read_status::reset};
+    read_type operator()(std::uint64_t, std::span<char> destination) {
+        if (reset_) {
+            return {.status_ = ruvia::quic_stream_read_status::reset};
         }
-        if (position == wire.size()) {
-            return {.status = fin ? ruvia::quic_stream_read_status::fin : ruvia::quic_stream_read_status::would_block};
+        if (position_ == wire_.size()) {
+            return {.status_ = fin_ ? ruvia::quic_stream_read_status::fin : ruvia::quic_stream_read_status::would_block};
         }
-        const auto size = std::min({destination.size(), wire.size() - position, maxChunk});
-        std::copy_n(wire.data() + position, size, destination.data());
-        position += size;
-        return {.status = ruvia::quic_stream_read_status::data, .size = size};
+        const auto size = std::min({destination.size(), wire_.size() - position_, max_chunk_});
+        std::copy_n(wire_.data() + position_, size, destination.data());
+        position_ += size;
+        return {.status_ = ruvia::quic_stream_read_status::data, .size_ = size};
     }
 };
 
-struct WakeCounter final {
-    std::size_t notifications{};
+struct wake_counter final {
+    std::size_t notifications_{};
 
-    static void notify(void* context) noexcept {
-        ++static_cast<WakeCounter*>(context)->notifications;
+    static void notify(void* context_value) noexcept {
+        ++static_cast<wake_counter*>(context_value)->notifications_;
     }
 };
 
-bool planMatches(const std::optional<ruvia::HttpResponseBodyPlan>& plan,
-    ruvia::HttpKnownMethod method, std::uint16_t status,
-    ruvia::HttpResponseContentSemantics semantics, bool bodySuppressed) {
-    return plan && plan->requestMethod() == method &&
-           plan->responseStatus() == ruvia::HttpStatusCode::fromValue(status) &&
-           plan->contentSemantics() == semantics &&
-           plan->bodySuppressed() == bodySuppressed;
+bool plan_matches(const std::optional<ruvia::http_response_body_plan>& plan,
+    ruvia::http_known_method method, std::uint16_t status,
+    ruvia::http_response_content_semantics semantics, bool body_suppressed) {
+    return plan && plan->request_method() == method &&
+           plan->response_status() == ruvia::http_status_code::from_value(status) &&
+           plan->content_semantics() == semantics &&
+           plan->body_suppressed() == body_suppressed;
 }
 }  // namespace
 
 RUVIA_TEST(http3_client_response_delivery_copies_events_without_invalidating_returned_body_view) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    ruvia::detail::Http3ClientBodyBudget bodyBudget(4096);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    ruvia::detail::http3_client_body_budget body_budget(4096);
     {
-        State state(worker.handle, &resource);
-        const auto beforeLeaseAllocations = resource.allocationCount();
-        Delivery delivery(state, &bodyBudget);
-        RUVIA_CHECK_EQ(resource.allocationCount(), beforeLeaseAllocations);
-        Engine engine(&resource);
-        Driver driver(engine);
-        const std::string firstBody(512, 'a');
-        const std::string secondBody(1024, 'b');
-        std::string_view returnedView;
+        state_type state_value(worker.handle_, &resource);
+        const auto before_lease_allocations = resource.allocation_count();
+        delivery_type delivery(state_value, &body_budget);
+        RUVIA_CHECK_EQ(resource.allocation_count(), before_lease_allocations);
+        engine_type engine(&resource);
+        driver_type driver(engine);
+        const std::string first_body(512, 'a');
+        const std::string second_body(1024, 'b');
+        std::string_view returned_view;
 
-        auto operation = [&]() -> ruvia::Task<void> {
-            RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                  delivery.eventSink())
-                            .scope == ruvia::Http3ConnectionErrorScope::kNone);
+        auto operation = [&]() -> ruvia::task<void> {
+            RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                                  delivery.event_sink())
+                            .scope_ == ruvia::http3_connection_error_scope::none);
 
-            FakeRead initial{.wire = responseHead()};
-            appendFrame(initial.wire, 0, firstBody);
-            const auto headAndBody = driver.drive(0, initial);
-            RUVIA_CHECK(headAndBody.status == Driver::Status::kProgress);
-            RUVIA_CHECK(state.headReady);
-            RUVIA_CHECK(state.status.value() == 200);
-            const auto plan = delivery.responseBodyPlan();
-            RUVIA_CHECK(plan && plan->requestMethod() == ruvia::HttpKnownMethod::kGet &&
-                        plan->responseStatus() == ruvia::http_status::kOk);
-            RUVIA_CHECK(state.protocolVersion == ruvia::HttpProtocolVersion::kHttp3);
-            RUVIA_CHECK(state.headers.size() == 1);
-            RUVIA_CHECK(state.headers.front().name() == "x-owned");
-            RUVIA_CHECK(state.headers.front().value() == "copied");
-            RUVIA_CHECK(!state.complete);
+            fake_read initial_value{.wire_ = response_head()};
+            append_frame(initial_value.wire_, 0, first_body);
+            const auto head_and_body = driver.drive(0, initial_value);
+            RUVIA_CHECK(head_and_body.status_ == driver_type::status_type::progress);
+            RUVIA_CHECK(state_value.head_ready_);
+            RUVIA_CHECK(state_value.status_.value() == 200);
+            const auto plan = delivery.response_body_plan();
+            RUVIA_CHECK(plan && plan->request_method() == ruvia::http_known_method::get &&
+                        plan->response_status() == ruvia::http_status::ok);
+            RUVIA_CHECK(state_value.protocol_version_ == ruvia::http_protocol_version::http3);
+            RUVIA_CHECK(state_value.headers_.size() == 1);
+            RUVIA_CHECK(state_value.headers_.front().name() == "x-owned");
+            RUVIA_CHECK(state_value.headers_.front().value() == "copied");
+            RUVIA_CHECK(!state_value.complete_);
 
-            const auto first = co_await state.consume_body<std::string_view>();
+            const auto first = co_await state_value.consume_body<std::string_view>();
             RUVIA_CHECK(first.has_value());
-            RUVIA_CHECK_EQ(first->size(), firstBody.size());
-            returnedView = *first;
-            const auto* const returnedAddress = returnedView.data();
+            RUVIA_CHECK_EQ(first->size(), first_body.size());
+            returned_view = *first;
+            const auto* const returned_address = returned_view.data();
 
-            FakeRead later{.wire = {}};
-            appendFrame(later.wire, 0, secondBody);
+            fake_read later{.wire_ = {}};
+            append_frame(later.wire_, 0, second_body);
             const auto data = driver.drive(0, later);
-            RUVIA_CHECK(data.status == Driver::Status::kProgress);
-            RUVIA_CHECK_EQ(state.buffered.size(), firstBody.size());
-            RUVIA_CHECK(state.buffered.data() == returnedAddress);
-            RUVIA_CHECK(returnedView == firstBody);
-            RUVIA_CHECK(std::string_view(state.pending) == secondBody);
+            RUVIA_CHECK(data.status_ == driver_type::status_type::progress);
+            RUVIA_CHECK_EQ(state_value.buffered_.size(), first_body.size());
+            RUVIA_CHECK(state_value.buffered_.data() == returned_address);
+            RUVIA_CHECK(returned_view == first_body);
+            RUVIA_CHECK(std::string_view(state_value.pending_) == second_body);
 
             // Trailers are a separate HEADERS field section, so use a fresh input
             // after the body bytes have already been consumed by the first drive.
-            FakeRead trailers{.wire = responseTrailer()};
-            RUVIA_CHECK(driver.drive(0, trailers).status == Driver::Status::kProgress);
-            RUVIA_CHECK(state.trailers.size() == 1);
-            RUVIA_CHECK(state.trailers.front().name() == "x-trailer");
-            RUVIA_CHECK(state.trailers.front().value() == "done");
+            fake_read trailers{.wire_ = response_trailer()};
+            RUVIA_CHECK(driver.drive(0, trailers).status_ == driver_type::status_type::progress);
+            RUVIA_CHECK(state_value.trailers_.size() == 1);
+            RUVIA_CHECK(state_value.trailers_.front().name() == "x-trailer");
+            RUVIA_CHECK(state_value.trailers_.front().value() == "done");
 
-            FakeRead end{.fin = true};
+            fake_read end{.fin_ = true};
             const auto finished = driver.drive(0, end);
-            RUVIA_CHECK(finished.status == Driver::Status::kResponseComplete);
-            RUVIA_CHECK(!state.complete);
-            RUVIA_CHECK(!state.failure);
-            RUVIA_CHECK(!state.errorCode);
-            RUVIA_CHECK(delivery.commit(finished) == Delivery::CommitStatus::kCommitted);
-            RUVIA_CHECK(state.complete);
-            RUVIA_CHECK(returnedView == firstBody);
-            RUVIA_CHECK(std::string_view(state.pending) == secondBody);
-            RUVIA_CHECK_EQ(bodyBudget.used(), firstBody.size() + secondBody.size());
+            RUVIA_CHECK(finished.status_ == driver_type::status_type::response_complete);
+            RUVIA_CHECK(!state_value.complete_);
+            RUVIA_CHECK(!state_value.failure_);
+            RUVIA_CHECK(!state_value.error_code_);
+            RUVIA_CHECK(delivery.commit(finished) == delivery_type::commit_status_type::committed);
+            RUVIA_CHECK(state_value.complete_);
+            RUVIA_CHECK(returned_view == first_body);
+            RUVIA_CHECK(std::string_view(state_value.pending_) == second_body);
+            RUVIA_CHECK_EQ(body_budget.used(), first_body.size() + second_body.size());
             RUVIA_CHECK(engine.release(0));
         };
-        runOperation(worker, io, operation);
+        run_operation(worker, io, operation);
     }
-    RUVIA_CHECK_EQ(bodyBudget.used(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    RUVIA_CHECK_EQ(body_budget.used(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_keeps_final_plans_for_decoder_and_terminal_paths) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        struct Case final {
-            ruvia::HttpKnownMethod method;
-            std::string_view status;
-            std::optional<std::string_view> contentLength;
-            std::string_view body;
-            std::uint16_t statusCode;
-            ruvia::HttpResponseContentSemantics semantics;
-            bool bodySuppressed;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        struct case_value final {
+            ruvia::http_known_method method_;
+            std::string_view status_;
+            std::optional<std::string_view> content_length_;
+            std::string_view body_;
+            std::uint16_t status_code_;
+            ruvia::http_response_content_semantics semantics_;
+            bool body_suppressed_;
         };
         constexpr std::array cases{
-            Case{ruvia::HttpKnownMethod::kGet, "200", "3", "abc", 200,
-                ruvia::HttpResponseContentSemantics::kWithContent, false},
-            Case{ruvia::HttpKnownMethod::kGet, "200", {}, {}, 200,
-                ruvia::HttpResponseContentSemantics::kWithContent, false},
-            Case{ruvia::HttpKnownMethod::kHead, "200", "5", {}, 200,
-                ruvia::HttpResponseContentSemantics::kWithoutContent, true},
-            Case{ruvia::HttpKnownMethod::kGet, "204", {}, {}, 204,
-                ruvia::HttpResponseContentSemantics::kWithoutContent, true},
-            Case{ruvia::HttpKnownMethod::kGet, "304", "7", {}, 304,
-                ruvia::HttpResponseContentSemantics::kWithoutContent, true},
+            case_value{ruvia::http_known_method::get, "200", "3", "abc", 200,
+                ruvia::http_response_content_semantics::with_content, false},
+            case_value{ruvia::http_known_method::get, "200", {}, {}, 200,
+                ruvia::http_response_content_semantics::with_content, false},
+            case_value{ruvia::http_known_method::head, "200", "5", {}, 200,
+                ruvia::http_response_content_semantics::without_content, true},
+            case_value{ruvia::http_known_method::get, "204", {}, {}, 204,
+                ruvia::http_response_content_semantics::without_content, true},
+            case_value{ruvia::http_known_method::get, "304", "7", {}, 304,
+                ruvia::http_response_content_semantics::without_content, true},
         };
         for (const auto& item : cases) {
-            State state(worker.handle, &resource);
-            Delivery delivery(state);
-            Engine engine(&resource);
-            Driver driver(engine);
-            RUVIA_CHECK(engine.registerRequest(0, item.method, delivery.eventSink()).scope ==
-                        ruvia::Http3ConnectionErrorScope::kNone);
-            FakeRead input{.wire = responseHead(item.status, item.contentLength), .fin = true};
-            if (!item.body.empty()) {
-                appendFrame(input.wire, 0, item.body);
+            state_type state_value(worker.handle_, &resource);
+            delivery_type delivery(state_value);
+            engine_type engine(&resource);
+            driver_type driver(engine);
+            RUVIA_CHECK(engine.register_request(0, item.method_, delivery.event_sink()).scope_ ==
+                        ruvia::http3_connection_error_scope::none);
+            fake_read input{.wire_ = response_head(item.status_, item.content_length_), .fin_ = true};
+            if (!item.body_.empty()) {
+                append_frame(input.wire_, 0, item.body_);
             }
-            RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kProgress);
-            RUVIA_CHECK(planMatches(delivery.responseBodyPlan(), item.method, item.statusCode,
-                item.semantics, item.bodySuppressed));
-            if (item.method == ruvia::HttpKnownMethod::kHead) {
-                const auto length = std::find_if(state.headers.begin(), state.headers.end(),
-                    [](const ruvia::HttpHeader& header) { return header.name() == "content-length"; });
-                RUVIA_CHECK(length != state.headers.end() && length->value() == "5");
+            RUVIA_CHECK(driver.drive(0, input).status_ == driver_type::status_type::progress);
+            RUVIA_CHECK(plan_matches(delivery.response_body_plan(), item.method_, item.status_code_,
+                item.semantics_, item.body_suppressed_));
+            if (item.method_ == ruvia::http_known_method::head) {
+                const auto length = std::find_if(state_value.headers_.begin(), state_value.headers_.end(),
+                    [](const ruvia::http_header& header_value) { return header_value.name() == "content-length"; });
+                RUVIA_CHECK(length != state_value.headers_.end() && length->value() == "5");
             }
-            if (!item.body.empty()) {
-                RUVIA_CHECK(std::string_view(state.pending) == item.body);
+            if (!item.body_.empty()) {
+                RUVIA_CHECK(std::string_view(state_value.pending_) == item.body_);
             }
-            const auto complete = driver.drive(0, input);
-            RUVIA_CHECK(complete.status == Driver::Status::kResponseComplete);
-            RUVIA_CHECK(delivery.commit(complete) == Delivery::CommitStatus::kCommitted);
-            RUVIA_CHECK(planMatches(delivery.responseBodyPlan(), item.method, item.statusCode,
-                item.semantics, item.bodySuppressed));
+            const auto complete_value = driver.drive(0, input);
+            RUVIA_CHECK(complete_value.status_ == driver_type::status_type::response_complete);
+            RUVIA_CHECK(delivery.commit(complete_value) == delivery_type::commit_status_type::committed);
+            RUVIA_CHECK(plan_matches(delivery.response_body_plan(), item.method_, item.status_code_,
+                item.semantics_, item.body_suppressed_));
             RUVIA_CHECK(engine.release(0));
         }
 
-        State informationalState(worker.handle, &resource);
-        Delivery informationalDelivery(informationalState);
-        Engine informationalEngine(&resource);
-        Driver informationalDriver(informationalEngine);
-        RUVIA_CHECK(informationalEngine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                           informationalDelivery.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead informational{.wire = responseHead("103")};
-        RUVIA_CHECK(informationalDriver.drive(0, informational).status == Driver::Status::kProgress);
-        RUVIA_CHECK(!informationalDelivery.responseBodyPlan());
-        RUVIA_CHECK_EQ(informationalState.informational.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(informationalState.informational.front().status().value(), std::uint16_t{103});
-        RUVIA_CHECK_EQ(informationalState.informational.front().headers().front().value(), "copied");
-        FakeRead finalHead{.wire = responseHead("200"), .fin = true};
-        RUVIA_CHECK(informationalDriver.drive(0, finalHead).status == Driver::Status::kProgress);
-        RUVIA_CHECK(planMatches(informationalDelivery.responseBodyPlan(), ruvia::HttpKnownMethod::kGet,
-            200, ruvia::HttpResponseContentSemantics::kWithContent, false));
-        const auto informationalEnd = informationalDriver.drive(0, finalHead);
-        RUVIA_CHECK(informationalDelivery.commit(informationalEnd) == Delivery::CommitStatus::kCommitted);
-        RUVIA_CHECK(planMatches(informationalDelivery.responseBodyPlan(), ruvia::HttpKnownMethod::kGet,
-            200, ruvia::HttpResponseContentSemantics::kWithContent, false));
-        RUVIA_CHECK(informationalEngine.release(0));
+        state_type informational_state(worker.handle_, &resource);
+        delivery_type informational_delivery(informational_state);
+        engine_type informational_engine(&resource);
+        driver_type informational_driver(informational_engine);
+        RUVIA_CHECK(informational_engine.register_request(0, ruvia::http_known_method::get,
+                                            informational_delivery.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        fake_read informational{.wire_ = response_head("103")};
+        RUVIA_CHECK(informational_driver.drive(0, informational).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(!informational_delivery.response_body_plan());
+        RUVIA_CHECK_EQ(informational_state.informational_.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(informational_state.informational_.front().status().value(), std::uint16_t{103});
+        RUVIA_CHECK_EQ(informational_state.informational_.front().headers().front().value(), "copied");
+        fake_read final_head{.wire_ = response_head("200"), .fin_ = true};
+        RUVIA_CHECK(informational_driver.drive(0, final_head).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(plan_matches(informational_delivery.response_body_plan(), ruvia::http_known_method::get,
+            200, ruvia::http_response_content_semantics::with_content, false));
+        const auto informational_end = informational_driver.drive(0, final_head);
+        RUVIA_CHECK(informational_delivery.commit(informational_end) == delivery_type::commit_status_type::committed);
+        RUVIA_CHECK(plan_matches(informational_delivery.response_body_plan(), ruvia::http_known_method::get,
+            200, ruvia::http_response_content_semantics::with_content, false));
+        RUVIA_CHECK(informational_engine.release(0));
 
-        State resetState(worker.handle, &resource);
-        Delivery resetDelivery(resetState);
-        Engine resetEngine(&resource);
-        Driver resetDriver(resetEngine);
-        RUVIA_CHECK(resetEngine.registerRequest(0, ruvia::HttpKnownMethod::kGet, resetDelivery.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead observedHead{.wire = responseHead("200")};
-        RUVIA_CHECK(resetDriver.drive(0, observedHead).status == Driver::Status::kProgress);
-        RUVIA_CHECK(planMatches(resetDelivery.responseBodyPlan(), ruvia::HttpKnownMethod::kGet, 200,
-            ruvia::HttpResponseContentSemantics::kWithContent, false));
-        FakeRead reset{.reset = true};
-        const auto resetResult = resetDriver.drive(0, reset);
-        RUVIA_CHECK(resetDelivery.commit(resetResult) == Delivery::CommitStatus::kCommitted);
-        RUVIA_CHECK(planMatches(resetDelivery.responseBodyPlan(), ruvia::HttpKnownMethod::kGet, 200,
-            ruvia::HttpResponseContentSemantics::kWithContent, false));
-        RUVIA_CHECK(resetEngine.release(0));
+        state_type reset_state(worker.handle_, &resource);
+        delivery_type reset_delivery(reset_state);
+        engine_type reset_engine(&resource);
+        driver_type reset_driver(reset_engine);
+        RUVIA_CHECK(reset_engine.register_request(0, ruvia::http_known_method::get, reset_delivery.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read observed_head{.wire_ = response_head("200")};
+        RUVIA_CHECK(reset_driver.drive(0, observed_head).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(plan_matches(reset_delivery.response_body_plan(), ruvia::http_known_method::get, 200,
+            ruvia::http_response_content_semantics::with_content, false));
+        fake_read reset{.reset_ = true};
+        const auto reset_result = reset_driver.drive(0, reset);
+        RUVIA_CHECK(reset_delivery.commit(reset_result) == delivery_type::commit_status_type::committed);
+        RUVIA_CHECK(plan_matches(reset_delivery.response_body_plan(), ruvia::http_known_method::get, 200,
+            ruvia::http_response_content_semantics::with_content, false));
+        RUVIA_CHECK(reset_engine.release(0));
 
-        State noHeadState(worker.handle, &resource);
-        Delivery noHeadDelivery(noHeadState);
-        Engine noHeadEngine(&resource);
-        Driver noHeadDriver(noHeadEngine);
-        RUVIA_CHECK(noHeadEngine.registerRequest(0, ruvia::HttpKnownMethod::kGet, noHeadDelivery.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead noHeadReset{.reset = true};
-        RUVIA_CHECK(noHeadDelivery.commit(noHeadDriver.drive(0, noHeadReset)) ==
-                    Delivery::CommitStatus::kCommitted);
-        RUVIA_CHECK(!noHeadDelivery.responseBodyPlan());
-        RUVIA_CHECK(noHeadEngine.release(0));
+        state_type no_head_state(worker.handle_, &resource);
+        delivery_type no_head_delivery(no_head_state);
+        engine_type no_head_engine(&resource);
+        driver_type no_head_driver(no_head_engine);
+        RUVIA_CHECK(no_head_engine.register_request(0, ruvia::http_known_method::get, no_head_delivery.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read no_head_reset{.reset_ = true};
+        RUVIA_CHECK(no_head_delivery.commit(no_head_driver.drive(0, no_head_reset)) ==
+                    delivery_type::commit_status_type::committed);
+        RUVIA_CHECK(!no_head_delivery.response_body_plan());
+        RUVIA_CHECK(no_head_engine.release(0));
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_uses_physical_buffered_occupancy_and_defers_overflow) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
     {
-        State state(worker.handle, &resource);
-        state.bufferedLimit = 8;
-        state.buffered.assign("abcde");
-        state.offset = 4;
-        state.pending.assign("xy");
-        Delivery delivery(state);
-        Engine engine(&resource);
-        Driver driver(engine);
+        state_type state_value(worker.handle_, &resource);
+        state_value.buffered_limit_ = 8;
+        state_value.buffered_.assign("abcde");
+        state_value.offset_ = 4;
+        state_value.pending_.assign("xy");
+        delivery_type delivery(state_value);
+        engine_type engine(&resource);
+        driver_type driver(engine);
 
-        auto operation = [&]() -> ruvia::Task<void> {
-            RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                  delivery.eventSink())
-                            .scope == ruvia::Http3ConnectionErrorScope::kNone);
-            FakeRead head{.wire = responseHead()};
-            RUVIA_CHECK(driver.drive(0, head).status == Driver::Status::kProgress);
+        auto operation = [&]() -> ruvia::task<void> {
+            RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                                  delivery.event_sink())
+                            .scope_ == ruvia::http3_connection_error_scope::none);
+            fake_read head{.wire_ = response_head()};
+            RUVIA_CHECK(driver.drive(0, head).status_ == driver_type::status_type::progress);
 
-            const auto allowance = delivery.readAllowance(64);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK_EQ(allowance.bytes, std::size_t{1});
+            const auto allowance = delivery.read_allowance(64);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK_EQ(allowance.bytes_, std::size_t{1});
 
-            FakeRead body{.wire = {}};
-            appendFrame(body.wire, 0, "zz");
+            fake_read body{.wire_ = {}};
+            append_frame(body.wire_, 0, "zz");
             // A compliant producer must stop once its body storage is full.
             // Exercise overflow independently by deliberately delivering a
             // complete DATA block larger than the available single byte.
-            const auto result = driver.drive(0, body);
-            RUVIA_CHECK(result.status == Driver::Status::kProgress);
+            const auto result_value = driver.drive(0, body);
+            RUVIA_CHECK(result_value.status_ == driver_type::status_type::progress);
 
-            RUVIA_CHECK(delivery.retirementReason() ==
-                        Delivery::RetirementReason::kResponseTooLarge);
-            const auto blocked = delivery.readAllowance(64);
-            RUVIA_CHECK(blocked.status == Delivery::ReadStatus::kRetirementRequired);
-            RUVIA_CHECK_EQ(blocked.bytes, std::size_t{0});
-            RUVIA_CHECK(delivery.commit(result) == Delivery::CommitStatus::kRetirementRequired);
-            RUVIA_CHECK(!state.complete);
-            RUVIA_CHECK(!state.errorCode);
-            RUVIA_CHECK_EQ(std::string_view(state.pending), std::string_view("xy"));
-            RUVIA_CHECK_EQ(std::string_view(state.buffered), std::string_view("abcde"));
+            RUVIA_CHECK(delivery.retirement_reason() ==
+                        delivery_type::retirement_reason_type::response_too_large);
+            const auto blocked = delivery.read_allowance(64);
+            RUVIA_CHECK(blocked.status_ == delivery_type::read_status_type::retirement_required);
+            RUVIA_CHECK_EQ(blocked.bytes_, std::size_t{0});
+            RUVIA_CHECK(delivery.commit(result_value) == delivery_type::commit_status_type::retirement_required);
+            RUVIA_CHECK(!state_value.complete_);
+            RUVIA_CHECK(!state_value.error_code_);
+            RUVIA_CHECK_EQ(std::string_view(state_value.pending_), std::string_view("xy"));
+            RUVIA_CHECK_EQ(std::string_view(state_value.buffered_), std::string_view("abcde"));
 
             // Represents the owner completing QUIC STOP_SENDING and parser
             // retirement after drive() returned; neither is performed by callback.
-            RUVIA_CHECK(engine.cancelRequest(0));
-            RUVIA_CHECK(delivery.commitRetirementFailure(
-                ruvia::HttpClientError::Code::kResponseTooLarge));
-            RUVIA_CHECK(state.complete);
-            RUVIA_CHECK(state.errorCode == static_cast<std::uint8_t>(
-                                               ruvia::HttpClientError::Code::kResponseTooLarge));
+            RUVIA_CHECK(engine.cancel_request(0));
+            RUVIA_CHECK(delivery.commit_retirement_failure(
+                ruvia::http_client_error::code_type::response_too_large));
+            RUVIA_CHECK(state_value.complete_);
+            RUVIA_CHECK(state_value.error_code_ == static_cast<std::uint8_t>(
+                                                       ruvia::http_client_error::code_type::response_too_large));
             RUVIA_CHECK(engine.release(0));
             co_return;
         };
-        runOperation(worker, io, operation);
+        run_operation(worker, io, operation);
     }
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_commits_reset_only_after_owner_observes_it) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
     {
-        State state(worker.handle, &resource);
-        Delivery delivery(state);
-        Engine engine(&resource);
-        Driver driver(engine);
+        state_type state_value(worker.handle_, &resource);
+        delivery_type delivery(state_value);
+        engine_type engine(&resource);
+        driver_type driver(engine);
 
-        auto operation = [&]() -> ruvia::Task<void> {
-            RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                  delivery.eventSink())
-                            .scope == ruvia::Http3ConnectionErrorScope::kNone);
-            FakeRead head{.wire = responseHead()};
-            RUVIA_CHECK(driver.drive(0, head).status == Driver::Status::kProgress);
-            FakeRead reset{.reset = true};
+        auto operation = [&]() -> ruvia::task<void> {
+            RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                                  delivery.event_sink())
+                            .scope_ == ruvia::http3_connection_error_scope::none);
+            fake_read head{.wire_ = response_head()};
+            RUVIA_CHECK(driver.drive(0, head).status_ == driver_type::status_type::progress);
+            fake_read reset{.reset_ = true};
             const auto failed = driver.drive(0, reset);
-            RUVIA_CHECK(failed.status == Driver::Status::kStreamReset);
-            RUVIA_CHECK(!state.complete);
-            RUVIA_CHECK(!state.errorCode);
-            RUVIA_CHECK(delivery.commit(failed) == Delivery::CommitStatus::kCommitted);
-            RUVIA_CHECK(state.complete);
-            RUVIA_CHECK(state.errorCode == static_cast<std::uint8_t>(
-                                               ruvia::HttpClientError::Code::kProtocolError));
+            RUVIA_CHECK(failed.status_ == driver_type::status_type::stream_reset);
+            RUVIA_CHECK(!state_value.complete_);
+            RUVIA_CHECK(!state_value.error_code_);
+            RUVIA_CHECK(delivery.commit(failed) == delivery_type::commit_status_type::committed);
+            RUVIA_CHECK(state_value.complete_);
+            RUVIA_CHECK(state_value.error_code_ == static_cast<std::uint8_t>(
+                                                       ruvia::http_client_error::code_type::protocol_error));
             RUVIA_CHECK(engine.release(0));
             co_return;
         };
-        runOperation(worker, io, operation);
+        run_operation(worker, io, operation);
     }
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_overflow_isolates_other_streams) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        State rejected(worker.handle, &resource);
-        State accepted(worker.handle, &resource);
-        rejected.bufferedLimit = 1;
-        rejected.collectAll = accepted.collectAll = true;
-        Delivery first(rejected);
-        Delivery second(accepted);
-        Engine engine(&resource);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                              first.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet,
-                              second.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead overflowing{.wire = responseHead()};
-        appendFrame(overflowing.wire, 0, "too large");
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        state_type rejected(worker.handle_, &resource);
+        state_type accepted(worker.handle_, &resource);
+        rejected.buffered_limit_ = 1;
+        rejected.collect_all_ = accepted.collect_all_ = true;
+        delivery_type first(rejected);
+        delivery_type second(accepted);
+        engine_type engine(&resource);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                              first.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(engine.register_request(4, ruvia::http_known_method::get,
+                              second.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        fake_read overflowing{.wire_ = response_head()};
+        append_frame(overflowing.wire_, 0, "too large");
         const auto overflow = driver.drive(0, overflowing);
-        RUVIA_CHECK(overflow.status == Driver::Status::kProgress);
-        RUVIA_CHECK(first.commit(overflow) == Delivery::CommitStatus::kRetirementRequired);
-        RUVIA_CHECK(!rejected.complete && !accepted.complete);
+        RUVIA_CHECK(overflow.status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(first.commit(overflow) == delivery_type::commit_status_type::retirement_required);
+        RUVIA_CHECK(!rejected.complete_ && !accepted.complete_);
         // Simulated transport ceases all delivery before local parser retirement.
-        RUVIA_CHECK(engine.cancelRequest(0));
+        RUVIA_CHECK(engine.cancel_request(0));
         RUVIA_CHECK(engine.release(0));
-        RUVIA_CHECK(first.commitRetirementFailure(ruvia::HttpClientError::Code::kResponseTooLarge));
+        RUVIA_CHECK(first.commit_retirement_failure(ruvia::http_client_error::code_type::response_too_large));
 
-        FakeRead normal{.wire = responseHead(), .fin = true};
-        appendFrame(normal.wire, 0, "survives");
-        const auto progress = driver.drive(4, normal);
-        RUVIA_CHECK(second.commit(progress) == Delivery::CommitStatus::kPending);
+        fake_read normal{.wire_ = response_head(), .fin_ = true};
+        append_frame(normal.wire_, 0, "survives");
+        const auto progress_value = driver.drive(4, normal);
+        RUVIA_CHECK(second.commit(progress_value) == delivery_type::commit_status_type::pending);
         const auto end = driver.drive(4, normal);
-        RUVIA_CHECK(second.commit(end) == Delivery::CommitStatus::kCommitted);
-        RUVIA_CHECK(accepted.complete && !accepted.errorCode && accepted.pending == "survives");
+        RUVIA_CHECK(second.commit(end) == delivery_type::commit_status_type::committed);
+        RUVIA_CHECK(accepted.complete_ && !accepted.error_code_ && accepted.pending_ == "survives");
         RUVIA_CHECK(engine.release(4));
-        RUVIA_CHECK(engine.registerRequest(8, ruvia::HttpKnownMethod::kGet).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(engine.cancelRequest(8) && engine.release(8));
+        RUVIA_CHECK(engine.register_request(8, ruvia::http_known_method::get).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(engine.cancel_request(8) && engine.release(8));
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_connection_error_precedes_local_overflow) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        State state(worker.handle, &resource);
-        state.bufferedLimit = 0;
-        state.collectAll = true;
-        Delivery delivery(state);
-        Engine engine(&resource);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                              delivery.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead input{.wire = responseHead()};
-        appendFrame(input.wire, 0, "overflow");
-        appendFrame(input.wire, 4, "");  // SETTINGS is illegal on a response stream.
-        const auto result = driver.drive(0, input);
-        RUVIA_CHECK(delivery.retirementReason() == Delivery::RetirementReason::kResponseTooLarge);
-        RUVIA_CHECK(result.status == Driver::Status::kConnectionError);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        state_type state_value(worker.handle_, &resource);
+        state_value.buffered_limit_ = 0;
+        state_value.collect_all_ = true;
+        delivery_type delivery(state_value);
+        engine_type engine(&resource);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                              delivery.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        fake_read input{.wire_ = response_head()};
+        append_frame(input.wire_, 0, "overflow");
+        append_frame(input.wire_, 4, "");  // SETTINGS is illegal on a response stream.
+        const auto result_value = driver.drive(0, input);
+        RUVIA_CHECK(delivery.retirement_reason() == delivery_type::retirement_reason_type::response_too_large);
+        RUVIA_CHECK(result_value.status_ == driver_type::status_type::connection_error);
         // The fake transport is now considered closed; only then commit failure.
-        RUVIA_CHECK(delivery.commit(result) == Delivery::CommitStatus::kCommitted);
-        RUVIA_CHECK(state.complete && state.errorCode ==
-                                          static_cast<std::uint8_t>(ruvia::HttpClientError::Code::kProtocolError));
-        RUVIA_CHECK(!delivery.commitRetirementFailure(ruvia::HttpClientError::Code::kResponseTooLarge));
+        RUVIA_CHECK(delivery.commit(result_value) == delivery_type::commit_status_type::committed);
+        RUVIA_CHECK(state_value.complete_ && state_value.error_code_ ==
+                                                 static_cast<std::uint8_t>(ruvia::http_client_error::code_type::protocol_error));
+        RUVIA_CHECK(!delivery.commit_retirement_failure(ruvia::http_client_error::code_type::response_too_large));
         RUVIA_CHECK(engine.release(0));
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(http3_client_response_delivery_collect_all_wakes_paused_producer_and_preserves_retry) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto resultBudget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
-        ruvia::HttpClientResultBudgetConfig{});
-    auto operation = [&]() -> ruvia::Task<void> {
-        State state(worker.handle, &resource);
-        state.resultBudgetDomain = &resultBudget;
-        state.bufferedLimit = 3;
-        Delivery delivery(state);
-        Engine engine(&resource);
-        Driver driver(engine);
-        ruvia::TaskScope tasks(worker.handle, {.resource = &resource});
-        ruvia::WorkerSignal paused(worker.handle);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                              delivery.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead initial{.wire = responseHead()};
-        appendFrame(initial.wire, 0, "abc");
-        RUVIA_CHECK(driver.drive(0, initial).status == Driver::Status::kProgress);
-        RUVIA_CHECK(state.pending == "abc" && !state.complete);
-        FakeRead tail{.wire = responseTrailer(), .fin = true};
-        bool waitedForSpace = false;
-        auto producer = [&]() -> ruvia::Task<void> {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto result_budget = std::make_shared<ruvia::detail::http_client_result_budget_domain>(
+        ruvia::http_client_result_budget_config{});
+    auto operation = [&]() -> ruvia::task<void> {
+        state_type state_value(worker.handle_, &resource);
+        state_value.result_budget_domain_ = &result_budget;
+        state_value.buffered_limit_ = 3;
+        delivery_type delivery(state_value);
+        engine_type engine(&resource);
+        driver_type driver(engine);
+        ruvia::task_scope tasks(worker.handle_, {.resource_ = &resource});
+        ruvia::worker_signal paused(worker.handle_);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                              delivery.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        fake_read initial_value{.wire_ = response_head()};
+        append_frame(initial_value.wire_, 0, "abc");
+        RUVIA_CHECK(driver.drive(0, initial_value).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(state_value.pending_ == "abc" && !state_value.complete_);
+        fake_read tail{.wire_ = response_trailer(), .fin_ = true};
+        bool waited_for_space = false;
+        auto producer_value = [&]() -> ruvia::task<void> {
             try {
-                for (std::size_t step = 0; step < tail.wire.size() + 4 && !state.complete; ++step) {
-                    const auto allowance = delivery.readAllowance(Driver::kReadBlockBytes);
-                    if (allowance.status == Delivery::ReadStatus::kBackpressured) {
-                        waitedForSpace = true;
+                for (std::size_t step = 0; step < tail.wire_.size() + 4 && !state_value.complete_; ++step) {
+                    const auto allowance = delivery.read_allowance(driver_type::read_block_bytes);
+                    if (allowance.status_ == delivery_type::read_status_type::backpressured) {
+                        waited_for_space = true;
                         paused.notify();
-                        co_await state.spaceSignal.wait();
+                        co_await state_value.space_signal_.wait();
                         continue;
                     }
-                    if (allowance.status != Delivery::ReadStatus::kReady || allowance.bytes == 0) {
+                    if (allowance.status_ != delivery_type::read_status_type::ready || allowance.bytes_ == 0) {
                         throw std::logic_error("collecting producer cannot make protocol progress");
                     }
-                    const auto input = driver.drive(0, tail, allowance.bytes);
+                    const auto input = driver.drive(0, tail, allowance.bytes_);
                     (void)delivery.commit(input);
                 }
-                if (!state.complete) {
+                if (!state_value.complete_) {
                     throw std::logic_error("collecting producer exceeded work bound");
                 }
             } catch (...) {
                 // Simulated transport terminates delivery before engine teardown.
                 (void)engine.stop();
-                (void)delivery.commitFailure(std::current_exception());
+                (void)delivery.commit_failure(std::current_exception());
                 paused.notify();
             }
         };
-        tasks.spawn(producer());
+        tasks.spawn(producer_value());
         co_await paused.wait();
-        bool tooSmall = false;
+        bool too_small = false;
         try {
-            (void)co_await ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(2));
-        } catch (const ruvia::HttpClientError& error) {
-            tooSmall = error.code() == ruvia::HttpClientError::Code::kResponseTooLarge;
+            (void)co_await ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.read_all(2));
+        } catch (const ruvia::http_client_error& error) {
+            too_small = error.code() == ruvia::http_client_error::code_type::response_too_large;
         }
         co_await tasks.join();
-        RUVIA_CHECK(waitedForSpace && tooSmall && state.complete);
-        RUVIA_CHECK(!state.failure && !state.errorCode);
-        RUVIA_CHECK(state.pending == "abc" && state.offset == 0);
-        const auto body = co_await ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(3));
-        const auto bodyBytes = body.bytes();
-        RUVIA_CHECK(bodyBytes.size() == 3 && bodyBytes.front() == std::byte{'a'} &&
-                    bodyBytes.back() == std::byte{'c'});
-        RUVIA_CHECK_EQ(state.trailers.size(), std::size_t{1});
+        RUVIA_CHECK(waited_for_space && too_small && state_value.complete_);
+        RUVIA_CHECK(!state_value.failure_ && !state_value.error_code_);
+        RUVIA_CHECK(state_value.pending_ == "abc" && state_value.offset_ == 0);
+        const auto body = co_await ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.read_all(3));
+        const auto body_bytes = body.bytes();
+        RUVIA_CHECK(body_bytes.size() == 3 && body_bytes.front() == std::byte{'a'} &&
+                    body_bytes.back() == std::byte{'c'});
+        RUVIA_CHECK_EQ(state_value.trailers_.size(), std::size_t{1});
         RUVIA_CHECK(engine.release(0));
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_collect_all_probes_through_trailers_and_fin) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
         for (const auto limit : {std::size_t{0}, std::size_t{3}}) {
             for (std::size_t size = 0; size <= limit + 1; ++size) {
-                State state(worker.handle, &resource);
-                state.bufferedLimit = limit;
-                state.collectAll = true;
-                Delivery delivery(state);
-                Engine engine(&resource);
-                Driver driver(engine);
-                RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                      delivery.eventSink())
-                                .scope == ruvia::Http3ConnectionErrorScope::kNone);
-                FakeRead input{.wire = responseHead(), .fin = true};
-                appendFrame(input.wire, 0, std::string(size, 'x'));
-                appendFrame(input.wire, 0, "");
-                const auto trailer = responseTrailer();
-                input.wire.insert(input.wire.end(), trailer.begin(), trailer.end());
+                state_type state_value(worker.handle_, &resource);
+                state_value.buffered_limit_ = limit;
+                state_value.collect_all_ = true;
+                delivery_type delivery(state_value);
+                engine_type engine(&resource);
+                driver_type driver(engine);
+                RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                                      delivery.event_sink())
+                                .scope_ == ruvia::http3_connection_error_scope::none);
+                fake_read input{.wire_ = response_head(), .fin_ = true};
+                append_frame(input.wire_, 0, std::string(size, 'x'));
+                append_frame(input.wire_, 0, "");
+                const auto trailer = response_trailer();
+                input.wire_.insert(input.wire_.end(), trailer.begin(), trailer.end());
                 bool settled = false;
-                for (std::size_t step = 0; step < input.wire.size() + 2 && !settled; ++step) {
-                    const auto allowance = delivery.readAllowance(4);
-                    RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-                    if (allowance.bytes == 0) {
+                for (std::size_t step = 0; step < input.wire_.size() + 2 && !settled; ++step) {
+                    const auto allowance = delivery.read_allowance(4);
+                    RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+                    if (allowance.bytes_ == 0) {
                         break;
                     }
-                    const auto result = driver.drive(0, input, allowance.bytes);
-                    const auto committed = delivery.commit(result);
-                    if (committed == Delivery::CommitStatus::kRetirementRequired) {
+                    const auto result_value = driver.drive(0, input, allowance.bytes_);
+                    const auto committed = delivery.commit(result_value);
+                    if (committed == delivery_type::commit_status_type::retirement_required) {
                         RUVIA_CHECK(size > limit);
                         // Fake transport stops delivering this stream here.
                         if (!engine.response(0)) {
-                            RUVIA_CHECK(engine.cancelRequest(0));
+                            RUVIA_CHECK(engine.cancel_request(0));
                         }
-                        RUVIA_CHECK(delivery.commitRetirementFailure(
-                            ruvia::HttpClientError::Code::kResponseTooLarge));
+                        RUVIA_CHECK(delivery.commit_retirement_failure(
+                            ruvia::http_client_error::code_type::response_too_large));
                     }
-                    settled = state.complete;
+                    settled = state_value.complete_;
                 }
                 RUVIA_CHECK(settled);
-                RUVIA_CHECK(state.pending.size() <= limit);
+                RUVIA_CHECK(state_value.pending_.size() <= limit);
                 if (size <= limit) {
-                    RUVIA_CHECK(!state.errorCode && !state.failure);
-                    RUVIA_CHECK_EQ(state.pending.size(), size);
-                    RUVIA_CHECK_EQ(state.trailers.size(), std::size_t{1});
+                    RUVIA_CHECK(!state_value.error_code_ && !state_value.failure_);
+                    RUVIA_CHECK_EQ(state_value.pending_.size(), size);
+                    RUVIA_CHECK_EQ(state_value.trailers_.size(), std::size_t{1});
                 } else {
-                    RUVIA_CHECK(state.errorCode == static_cast<std::uint8_t>(
-                                                       ruvia::HttpClientError::Code::kResponseTooLarge));
+                    RUVIA_CHECK(state_value.error_code_ == static_cast<std::uint8_t>(
+                                                               ruvia::http_client_error::code_type::response_too_large));
                 }
                 RUVIA_CHECK(engine.release(0));
             }
         }
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_shared_budget_backpressures_per_stream_and_resumes_after_consumption) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        ruvia::detail::Http3ClientBodyBudget budget(6);
-        State firstState(worker.handle, &resource);
-        State secondState(worker.handle, &resource);
-        State waitingState(worker.handle, &resource);
-        State framingState(worker.handle, &resource);
-        firstState.bufferedLimit = secondState.bufferedLimit = 3;
-        waitingState.bufferedLimit = framingState.bufferedLimit = 3;
-        framingState.collectAll = true;
-        Delivery first(firstState, &budget);
-        Delivery second(secondState, &budget);
-        Delivery waiting(waitingState, &budget);
-        Delivery framing(framingState, &budget);
-        Engine engine(&resource, budget);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, first.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet, second.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead firstHead{.wire = responseHead()};
-        RUVIA_CHECK(driver.drive(0, firstHead).status == Driver::Status::kProgress);
-        FakeRead firstBody{.wire = frame(0, std::span<const char>("abc", 3))};
-        for (std::size_t step = 0; step < firstBody.wire.size() + 2 && firstState.pending.size() != 3;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::detail::http3_client_body_budget budget(6);
+        state_type first_state(worker.handle_, &resource);
+        state_type second_state(worker.handle_, &resource);
+        state_type waiting_state(worker.handle_, &resource);
+        state_type framing_state(worker.handle_, &resource);
+        first_state.buffered_limit_ = second_state.buffered_limit_ = 3;
+        waiting_state.buffered_limit_ = framing_state.buffered_limit_ = 3;
+        framing_state.collect_all_ = true;
+        delivery_type first(first_state, &budget);
+        delivery_type second(second_state, &budget);
+        delivery_type waiting(waiting_state, &budget);
+        delivery_type framing(framing_state, &budget);
+        engine_type engine(&resource, budget);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, first.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(engine.register_request(4, ruvia::http_known_method::get, second.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read first_head{.wire_ = response_head()};
+        RUVIA_CHECK(driver.drive(0, first_head).status_ == driver_type::status_type::progress);
+        fake_read first_body{.wire_ = frame(0, std::span<const char>("abc", 3))};
+        for (std::size_t step = 0; step < first_body.wire_.size() + 2 && first_state.pending_.size() != 3;
             ++step) {
-            const auto allowance = first.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(driver.drive(0, firstBody, allowance.bytes).status == Driver::Status::kProgress);
+            const auto allowance = first.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(driver.drive(0, first_body, allowance.bytes_).status_ == driver_type::status_type::progress);
         }
-        RUVIA_CHECK_EQ(firstState.pending, std::string_view("abc"));
-        RUVIA_CHECK(first.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kBackpressured);
+        RUVIA_CHECK_EQ(first_state.pending_, std::string_view("abc"));
+        RUVIA_CHECK(first.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::backpressured);
         RUVIA_CHECK_EQ(budget.used(), std::size_t{3});
 
-        FakeRead secondHead{.wire = responseHead()};
-        RUVIA_CHECK(driver.drive(4, secondHead).status == Driver::Status::kProgress);
-        RUVIA_CHECK(second.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kReady);
-        FakeRead secondBody{.wire = frame(0, std::span<const char>("xyz", 3))};
-        for (std::size_t step = 0; step < secondBody.wire.size() + 2 && secondState.pending.size() != 3;
+        fake_read second_head{.wire_ = response_head()};
+        RUVIA_CHECK(driver.drive(4, second_head).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(second.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::ready);
+        fake_read second_body{.wire_ = frame(0, std::span<const char>("xyz", 3))};
+        for (std::size_t step = 0; step < second_body.wire_.size() + 2 && second_state.pending_.size() != 3;
             ++step) {
-            const auto allowance = second.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(driver.drive(4, secondBody, allowance.bytes).status == Driver::Status::kProgress);
+            const auto allowance = second.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(driver.drive(4, second_body, allowance.bytes_).status_ == driver_type::status_type::progress);
         }
-        RUVIA_CHECK_EQ(secondState.pending, std::string_view("xyz"));
+        RUVIA_CHECK_EQ(second_state.pending_, std::string_view("xyz"));
         RUVIA_CHECK_EQ(budget.used(), std::size_t{6});
-        RUVIA_CHECK(waiting.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kBackpressured);
-        const auto framingProbe = framing.readAllowance(Driver::kReadBlockBytes);
-        RUVIA_CHECK(framingProbe.status == Delivery::ReadStatus::kReady && framingProbe.bytes == 1);
+        RUVIA_CHECK(waiting.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::backpressured);
+        const auto framing_probe = framing.read_allowance(driver_type::read_block_bytes);
+        RUVIA_CHECK(framing_probe.status_ == delivery_type::read_status_type::ready && framing_probe.bytes_ == 1);
 
-        const auto borrowed = co_await firstState.consume_body<std::string_view>();
+        const auto borrowed = co_await first_state.consume_body<std::string_view>();
         RUVIA_CHECK(borrowed && *borrowed == "abc");
         RUVIA_CHECK_EQ(budget.used(), std::size_t{6});
-        firstState.releaseConsumedBodyPrefix();
-        first.reconcileBodyBytes();
+        first_state.release_consumed_body_prefix();
+        first.reconcile_body_bytes();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{3});
-        RUVIA_CHECK(first.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kReady);
-        RUVIA_CHECK(waiting.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kReady);
-        RUVIA_CHECK(framing.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kReady);
+        RUVIA_CHECK(first.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::ready);
+        RUVIA_CHECK(waiting.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::ready);
+        RUVIA_CHECK(framing.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::ready);
 
-        RUVIA_CHECK(engine.cancelRequest(0) && engine.release(0));
-        RUVIA_CHECK(engine.cancelRequest(4) && engine.release(4));
-        firstState.discardResponseBody();
-        first.reconcileBodyBytes();
-        secondState.discardResponseBody();
-        second.reconcileBodyBytes();
+        RUVIA_CHECK(engine.cancel_request(0) && engine.release(0));
+        RUVIA_CHECK(engine.cancel_request(4) && engine.release(4));
+        first_state.discard_response_body();
+        first.reconcile_body_bytes();
+        second_state.discard_response_body();
+        second.reconcile_body_bytes();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_two_collect_all_streams_parse_trailers_and_fin_at_shared_limit) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        ruvia::detail::Http3ClientBodyBudget budget(6);
-        State firstState(worker.handle, &resource);
-        State secondState(worker.handle, &resource);
-        firstState.bufferedLimit = secondState.bufferedLimit = 4;
-        firstState.collectAll = secondState.collectAll = true;
-        Delivery first(firstState, &budget);
-        Delivery second(secondState, &budget);
-        Engine engine(&resource, budget);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, first.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet, second.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead firstHead{.wire = responseHead()};
-        FakeRead secondHead{.wire = responseHead()};
-        RUVIA_CHECK(driver.drive(0, firstHead).status == Driver::Status::kProgress);
-        RUVIA_CHECK(driver.drive(4, secondHead).status == Driver::Status::kProgress);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::detail::http3_client_body_budget budget(6);
+        state_type first_state(worker.handle_, &resource);
+        state_type second_state(worker.handle_, &resource);
+        first_state.buffered_limit_ = second_state.buffered_limit_ = 4;
+        first_state.collect_all_ = second_state.collect_all_ = true;
+        delivery_type first(first_state, &budget);
+        delivery_type second(second_state, &budget);
+        engine_type engine(&resource, budget);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, first.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(engine.register_request(4, ruvia::http_known_method::get, second.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read first_head{.wire_ = response_head()};
+        fake_read second_head{.wire_ = response_head()};
+        RUVIA_CHECK(driver.drive(0, first_head).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(driver.drive(4, second_head).status_ == driver_type::status_type::progress);
 
-        FakeRead firstBody{.wire = frame(0, std::span<const char>("abc", 3))};
-        for (std::size_t step = 0; step < firstBody.wire.size() + 2 && firstState.pending.size() != 3;
+        fake_read first_body{.wire_ = frame(0, std::span<const char>("abc", 3))};
+        for (std::size_t step = 0; step < first_body.wire_.size() + 2 && first_state.pending_.size() != 3;
             ++step) {
-            const auto allowance = first.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(driver.drive(0, firstBody, allowance.bytes).status == Driver::Status::kProgress);
+            const auto allowance = first.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(driver.drive(0, first_body, allowance.bytes_).status_ == driver_type::status_type::progress);
         }
-        FakeRead secondBody{.wire = frame(0, std::span<const char>("xyz", 3))};
-        for (std::size_t step = 0; step < secondBody.wire.size() + 2 && secondState.pending.size() != 3;
+        fake_read second_body{.wire_ = frame(0, std::span<const char>("xyz", 3))};
+        for (std::size_t step = 0; step < second_body.wire_.size() + 2 && second_state.pending_.size() != 3;
             ++step) {
-            const auto allowance = second.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(driver.drive(4, secondBody, allowance.bytes).status == Driver::Status::kProgress);
+            const auto allowance = second.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(driver.drive(4, second_body, allowance.bytes_).status_ == driver_type::status_type::progress);
         }
-        RUVIA_CHECK_EQ(firstState.pending, std::string_view("abc"));
-        RUVIA_CHECK_EQ(secondState.pending, std::string_view("xyz"));
+        RUVIA_CHECK_EQ(first_state.pending_, std::string_view("abc"));
+        RUVIA_CHECK_EQ(second_state.pending_, std::string_view("xyz"));
         RUVIA_CHECK_EQ(budget.used(), std::size_t{6});
 
-        const auto trailer = responseTrailer();
-        FakeRead firstTail{.wire = trailer, .fin = true};
-        FakeRead secondTail{.wire = trailer, .fin = true};
-        auto finish = [&](std::uint64_t id, FakeRead& input, Delivery& delivery, State& state) {
-            for (std::size_t step = 0; step < input.wire.size() + 2 && !state.complete; ++step) {
-                const auto allowance = delivery.readAllowance(Driver::kReadBlockBytes);
-                RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-                RUVIA_CHECK_EQ(allowance.bytes, std::size_t{1});
-                const auto result = driver.drive(id, input, allowance.bytes);
-                if (result.status == Driver::Status::kResponseComplete) {
-                    RUVIA_CHECK(delivery.commit(result) == Delivery::CommitStatus::kCommitted);
+        const auto trailer = response_trailer();
+        fake_read first_tail{.wire_ = trailer, .fin_ = true};
+        fake_read second_tail{.wire_ = trailer, .fin_ = true};
+        auto finish_value = [&](std::uint64_t id, fake_read& input, delivery_type& delivery, state_type& state_value) {
+            for (std::size_t step = 0; step < input.wire_.size() + 2 && !state_value.complete_; ++step) {
+                const auto allowance = delivery.read_allowance(driver_type::read_block_bytes);
+                RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+                RUVIA_CHECK_EQ(allowance.bytes_, std::size_t{1});
+                const auto result_value = driver.drive(id, input, allowance.bytes_);
+                if (result_value.status_ == driver_type::status_type::response_complete) {
+                    RUVIA_CHECK(delivery.commit(result_value) == delivery_type::commit_status_type::committed);
                 } else {
-                    RUVIA_CHECK(result.status == Driver::Status::kProgress);
+                    RUVIA_CHECK(result_value.status_ == driver_type::status_type::progress);
                 }
             }
-            RUVIA_CHECK(state.complete && state.trailers.size() == 1);
+            RUVIA_CHECK(state_value.complete_ && state_value.trailers_.size() == 1);
         };
-        finish(0, firstTail, first, firstState);
-        finish(4, secondTail, second, secondState);
+        finish_value(0, first_tail, first, first_state);
+        finish_value(4, second_tail, second, second_state);
         RUVIA_CHECK(engine.release(0));
         RUVIA_CHECK(engine.release(4));
-        firstState.discardResponseBody();
-        first.reconcileBodyBytes();
-        secondState.discardResponseBody();
-        second.reconcileBodyBytes();
+        first_state.discard_response_body();
+        first.reconcile_body_bytes();
+        second_state.discard_response_body();
+        second.reconcile_body_bytes();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_budget_survives_connection_generations_and_wakes_drivers) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    ruvia::detail::Http3ClientBodyBudget budget(32);
-    WakeCounter oldGenerationWake;
-    WakeCounter newGenerationWake;
-    ruvia::detail::Http3ClientBodyBudget::WakeRegistration oldGenerationRegistration(
-        budget, WakeCounter::notify, &oldGenerationWake);
-    ruvia::detail::Http3ClientBodyBudget::WakeRegistration newGenerationRegistration(
-        budget, WakeCounter::notify, &newGenerationWake);
-    auto operation = [&]() -> ruvia::Task<void> {
-        const std::string firstBody(32, 'a');
-        const std::string secondBody(16, 'b');
-        State oldGenerationState(worker.handle, &resource);
-        State newGenerationState(worker.handle, &resource);
-        Delivery oldGeneration(oldGenerationState, &budget);
-        Delivery newGeneration(newGenerationState, &budget);
-        Engine oldEngine(&resource);
-        Engine newEngine(&resource);
-        Driver oldDriver(oldEngine);
-        Driver newDriver(newEngine);
-        RUVIA_CHECK(oldEngine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                 oldGeneration.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(newEngine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                 newGeneration.eventSink())
-                        .scope == ruvia::Http3ConnectionErrorScope::kNone);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    ruvia::detail::http3_client_body_budget budget(32);
+    wake_counter old_generation_wake;
+    wake_counter new_generation_wake;
+    ruvia::detail::http3_client_body_budget::wake_registration_type old_generation_registration(
+        budget, wake_counter::notify, &old_generation_wake);
+    ruvia::detail::http3_client_body_budget::wake_registration_type new_generation_registration(
+        budget, wake_counter::notify, &new_generation_wake);
+    auto operation = [&]() -> ruvia::task<void> {
+        const std::string first_body(32, 'a');
+        const std::string second_body(16, 'b');
+        state_type old_generation_state(worker.handle_, &resource);
+        state_type new_generation_state(worker.handle_, &resource);
+        delivery_type old_generation(old_generation_state, &budget);
+        delivery_type new_generation(new_generation_state, &budget);
+        engine_type old_engine(&resource);
+        engine_type new_engine(&resource);
+        driver_type old_driver(old_engine);
+        driver_type new_driver(new_engine);
+        RUVIA_CHECK(old_engine.register_request(0, ruvia::http_known_method::get,
+                                  old_generation.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(new_engine.register_request(0, ruvia::http_known_method::get,
+                                  new_generation.event_sink())
+                        .scope_ == ruvia::http3_connection_error_scope::none);
 
-        FakeRead firstInput{.wire = responseHead()};
-        appendFrame(firstInput.wire, 0, firstBody);
-        for (std::size_t step = 0; step < firstInput.wire.size() + 2 &&
-                                   oldGenerationState.pending.size() != firstBody.size();
+        fake_read first_input{.wire_ = response_head()};
+        append_frame(first_input.wire_, 0, first_body);
+        for (std::size_t step = 0; step < first_input.wire_.size() + 2 &&
+                                   old_generation_state.pending_.size() != first_body.size();
             ++step) {
-            const auto allowance = oldGeneration.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(oldDriver.drive(0, firstInput, allowance.bytes).status ==
-                        Driver::Status::kProgress);
+            const auto allowance = old_generation.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(old_driver.drive(0, first_input, allowance.bytes_).status_ ==
+                        driver_type::status_type::progress);
         }
-        RUVIA_CHECK_EQ(budget.used(), firstBody.size());
-        RUVIA_CHECK(newGeneration.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kBackpressured);
+        RUVIA_CHECK_EQ(budget.used(), first_body.size());
+        RUVIA_CHECK(new_generation.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::backpressured);
         // Changing the read policy must wake the QUIC driver even if no
         // storage has yet been freed (the peer may have trailers or FIN).
-        const auto oldBeforePolicy = oldGenerationWake.notifications;
-        const auto newBeforePolicy = newGenerationWake.notifications;
-        oldGenerationState.collectAll = true;
-        oldGenerationState.notifyProducerSpace();
-        RUVIA_CHECK_EQ(budget.used(), firstBody.size());
-        RUVIA_CHECK_EQ(oldGenerationWake.notifications, oldBeforePolicy + 1);
-        RUVIA_CHECK_EQ(newGenerationWake.notifications, newBeforePolicy + 1);
+        const auto old_before_policy = old_generation_wake.notifications_;
+        const auto new_before_policy = new_generation_wake.notifications_;
+        old_generation_state.collect_all_ = true;
+        old_generation_state.notify_producer_space();
+        RUVIA_CHECK_EQ(budget.used(), first_body.size());
+        RUVIA_CHECK_EQ(old_generation_wake.notifications_, old_before_policy + 1);
+        RUVIA_CHECK_EQ(new_generation_wake.notifications_, new_before_policy + 1);
 
-        const auto borrowed = co_await oldGenerationState.consume_body<std::string_view>();
-        RUVIA_CHECK(borrowed && *borrowed == firstBody);
-        RUVIA_CHECK_EQ(budget.used(), firstBody.size());
+        const auto borrowed = co_await old_generation_state.consume_body<std::string_view>();
+        RUVIA_CHECK(borrowed && *borrowed == first_body);
+        RUVIA_CHECK_EQ(budget.used(), first_body.size());
         // The borrowed bytes remain charged until the next body operation frees
         // the consumed buffered prefix; this release wakes both generations.
-        const auto oldBeforeRelease = oldGenerationWake.notifications;
-        const auto newBeforeRelease = newGenerationWake.notifications;
-        oldGenerationState.releaseConsumedBodyPrefix();
+        const auto old_before_release = old_generation_wake.notifications_;
+        const auto new_before_release = new_generation_wake.notifications_;
+        old_generation_state.release_consumed_body_prefix();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
-        RUVIA_CHECK_EQ(oldGenerationWake.notifications, oldBeforeRelease + 2);
-        RUVIA_CHECK_EQ(newGenerationWake.notifications, newBeforeRelease + 2);
-        RUVIA_CHECK(newGeneration.readAllowance(Driver::kReadBlockBytes).status ==
-                    Delivery::ReadStatus::kReady);
+        RUVIA_CHECK_EQ(old_generation_wake.notifications_, old_before_release + 2);
+        RUVIA_CHECK_EQ(new_generation_wake.notifications_, new_before_release + 2);
+        RUVIA_CHECK(new_generation.read_allowance(driver_type::read_block_bytes).status_ ==
+                    delivery_type::read_status_type::ready);
 
-        FakeRead secondInput{.wire = responseHead()};
-        appendFrame(secondInput.wire, 0, secondBody);
-        for (std::size_t step = 0; step < secondInput.wire.size() + 2 &&
-                                   newGenerationState.pending.size() != secondBody.size();
+        fake_read second_input{.wire_ = response_head()};
+        append_frame(second_input.wire_, 0, second_body);
+        for (std::size_t step = 0; step < second_input.wire_.size() + 2 &&
+                                   new_generation_state.pending_.size() != second_body.size();
             ++step) {
-            const auto allowance = newGeneration.readAllowance(Driver::kReadBlockBytes);
-            RUVIA_CHECK(allowance.status == Delivery::ReadStatus::kReady);
-            RUVIA_CHECK(newDriver.drive(0, secondInput, allowance.bytes).status ==
-                        Driver::Status::kProgress);
+            const auto allowance = new_generation.read_allowance(driver_type::read_block_bytes);
+            RUVIA_CHECK(allowance.status_ == delivery_type::read_status_type::ready);
+            RUVIA_CHECK(new_driver.drive(0, second_input, allowance.bytes_).status_ ==
+                        driver_type::status_type::progress);
         }
-        RUVIA_CHECK_EQ(budget.used(), secondBody.size());
-        const auto oldBeforeDiscard = oldGenerationWake.notifications;
-        const auto newBeforeDiscard = newGenerationWake.notifications;
-        newGenerationState.discardResponseBody();
+        RUVIA_CHECK_EQ(budget.used(), second_body.size());
+        const auto old_before_discard = old_generation_wake.notifications_;
+        const auto new_before_discard = new_generation_wake.notifications_;
+        new_generation_state.discard_response_body();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
-        RUVIA_CHECK_EQ(oldGenerationWake.notifications, oldBeforeDiscard + 2);
-        RUVIA_CHECK_EQ(newGenerationWake.notifications, newBeforeDiscard + 2);
-        RUVIA_CHECK(oldEngine.cancelRequest(0) && oldEngine.release(0));
-        RUVIA_CHECK(newEngine.cancelRequest(0) && newEngine.release(0));
+        RUVIA_CHECK_EQ(old_generation_wake.notifications_, old_before_discard + 2);
+        RUVIA_CHECK_EQ(new_generation_wake.notifications_, new_before_discard + 2);
+        RUVIA_CHECK(old_engine.cancel_request(0) && old_engine.release(0));
+        RUVIA_CHECK(new_engine.cancel_request(0) && new_engine.release(0));
     };
-    runOperation(worker, io, operation);
+    run_operation(worker, io, operation);
     RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_isolates_callback_bad_alloc_and_rolls_back_body_reservation) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::RejectingMemoryResource rejecting;
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        ruvia::detail::Http3ClientBodyBudget budget(1024);
-        State failingState(worker.handle, &rejecting);
-        State siblingState(worker.handle, &resource);
-        Delivery failing(failingState, &budget);
-        Delivery sibling(siblingState, &budget);
-        Engine engine(&resource, budget);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, failing.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet, sibling.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead failingHead{.wire = responseHead()};
-        RUVIA_CHECK(driver.drive(0, failingHead).status == Driver::Status::kProgress);
-        rejecting.rejectAllocations(true, 32);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::rejecting_memory_resource rejecting;
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::detail::http3_client_body_budget budget(1024);
+        state_type failing_state(worker.handle_, &rejecting);
+        state_type sibling_state(worker.handle_, &resource);
+        delivery_type failing(failing_state, &budget);
+        delivery_type sibling(sibling_state, &budget);
+        engine_type engine(&resource, budget);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, failing.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(engine.register_request(4, ruvia::http_known_method::get, sibling.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read failing_head{.wire_ = response_head()};
+        RUVIA_CHECK(driver.drive(0, failing_head).status_ == driver_type::status_type::progress);
+        rejecting.reject_allocations(true, 32);
         const std::string body(64, 'x');
-        FakeRead failingBody{.wire = frame(0, std::span<const char>(body.data(), body.size()))};
-        RUVIA_CHECK(driver.drive(0, failingBody).status == Driver::Status::kProgress);
-        RUVIA_CHECK(failing.retirementReason() == Delivery::RetirementReason::kCallbackFailure);
-        RUVIA_CHECK(failing.callbackFailure() != nullptr);
+        fake_read failing_body{.wire_ = frame(0, std::span<const char>(body.data(), body.size()))};
+        RUVIA_CHECK(driver.drive(0, failing_body).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(failing.retirement_reason() == delivery_type::retirement_reason_type::callback_failure);
+        RUVIA_CHECK(failing.callback_failure() != nullptr);
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
 
-        FakeRead siblingInput{.wire = responseHead()};
-        appendFrame(siblingInput.wire, 0, "safe");
-        RUVIA_CHECK(driver.drive(4, siblingInput).status == Driver::Status::kProgress);
-        RUVIA_CHECK_EQ(siblingState.pending, std::string_view("safe"));
+        fake_read sibling_input{.wire_ = response_head()};
+        append_frame(sibling_input.wire_, 0, "safe");
+        RUVIA_CHECK(driver.drive(4, sibling_input).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK_EQ(sibling_state.pending_, std::string_view("safe"));
         RUVIA_CHECK_EQ(budget.used(), std::size_t{4});
 
-        RUVIA_CHECK(engine.cancelRequest(0));
-        RUVIA_CHECK(failing.commitFailure(failing.callbackFailure()));
+        RUVIA_CHECK(engine.cancel_request(0));
+        RUVIA_CHECK(failing.commit_failure(failing.callback_failure()));
         RUVIA_CHECK(engine.release(0));
-        FakeRead siblingFin{.fin = true};
-        const auto complete = driver.drive(4, siblingFin);
-        RUVIA_CHECK(complete.status == Driver::Status::kResponseComplete);
-        RUVIA_CHECK(sibling.commit(complete) == Delivery::CommitStatus::kCommitted);
+        fake_read sibling_fin{.fin_ = true};
+        const auto complete_value = driver.drive(4, sibling_fin);
+        RUVIA_CHECK(complete_value.status_ == driver_type::status_type::response_complete);
+        RUVIA_CHECK(sibling.commit(complete_value) == delivery_type::commit_status_type::committed);
         RUVIA_CHECK(engine.release(4));
-        siblingState.discardResponseBody();
-        sibling.reconcileBodyBytes();
+        sibling_state.discard_response_body();
+        sibling.reconcile_body_bytes();
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
-        rejecting.rejectAllocations(false);
+        rejecting.reject_allocations(false);
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_connection_protocol_error_wins_after_callback_allocation_failure) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::RejectingMemoryResource rejecting;
-    ruvia::test::CountingMemoryResource resource;
-    auto operation = [&]() -> ruvia::Task<void> {
-        ruvia::detail::Http3ClientBodyBudget budget(1024);
-        State state(worker.handle, &rejecting);
-        Delivery delivery(state, &budget);
-        Engine engine(&resource, budget);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, delivery.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead head{.wire = responseHead()};
-        RUVIA_CHECK(driver.drive(0, head).status == Driver::Status::kProgress);
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::rejecting_memory_resource rejecting;
+    ruvia::test::counting_memory_resource resource;
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::detail::http3_client_body_budget budget(1024);
+        state_type state_value(worker.handle_, &rejecting);
+        delivery_type delivery(state_value, &budget);
+        engine_type engine(&resource, budget);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, delivery.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read head{.wire_ = response_head()};
+        RUVIA_CHECK(driver.drive(0, head).status_ == driver_type::status_type::progress);
 
-        rejecting.rejectAllocations(true, 32);
+        rejecting.reject_allocations(true, 32);
         const std::string body(64, 'x');
         auto wire = frame(0, std::span<const char>(body.data(), body.size()));
-        appendFrame(wire, 4, {});
-        FakeRead malformed{.wire = std::move(wire)};
-        const auto result = driver.drive(0, malformed);
-        RUVIA_CHECK(result.status == Driver::Status::kConnectionError);
-        RUVIA_CHECK(result.protocol.scope == ruvia::Http3ConnectionErrorScope::kConnection);
-        RUVIA_CHECK(delivery.retirementReason() == Delivery::RetirementReason::kCallbackFailure);
-        RUVIA_CHECK(delivery.callbackFailure() != nullptr);
+        append_frame(wire, 4, {});
+        fake_read malformed{.wire_ = std::move(wire)};
+        const auto result_value = driver.drive(0, malformed);
+        RUVIA_CHECK(result_value.status_ == driver_type::status_type::connection_error);
+        RUVIA_CHECK(result_value.protocol_.scope_ == ruvia::http3_connection_error_scope::connection);
+        RUVIA_CHECK(delivery.retirement_reason() == delivery_type::retirement_reason_type::callback_failure);
+        RUVIA_CHECK(delivery.callback_failure() != nullptr);
         RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
-        RUVIA_CHECK(delivery.commitFailure(delivery.callbackFailure()));
+        RUVIA_CHECK(delivery.commit_failure(delivery.callback_failure()));
         (void)engine.stop();
         RUVIA_CHECK(engine.release(0));
-        rejecting.rejectAllocations(false);
+        rejecting.reject_allocations(false);
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_holds_compressed_bytes_until_fin_and_decode_success) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    ruvia::detail::Http3ClientBodyBudget receiveBudget(4096);
-    auto operation = [&]() -> ruvia::Task<void> {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    ruvia::detail::http3_client_body_budget receive_budget(4096);
+    auto operation = [&]() -> ruvia::task<void> {
         constexpr std::string_view plain = "decoded after the final response byte";
-        auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, plain,
-            {.maxEncodedBytes = 4096, .resource = &resource});
+        auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain,
+            {.max_encoded_bytes_ = 4096, .resource_ = &resource});
         RUVIA_CHECK(encoded.encoded() != nullptr);
-        const auto encodedBytes = encoded.encoded()->bytes();
-        State state(worker.handle, &resource);
-        state.bufferedLimit = 1024;
-        Delivery delivery(state, &receiveBudget);
-        Engine engine(&resource);
-        Driver driver(engine);
-        RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, delivery.eventSink()).scope ==
-                    ruvia::Http3ConnectionErrorScope::kNone);
-        FakeRead input{.wire = responseHead("200", {}, "gzip")};
-        appendFrame(input.wire, 0, encodedBytes);
-        RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kProgress);
-        RUVIA_CHECK(state.bodyDecodeRequired && state.collectAll && !state.complete);
-        RUVIA_CHECK_EQ(std::string_view(state.pending), encodedBytes);
-        RUVIA_CHECK_EQ(receiveBudget.used(), encodedBytes.size());
+        const auto encoded_bytes = encoded.encoded()->bytes();
+        state_type state_value(worker.handle_, &resource);
+        state_value.buffered_limit_ = 1024;
+        delivery_type delivery(state_value, &receive_budget);
+        engine_type engine(&resource);
+        driver_type driver(engine);
+        RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, delivery.event_sink()).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        fake_read input{.wire_ = response_head("200", {}, "gzip")};
+        append_frame(input.wire_, 0, encoded_bytes);
+        RUVIA_CHECK(driver.drive(0, input).status_ == driver_type::status_type::progress);
+        RUVIA_CHECK(state_value.body_decode_required_ && state_value.collect_all_ && !state_value.complete_);
+        RUVIA_CHECK_EQ(std::string_view(state_value.pending_), encoded_bytes);
+        RUVIA_CHECK_EQ(receive_budget.used(), encoded_bytes.size());
 
-        bool readReturned = false;
-        bool watchdogExpired = false;
-        std::optional<std::string_view> readValue;
-        ruvia::TaskScope tasks(worker.handle, {.resource = &resource});
-        auto consumer = [&]() -> ruvia::Task<void> {
-            readValue = co_await state.consume_body<std::string_view>();
-            readReturned = true;
+        bool read_returned = false;
+        bool watchdog_expired = false;
+        std::optional<std::string_view> read_value;
+        ruvia::task_scope tasks(worker.handle_, {.resource_ = &resource});
+        auto consumer = [&]() -> ruvia::task<void> {
+            read_value = co_await state_value.consume_body<std::string_view>();
+            read_returned = true;
         };
-        auto watchdog = [&]() -> ruvia::Task<void> {
-            (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(100));
-            if (!readReturned) {
-                watchdogExpired = true;
-                state.failure = std::make_exception_ptr(std::runtime_error("compressed read watchdog"));
-                state.complete = true;
-                state.dataSignal.notify();
+        auto watchdog_value = [&]() -> ruvia::task<void> {
+            (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
+            if (!read_returned) {
+                watchdog_expired = true;
+                state_value.failure_ = std::make_exception_ptr(std::runtime_error("compressed read watchdog"));
+                state_value.complete_ = true;
+                state_value.data_signal_.notify();
             }
         };
         tasks.spawn(consumer());
-        tasks.spawn(watchdog());
-        (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(2));
-        RUVIA_CHECK(!readReturned);
+        tasks.spawn(watchdog_value());
+        (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(2));
+        RUVIA_CHECK(!read_returned);
 
-        FakeRead fin{.fin = true};
+        fake_read fin{.fin_ = true};
         const auto finished = driver.drive(0, fin);
-        RUVIA_CHECK(finished.status == Driver::Status::kResponseComplete);
-        ruvia::detail::decodeHttpClientResponseContentEncoding(state, true, 1024);
-        RUVIA_CHECK(!state.bodyDecodeRequired);
-        RUVIA_CHECK_EQ(std::string_view(state.buffered), plain);
-        RUVIA_CHECK_EQ(receiveBudget.used(), plain.size());
-        RUVIA_CHECK(delivery.commit(finished) == Delivery::CommitStatus::kCommitted);
+        RUVIA_CHECK(finished.status_ == driver_type::status_type::response_complete);
+        ruvia::detail::decode_http_client_response_content_encoding(state_value, true, 1024);
+        RUVIA_CHECK(!state_value.body_decode_required_);
+        RUVIA_CHECK_EQ(std::string_view(state_value.buffered_), plain);
+        RUVIA_CHECK_EQ(receive_budget.used(), plain.size());
+        RUVIA_CHECK(delivery.commit(finished) == delivery_type::commit_status_type::committed);
         co_await tasks.join();
-        RUVIA_CHECK(readReturned && !watchdogExpired && readValue && *readValue == plain);
-        state.discardResponseBody();
-        RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{0});
+        RUVIA_CHECK(read_returned && !watchdog_expired && read_value && *read_value == plain);
+        state_value.discard_response_body();
+        RUVIA_CHECK_EQ(receive_budget.used(), std::size_t{0});
         RUVIA_CHECK(engine.release(0));
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_decode_errors_and_decoded_limits_publish_no_encoded_bytes) {
-    auto& io = ruvia::test::newTestIoContext();
-    TestWorker worker(io);
-    ruvia::test::CountingMemoryResource resource;
-    ruvia::detail::Http3ClientBodyBudget receiveBudget(8192);
-    auto operation = [&]() -> ruvia::Task<void> {
-        struct Case final {
-            std::string_view bytes;
-            std::size_t decodedLimit;
-            ruvia::HttpClientError::Code error;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::counting_memory_resource resource;
+    ruvia::detail::http3_client_body_budget receive_budget(8192);
+    auto operation = [&]() -> ruvia::task<void> {
+        struct case_value final {
+            std::string_view bytes_;
+            std::size_t decoded_limit_;
+            ruvia::http_client_error::code_type error_;
         };
         constexpr std::array cases{
-            Case{"not a gzip member", 1024, ruvia::HttpClientError::Code::kProtocolError},
-            Case{"decoded output exceeds its bound", 4, ruvia::HttpClientError::Code::kResponseTooLarge},
+            case_value{"not a gzip member", 1024, ruvia::http_client_error::code_type::protocol_error},
+            case_value{"decoded output exceeds its bound", 4, ruvia::http_client_error::code_type::response_too_large},
         };
         for (const auto& item : cases) {
-            std::string wireBody(item.bytes);
-            if (item.error == ruvia::HttpClientError::Code::kResponseTooLarge) {
-                auto compressed = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip,
-                    item.bytes, {.maxEncodedBytes = 4096, .resource = &resource});
+            std::string wire_body(item.bytes_);
+            if (item.error_ == ruvia::http_client_error::code_type::response_too_large) {
+                auto compressed = ruvia::encode_http_content(ruvia::http_content_coding::gzip,
+                    item.bytes_, {.max_encoded_bytes_ = 4096, .resource_ = &resource});
                 RUVIA_CHECK(compressed.encoded() != nullptr);
-                wireBody.assign(compressed.encoded()->bytes());
+                wire_body.assign(compressed.encoded()->bytes());
             }
-            State state(worker.handle, &resource);
-            State siblingState(worker.handle, &resource);
-            state.bufferedLimit = siblingState.bufferedLimit = 1024;
-            Delivery delivery(state, &receiveBudget);
-            Delivery siblingDelivery(siblingState, &receiveBudget);
-            Engine engine(&resource);
-            Driver driver(engine);
-            RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet,
-                                  delivery.eventSink())
-                            .scope == ruvia::Http3ConnectionErrorScope::kNone);
-            RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet,
-                                  siblingDelivery.eventSink())
-                            .scope == ruvia::Http3ConnectionErrorScope::kNone);
-            FakeRead input{.wire = responseHead("200", {}, "gzip")};
-            appendFrame(input.wire, 0, wireBody);
-            RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kProgress);
-            RUVIA_CHECK(state.bodyDecodeRequired && state.collectAll);
-            RUVIA_CHECK_EQ(receiveBudget.used(), wireBody.size());
-            FakeRead fin{.fin = true};
+            state_type state_value(worker.handle_, &resource);
+            state_type sibling_state(worker.handle_, &resource);
+            state_value.buffered_limit_ = sibling_state.buffered_limit_ = 1024;
+            delivery_type delivery(state_value, &receive_budget);
+            delivery_type sibling_delivery(sibling_state, &receive_budget);
+            engine_type engine(&resource);
+            driver_type driver(engine);
+            RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get,
+                                  delivery.event_sink())
+                            .scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(engine.register_request(4, ruvia::http_known_method::get,
+                                  sibling_delivery.event_sink())
+                            .scope_ == ruvia::http3_connection_error_scope::none);
+            fake_read input{.wire_ = response_head("200", {}, "gzip")};
+            append_frame(input.wire_, 0, wire_body);
+            RUVIA_CHECK(driver.drive(0, input).status_ == driver_type::status_type::progress);
+            RUVIA_CHECK(state_value.body_decode_required_ && state_value.collect_all_);
+            RUVIA_CHECK_EQ(receive_budget.used(), wire_body.size());
+            fake_read fin{.fin_ = true};
             const auto finished = driver.drive(0, fin);
-            RUVIA_CHECK(finished.status == Driver::Status::kResponseComplete);
+            RUVIA_CHECK(finished.status_ == driver_type::status_type::response_complete);
             std::exception_ptr failure;
             try {
-                ruvia::detail::decodeHttpClientResponseContentEncoding(
-                    state, true, item.decodedLimit);
-            } catch (const ruvia::HttpClientError& error) {
-                RUVIA_CHECK(error.code() == item.error);
+                ruvia::detail::decode_http_client_response_content_encoding(
+                    state_value, true, item.decoded_limit_);
+            } catch (const ruvia::http_client_error& error) {
+                RUVIA_CHECK(error.code() == item.error_);
                 failure = std::current_exception();
             }
             RUVIA_CHECK(failure != nullptr);
-            RUVIA_CHECK(delivery.commitFailure(failure));
-            RUVIA_CHECK(state.complete && state.buffered.empty() && state.pending.empty());
-            RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{0});
-            bool readFailed = false;
+            RUVIA_CHECK(delivery.commit_failure(failure));
+            RUVIA_CHECK(state_value.complete_ && state_value.buffered_.empty() && state_value.pending_.empty());
+            RUVIA_CHECK_EQ(receive_budget.used(), std::size_t{0});
+            bool read_failed = false;
             try {
-                (void)co_await state.readAll(1024);
-            } catch (const ruvia::HttpClientError& error) {
-                readFailed = error.code() == item.error;
+                (void)co_await state_value.read_all(1024);
+            } catch (const ruvia::http_client_error& error) {
+                read_failed = error.code() == item.error_;
             }
-            RUVIA_CHECK(readFailed);
-            FakeRead siblingInput{.wire = responseHead()};
-            appendFrame(siblingInput.wire, 0, "sibling");
-            RUVIA_CHECK(driver.drive(4, siblingInput).status == Driver::Status::kProgress);
-            FakeRead siblingFin{.fin = true};
-            const auto siblingFinished = driver.drive(4, siblingFin);
-            RUVIA_CHECK(siblingFinished.status == Driver::Status::kResponseComplete);
-            RUVIA_CHECK(siblingDelivery.commit(siblingFinished) == Delivery::CommitStatus::kCommitted);
-            RUVIA_CHECK(siblingState.complete && siblingState.pending == "sibling");
-            RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{7});
-            siblingState.discardResponseBody();
-            RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{0});
+            RUVIA_CHECK(read_failed);
+            fake_read sibling_input{.wire_ = response_head()};
+            append_frame(sibling_input.wire_, 0, "sibling");
+            RUVIA_CHECK(driver.drive(4, sibling_input).status_ == driver_type::status_type::progress);
+            fake_read sibling_fin{.fin_ = true};
+            const auto sibling_finished = driver.drive(4, sibling_fin);
+            RUVIA_CHECK(sibling_finished.status_ == driver_type::status_type::response_complete);
+            RUVIA_CHECK(sibling_delivery.commit(sibling_finished) == delivery_type::commit_status_type::committed);
+            RUVIA_CHECK(sibling_state.complete_ && sibling_state.pending_ == "sibling");
+            RUVIA_CHECK_EQ(receive_budget.used(), std::size_t{7});
+            sibling_state.discard_response_body();
+            RUVIA_CHECK_EQ(receive_budget.used(), std::size_t{0});
             RUVIA_CHECK(engine.release(0));
             RUVIA_CHECK(engine.release(4));
         }
         co_return;
     };
-    runOperation(worker, io, operation);
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(http3_client_response_delivery_parser_registration_allocation_failure_leaves_no_entry) {
-    ruvia::test::RejectingMemoryResource resource;
-    Engine engine(&resource);
+    ruvia::test::rejecting_memory_resource resource;
+    engine_type engine(&resource);
     std::size_t callbacks{};
-    const auto sink = ruvia::detail::Http3ClientResponseEventSink{
-        .callback = [](void* context, const ruvia::Http3ConnectionEvent&) {
-            ++*static_cast<std::size_t*>(context);
+    const auto sink_value = ruvia::detail::http3_client_response_event_sink{
+        .callback_ = [](void* context_value, const ruvia::http3_connection_event&) {
+            ++*static_cast<std::size_t*>(context_value);
         },
-        .context = &callbacks,
+        .context_ = &callbacks,
     };
-    const auto allocationsBefore = resource.allocationCount();
-    resource.rejectAllocations();
-    bool allocationFailed = false;
+    const auto allocations_before = resource.allocation_count();
+    resource.reject_allocations();
+    bool allocation_failed = false;
     try {
-        (void)engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, sink);
+        (void)engine.register_request(0, ruvia::http_known_method::get, sink_value);
     } catch (const std::bad_alloc&) {
-        allocationFailed = true;
+        allocation_failed = true;
     }
-    RUVIA_CHECK(allocationFailed);
-    RUVIA_CHECK_EQ(resource.allocationCount(), allocationsBefore + 1);
-    RUVIA_CHECK_EQ(engine.liveStreamCount(), std::size_t{0});
+    RUVIA_CHECK(allocation_failed);
+    RUVIA_CHECK_EQ(resource.allocation_count(), allocations_before + 1);
+    RUVIA_CHECK_EQ(engine.live_stream_count(), std::size_t{0});
     RUVIA_CHECK(!engine.response(0));
     RUVIA_CHECK_EQ(callbacks, std::size_t{0});
 
-    resource.rejectAllocations(false);
-    RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet, sink).scope ==
-                ruvia::Http3ConnectionErrorScope::kNone);
-    RUVIA_CHECK_EQ(engine.liveStreamCount(), std::size_t{1});
-    RUVIA_CHECK(engine.stop().status ==
-                ruvia::detail::Http3ClientSansIoSessionStatus::kTransportError);
+    resource.reject_allocations(false);
+    RUVIA_CHECK(engine.register_request(0, ruvia::http_known_method::get, sink_value).scope_ ==
+                ruvia::http3_connection_error_scope::none);
+    RUVIA_CHECK_EQ(engine.live_stream_count(), std::size_t{1});
+    RUVIA_CHECK(engine.stop().status_ ==
+                ruvia::detail::http3_client_sans_io_session_status::transport_error);
     RUVIA_CHECK(engine.response(0).has_value());
     RUVIA_CHECK(engine.release(0));
-    RUVIA_CHECK_EQ(engine.liveStreamCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(engine.live_stream_count(), std::size_t{0});
     RUVIA_CHECK_EQ(callbacks, std::size_t{0});
 }

@@ -7,90 +7,90 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/Async.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/Socket.h"
+#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/socket.h"
 
-#include "router/RouterImpl.h"
-#include "server/NativeAcceptedSocketTicket.h"
-#include "server/WebWorkerRuntime.h"
+#include "router/router_impl.h"
+#include "server/native_accepted_socket_ticket.h"
+#include "server/web_worker_runtime.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
-struct Observation {
-    std::string bytes;
-    bool finishFirst{};
-    bool ended{};
-    bool retainedStable{true};
+struct observation {
+    std::string bytes_;
+    bool finish_first_{};
+    bool ended_{};
+    bool retained_stable_{true};
 };
-ruvia::Task<void> tunnelHandler(void* raw, ruvia::Context& context) {
-    auto& observed = *static_cast<Observation*>(raw);
-    auto& tunnel = context.tunnel();
-    if (observed.finishFirst) {
+ruvia::task<void> tunnel_handler(void* raw, ruvia::context& context_value) {
+    auto& observed_value = *static_cast<observation*>(raw);
+    auto& tunnel = context_value.tunnel();
+    if (observed_value.finish_first_) {
         co_await tunnel.finish();
     }
     std::optional<std::pmr::string> retained;
     while (auto bytes = co_await tunnel.read()) {
-        observed.bytes.append(*bytes);
+        observed_value.bytes_.append(*bytes);
         if (!retained) {
-            retained.emplace(*bytes, context.pool());
+            retained.emplace(*bytes, context_value.pool());
         }
-        if (!observed.finishFirst) {
+        if (!observed_value.finish_first_) {
             auto output = tunnel.write(std::string_view(*bytes));
             bytes->assign("input changed before awaiting output");
             co_await std::move(output);
         }
-        observed.retainedStable = observed.retainedStable && retained->find_first_not_of('t') == std::string_view::npos;
+        observed_value.retained_stable_ = observed_value.retained_stable_ && retained->find_first_not_of('t') == std::string_view::npos;
     }
-    observed.ended = true;
+    observed_value.ended_ = true;
     co_await tunnel.finish();
 }
-void exerciseConnect(ruvia::testing::TestContext& ruvia_ctx, bool finishFirst) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io);
-    Observation observed;
-    observed.finishFirst = finishFirst;
-    ruvia::detail::Router router;
-    auto& routes = ruvia::detail::RouterImpl::from(router);
-    routes.registerTunnelRoute({}, std::pmr::string("target.test:443"), {&observed, &tunnelHandler}, {}, {});
-    routes.finalize();
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes.routeTable(), {});
+void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    observation observed;
+    observed.finish_first_ = finish_first;
+    ruvia::detail::router router;
+    auto& routes_value = ruvia::detail::router_impl::from(router);
+    routes_value.register_tunnel_route({}, std::pmr::string("target.test:443"), {&observed, &tunnel_handler}, {}, {});
+    routes_value.finalize();
+    ruvia::detail::web_worker_runtime server(asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes_value.route_table(), {});
     server.start();
-    asio::ip::tcp::acceptor source(io, {asio::ip::address_v4::loopback(), 0});
+    asio::ip::tcp::acceptor source_value(io, {asio::ip::address_v4::loopback(), 0});
     asio::ip::tcp::socket client(io);
-    client.connect(source.local_endpoint());
+    client.connect(source_value.local_endpoint());
     asio::ip::tcp::socket accepted(io);
-    source.accept(accepted);
+    source_value.accept(accepted);
     std::error_code error;
     auto native = accepted.release(error);
     RUVIA_CHECK(!error);
-    auto ticket = ruvia::detail::NativeAcceptedSocketTicket(asio::ip::tcp::v4(), 0, native);
-    const auto posted = server.networkSubmission().post([&server, ticket = std::move(ticket)]() mutable {
-        server.acceptTransferredConnection(std::move(ticket));
+    auto ticket = ruvia::detail::native_accepted_socket_ticket(asio::ip::tcp::v4(), 0, native);
+    const auto posted = server.network_submission().post([&server, ticket = std::move(ticket)]() mutable {
+        server.accept_transferred_connection(std::move(ticket));
     });
     RUVIA_CHECK(posted.accepted());
-    const std::string initial(5007, 't');
+    const std::string initial_value(5007, 't');
     const std::string additional(100003, 't');
     std::exception_ptr failure;
-    auto run = [&]() -> ruvia::Task<void> {
-        asio::steady_timer watchdog(io, std::chrono::seconds(5));
-        watchdog.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::closeSocket(client); } });
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
         try {
-            const auto send = [&](std::string_view bytes) -> ruvia::Task<void> {
-                const auto result = co_await ruvia::asyncAsio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes), std::move(handler)); });
-                if (result.errorCode()) {
-                    throw std::system_error(result.errorCode());
+            const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
+                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
+                if (result_value.error_code()) {
+                    throw std::system_error(result_value.error_code());
                 }
             };
-            const std::string request = "CONNECT TARGET.TEST:0443 HTTP/1.1\r\nHost: TARGET.TEST:0443\r\n\r\n" + initial;
+            const std::string request = "CONNECT TARGET.TEST:0443 HTTP/1.1\r\nHost: TARGET.TEST:0443\r\n\r\n" + initial_value;
             co_await send(request);
             std::string head;
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
-                const auto read = co_await ruvia::asyncAsio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
-                if (read.errorCode()) {
-                    throw std::system_error(read.errorCode());
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
                 }
                 head.push_back(byte);
             }
@@ -99,30 +99,30 @@ void exerciseConnect(ruvia::testing::TestContext& ruvia_ctx, bool finishFirst) {
             RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string::npos);
             std::array<char, 4096> input{};
             std::string echoed;
-            if (!finishFirst) {
+            if (!finish_first) {
                 co_await send(additional);
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
             }
             for (;;) {
-                const auto read = co_await ruvia::asyncAsio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
-                if (read.errorCode() == asio::error::eof) {
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                if (read.error_code() == asio::error::eof) {
                     break;
                 }
-                if (read.errorCode()) {
-                    throw std::system_error(read.errorCode());
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
                 }
                 echoed.append(input.data(), read.result());
             }
-            RUVIA_CHECK(echoed == (finishFirst ? std::string{} : initial + additional));
-            if (finishFirst) {
+            RUVIA_CHECK(echoed == (finish_first ? std::string{} : initial_value + additional));
+            if (finish_first) {
                 co_await send(additional);
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
             }
         } catch (...) {
             failure = std::current_exception();
-            ruvia::closeSocket(client);
+            ruvia::close_socket(client);
         }
-        (void)watchdog.cancel();
+        (void)watchdog_value.cancel();
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
@@ -130,8 +130,8 @@ void exerciseConnect(ruvia::testing::TestContext& ruvia_ctx, bool finishFirst) {
     root.get();
     // A serving worker can still be consuming the bytes sent after its FIN.
     // Closing admission does not destroy its pending connection coroutines.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (server.stats().activeConnections != 0 && std::chrono::steady_clock::now() < deadline) {
+    const auto deadline_value = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (server.stats().active_connections_ != 0 && std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     server.stop();
@@ -139,12 +139,12 @@ void exerciseConnect(ruvia::testing::TestContext& ruvia_ctx, bool finishFirst) {
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK(observed.ended && observed.retainedStable);
-    RUVIA_CHECK(observed.bytes == initial + additional);
+    RUVIA_CHECK(observed.ended_ && observed.retained_stable_);
+    RUVIA_CHECK(observed.bytes_ == initial_value + additional);
 }
 }  // namespace
 
-RUVIA_TEST(http1ConnectRoutesTransferBufferedBytesAndKeepReceiveDirectionAfterSendFin) {
-    exerciseConnect(ruvia_ctx, false);
-    exerciseConnect(ruvia_ctx, true);
+RUVIA_TEST(http1_connect_routes_transfer_buffered_bytes_and_keep_receive_direction_after_send_fin) {
+    exercise_connect(ruvia_ctx, false);
+    exercise_connect(ruvia_ctx, true);
 }

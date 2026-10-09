@@ -5,25 +5,25 @@
 #include <new>
 
 namespace ruvia::test {
-class HeaderMemory final : public std::pmr::memory_resource {
+class header_memory final : public std::pmr::memory_resource {
 public:
-    std::size_t liveBytes{0};
-    std::size_t allocations{0};
-    bool reject{false};
+    std::size_t live_bytes_{0};
+    std::size_t allocations_{0};
+    bool reject_{false};
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (reject) {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (reject_) {
             throw std::bad_alloc();
         }
-        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        liveBytes += bytes;
-        ++allocations;
-        return result;
+        auto* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        live_bytes_ += bytes_value;
+        ++allocations_;
+        return result_value;
     }
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        liveBytes -= bytes;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
+        live_bytes_ -= bytes_value;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;

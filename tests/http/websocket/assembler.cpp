@@ -8,145 +8,145 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_protocol.h"
 
 #include "test_harness.h"
-#include "websocket/HttpWebSocketFrameCodec.h"
-#include "websocket/HttpWebSocketFrameView.h"
-#include "websocket/HttpWebSocketInboundAssembler.h"
+#include "websocket/http_websocket_frame_codec.h"
+#include "websocket/http_websocket_frame_view.h"
+#include "websocket/http_websocket_inbound_assembler.h"
 
 namespace {
 
-using ruvia::ProtocolByteLimit;
-using ruvia::WebSocketMessage;
-using ruvia::WebSocketOpcode;
-using ruvia::detail::WebSocketFrameView;
-using ruvia::detail::WebSocketInboundAssembler;
-using ruvia::detail::WebSocketInboundContentEncoding;
-using ruvia::detail::WebSocketInboundResult;
-using ruvia::detail::WebSocketMessageAccess;
-using ruvia::detail::WebSocketProtocolFailure;
-using ruvia::detail::webSocketProtocolFailureCloseCode;
+using ruvia::protocol_byte_limit;
+using ruvia::websocket_message;
+using ruvia::websocket_opcode;
+using ruvia::detail::websocket_frame_view;
+using ruvia::detail::websocket_inbound_assembler;
+using ruvia::detail::websocket_inbound_content_encoding;
+using ruvia::detail::websocket_inbound_result;
+using ruvia::detail::websocket_message_access;
+using ruvia::detail::websocket_protocol_failure;
+using ruvia::detail::websocket_protocol_failure_close_code;
 
-WebSocketFrameView frame(WebSocketOpcode opcode, std::string_view payload, bool fin,
+websocket_frame_view frame(websocket_opcode opcode, std::string_view payload_value, bool fin,
     bool continuation = false, bool rsv1 = false) {
     if (continuation) {
-        return WebSocketFrameView::continuation(payload, fin);
+        return websocket_frame_view::continuation(payload_value, fin);
     }
     switch (opcode) {
-        case WebSocketOpcode::kText:
-            return WebSocketFrameView::text(payload, fin, rsv1);
-        case WebSocketOpcode::kBinary:
-            return WebSocketFrameView::binary(payload, fin, rsv1);
-        case WebSocketOpcode::kClose:
-            return *WebSocketFrameView::close(payload);
-        case WebSocketOpcode::kPing:
-            return *WebSocketFrameView::ping(payload);
-        case WebSocketOpcode::kPong:
-            return *WebSocketFrameView::pong(payload);
+        case websocket_opcode::text:
+            return websocket_frame_view::text(payload_value, fin, rsv1);
+        case websocket_opcode::binary:
+            return websocket_frame_view::binary(payload_value, fin, rsv1);
+        case websocket_opcode::close:
+            return *websocket_frame_view::close(payload_value);
+        case websocket_opcode::ping:
+            return *websocket_frame_view::ping(payload_value);
+        case websocket_opcode::pong:
+            return *websocket_frame_view::pong(payload_value);
     }
-    return WebSocketFrameView::text(payload, fin, rsv1);
+    return websocket_frame_view::text(payload_value, fin, rsv1);
 }
 
-ProtocolByteLimit byteLimit(std::size_t bytes) {
-    return ProtocolByteLimit::limited(bytes);
+protocol_byte_limit byte_limit(std::size_t bytes_value) {
+    return protocol_byte_limit::limited(bytes_value);
 }
 
-class FailNextAllocationResource final : public std::pmr::memory_resource {
+class fail_next_allocation_resource final : public std::pmr::memory_resource {
 public:
-    void failNext() noexcept {
-        failNext_ = true;
+    void fail_next() noexcept {
+        fail_next_ = true;
     }
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (failNext_) {
-            failNext_ = false;
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (fail_next_) {
+            fail_next_ = false;
             throw std::bad_alloc();
         }
-        return std::pmr::get_default_resource()->allocate(bytes, alignment);
+        return std::pmr::get_default_resource()->allocate(bytes_value, alignment);
     }
 
-    void do_deallocate(void* p, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::get_default_resource()->deallocate(p, bytes, alignment);
+    void do_deallocate(void* p, std::size_t bytes_value, std::size_t alignment) override {
+        std::pmr::get_default_resource()->deallocate(p, bytes_value, alignment);
     }
 
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
-    bool failNext_{false};
+    bool fail_next_{false};
 };
 
 // The RFC 6455 §7.4.1 close code the violation must be reported with (0 if none).
-std::uint16_t acceptCloseCode(WebSocketInboundAssembler& assembler, const WebSocketFrameView& f,
-    ProtocolByteLimit messageLimit) {
-    const auto result = assembler.accept(f, messageLimit);
-    const auto* failure = result.failure();
-    return failure != nullptr ? webSocketProtocolFailureCloseCode(failure->error()) : 0;
+std::uint16_t accept_close_code(websocket_inbound_assembler& assembler, const websocket_frame_view& f,
+    protocol_byte_limit message_limit) {
+    const auto result_value = assembler.accept(f, message_limit);
+    const auto* failure = result_value.failure();
+    return failure != nullptr ? websocket_protocol_failure_close_code(failure->error()) : 0;
 }
 
 }  // namespace
 
 RUVIA_TEST(ws_assembler_control_frames) {
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
-    const auto ping = assembler.accept(frame(WebSocketOpcode::kPing, "p", true), byteLimit(1000));
-    RUVIA_CHECK(ping.controlFrame() != nullptr);
-    RUVIA_CHECK(ping.controlFrame()->opcode() == WebSocketOpcode::kPing);
-    RUVIA_CHECK_EQ(ping.controlFrame()->payload(), std::string_view("p"));
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
+    const auto ping = assembler.accept(frame(websocket_opcode::ping, "p", true), byte_limit(1000));
+    RUVIA_CHECK(ping.control_frame() != nullptr);
+    RUVIA_CHECK(ping.control_frame()->opcode() == websocket_opcode::ping);
+    RUVIA_CHECK_EQ(ping.control_frame()->payload(), std::string_view("p"));
 
-    const auto pong = assembler.accept(frame(WebSocketOpcode::kPong, "", true), byteLimit(1000));
-    RUVIA_CHECK(pong.controlFrame() != nullptr);
-    RUVIA_CHECK(pong.controlFrame()->opcode() == WebSocketOpcode::kPong);
+    const auto pong = assembler.accept(frame(websocket_opcode::pong, "", true), byte_limit(1000));
+    RUVIA_CHECK(pong.control_frame() != nullptr);
+    RUVIA_CHECK(pong.control_frame()->opcode() == websocket_opcode::pong);
 
-    const auto close = assembler.accept(frame(WebSocketOpcode::kClose, "", true), byteLimit(1000));
-    RUVIA_CHECK(close.controlFrame() != nullptr);
-    RUVIA_CHECK(close.controlFrame()->opcode() == WebSocketOpcode::kClose);
+    const auto close = assembler.accept(frame(websocket_opcode::close, "", true), byte_limit(1000));
+    RUVIA_CHECK(close.control_frame() != nullptr);
+    RUVIA_CHECK(close.control_frame()->opcode() == websocket_opcode::close);
 }
 
 RUVIA_TEST(ws_assembler_single_frame_messages) {
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
     const auto text =
-        assembler.accept(frame(WebSocketOpcode::kText, "hello", true), byteLimit(1000));
+        assembler.accept(frame(websocket_opcode::text, "hello", true), byte_limit(1000));
     RUVIA_CHECK(text.message() != nullptr);
     RUVIA_CHECK_EQ(text.message()->message().payload(), std::string_view("hello"));
-    RUVIA_CHECK(text.message()->contentEncoding() == WebSocketInboundContentEncoding::kIdentity);
+    RUVIA_CHECK(text.message()->content_encoding() == websocket_inbound_content_encoding::identity);
     // Binary is delivered without UTF-8 checking.
     const std::string binary("\xff\xfe\x00\x01", 4);
-    const auto binaryResult =
-        assembler.accept(frame(WebSocketOpcode::kBinary, binary, true), byteLimit(1000));
-    RUVIA_CHECK(binaryResult.message() != nullptr);
-    RUVIA_CHECK_EQ(binaryResult.message()->message().payload(), std::string_view(binary));
+    const auto binary_result =
+        assembler.accept(frame(websocket_opcode::binary, binary, true), byte_limit(1000));
+    RUVIA_CHECK(binary_result.message() != nullptr);
+    RUVIA_CHECK_EQ(binary_result.message()->message().payload(), std::string_view(binary));
     // A compressed (RSV1) frame defers to the connection for inflation.
     const auto compressed =
-        assembler.accept(frame(WebSocketOpcode::kText, "z", true, false, true), byteLimit(1000));
+        assembler.accept(frame(websocket_opcode::text, "z", true, false, true), byte_limit(1000));
     RUVIA_CHECK(compressed.message() != nullptr);
-    RUVIA_CHECK(compressed.message()->contentEncoding() ==
-                WebSocketInboundContentEncoding::kPerMessageDeflate);
+    RUVIA_CHECK(compressed.message()->content_encoding() ==
+                websocket_inbound_content_encoding::per_message_deflate);
 }
 
 RUVIA_TEST(ws_assembler_invalid_utf8_text) {
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
     const std::string overlong("\xc0\x80", 2);  // overlong encoding of NUL
-    const auto result =
-        assembler.accept(frame(WebSocketOpcode::kText, overlong, true), byteLimit(1000));
-    RUVIA_CHECK(result.failure() != nullptr);
-    RUVIA_CHECK(result.failure()->error() == WebSocketProtocolFailure::kInvalidPayloadData);
+    const auto result_value =
+        assembler.accept(frame(websocket_opcode::text, overlong, true), byte_limit(1000));
+    RUVIA_CHECK(result_value.failure() != nullptr);
+    RUVIA_CHECK(result_value.failure()->error() == websocket_protocol_failure::invalid_payload_data);
 }
 
 RUVIA_TEST(ws_assembler_fragmented_message) {
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
     const auto first =
-        assembler.accept(frame(WebSocketOpcode::kText, "hel", false), byteLimit(1000));
-    RUVIA_CHECK(first.continueReading() != nullptr);
+        assembler.accept(frame(websocket_opcode::text, "hel", false), byte_limit(1000));
+    RUVIA_CHECK(first.continue_reading() != nullptr);
     const auto second =
-        assembler.accept(frame(WebSocketOpcode::kText, "lo ", false, true), byteLimit(1000));
-    RUVIA_CHECK(second.continueReading() != nullptr);
-    const auto complete =
-        assembler.accept(frame(WebSocketOpcode::kText, "world", true, true), byteLimit(1000));
-    RUVIA_CHECK(complete.message() != nullptr);
-    RUVIA_CHECK_EQ(complete.message()->message().payload(), std::string_view("hello world"));
+        assembler.accept(frame(websocket_opcode::text, "lo ", false, true), byte_limit(1000));
+    RUVIA_CHECK(second.continue_reading() != nullptr);
+    const auto complete_value =
+        assembler.accept(frame(websocket_opcode::text, "world", true, true), byte_limit(1000));
+    RUVIA_CHECK(complete_value.message() != nullptr);
+    RUVIA_CHECK_EQ(complete_value.message()->message().payload(), std::string_view("hello world"));
 }
 
 #if !defined(_MSC_VER)
@@ -154,118 +154,118 @@ RUVIA_TEST(ws_assembler_fragmented_message) {
 // the resource throws. Keep the exact allocation-failure retry contract on the
 // standard libraries where that failure path is well behaved.
 RUVIA_TEST(ws_assembler_first_fragment_allocation_failure_is_retryable) {
-    FailNextAllocationResource resource;
-    WebSocketInboundAssembler assembler(&resource);
-    const std::string payload(128, 'x');
+    fail_next_allocation_resource resource;
+    websocket_inbound_assembler assembler(&resource);
+    const std::string payload_value(128, 'x');
 
-    resource.failNext();
+    resource.fail_next();
     bool threw = false;
     try {
-        (void)assembler.accept(frame(WebSocketOpcode::kText, payload, false), byteLimit(1000));
+        (void)assembler.accept(frame(websocket_opcode::text, payload_value, false), byte_limit(1000));
     } catch (const std::bad_alloc&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
 
     const auto retried =
-        assembler.accept(frame(WebSocketOpcode::kText, payload, false), byteLimit(1000));
-    RUVIA_CHECK(retried.continueReading() != nullptr);
-    const auto complete =
-        assembler.accept(frame(WebSocketOpcode::kText, "done", true, true), byteLimit(1000));
-    RUVIA_CHECK(complete.message() != nullptr);
-    RUVIA_CHECK_EQ(complete.message()->message().payload().size(),
-        payload.size() + std::string_view("done").size());
+        assembler.accept(frame(websocket_opcode::text, payload_value, false), byte_limit(1000));
+    RUVIA_CHECK(retried.continue_reading() != nullptr);
+    const auto complete_value =
+        assembler.accept(frame(websocket_opcode::text, "done", true, true), byte_limit(1000));
+    RUVIA_CHECK(complete_value.message() != nullptr);
+    RUVIA_CHECK_EQ(complete_value.message()->message().payload().size(),
+        payload_value.size() + std::string_view("done").size());
 }
 #endif  // !_MSC_VER
 
 RUVIA_TEST(ws_assembler_control_frame_interleaved_in_fragments) {
     // RFC 6455 §5.4: a control frame may be injected between the fragments of a
     // data message and MUST NOT disrupt the reassembly already in progress.
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
     const auto first =
-        assembler.accept(frame(WebSocketOpcode::kText, "hel", false), byteLimit(1000));
-    RUVIA_CHECK(first.continueReading() != nullptr);
+        assembler.accept(frame(websocket_opcode::text, "hel", false), byte_limit(1000));
+    RUVIA_CHECK(first.continue_reading() != nullptr);
     // A ping arrives mid-message: it is answered but the fragment state is untouched.
-    const auto ping = assembler.accept(frame(WebSocketOpcode::kPing, "p", true), byteLimit(1000));
-    RUVIA_CHECK(ping.controlFrame() != nullptr);
-    RUVIA_CHECK(ping.controlFrame()->opcode() == WebSocketOpcode::kPing);
+    const auto ping = assembler.accept(frame(websocket_opcode::ping, "p", true), byte_limit(1000));
+    RUVIA_CHECK(ping.control_frame() != nullptr);
+    RUVIA_CHECK(ping.control_frame()->opcode() == websocket_opcode::ping);
     // The continuation still completes the ORIGINAL message intact.
-    const auto complete =
-        assembler.accept(frame(WebSocketOpcode::kText, "lo", true, true), byteLimit(1000));
-    RUVIA_CHECK(complete.message() != nullptr);
-    RUVIA_CHECK_EQ(complete.message()->message().payload(), std::string_view("hello"));
+    const auto complete_value =
+        assembler.accept(frame(websocket_opcode::text, "lo", true, true), byte_limit(1000));
+    RUVIA_CHECK(complete_value.message() != nullptr);
+    RUVIA_CHECK_EQ(complete_value.message()->message().payload(), std::string_view("hello"));
 }
 
 RUVIA_TEST(ws_assembler_fragmented_compressed_defers_validation) {
     // A compressed message carries RSV1 on its FIRST frame only; the assembler must
     // remember that across continuation frames and, on completion, defer to the
     // connection for inflation (UTF-8 cannot be judged until the bytes are inflated).
-    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    websocket_inbound_assembler assembler(std::pmr::get_default_resource());
     const auto first = assembler.accept(
-        frame(WebSocketOpcode::kText, std::string_view("\x01\x02", 2), false, false, true),
-        byteLimit(1000));
-    RUVIA_CHECK(first.continueReading() != nullptr);
-    const auto complete = assembler.accept(
-        frame(WebSocketOpcode::kText, std::string_view("\x03", 1), true, true), byteLimit(1000));
-    RUVIA_CHECK(complete.message() != nullptr);
-    RUVIA_CHECK(complete.message()->contentEncoding() ==
-                WebSocketInboundContentEncoding::kPerMessageDeflate);
-    RUVIA_CHECK_EQ(complete.message()->message().payload().size(), std::size_t{3});
+        frame(websocket_opcode::text, std::string_view("\x01\x02", 2), false, false, true),
+        byte_limit(1000));
+    RUVIA_CHECK(first.continue_reading() != nullptr);
+    const auto complete_value = assembler.accept(
+        frame(websocket_opcode::text, std::string_view("\x03", 1), true, true), byte_limit(1000));
+    RUVIA_CHECK(complete_value.message() != nullptr);
+    RUVIA_CHECK(complete_value.message()->content_encoding() ==
+                websocket_inbound_content_encoding::per_message_deflate);
+    RUVIA_CHECK_EQ(complete_value.message()->message().payload().size(), std::size_t{3});
 }
 
 RUVIA_TEST(ws_assembler_protocol_errors) {
     // A continuation frame with no message in progress is a protocol violation.
-    WebSocketInboundAssembler noStart(std::pmr::get_default_resource());
-    const auto noStartResult =
-        noStart.accept(frame(WebSocketOpcode::kText, "x", true, true), byteLimit(1000));
-    RUVIA_CHECK(noStartResult.failure() != nullptr);
-    RUVIA_CHECK(noStartResult.failure()->error() == WebSocketProtocolFailure::kProtocolError);
+    websocket_inbound_assembler no_start(std::pmr::get_default_resource());
+    const auto no_start_result =
+        no_start.accept(frame(websocket_opcode::text, "x", true, true), byte_limit(1000));
+    RUVIA_CHECK(no_start_result.failure() != nullptr);
+    RUVIA_CHECK(no_start_result.failure()->error() == websocket_protocol_failure::protocol_error);
 
     // A new data frame while a fragmented message is in progress is a violation.
-    WebSocketInboundAssembler interleaved(std::pmr::get_default_resource());
+    websocket_inbound_assembler interleaved(std::pmr::get_default_resource());
     const auto started =
-        interleaved.accept(frame(WebSocketOpcode::kText, "start", false), byteLimit(1000));
-    RUVIA_CHECK(started.continueReading() != nullptr);
-    const auto interleavedResult =
-        interleaved.accept(frame(WebSocketOpcode::kText, "new", true), byteLimit(1000));
-    RUVIA_CHECK(interleavedResult.failure() != nullptr);
-    RUVIA_CHECK(interleavedResult.failure()->error() == WebSocketProtocolFailure::kProtocolError);
+        interleaved.accept(frame(websocket_opcode::text, "start", false), byte_limit(1000));
+    RUVIA_CHECK(started.continue_reading() != nullptr);
+    const auto interleaved_result =
+        interleaved.accept(frame(websocket_opcode::text, "new", true), byte_limit(1000));
+    RUVIA_CHECK(interleaved_result.failure() != nullptr);
+    RUVIA_CHECK(interleaved_result.failure()->error() == websocket_protocol_failure::protocol_error);
 
     // Exceeding the per-message size limit across fragments is an explicit failure.
-    WebSocketInboundAssembler tooBig(std::pmr::get_default_resource());
-    const auto withinLimit =
-        tooBig.accept(frame(WebSocketOpcode::kText, "12345", false), byteLimit(10));
-    RUVIA_CHECK(withinLimit.continueReading() != nullptr);
-    const auto tooBigResult =
-        tooBig.accept(frame(WebSocketOpcode::kText, "678901", true, true), byteLimit(10));
-    RUVIA_CHECK(tooBigResult.failure() != nullptr);
-    RUVIA_CHECK(tooBigResult.failure()->error() == WebSocketProtocolFailure::kMessageTooLarge);
+    websocket_inbound_assembler too_big(std::pmr::get_default_resource());
+    const auto within_limit =
+        too_big.accept(frame(websocket_opcode::text, "12345", false), byte_limit(10));
+    RUVIA_CHECK(within_limit.continue_reading() != nullptr);
+    const auto too_big_result =
+        too_big.accept(frame(websocket_opcode::text, "678901", true, true), byte_limit(10));
+    RUVIA_CHECK(too_big_result.failure() != nullptr);
+    RUVIA_CHECK(too_big_result.failure()->error() == websocket_protocol_failure::message_too_large);
 
-    WebSocketInboundAssembler firstFrameTooBig(std::pmr::get_default_resource());
-    const auto firstFrameResult =
-        firstFrameTooBig.accept(frame(WebSocketOpcode::kBinary, "123456", false), byteLimit(5));
-    RUVIA_CHECK(firstFrameResult.failure() != nullptr);
-    RUVIA_CHECK(firstFrameResult.failure()->error() == WebSocketProtocolFailure::kMessageTooLarge);
+    websocket_inbound_assembler first_frame_too_big(std::pmr::get_default_resource());
+    const auto first_frame_result =
+        first_frame_too_big.accept(frame(websocket_opcode::binary, "123456", false), byte_limit(5));
+    RUVIA_CHECK(first_frame_result.failure() != nullptr);
+    RUVIA_CHECK(first_frame_result.failure()->error() == websocket_protocol_failure::message_too_large);
 }
 
 RUVIA_TEST(ws_assembler_violations_carry_rfc_close_code) {
     // RFC 6455 §7.4.1: framing/fragmentation violations report 1002 (protocol
     // error); a size-limit breach reports 1009 (message too big). The read loop
     // sends this code rather than the generic 1011 (internal error).
-    WebSocketInboundAssembler noStart(std::pmr::get_default_resource());
+    websocket_inbound_assembler no_start(std::pmr::get_default_resource());
     RUVIA_CHECK_EQ(
-        acceptCloseCode(noStart, frame(WebSocketOpcode::kText, "x", true, true), byteLimit(1000)),
+        accept_close_code(no_start, frame(websocket_opcode::text, "x", true, true), byte_limit(1000)),
         std::uint16_t{1002});  // continuation with no message open
 
-    WebSocketInboundAssembler interleaved(std::pmr::get_default_resource());
-    (void)interleaved.accept(frame(WebSocketOpcode::kText, "start", false), byteLimit(1000));
+    websocket_inbound_assembler interleaved(std::pmr::get_default_resource());
+    (void)interleaved.accept(frame(websocket_opcode::text, "start", false), byte_limit(1000));
     RUVIA_CHECK_EQ(
-        acceptCloseCode(interleaved, frame(WebSocketOpcode::kText, "new", true), byteLimit(1000)),
+        accept_close_code(interleaved, frame(websocket_opcode::text, "new", true), byte_limit(1000)),
         std::uint16_t{1002});  // interleaved non-continuation data frame
 
-    WebSocketInboundAssembler tooBig(std::pmr::get_default_resource());
-    (void)tooBig.accept(frame(WebSocketOpcode::kText, "12345", false), byteLimit(10));
+    websocket_inbound_assembler too_big(std::pmr::get_default_resource());
+    (void)too_big.accept(frame(websocket_opcode::text, "12345", false), byte_limit(10));
     RUVIA_CHECK_EQ(
-        acceptCloseCode(tooBig, frame(WebSocketOpcode::kText, "678901", true, true), byteLimit(10)),
+        accept_close_code(too_big, frame(websocket_opcode::text, "678901", true, true), byte_limit(10)),
         std::uint16_t{1009});  // per-message size limit exceeded
 }

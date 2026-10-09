@@ -11,13 +11,13 @@
 namespace ruvia::test {
 
 inline int sign_tls_certificate(X509* certificate, EVP_PKEY* key) {
-    const auto context = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(
+    const auto context_value = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(
         EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!context || EVP_DigestSignInit_ex(context.get(), nullptr, "SHA256", nullptr, nullptr,
-                        key, nullptr) != 1) {
+    if (!context_value || EVP_DigestSignInit_ex(context_value.get(), nullptr, "SHA256", nullptr, nullptr,
+                              key, nullptr) != 1) {
         return 0;
     }
-    return X509_sign_ctx(certificate, context.get());
+    return X509_sign_ctx(certificate, context_value.get());
 }
 
 inline int write_tls_private_key(BIO* output, const EVP_PKEY* key,
@@ -30,8 +30,8 @@ inline int write_tls_private_key(BIO* output, const EVP_PKEY* key,
     if (encrypted && !cipher) {
         return 0;
     }
-    const auto* bytes = reinterpret_cast<const unsigned char*>(password.empty() ? "" : password.data());
-    return PEM_write_bio_PrivateKey_ex(output, key, cipher.get(), encrypted ? bytes : nullptr,
+    const auto* bytes_value = reinterpret_cast<const unsigned char*>(password.empty() ? "" : password.data());
+    return PEM_write_bio_PrivateKey_ex(output, key, cipher.get(), encrypted ? bytes_value : nullptr,
         static_cast<int>(password.size()), nullptr, nullptr, nullptr, nullptr);
 }
 

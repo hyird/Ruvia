@@ -2,14 +2,14 @@
 
 #include <array>
 
-#include "ruvia/http/Http3Qpack.h"
+#include "ruvia/http/http3_qpack.h"
 
 #include "field/static_field_lookup.h"
 
 namespace ruvia::detail {
 
 // Normative QPACK wire table, shared by public index access and both encoders.
-inline constexpr std::array<Http3QpackStaticEntry, 99> qpack_static_table{{
+inline constexpr std::array<http3_qpack_static_entry, 99> qpack_static_table{{
     {":authority", ""},
     {":path", "/"},
     {"age", "0"},

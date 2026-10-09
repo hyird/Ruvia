@@ -1,45 +1,45 @@
 #include <string_view>
 
-#include "ruvia/http/Http2Connection.h"
-#include "ruvia/http/HttpResponseStream.h"
+#include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_response_stream.h"
 
-#include "http2/Http2RequestBuilder.h"
+#include "http2/http2_request_builder.h"
 #include "http2_connection_fixture.h"
-#include "request/HttpRequestAccess.h"
+#include "request/http_request_access.h"
 
-// Http2Connection: HEADERS, CONTINUATION, HPACK and trailers.
+// http2_connection: HEADERS, CONTINUATION, HPACK and trailers.
 
 RUVIA_TEST(http2_connection_header_table_reduction_prefixes_next_field_block) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
-    beginPeerInput(client);
+    http2_connection client(&resource, ruvia::detail::http2_role::client);
+    begin_peer_input(client);
 
     // RFC 9113 §4.3.1: after acknowledging a reduction of the peer's HPACK
     // dynamic-table maximum, the next field block must begin with a conformant
     // Dynamic Table Size Update. The stateless Ruvia encoder uses no dynamic
     // entries, so it can truthfully select zero (encoded as the single byte 0x20).
     char settings[15];
-    auto* out = ruvia::detail::http2WriteFrameHeader(settings, 6, Http2FrameType::kSettings, 0, 0);
-    out = ruvia::detail::http2WriteSettingsEntry(
-        out, ruvia::detail::Http2SettingId::kHeaderTableSize, 0);
+    auto* out = ruvia::detail::http2_write_frame_header(settings, 6, http2_frame_type::settings, 0, 0);
+    out = ruvia::detail::http2_write_settings_entry(
+        out, ruvia::detail::http2_setting_id::header_table_size, 0);
     RUVIA_CHECK_EQ(out, settings + sizeof(settings));
     RUVIA_CHECK(
-        client.feed(std::string_view(settings, sizeof(settings))) == Http2FeedResult::kAccepted);
+        client.feed(std::string_view(settings, sizeof(settings))) == http2_feed_result::accepted);
 
-    const auto ack = client.pendingOutput();
+    const auto ack = client.pending_output();
     RUVIA_CHECK_EQ(ack.size(), std::size_t{9});
     RUVIA_CHECK(
-        (ruvia::detail::http2ParseFrameHeader(ack).flags & ruvia::detail::kHttp2FlagAck) != 0);
-    client.consumeOutput(ack.size());
+        (ruvia::detail::http2_parse_frame_header(ack).flags_ & ruvia::detail::http2_flag_ack) != 0);
+    client.consume_output(ack.size());
 
-    const auto submitted = client.submitRegularRequestHead(
-        "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    const auto submitted = client.submit_regular_request_head(
+        "GET", "https", "example.test", "/", {}, http2_request_content::none());
     RUVIA_CHECK(submitted.submitted() != nullptr);
-    const auto bytes = client.pendingOutput();
-    const auto headers = ruvia::detail::http2ParseFrameHeader(bytes.substr(0, 9));
-    RUVIA_CHECK_EQ(headers.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK(headers.length > 0);
-    RUVIA_CHECK_EQ(static_cast<unsigned char>(bytes[9]), static_cast<unsigned char>(0x20));
+    const auto bytes_value = client.pending_output();
+    const auto headers = ruvia::detail::http2_parse_frame_header(bytes_value.substr(0, 9));
+    RUVIA_CHECK_EQ(headers.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK(headers.length_ > 0);
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(bytes_value[9]), static_cast<unsigned char>(0x20));
 }
 
 RUVIA_TEST(http2_connection_rejects_invalid_hpack_size_update_sequences) {
@@ -47,33 +47,33 @@ RUVIA_TEST(http2_connection_rejects_invalid_hpack_size_update_sequences) {
     // of a field block and requires the smallest value before the final value.
     // Either violation makes the field block undecodable, which RFC 9113
     // section 4.3 maps to a connection-level COMPRESSION_ERROR.
-    constexpr std::string_view invalidPrefixes[] = {
+    constexpr std::string_view invalid_prefixes[] = {
         std::string_view("\x20\x21\x22", 3),  // three updates
         std::string_view("\x2a\x25", 2),      // 10 then 5: smallest is last
     };
 
-    for (const auto prefix : invalidPrefixes) {
+    for (const auto prefix : invalid_prefixes) {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection conn(&resource);
+        http2_connection conn(&resource);
         handshake(conn);
 
         std::pmr::string block(prefix, &resource);
-        encodeGetRequest(block);
-        const auto request = headersFrame(&resource, 1,
-            ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        encode_get_request(block);
+        const auto request = headers_frame(&resource, 1,
+            ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
             std::string_view(block.data(), block.size()));
         RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
-                    Http2FeedResult::kProtocolFailure);
-        RUVIA_CHECK(conn.connectionError() == Http2ErrorCode::kCompressionError);
+                    http2_feed_result::protocol_failure);
+        RUVIA_CHECK(conn.connection_error() == http2_error_code::compression_error);
 
-        const auto output = conn.pendingOutput();
+        const auto output = conn.pending_output();
         RUVIA_CHECK(output.size() >= 17);
         if (output.size() >= 17) {
-            const auto goaway = ruvia::detail::http2ParseFrameHeader(output.substr(0, 9));
-            RUVIA_CHECK_EQ(goaway.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
-            RUVIA_CHECK_EQ(ruvia::detail::http2Read32(
+            const auto goaway = ruvia::detail::http2_parse_frame_header(output.substr(0, 9));
+            RUVIA_CHECK_EQ(goaway.type_, static_cast<std::uint8_t>(http2_frame_type::goaway));
+            RUVIA_CHECK_EQ(ruvia::detail::http2_read32(
                                reinterpret_cast<const unsigned char*>(output.data() + 13)),
-                static_cast<std::uint32_t>(Http2ErrorCode::kCompressionError));
+                static_cast<std::uint32_t>(http2_error_code::compression_error));
         }
     }
 }
@@ -83,60 +83,60 @@ RUVIA_TEST(http2_connection_rejects_invalid_hpack_size_update_sequences) {
 // Pad Length remains PROTOCOL_ERROR.
 
 RUVIA_TEST(http2_connection_malformed_headers_payload_error_codes) {
-    const auto goawayErrorFor = [&](std::uint8_t flags, std::string_view payload) {
+    const auto goaway_error_for = [&](std::uint8_t flags, std::string_view payload_value) {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection conn(&resource);
+        http2_connection conn(&resource);
         handshake(conn);
 
-        const auto frame = headersFrame(&resource, 1, flags, payload);
-        RUVIA_CHECK(conn.feed(frame) == Http2FeedResult::kProtocolFailure);
-        RUVIA_CHECK(conn.connectionError().has_value());
+        const auto frame = headers_frame(&resource, 1, flags, payload_value);
+        RUVIA_CHECK(conn.feed(frame) == http2_feed_result::protocol_failure);
+        RUVIA_CHECK(conn.connection_error().has_value());
 
-        const auto out = conn.pendingOutput();
-        const auto header = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-        RUVIA_CHECK_EQ(header.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
-        return ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(out.data() + 13));
+        const auto out = conn.pending_output();
+        const auto header_value = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+        RUVIA_CHECK_EQ(header_value.type_, static_cast<std::uint8_t>(http2_frame_type::goaway));
+        return ruvia::detail::http2_read32(reinterpret_cast<const unsigned char*>(out.data() + 13));
     };
 
     RUVIA_CHECK_EQ(
-        goawayErrorFor(ruvia::detail::kHttp2FlagPriority, std::string_view("\0\0\0\0", 4)),
-        static_cast<std::uint32_t>(Http2ErrorCode::kFrameSizeError));
-    RUVIA_CHECK_EQ(goawayErrorFor(ruvia::detail::kHttp2FlagPadded, std::string_view()),
-        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+        goaway_error_for(ruvia::detail::http2_flag_priority, std::string_view("\0\0\0\0", 4)),
+        static_cast<std::uint32_t>(http2_error_code::frame_size_error));
+    RUVIA_CHECK_EQ(goaway_error_for(ruvia::detail::http2_flag_padded, std::string_view()),
+        static_cast<std::uint32_t>(http2_error_code::protocol_error));
 }
 
 RUVIA_TEST(http2_connection_rejects_regular_header_values_with_edge_whitespace) {
     for (const auto value : {" value", "value ", "\tvalue", "value\t"}) {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection conn(&resource);
+        http2_connection conn(&resource);
         handshake(conn);
 
         std::pmr::string block(&resource);
-        encodeGetRequest(block);
-        HpackEncoder::encodeHeader(block, "x-test", value);
-        const auto request = headersFrame(&resource, 1,
-            ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        encode_get_request(block);
+        hpack_encoder::encode_header(block, "x-test", value);
+        const auto request = headers_frame(&resource, 1,
+            ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
             std::string_view(block.data(), block.size()));
 
         RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
-                    Http2FeedResult::kAccepted);
-        RUVIA_CHECK(!conn.connectionError().has_value());
-        const auto event = conn.nextEvent();
+                    http2_feed_result::accepted);
+        RUVIA_CHECK(!conn.connection_error().has_value());
+        const auto event = conn.next_event();
         RUVIA_CHECK(event.has_value());
         if (event.has_value()) {
-            RUVIA_CHECK(event->kind() == Http2EventKind::kStreamClosed);
+            RUVIA_CHECK(event->kind() == http2_event_kind::stream_closed);
         }
-        RUVIA_CHECK(!conn.nextEvent().has_value());
+        RUVIA_CHECK(!conn.next_event().has_value());
 
-        const auto out = conn.pendingOutput();
-        RUVIA_CHECK(out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4);
-        if (out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4) {
-            const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-            RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
-            RUVIA_CHECK_EQ(reset.streamId, std::uint32_t{1});
+        const auto out = conn.pending_output();
+        RUVIA_CHECK(out.size() >= ruvia::detail::http2_frame_header_bytes + 4);
+        if (out.size() >= ruvia::detail::http2_frame_header_bytes + 4) {
+            const auto reset = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+            RUVIA_CHECK_EQ(reset.type_, static_cast<std::uint8_t>(http2_frame_type::rst_stream));
+            RUVIA_CHECK_EQ(reset.stream_id_, std::uint32_t{1});
             RUVIA_CHECK_EQ(
-                ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(out.data() + 9)),
-                static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+                ruvia::detail::http2_read32(reinterpret_cast<const unsigned char*>(out.data() + 9)),
+                static_cast<std::uint32_t>(http2_error_code::protocol_error));
         }
         RUVIA_CHECK(conn.stream(1) == nullptr);
     }
@@ -147,38 +147,38 @@ RUVIA_TEST(http2_connection_rejects_regular_header_values_with_edge_whitespace) 
 
 RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     std::pmr::string first(&resource);
-    HpackEncoder::encodeHeader(first, ":method", "GET");
-    HpackEncoder::encodeHeader(first, ":scheme", "https");
+    hpack_encoder::encode_header(first, ":method", "GET");
+    hpack_encoder::encode_header(first, ":scheme", "https");
     std::pmr::string second(&resource);
-    HpackEncoder::encodeHeader(second, ":path", "/");
-    HpackEncoder::encodeHeader(second, ":authority", "example.com");
+    hpack_encoder::encode_header(second, ":path", "/");
+    hpack_encoder::encode_header(second, ":authority", "example.com");
 
     // HEADERS with END_STREAM but no END_HEADERS -> no event yet.
-    const auto h = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndStream,
+    const auto h = headers_frame(&resource, 1, ruvia::detail::http2_flag_end_stream,
         std::string_view(first.data(), first.size()));
     RUVIA_CHECK(conn.feed(std::string_view(h.data(), h.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(!conn.nextEvent().has_value());
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(!conn.next_event().has_value());
 
     // CONTINUATION with END_HEADERS -> head completes.
     char chdr[9];
-    ruvia::detail::http2EncodeFrameHeader(chdr, static_cast<std::uint32_t>(second.size()),
-        Http2FrameType::kContinuation, ruvia::detail::kHttp2FlagEndHeaders, 1);
+    ruvia::detail::http2_encode_frame_header(chdr, static_cast<std::uint32_t>(second.size()),
+        http2_frame_type::continuation, ruvia::detail::http2_flag_end_headers, 1);
     std::pmr::string cont(&resource);
     cont.append(chdr, 9);
     cont.append(second.data(), second.size());
     RUVIA_CHECK(conn.feed(std::string_view(cont.data(), cont.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
+                ruvia::detail::http2_feed_result::accepted);
 
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_end);
     auto* s = conn.stream(1);
-    RUVIA_CHECK(s != nullptr && s->requestMethod() == "GET");
-    RUVIA_CHECK(s != nullptr && s->requestKnownMethod() == ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(s != nullptr && s->request_method() == "GET");
+    RUVIA_CHECK(s != nullptr && s->request_known_method() == ruvia::http_known_method::get);
 }
 
 // RFC 9113 §8.3.1: an intermediary translating HTTP/1.1 origin-form MUST omit
@@ -186,26 +186,26 @@ RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
 
 RUVIA_TEST(http2_connection_accepts_host_without_authority_pseudo_header) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     std::pmr::string block(&resource);
-    encodeRequest(block, "GET", "https", "/", std::nullopt);
-    HpackEncoder::encodeHeader(block, "host", "example.com");
-    const auto request = headersFrame(&resource, 1,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+    encode_request(block, "GET", "https", "/", std::nullopt);
+    hpack_encoder::encode_header(block, "host", "example.com");
+    const auto request = headers_frame(&resource, 1,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
         std::string_view(block.data(), block.size()));
     RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
-                Http2FeedResult::kAccepted);
-    RUVIA_CHECK(!conn.connectionError().has_value());
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+                http2_feed_result::accepted);
+    RUVIA_CHECK(!conn.connection_error().has_value());
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_head);
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
-        RUVIA_CHECK(stream->hasHost());
-        RUVIA_CHECK(!stream->hasAuthority());
-        auto built = ruvia::detail::HttpRequestAccess::make();
-        const auto build = ruvia::detail::Http2RequestBuilder::build(
+        RUVIA_CHECK(stream->has_host());
+        RUVIA_CHECK(!stream->has_authority());
+        auto built = ruvia::detail::http_request_access::make();
+        const auto build = ruvia::detail::http2_request_builder::build(
             *stream, built, &resource, {});
         RUVIA_CHECK(build.built() != nullptr);
         RUVIA_CHECK_EQ(built.authority(), std::string_view("example.com"));
@@ -216,30 +216,30 @@ RUVIA_TEST(http2_connection_accepts_host_without_authority_pseudo_header) {
 
 RUVIA_TEST(http2_connection_rejects_https_request_without_authority_or_host) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     std::pmr::string block(&resource);
-    encodeRequest(block, "GET", "https", "/", std::nullopt);
-    const auto request = headersFrame(&resource, 1,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+    encode_request(block, "GET", "https", "/", std::nullopt);
+    const auto request = headers_frame(&resource, 1,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
         std::string_view(block.data(), block.size()));
     RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
-                Http2FeedResult::kAccepted);
-    RUVIA_CHECK(!conn.connectionError().has_value());
-    const auto event = conn.nextEvent();
+                http2_feed_result::accepted);
+    RUVIA_CHECK(!conn.connection_error().has_value());
+    const auto event = conn.next_event();
     RUVIA_CHECK(event.has_value());
     if (event.has_value()) {
-        RUVIA_CHECK(event->kind() == Http2EventKind::kStreamClosed);
+        RUVIA_CHECK(event->kind() == http2_event_kind::stream_closed);
     }
-    const auto out = conn.pendingOutput();
-    RUVIA_CHECK(out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4);
-    if (out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4) {
-        const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-        RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    const auto out = conn.pending_output();
+    RUVIA_CHECK(out.size() >= ruvia::detail::http2_frame_header_bytes + 4);
+    if (out.size() >= ruvia::detail::http2_frame_header_bytes + 4) {
+        const auto reset = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+        RUVIA_CHECK_EQ(reset.type_, static_cast<std::uint8_t>(http2_frame_type::rst_stream));
         RUVIA_CHECK_EQ(
-            ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(out.data() + 9)),
-            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+            ruvia::detail::http2_read32(reinterpret_cast<const unsigned char*>(out.data() + 9)),
+            static_cast<std::uint32_t>(http2_error_code::protocol_error));
     }
 }
 
@@ -249,43 +249,43 @@ RUVIA_TEST(http2_connection_rejects_https_request_without_authority_or_host) {
 
 RUVIA_TEST(http2_connection_local_reset_discards_multiframe_headers_and_keeps_hpack) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveGetRequest(conn, &resource);
-    conn.pinStream(1);
-    RUVIA_CHECK(conn.submitReset(1, Http2ErrorCode::kCancel) == Http2SubmitStatus::kAccepted);
-    conn.consumeOutput(conn.pendingOutput().size());
+    drive_get_request(conn, &resource);
+    conn.pin_stream(1);
+    RUVIA_CHECK(conn.submit_reset(1, http2_error_code::cancel) == http2_submit_status::accepted);
+    conn.consume_output(conn.pending_output().size());
 
     std::pmr::string dynamic(&resource);
-    encodeShortDynamicHeader(dynamic, "x-discarded", "indexed");
+    encode_short_dynamic_header(dynamic, "x-discarded", "indexed");
     const auto split = dynamic.size() / 2;
-    const auto first = headersFrame(&resource, 1, 0, std::string_view(dynamic.data(), split));
+    const auto first = headers_frame(&resource, 1, 0, std::string_view(dynamic.data(), split));
     RUVIA_CHECK(conn.feed(std::string_view(first.data(), first.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(conn.headerBlockInProgress());
-    RUVIA_CHECK(conn.pendingOutput().empty());  // no second RST
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(conn.header_block_in_progress());
+    RUVIA_CHECK(conn.pending_output().empty());  // no second RST
 
-    const auto last = continuationFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+    const auto last = continuation_frame(&resource, 1, ruvia::detail::http2_flag_end_headers,
         std::string_view(dynamic.data() + split, dynamic.size() - split));
     RUVIA_CHECK(conn.feed(std::string_view(last.data(), last.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(!conn.connectionError().has_value());
-    RUVIA_CHECK(!conn.headerBlockInProgress());
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(conn.stream(1) != nullptr && conn.stream(1)->isAborted());
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(!conn.connection_error().has_value());
+    RUVIA_CHECK(!conn.header_block_in_progress());
+    RUVIA_CHECK(conn.pending_output().empty());
+    RUVIA_CHECK(conn.stream(1) != nullptr && conn.stream(1)->is_aborted());
 
-    std::pmr::string nextBlock(&resource);
-    encodeGetRequest(nextBlock);
-    HpackEncoder::encodeIndexed(nextBlock, 62);  // x-discarded: indexed
-    const auto next = headersFrame(&resource, 3,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
-        std::string_view(nextBlock.data(), nextBlock.size()));
-    RUVIA_CHECK(conn.feed(std::string_view(next.data(), next.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
-    RUVIA_CHECK(!conn.connectionError().has_value());
-    conn.unpinStream(1);
+    std::pmr::string next_block(&resource);
+    encode_get_request(next_block);
+    hpack_encoder::encode_indexed(next_block, 62);  // x-discarded: indexed
+    const auto next_value = headers_frame(&resource, 3,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
+        std::string_view(next_block.data(), next_block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(next_value.data(), next_value.size())) ==
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_end);
+    RUVIA_CHECK(!conn.connection_error().has_value());
+    conn.unpin_stream(1);
 }
 
 // A trailer section without END_STREAM is a stream error, but its complete field
@@ -294,250 +294,250 @@ RUVIA_TEST(http2_connection_local_reset_discards_multiframe_headers_and_keeps_hp
 
 RUVIA_TEST(http2_connection_invalid_multiframe_trailer_resets_after_hpack_decode) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
-    const auto request = postHeadFrame(&resource, "");
+    const auto request = post_head_frame(&resource, "");
     RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(!conn.nextEvent().has_value());
-    conn.consumeOutput(conn.pendingOutput().size());
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(!conn.next_event().has_value());
+    conn.consume_output(conn.pending_output().size());
 
     std::pmr::string trailer(&resource);
-    encodeShortDynamicHeader(trailer, "x-invalid-trailer", "indexed");
+    encode_short_dynamic_header(trailer, "x-invalid-trailer", "indexed");
     const auto split = trailer.size() / 2;
-    const auto first = headersFrame(&resource, 1, 0, std::string_view(trailer.data(), split));
+    const auto first = headers_frame(&resource, 1, 0, std::string_view(trailer.data(), split));
     RUVIA_CHECK(conn.feed(std::string_view(first.data(), first.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(conn.headerBlockInProgress());
-    RUVIA_CHECK(conn.pendingOutput().empty());
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(conn.header_block_in_progress());
+    RUVIA_CHECK(conn.pending_output().empty());
 
-    const auto last = continuationFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+    const auto last = continuation_frame(&resource, 1, ruvia::detail::http2_flag_end_headers,
         std::string_view(trailer.data() + split, trailer.size() - split));
     RUVIA_CHECK(conn.feed(std::string_view(last.data(), last.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(!conn.connectionError().has_value());
-    const auto resetBytes = conn.pendingOutput();
-    RUVIA_CHECK_EQ(resetBytes.size(), static_cast<std::size_t>(13));
-    const auto reset = ruvia::detail::http2ParseFrameHeader(resetBytes.substr(0, 9));
-    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(!conn.connection_error().has_value());
+    const auto reset_bytes = conn.pending_output();
+    RUVIA_CHECK_EQ(reset_bytes.size(), static_cast<std::size_t>(13));
+    const auto reset = ruvia::detail::http2_parse_frame_header(reset_bytes.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type_, static_cast<std::uint8_t>(http2_frame_type::rst_stream));
     RUVIA_CHECK_EQ(
-        ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(resetBytes.data() + 9)),
-        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
-    while (conn.nextEvent().has_value()) {
+        ruvia::detail::http2_read32(reinterpret_cast<const unsigned char*>(reset_bytes.data() + 9)),
+        static_cast<std::uint32_t>(http2_error_code::protocol_error));
+    while (conn.next_event().has_value()) {
     }
-    conn.consumeOutput(resetBytes.size());
+    conn.consume_output(reset_bytes.size());
 
-    std::pmr::string nextBlock(&resource);
-    encodeGetRequest(nextBlock);
-    HpackEncoder::encodeIndexed(nextBlock, 62);  // x-invalid-trailer: indexed
-    const auto next = headersFrame(&resource, 3,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
-        std::string_view(nextBlock.data(), nextBlock.size()));
-    RUVIA_CHECK(conn.feed(std::string_view(next.data(), next.size())) ==
-                ruvia::detail::Http2FeedResult::kAccepted);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
-    RUVIA_CHECK(!conn.connectionError().has_value());
+    std::pmr::string next_block(&resource);
+    encode_get_request(next_block);
+    hpack_encoder::encode_indexed(next_block, 62);  // x-invalid-trailer: indexed
+    const auto next_value = headers_frame(&resource, 3,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
+        std::string_view(next_block.data(), next_block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(next_value.data(), next_value.size())) ==
+                ruvia::detail::http2_feed_result::accepted);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(conn.next_event().value().kind() == http2_event_kind::message_end);
+    RUVIA_CHECK(!conn.connection_error().has_value());
 }
 
 RUVIA_TEST(http2_connection_rejects_trailer_field_flood) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection connection(&resource);
+    http2_connection connection(&resource);
     handshake(connection);
 
-    const auto request = postHeadFrame(&resource, "");
+    const auto request = post_head_frame(&resource, "");
     RUVIA_CHECK(connection.feed(std::string_view(request.data(), request.size())) ==
-                Http2FeedResult::kAccepted);
-    RUVIA_CHECK(connection.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(!connection.nextEvent().has_value());
+                http2_feed_result::accepted);
+    RUVIA_CHECK(connection.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(!connection.next_event().has_value());
 
     std::pmr::string trailers(&resource);
-    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
-        HpackEncoder::encodeHeader(trailers, "x-trace", "value");
+    for (std::size_t i = 0; i <= ruvia::max_http_header_fields; ++i) {
+        hpack_encoder::encode_header(trailers, "x-trace", "value");
     }
-    const auto trailerFrame = headersFrame(&resource, 1,
+    const auto trailer_frame = headers_frame(&resource, 1,
         static_cast<std::uint8_t>(
-            ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream),
+            ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream),
         std::string_view(trailers.data(), trailers.size()));
-    RUVIA_CHECK(connection.feed(std::string_view(trailerFrame.data(), trailerFrame.size())) ==
-                Http2FeedResult::kAccepted);
+    RUVIA_CHECK(connection.feed(std::string_view(trailer_frame.data(), trailer_frame.size())) ==
+                http2_feed_result::accepted);
 
-    bool sawClosed = false;
-    while (const auto event = connection.nextEvent()) {
-        RUVIA_CHECK(event->messageEnd() == nullptr);
-        if (const auto* closed = event->streamClosed()) {
-            sawClosed = true;
-            RUVIA_CHECK(closed->source() == Http2StreamCloseSource::kLocal);
-            RUVIA_CHECK(closed->error() == Http2ErrorCode::kProtocolError);
+    bool saw_closed = false;
+    while (const auto event = connection.next_event()) {
+        RUVIA_CHECK(event->message_end() == nullptr);
+        if (const auto* closed = event->stream_closed()) {
+            saw_closed = true;
+            RUVIA_CHECK(closed->source() == http2_stream_close_source::local);
+            RUVIA_CHECK(closed->error() == http2_error_code::protocol_error);
         }
     }
-    RUVIA_CHECK(sawClosed);
+    RUVIA_CHECK(saw_closed);
     RUVIA_CHECK(connection.stream(1) == nullptr);
-    RUVIA_CHECK(!connection.connectionError().has_value());
+    RUVIA_CHECK(!connection.connection_error().has_value());
 
-    const auto resetBytes = connection.pendingOutput();
-    RUVIA_CHECK_EQ(resetBytes.size(), static_cast<std::size_t>(13));
-    const auto reset = ruvia::detail::http2ParseFrameHeader(resetBytes.substr(0, 9));
-    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
-    RUVIA_CHECK_EQ(reset.streamId, std::uint32_t{1});
+    const auto reset_bytes = connection.pending_output();
+    RUVIA_CHECK_EQ(reset_bytes.size(), static_cast<std::size_t>(13));
+    const auto reset = ruvia::detail::http2_parse_frame_header(reset_bytes.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type_, static_cast<std::uint8_t>(http2_frame_type::rst_stream));
+    RUVIA_CHECK_EQ(reset.stream_id_, std::uint32_t{1});
 }
 
 RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
-    beginClient(client);
+    http2_connection client(&resource, ruvia::detail::http2_role::client);
+    begin_client(client);
     const auto reject = [&](std::string_view method, std::string_view scheme,
                             std::optional<std::string_view> authority, std::string_view path,
-                            std::span<const ruvia::HttpHeaderView> headers) {
-        const auto result = client.submitRegularRequestHead(
-            method, scheme, authority, path, headers, Http2RequestContent::none());
-        RUVIA_CHECK(result.submitted() == nullptr);
-        RUVIA_CHECK(requestHeadSubmitError(result) == Http2RequestHeadSubmitError::kInvalidMessage);
-        RUVIA_CHECK(client.pendingOutput().empty());
+                            std::span<const ruvia::http_header_view> headers) {
+        const auto result_value = client.submit_regular_request_head(
+            method, scheme, authority, path, headers, http2_request_content::none());
+        RUVIA_CHECK(result_value.submitted() == nullptr);
+        RUVIA_CHECK(request_head_submit_error(result_value) == http2_request_head_submit_error::invalid_message);
+        RUVIA_CHECK(client.pending_output().empty());
         RUVIA_CHECK(client.stream(1) == nullptr);
     };
 
-    const ruvia::HttpHeaderView uppercase[] = {{"X-Test", "value"}};
-    const ruvia::HttpHeaderView connection[] = {{"connection", "keep-alive"}};
-    const ruvia::HttpHeaderView matchingHost[] = {{"host", "example.test"}};
-    const ruvia::HttpHeaderView mismatchedHost[] = {{"host", "other.test"}};
-    const ruvia::HttpHeaderView invalidExpect[] = {{"expect", "bad value"}};
-    const ruvia::HttpHeaderView invalidTrailerList[] = {{"trailer", "x-checksum, bad field"}};
-    const ruvia::HttpHeaderView emptyTrailerElement[] = {{"trailer", ","}};
-    const ruvia::HttpHeaderView forbiddenTrailerName[] = {{"trailer", "content-length"}};
+    const ruvia::http_header_view uppercase[] = {{"X-Test", "value"}};
+    const ruvia::http_header_view connection[] = {{"connection", "keep-alive"}};
+    const ruvia::http_header_view matching_host[] = {{"host", "example.test"}};
+    const ruvia::http_header_view mismatched_host[] = {{"host", "other.test"}};
+    const ruvia::http_header_view invalid_expect[] = {{"expect", "bad value"}};
+    const ruvia::http_header_view invalid_trailer_list[] = {{"trailer", "x-checksum, bad field"}};
+    const ruvia::http_header_view empty_trailer_element[] = {{"trailer", ","}};
+    const ruvia::http_header_view forbidden_trailer_name[] = {{"trailer", "content-length"}};
     reject("CONNECT", "https", "example.test:443", "/", {});
     reject("GET bad", "https", "example.test", "/", {});
     reject("GET", "1ftp", "example.test", "/", {});
     reject("GET", "https", "example.test", "*", {});
     reject("GET", "https", std::nullopt, "/", {});
-    reject("GET", "HTTP", std::nullopt, "/", matchingHost);
+    reject("GET", "HTTP", std::nullopt, "/", matching_host);
     reject("GET", "https", "user@example.test", "/", {});
     reject("GET", "https", "example.test", "relative", {});
     reject("GET", "https", "example.test", "", {});
     reject("GET", "https", "example.test", "/", uppercase);
     reject("GET", "https", "example.test", "/", connection);
-    reject("GET", "https", "example.test", "/", mismatchedHost);
-    reject("GET", "https", "example.test", "/", invalidExpect);
-    reject("GET", "https", "example.test", "/", invalidTrailerList);
-    reject("GET", "https", "example.test", "/", emptyTrailerElement);
-    reject("GET", "https", "example.test", "/", forbiddenTrailerName);
+    reject("GET", "https", "example.test", "/", mismatched_host);
+    reject("GET", "https", "example.test", "/", invalid_expect);
+    reject("GET", "https", "example.test", "/", invalid_trailer_list);
+    reject("GET", "https", "example.test", "/", empty_trailer_element);
+    reject("GET", "https", "example.test", "/", forbidden_trailer_name);
 
-    const ruvia::HttpHeaderView emptyTrailerList[] = {{"trailer", ""}};
-    const auto acceptedEmptyTrailerList = client.submitRegularRequestHead(
-        "GET", "https", "example.test", "/", emptyTrailerList, Http2RequestContent::none());
-    RUVIA_CHECK(acceptedEmptyTrailerList.submitted() != nullptr);
-    RUVIA_CHECK_EQ(submittedRequestStreamId(acceptedEmptyTrailerList), std::uint32_t{1});
-    client.consumeOutput(client.pendingOutput().size());
+    const ruvia::http_header_view empty_trailer_list[] = {{"trailer", ""}};
+    const auto accepted_empty_trailer_list = client.submit_regular_request_head(
+        "GET", "https", "example.test", "/", empty_trailer_list, http2_request_content::none());
+    RUVIA_CHECK(accepted_empty_trailer_list.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submitted_request_stream_id(accepted_empty_trailer_list), std::uint32_t{1});
+    client.consume_output(client.pending_output().size());
 
-    const auto accepted = client.submitRegularRequestHead(
-        "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    const auto accepted = client.submit_regular_request_head(
+        "GET", "https", "example.test", "/", {}, http2_request_content::none());
     RUVIA_CHECK(accepted.submitted() != nullptr);
-    RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{3});
+    RUVIA_CHECK_EQ(submitted_request_stream_id(accepted), std::uint32_t{3});
 }
 
 RUVIA_TEST(http2_connection_submits_options_asterisk_with_authority) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
-    beginClient(client);
+    http2_connection client(&resource, ruvia::detail::http2_role::client);
+    begin_client(client);
 
-    const auto accepted = client.submitRegularRequestHead(
-        "OPTIONS", "https", "example.test", "*", {}, Http2RequestContent::none());
+    const auto accepted = client.submit_regular_request_head(
+        "OPTIONS", "https", "example.test", "*", {}, http2_request_content::none());
     RUVIA_CHECK(accepted.submitted() != nullptr);
-    RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
-    RUVIA_CHECK(!client.pendingOutput().empty());
+    RUVIA_CHECK_EQ(submitted_request_stream_id(accepted), std::uint32_t{1});
+    RUVIA_CHECK(!client.pending_output().empty());
 }
 
 RUVIA_TEST(http2_connection_terminal_large_head_sets_end_stream_only_on_headers) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveGetRequest(conn, &resource);
+    drive_get_request(conn, &resource);
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kNoContent);
-    const std::string largeValue(20 * 1024, 'a');
-    response.header("X-Large", largeValue);
-    const auto result = submitBufferedResponseHead(conn, 1, response);
-    RUVIA_CHECK(responseHeadSubmitted(result));
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::no_content);
+    const std::string large_value(20 * 1024, 'a');
+    response.header("X-Large", large_value);
+    const auto result_value = submit_buffered_response_head(conn, 1, response);
+    RUVIA_CHECK(response_head_submitted(result_value));
 
-    auto out = conn.pendingOutput();
+    auto out = conn.pending_output();
     bool first = true;
-    bool sawContinuation = false;
-    bool sawEndHeaders = false;
+    bool saw_continuation = false;
+    bool saw_end_headers = false;
     while (out.size() >= 9) {
-        const auto frame = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-        RUVIA_CHECK(out.size() >= 9 + frame.length);
+        const auto frame = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+        RUVIA_CHECK(out.size() >= 9 + frame.length_);
         if (first) {
-            RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-            RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+            RUVIA_CHECK_EQ(frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+            RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_stream) != 0);
             first = false;
         } else {
-            RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kContinuation));
-            RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
-            sawContinuation = true;
+            RUVIA_CHECK_EQ(frame.type_, static_cast<std::uint8_t>(http2_frame_type::continuation));
+            RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_stream) == 0);
+            saw_continuation = true;
         }
-        if ((frame.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0) {
-            sawEndHeaders = true;
+        if ((frame.flags_ & ruvia::detail::http2_flag_end_headers) != 0) {
+            saw_end_headers = true;
         }
-        out.remove_prefix(9 + frame.length);
+        out.remove_prefix(9 + frame.length_);
     }
     RUVIA_CHECK(!first);
-    RUVIA_CHECK(sawContinuation);
-    RUVIA_CHECK(sawEndHeaders);
+    RUVIA_CHECK(saw_continuation);
+    RUVIA_CHECK(saw_end_headers);
     RUVIA_CHECK(out.empty());
 }
 
 RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exact) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveGetRequest(conn, &resource);
+    drive_get_request(conn, &resource);
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kOk);
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::ok);
     response.header("Content-Length", "5");
-    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
+    RUVIA_CHECK(response_head_submitted(conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
-    conn.consumeOutput(conn.pendingOutput().size());
+    conn.consume_output(conn.pending_output().size());
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
 
-    RUVIA_CHECK(conn.submitData(1, "hey", Http2EndStream::kEndStream) ==
-                Http2DataSubmitStatus::kContentLengthIncomplete);
-    RUVIA_CHECK(conn.submitData(1, "toolong", Http2EndStream::kKeepOpen) ==
-                Http2DataSubmitStatus::kContentLengthExceeded);
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{0});
+    RUVIA_CHECK(conn.submit_data(1, "hey", http2_end_stream::end_stream) ==
+                http2_data_submit_status::content_length_incomplete);
+    RUVIA_CHECK(conn.submit_data(1, "toolong", http2_end_stream::keep_open) ==
+                http2_data_submit_status::content_length_exceeded);
+    RUVIA_CHECK(conn.pending_output().empty());
+    RUVIA_CHECK_EQ(stream->local_content().accepted_bytes(), std::uint64_t{0});
 
     RUVIA_CHECK(
-        conn.submitData(1, "hel", Http2EndStream::kKeepOpen) == Http2DataSubmitStatus::kAccepted);
-    conn.consumeOutput(conn.pendingOutput().size());
-    const std::array<ruvia::HttpHeaderView, 1> trailers{ruvia::HttpHeaderView{"X-Checksum", "ok"}};
-    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers(trailers)) ==
-                Http2FinishSubmitStatus::kContentLengthIncomplete);
-    RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
-    RUVIA_CHECK(conn.pendingOutput().empty());
+        conn.submit_data(1, "hel", http2_end_stream::keep_open) == http2_data_submit_status::accepted);
+    conn.consume_output(conn.pending_output().size());
+    const std::array<ruvia::http_header_view, 1> trailers{ruvia::http_header_view{"X-Checksum", "ok"}};
+    RUVIA_CHECK(conn.finish_response(1, validated_trailers(trailers)) ==
+                http2_finish_submit_status::content_length_incomplete);
+    RUVIA_CHECK(stream->local_send().response_content_open() != nullptr);
+    RUVIA_CHECK(conn.pending_output().empty());
 
     RUVIA_CHECK(
-        conn.submitData(1, "lo", Http2EndStream::kKeepOpen) == Http2DataSubmitStatus::kAccepted);
-    conn.consumeOutput(conn.pendingOutput().size());
+        conn.submit_data(1, "lo", http2_end_stream::keep_open) == http2_data_submit_status::accepted);
+    conn.consume_output(conn.pending_output().size());
     RUVIA_CHECK(
-        conn.finishResponse(1, validatedTrailers(trailers)) == Http2FinishSubmitStatus::kAccepted);
-    const auto trailer = conn.pendingOutput();
-    const auto trailerBytes = trailer.size();
-    RUVIA_CHECK(trailerBytes != 0);
+        conn.finish_response(1, validated_trailers(trailers)) == http2_finish_submit_status::accepted);
+    const auto trailer = conn.pending_output();
+    const auto trailer_bytes = trailer.size();
+    RUVIA_CHECK(trailer_bytes != 0);
     // The terminal call committed the complete section and closed the local half;
     // no separately staged metadata can be stranded by a later DATA submission.
     RUVIA_CHECK(
-        conn.submitData(1, {}, Http2EndStream::kEndStream) == Http2DataSubmitStatus::kInvalidState);
-    RUVIA_CHECK_EQ(conn.pendingOutput().size(), trailerBytes);
-    const auto frame = ruvia::detail::http2ParseFrameHeader(trailer.substr(0, 9));
-    RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
+        conn.submit_data(1, {}, http2_end_stream::end_stream) == http2_data_submit_status::invalid_state);
+    RUVIA_CHECK_EQ(conn.pending_output().size(), trailer_bytes);
+    const auto frame = ruvia::detail::http2_parse_frame_header(trailer.substr(0, 9));
+    RUVIA_CHECK_EQ(frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_stream) != 0);
+    RUVIA_CHECK_EQ(stream->local_content().accepted_bytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->local_content().committed_bytes(), std::uint64_t{5});
 }
 
 // An explicitly registered streaming HEAD route still cannot emit a payload.
@@ -545,205 +545,205 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
 
 RUVIA_TEST(http2_connection_head_streaming_response_ends_on_headers) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveRequest(conn, &resource, "HEAD");
+    drive_request(conn, &resource, "HEAD");
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kOk);
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::ok);
     response.header("Content-Length", "10");
-    const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
+    const auto head_result = conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
 
-    RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().statusAllowsBody());
-    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+    RUVIA_CHECK(response_head_submitted(head_result));
+    RUVIA_CHECK(submitted_response_plan(head_result).body_plan().status_allows_body());
+    RUVIA_CHECK(submitted_response_plan(head_result).body_plan().body_suppressed());
+    RUVIA_CHECK(submitted_response_plan(head_result).head_disposition() ==
                 http_response_stream_head_disposition::message_ended);
-    RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
-    RUVIA_CHECK(conn.stream(1)->localContent().knownLength() == nullptr);
-    const auto head = conn.pendingOutput();
-    const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
-    RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
-    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    const auto beforeRejectedData = conn.pendingOutput().size();
-    RUVIA_CHECK(conn.submitData(1, "forbidden", Http2EndStream::kEndStream) ==
-                Http2DataSubmitStatus::kInvalidState);
-    RUVIA_CHECK_EQ(conn.pendingOutput().size(), beforeRejectedData);
+    RUVIA_CHECK(conn.stream(1)->local_content().forbidden() != nullptr);
+    RUVIA_CHECK(conn.stream(1)->local_content().known_length() == nullptr);
+    const auto head = conn.pending_output();
+    const auto frame = ruvia::detail::http2_parse_frame_header(head.substr(0, 9));
+    RUVIA_CHECK_EQ(frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_headers) != 0);
+    RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_stream) != 0);
+    const auto before_rejected_data = conn.pending_output().size();
+    RUVIA_CHECK(conn.submit_data(1, "forbidden", http2_end_stream::end_stream) ==
+                http2_data_submit_status::invalid_state);
+    RUVIA_CHECK_EQ(conn.pending_output().size(), before_rejected_data);
 }
 
 RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveRequest(conn, &resource, "HEAD");
+    drive_request(conn, &resource, "HEAD");
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kOk);
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::ok);
     response.header("Content-Length", "10");
-    const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
+    const auto head_result = conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::present);
 
-    RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+    RUVIA_CHECK(response_head_submitted(head_result));
+    RUVIA_CHECK(submitted_response_plan(head_result).body_plan().body_suppressed());
+    RUVIA_CHECK(submitted_response_plan(head_result).head_disposition() ==
                 http_response_stream_head_disposition::trailers_only);
-    RUVIA_CHECK(submittedResponsePlan(headResult).trailer_framing() ==
+    RUVIA_CHECK(submitted_response_plan(head_result).trailer_framing() ==
                 http_response_stream_trailer_framing::http2_trailing_headers);
-    const auto initialHead = conn.pendingOutput();
-    const auto initialFrame = ruvia::detail::http2ParseFrameHeader(initialHead.substr(0, 9));
-    RUVIA_CHECK_EQ(initialFrame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK((initialFrame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
-    conn.consumeOutput(initialHead.size());
+    const auto initial_head = conn.pending_output();
+    const auto initial_frame = ruvia::detail::http2_parse_frame_header(initial_head.substr(0, 9));
+    RUVIA_CHECK_EQ(initial_frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK((initial_frame.flags_ & ruvia::detail::http2_flag_end_stream) == 0);
+    conn.consume_output(initial_head.size());
 
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->localSend().responseContentOpen() == nullptr);
-    RUVIA_CHECK(stream->localSend().responseTrailersOnly() != nullptr);
-    RUVIA_CHECK(stream->localContent().forbidden() != nullptr);
-    RUVIA_CHECK(conn.submitData(1, "forbidden", Http2EndStream::kKeepOpen) ==
-                Http2DataSubmitStatus::kInvalidState);
-    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(stream->local_send().response_content_open() == nullptr);
+    RUVIA_CHECK(stream->local_send().response_trailers_only() != nullptr);
+    RUVIA_CHECK(stream->local_content().forbidden() != nullptr);
+    RUVIA_CHECK(conn.submit_data(1, "forbidden", http2_end_stream::keep_open) ==
+                http2_data_submit_status::invalid_state);
+    RUVIA_CHECK(conn.pending_output().empty());
 
     // Declaring trailer intent cannot fall back to an empty DATA terminator.
     RUVIA_CHECK(
-        conn.finishResponse(1, validatedTrailers({})) == Http2FinishSubmitStatus::kInvalidState);
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(stream->localSend().responseTrailersOnly() != nullptr);
+        conn.finish_response(1, validated_trailers({})) == http2_finish_submit_status::invalid_state);
+    RUVIA_CHECK(conn.pending_output().empty());
+    RUVIA_CHECK(stream->local_send().response_trailers_only() != nullptr);
 
-    const std::array<ruvia::HttpHeaderView, 1> trailers{
-        ruvia::HttpHeaderView{"Server-Timing", "db;dur=4"}};
+    const std::array<ruvia::http_header_view, 1> trailers{
+        ruvia::http_header_view{"Server-Timing", "db;dur=4"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, validatedTrailers(trailers)) == Http2FinishSubmitStatus::kAccepted);
-    const auto terminal = conn.pendingOutput();
-    const auto terminalFrame = ruvia::detail::http2ParseFrameHeader(terminal.substr(0, 9));
-    RUVIA_CHECK_EQ(terminalFrame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK((terminalFrame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    RUVIA_CHECK(stream->localSend().endStreamCommitted() != nullptr);
+        conn.finish_response(1, validated_trailers(trailers)) == http2_finish_submit_status::accepted);
+    const auto terminal = conn.pending_output();
+    const auto terminal_frame = ruvia::detail::http2_parse_frame_header(terminal.substr(0, 9));
+    RUVIA_CHECK_EQ(terminal_frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK((terminal_frame.flags_ & ruvia::detail::http2_flag_end_stream) != 0);
+    RUVIA_CHECK(stream->local_send().end_stream_committed() != nullptr);
 }
 
 RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveGetRequest(conn, &resource);
+    drive_get_request(conn, &resource);
 
-    const std::array<ruvia::HttpHeaderView, 1> validTrailers{
-        ruvia::HttpHeaderView{"X-Checksum", "ok"}};
-    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers(validTrailers)) ==
-                Http2FinishSubmitStatus::kInvalidState);
+    const std::array<ruvia::http_header_view, 1> valid_trailers{
+        ruvia::http_header_view{"X-Checksum", "ok"}};
+    RUVIA_CHECK(conn.finish_response(1, validated_trailers(valid_trailers)) ==
+                http2_finish_submit_status::invalid_state);
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kOk);
-    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::ok);
+    RUVIA_CHECK(response_head_submitted(conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
-    conn.consumeOutput(conn.pendingOutput().size());
+    conn.consume_output(conn.pending_output().size());
 
-    const std::array<ruvia::HttpHeaderView, 2> mixedTrailers{
-        ruvia::HttpHeaderView{"X-Checksum", "ok"}, ruvia::HttpHeaderView{"Content-Length", "2"}};
-    const auto mixedResult = ruvia::detail::httpResponseTrailerSection(mixedTrailers);
-    RUVIA_CHECK(mixedResult.section() == nullptr);
-    RUVIA_CHECK(mixedResult.failure() != nullptr);
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(conn.stream(1)->localSend().responseContentOpen() != nullptr);
+    const std::array<ruvia::http_header_view, 2> mixed_trailers{
+        ruvia::http_header_view{"X-Checksum", "ok"}, ruvia::http_header_view{"Content-Length", "2"}};
+    const auto mixed_result = ruvia::detail::check_http_response_trailer_section(mixed_trailers);
+    RUVIA_CHECK(mixed_result.section() == nullptr);
+    RUVIA_CHECK(mixed_result.failure() != nullptr);
+    RUVIA_CHECK(conn.pending_output().empty());
+    RUVIA_CHECK(conn.stream(1)->local_send().response_content_open() != nullptr);
 
-    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers(validTrailers)) ==
-                Http2FinishSubmitStatus::kAccepted);
-    const auto acceptedBytes = conn.pendingOutput().size();
-    RUVIA_CHECK(acceptedBytes != 0);
-    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers(validTrailers)) ==
-                Http2FinishSubmitStatus::kInvalidState);
-    RUVIA_CHECK_EQ(conn.pendingOutput().size(), acceptedBytes);
+    RUVIA_CHECK(conn.finish_response(1, validated_trailers(valid_trailers)) ==
+                http2_finish_submit_status::accepted);
+    const auto accepted_bytes = conn.pending_output().size();
+    RUVIA_CHECK(accepted_bytes != 0);
+    RUVIA_CHECK(conn.finish_response(1, validated_trailers(valid_trailers)) ==
+                http2_finish_submit_status::invalid_state);
+    RUVIA_CHECK_EQ(conn.pending_output().size(), accepted_bytes);
 }
 
 RUVIA_TEST(http2_connection_rejects_trailers_for_contentless_statuses_before_headers) {
-    for (const auto status : {ruvia::http_status::kNoContent, ruvia::http_status::kNotModified}) {
+    for (const auto status : {ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection conn(&resource);
+        http2_connection conn(&resource);
         handshake(conn);
-        driveGetRequest(conn, &resource);
+        drive_get_request(conn, &resource);
 
-        ruvia::HttpResponse response({.resource = &resource});
+        ruvia::http_response response({.resource_ = &resource});
         response.status(status);
-        const auto result = conn.submitStreamingResponseHead(1, std::move(response),
+        const auto result_value = conn.submit_streaming_response_head(1, std::move(response),
             ruvia::http_response_stream_kind::generic, http_response_trailer_intent::present);
-        RUVIA_CHECK(!responseHeadSubmitted(result));
-        RUVIA_CHECK(result.failure() != nullptr);
-        if (result.failure() != nullptr) {
-            RUVIA_CHECK(result.failure()->error() ==
-                        ruvia::Http2ResponseHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(!response_head_submitted(result_value));
+        RUVIA_CHECK(result_value.failure() != nullptr);
+        if (result_value.failure() != nullptr) {
+            RUVIA_CHECK(result_value.failure()->error() ==
+                        ruvia::http2_response_head_submit_error::invalid_message);
         }
-        RUVIA_CHECK(conn.pendingOutput().empty());
-        RUVIA_CHECK(conn.stream(1)->localSend().headPending() != nullptr);
+        RUVIA_CHECK(conn.pending_output().empty());
+        RUVIA_CHECK(conn.stream(1)->local_send().head_pending() != nullptr);
     }
 }
 
 RUVIA_TEST(http2_connection_reset_content_streaming_ends_on_headers) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
-    driveGetRequest(conn, &resource);
+    drive_get_request(conn, &resource);
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kResetContent);
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::reset_content);
     response.header("Content-Length", "9");
-    const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
+    const auto head_result = conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
 
-    RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(!submittedResponsePlan(headResult).body_plan().statusAllowsBody());
-    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+    RUVIA_CHECK(response_head_submitted(head_result));
+    RUVIA_CHECK(!submitted_response_plan(head_result).body_plan().status_allows_body());
+    RUVIA_CHECK(submitted_response_plan(head_result).body_plan().body_suppressed());
+    RUVIA_CHECK(submitted_response_plan(head_result).head_disposition() ==
                 http_response_stream_head_disposition::message_ended);
-    RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
-    const auto head = conn.pendingOutput();
-    const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
-    RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
-    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
-    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    const auto beforeRejectedData = conn.pendingOutput().size();
-    RUVIA_CHECK(conn.submitData(1, "forbidden", Http2EndStream::kEndStream) ==
-                Http2DataSubmitStatus::kInvalidState);
-    RUVIA_CHECK_EQ(conn.pendingOutput().size(), beforeRejectedData);
+    RUVIA_CHECK(conn.stream(1)->local_content().forbidden() != nullptr);
+    const auto head = conn.pending_output();
+    const auto frame = ruvia::detail::http2_parse_frame_header(head.substr(0, 9));
+    RUVIA_CHECK_EQ(frame.type_, static_cast<std::uint8_t>(http2_frame_type::headers));
+    RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_headers) != 0);
+    RUVIA_CHECK((frame.flags_ & ruvia::detail::http2_flag_end_stream) != 0);
+    const auto before_rejected_data = conn.pending_output().size();
+    RUVIA_CHECK(conn.submit_data(1, "forbidden", http2_end_stream::end_stream) ==
+                http2_data_submit_status::invalid_state);
+    RUVIA_CHECK_EQ(conn.pending_output().size(), before_rejected_data);
 }
 
 RUVIA_TEST(http2_connection_peer_reset_discards_queued_data_and_trailers) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
-    handshakeWithWindow(conn, 0);
-    driveGetRequest(conn, &resource);
+    http2_connection conn(&resource);
+    handshake_with_window(conn, 0);
+    drive_get_request(conn, &resource);
 
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kOk);
-    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::ok);
+    RUVIA_CHECK(response_head_submitted(conn.submit_streaming_response_head(1, std::move(response),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
-    conn.consumeOutput(conn.pendingOutput().size());
-    RUVIA_CHECK(conn.submitData(1, "deferred", Http2EndStream::kKeepOpen) ==
-                Http2DataSubmitStatus::kQueued);
-    RUVIA_CHECK(conn.hasQueuedData(1));
-    RUVIA_CHECK(conn.pendingOutput().empty());
+    conn.consume_output(conn.pending_output().size());
+    RUVIA_CHECK(conn.submit_data(1, "deferred", http2_end_stream::keep_open) ==
+                http2_data_submit_status::queued);
+    RUVIA_CHECK(conn.has_queued_data(1));
+    RUVIA_CHECK(conn.pending_output().empty());
 
-    const std::array<ruvia::HttpHeaderView, 1> trailers{ruvia::HttpHeaderView{"X-Checksum", "ok"}};
+    const std::array<ruvia::http_header_view, 1> trailers{ruvia::http_header_view{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, validatedTrailers(trailers)) == Http2FinishSubmitStatus::kQueued);
+        conn.finish_response(1, validated_trailers(trailers)) == http2_finish_submit_status::queued);
 
     char rst[13];
-    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
-    ruvia::detail::http2Write32(rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+    ruvia::detail::http2_encode_frame_header(rst, 4, http2_frame_type::rst_stream, 0, 1);
+    ruvia::detail::http2_write32(rst + 9, static_cast<std::uint32_t>(http2_error_code::cancel));
     (void)conn.feed(std::string_view(rst, sizeof(rst)));
-    while (conn.nextEvent().has_value()) {
+    while (conn.next_event().has_value()) {
     }
     RUVIA_CHECK(conn.stream(1) == nullptr);
-    RUVIA_CHECK(!conn.hasQueuedData(1));
-    RUVIA_CHECK(conn.takeDrainedDataStreams().empty());
-    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(!conn.has_queued_data(1));
+    RUVIA_CHECK(conn.take_drained_data_streams().empty());
+    RUVIA_CHECK(conn.pending_output().empty());
 
-    char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
-    ruvia::detail::http2WriteWindowUpdate(wu, 1, 100);
+    char wu[ruvia::detail::http2_window_update_frame_bytes];
+    ruvia::detail::http2_write_window_update(wu, 1, 100);
     (void)conn.feed(std::string_view(wu, sizeof(wu)));
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(conn.takeDrainedDataStreams().empty());
+    RUVIA_CHECK(conn.pending_output().empty());
+    RUVIA_CHECK(conn.take_drained_data_streams().empty());
 }
 
 // A HEAD response's Content-Length is representation metadata, not a DATA
@@ -752,169 +752,169 @@ RUVIA_TEST(http2_connection_peer_reset_discards_queued_data_and_trailers) {
 
 RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_terminal) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection client(&resource, Http2Role::kClient);
+    http2_connection client(&resource, http2_role::client);
     handshake(client);
 
-    const auto request = client.submitRegularRequestHead(
-        "HEAD", "https", "example.test", "/", {}, Http2RequestContent::none());
+    const auto request = client.submit_regular_request_head(
+        "HEAD", "https", "example.test", "/", {}, http2_request_content::none());
     RUVIA_CHECK(request.submitted() != nullptr);
-    const auto streamId = submittedRequestStreamId(request);
-    client.pinStream(streamId);
-    client.consumeOutput(client.pendingOutput().size());
+    const auto stream_id = submitted_request_stream_id(request);
+    client.pin_stream(stream_id);
+    client.consume_output(client.pending_output().size());
 
     std::pmr::string response(&resource);
-    HpackEncoder::encodeHeader(response, ":status", "200");
-    HpackEncoder::encodeHeader(response, "content-length", "10");
-    const auto responseHead = headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+    hpack_encoder::encode_header(response, ":status", "200");
+    hpack_encoder::encode_header(response, "content-length", "10");
+    const auto response_head = headers_frame(&resource, stream_id, ruvia::detail::http2_flag_end_headers,
         std::string_view(response.data(), response.size()));
-    RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
-                Http2FeedResult::kAccepted);
-    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(!client.nextEvent().has_value());
-    const auto* stream = client.stream(streamId);
+    RUVIA_CHECK(client.feed(std::string_view(response_head.data(), response_head.size())) ==
+                http2_feed_result::accepted);
+    RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(!client.next_event().has_value());
+    const auto* stream = client.stream(stream_id);
     RUVIA_CHECK(stream != nullptr);
-    const auto* known = stream->remoteContent().metadataOnlyKnownLength();
+    const auto* known = stream->remote_content().metadata_only_known_length();
     RUVIA_CHECK(known != nullptr);
-    RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
-    RUVIA_CHECK(stream->remoteContent().metadataOnlyKnownLength() != nullptr);
-    RUVIA_CHECK_EQ(stream->remoteHeaderCount(), std::size_t{1});
+    RUVIA_CHECK_EQ(known->declared_length(), std::size_t{10});
+    RUVIA_CHECK(stream->remote_content().metadata_only_known_length() != nullptr);
+    RUVIA_CHECK_EQ(stream->remote_header_count(), std::size_t{1});
 
     std::pmr::string trailers(&resource);
-    HpackEncoder::encodeHeader(trailers, "server-timing", "db;dur=4");
-    const auto trailerHead = headersFrame(&resource, streamId,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+    hpack_encoder::encode_header(trailers, "server-timing", "db;dur=4");
+    const auto trailer_head = headers_frame(&resource, stream_id,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
         std::string_view(trailers.data(), trailers.size()));
-    RUVIA_CHECK(client.feed(std::string_view(trailerHead.data(), trailerHead.size())) ==
-                Http2FeedResult::kAccepted);
-    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
-    RUVIA_CHECK(!client.nextEvent().has_value());
-    RUVIA_CHECK(!client.connectionError().has_value());
-    RUVIA_CHECK(client.pendingOutput().empty());
-    RUVIA_CHECK(client.stream(streamId)->remoteReceive().endStream() != nullptr);
-    RUVIA_CHECK_EQ(client.stream(streamId)->remoteHeaderCount(), std::size_t{1});
-    RUVIA_CHECK_EQ(client.stream(streamId)->remoteTrailers().size(), std::size_t{1});
-    const auto& storedTrailer = client.stream(streamId)->remoteTrailers().front();
-    RUVIA_CHECK_EQ(storedTrailer.name(), std::string_view("server-timing"));
-    RUVIA_CHECK_EQ(storedTrailer.value(), std::string_view("db;dur=4"));
+    RUVIA_CHECK(client.feed(std::string_view(trailer_head.data(), trailer_head.size())) ==
+                http2_feed_result::accepted);
+    RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_end);
+    RUVIA_CHECK(!client.next_event().has_value());
+    RUVIA_CHECK(!client.connection_error().has_value());
+    RUVIA_CHECK(client.pending_output().empty());
+    RUVIA_CHECK(client.stream(stream_id)->remote_receive().end_stream() != nullptr);
+    RUVIA_CHECK_EQ(client.stream(stream_id)->remote_header_count(), std::size_t{1});
+    RUVIA_CHECK_EQ(client.stream(stream_id)->remote_trailers().size(), std::size_t{1});
+    const auto& stored_trailer = client.stream(stream_id)->remote_trailers().front();
+    RUVIA_CHECK_EQ(stored_trailer.name(), std::string_view("server-timing"));
+    RUVIA_CHECK_EQ(stored_trailer.value(), std::string_view("db;dur=4"));
 
-    client.unpinStream(streamId);
-    RUVIA_CHECK(client.stream(streamId) == nullptr);
+    client.unpin_stream(stream_id);
+    RUVIA_CHECK(client.stream(stream_id) == nullptr);
 }
 
 RUVIA_TEST(http2_connection_client_accepts_204_content_length_as_metadata) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection client(&resource, Http2Role::kClient);
+    http2_connection client(&resource, http2_role::client);
     handshake(client);
 
-    const auto request = client.submitRegularRequestHead(
-        "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    const auto request = client.submit_regular_request_head(
+        "GET", "https", "example.test", "/", {}, http2_request_content::none());
     RUVIA_CHECK(request.submitted() != nullptr);
-    const auto streamId = submittedRequestStreamId(request);
-    client.pinStream(streamId);
-    client.consumeOutput(client.pendingOutput().size());
+    const auto stream_id = submitted_request_stream_id(request);
+    client.pin_stream(stream_id);
+    client.consume_output(client.pending_output().size());
 
     std::pmr::string response(&resource);
-    HpackEncoder::encodeHeader(response, ":status", "204");
-    HpackEncoder::encodeHeader(response, "content-length", "10");
-    const auto responseHead = headersFrame(&resource, streamId,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+    hpack_encoder::encode_header(response, ":status", "204");
+    hpack_encoder::encode_header(response, "content-length", "10");
+    const auto response_head = headers_frame(&resource, stream_id,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
         std::string_view(response.data(), response.size()));
-    RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
-                Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.feed(std::string_view(response_head.data(), response_head.size())) ==
+                http2_feed_result::accepted);
 
-    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
-    RUVIA_CHECK(!client.nextEvent().has_value());
-    const auto* stream = client.stream(streamId);
+    RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_head);
+    RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_end);
+    RUVIA_CHECK(!client.next_event().has_value());
+    const auto* stream = client.stream(stream_id);
     RUVIA_CHECK(stream != nullptr);
-    const auto* known = stream->remoteContent().metadataOnlyKnownLength();
+    const auto* known = stream->remote_content().metadata_only_known_length();
     RUVIA_CHECK(known != nullptr);
-    RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
-    RUVIA_CHECK(!client.connectionError().has_value());
-    RUVIA_CHECK(client.pendingOutput().empty());
+    RUVIA_CHECK_EQ(known->declared_length(), std::size_t{10});
+    RUVIA_CHECK(!client.connection_error().has_value());
+    RUVIA_CHECK(client.pending_output().empty());
 
-    client.unpinStream(streamId);
-    RUVIA_CHECK(client.stream(streamId) == nullptr);
+    client.unpin_stream(stream_id);
+    RUVIA_CHECK(client.stream(stream_id) == nullptr);
 }
 
 RUVIA_TEST(http2_connection_client_accepts_combined_equal_response_content_length) {
     {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection client(&resource, Http2Role::kClient);
+        http2_connection client(&resource, http2_role::client);
         handshake(client);
 
-        const auto request = client.submitRegularRequestHead(
-            "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+        const auto request = client.submit_regular_request_head(
+            "GET", "https", "example.test", "/", {}, http2_request_content::none());
         RUVIA_CHECK(request.submitted() != nullptr);
-        const auto streamId = submittedRequestStreamId(request);
-        client.consumeOutput(client.pendingOutput().size());
+        const auto stream_id = submitted_request_stream_id(request);
+        client.consume_output(client.pending_output().size());
 
         std::pmr::string response(&resource);
-        HpackEncoder::encodeHeader(response, ":status", "200");
-        HpackEncoder::encodeHeader(response, "content-length", "5, 5");
-        const auto responseHead =
-            headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+        hpack_encoder::encode_header(response, ":status", "200");
+        hpack_encoder::encode_header(response, "content-length", "5, 5");
+        const auto response_head =
+            headers_frame(&resource, stream_id, ruvia::detail::http2_flag_end_headers,
                 std::string_view(response.data(), response.size()));
-        RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
-                    Http2FeedResult::kAccepted);
-        RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-        RUVIA_CHECK(!client.nextEvent().has_value());
-        auto* stream = client.stream(streamId);
+        RUVIA_CHECK(client.feed(std::string_view(response_head.data(), response_head.size())) ==
+                    http2_feed_result::accepted);
+        RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_head);
+        RUVIA_CHECK(!client.next_event().has_value());
+        auto* stream = client.stream(stream_id);
         RUVIA_CHECK(stream != nullptr);
         if (stream != nullptr) {
-            const auto* known = stream->remoteContent().allowedKnownLength();
+            const auto* known = stream->remote_content().allowed_known_length();
             RUVIA_CHECK(known != nullptr);
             if (known != nullptr) {
-                RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{5});
+                RUVIA_CHECK_EQ(known->declared_length(), std::size_t{5});
             }
         }
-        RUVIA_CHECK(client.pendingOutput().empty());
-        RUVIA_CHECK(!client.connectionError().has_value());
+        RUVIA_CHECK(client.pending_output().empty());
+        RUVIA_CHECK(!client.connection_error().has_value());
     }
 
     {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection client(&resource, Http2Role::kClient);
+        http2_connection client(&resource, http2_role::client);
         handshake(client);
 
-        const auto request = client.submitRegularRequestHead(
-            "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+        const auto request = client.submit_regular_request_head(
+            "GET", "https", "example.test", "/", {}, http2_request_content::none());
         RUVIA_CHECK(request.submitted() != nullptr);
-        const auto streamId = submittedRequestStreamId(request);
-        client.consumeOutput(client.pendingOutput().size());
+        const auto stream_id = submitted_request_stream_id(request);
+        client.consume_output(client.pending_output().size());
 
         std::pmr::string response(&resource);
-        HpackEncoder::encodeHeader(response, ":status", "200");
-        HpackEncoder::encodeHeader(response, "content-length", "5, 6");
-        const auto responseHead =
-            headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+        hpack_encoder::encode_header(response, ":status", "200");
+        hpack_encoder::encode_header(response, "content-length", "5, 6");
+        const auto response_head =
+            headers_frame(&resource, stream_id, ruvia::detail::http2_flag_end_headers,
                 std::string_view(response.data(), response.size()));
-        RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
-                    Http2FeedResult::kAccepted);
+        RUVIA_CHECK(client.feed(std::string_view(response_head.data(), response_head.size())) ==
+                    http2_feed_result::accepted);
 
-        bool sawClosed = false;
-        while (const auto event = client.nextEvent()) {
-            RUVIA_CHECK(event->messageHead() == nullptr);
-            if (const auto* closed = event->streamClosed()) {
-                sawClosed = true;
-                RUVIA_CHECK(closed->source() == Http2StreamCloseSource::kLocal);
-                RUVIA_CHECK(closed->error() == Http2ErrorCode::kProtocolError);
+        bool saw_closed = false;
+        while (const auto event = client.next_event()) {
+            RUVIA_CHECK(event->message_head() == nullptr);
+            if (const auto* closed = event->stream_closed()) {
+                saw_closed = true;
+                RUVIA_CHECK(closed->source() == http2_stream_close_source::local);
+                RUVIA_CHECK(closed->error() == http2_error_code::protocol_error);
             }
         }
-        RUVIA_CHECK(sawClosed);
-        RUVIA_CHECK(client.stream(streamId) == nullptr);
-        RUVIA_CHECK(!client.pendingOutput().empty());
-        RUVIA_CHECK(!client.connectionError().has_value());
+        RUVIA_CHECK(saw_closed);
+        RUVIA_CHECK(client.stream(stream_id) == nullptr);
+        RUVIA_CHECK(!client.pending_output().empty());
+        RUVIA_CHECK(!client.connection_error().has_value());
     }
 }
 
 RUVIA_TEST(http2_connection_applies_response_specific_trailer_rules) {
-    struct Case final {
-        std::string_view name;
-        std::string_view value;
-        bool accepted;
+    struct case_value final {
+        std::string_view name_;
+        std::string_view value_;
+        bool accepted_;
     };
-    constexpr Case cases[] = {
+    constexpr case_value cases[] = {
         // RFC 9110 Section 14.3 explicitly permits Accept-Ranges in a trailer.
         {"accept-ranges", "bytes", true},
         // Date is response control data that has to be known before content.
@@ -923,96 +923,96 @@ RUVIA_TEST(http2_connection_applies_response_specific_trailer_rules) {
 
     for (const auto& test : cases) {
         std::pmr::monotonic_buffer_resource resource;
-        Http2Connection client(&resource, Http2Role::kClient);
+        http2_connection client(&resource, http2_role::client);
         handshake(client);
 
-        const auto request = client.submitRegularRequestHead(
-            "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+        const auto request = client.submit_regular_request_head(
+            "GET", "https", "example.test", "/", {}, http2_request_content::none());
         RUVIA_CHECK(request.submitted() != nullptr);
-        const auto streamId = submittedRequestStreamId(request);
-        client.consumeOutput(client.pendingOutput().size());
+        const auto stream_id = submitted_request_stream_id(request);
+        client.consume_output(client.pending_output().size());
 
         std::pmr::string response(&resource);
-        HpackEncoder::encodeHeader(response, ":status", "200");
-        const auto responseHead =
-            headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+        hpack_encoder::encode_header(response, ":status", "200");
+        const auto response_head =
+            headers_frame(&resource, stream_id, ruvia::detail::http2_flag_end_headers,
                 std::string_view(response.data(), response.size()));
-        RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
-                    Http2FeedResult::kAccepted);
-        RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageHead);
-        RUVIA_CHECK(!client.nextEvent().has_value());
+        RUVIA_CHECK(client.feed(std::string_view(response_head.data(), response_head.size())) ==
+                    http2_feed_result::accepted);
+        RUVIA_CHECK(client.next_event().value().kind() == http2_event_kind::message_head);
+        RUVIA_CHECK(!client.next_event().has_value());
 
         std::pmr::string trailers(&resource);
-        HpackEncoder::encodeHeader(trailers, test.name, test.value);
-        const auto trailerHead = headersFrame(&resource, streamId,
+        hpack_encoder::encode_header(trailers, test.name_, test.value_);
+        const auto trailer_head = headers_frame(&resource, stream_id,
             static_cast<std::uint8_t>(
-                ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream),
+                ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream),
             std::string_view(trailers.data(), trailers.size()));
-        RUVIA_CHECK(client.feed(std::string_view(trailerHead.data(), trailerHead.size())) ==
-                    Http2FeedResult::kAccepted);
+        RUVIA_CHECK(client.feed(std::string_view(trailer_head.data(), trailer_head.size())) ==
+                    http2_feed_result::accepted);
 
-        bool sawMessageEnd = false;
-        bool sawProtocolClose = false;
-        while (const auto event = client.nextEvent()) {
-            sawMessageEnd = sawMessageEnd || event->messageEnd() != nullptr;
-            if (const auto* closed = event->streamClosed()) {
-                sawProtocolClose = closed->source() == Http2StreamCloseSource::kLocal &&
-                                   closed->error() == Http2ErrorCode::kProtocolError;
+        bool saw_message_end = false;
+        bool saw_protocol_close = false;
+        while (const auto event = client.next_event()) {
+            saw_message_end = saw_message_end || event->message_end() != nullptr;
+            if (const auto* closed = event->stream_closed()) {
+                saw_protocol_close = closed->source() == http2_stream_close_source::local &&
+                                     closed->error() == http2_error_code::protocol_error;
             }
         }
-        RUVIA_CHECK_EQ(sawMessageEnd, test.accepted);
-        RUVIA_CHECK_EQ(sawProtocolClose, !test.accepted);
-        RUVIA_CHECK_EQ(client.pendingOutput().empty(), test.accepted);
-        RUVIA_CHECK(!client.connectionError().has_value());
+        RUVIA_CHECK_EQ(saw_message_end, test.accepted_);
+        RUVIA_CHECK_EQ(saw_protocol_close, !test.accepted_);
+        RUVIA_CHECK_EQ(client.pending_output().empty(), test.accepted_);
+        RUVIA_CHECK(!client.connection_error().has_value());
     }
 }
 
 // Server-role trailers: a trailing HEADERS block WITHOUT END_STREAM is a protocol
-// error on that stream (RFC 9113 §8.1) -- the core RSTs and closes it, no kMessageEnd.
+// error on that stream (RFC 9113 §8.1) -- the core RSTs and closes it, no message_end.
 
 RUVIA_TEST(http2_connection_server_trailers_without_end_stream_rejected) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     // Open stream 1 with a body (POST, no END_STREAM on HEADERS).
     std::pmr::string block(&resource);
-    HpackEncoder::encodeHeader(block, ":method", "POST");
-    HpackEncoder::encodeHeader(block, ":scheme", "https");
-    HpackEncoder::encodeHeader(block, ":path", "/");
-    HpackEncoder::encodeHeader(block, ":authority", "example.com");
-    const auto h = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+    hpack_encoder::encode_header(block, ":method", "POST");
+    hpack_encoder::encode_header(block, ":scheme", "https");
+    hpack_encoder::encode_header(block, ":path", "/");
+    hpack_encoder::encode_header(block, ":authority", "example.com");
+    const auto h = headers_frame(&resource, 1, ruvia::detail::http2_flag_end_headers,
         std::string_view(block.data(), block.size()));
     (void)conn.feed(std::string_view(h.data(), h.size()));
-    while (conn.nextEvent().has_value()) {
+    while (conn.next_event().has_value()) {
     }
-    conn.consumeOutput(conn.pendingOutput().size());
+    conn.consume_output(conn.pending_output().size());
 
     // A trailer HEADERS block with END_HEADERS but NO END_STREAM -> stream error.
     std::pmr::string trailer(&resource);
-    HpackEncoder::encodeHeader(trailer, "x-checksum", "abc");
-    const auto t = headersFrame(&resource, 1,
-        ruvia::detail::kHttp2FlagEndHeaders,  // deliberately no END_STREAM
+    hpack_encoder::encode_header(trailer, "x-checksum", "abc");
+    const auto t = headers_frame(&resource, 1,
+        ruvia::detail::http2_flag_end_headers,  // deliberately no END_STREAM
         std::string_view(trailer.data(), trailer.size()));
     (void)conn.feed(std::string_view(t.data(), t.size()));
 
-    bool sawClosed = false;
-    bool sawEnd = false;
-    while (const auto event = conn.nextEvent()) {
-        if (const auto* closed = event->streamClosed()) {
-            sawClosed = true;
-            RUVIA_CHECK(closed->source() == ruvia::detail::Http2StreamCloseSource::kLocal);
-            RUVIA_CHECK(closed->error() == Http2ErrorCode::kProtocolError);
+    bool saw_closed = false;
+    bool saw_end = false;
+    while (const auto event = conn.next_event()) {
+        if (const auto* closed = event->stream_closed()) {
+            saw_closed = true;
+            RUVIA_CHECK(closed->source() == ruvia::detail::http2_stream_close_source::local);
+            RUVIA_CHECK(closed->error() == http2_error_code::protocol_error);
         }
-        if (event->messageEnd() != nullptr) {
-            sawEnd = true;
+        if (event->message_end() != nullptr) {
+            saw_end = true;
         }
     }
-    RUVIA_CHECK(sawClosed);
-    RUVIA_CHECK(!sawEnd);                              // never completes the request
-    RUVIA_CHECK(!conn.connectionError().has_value());  // stream error, not connection error
-    const auto rst = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
-    RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK(saw_closed);
+    RUVIA_CHECK(!saw_end);                              // never completes the request
+    RUVIA_CHECK(!conn.connection_error().has_value());  // stream error, not connection error
+    const auto rst = ruvia::detail::http2_parse_frame_header(conn.pending_output().substr(0, 9));
+    RUVIA_CHECK_EQ(rst.type_, static_cast<std::uint8_t>(http2_frame_type::rst_stream));
     RUVIA_CHECK(conn.stream(1) == nullptr);  // removed, not leaked
 }
 
@@ -1022,70 +1022,70 @@ RUVIA_TEST(http2_connection_server_trailers_without_end_stream_rejected) {
 
 RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
-    handshakeWithWindow(conn, 4);  // tiny 4-byte stream send window
-    driveGetRequest(conn, &resource);
-    conn.consumeOutput(conn.pendingOutput().size());
+    http2_connection conn(&resource);
+    handshake_with_window(conn, 4);  // tiny 4-byte stream send window
+    drive_get_request(conn, &resource);
+    conn.consume_output(conn.pending_output().size());
 
     // Streaming response head declares an exact 8-byte content length. Only 4 DATA
-    // bytes fit the window, so the other 4 are core-owned and deferred -> kQueued.
-    ruvia::HttpResponse head({.resource = &resource});
-    head.status(ruvia::http_status::kOk);
+    // bytes fit the window, so the other 4 are core-owned and deferred -> queued.
+    ruvia::http_response head({.resource_ = &resource});
+    head.status(ruvia::http_status::ok);
     head.header("Content-Length", "8");
-    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(head),
+    RUVIA_CHECK(response_head_submitted(conn.submit_streaming_response_head(1, std::move(head),
         ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
-    conn.consumeOutput(conn.pendingOutput().size());
-    RUVIA_CHECK(conn.submitData(1, "AAAABBBB", Http2EndStream::kKeepOpen) ==
-                Http2DataSubmitStatus::kQueued);
+    conn.consume_output(conn.pending_output().size());
+    RUVIA_CHECK(conn.submit_data(1, "AAAABBBB", http2_end_stream::keep_open) ==
+                http2_data_submit_status::queued);
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{8});
-    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{4});
+    RUVIA_CHECK_EQ(stream->local_content().accepted_bytes(), std::uint64_t{8});
+    RUVIA_CHECK_EQ(stream->local_content().committed_bytes(), std::uint64_t{4});
 
     // First 4 bytes went out as DATA (no END_STREAM).
-    auto out = conn.pendingOutput();
-    const auto d1 = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-    RUVIA_CHECK_EQ(d1.type, static_cast<std::uint8_t>(Http2FrameType::kData));
-    RUVIA_CHECK_EQ(d1.length, static_cast<std::uint32_t>(4));
-    RUVIA_CHECK((d1.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
-    conn.consumeOutput(out.size());
+    auto out = conn.pending_output();
+    const auto d1 = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+    RUVIA_CHECK_EQ(d1.type_, static_cast<std::uint8_t>(http2_frame_type::data));
+    RUVIA_CHECK_EQ(d1.length_, static_cast<std::uint32_t>(4));
+    RUVIA_CHECK((d1.flags_ & ruvia::detail::http2_flag_end_stream) == 0);
+    conn.consume_output(out.size());
 
     // Queue trailers while the remaining 4 bytes are still window-blocked.
-    const std::array<ruvia::HttpHeaderView, 1> invalidTrailers{
-        ruvia::HttpHeaderView{"Content-Length", "8"}};
-    const auto invalidResult = ruvia::detail::httpResponseTrailerSection(invalidTrailers);
-    RUVIA_CHECK(invalidResult.section() == nullptr);
-    RUVIA_CHECK(invalidResult.failure() != nullptr);
-    RUVIA_CHECK(conn.hasQueuedData(1));
-    RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
-    RUVIA_CHECK(conn.pendingOutput().empty());
-    const std::array<ruvia::HttpHeaderView, 1> trailers{ruvia::HttpHeaderView{"X-Checksum", "ok"}};
+    const std::array<ruvia::http_header_view, 1> invalid_trailers{
+        ruvia::http_header_view{"Content-Length", "8"}};
+    const auto invalid_result = ruvia::detail::check_http_response_trailer_section(invalid_trailers);
+    RUVIA_CHECK(invalid_result.section() == nullptr);
+    RUVIA_CHECK(invalid_result.failure() != nullptr);
+    RUVIA_CHECK(conn.has_queued_data(1));
+    RUVIA_CHECK(stream->local_send().response_content_open() != nullptr);
+    RUVIA_CHECK(conn.pending_output().empty());
+    const std::array<ruvia::http_header_view, 1> trailers{ruvia::http_header_view{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, validatedTrailers(trailers)) == Http2FinishSubmitStatus::kQueued);
-    RUVIA_CHECK(conn.pendingOutput().empty());  // nothing emitted yet (still blocked)
+        conn.finish_response(1, validated_trailers(trailers)) == http2_finish_submit_status::queued);
+    RUVIA_CHECK(conn.pending_output().empty());  // nothing emitted yet (still blocked)
 
     // Peer WINDOW_UPDATE reopens the window: the deferred DATA drains, THEN the trailer
     // HEADERS(END_STREAM) follows -- in that order.
     char wu[9 + 4];
-    ruvia::detail::http2EncodeFrameHeader(wu, 4, Http2FrameType::kWindowUpdate, 0, 1);
-    ruvia::detail::http2Write32(wu + 9, 100);
+    ruvia::detail::http2_encode_frame_header(wu, 4, http2_frame_type::window_update, 0, 1);
+    ruvia::detail::http2_write32(wu + 9, 100);
     (void)conn.feed(std::string_view(wu, sizeof(wu)));
-    while (conn.nextEvent().has_value()) {
+    while (conn.next_event().has_value()) {
     }
 
-    out = conn.pendingOutput();
-    const auto d2 = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-    RUVIA_CHECK_EQ(d2.type, static_cast<std::uint8_t>(Http2FrameType::kData));
-    RUVIA_CHECK_EQ(d2.length, static_cast<std::uint32_t>(4));           // the remaining body
-    RUVIA_CHECK((d2.flags & ruvia::detail::kHttp2FlagEndStream) == 0);  // NOT on the DATA
-    out = out.substr(9 + d2.length);
-    const auto th = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
-    RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
-    RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);             // END_STREAM here
-    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
-    const auto trailerPayload = out.substr(9, th.length);
-    RUVIA_CHECK((trailerPayload.find("x-checksum") != std::string_view::npos));
-    RUVIA_CHECK(!(trailerPayload.find("X-Checksum") != std::string_view::npos));
+    out = conn.pending_output();
+    const auto d2 = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+    RUVIA_CHECK_EQ(d2.type_, static_cast<std::uint8_t>(http2_frame_type::data));
+    RUVIA_CHECK_EQ(d2.length_, static_cast<std::uint32_t>(4));             // the remaining body
+    RUVIA_CHECK((d2.flags_ & ruvia::detail::http2_flag_end_stream) == 0);  // NOT on the DATA
+    out = out.substr(9 + d2.length_);
+    const auto th = ruvia::detail::http2_parse_frame_header(out.substr(0, 9));
+    RUVIA_CHECK_EQ(th.type_, static_cast<std::uint8_t>(http2_frame_type::headers));  // trailer
+    RUVIA_CHECK((th.flags_ & ruvia::detail::http2_flag_end_stream) != 0);            // END_STREAM here
+    RUVIA_CHECK_EQ(stream->local_content().committed_bytes(), std::uint64_t{8});
+    const auto trailer_payload = out.substr(9, th.length_);
+    RUVIA_CHECK((trailer_payload.find("x-checksum") != std::string_view::npos));
+    RUVIA_CHECK(!(trailer_payload.find("X-Checksum") != std::string_view::npos));
 }
 
 // A HEADERS without END_HEADERS followed by an endless stream of EMPTY CONTINUATION
@@ -1096,25 +1096,25 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
 
 RUVIA_TEST(http2_connection_continuation_flood_trips_enhance_your_calm) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     std::pmr::string block(&resource);
-    encodeGetRequest(block);
+    encode_get_request(block);
     // Open the block WITHOUT END_HEADERS so CONTINUATION frames are expected.
-    const auto head = headersFrame(&resource, 1, 0, std::string_view(block.data(), block.size()));
+    const auto head = headers_frame(&resource, 1, 0, std::string_view(block.data(), block.size()));
     RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
-                ruvia::detail::Http2FeedResult::kProtocolFailure);
+                ruvia::detail::http2_feed_result::protocol_failure);
 
-    const auto empty = continuationFrame(&resource, 1, 0, {});
+    const auto empty = continuation_frame(&resource, 1, 0, {});
     bool tripped = false;
-    for (std::uint32_t i = 0; i < ruvia::detail::kHttp2MaxContinuationFrames + 2 && !tripped; ++i) {
+    for (std::uint32_t i = 0; i < ruvia::detail::http2_max_continuation_frames + 2 && !tripped; ++i) {
         tripped = conn.feed(std::string_view(empty.data(), empty.size())) ==
-                  ruvia::detail::Http2FeedResult::kProtocolFailure;
+                  ruvia::detail::http2_feed_result::protocol_failure;
     }
     RUVIA_CHECK(tripped);
-    RUVIA_CHECK(conn.connectionError().has_value());
-    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+    RUVIA_CHECK(conn.connection_error().has_value());
+    RUVIA_CHECK_EQ(first_goaway_error(conn.pending_output()), enhance_your_calm);
 }
 
 // A well-formed head split across a few CONTINUATION frames completes normally: the
@@ -1122,34 +1122,34 @@ RUVIA_TEST(http2_connection_continuation_flood_trips_enhance_your_calm) {
 
 RUVIA_TEST(http2_connection_fragmented_headers_within_budget_complete) {
     std::pmr::monotonic_buffer_resource resource;
-    Http2Connection conn(&resource);
+    http2_connection conn(&resource);
     handshake(conn);
 
     std::pmr::string block(&resource);
-    encodeGetRequest(block);
+    encode_get_request(block);
     const std::string_view whole(block.data(), block.size());
     const auto q = whole.size() / 4;
-    const auto head = headersFrame(&resource, 1, 0, whole.substr(0, q));
+    const auto head = headers_frame(&resource, 1, 0, whole.substr(0, q));
     RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
-                ruvia::detail::Http2FeedResult::kProtocolFailure);
-    const auto c1 = continuationFrame(&resource, 1, 0, whole.substr(q, q));
-    const auto c2 = continuationFrame(&resource, 1, 0, whole.substr(2 * q, q));
-    const auto c3 = continuationFrame(&resource, 1,
-        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+                ruvia::detail::http2_feed_result::protocol_failure);
+    const auto c1 = continuation_frame(&resource, 1, 0, whole.substr(q, q));
+    const auto c2 = continuation_frame(&resource, 1, 0, whole.substr(2 * q, q));
+    const auto c3 = continuation_frame(&resource, 1,
+        ruvia::detail::http2_flag_end_headers | ruvia::detail::http2_flag_end_stream,
         whole.substr(3 * q));
     RUVIA_CHECK(conn.feed(std::string_view(c1.data(), c1.size())) !=
-                ruvia::detail::Http2FeedResult::kProtocolFailure);
+                ruvia::detail::http2_feed_result::protocol_failure);
     RUVIA_CHECK(conn.feed(std::string_view(c2.data(), c2.size())) !=
-                ruvia::detail::Http2FeedResult::kProtocolFailure);
+                ruvia::detail::http2_feed_result::protocol_failure);
     RUVIA_CHECK(conn.feed(std::string_view(c3.data(), c3.size())) !=
-                ruvia::detail::Http2FeedResult::kProtocolFailure);
-    RUVIA_CHECK(!conn.connectionError().has_value());
+                ruvia::detail::http2_feed_result::protocol_failure);
+    RUVIA_CHECK(!conn.connection_error().has_value());
 
-    bool sawHead = false;
-    while (const auto event = conn.nextEvent()) {
-        if (event->messageHead() != nullptr) {
-            sawHead = true;
+    bool saw_head = false;
+    while (const auto event = conn.next_event()) {
+        if (event->message_head() != nullptr) {
+            saw_head = true;
         }
     }
-    RUVIA_CHECK(sawHead);
+    RUVIA_CHECK(saw_head);
 }

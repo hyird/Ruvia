@@ -2,8 +2,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/detail/server/http_response_trailers.h"
 
 #include "test_harness.h"
 
@@ -23,12 +23,12 @@ RUVIA_TEST(http_trailer_policies_share_framing_and_authentication_restrictions) 
             }
         }
         for (auto spelling : {name, std::string_view(lower)}) {
-            RUVIA_CHECK(ruvia::detail::isForbiddenHttpRequestTrailerName(spelling));
-            RUVIA_CHECK(ruvia::detail::isForbiddenResponseTrailerName(spelling));
-            RUVIA_CHECK(!ruvia::detail::isValidHttpRequestTrailerFieldValue(
-                spelling, ruvia::detail::HttpFieldListRole::kSender));
-            RUVIA_CHECK(!ruvia::detail::isValidHttpResponseTrailerFieldValue(
-                spelling, ruvia::detail::HttpFieldListRole::kSender));
+            RUVIA_CHECK(ruvia::detail::is_forbidden_http_request_trailer_name(spelling));
+            RUVIA_CHECK(ruvia::detail::is_forbidden_response_trailer_name(spelling));
+            RUVIA_CHECK(!ruvia::detail::is_valid_http_request_trailer_field_value(
+                spelling, ruvia::detail::http_field_list_role::sender));
+            RUVIA_CHECK(!ruvia::detail::is_valid_http_response_trailer_field_value(
+                spelling, ruvia::detail::http_field_list_role::sender));
         }
     }
 }
@@ -36,15 +36,15 @@ RUVIA_TEST(http_trailer_policies_share_framing_and_authentication_restrictions) 
 RUVIA_TEST(http_trailer_policies_preserve_direction_specific_permissions) {
     for (std::string_view name : {"Accept-Ranges", "Origin", "Access-Control-Request-Headers",
              "Access-Control-Request-Method"}) {
-        RUVIA_CHECK(ruvia::detail::isForbiddenHttpRequestTrailerName(name));
-        RUVIA_CHECK(!ruvia::detail::isForbiddenResponseTrailerName(name));
+        RUVIA_CHECK(ruvia::detail::is_forbidden_http_request_trailer_name(name));
+        RUVIA_CHECK(!ruvia::detail::is_forbidden_response_trailer_name(name));
     }
     for (std::string_view name : {"Age", "Date", "Vary", "Location", "Retry-After"}) {
-        RUVIA_CHECK(!ruvia::detail::isForbiddenHttpRequestTrailerName(name));
-        RUVIA_CHECK(ruvia::detail::isForbiddenResponseTrailerName(name));
+        RUVIA_CHECK(!ruvia::detail::is_forbidden_http_request_trailer_name(name));
+        RUVIA_CHECK(ruvia::detail::is_forbidden_response_trailer_name(name));
     }
     for (std::string_view name : {"ETag", "Digest", "X-Checksum", "Proxy-Authorization-Extra"}) {
-        RUVIA_CHECK(!ruvia::detail::isForbiddenHttpRequestTrailerName(name));
-        RUVIA_CHECK(!ruvia::detail::isForbiddenResponseTrailerName(name));
+        RUVIA_CHECK(!ruvia::detail::is_forbidden_http_request_trailer_name(name));
+        RUVIA_CHECK(!ruvia::detail::is_forbidden_response_trailer_name(name));
     }
 }

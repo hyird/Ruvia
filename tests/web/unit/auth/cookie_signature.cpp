@@ -1,3 +1,5 @@
+#include "auth/cookie_signature.h"
+
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -5,14 +7,13 @@
 #include <string>
 #include <string_view>
 
-#include "auth/CookieSignature.h"
 #include "test_harness.h"
 
 namespace {
 
 std::string sign(std::string_view secret, std::string_view name, std::string_view value) {
-    std::string out(ruvia::detail::kCookieSignatureSize, '\0');
-    ruvia::detail::writeCookieSignature(out.data(), secret, name, value);
+    std::string out(ruvia::detail::cookie_signature_size, '\0');
+    ruvia::detail::write_cookie_signature(out.data(), secret, name, value);
     return out;
 }
 
@@ -21,7 +22,7 @@ std::string sign(std::string_view secret, std::string_view name, std::string_vie
 RUVIA_TEST(cookie_signature_is_deterministic) {
     const std::string a = sign("s3cr3t", "user", "42");
     const std::string b = sign("s3cr3t", "user", "42");
-    RUVIA_CHECK_EQ(a.size(), ruvia::detail::kCookieSignatureSize);
+    RUVIA_CHECK_EQ(a.size(), ruvia::detail::cookie_signature_size);
     RUVIA_CHECK_EQ(a, b);
 }
 
@@ -46,12 +47,12 @@ RUVIA_TEST(cookie_signature_known_vector) {
 }
 
 RUVIA_TEST(cookie_signature_equals_constant_time) {
-    using ruvia::detail::cookieSignatureEquals;
-    RUVIA_CHECK(cookieSignatureEquals("abcdef", "abcdef"));
-    RUVIA_CHECK(!cookieSignatureEquals("abcdef", "abcdeg"));
-    RUVIA_CHECK(!cookieSignatureEquals("abc", "abcd"));  // length mismatch
-    RUVIA_CHECK(!cookieSignatureEquals("", "x"));
-    RUVIA_CHECK(cookieSignatureEquals("", ""));
+    using ruvia::detail::cookie_signature_equals;
+    RUVIA_CHECK(cookie_signature_equals("abcdef", "abcdef"));
+    RUVIA_CHECK(!cookie_signature_equals("abcdef", "abcdeg"));
+    RUVIA_CHECK(!cookie_signature_equals("abc", "abcd"));  // length mismatch
+    RUVIA_CHECK(!cookie_signature_equals("", "x"));
+    RUVIA_CHECK(cookie_signature_equals("", ""));
 }
 
 RUVIA_TEST(cookie_signature_large_value_spills_past_stack_arena) {
@@ -62,21 +63,21 @@ RUVIA_TEST(cookie_signature_large_value_spills_past_stack_arena) {
     std::string mutated = big;
     mutated.back() = 'y';
     const std::string a = sign("secret", "big", big);
-    RUVIA_CHECK_EQ(a.size(), ruvia::detail::kCookieSignatureSize);
+    RUVIA_CHECK_EQ(a.size(), ruvia::detail::cookie_signature_size);
     RUVIA_CHECK_EQ(a, sign("secret", "big", big));     // deterministic across the fallback
     RUVIA_CHECK(a != sign("secret", "big", mutated));  // change beyond the stack arena matters
 }
 
 RUVIA_TEST(cookie_signature_rejects_unrepresentable_lengths) {
-    std::array<char, ruvia::detail::kCookieSignatureSize> output{};
+    std::array<char, ruvia::detail::cookie_signature_size> output{};
 
     if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
-        const auto oversizedNameSize =
+        const auto oversized_name_size =
             static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
         bool rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(
-                output.data(), "secret", std::string_view("x", oversizedNameSize), "value");
+            ruvia::detail::write_cookie_signature(
+                output.data(), "secret", std::string_view("x", oversized_name_size), "value");
         } catch (const std::length_error&) {
             rejected = true;
         }
@@ -84,23 +85,23 @@ RUVIA_TEST(cookie_signature_rejects_unrepresentable_lengths) {
     }
 
     if constexpr (sizeof(std::size_t) > sizeof(int)) {
-        const auto oversizedSecretSize =
+        const auto oversized_secret_size =
             static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
         bool rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(
-                output.data(), std::string_view("x", oversizedSecretSize), "name", "value");
+            ruvia::detail::write_cookie_signature(
+                output.data(), std::string_view("x", oversized_secret_size), "name", "value");
         } catch (const std::length_error&) {
             rejected = true;
         }
         RUVIA_CHECK(rejected);
 
-        const auto oversizedMessageSize =
+        const auto oversized_message_size =
             static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
         rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(
-                output.data(), "secret", "name", std::string_view("x", oversizedMessageSize));
+            ruvia::detail::write_cookie_signature(
+                output.data(), "secret", "name", std::string_view("x", oversized_message_size));
         } catch (const std::length_error&) {
             rejected = true;
         }
@@ -114,8 +115,8 @@ RUVIA_TEST(cookie_signature_roundtrip_verify) {
     const std::string value = "session=deadbeef; role=admin";
     const std::string good = sign(secret, name, value);
     const std::string recomputed = sign(secret, name, value);
-    RUVIA_CHECK(ruvia::detail::cookieSignatureEquals(good, recomputed));
+    RUVIA_CHECK(ruvia::detail::cookie_signature_equals(good, recomputed));
     // A tampered value must not verify.
     const std::string tampered = sign(secret, name, "session=deadbeef; role=user");
-    RUVIA_CHECK(!ruvia::detail::cookieSignatureEquals(good, tampered));
+    RUVIA_CHECK(!ruvia::detail::cookie_signature_equals(good, tampered));
 }

@@ -6,179 +6,179 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/Http1RequestParser.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpRequestContentDecoding.h"
+#include "ruvia/http/http1_request_parser.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_content_decoding.h"
 
-#include "request/HttpRequestAccess.h"
+#include "request/http_request_access.h"
 #include "request_header_memory_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::HttpContentCoding;
-using ruvia::HttpHeaderView;
-using ruvia::HttpKnownMethod;
-using ruvia::HttpProtocolVersion;
-using ruvia::HttpRequest;
-using ruvia::HttpRequestTargetForm;
-using ruvia::requestContentCoding;
-using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::requestBodyBytes;
-using ruvia::detail::RequestHeaderKind;
-using ruvia::detail::requestKnownHeader;
+using ruvia::http_content_coding;
+using ruvia::http_header_view;
+using ruvia::http_known_method;
+using ruvia::http_protocol_version;
+using ruvia::http_request;
+using ruvia::http_request_target_form;
+using ruvia::request_content_coding;
+using ruvia::detail::http_request_access;
+using ruvia::detail::request_body_bytes;
+using ruvia::detail::request_header_kind;
+using ruvia::detail::request_known_header;
 
-using ruvia::test::HeaderMemory;
+using ruvia::test::header_memory;
 
 }  // namespace
 
 RUVIA_TEST(request_header_blocks_reclaim_repeated_parses_and_preserve_retained_results) {
-    HeaderMemory resource;
-    ruvia::Http1RequestParser parser;
+    header_memory resource;
+    ruvia::http1_request_parser parser;
     {
-        auto retained = parser.parse("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", {.resource = &resource});
+        auto retained = parser.parse("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", {.resource_ = &resource});
         RUVIA_CHECK(retained.parsed() != nullptr);
-        const auto baseline = resource.liveBytes;
-        RUVIA_CHECK(baseline >= 2 * sizeof(HttpHeaderView));
-        RUVIA_CHECK(baseline < ruvia::kMaxHttpHeaderFields * sizeof(HttpHeaderView));
+        const auto baseline = resource.live_bytes_;
+        RUVIA_CHECK(baseline >= 2 * sizeof(http_header_view));
+        RUVIA_CHECK(baseline < ruvia::max_http_header_fields * sizeof(http_header_view));
         for (int i = 0; i < 64; ++i) {
             {
-                const auto before = resource.allocations;
-                auto result = parser.parse("GET / HTTP/1.1\r\nHost: second\r\n\r\n", {.resource = &resource});
-                RUVIA_CHECK(result.parsed() != nullptr);
-                RUVIA_CHECK_EQ(resource.allocations, before + 1);
-                auto moved = std::move(result);
+                const auto before = resource.allocations_;
+                auto result_value = parser.parse("GET / HTTP/1.1\r\nHost: second\r\n\r\n", {.resource_ = &resource});
+                RUVIA_CHECK(result_value.parsed() != nullptr);
+                RUVIA_CHECK_EQ(resource.allocations_, before + 1);
+                auto moved = std::move(result_value);
                 RUVIA_CHECK_EQ(moved.parsed()->request().header("Host").value(), std::string_view("second"));
                 RUVIA_CHECK_EQ(retained.parsed()->request().header("X-Data").value(), std::string_view("saved"));
             }
-            RUVIA_CHECK_EQ(resource.liveBytes, baseline);
-            auto incomplete = parser.parse("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", {.resource = &resource});
-            RUVIA_CHECK(incomplete.needMore() != nullptr);
-            RUVIA_CHECK_EQ(resource.liveBytes, baseline);
+            RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
+            auto incomplete = parser.parse("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", {.resource_ = &resource});
+            RUVIA_CHECK(incomplete.need_more() != nullptr);
+            RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
         }
-        resource.reject = true;
+        resource.reject_ = true;
         bool failed = false;
         try {
-            (void)parser.parse("GET / HTTP/1.1\r\nHost: example\r\n\r\n", {.resource = &resource});
+            (void)parser.parse("GET / HTTP/1.1\r\nHost: example\r\n\r\n", {.resource_ = &resource});
         } catch (const std::bad_alloc&) {
             failed = true;
         }
         RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(resource.liveBytes, baseline);
+        RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
         RUVIA_CHECK_EQ(retained.parsed()->request().path(), std::string_view("/saved"));
     }
-    RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
 }
 
 RUVIA_TEST(request_header_block_move_assignment_and_reset_release_storage) {
-    HeaderMemory firstResource;
-    HeaderMemory secondResource;
-    auto first = HttpRequestAccess::make();
-    auto second = HttpRequestAccess::make();
-    HttpRequestAccess::setResource(first, &firstResource);
-    HttpRequestAccess::setResource(second, &secondResource);
-    HttpRequestAccess::reserveHeaders(first, 1);
-    HttpRequestAccess::reserveHeaders(second, 1);
-    const auto host = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(first, {"Host", "first"}, host));
-    RUVIA_CHECK(HttpRequestAccess::addHeader(second, {"Host", "second"}, host));
+    header_memory first_resource;
+    header_memory second_resource;
+    auto first = http_request_access::make();
+    auto second = http_request_access::make();
+    http_request_access::set_resource(first, &first_resource);
+    http_request_access::set_resource(second, &second_resource);
+    http_request_access::reserve_headers(first, 1);
+    http_request_access::reserve_headers(second, 1);
+    const auto host = http_request_access::known_header_slot(request_header_kind::host);
+    RUVIA_CHECK(http_request_access::add_header(first, {"Host", "first"}, host));
+    RUVIA_CHECK(http_request_access::add_header(second, {"Host", "second"}, host));
     first = std::move(second);
-    RUVIA_CHECK_EQ(firstResource.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(first_resource.live_bytes_, std::size_t{0});
     RUVIA_CHECK_EQ(first.header("host").value(), std::string_view("second"));
     RUVIA_CHECK(!second.header("host").has_value());
-    HttpRequestAccess::reset(first);
-    RUVIA_CHECK_EQ(secondResource.liveBytes, std::size_t{0});
+    http_request_access::reset(first);
+    RUVIA_CHECK_EQ(second_resource.live_bytes_, std::size_t{0});
 }
 
 RUVIA_TEST(request_access_reset_initializes_defaults) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
     RUVIA_CHECK(request.method().empty());
-    RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
+    RUVIA_CHECK(request.known_method() == http_known_method::unknown);
     RUVIA_CHECK(request.target().empty());
     RUVIA_CHECK(request.scheme().empty());
     RUVIA_CHECK(request.authority().empty());
-    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kOrigin);
-    RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp11);
+    RUVIA_CHECK(request.target_form() == http_request_target_form::origin);
+    RUVIA_CHECK(request.protocol_version() == http_protocol_version::http11);
     RUVIA_CHECK(request.headers().empty());
-    RUVIA_CHECK(requestBodyBytes(request).empty());
+    RUVIA_CHECK(request_body_bytes(request).empty());
 }
 
 RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
-    HeaderMemory resource;
-    auto request = HttpRequestAccess::make();
-    HttpRequestAccess::setResource(request, &resource);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setTarget(request, "/path?key=value");
-    HttpRequestAccess::setScheme(request, "https");
-    HttpRequestAccess::setAuthority(request, "example.test");
-    HttpRequestAccess::setPath(request, "/path");
-    HttpRequestAccess::setQueryString(request, "key=value");
-    HttpRequestAccess::setBody(request, "payload");
-    HttpRequestAccess::reserveHeaders(request, 1);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, {"Host", "example.test"}));
-    RUVIA_CHECK(resource.liveBytes > 0);
+    header_memory resource;
+    auto request = http_request_access::make();
+    http_request_access::set_resource(request, &resource);
+    http_request_access::set_method(request, "GET");
+    http_request_access::set_target(request, "/path?key=value");
+    http_request_access::set_scheme(request, "https");
+    http_request_access::set_authority(request, "example.test");
+    http_request_access::set_path(request, "/path");
+    http_request_access::set_query_string(request, "key=value");
+    http_request_access::set_body(request, "payload");
+    http_request_access::reserve_headers(request, 1);
+    RUVIA_CHECK(http_request_access::add_header(request, {"Host", "example.test"}));
+    RUVIA_CHECK(resource.live_bytes_ > 0);
     request.reset();
-    RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
     RUVIA_CHECK(request.method().empty());
     RUVIA_CHECK(request.target().empty());
     RUVIA_CHECK(request.scheme().empty());
     RUVIA_CHECK(request.authority().empty());
     RUVIA_CHECK(request.path().empty());
-    RUVIA_CHECK(request.queryString().empty());
+    RUVIA_CHECK(request.query_string().empty());
     RUVIA_CHECK(request.headers().empty());
     RUVIA_CHECK(!request.header("Host").has_value());
-    RUVIA_CHECK(requestBodyBytes(request).empty());
-    RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp11);
-    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kOrigin);
+    RUVIA_CHECK(request_body_bytes(request).empty());
+    RUVIA_CHECK(request.protocol_version() == http_protocol_version::http11);
+    RUVIA_CHECK(request.target_form() == http_request_target_form::origin);
 }
 
 RUVIA_TEST(request_access_preserves_target_components_and_form) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setTarget(request, "https://example.test/search?q=1");
-    HttpRequestAccess::setScheme(request, "https");
-    HttpRequestAccess::setAuthority(request, "example.test");
-    HttpRequestAccess::setTargetForm(request, HttpRequestTargetForm::kAbsolute);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    http_request_access::set_target(request, "https://example.test/search?q=1");
+    http_request_access::set_scheme(request, "https");
+    http_request_access::set_authority(request, "example.test");
+    http_request_access::set_target_form(request, http_request_target_form::absolute);
 
     RUVIA_CHECK_EQ(request.target(), std::string_view("https://example.test/search?q=1"));
     RUVIA_CHECK_EQ(request.scheme(), std::string_view("https"));
     RUVIA_CHECK_EQ(request.authority(), std::string_view("example.test"));
-    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kAbsolute);
+    RUVIA_CHECK(request.target_form() == http_request_target_form::absolute);
 }
 
 RUVIA_TEST(request_access_protocol_version_is_typed_control_data) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::setProtocolVersion(request, HttpProtocolVersion::kHttp2);
-    RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp2);
+    http_request request = http_request_access::make();
+    http_request_access::set_protocol_version(request, http_protocol_version::http2);
+    RUVIA_CHECK(request.protocol_version() == http_protocol_version::http2);
 }
 
 RUVIA_TEST(request_access_preserves_extension_method_token) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "PROPFIND");
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    http_request_access::set_method(request, "PROPFIND");
     RUVIA_CHECK_EQ(request.method(), std::string_view("PROPFIND"));
-    RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
+    RUVIA_CHECK(request.known_method() == http_known_method::unknown);
 }
 
 RUVIA_TEST(request_access_classified_and_unknown_header_lookup) {
-    auto request = HttpRequestAccess::make();
-    for (const auto field : {HttpHeaderView{"aCcEpT", "text/plain"},
-             HttpHeaderView{"HOST", "example.com"},
-             HttpHeaderView{"User-Agent", "client"},
-             HttpHeaderView{"Sec-WebSocket-Extensions", "permessage-deflate"},
-             HttpHeaderView{"X-Request-Id", "request-id"}}) {
-        RUVIA_CHECK(HttpRequestAccess::addHeader(request, field));
+    auto request = http_request_access::make();
+    for (const auto field : {http_header_view{"aCcEpT", "text/plain"},
+             http_header_view{"HOST", "example.com"},
+             http_header_view{"User-Agent", "client"},
+             http_header_view{"Sec-WebSocket-Extensions", "permessage-deflate"},
+             http_header_view{"X-Request-Id", "request-id"}}) {
+        RUVIA_CHECK(http_request_access::add_header(request, field));
         RUVIA_CHECK(request.header(field.name()) == field.value());
-        const auto kind = ruvia::detail::classifyRequestHeader(field.name());
-        if (kind == RequestHeaderKind::kOther) {
-            RUVIA_CHECK(!HttpRequestAccess::hasKnownHeader(request, kind));
-            RUVIA_CHECK(HttpRequestAccess::knownHeader(request, kind).empty());
+        const auto kind = ruvia::detail::classify_request_header(field.name());
+        if (kind == request_header_kind::other) {
+            RUVIA_CHECK(!http_request_access::has_known_header(request, kind));
+            RUVIA_CHECK(http_request_access::known_header(request, kind).empty());
         } else {
-            RUVIA_CHECK(HttpRequestAccess::hasKnownHeader(request, kind));
-            RUVIA_CHECK_EQ(HttpRequestAccess::knownHeader(request, kind), field.value());
+            RUVIA_CHECK(http_request_access::has_known_header(request, kind));
+            RUVIA_CHECK_EQ(http_request_access::known_header(request, kind), field.value());
         }
     }
     RUVIA_CHECK(request.header("accept") == "text/plain");
@@ -186,132 +186,132 @@ RUVIA_TEST(request_access_classified_and_unknown_header_lookup) {
 }
 
 RUVIA_TEST(request_access_known_header_last_write_wins) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "first.example"}, slot));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    const auto slot = http_request_access::known_header_slot(request_header_kind::host);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Host", "first.example"}, slot));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("first.example"));
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "second.example"}, slot));
+        request_known_header(request, request_header_kind::host), std::string_view("first.example"));
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Host", "second.example"}, slot));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("second.example"));
+        request_known_header(request, request_header_kind::host), std::string_view("second.example"));
     // An unpopulated known header reads back empty.
-    RUVIA_CHECK(requestKnownHeader(request, RequestHeaderKind::kUserAgent).empty());
+    RUVIA_CHECK(request_known_header(request, request_header_kind::user_agent).empty());
 }
 
 RUVIA_TEST(request_access_add_header_appends_and_caches) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"host", "example.com"},
-        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost)));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"host", "example.com"},
+        http_request_access::known_header_slot(request_header_kind::host)));
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{1});
     RUVIA_CHECK_EQ(request.headers()[0].name(), std::string_view("host"));
     RUVIA_CHECK_EQ(request.headers()[0].value(), std::string_view("example.com"));
     // The two-argument overload also caches the value for fast known-header access.
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("example.com"));
+        request_known_header(request, request_header_kind::host), std::string_view("example.com"));
 }
 
 RUVIA_TEST(request_access_unknown_header_lookup_uses_last_match) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Trace", "first"}));
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x-trace", "second"}));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"X-Trace", "first"}));
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"x-trace", "second"}));
 
     RUVIA_CHECK_EQ(request.header("X-Trace"), std::string_view("second"));
 }
 
 RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
 
     RUVIA_CHECK(!request.header("X-Empty").has_value());
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Empty", ""}));
-    const auto presentEmpty = request.header("x-empty");
-    RUVIA_CHECK(presentEmpty.has_value());
-    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"X-Empty", ""}));
+    const auto present_empty = request.header("x-empty");
+    RUVIA_CHECK(present_empty.has_value());
+    RUVIA_CHECK(present_empty.value_or("missing").empty());
 
-    const auto hostSlot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", ""}, hostSlot));
-    const auto knownPresentEmpty = request.header("HOST");
-    RUVIA_CHECK(knownPresentEmpty.has_value());
-    RUVIA_CHECK(knownPresentEmpty.value_or("missing").empty());
+    const auto host_slot = http_request_access::known_header_slot(request_header_kind::host);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Host", ""}, host_slot));
+    const auto known_present_empty = request.header("HOST");
+    RUVIA_CHECK(known_present_empty.has_value());
+    RUVIA_CHECK(known_present_empty.value_or("missing").empty());
 }
 
 RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    const auto slot = http_request_access::known_header_slot(request_header_kind::host);
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "first.example"}, slot));
+        http_request_access::add_header(request, http_header_view{"Host", "first.example"}, slot));
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"host", "second.example"}, slot));
+        http_request_access::add_header(request, http_header_view{"host", "second.example"}, slot));
 
     RUVIA_CHECK_EQ(request.header("Host"), std::string_view("second.example"));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("second.example"));
+        request_known_header(request, request_header_kind::host), std::string_view("second.example"));
 }
 
 RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kContentEncoding);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    const auto slot = http_request_access::known_header_slot(request_header_kind::content_encoding);
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "br"}, slot));
+        http_request_access::add_header(request, http_header_view{"Content-Encoding", "br"}, slot));
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
+        http_request_access::add_header(request, http_header_view{"Content-Encoding", "gzip"}, slot));
 
-    RUVIA_CHECK_EQ(requestKnownHeader(request, RequestHeaderKind::kContentEncoding),
+    RUVIA_CHECK_EQ(request_known_header(request, request_header_kind::content_encoding),
         std::string_view("gzip"));
     std::pmr::monotonic_buffer_resource resource;
-    const auto coding = requestContentCoding(request, &resource);
+    const auto coding = request_content_coding(request, &resource);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK_EQ(coding.codings().size(), 2U);
     if (coding.codings().size() == 2) {
-        RUVIA_CHECK(coding.codings()[0] == HttpContentCoding::kBrotli);
-        RUVIA_CHECK(coding.codings()[1] == HttpContentCoding::kGzip);
+        RUVIA_CHECK(coding.codings()[0] == http_content_coding::brotli);
+        RUVIA_CHECK(coding.codings()[1] == http_content_coding::gzip);
     }
 }
 
 RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kContentEncoding);
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    const auto slot = http_request_access::known_header_slot(request_header_kind::content_encoding);
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", ","}, slot));
+        http_request_access::add_header(request, http_header_view{"Content-Encoding", ","}, slot));
     RUVIA_CHECK(
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
+        http_request_access::add_header(request, http_header_view{"Content-Encoding", "gzip"}, slot));
 
     std::pmr::monotonic_buffer_resource resource;
-    const auto coding = requestContentCoding(request, &resource);
+    const auto coding = request_content_coding(request, &resource);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK_EQ(coding.codings().size(), 1U);
     if (!coding.codings().empty()) {
-        RUVIA_CHECK(coding.codings().front() == HttpContentCoding::kGzip);
+        RUVIA_CHECK(coding.codings().front() == http_content_coding::gzip);
     }
 }
 
 RUVIA_TEST(request_access_raw_query_lookup_preserves_encoding_and_uses_last_match) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setQueryString(
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    http_request_access::set_query_string(
         request, "a=first&b=2&a=second+value&encoded%20key=raw%2Fvalue");
 
-    const auto value = request.lastRawQueryValue("a");
+    const auto value = request.last_raw_query_value("a");
     RUVIA_CHECK(value.has_value());
     RUVIA_CHECK_EQ(*value, std::string_view("second+value"));
-    RUVIA_CHECK(!request.lastRawQueryValue("encoded key").has_value());
-    RUVIA_CHECK_EQ(*request.lastRawQueryValue("encoded%20key"), std::string_view("raw%2Fvalue"));
+    RUVIA_CHECK(!request.last_raw_query_value("encoded key").has_value());
+    RUVIA_CHECK_EQ(*request.last_raw_query_value("encoded%20key"), std::string_view("raw%2Fvalue"));
 }
 
 RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Cookie", "sid=first; theme=dark; sid=second"},
-        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kCookie)));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    RUVIA_CHECK(http_request_access::add_header(request,
+        http_header_view{"Cookie", "sid=first; theme=dark; sid=second"},
+        http_request_access::known_header_slot(request_header_kind::cookie)));
 
     const auto value = request.cookie("sid");
     RUVIA_CHECK(value.has_value());
@@ -319,11 +319,11 @@ RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
 }
 
 RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kCookie);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1"}, slot));
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "b=2"}, slot));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    const auto slot = http_request_access::known_header_slot(request_header_kind::cookie);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Cookie", "a=1"}, slot));
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Cookie", "b=2"}, slot));
 
     const auto first = request.cookie("a");
     RUVIA_CHECK(first.has_value());
@@ -334,23 +334,23 @@ RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
 }
 
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    for (int i = 0; i < 64; ++i) {  // kMaxHttpHeaderFields == 64
-        RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x", "y"}));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    for (int i = 0; i < 64; ++i) {  // max_http_header_fields == 64
+        RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"x", "y"}));
     }
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{64});
-    RUVIA_CHECK(!HttpRequestAccess::addHeader(request, HttpHeaderView{"over", "flow"}));
+    RUVIA_CHECK(!http_request_access::add_header(request, http_header_view{"over", "flow"}));
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{64});
 }
 
 RUVIA_TEST(request_access_reset_clears_cached_headers) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "h"},
-        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost)));
+    http_request request = http_request_access::make();
+    http_request_access::reset(request);
+    RUVIA_CHECK(http_request_access::add_header(request, http_header_view{"Host", "h"},
+        http_request_access::known_header_slot(request_header_kind::host)));
     // reset wipes cached known headers and appended headers.
-    HttpRequestAccess::reset(request);
-    RUVIA_CHECK(requestKnownHeader(request, RequestHeaderKind::kHost).empty());
+    http_request_access::reset(request);
+    RUVIA_CHECK(request_known_header(request, request_header_kind::host).empty());
     RUVIA_CHECK(request.headers().empty());
 }

@@ -6,8 +6,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/ModelObject.h"
-#include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/model_object.h"
+#include "ruvia/web/model_types.h"
 
 #include "failing_memory_resource.h"
 #include "test_harness.h"
@@ -16,15 +16,15 @@ namespace {
 
 template <typename value_type>
 value_type borrow_text(std::string_view text, std::pmr::memory_resource* resource) {
-    if constexpr (std::is_same_v<value_type, ruvia::String>) {
-        return ruvia::detail::ModelValueFactory::makeString(text, resource);
+    if constexpr (std::is_same_v<value_type, ruvia::string>) {
+        return ruvia::detail::model_value_factory::make_string(text, resource);
     } else {
-        return std::move(*value_type::parse(text, {.resource = resource}));
+        return std::move(*value_type::parse(text, {.resource_ = resource}));
     }
 }
 
 template <typename value_type>
-void verify_text_ownership(ruvia::testing::TestContext& ruvia_ctx) {
+void verify_text_ownership(ruvia::testing::test_context& ruvia_ctx) {
     failing_memory_resource source_resource;
     failing_memory_resource target_resource;
     const std::string original = "{\"text\":\"" + std::string(128, 'x') + "\"}";
@@ -33,7 +33,7 @@ void verify_text_ownership(ruvia::testing::TestContext& ruvia_ctx) {
         auto borrowed = borrow_text<value_type>(input, &source_resource);
         auto moved_borrow = std::move(borrowed);
         RUVIA_CHECK(moved_borrow.view().data() == input.data());
-        value_type target({.resource = &target_resource});
+        value_type target({.resource_ = &target_resource});
         target = std::move(moved_borrow);
         RUVIA_CHECK(target.resource() == &target_resource);
         RUVIA_CHECK(target.view().data() != input.data());
@@ -45,16 +45,16 @@ void verify_text_ownership(ruvia::testing::TestContext& ruvia_ctx) {
         target = std::move(self);
         RUVIA_CHECK(target.view().data() == target_bytes);
 
-        const auto const_source = ruvia::detail::rebindModelValue(target, &target_resource);
+        const auto const_source = ruvia::detail::rebind_model_value(target, &target_resource);
         const auto* const_bytes = const_source.view().data();
-        auto const_copy = ruvia::detail::rebindModelValue(std::move(const_source), &target_resource);
+        auto const_copy = ruvia::detail::rebind_model_value(std::move(const_source), &target_resource);
         RUVIA_CHECK_EQ(const_copy.view(), std::string_view(original));
         RUVIA_CHECK(const_copy.view().data() != const_bytes);
         RUVIA_CHECK(const_source.view().data() == const_bytes);
 
-        auto owned = ruvia::detail::rebindModelValue(target, &target_resource);
+        auto owned = ruvia::detail::rebind_model_value(target, &target_resource);
         const auto* owned_bytes = owned.view().data();
-        auto transferred = ruvia::detail::rebindModelValue(std::move(owned), &target_resource);
+        auto transferred = ruvia::detail::rebind_model_value(std::move(owned), &target_resource);
         RUVIA_CHECK(transferred.view().data() == owned_bytes);
         target = std::move(transferred);
         RUVIA_CHECK(target.view().data() == owned_bytes);
@@ -77,7 +77,7 @@ void verify_text_ownership(ruvia::testing::TestContext& ruvia_ctx) {
         RUVIA_CHECK(target.view().data() != owned_bytes);
         RUVIA_CHECK_EQ(target.view(), std::string_view(original));
 
-        auto foreign = ruvia::detail::rebindModelValue(target, &source_resource);
+        auto foreign = ruvia::detail::rebind_model_value(target, &source_resource);
         const auto* foreign_bytes = foreign.view().data();
         const auto* old_target_bytes = target.view().data();
         target_resource.fail_after(0);
@@ -106,7 +106,7 @@ void verify_text_ownership(ruvia::testing::TestContext& ruvia_ctx) {
 }  // namespace
 
 RUVIA_TEST(model_text_facades_share_borrow_clone_transfer_and_failed_assignment_rules) {
-    verify_text_ownership<ruvia::String>(ruvia_ctx);
-    verify_text_ownership<ruvia::JsonValue>(ruvia_ctx);
-    verify_text_ownership<ruvia::JsonObject>(ruvia_ctx);
+    verify_text_ownership<ruvia::string>(ruvia_ctx);
+    verify_text_ownership<ruvia::json_value>(ruvia_ctx);
+    verify_text_ownership<ruvia::json_object>(ruvia_ctx);
 }

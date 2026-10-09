@@ -2,7 +2,7 @@
 #include <new>
 #include <string_view>
 
-#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
 #include "test_harness.h"
@@ -18,8 +18,8 @@ constexpr field_names names[]{
     {"X-Trace-Field", "x-trace-field"}, {"Cache-Control", "cache-control"}};
 constexpr std::string_view values[]{"first", "middle", "final"};
 
-void populate_headers(ruvia::HttpResponse& response, const field_names& name) {
-    const ruvia::HttpResponse::HeaderOptions append{.mode = ruvia::HttpResponseHeaderMode::kAppend};
+void populate_headers(ruvia::http_response& response, const field_names& name) {
+    const ruvia::http_response::header_options_type append{.mode_ = ruvia::http_response_header_mode::append};
     response.header("X-Before", "before");
     response.header(name.primary_, values[0], append);
     response.header("Content-Type", "text/plain");
@@ -32,23 +32,23 @@ void populate_headers(ruvia::HttpResponse& response, const field_names& name) {
 
 RUVIA_TEST(response_header_replacement_accepts_borrowed_names_and_values) {
     for (const auto& name : names) {
-        for (std::size_t source = 0; source < 3; ++source) {
+        for (std::size_t source_value = 0; source_value < 3; ++source_value) {
             failing_memory_resource resource;
             {
-                ruvia::HttpResponse response({.resource = &resource});
+                ruvia::http_response response({.resource_ = &resource});
                 populate_headers(response, name);
                 const auto live = resource.live_allocations();
-                const auto& field = response.headers().begin()[source * 2 + 1];
+                const auto& field = response.headers().begin()[source_value * 2 + 1];
                 const auto borrowed_name = field.name();
                 const auto borrowed_value = field.value();
                 response.header(borrowed_name, borrowed_value);
 
                 RUVIA_CHECK_EQ(response.headers().size(), std::size_t{4});
                 RUVIA_CHECK_EQ(response.headers().begin()[0].name(), "X-Before");
-                RUVIA_CHECK_EQ(response.headers().begin()[1].value(), values[source]);
+                RUVIA_CHECK_EQ(response.headers().begin()[1].value(), values[source_value]);
                 RUVIA_CHECK_EQ(response.headers().begin()[2].name(), "Content-Type");
                 RUVIA_CHECK_EQ(response.headers().begin()[3].name(), "X-After");
-                RUVIA_CHECK_EQ(response.header(name.primary_).value_or(""), values[source]);
+                RUVIA_CHECK_EQ(response.header(name.primary_).value_or(""), values[source_value]);
                 RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/plain");
                 RUVIA_CHECK_EQ(resource.live_allocations(), live - 2);
             }
@@ -59,15 +59,15 @@ RUVIA_TEST(response_header_replacement_accepts_borrowed_names_and_values) {
 
 RUVIA_TEST(response_header_removal_accepts_borrowed_names_without_allocating) {
     for (const auto& name : names) {
-        for (std::size_t source = 0; source < 3; ++source) {
+        for (std::size_t source_value = 0; source_value < 3; ++source_value) {
             failing_memory_resource resource;
             {
-                ruvia::HttpResponse response({.resource = &resource});
+                ruvia::http_response response({.resource_ = &resource});
                 populate_headers(response, name);
                 const auto live = resource.live_allocations();
-                const auto borrowed_name = response.headers().begin()[source * 2 + 1].name();
+                const auto borrowed_name = response.headers().begin()[source_value * 2 + 1].name();
                 resource.fail_after(0);
-                response.removeHeader(borrowed_name);
+                response.remove_header(borrowed_name);
 
                 RUVIA_CHECK_EQ(response.headers().size(), std::size_t{3});
                 RUVIA_CHECK_EQ(response.headers().begin()[0].name(), "X-Before");
@@ -82,12 +82,12 @@ RUVIA_TEST(response_header_removal_accepts_borrowed_names_without_allocating) {
 
         failing_memory_resource resource;
         {
-            ruvia::HttpResponse response({.resource = &resource});
+            ruvia::http_response response({.resource_ = &resource});
             const auto owner_allocations = resource.live_allocations();
             response.header(name.primary_, "only");
             const auto borrowed_name = response.headers().begin()->name();
             resource.fail_after(0);
-            response.removeHeader(borrowed_name);
+            response.remove_header(borrowed_name);
             RUVIA_CHECK(response.headers().empty());
             RUVIA_CHECK(!response.header(name.primary_));
             RUVIA_CHECK_EQ(resource.live_allocations(), owner_allocations);
@@ -100,7 +100,7 @@ RUVIA_TEST(response_header_replacement_failure_preserves_borrowed_inputs_for_ret
     for (const auto& name : names) {
         failing_memory_resource resource;
         {
-            ruvia::HttpResponse response({.resource = &resource});
+            ruvia::http_response response({.resource_ = &resource});
             populate_headers(response, name);
             const auto live = resource.live_allocations();
             const auto borrowed_name = response.headers().begin()[1].name();

@@ -5,137 +5,137 @@
 #include <string>
 #include <variant>
 
-#include "ruvia/http/Http3Frames.h"
-#include "ruvia/http/Http3LocalCriticalStreams.h"
+#include "ruvia/http/http3_frames.h"
+#include "ruvia/http/http3_local_critical_streams.h"
 
-#include "http3/Http3CriticalStreamDriver.h"
+#include "http3/http3_critical_stream_driver.h"
 #include "test_harness.h"
 
 namespace {
 
-using Driver = ruvia::detail::Http3CriticalStreamDriver;
-using StreamOpen = ruvia::quic_stream_open_result;
-using StreamWrite = ruvia::quic_stream_write_result;
-using OperationStatus = ruvia::quic_operation_status;
+using driver_type = ruvia::detail::http3_critical_stream_driver;
+using stream_open_type = ruvia::quic_stream_open_result;
+using stream_write_type = ruvia::quic_stream_write_result;
+using operation_status_type = ruvia::quic_operation_status;
 
-struct FakeQuic final {
-    std::array<std::string, 3> accepted{};
-    std::array<const char*, 3> retryAddress{};
-    std::array<std::size_t, 3> retrySize{};
-    std::array<int, 3> writes{};
-    int opens{};
-    bool noCredit{true};
-    bool failDecoder{false};
+struct fake_quic final {
+    std::array<std::string, 3> accepted_{};
+    std::array<const char*, 3> retry_address_{};
+    std::array<std::size_t, 3> retry_size_{};
+    std::array<int, 3> writes_{};
+    int opens_{};
+    bool no_credit_{true};
+    bool fail_decoder_{false};
 
-    [[nodiscard]] StreamOpen open(Driver::Kind kind) {
-        ++opens;
-        if (kind == Driver::Kind::qpack_encoder && noCredit) {
-            noCredit = false;
-            return {.status = OperationStatus::would_block};
+    [[nodiscard]] stream_open_type open(driver_type::kind_type kind) {
+        ++opens_;
+        if (kind == driver_type::kind_type::qpack_encoder && no_credit_) {
+            no_credit_ = false;
+            return {.status_ = operation_status_type::would_block};
         }
-        return {.status = OperationStatus::accepted,
-            .stream_id = 2 + 4 * static_cast<std::uint64_t>(kind)};
+        return {.status_ = operation_status_type::accepted,
+            .stream_id_ = 2 + 4 * static_cast<std::uint64_t>(kind)};
     }
 
-    [[nodiscard]] StreamWrite write(std::uint64_t id, std::span<const char> bytes) {
+    [[nodiscard]] stream_write_type write(std::uint64_t id, std::span<const char> bytes_value) {
         const auto index = static_cast<std::size_t>((id - 2) / 4);
-        if (index >= accepted.size()) {
-            return {.status = OperationStatus::closing};
+        if (index >= accepted_.size()) {
+            return {.status_ = operation_status_type::closing};
         }
-        ++writes[index];
-        if (index == 0 && writes[index] == 1) {
-            retryAddress[index] = bytes.data();
-            retrySize[index] = bytes.size();
-            return {.status = OperationStatus::would_block};
+        ++writes_[index];
+        if (index == 0 && writes_[index] == 1) {
+            retry_address_[index] = bytes_value.data();
+            retry_size_[index] = bytes_value.size();
+            return {.status_ = operation_status_type::would_block};
         }
-        if (index == 0 && writes[index] == 2 &&
-            (bytes.data() != retryAddress[index] || bytes.size() != retrySize[index])) {
-            return {.status = OperationStatus::closing};
+        if (index == 0 && writes_[index] == 2 &&
+            (bytes_value.data() != retry_address_[index] || bytes_value.size() != retry_size_[index])) {
+            return {.status_ = operation_status_type::closing};
         }
-        if (index == 2 && failDecoder) {
-            return {.status = OperationStatus::closing};
+        if (index == 2 && fail_decoder_) {
+            return {.status_ = operation_status_type::closing};
         }
-        const auto count = index == 0 && writes[index] == 2 ? std::size_t{1} : bytes.size();
-        accepted[index].append(bytes.data(), count);
-        return {.status = OperationStatus::accepted, .accepted = count};
+        const auto count = index == 0 && writes_[index] == 2 ? std::size_t{1} : bytes_value.size();
+        accepted_[index].append(bytes_value.data(), count);
+        return {.status_ = operation_status_type::accepted, .accepted_ = count};
     }
 };
 
 }  // namespace
 
-RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams) {
-    const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
+RUVIA_TEST(http3_critical_stream_driver_retries_credit_and_want_without_concluding_streams) {
+    const auto prefixes = ruvia::http3_local_critical_streams::create();
     RUVIA_CHECK((prefixes.index() == 0));
     if ((prefixes.index() != 0)) {
         return;
     }
-    Driver driver(std::get<0>(prefixes));
-    FakeQuic quic;
+    driver_type driver(std::get<0>(prefixes));
+    fake_quic quic;
     RUVIA_CHECK(!driver.complete());
-    bool wroteBeforeCredit = false;
+    bool wrote_before_credit = false;
     RUVIA_CHECK(driver.drive(
-                    [](Driver::Kind) {
-                        return StreamOpen{.status = OperationStatus::would_block};
+                    [](driver_type::kind_type) {
+                        return stream_open_type{.status_ = operation_status_type::would_block};
                     },
                     [&](std::uint64_t, std::span<const char>) {
-                        wroteBeforeCredit = true;
-                        return StreamWrite{.status = OperationStatus::closing};
-                    }) == Driver::Result::kBlocked);
-    RUVIA_CHECK(!wroteBeforeCredit);
-    auto open = [&](Driver::Kind kind) { return quic.open(kind); };
-    auto write = [&](std::uint64_t id, std::span<const char> bytes) {
-        return quic.write(id, bytes);
+                        wrote_before_credit = true;
+                        return stream_write_type{.status_ = operation_status_type::closing};
+                    }) == driver_type::result_type::blocked);
+    RUVIA_CHECK(!wrote_before_credit);
+    auto open = [&](driver_type::kind_type kind) { return quic.open(kind); };
+    auto write = [&](std::uint64_t id, std::span<const char> bytes_value) {
+        return quic.write(id, bytes_value);
     };
     for (int i = 0; i < 5; ++i) {
-        if (driver.drive(open, write) == Driver::Result::kReady) {
+        if (driver.drive(open, write) == driver_type::result_type::ready) {
             break;
         }
     }
-    RUVIA_CHECK(driver.drive(open, write) == Driver::Result::kReady);
+    RUVIA_CHECK(driver.drive(open, write) == driver_type::result_type::ready);
     RUVIA_CHECK(driver.complete());
-    RUVIA_CHECK_EQ(quic.accepted[0], std::string(std::get<0>(prefixes).controlPrefix().data(),
-                                         std::get<0>(prefixes).controlPrefix().size()));
-    RUVIA_CHECK_EQ(quic.accepted[1], std::string(std::get<0>(prefixes).qpackEncoderPrefix().data(),
-                                         std::get<0>(prefixes).qpackEncoderPrefix().size()));
-    RUVIA_CHECK_EQ(quic.accepted[2], std::string(std::get<0>(prefixes).qpackDecoderPrefix().data(),
-                                         std::get<0>(prefixes).qpackDecoderPrefix().size()));
-    RUVIA_CHECK(driver.queueGoaway(12));
+    RUVIA_CHECK_EQ(quic.accepted_[0], std::string(std::get<0>(prefixes).control_prefix().data(),
+                                          std::get<0>(prefixes).control_prefix().size()));
+    RUVIA_CHECK_EQ(quic.accepted_[1], std::string(std::get<0>(prefixes).qpack_encoder_prefix().data(),
+                                          std::get<0>(prefixes).qpack_encoder_prefix().size()));
+    RUVIA_CHECK_EQ(quic.accepted_[2], std::string(std::get<0>(prefixes).qpack_decoder_prefix().data(),
+                                          std::get<0>(prefixes).qpack_decoder_prefix().size()));
+    RUVIA_CHECK(driver.queue_goaway(12));
     RUVIA_CHECK(!driver.complete());
-    RUVIA_CHECK(!driver.queueGoaway(16));
-    RUVIA_CHECK(driver.drive(open, write) == Driver::Result::kReady);
+    RUVIA_CHECK(!driver.queue_goaway(16));
+    RUVIA_CHECK(driver.drive(open, write) == driver_type::result_type::ready);
     RUVIA_CHECK(driver.complete());
-    const auto controlBytes = std::span<const char>(quic.accepted[0].data(),
-        quic.accepted[0].size());
-    const auto goaway = controlBytes.subspan(std::get<0>(prefixes).controlPrefix().size());
-    const auto decodedGoaway = ruvia::decodeHttp3Frame(goaway);
-    RUVIA_CHECK((decodedGoaway.index() == 0) && std::get<0>(decodedGoaway).type ==
-                                                    static_cast<std::uint64_t>(ruvia::Http3FrameType::kGoaway));
-    if ((decodedGoaway.index() == 0)) {
-        const auto identifier = ruvia::decodeHttp3VarInt(std::get<0>(decodedGoaway).payload);
-        RUVIA_CHECK((identifier.index() == 0) && std::get<0>(identifier).value == 12);
-        RUVIA_CHECK_EQ(std::get<0>(decodedGoaway).encodedBytes, goaway.size());
+    const auto control_bytes = std::span<const char>(quic.accepted_[0].data(),
+        quic.accepted_[0].size());
+    const auto goaway = control_bytes.subspan(std::get<0>(prefixes).control_prefix().size());
+    const auto decoded_goaway = ruvia::decode_http3_frame(goaway);
+    RUVIA_CHECK((decoded_goaway.index() == 0) && std::get<0>(decoded_goaway).type_ ==
+                                                     static_cast<std::uint64_t>(ruvia::http3_frame_type::goaway));
+    if ((decoded_goaway.index() == 0)) {
+        const auto identifier = ruvia::decode_http3_var_int(std::get<0>(decoded_goaway).payload_);
+        RUVIA_CHECK((identifier.index() == 0) && std::get<0>(identifier).value_ == 12);
+        RUVIA_CHECK_EQ(std::get<0>(decoded_goaway).encoded_bytes_, goaway.size());
     }
-    RUVIA_CHECK(driver.streamId(Driver::Kind::control) == 2);
-    RUVIA_CHECK(driver.streamId(Driver::Kind::qpack_encoder) == 6);
-    RUVIA_CHECK(driver.streamId(Driver::Kind::qpack_decoder) == 10);
-    RUVIA_CHECK_EQ(quic.opens, 4);
+    RUVIA_CHECK(driver.stream_id(driver_type::kind_type::control) == 2);
+    RUVIA_CHECK(driver.stream_id(driver_type::kind_type::qpack_encoder) == 6);
+    RUVIA_CHECK(driver.stream_id(driver_type::kind_type::qpack_decoder) == 10);
+    RUVIA_CHECK_EQ(quic.opens_, 4);
 }
 
-RUVIA_TEST(http3CriticalStreamDriverLatchesFailedCriticalStream) {
-    const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
+RUVIA_TEST(http3_critical_stream_driver_latches_failed_critical_stream) {
+    const auto prefixes = ruvia::http3_local_critical_streams::create();
     RUVIA_CHECK((prefixes.index() == 0));
     if ((prefixes.index() != 0)) {
         return;
     }
-    Driver driver(std::get<0>(prefixes));
-    FakeQuic quic;
-    quic.failDecoder = true;
-    auto open = [&](Driver::Kind kind) { return quic.open(kind); };
-    auto write = [&](std::uint64_t id, std::span<const char> bytes) {
-        return quic.write(id, bytes);
+    driver_type driver(std::get<0>(prefixes));
+    fake_quic quic;
+    quic.fail_decoder_ = true;
+    auto open = [&](driver_type::kind_type kind) { return quic.open(kind); };
+    auto write = [&](std::uint64_t id, std::span<const char> bytes_value) {
+        return quic.write(id, bytes_value);
     };
-    RUVIA_CHECK(driver.drive(open, write) == Driver::Result::kFatal);
-    const auto previousOpens = quic.opens;
-    RUVIA_CHECK(driver.drive(open, write) == Driver::Result::kFatal);
-    RUVIA_CHECK_EQ(quic.opens, previousOpens);
+    RUVIA_CHECK(driver.drive(open, write) == driver_type::result_type::fatal);
+    const auto previous_opens = quic.opens_;
+    RUVIA_CHECK(driver.drive(open, write) == driver_type::result_type::fatal);
+    RUVIA_CHECK_EQ(quic.opens_, previous_opens);
 }

@@ -13,90 +13,90 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "http3/Http3UdpSocket.h"
+#include "http3/http3_udp_socket.h"
 #include "test_harness.h"
 
 namespace {
-using Socket = ruvia::detail::http3_udp_socket;
-using Udp = asio::ip::udp;
+using socket_type = ruvia::detail::http3_udp_socket;
+using udp_type = asio::ip::udp;
 using namespace std::chrono_literals;
 
-[[noreturn]] void fixtureLifetimeViolation(const char* fixture) noexcept {
+[[noreturn]] void fixture_lifetime_violation(const char* fixture_value) noexcept {
     std::fprintf(stderr,
         "[FATAL FIXTURE LIFETIME] %s did not drain every borrowed completion; terminating\n",
-        fixture);
+        fixture_value);
     std::fflush(stderr);
     std::terminate();
 }
 
-struct Exchange final {
-    Socket* server{};
-    Udp::endpoint replySource;
-    std::array<std::byte, 8> replyBytes{};
-    std::size_t replySize{};
-    std::array<std::byte, 64> requestBytes{};
-    std::size_t requestSize{};
-    bool receivedIntoOwnedStorage{};
-    Udp::endpoint receivedPeer;
-    Udp::endpoint local_destination;
-    std::array<std::byte, 64> replyBuffer{};
-    Udp::endpoint replyPeer;
-    int receiveCalls{};
-    int sendCalls{};
-    int replyCalls{};
-    int requestSendCalls{};
-    std::error_code receiveError;
-    std::error_code sendError;
-    std::error_code replyError;
-    std::error_code requestError;
-    std::size_t sentSize{};
-    std::size_t requestSentSize{};
-    std::size_t replyReceivedSize{};
-    bool sendAccepted{};
-    bool requestSent{};
+struct exchange final {
+    socket_type* server_{};
+    udp_type::endpoint reply_source_;
+    std::array<std::byte, 8> reply_bytes_{};
+    std::size_t reply_size_{};
+    std::array<std::byte, 64> request_bytes_{};
+    std::size_t request_size_{};
+    bool received_into_owned_storage_{};
+    udp_type::endpoint received_peer_;
+    udp_type::endpoint local_destination_;
+    std::array<std::byte, 64> reply_buffer_{};
+    udp_type::endpoint reply_peer_;
+    int receive_calls_{};
+    int send_calls_{};
+    int reply_calls_{};
+    int request_send_calls_{};
+    std::error_code receive_error_;
+    std::error_code send_error_;
+    std::error_code reply_error_;
+    std::error_code request_error_;
+    std::size_t sent_size_{};
+    std::size_t request_sent_size_{};
+    std::size_t reply_received_size_{};
+    bool send_accepted_{};
+    bool request_sent_{};
 };
 
-void onSend(void* object, std::error_code error, std::size_t size) noexcept {
-    auto& exchange = *static_cast<Exchange*>(object);
-    ++exchange.sendCalls;
-    exchange.sendError = error;
-    exchange.sentSize = size;
+void on_send(void* object, std::error_code error, std::size_t size) noexcept {
+    auto& exchange_value = *static_cast<exchange*>(object);
+    ++exchange_value.send_calls_;
+    exchange_value.send_error_ = error;
+    exchange_value.sent_size_ = size;
 }
 
-void onReceive(void* object, std::error_code error, Socket::receive_view view) noexcept {
-    auto& exchange = *static_cast<Exchange*>(object);
-    ++exchange.receiveCalls;
-    exchange.receiveError = error;
+void on_receive(void* object, std::error_code error, socket_type::receive_view view) noexcept {
+    auto& exchange_value = *static_cast<exchange*>(object);
+    ++exchange_value.receive_calls_;
+    exchange_value.receive_error_ = error;
     if (error) {
         return;
     }
-    exchange.receivedPeer = std::move(view.peer);
-    exchange.local_destination = std::move(view.local_destination);
-    exchange.requestSize = std::min(view.bytes.size(), exchange.requestBytes.size());
-    exchange.receivedIntoOwnedStorage = view.bytes.data() == exchange.requestBytes.data();
-    exchange.sendAccepted = exchange.server->async_send(
-        Socket::send_view{exchange.replySource, exchange.receivedPeer,
-            std::span<const std::byte>(exchange.replyBytes.data(), exchange.replySize)},
-        &exchange, onSend);
+    exchange_value.received_peer_ = std::move(view.peer_);
+    exchange_value.local_destination_ = std::move(view.local_destination_);
+    exchange_value.request_size_ = std::min(view.bytes_.size(), exchange_value.request_bytes_.size());
+    exchange_value.received_into_owned_storage_ = view.bytes_.data() == exchange_value.request_bytes_.data();
+    exchange_value.send_accepted_ = exchange_value.server_->async_send(
+        socket_type::send_view{exchange_value.reply_source_, exchange_value.received_peer_,
+            std::span<const std::byte>(exchange_value.reply_bytes_.data(), exchange_value.reply_size_)},
+        &exchange_value, on_send);
 }
 
-Exchange runExchange(asio::io_context& io, Socket& server, Udp::socket& client,
-    const Udp::endpoint& destination, const Udp::endpoint& replySource,
+exchange run_exchange(asio::io_context& io, socket_type& server, udp_type::socket& client,
+    const udp_type::endpoint& destination, const udp_type::endpoint& reply_source,
     std::span<const std::byte> request) {
     if (io.stopped()) {
         io.restart();
     }
-    Exchange exchange;
-    exchange.server = &server;
-    exchange.replySource = replySource;
-    exchange.replyBytes = {std::byte{'r'}, std::byte{'e'}, std::byte{'p'},
+    exchange exchange;
+    exchange.server_ = &server;
+    exchange.reply_source_ = reply_source;
+    exchange.reply_bytes_ = {std::byte{'r'}, std::byte{'e'}, std::byte{'p'},
         std::byte{'l'}, std::byte{'y'}, std::byte{'!'}, std::byte{}, std::byte{}};
-    exchange.replySize = 6;
+    exchange.reply_size_ = 6;
 
-    bool receiveAccepted = false;
-    bool clientReceiveAccepted = false;
-    bool clientSendAccepted = false;
-    const auto cancelAndDrain = [&]() noexcept {
+    bool receive_accepted = false;
+    bool client_receive_accepted = false;
+    bool client_send_accepted = false;
+    const auto cancel_and_drain = [&]() noexcept {
         server.request_stop();
         asio::error_code ignored;
         client.cancel(ignored);
@@ -108,59 +108,59 @@ Exchange runExchange(asio::io_context& io, Socket& server, Udp::socket& client,
             io.restart();
         }
         (void)io.poll();
-        const int expectedReceiveCalls = receiveAccepted ? 1 : 0;
-        const int expectedSendCalls = exchange.sendAccepted ? 1 : 0;
-        const int expectedReplyCalls = clientReceiveAccepted ? 1 : 0;
-        const int expectedClientSendCalls = clientSendAccepted ? 1 : 0;
-        if (!server.done() || exchange.receiveCalls != expectedReceiveCalls ||
-            exchange.sendCalls != expectedSendCalls || exchange.replyCalls != expectedReplyCalls ||
-            exchange.requestSendCalls != expectedClientSendCalls) {
-            fixtureLifetimeViolation("runExchange cancellation/drain");
+        const int expected_receive_calls = receive_accepted ? 1 : 0;
+        const int expected_send_calls = exchange.send_accepted_ ? 1 : 0;
+        const int expected_reply_calls = client_receive_accepted ? 1 : 0;
+        const int expected_client_send_calls = client_send_accepted ? 1 : 0;
+        if (!server.done() || exchange.receive_calls_ != expected_receive_calls ||
+            exchange.send_calls_ != expected_send_calls || exchange.reply_calls_ != expected_reply_calls ||
+            exchange.request_send_calls_ != expected_client_send_calls) {
+            fixture_lifetime_violation("runExchange cancellation/drain");
         }
     };
 
     try {
-        client.async_receive_from(asio::buffer(exchange.replyBuffer), exchange.replyPeer,
+        client.async_receive_from(asio::buffer(exchange.reply_buffer_), exchange.reply_peer_,
             [&exchange](const asio::error_code& error, std::size_t size) noexcept {
-                ++exchange.replyCalls;
-                exchange.replyError = error;
-                exchange.replyReceivedSize = size;
+                ++exchange.reply_calls_;
+                exchange.reply_error_ = error;
+                exchange.reply_received_size_ = size;
             });
-        clientReceiveAccepted = true;
-        receiveAccepted = server.async_receive(exchange.requestBytes, &exchange, onReceive);
+        client_receive_accepted = true;
+        receive_accepted = server.async_receive(exchange.request_bytes_, &exchange, on_receive);
         client.async_send_to(asio::buffer(request), destination,
-            [&exchange, expectedSize = request.size()](const asio::error_code& error,
+            [&exchange, expected_size = request.size()](const asio::error_code& error,
                 std::size_t size) noexcept {
-                ++exchange.requestSendCalls;
-                exchange.requestError = error;
-                exchange.requestSentSize = size;
-                exchange.requestSent = !error && size == expectedSize;
+                ++exchange.request_send_calls_;
+                exchange.request_error_ = error;
+                exchange.request_sent_size_ = size;
+                exchange.request_sent_ = !error && size == expected_size;
             });
-        clientSendAccepted = true;
+        client_send_accepted = true;
         io.run_for(2s);
     } catch (...) {
-        cancelAndDrain();
+        cancel_and_drain();
         throw;
     }
 
-    const bool complete = receiveAccepted && exchange.receiveCalls == 1 &&
-                          exchange.sendCalls == (exchange.sendAccepted ? 1 : 0) &&
-                          exchange.replyCalls == 1 && exchange.requestSendCalls == 1;
-    if (!complete) {
-        cancelAndDrain();
+    const bool complete_value = receive_accepted && exchange.receive_calls_ == 1 &&
+                                exchange.send_calls_ == (exchange.send_accepted_ ? 1 : 0) &&
+                                exchange.reply_calls_ == 1 && exchange.request_send_calls_ == 1;
+    if (!complete_value) {
+        cancel_and_drain();
     }
-    if (!receiveAccepted) {
-        exchange.receiveError = std::make_error_code(std::errc::operation_not_permitted);
+    if (!receive_accepted) {
+        exchange.receive_error_ = std::make_error_code(std::errc::operation_not_permitted);
     }
     return exchange;
 }
 
-bool isOperationCanceled(std::error_code error) noexcept {
+bool is_operation_canceled(std::error_code error) noexcept {
     return error == asio::error::operation_aborted ||
            error == std::errc::operation_canceled;
 }
 
-bool isIPv6Unavailable(std::error_code error) noexcept {
+bool is_i_pv6_unavailable(std::error_code error) noexcept {
     return error == asio::error::address_family_not_supported ||
            error == std::errc::protocol_not_supported ||
            error == asio::error::operation_not_supported ||
@@ -168,76 +168,76 @@ bool isIPv6Unavailable(std::error_code error) noexcept {
            error == std::errc::network_unreachable;
 }
 
-struct StopReceive final {
-    Socket* socket{};
-    int calls{};
-    std::error_code firstError;
-    std::error_code secondError;
-    std::size_t firstSize{};
-    std::size_t secondSize{};
-    bool rearm{};
-    bool rearmAccepted{};
-    bool postStopRearmAccepted{};
-    bool doneInsideCompletion{};
-    std::array<std::byte, 64> bytes{};
+struct stop_receive final {
+    socket_type* socket_{};
+    int calls_{};
+    std::error_code first_error_;
+    std::error_code second_error_;
+    std::size_t first_size_{};
+    std::size_t second_size_{};
+    bool rearm_{};
+    bool rearm_accepted_{};
+    bool post_stop_rearm_accepted_{};
+    bool done_inside_completion_{};
+    std::array<std::byte, 64> bytes_{};
 };
 
-struct SendCompletionState final {
-    int calls{};
-    std::error_code error;
-    std::size_t size{};
+struct send_completion_state final {
+    int calls_{};
+    std::error_code error_;
+    std::size_t size_{};
 };
 
-struct DatagramSendState final {
-    int calls{};
-    asio::error_code error;
-    std::size_t size{};
+struct datagram_send_state final {
+    int calls_{};
+    asio::error_code error_;
+    std::size_t size_{};
 };
 
-void onCancellationSend(void* object, std::error_code error, std::size_t size) noexcept {
-    auto& state = *static_cast<SendCompletionState*>(object);
-    ++state.calls;
-    state.error = error;
-    state.size = size;
+void on_cancellation_send(void* object, std::error_code error, std::size_t size) noexcept {
+    auto& state_value = *static_cast<send_completion_state*>(object);
+    ++state_value.calls_;
+    state_value.error_ = error;
+    state_value.size_ = size;
 }
 
-void onStopReceive(void* object, std::error_code error,
-    Socket::receive_view view) noexcept {
-    auto& state = *static_cast<StopReceive*>(object);
-    ++state.calls;
-    if (state.calls == 1) {
-        state.firstError = error;
-        state.firstSize = view.bytes.size();
-        if (state.rearm) {
-            state.rearmAccepted = state.socket->async_receive(state.bytes, &state, onStopReceive);
-            state.socket->request_stop();
-            state.doneInsideCompletion = state.socket->done();
-            state.postStopRearmAccepted = state.socket->async_receive(state.bytes, &state, onStopReceive);
+void on_stop_receive(void* object, std::error_code error,
+    socket_type::receive_view view) noexcept {
+    auto& state_value = *static_cast<stop_receive*>(object);
+    ++state_value.calls_;
+    if (state_value.calls_ == 1) {
+        state_value.first_error_ = error;
+        state_value.first_size_ = view.bytes_.size();
+        if (state_value.rearm_) {
+            state_value.rearm_accepted_ = state_value.socket_->async_receive(state_value.bytes_, &state_value, on_stop_receive);
+            state_value.socket_->request_stop();
+            state_value.done_inside_completion_ = state_value.socket_->done();
+            state_value.post_stop_rearm_accepted_ = state_value.socket_->async_receive(state_value.bytes_, &state_value, on_stop_receive);
         }
     } else {
-        state.secondError = error;
-        state.secondSize = view.bytes.size();
+        state_value.second_error_ = error;
+        state_value.second_size_ = view.bytes_.size();
     }
 }
 
-class CountingResource final : public std::pmr::memory_resource {
+class counting_resource final : public std::pmr::memory_resource {
 public:
-    std::size_t liveBytes{};
-    std::size_t allocations{};
-    std::size_t returns{};
+    std::size_t live_bytes_{};
+    std::size_t allocations_{};
+    std::size_t returns_{};
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        void* const result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        liveBytes += bytes;
-        ++allocations;
-        return result;
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        void* const result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        live_bytes_ += bytes_value;
+        ++allocations_;
+        return result_value;
     }
 
-    void do_deallocate(void* memory, std::size_t bytes, std::size_t alignment) override {
-        liveBytes -= bytes;
-        ++returns;
-        std::pmr::new_delete_resource()->deallocate(memory, bytes, alignment);
+    void do_deallocate(void* memory, std::size_t bytes_value, std::size_t alignment) override {
+        live_bytes_ -= bytes_value;
+        ++returns_;
+        std::pmr::new_delete_resource()->deallocate(memory, bytes_value, alignment);
     }
 
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -245,136 +245,136 @@ private:
     }
 };
 
-struct SendRound final {
-    std::pmr::vector<std::byte> payload;
-    std::pmr::vector<std::byte>* retainedSent{};
-    std::pmr::vector<std::byte>* retainedReceived{};
-    bool payloadAlive{true};
-    bool sendBorrowAlive{};
-    int sendCalls{};
-    int receiveCalls{};
-    std::error_code sendError;
-    std::error_code receiveError;
-    std::size_t sentSize{};
-    std::size_t receivedSize{};
-    std::array<std::byte, 64> received{};
-    Udp::endpoint sender;
+struct send_round final {
+    std::pmr::vector<std::byte> payload_;
+    std::pmr::vector<std::byte>* retained_sent_{};
+    std::pmr::vector<std::byte>* retained_received_{};
+    bool payload_alive_{true};
+    bool send_borrow_alive_{};
+    int send_calls_{};
+    int receive_calls_{};
+    std::error_code send_error_;
+    std::error_code receive_error_;
+    std::size_t sent_size_{};
+    std::size_t received_size_{};
+    std::array<std::byte, 64> received_{};
+    udp_type::endpoint sender_;
 
-    explicit SendRound(std::pmr::memory_resource* resource)
-        : payload(resource) {}
+    explicit send_round(std::pmr::memory_resource* resource)
+        : payload_(resource) {}
 };
 
-void onRoundSend(void* object, std::error_code error, std::size_t size) noexcept {
-    auto& round = *static_cast<SendRound*>(object);
-    ++round.sendCalls;
-    round.sendError = error;
-    round.sentSize = size;
-    round.sendBorrowAlive = round.payloadAlive;
-    if (round.payloadAlive && !error && !round.payload.empty()) {
-        round.retainedSent->insert(round.retainedSent->end(),
-            round.payload.begin(), round.payload.end());
+void on_round_send(void* object, std::error_code error, std::size_t size) noexcept {
+    auto& round = *static_cast<send_round*>(object);
+    ++round.send_calls_;
+    round.send_error_ = error;
+    round.sent_size_ = size;
+    round.send_borrow_alive_ = round.payload_alive_;
+    if (round.payload_alive_ && !error && !round.payload_.empty()) {
+        round.retained_sent_->insert(round.retained_sent_->end(),
+            round.payload_.begin(), round.payload_.end());
     }
 }
 
 }  // namespace
 
-RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
+RUVIA_TEST(http3_network_udp_socket_preserves_pktinfo_and_explicit_reply_source) {
     asio::io_context io;
-    Socket server(io, Udp::endpoint(asio::ip::address_v4::any(), 0));
+    socket_type server(io, udp_type::endpoint(asio::ip::address_v4::any(), 0));
     server.prepare();
     RUVIA_CHECK(server.bound_port() != 0);
 
     const auto loopback1 = asio::ip::address_v4::loopback();
     const auto loopback2 = asio::ip::address_v4({127, 0, 0, 2});
-    Udp::socket client1(io, Udp::endpoint(loopback1, 0));
-    Udp::socket client2(io, Udp::endpoint(loopback2, 0));
+    udp_type::socket client1(io, udp_type::endpoint(loopback1, 0));
+    udp_type::socket client2(io, udp_type::endpoint(loopback2, 0));
 #ifdef _WIN32
-    const Udp::endpoint source(loopback1, server.bound_port());
+    const udp_type::endpoint source_value(loopback1, server.bound_port());
 #else
-    const Udp::endpoint source(loopback2, server.bound_port());
+    const udp_type::endpoint source_value(loopback2, server.bound_port());
 #endif
-    const std::array<std::byte, 4> firstRequest{
+    const std::array<std::byte, 4> first_request{
         std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14}};
-    const std::array<std::byte, 5> secondRequest{
+    const std::array<std::byte, 5> second_request{
         std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24}, std::byte{0x25}};
 
-    auto first = runExchange(io, server, client1, Udp::endpoint(loopback1, server.bound_port()),
-        source, firstRequest);
-    RUVIA_CHECK(first.requestSent);
-    RUVIA_CHECK(first.requestSendCalls == 1);
-    RUVIA_CHECK(!first.requestError);
-    RUVIA_CHECK(first.requestSentSize == firstRequest.size());
-    RUVIA_CHECK(first.receiveCalls == 1);
-    RUVIA_CHECK(!first.receiveError);
-    RUVIA_CHECK(first.receivedPeer == client1.local_endpoint());
-    RUVIA_CHECK(first.local_destination == Udp::endpoint(loopback1, server.bound_port()));
-    RUVIA_CHECK(first.receivedIntoOwnedStorage);
-    RUVIA_CHECK(first.requestSize == firstRequest.size());
-    RUVIA_CHECK(std::equal(firstRequest.begin(), firstRequest.end(), first.requestBytes.begin()));
-    RUVIA_CHECK(first.sendAccepted);
-    RUVIA_CHECK(first.sendCalls == 1);
-    RUVIA_CHECK(!first.sendError);
-    RUVIA_CHECK(first.sentSize == first.replySize);
-    RUVIA_CHECK(first.replyCalls == 1);
-    RUVIA_CHECK(!first.replyError);
-    RUVIA_CHECK(first.replyReceivedSize == first.replySize);
-    RUVIA_CHECK(first.replyPeer == source);
-    RUVIA_CHECK(std::equal(first.replyBytes.begin(),
-        first.replyBytes.begin() + static_cast<std::ptrdiff_t>(first.replySize),
-        first.replyBuffer.begin()));
-    if (first.receiveCalls != 1 || first.sendCalls != 1 || first.replyCalls != 1 ||
-        first.requestSendCalls != 1 || first.receiveError || first.sendError || first.replyError ||
-        first.requestError) {
+    auto first = run_exchange(io, server, client1, udp_type::endpoint(loopback1, server.bound_port()),
+        source_value, first_request);
+    RUVIA_CHECK(first.request_sent_);
+    RUVIA_CHECK(first.request_send_calls_ == 1);
+    RUVIA_CHECK(!first.request_error_);
+    RUVIA_CHECK(first.request_sent_size_ == first_request.size());
+    RUVIA_CHECK(first.receive_calls_ == 1);
+    RUVIA_CHECK(!first.receive_error_);
+    RUVIA_CHECK(first.received_peer_ == client1.local_endpoint());
+    RUVIA_CHECK(first.local_destination_ == udp_type::endpoint(loopback1, server.bound_port()));
+    RUVIA_CHECK(first.received_into_owned_storage_);
+    RUVIA_CHECK(first.request_size_ == first_request.size());
+    RUVIA_CHECK(std::equal(first_request.begin(), first_request.end(), first.request_bytes_.begin()));
+    RUVIA_CHECK(first.send_accepted_);
+    RUVIA_CHECK(first.send_calls_ == 1);
+    RUVIA_CHECK(!first.send_error_);
+    RUVIA_CHECK(first.sent_size_ == first.reply_size_);
+    RUVIA_CHECK(first.reply_calls_ == 1);
+    RUVIA_CHECK(!first.reply_error_);
+    RUVIA_CHECK(first.reply_received_size_ == first.reply_size_);
+    RUVIA_CHECK(first.reply_peer_ == source_value);
+    RUVIA_CHECK(std::equal(first.reply_bytes_.begin(),
+        first.reply_bytes_.begin() + static_cast<std::ptrdiff_t>(first.reply_size_),
+        first.reply_buffer_.begin()));
+    if (first.receive_calls_ != 1 || first.send_calls_ != 1 || first.reply_calls_ != 1 ||
+        first.request_send_calls_ != 1 || first.receive_error_ || first.send_error_ || first.reply_error_ ||
+        first.request_error_) {
         return;
     }
 
     // Late replies to a departed peer must leave the shared receive side usable.
     client1.close();
-    Exchange closed_peer;
+    exchange closed_peer;
     const bool late_send = server.async_send(
-        Socket::send_view{source, first.receivedPeer, firstRequest}, &closed_peer, onSend);
+        socket_type::send_view{source_value, first.received_peer_, first_request}, &closed_peer, on_send);
     RUVIA_CHECK(late_send);
     io.restart();
     io.run_for(50ms);
-    RUVIA_CHECK_EQ(closed_peer.sendCalls, 1);
-    RUVIA_CHECK(!closed_peer.sendError);
-    if (!late_send || closed_peer.sendCalls != 1 || closed_peer.sendError) {
+    RUVIA_CHECK_EQ(closed_peer.send_calls_, 1);
+    RUVIA_CHECK(!closed_peer.send_error_);
+    if (!late_send || closed_peer.send_calls_ != 1 || closed_peer.send_error_) {
         server.request_stop();
         io.restart();
         io.run_for(2s);
         if (!server.done()) {
-            fixtureLifetimeViolation("closed peer send");
+            fixture_lifetime_violation("closed peer send");
         }
         return;
     }
 
-    auto second = runExchange(io, server, client2, Udp::endpoint(loopback2, server.bound_port()),
-        source, secondRequest);
-    RUVIA_CHECK(second.requestSent);
-    RUVIA_CHECK(second.requestSendCalls == 1);
-    RUVIA_CHECK(!second.requestError);
-    RUVIA_CHECK(second.requestSentSize == secondRequest.size());
-    RUVIA_CHECK(second.receiveCalls == 1);
-    RUVIA_CHECK(!second.receiveError);
-    RUVIA_CHECK(second.receivedPeer == client2.local_endpoint());
-    RUVIA_CHECK(second.local_destination == Udp::endpoint(loopback2, server.bound_port()));
-    RUVIA_CHECK(second.receivedIntoOwnedStorage);
-    RUVIA_CHECK(second.requestSize == secondRequest.size());
-    RUVIA_CHECK(std::equal(secondRequest.begin(), secondRequest.end(), second.requestBytes.begin()));
-    RUVIA_CHECK(second.sendAccepted);
-    RUVIA_CHECK(second.sendCalls == 1);
-    RUVIA_CHECK(!second.sendError);
-    RUVIA_CHECK(second.sentSize == second.replySize);
-    RUVIA_CHECK(second.replyCalls == 1);
-    RUVIA_CHECK(!second.replyError);
-    RUVIA_CHECK(second.replyReceivedSize == second.replySize);
-    RUVIA_CHECK(second.replyPeer == source);
-    RUVIA_CHECK(std::equal(second.replyBytes.begin(),
-        second.replyBytes.begin() + static_cast<std::ptrdiff_t>(second.replySize),
-        second.replyBuffer.begin()));
-    if (second.receiveCalls != 1 || second.sendCalls != 1 || second.replyCalls != 1 ||
-        second.requestSendCalls != 1 || second.receiveError || second.sendError || second.replyError ||
-        second.requestError) {
+    auto second = run_exchange(io, server, client2, udp_type::endpoint(loopback2, server.bound_port()),
+        source_value, second_request);
+    RUVIA_CHECK(second.request_sent_);
+    RUVIA_CHECK(second.request_send_calls_ == 1);
+    RUVIA_CHECK(!second.request_error_);
+    RUVIA_CHECK(second.request_sent_size_ == second_request.size());
+    RUVIA_CHECK(second.receive_calls_ == 1);
+    RUVIA_CHECK(!second.receive_error_);
+    RUVIA_CHECK(second.received_peer_ == client2.local_endpoint());
+    RUVIA_CHECK(second.local_destination_ == udp_type::endpoint(loopback2, server.bound_port()));
+    RUVIA_CHECK(second.received_into_owned_storage_);
+    RUVIA_CHECK(second.request_size_ == second_request.size());
+    RUVIA_CHECK(std::equal(second_request.begin(), second_request.end(), second.request_bytes_.begin()));
+    RUVIA_CHECK(second.send_accepted_);
+    RUVIA_CHECK(second.send_calls_ == 1);
+    RUVIA_CHECK(!second.send_error_);
+    RUVIA_CHECK(second.sent_size_ == second.reply_size_);
+    RUVIA_CHECK(second.reply_calls_ == 1);
+    RUVIA_CHECK(!second.reply_error_);
+    RUVIA_CHECK(second.reply_received_size_ == second.reply_size_);
+    RUVIA_CHECK(second.reply_peer_ == source_value);
+    RUVIA_CHECK(std::equal(second.reply_bytes_.begin(),
+        second.reply_bytes_.begin() + static_cast<std::ptrdiff_t>(second.reply_size_),
+        second.reply_buffer_.begin()));
+    if (second.receive_calls_ != 1 || second.send_calls_ != 1 || second.reply_calls_ != 1 ||
+        second.request_send_calls_ != 1 || second.receive_error_ || second.send_error_ || second.reply_error_ ||
+        second.request_error_) {
         return;
     }
 
@@ -382,11 +382,11 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     RUVIA_CHECK(server.done());
 
     try {
-        Socket ipv6Server(io, Udp::endpoint(asio::ip::address_v6::any(), 0));
+        socket_type ipv6_server(io, udp_type::endpoint(asio::ip::address_v6::any(), 0));
         try {
-            ipv6Server.prepare();
+            ipv6_server.prepare();
         } catch (const std::system_error& error) {
-            if (isIPv6Unavailable(error.code())) {
+            if (is_i_pv6_unavailable(error.code())) {
                 std::fprintf(stderr,
                     "[SKIP] IPv6 network (::1) unavailable during prepare: %s\n",
                     error.code().message().c_str());
@@ -395,97 +395,97 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
                     error.code().message().c_str());
                 RUVIA_CHECK(false && "unexpected IPv6 network prepare failure");
             }
-            ipv6Server.request_stop();
-            RUVIA_CHECK(ipv6Server.done());
+            ipv6_server.request_stop();
+            RUVIA_CHECK(ipv6_server.done());
             return;
         }
 
-        Udp::socket ipv6Client(io);
-        asio::error_code ipv6Error;
-        ipv6Client.open(Udp::v6(), ipv6Error);
-        if (!ipv6Error) {
-            ipv6Client.bind(Udp::endpoint(asio::ip::address_v6::loopback(), 0), ipv6Error);
+        udp_type::socket ipv6_client(io);
+        asio::error_code ipv6_error;
+        ipv6_client.open(udp_type::v6(), ipv6_error);
+        if (!ipv6_error) {
+            ipv6_client.bind(udp_type::endpoint(asio::ip::address_v6::loopback(), 0), ipv6_error);
         }
-        if (ipv6Error) {
-            if (isIPv6Unavailable(ipv6Error)) {
+        if (ipv6_error) {
+            if (is_i_pv6_unavailable(ipv6_error)) {
                 std::fprintf(stderr,
                     "[SKIP] IPv6 network (::1) unavailable for client bind: %s\n",
-                    ipv6Error.message().c_str());
+                    ipv6_error.message().c_str());
             } else {
                 std::fprintf(stderr, "IPv6 network client setup failed: %s\n",
-                    ipv6Error.message().c_str());
+                    ipv6_error.message().c_str());
                 RUVIA_CHECK(false && "unexpected IPv6 network client setup failure");
             }
-            ipv6Server.request_stop();
-            RUVIA_CHECK(ipv6Server.done());
+            ipv6_server.request_stop();
+            RUVIA_CHECK(ipv6_server.done());
             return;
         }
 
-        const auto ipv6Loopback = asio::ip::address_v6::loopback();
-        const Udp::endpoint ipv6Source(ipv6Loopback, ipv6Server.bound_port());
-        const std::array<std::byte, 3> ipv6Request{
+        const auto ipv6_loopback = asio::ip::address_v6::loopback();
+        const udp_type::endpoint ipv6_source(ipv6_loopback, ipv6_server.bound_port());
+        const std::array<std::byte, 3> ipv6_request{
             std::byte{0x31}, std::byte{0x32}, std::byte{0x33}};
-        auto ipv6 = runExchange(io, ipv6Server, ipv6Client,
-            Udp::endpoint(ipv6Loopback, ipv6Server.bound_port()), ipv6Source, ipv6Request);
-        RUVIA_CHECK(ipv6.requestSent);
-        RUVIA_CHECK(ipv6.requestSendCalls == 1);
-        RUVIA_CHECK(!ipv6.requestError);
-        RUVIA_CHECK(ipv6.requestSentSize == ipv6Request.size());
-        RUVIA_CHECK(ipv6.receiveCalls == 1);
-        RUVIA_CHECK(!ipv6.receiveError);
-        RUVIA_CHECK(ipv6.receivedPeer == ipv6Client.local_endpoint());
-        RUVIA_CHECK(ipv6.local_destination ==
-                    Udp::endpoint(ipv6Loopback, ipv6Server.bound_port()));
-        RUVIA_CHECK(ipv6.receivedIntoOwnedStorage);
-        RUVIA_CHECK(ipv6.requestSize == ipv6Request.size());
-        RUVIA_CHECK(std::equal(ipv6Request.begin(), ipv6Request.end(), ipv6.requestBytes.begin()));
-        RUVIA_CHECK(ipv6.sendAccepted);
-        RUVIA_CHECK(ipv6.sendCalls == 1);
-        RUVIA_CHECK(!ipv6.sendError);
-        RUVIA_CHECK(ipv6.sentSize == ipv6.replySize);
-        RUVIA_CHECK(ipv6.replyCalls == 1);
-        RUVIA_CHECK(!ipv6.replyError);
-        RUVIA_CHECK(ipv6.replyReceivedSize == ipv6.replySize);
-        RUVIA_CHECK(ipv6.replyPeer == ipv6Source);
-        RUVIA_CHECK(std::equal(ipv6.replyBytes.begin(),
-            ipv6.replyBytes.begin() + static_cast<std::ptrdiff_t>(ipv6.replySize),
-            ipv6.replyBuffer.begin()));
-        ipv6Server.request_stop();
-        RUVIA_CHECK(ipv6Server.done());
+        auto ipv6 = run_exchange(io, ipv6_server, ipv6_client,
+            udp_type::endpoint(ipv6_loopback, ipv6_server.bound_port()), ipv6_source, ipv6_request);
+        RUVIA_CHECK(ipv6.request_sent_);
+        RUVIA_CHECK(ipv6.request_send_calls_ == 1);
+        RUVIA_CHECK(!ipv6.request_error_);
+        RUVIA_CHECK(ipv6.request_sent_size_ == ipv6_request.size());
+        RUVIA_CHECK(ipv6.receive_calls_ == 1);
+        RUVIA_CHECK(!ipv6.receive_error_);
+        RUVIA_CHECK(ipv6.received_peer_ == ipv6_client.local_endpoint());
+        RUVIA_CHECK(ipv6.local_destination_ ==
+                    udp_type::endpoint(ipv6_loopback, ipv6_server.bound_port()));
+        RUVIA_CHECK(ipv6.received_into_owned_storage_);
+        RUVIA_CHECK(ipv6.request_size_ == ipv6_request.size());
+        RUVIA_CHECK(std::equal(ipv6_request.begin(), ipv6_request.end(), ipv6.request_bytes_.begin()));
+        RUVIA_CHECK(ipv6.send_accepted_);
+        RUVIA_CHECK(ipv6.send_calls_ == 1);
+        RUVIA_CHECK(!ipv6.send_error_);
+        RUVIA_CHECK(ipv6.sent_size_ == ipv6.reply_size_);
+        RUVIA_CHECK(ipv6.reply_calls_ == 1);
+        RUVIA_CHECK(!ipv6.reply_error_);
+        RUVIA_CHECK(ipv6.reply_received_size_ == ipv6.reply_size_);
+        RUVIA_CHECK(ipv6.reply_peer_ == ipv6_source);
+        RUVIA_CHECK(std::equal(ipv6.reply_bytes_.begin(),
+            ipv6.reply_bytes_.begin() + static_cast<std::ptrdiff_t>(ipv6.reply_size_),
+            ipv6.reply_buffer_.begin()));
+        ipv6_server.request_stop();
+        RUVIA_CHECK(ipv6_server.done());
     } catch (const std::exception& error) {
         RUVIA_CHECK(false && "unexpected IPv6 network setup/runtime exception");
         std::fprintf(stderr, "IPv6 network exception: %s\n", error.what());
     }
 }
 
-RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
-    constexpr int kRounds = 12;
+RUVIA_TEST(http3_network_udp_socket_stop_drains_receive_completions) {
+    constexpr int rounds = 12;
     asio::io_context io;
     const auto loopback = asio::ip::address_v4::loopback();
     {
-        Socket cold(io, Udp::endpoint(loopback, 0));
-        StopReceive coldState{.socket = &cold, .firstError = {}, .secondError = {}};
-        RUVIA_CHECK(!cold.async_receive(coldState.bytes, &coldState, onStopReceive));
-        RUVIA_CHECK_EQ(coldState.calls, 0);
+        socket_type cold(io, udp_type::endpoint(loopback, 0));
+        stop_receive cold_state{.socket_ = &cold, .first_error_ = {}, .second_error_ = {}};
+        RUVIA_CHECK(!cold.async_receive(cold_state.bytes_, &cold_state, on_stop_receive));
+        RUVIA_CHECK_EQ(cold_state.calls_, 0);
         cold.prepare();
         cold.request_stop();
         RUVIA_CHECK(cold.done());
     }
 
-    for (int round = 0; round < kRounds; ++round) {
+    for (int round = 0; round < rounds; ++round) {
         if (io.stopped()) {
             io.restart();
         }
-        Socket socket(io, Udp::endpoint(loopback, 0));
+        socket_type socket(io, udp_type::endpoint(loopback, 0));
         socket.prepare();
-        StopReceive state{.socket = &socket, .firstError = {}, .secondError = {}};
-        const bool accepted = socket.async_receive(state.bytes, &state, onStopReceive);
+        stop_receive state_value{.socket_ = &socket, .first_error_ = {}, .second_error_ = {}};
+        const bool accepted = socket.async_receive(state_value.bytes_, &state_value, on_stop_receive);
         RUVIA_CHECK(accepted);
-        const bool duplicateAccepted = socket.async_receive(state.bytes, &state, onStopReceive);
-        RUVIA_CHECK(!duplicateAccepted);
+        const bool duplicate_accepted = socket.async_receive(state_value.bytes_, &state_value, on_stop_receive);
+        RUVIA_CHECK(!duplicate_accepted);
 #ifndef _WIN32
         RUVIA_CHECK_EQ(io.poll_one(), 1U);
-        RUVIA_CHECK_EQ(state.calls, 0);
+        RUVIA_CHECK_EQ(state_value.calls_, 0);
 #endif
         socket.request_stop();
         RUVIA_CHECK(!socket.done());
@@ -496,13 +496,13 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
             }
             io.run_for(2s);
         }
-        RUVIA_CHECK(state.calls == 1);
-        RUVIA_CHECK(isOperationCanceled(state.firstError));
+        RUVIA_CHECK(state_value.calls_ == 1);
+        RUVIA_CHECK(is_operation_canceled(state_value.first_error_));
         RUVIA_CHECK(socket.done());
         if (!socket.done()) {
-            fixtureLifetimeViolation("pending receive stop");
+            fixture_lifetime_violation("pending receive stop");
         }
-        if (state.calls != 1) {
+        if (state_value.calls_ != 1) {
             return;
         }
         if (io.stopped()) {
@@ -511,20 +511,20 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         RUVIA_CHECK_EQ(io.poll(), 0U);
     }
 
-    for (int round = 0; round < kRounds; ++round) {
+    for (int round = 0; round < rounds; ++round) {
         if (io.stopped()) {
             io.restart();
         }
-        Socket socket(io, Udp::endpoint(loopback, 0));
+        socket_type socket(io, udp_type::endpoint(loopback, 0));
         socket.prepare();
-        Udp::socket sender(io, Udp::endpoint(loopback, 0));
-        StopReceive state{.socket = &socket, .firstError = {}, .secondError = {}, .rearm = true};
-        const bool accepted = socket.async_receive(state.bytes, &state, onStopReceive);
+        udp_type::socket sender(io, udp_type::endpoint(loopback, 0));
+        stop_receive state_value{.socket_ = &socket, .first_error_ = {}, .second_error_ = {}, .rearm_ = true};
+        const bool accepted = socket.async_receive(state_value.bytes_, &state_value, on_stop_receive);
         RUVIA_CHECK(accepted);
         const std::array<std::byte, 2> packet{std::byte{0x41}, std::byte{0x42}};
-        DatagramSendState sendState;
-        bool sendAccepted = false;
-        const auto cancelAndDrain = [&]() noexcept {
+        datagram_send_state send_state;
+        bool send_accepted = false;
+        const auto cancel_and_drain = [&]() noexcept {
             socket.request_stop();
             asio::error_code ignored;
             sender.cancel(ignored);
@@ -536,46 +536,46 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
                 io.restart();
             }
             (void)io.poll();
-            const int expectedReceiveCalls = (accepted ? 1 : 0) +
-                                             (state.rearmAccepted ? 1 : 0);
-            const int expectedSendCalls = sendAccepted ? 1 : 0;
-            if (!socket.done() || state.calls != expectedReceiveCalls ||
-                sendState.calls != expectedSendCalls) {
-                fixtureLifetimeViolation("receive completion/stop race cleanup");
+            const int expected_receive_calls = (accepted ? 1 : 0) +
+                                               (state_value.rearm_accepted_ ? 1 : 0);
+            const int expected_send_calls = send_accepted ? 1 : 0;
+            if (!socket.done() || state_value.calls_ != expected_receive_calls ||
+                send_state.calls_ != expected_send_calls) {
+                fixture_lifetime_violation("receive completion/stop race cleanup");
             }
         };
         try {
             sender.async_send_to(asio::buffer(packet),
-                Udp::endpoint(loopback, socket.bound_port()),
-                [&sendState](const asio::error_code& error, std::size_t size) noexcept {
-                    ++sendState.calls;
-                    sendState.error = error;
-                    sendState.size = size;
+                udp_type::endpoint(loopback, socket.bound_port()),
+                [&send_state](const asio::error_code& error, std::size_t size) noexcept {
+                    ++send_state.calls_;
+                    send_state.error_ = error;
+                    send_state.size_ = size;
                 });
-            sendAccepted = true;
+            send_accepted = true;
             io.run_for(2s);
         } catch (...) {
-            cancelAndDrain();
+            cancel_and_drain();
             throw;
         }
-        if (!socket.done() || state.calls != 2 || sendState.calls != 1) {
-            cancelAndDrain();
+        if (!socket.done() || state_value.calls_ != 2 || send_state.calls_ != 1) {
+            cancel_and_drain();
         }
-        RUVIA_CHECK(state.calls == 2);
-        RUVIA_CHECK(!sendState.error);
-        RUVIA_CHECK(sendState.size == packet.size());
-        RUVIA_CHECK(!state.firstError);
-        RUVIA_CHECK(state.firstSize == packet.size());
-        RUVIA_CHECK(state.rearmAccepted);
-        RUVIA_CHECK(!state.doneInsideCompletion);
-        RUVIA_CHECK(!state.postStopRearmAccepted);
-        RUVIA_CHECK(isOperationCanceled(state.secondError));
-        RUVIA_CHECK(state.secondSize == 0);
+        RUVIA_CHECK(state_value.calls_ == 2);
+        RUVIA_CHECK(!send_state.error_);
+        RUVIA_CHECK(send_state.size_ == packet.size());
+        RUVIA_CHECK(!state_value.first_error_);
+        RUVIA_CHECK(state_value.first_size_ == packet.size());
+        RUVIA_CHECK(state_value.rearm_accepted_);
+        RUVIA_CHECK(!state_value.done_inside_completion_);
+        RUVIA_CHECK(!state_value.post_stop_rearm_accepted_);
+        RUVIA_CHECK(is_operation_canceled(state_value.second_error_));
+        RUVIA_CHECK(state_value.second_size_ == 0);
         RUVIA_CHECK(socket.done());
         if (!socket.done()) {
-            fixtureLifetimeViolation("receive completion/stop race");
+            fixture_lifetime_violation("receive completion/stop race");
         }
-        if (state.calls != 2) {
+        if (state_value.calls_ != 2) {
             return;
         }
         if (io.stopped()) {
@@ -584,20 +584,20 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         RUVIA_CHECK_EQ(io.poll(), 0U);
     }
 
-    for (int round = 0; round < kRounds; ++round) {
+    for (int round = 0; round < rounds; ++round) {
         if (io.stopped()) {
             io.restart();
         }
-        Socket socket(io, Udp::endpoint(asio::ip::address_v4::any(), 0));
+        socket_type socket(io, udp_type::endpoint(asio::ip::address_v4::any(), 0));
         socket.prepare();
-        Udp::socket peer(io, Udp::endpoint(loopback, 0));
-        SendCompletionState state;
-        const std::array<std::byte, 3> payload{
+        udp_type::socket peer(io, udp_type::endpoint(loopback, 0));
+        send_completion_state state_value;
+        const std::array<std::byte, 3> payload_value{
             std::byte{0x51}, std::byte{0x52}, std::byte{0x53}};
         const bool accepted = socket.async_send(
-            Socket::send_view{Udp::endpoint(loopback, socket.bound_port()),
-                peer.local_endpoint(), payload},
-            &state, onCancellationSend);
+            socket_type::send_view{udp_type::endpoint(loopback, socket.bound_port()),
+                peer.local_endpoint(), payload_value},
+            &state_value, on_cancellation_send);
         RUVIA_CHECK(accepted);
         socket.request_stop();
         RUVIA_CHECK(!socket.done());
@@ -608,14 +608,14 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
             }
             io.run_for(2s);
         }
-        RUVIA_CHECK(state.calls == 1);
-        RUVIA_CHECK(!state.error || isOperationCanceled(state.error));
-        RUVIA_CHECK(state.error ? state.size == 0 : state.size == payload.size());
+        RUVIA_CHECK(state_value.calls_ == 1);
+        RUVIA_CHECK(!state_value.error_ || is_operation_canceled(state_value.error_));
+        RUVIA_CHECK(state_value.error_ ? state_value.size_ == 0 : state_value.size_ == payload_value.size());
         RUVIA_CHECK(socket.done());
         if (!socket.done()) {
-            fixtureLifetimeViolation("pending send cancellation");
+            fixture_lifetime_violation("pending send cancellation");
         }
-        if (state.calls != 1) {
+        if (state_value.calls_ != 1) {
             return;
         }
         if (io.stopped()) {
@@ -625,81 +625,81 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
     }
 }
 
-RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
-    constexpr std::size_t kRounds = 10;
-    constexpr std::size_t kPayloadSize = 37;
+RUVIA_TEST(http3_network_udp_socket_borrows_send_bytes_until_completion) {
+    constexpr std::size_t rounds = 10;
+    constexpr std::size_t payload_size = 37;
     asio::io_context io;
     const auto loopback = asio::ip::address_v4::loopback();
-    Socket server(io, Udp::endpoint(asio::ip::address_v4::any(), 0));
+    socket_type server(io, udp_type::endpoint(asio::ip::address_v4::any(), 0));
     server.prepare();
-    Udp::socket peer(io, Udp::endpoint(loopback, 0));
-    const Udp::endpoint explicitSource(loopback, server.bound_port());
+    udp_type::socket peer(io, udp_type::endpoint(loopback, 0));
+    const udp_type::endpoint explicit_source(loopback, server.bound_port());
 
-    CountingResource resource;
+    counting_resource resource;
     {
-        std::pmr::vector<std::byte> retainedSent(&resource);
-        std::pmr::vector<std::byte> retainedReceived(&resource);
-        retainedSent.reserve(kRounds * kPayloadSize);
-        retainedReceived.reserve(kRounds * kPayloadSize);
-        const std::size_t retainedAllocationBytes = resource.liveBytes;
+        std::pmr::vector<std::byte> retained_sent(&resource);
+        std::pmr::vector<std::byte> retained_received(&resource);
+        retained_sent.reserve(rounds * payload_size);
+        retained_received.reserve(rounds * payload_size);
+        const std::size_t retained_allocation_bytes = resource.live_bytes_;
 
-        SendCompletionState invalidSourceState;
-        Socket::send_view invalidSource{
-            Udp::endpoint(asio::ip::address_v4::any(), server.bound_port()),
+        send_completion_state invalid_source_state;
+        socket_type::send_view invalid_source{
+            udp_type::endpoint(asio::ip::address_v4::any(), server.bound_port()),
             peer.local_endpoint(), {}};
-        RUVIA_CHECK(!server.async_send(invalidSource, &invalidSourceState, onCancellationSend));
-        RUVIA_CHECK_EQ(invalidSourceState.calls, 0);
-        SendCompletionState invalidPortState;
-        Socket::send_view invalidPort{
-            Udp::endpoint(loopback, static_cast<std::uint16_t>(server.bound_port() + 1)),
+        RUVIA_CHECK(!server.async_send(invalid_source, &invalid_source_state, on_cancellation_send));
+        RUVIA_CHECK_EQ(invalid_source_state.calls_, 0);
+        send_completion_state invalid_port_state;
+        socket_type::send_view invalid_port{
+            udp_type::endpoint(loopback, static_cast<std::uint16_t>(server.bound_port() + 1)),
             peer.local_endpoint(), {}};
-        RUVIA_CHECK(!server.async_send(invalidPort, &invalidPortState, onCancellationSend));
-        RUVIA_CHECK_EQ(invalidPortState.calls, 0);
+        RUVIA_CHECK(!server.async_send(invalid_port, &invalid_port_state, on_cancellation_send));
+        RUVIA_CHECK_EQ(invalid_port_state.calls_, 0);
 
-        for (std::size_t roundIndex = 0; roundIndex < kRounds; ++roundIndex) {
+        for (std::size_t round_index = 0; round_index < rounds; ++round_index) {
             if (io.stopped()) {
                 io.restart();
             }
             {
-                SendRound round(&resource);
-                round.retainedSent = &retainedSent;
-                round.retainedReceived = &retainedReceived;
-                round.payload.resize(kPayloadSize);
-                for (std::size_t byte = 0; byte < round.payload.size(); ++byte) {
-                    round.payload[byte] = static_cast<std::byte>(
-                        (roundIndex * 19 + byte * 7) & 0xff);
+                send_round round(&resource);
+                round.retained_sent_ = &retained_sent;
+                round.retained_received_ = &retained_received;
+                round.payload_.resize(payload_size);
+                for (std::size_t byte = 0; byte < round.payload_.size(); ++byte) {
+                    round.payload_[byte] = static_cast<std::byte>(
+                        (round_index * 19 + byte * 7) & 0xff);
                 }
 
-                peer.async_receive_from(asio::buffer(round.received), round.sender,
+                peer.async_receive_from(asio::buffer(round.received_), round.sender_,
                     [&round](const asio::error_code& error, std::size_t size) noexcept {
-                        ++round.receiveCalls;
-                        round.receiveError = error;
-                        round.receivedSize = size;
+                        ++round.receive_calls_;
+                        round.receive_error_ = error;
+                        round.received_size_ = size;
                         if (!error && size != 0) {
-                            round.retainedReceived->insert(round.retainedReceived->end(),
-                                round.received.begin(),
-                                round.received.begin() + static_cast<std::ptrdiff_t>(size));
+                            round.retained_received_->insert(round.retained_received_->end(),
+                                round.received_.begin(),
+                                round.received_.begin() + static_cast<std::ptrdiff_t>(size));
                         }
                     });
                 const bool accepted = server.async_send(
-                    Socket::send_view{explicitSource, peer.local_endpoint(), round.payload},
-                    &round, onRoundSend);
+                    socket_type::send_view{explicit_source, peer.local_endpoint(), round.payload_},
+                    &round, on_round_send);
                 RUVIA_CHECK(accepted);
-                RUVIA_CHECK(round.sendCalls == 0);
-                RUVIA_CHECK(round.receiveCalls == 0);
+                RUVIA_CHECK(round.send_calls_ == 0);
+                RUVIA_CHECK(round.receive_calls_ == 0);
                 io.run_for(2s);
-                RUVIA_CHECK(round.sendCalls == 1);
-                RUVIA_CHECK(!round.sendError);
-                RUVIA_CHECK(round.sendBorrowAlive);
-                RUVIA_CHECK(round.sentSize == kPayloadSize);
-                RUVIA_CHECK(round.receiveCalls == 1);
-                RUVIA_CHECK(!round.receiveError);
-                RUVIA_CHECK(round.receivedSize == kPayloadSize);
-                RUVIA_CHECK(round.sender == explicitSource);
-                RUVIA_CHECK(std::equal(round.payload.begin(), round.payload.end(),
-                    round.received.begin()));
-                if (round.sendCalls != 1 || round.receiveCalls != 1 ||
-                    round.sendError || round.receiveError) {
+                RUVIA_CHECK(round.send_calls_ == 1);
+                RUVIA_CHECK(!round.send_error_);
+                RUVIA_CHECK(round.send_borrow_alive_);
+                RUVIA_CHECK(round.sent_size_ == payload_size);
+                RUVIA_CHECK(round.receive_calls_ == 1);
+                RUVIA_CHECK(!round.receive_error_);
+                RUVIA_CHECK(round.received_size_ == payload_size);
+                RUVIA_CHECK(round.sender_ == explicit_source);
+                RUVIA_CHECK(std::equal(round.payload_.begin(), round.payload_.end(),
+                    round.received_.begin()));
+                if (round.send_calls_ != 1 || round.receive_calls_ != 1 ||
+                    round.send_error_ || round.receive_error_) {
                     server.request_stop();
                     asio::error_code ignored;
                     peer.cancel(ignored);
@@ -711,45 +711,45 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
                         io.restart();
                     }
                     (void)io.poll();
-                    const int expectedSendCalls = accepted ? 1 : 0;
-                    if (!server.done() || round.sendCalls != expectedSendCalls ||
-                        round.receiveCalls != 1) {
-                        fixtureLifetimeViolation("SendRound timeout cleanup");
+                    const int expected_send_calls = accepted ? 1 : 0;
+                    if (!server.done() || round.send_calls_ != expected_send_calls ||
+                        round.receive_calls_ != 1) {
+                        fixture_lifetime_violation("SendRound timeout cleanup");
                     }
                     return;
                 }
-                round.payloadAlive = false;
+                round.payload_alive_ = false;
             }
-            RUVIA_CHECK(resource.liveBytes == retainedAllocationBytes);
+            RUVIA_CHECK(resource.live_bytes_ == retained_allocation_bytes);
         }
 
         if (io.stopped()) {
             io.restart();
         }
         {
-            SendRound zeroLength(&resource);
-            zeroLength.retainedSent = &retainedSent;
-            zeroLength.retainedReceived = &retainedReceived;
-            peer.async_receive_from(asio::buffer(zeroLength.received), zeroLength.sender,
-                [&zeroLength](const asio::error_code& error, std::size_t size) noexcept {
-                    ++zeroLength.receiveCalls;
-                    zeroLength.receiveError = error;
-                    zeroLength.receivedSize = size;
+            send_round zero_length(&resource);
+            zero_length.retained_sent_ = &retained_sent;
+            zero_length.retained_received_ = &retained_received;
+            peer.async_receive_from(asio::buffer(zero_length.received_), zero_length.sender_,
+                [&zero_length](const asio::error_code& error, std::size_t size) noexcept {
+                    ++zero_length.receive_calls_;
+                    zero_length.receive_error_ = error;
+                    zero_length.received_size_ = size;
                 });
             const bool accepted = server.async_send(
-                Socket::send_view{explicitSource, peer.local_endpoint(), zeroLength.payload},
-                &zeroLength, onRoundSend);
+                socket_type::send_view{explicit_source, peer.local_endpoint(), zero_length.payload_},
+                &zero_length, on_round_send);
             RUVIA_CHECK(accepted);
             io.run_for(2s);
-            RUVIA_CHECK(zeroLength.sendCalls == 1);
-            RUVIA_CHECK(!zeroLength.sendError);
-            RUVIA_CHECK(zeroLength.sendBorrowAlive);
-            RUVIA_CHECK_EQ(zeroLength.sentSize, 0U);
-            RUVIA_CHECK(zeroLength.receiveCalls == 1);
-            RUVIA_CHECK(!zeroLength.receiveError);
-            RUVIA_CHECK_EQ(zeroLength.receivedSize, 0U);
-            RUVIA_CHECK(zeroLength.sender == explicitSource);
-            if (zeroLength.sendCalls != 1 || zeroLength.receiveCalls != 1) {
+            RUVIA_CHECK(zero_length.send_calls_ == 1);
+            RUVIA_CHECK(!zero_length.send_error_);
+            RUVIA_CHECK(zero_length.send_borrow_alive_);
+            RUVIA_CHECK_EQ(zero_length.sent_size_, 0U);
+            RUVIA_CHECK(zero_length.receive_calls_ == 1);
+            RUVIA_CHECK(!zero_length.receive_error_);
+            RUVIA_CHECK_EQ(zero_length.received_size_, 0U);
+            RUVIA_CHECK(zero_length.sender_ == explicit_source);
+            if (zero_length.send_calls_ != 1 || zero_length.receive_calls_ != 1) {
                 server.request_stop();
                 asio::error_code ignored;
                 peer.cancel(ignored);
@@ -761,29 +761,29 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
                     io.restart();
                 }
                 (void)io.poll();
-                if (!server.done() || zeroLength.sendCalls != (accepted ? 1 : 0) ||
-                    zeroLength.receiveCalls != 1) {
-                    fixtureLifetimeViolation("zero-length SendRound timeout cleanup");
+                if (!server.done() || zero_length.send_calls_ != (accepted ? 1 : 0) ||
+                    zero_length.receive_calls_ != 1) {
+                    fixture_lifetime_violation("zero-length SendRound timeout cleanup");
                 }
                 return;
             }
-            zeroLength.payloadAlive = false;
+            zero_length.payload_alive_ = false;
         }
-        RUVIA_CHECK(resource.liveBytes == retainedAllocationBytes);
-        RUVIA_CHECK(retainedSent.size() == kRounds * kPayloadSize);
-        RUVIA_CHECK(retainedReceived.size() == kRounds * kPayloadSize);
-        for (std::size_t roundIndex = 0; roundIndex < kRounds; ++roundIndex) {
-            for (std::size_t byte = 0; byte < kPayloadSize; ++byte) {
-                const auto expected = static_cast<std::byte>((roundIndex * 19 + byte * 7) & 0xff);
-                const auto index = roundIndex * kPayloadSize + byte;
-                RUVIA_CHECK(retainedSent[index] == expected);
-                RUVIA_CHECK(retainedReceived[index] == expected);
+        RUVIA_CHECK(resource.live_bytes_ == retained_allocation_bytes);
+        RUVIA_CHECK(retained_sent.size() == rounds * payload_size);
+        RUVIA_CHECK(retained_received.size() == rounds * payload_size);
+        for (std::size_t round_index = 0; round_index < rounds; ++round_index) {
+            for (std::size_t byte = 0; byte < payload_size; ++byte) {
+                const auto expected = static_cast<std::byte>((round_index * 19 + byte * 7) & 0xff);
+                const auto index = round_index * payload_size + byte;
+                RUVIA_CHECK(retained_sent[index] == expected);
+                RUVIA_CHECK(retained_received[index] == expected);
             }
         }
-        RUVIA_CHECK(resource.liveBytes == retainedAllocationBytes);
+        RUVIA_CHECK(resource.live_bytes_ == retained_allocation_bytes);
     }
-    RUVIA_CHECK_EQ(resource.liveBytes, 0U);
-    RUVIA_CHECK_EQ(resource.allocations, resource.returns);
+    RUVIA_CHECK_EQ(resource.live_bytes_, 0U);
+    RUVIA_CHECK_EQ(resource.allocations_, resource.returns_);
     server.request_stop();
     RUVIA_CHECK(server.done());
 }

@@ -6,9 +6,9 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/HttpMediaType.h"
+#include "ruvia/http/http_media_type.h"
 
-#include "coding/HttpContentCoding.h"
+#include "coding/http_content_coding.h"
 
 namespace ruvia {
 namespace {
@@ -46,10 +46,10 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     std::string_view content_encoding, std::pmr::memory_resource* resource) {
     if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 ||
         ranges.size() > http_byte_range_set::capacity || representation_length == 0 ||
-        !isValidHttpContentTypeFieldValue(media_type) ||
+        !is_valid_http_content_type_field_value(media_type) ||
         (!content_encoding.empty() &&
-            !detail::isValidHttpContentEncodingFieldValue(
-                content_encoding, detail::HttpFieldListRole::kSender)) ||
+            !detail::is_valid_http_content_encoding_field_value(
+                content_encoding, detail::http_field_list_role::sender)) ||
         !valid_boundary(boundary) || resource == nullptr) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }

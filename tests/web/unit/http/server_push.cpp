@@ -5,88 +5,88 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/TaskScope.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/core/WorkerSignal.h"
-#include "ruvia/http/Http1ServerRequestParser.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http1_server_request_parser.h"
 
-#include "client/HttpClientConfigValidation.h"
-#include "context/ContextAccess.h"
-#include "context/HttpPushOutput.h"
+#include "client/http_client_config_validation.h"
+#include "context/context_access.h"
+#include "context/http_push_output.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
-struct PushSink final {
-    const ruvia::WorkerHandle& worker;
-    ruvia::WorkerSignal entered;
-    ruvia::StopSource stop;
-    bool delay{};
-    bool fail{};
-    unsigned writes{};
-    std::string path;
-    std::string header;
-    explicit PushSink(const ruvia::WorkerHandle& handle)
-        : worker(handle),
-          entered(handle) {}
-    static ruvia::Task<bool> submit(void* raw, ruvia::HttpPushRequestView request) {
-        auto& sink = *static_cast<PushSink*>(raw);
-        if (sink.delay) {
-            sink.entered.notify();
-            const auto result = co_await ruvia::sleepFor(sink.worker, std::chrono::seconds(10), sink.stop.token());
-            if (result == ruvia::TimerSleepResult::kStopRequested) {
+struct push_sink final {
+    const ruvia::worker_handle& worker_;
+    ruvia::worker_signal entered_;
+    ruvia::stop_source stop_;
+    bool delay_{};
+    bool fail_{};
+    unsigned writes_{};
+    std::string path_;
+    std::string header_;
+    explicit push_sink(const ruvia::worker_handle& handle)
+        : worker_(handle),
+          entered_(handle) {}
+    static ruvia::task<bool> submit(void* raw, ruvia::http_push_request_view request) {
+        auto& sink_value = *static_cast<push_sink*>(raw);
+        if (sink_value.delay_) {
+            sink_value.entered_.notify();
+            const auto result_value = co_await ruvia::sleep_for(sink_value.worker_, std::chrono::seconds(10), sink_value.stop_.token());
+            if (result_value == ruvia::timer_sleep_result::stop_requested) {
                 throw std::runtime_error("cancelled");
             }
         }
-        if (sink.fail) {
+        if (sink_value.fail_) {
             throw std::runtime_error("push failed");
         }
-        sink.path = request.path;
-        sink.header = request.headers.front().value();
-        ++sink.writes;
+        sink_value.path_ = request.path_;
+        sink_value.header_ = request.headers_.front().value();
+        ++sink_value.writes_;
         co_return true;
     }
 };
 }  // namespace
 
 RUVIA_TEST(context_push_owns_inputs_reclaims_each_operation_and_handles_cold_failure_cancel_expiry) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io);
-    auto run = [&]() -> ruvia::Task<void> {
-        const auto& worker = attachment.loop().handle();
-        ruvia::test::CountingMemoryResource memory;
-        ruvia::WorkerMemory workerMemory;
-        ruvia::RequestMemory requestMemory(workerMemory);
-        const auto parsed = ruvia::Http1ServerRequestParser{}.parseMessage("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
-        const ruvia::StopToken stop;
-        PushSink sink(worker);
-        auto makeContext = [&](auto& output) {
-            return ruvia::detail::ContextAccess::make(requestMemory, parsed.request,
-                ruvia::detail::ContextServices(worker, stop).withPushOutput(output));
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    auto run = [&]() -> ruvia::task<void> {
+        const auto& worker_value = attachment.loop().handle();
+        ruvia::test::counting_memory_resource memory;
+        ruvia::worker_memory worker_memory;
+        ruvia::request_memory request_memory(worker_memory);
+        const auto parsed_value = ruvia::http1_server_request_parser{}.parse_message("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
+        const ruvia::stop_token stop;
+        push_sink sink(worker_value);
+        auto make_context = [&](auto& output) {
+            return ruvia::detail::context_access::make(request_memory, parsed_value.request_,
+                ruvia::detail::context_services(worker_value, stop).with_push_output(output));
         };
         {
-            ruvia::detail::HttpPushOutput output(&memory, &sink, &PushSink::submit);
-            auto context = makeContext(output);
+            ruvia::detail::http_push_output output(&memory, &sink, &push_sink::submit);
+            auto context_value = make_context(output);
             std::string path = "/" + std::string(80, 'a');
             std::string value(80, 'h');
-            const std::array<ruvia::HttpHeaderView, 1> fields{{{"x-push", value}}};
-            const ruvia::HttpPushRequestView request{.authority = "example.test", .path = path, .headers = fields};
+            const std::array<ruvia::http_header_view, 1> fields_value{{{"x-push", value}}};
+            const ruvia::http_push_request_view request{.authority_ = "example.test", .path_ = path, .headers_ = fields_value};
             {
-                auto cold = context.push(request);
-                RUVIA_CHECK(memory.liveAllocations() > 0);
+                auto cold = context_value.push(request);
+                RUVIA_CHECK(memory.live_allocations() > 0);
             }
-            RUVIA_CHECK_EQ(sink.writes, 0U);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(sink.writes_, 0U);
+            RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
             for (unsigned repeat = 0; repeat != 128; ++repeat) {
                 path.assign("/" + std::string(80, 'a'));
                 value.assign(80, 'h');
-                const std::array<ruvia::HttpHeaderView, 1> inputs{{{"x-push", value}}};
-                auto operation = context.push({.authority = "example.test", .path = path, .headers = inputs});
+                const std::array<ruvia::http_header_view, 1> inputs{{{"x-push", value}}};
+                auto operation = context_value.push({.authority_ = "example.test", .path_ = path, .headers_ = inputs});
                 bool busy = false;
                 try {
-                    auto overlap = context.push(request);
+                    auto overlap = context_value.push(request);
                 } catch (const std::logic_error&) {
                     busy = true;
                 }
@@ -94,42 +94,42 @@ RUVIA_TEST(context_push_owns_inputs_reclaims_each_operation_and_handles_cold_fai
                 path.assign("changed");
                 value.assign("changed");
                 RUVIA_CHECK(co_await std::move(operation));
-                RUVIA_CHECK(sink.path == "/" + std::string(80, 'a') && sink.header == std::string(80, 'h'));
-                RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+                RUVIA_CHECK(sink.path_ == "/" + std::string(80, 'a') && sink.header_ == std::string(80, 'h'));
+                RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
             }
-            const std::array<ruvia::HttpHeaderView, 1> validFields{{{"x-push", "failure"}}};
-            sink.fail = true;
+            const std::array<ruvia::http_header_view, 1> valid_fields{{{"x-push", "failure"}}};
+            sink.fail_ = true;
             bool failed = false;
             try {
-                (void)co_await context.push({.authority = "example.test", .headers = validFields});
+                (void)co_await context_value.push({.authority_ = "example.test", .headers_ = valid_fields});
             } catch (const std::runtime_error&) {
                 failed = true;
             }
             RUVIA_CHECK(failed);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
-            sink.fail = false;
-            sink.delay = true;
-            ruvia::TaskScope tasks(worker);
+            RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+            sink.fail_ = false;
+            sink.delay_ = true;
+            ruvia::task_scope tasks(worker_value);
             bool cancelled = false;
-            auto wait = [&]() -> ruvia::Task<void> {
+            auto wait = [&]() -> ruvia::task<void> {
                 try {
-                    (void)co_await context.push({.authority = "example.test", .headers = validFields});
+                    (void)co_await context_value.push({.authority_ = "example.test", .headers_ = valid_fields});
                 } catch (const std::runtime_error&) {
                     cancelled = true;
                 }
             };
             tasks.spawn(wait());
-            co_await sink.entered.wait();
-            sink.stop.requestStop();
+            co_await sink.entered_.wait();
+            sink.stop_.request_stop();
             co_await tasks.join();
             RUVIA_CHECK(cancelled);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
         }
         {
-            std::optional<ruvia::detail::HttpPushOutput> output;
-            output.emplace(&memory, &sink, &PushSink::submit);
-            auto context = makeContext(*output);
-            auto expired = context.push({.authority = "example.test"});
+            std::optional<ruvia::detail::http_push_output> output;
+            output.emplace(&memory, &sink, &push_sink::submit);
+            auto context_value = make_context(*output);
+            auto expired = context_value.push({.authority_ = "example.test"});
             output.reset();
             bool rejected = false;
             try {
@@ -139,8 +139,8 @@ RUVIA_TEST(context_push_owns_inputs_reclaims_each_operation_and_handles_cold_fai
             }
             RUVIA_CHECK(rejected);
         }
-        RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+        RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
@@ -149,25 +149,25 @@ RUVIA_TEST(context_push_owns_inputs_reclaims_each_operation_and_handles_cold_fai
 }
 
 RUVIA_TEST(http_client_push_configuration_rejects_zero_bounds_timeout_and_unverified_https) {
-    ruvia::HttpClientConfig config{.host = "example.test"};
+    ruvia::http_client_config config{.host_ = "example.test"};
     for (unsigned mode = 0; mode != 4; ++mode) {
-        config.push = {.enabled = true};
-        config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kVerify;
+        config.push_ = {.enabled_ = true};
+        config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::verify;
         if (mode == 0) {
-            config.push.maxQueuedPushes = 0;
+            config.push_.max_queued_pushes_ = 0;
         }
         if (mode == 1) {
-            config.push.maxConcurrentPushes = 0;
+            config.push_.max_concurrent_pushes_ = 0;
         }
         if (mode == 2) {
-            config.push.timeout = std::chrono::milliseconds::zero();
+            config.push_.timeout_ = std::chrono::milliseconds::zero();
         }
         if (mode == 3) {
-            config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
+            config.tls_peer_verification_ = ruvia::tls_peer_verification_policy::skip_verification;
         }
         bool rejected = false;
         try {
-            ruvia::detail::validateHttpClientConfig(config);
+            ruvia::detail::validate_http_client_config(config);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }

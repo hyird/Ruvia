@@ -2,35 +2,35 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/json/JsonEscape.h"
+#include "ruvia/web/detail/json/json_escape.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::appendJsonString;
-using ruvia::detail::jsonStringSizeHint;
+using ruvia::detail::append_json_string;
+using ruvia::detail::json_string_size_hint;
 
-// The hint must exactly equal what appendJsonString writes, so the output buffer
+// The hint must exactly equal what append_json_string writes, so the output buffer
 // is reserved precisely (undersizing would force a reallocation).
-void checkConsistent(ruvia::testing::TestContext& ruvia_ctx, std::string_view value) {
+void check_consistent(ruvia::testing::test_context& ruvia_ctx, std::string_view value) {
     std::string out;
-    appendJsonString(out, value);
-    RUVIA_CHECK_EQ(jsonStringSizeHint(value), out.size());
+    append_json_string(out, value);
+    RUVIA_CHECK_EQ(json_string_size_hint(value), out.size());
 }
 
 std::string escaped(std::string_view value) {
     std::string out;
-    appendJsonString(out, value);
+    append_json_string(out, value);
     return out;
 }
 
 }  // namespace
 
 RUVIA_TEST(json_string_size_hint_matches_output) {
-    checkConsistent(ruvia_ctx, "");
-    checkConsistent(ruvia_ctx, "plain text 123");
-    checkConsistent(ruvia_ctx, "with \"quote\" and \\ backslash");
+    check_consistent(ruvia_ctx, "");
+    check_consistent(ruvia_ctx, "plain text 123");
+    check_consistent(ruvia_ctx, "with \"quote\" and \\ backslash");
 
     // Every named short escape.
     std::string named = "a";
@@ -40,26 +40,26 @@ RUVIA_TEST(json_string_size_hint_matches_output) {
     named += '\r';
     named += '\t';
     named += 'z';
-    checkConsistent(ruvia_ctx, named);
+    check_consistent(ruvia_ctx, named);
 
     // Non-named control bytes take the \u00XX form.
     std::string ctrl = "x";
     ctrl += '\x01';
     ctrl += '\x1f';
-    checkConsistent(ruvia_ctx, ctrl);
+    check_consistent(ruvia_ctx, ctrl);
 
     // An embedded NUL is a control byte.
-    std::string withNull = "a";
-    withNull += '\0';
-    withNull += 'b';
-    checkConsistent(ruvia_ctx, withNull);
+    std::string with_null = "a";
+    with_null += '\0';
+    with_null += 'b';
+    check_consistent(ruvia_ctx, with_null);
 
     // High (UTF-8) bytes pass through as single bytes.
     std::string high = "a";
     high += static_cast<char>(0x80);
     high += static_cast<char>(0xff);
     high += 'b';
-    checkConsistent(ruvia_ctx, high);
+    check_consistent(ruvia_ctx, high);
 
     // Exercise escapes immediately before, on, and after 16-byte SIMD blocks.
     std::string blocks(15, 'a');
@@ -68,7 +68,7 @@ RUVIA_TEST(json_string_size_hint_matches_output) {
     blocks.push_back('\\');
     blocks.push_back('\x01');
     blocks.append(17, 'c');
-    checkConsistent(ruvia_ctx, blocks);
+    check_consistent(ruvia_ctx, blocks);
 }
 
 RUVIA_TEST(json_string_escape_output_content_is_exact) {

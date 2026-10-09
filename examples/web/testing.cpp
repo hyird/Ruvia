@@ -1,73 +1,73 @@
-// In-memory application testing: TestApp/TestRequest/TestResponse drive the
+// In-memory application testing: test_app/test_request/test_response drive the
 // production dispatch pipeline -- routing, params, model bodies, middleware,
-// fallbacks, urlFor and worker state -- without opening a socket. This is the
+// fallbacks, url_for and worker state -- without opening a socket. This is the
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
 // Run ruvia_example_testing with no arguments or external services.
-// Assertions below check functional responses; TestApp owns startup/teardown.
+// Assertions below check functional responses; test_app owns startup/teardown.
 
-#include "ruvia/web/Testing.h"
+#include "ruvia/web/testing.h"
 
 #include <cstdio>
 #include <string_view>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 
-RUVIA_MODEL(NoteRequest, RUVIA_OPTIONAL_FIELD(text, ruvia::String));
+RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
 
 namespace {
 
-struct NoteCounter final {
-    int stored{0};
+struct note_counter final {
+    int stored_{0};
 };
 
-class AuditMiddleware final : public ruvia::Middleware {
+class audit_middleware final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        co_await next();
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        co_await next_value();
         c.header("X-Audited", "yes");
     }
 };
 
-class NotesController final : public ruvia::Controller<NotesController> {
+class notes_controller final : public ruvia::controller<notes_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/notes")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/:id", note);
-    RUVIA_POST("/", create, ruvia::JsonBody<NoteRequest>);
+    RUVIA_POST("/", create, ruvia::json_body<note_request>);
     RUVIA_GET("/", stats);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> note(ruvia::Context& c) {
-        // urlFor builds links from registered patterns; the pattern is the
+    ruvia::task<ruvia::http_response> note(ruvia::context& c) {
+        // url_for builds links from registered patterns; the pattern is the
         // route's identity.
         std::pmr::string body(c.arena());
         body.append("note ");
         body.append(c.req().param("id").value_or("?"));
         body.append(" self=");
-        body.append(c.urlFor("/notes/:id", {c.req().param("id").value_or("0")}));
+        body.append(c.url_for("/notes/:id", {c.req().param("id").value_or("0")}));
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
-        const auto& note = c.req().validated<NoteRequest>();
-        ++c.workerState<NoteCounter>().stored;
-        c.status(ruvia::http_status::kCreated);
+    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
+        const auto& note = c.req().validated<note_request>();
+        ++c.worker_state<note_counter>().stored_;
+        c.status(ruvia::http_status::created);
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
     }
 
-    ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
         std::pmr::string body(c.arena());
         body.append("stored=");
-        body.append(std::to_string(c.workerState<NoteCounter>().stored));
+        body.append(std::to_string(c.worker_state<note_counter>().stored_));
         co_return c.text(std::move(body));
     }
 };
 
-ruvia::Task<ruvia::HttpResponse> notesMissing(ruvia::Context& c) {
-    c.status(ruvia::http_status::kNotFound);
+ruvia::task<ruvia::http_response> notes_missing(ruvia::context& c) {
+    c.status(ruvia::http_status::not_found);
     co_return c.text("no such note");
 }
 
@@ -83,36 +83,36 @@ void expect(bool condition, const char* what) {
 }  // namespace
 
 int main() {
-    ruvia::TestApp app;
-    app.use<AuditMiddleware>().onNotFound({.prefix = "/notes", .handler = &notesMissing});
-    app.useWorkerState<NoteCounter>();
+    ruvia::test_app app;
+    app.use<audit_middleware>().on_not_found({.prefix_ = "/notes", .handler_ = &notes_missing});
+    app.use_worker_state<note_counter>();
 
-    // Routing, params and urlFor.
-    const auto note = app.request(ruvia::TestRequest::get("/notes/7"));
-    expect(note.status() == ruvia::http_status::kOk, "GET /notes/7 is 200");
-    expect(note.body() == "note 7 self=/notes/7", "urlFor builds the note link");
+    // Routing, params and url_for.
+    const auto note = app.request(ruvia::test_request::get("/notes/7"));
+    expect(note.status() == ruvia::http_status::ok, "GET /notes/7 is 200");
+    expect(note.body() == "note 7 self=/notes/7", "url_for builds the note link");
     expect(
         note.header("X-Audited").value_or("") == "yes", "global middleware stamped the response");
 
     // Model bodies keep their production status split: 415 for the wrong
     // media type, 400 for a malformed body of the right type.
     const auto created =
-        app.request(ruvia::TestRequest::post("/notes").json(R"({"text":"remember"})"));
-    expect(created.status() == ruvia::http_status::kCreated, "valid JSON is 201");
+        app.request(ruvia::test_request::post("/notes").json(R"({"text":"remember"})"));
+    expect(created.status() == ruvia::http_status::created, "valid JSON is 201");
     expect(created.body() == "remember", "created body echoes the model field");
-    const auto wrongType =
-        app.request(ruvia::TestRequest::post("/notes").body("text", "text/plain"));
+    const auto wrong_type =
+        app.request(ruvia::test_request::post("/notes").body("text", "text/plain"));
     expect(
-        wrongType.status() == ruvia::http_status::kUnsupportedMediaType, "wrong media type is 415");
+        wrong_type.status() == ruvia::http_status::unsupported_media_type, "wrong media type is 415");
 
     // Worker state persisted across the requests above.
-    const auto stats = app.request(ruvia::TestRequest::get("/notes"));
+    const auto stats = app.request(ruvia::test_request::get("/notes"));
     expect(stats.body() == "stored=1", "worker state persisted");
 
-    // The prefix-scoped notFound handled the miss under /notes.
-    const auto missing = app.request(ruvia::TestRequest::get("/notes/9/edit"));
-    expect(missing.status() == ruvia::http_status::kNotFound, "miss is 404");
-    expect(missing.body() == "no such note", "prefix notFound rendered the miss");
+    // The prefix-scoped not_found handled the miss under /notes.
+    const auto missing = app.request(ruvia::test_request::get("/notes/9/edit"));
+    expect(missing.status() == ruvia::http_status::not_found, "miss is 404");
+    expect(missing.body() == "no such note", "prefix not_found rendered the miss");
 
     if (g_failures == 0) {
         std::puts("testing facade example: all checks passed");

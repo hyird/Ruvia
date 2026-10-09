@@ -7,34 +7,34 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/http/Http1ServerRequestParser.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/websocket_handshake.h"
 
 #include "test_harness.h"
 #include "test_io_context.h"
-#include "websocket/HttpWebSocketHandshake.h"
+#include "websocket/http_websocket_handshake.h"
 
 namespace {
 
-using ruvia::Http1ServerRequestParser;
-using ruvia::HttpRequest;
+using ruvia::http1_server_request_parser;
+using ruvia::http_request;
 
-class FailingHandshakeWriteStream final {
+class failing_handshake_write_stream final {
 public:
     using executor_type = asio::io_context::executor_type;
 
-    explicit FailingHandshakeWriteStream(asio::io_context& io) noexcept
+    explicit failing_handshake_write_stream(asio::io_context& io) noexcept
         : executor_(io.get_executor()) {}
 
     [[nodiscard]] executor_type get_executor() const noexcept {
         return executor_;
     }
 
-    template <typename ConstBufferSequence, typename Handler>
-    void async_write_some(const ConstBufferSequence&, Handler&& handler) {
-        asio::post(executor_, [handler = std::forward<Handler>(handler)]() mutable {
+    template <typename const_buffer_sequence_type, typename handler_type>
+    void async_write_some(const const_buffer_sequence_type&, handler_type&& handler) {
+        asio::post(executor_, [handler = std::forward<handler_type>(handler)]() mutable {
             std::move(handler)(std::make_error_code(std::errc::broken_pipe), std::size_t{0});
         });
     }
@@ -43,13 +43,13 @@ private:
     executor_type executor_;
 };
 
-HttpRequest parseRequest(std::string_view rawRequest) {
-    Http1ServerRequestParser parser;
-    auto parsed = parser.parseMessage(rawRequest);
-    return std::move(parsed.request);
+http_request parse_request(std::string_view raw_request) {
+    http1_server_request_parser parser;
+    auto parsed_value = parser.parse_message(raw_request);
+    return std::move(parsed_value.request_);
 }
 
-std::string_view validHandshake() {
+std::string_view valid_handshake() {
     return "GET /ws HTTP/1.1\r\n"
            "Host: example.test\r\n"
            "Connection: Upgrade\r\n"
@@ -62,13 +62,13 @@ std::string_view validHandshake() {
 }  // namespace
 
 RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
-    const auto request = parseRequest(validHandshake());
-    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {});
-    asio::io_context& io = ruvia::test::newTestIoContext();
-    FailingHandshakeWriteStream stream(io);
-    auto result = asio::co_spawn(io,
-        ruvia::asAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)),
+    const auto request = parse_request(valid_handshake());
+    const auto handshake = ruvia::make_websocket_server_handshake(request, {});
+    asio::io_context& io = ruvia::test::new_test_io_context();
+    failing_handshake_write_stream stream(io);
+    auto result_value = asio::co_spawn(io,
+        ruvia::as_awaitable(ruvia::detail::write_websocket_handshake(stream, handshake)),
         asio::use_future);
     io.run();
-    RUVIA_CHECK_EQ(result.get(), std::make_error_code(std::errc::broken_pipe));
+    RUVIA_CHECK_EQ(result_value.get(), std::make_error_code(std::errc::broken_pipe));
 }

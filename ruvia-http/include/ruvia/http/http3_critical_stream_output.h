@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <span>
 
-#include "ruvia/http/Http3LocalCriticalStreams.h"
-#include "ruvia/http/Http3VarInt.h"
+#include "ruvia/http/http3_local_critical_streams.h"
+#include "ruvia/http/http3_var_int.h"
 
 namespace ruvia {
 
@@ -21,7 +21,7 @@ public:
         qpack_encoder,
         qpack_decoder };
 
-    explicit http3_critical_stream_output(Http3LocalCriticalStreams prefixes) noexcept;
+    explicit http3_critical_stream_output(http3_local_critical_streams prefixes) noexcept;
     http3_critical_stream_output(const http3_critical_stream_output&) = delete;
     http3_critical_stream_output& operator=(const http3_critical_stream_output&) = delete;
     http3_critical_stream_output(http3_critical_stream_output&&) = delete;
@@ -40,16 +40,16 @@ public:
 
 private:
     struct slot final {
-        std::size_t consumed{};
-        bool offered{};
-        bool offering_goaway{};
+        std::size_t consumed_{};
+        bool offered_{};
+        bool offering_goaway_{};
     };
 
     [[nodiscard]] std::span<const char> prefix(stream_kind kind) const noexcept;
     [[nodiscard]] static std::size_t index(stream_kind kind) noexcept;
 
-    Http3LocalCriticalStreams prefixes_;
-    std::array<char, 3 * kHttp3VarIntMaxBytes> goaway_{};
+    http3_local_critical_streams prefixes_;
+    std::array<char, 3 * http3_var_int_max_bytes> goaway_{};
     std::array<slot, 3> slots_{};
     std::size_t goaway_size_{};
     std::size_t goaway_consumed_{};

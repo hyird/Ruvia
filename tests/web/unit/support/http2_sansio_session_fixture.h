@@ -5,71 +5,71 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/ConnectionScanner.h"
-#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/connection_scanner.h"
+#include "ruvia/core/event_loop_attachment.h"
 
-#include "context/ContextServices.h"
-#include "http2/Http2SansIoSession.h"
+#include "context/context_services.h"
+#include "http2/http2_sans_io_session.h"
 
 namespace ruvia::test {
 
 // Test-only owner for the production session's mandatory connection wiring.
 // Keeping these defaults here prevents test convenience from weakening the
 // installed runtime contract.
-class Http2SansIoSessionFixture final {
+class http2_sans_io_session_fixture final {
 public:
-    [[nodiscard]] detail::ContextServices services(const WorkerHandle& worker) const {
-        return detail::ContextServices(worker, stopToken_);
+    [[nodiscard]] detail::context_services services(const worker_handle& worker_value) const {
+        return detail::context_services(worker_value, stop_token_);
     }
 
-    [[nodiscard]] detail::Http2SansIoSessionContext context(detail::ContextServices services) {
-        return detail::Http2SansIoSessionContext(
-            std::move(services), options, scannerEntry, workerState);
+    [[nodiscard]] detail::http2_sans_io_session_context context(detail::context_services services) {
+        return detail::http2_sans_io_session_context(
+            std::move(services), options_, scanner_entry_, worker_state_);
     }
 
-    detail::HttpServerOptions options;
-    ConnectionScanner::Entry scannerEntry;
-    detail::HttpServerWorkerState workerState{detail::HttpServerWorkerState::kRunning};
+    detail::http_server_options options_;
+    connection_scanner::entry_type scanner_entry_;
+    detail::http_server_worker_state worker_state_{detail::http_server_worker_state::running};
 
 private:
-    StopToken stopToken_;
+    stop_token stop_token_;
 };
 
-template <typename Stream, typename BindTransport>
-Task<void> runBareHttp2SansIoSessionWith(Stream& stream, const detail::RouteTable& routes,
-    WorkerMemory& worker, BindTransport bindTransport, std::string_view initialBytes) {
-    Http2SansIoSessionFixture fixture;
-    auto attachment = attachEventLoop(
-        static_cast<asio::io_context&>(stream.get_executor().context()), {.queue_capacity = 64});
-    const auto workerHandle = attachment.loop().handle();
-    auto services = bindTransport(fixture.services(workerHandle));
-    co_await detail::runHttp2SansIoSession(
-        stream, routes, worker, fixture.context(services), initialBytes);
+template <typename stream_type, typename bind_transport_type>
+task<void> run_bare_http2_sans_io_session_with(stream_type& stream, const detail::route_table& routes_value,
+    worker_memory& worker_value, bind_transport_type bind_transport, std::string_view initial_bytes) {
+    http2_sans_io_session_fixture fixture;
+    auto attachment = attach_event_loop(
+        static_cast<asio::io_context&>(stream.get_executor().context()), {.queue_capacity_ = 64});
+    const auto worker_handle_value = attachment.loop().handle();
+    auto services = bind_transport(fixture.services(worker_handle_value));
+    co_await detail::run_http2_sans_io_session(
+        stream, routes_value, worker_value, fixture.context(services), initial_bytes);
 }
 
 // Convenience for the many cleartext socket tests. TLS tests must call the
 // typed helper above so the stream type cannot silently manufacture identity.
-template <typename Stream>
-Task<void> runBarePlainHttp2SansIoSession(Stream& stream, const detail::RouteTable& routes,
-    WorkerMemory& worker, std::string_view remoteAddress, std::string_view initialBytes = {}) {
-    co_await runBareHttp2SansIoSessionWith(
-        stream, routes, worker,
-        [remoteAddress](detail::ContextServices services) {
-            return services.withPlainTransport(remoteAddress);
+template <typename stream_type>
+task<void> run_bare_plain_http2_sans_io_session(stream_type& stream, const detail::route_table& routes_value,
+    worker_memory& worker_value, std::string_view remote_address, std::string_view initial_bytes = {}) {
+    co_await run_bare_http2_sans_io_session_with(
+        stream, routes_value, worker_value,
+        [remote_address](detail::context_services services) {
+            return services.with_plain_transport(remote_address);
         },
-        initialBytes);
+        initial_bytes);
 }
 
-template <typename Stream>
-Task<void> runBareTlsHttp2SansIoSession(Stream& stream, const detail::RouteTable& routes,
-    WorkerMemory& worker, std::string_view remoteAddress,
-    std::string_view clientCertificateSubject = {}, std::string_view initialBytes = {}) {
-    co_await runBareHttp2SansIoSessionWith(
-        stream, routes, worker,
-        [remoteAddress, clientCertificateSubject](detail::ContextServices services) {
-            return services.withTlsTransport(remoteAddress, clientCertificateSubject);
+template <typename stream_type>
+task<void> run_bare_tls_http2_sans_io_session(stream_type& stream, const detail::route_table& routes_value,
+    worker_memory& worker_value, std::string_view remote_address,
+    std::string_view client_certificate_subject = {}, std::string_view initial_bytes = {}) {
+    co_await run_bare_http2_sans_io_session_with(
+        stream, routes_value, worker_value,
+        [remote_address, client_certificate_subject](detail::context_services services) {
+            return services.with_tls_transport(remote_address, client_certificate_subject);
         },
-        initialBytes);
+        initial_bytes);
 }
 
 }  // namespace ruvia::test

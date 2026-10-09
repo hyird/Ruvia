@@ -23,9 +23,9 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/EventLoopPool.h"
-#include "ruvia/web/db/DbClient.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/web/db/db_client.h"
 
 #include "test_harness.h"
 
@@ -33,9 +33,9 @@ namespace {
 
 // Minimal PostgreSQL startup peer. Authentication is explicitly released by
 // the test so concurrent connect/shutdown ordering needs no sleeps or server.
-class PostgreSqlStartupPeer final {
+class postgresql_startup_peer final {
 public:
-    PostgreSqlStartupPeer()
+    postgresql_startup_peer()
         : acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
           gate_(io_, std::chrono::steady_clock::time_point::max()),
@@ -44,7 +44,7 @@ public:
           done_(asio::co_spawn(io_, serve(), asio::use_future)),
           thread_([this] { io_.run(); }) {}
 
-    ~PostgreSqlStartupPeer() {
+    ~postgresql_startup_peer() {
         asio::post(io_, [this] {
             std::error_code ignored;
             acceptor_.close(ignored);
@@ -59,8 +59,8 @@ public:
         }
     }
 
-    ruvia::DbConfig config() const {
-        return {.driver = ruvia::DbDriver::kPostgreSql, .host = "127.0.0.1", .port = port_, .username = "test", .tls = {.mode = ruvia::client_tls_mode::disabled}, .database = "test", .connectTimeout = std::chrono::seconds(5)};
+    ruvia::db_config config() const {
+        return {.driver_ = ruvia::db_driver::postgresql, .host_ = "127.0.0.1", .port_ = port_, .username_ = "test", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .database_ = "test", .connect_timeout_ = std::chrono::seconds(5)};
     }
 
     void wait_for_startup() {
@@ -76,21 +76,21 @@ public:
     }
 
 private:
-    static std::uint32_t integer(const unsigned char* bytes) {
-        return (std::uint32_t{bytes[0]} << 24) | (std::uint32_t{bytes[1]} << 16) |
-               (std::uint32_t{bytes[2]} << 8) | std::uint32_t{bytes[3]};
+    static std::uint32_t integer(const unsigned char* bytes_value) {
+        return (std::uint32_t{bytes_value[0]} << 24) | (std::uint32_t{bytes_value[1]} << 16) |
+               (std::uint32_t{bytes_value[2]} << 8) | std::uint32_t{bytes_value[3]};
     }
 
-    static void appendInteger(std::string& bytes, std::uint32_t value) {
+    static void append_integer(std::string& bytes_value, std::uint32_t value) {
         for (int shift = 24; shift >= 0; shift -= 8) {
-            bytes.push_back(static_cast<char>((value >> shift) & 255));
+            bytes_value.push_back(static_cast<char>((value >> shift) & 255));
         }
     }
 
-    static void message(std::string& bytes, char type, std::string_view payload) {
-        bytes.push_back(type);
-        appendInteger(bytes, static_cast<std::uint32_t>(payload.size() + 4));
-        bytes.append(payload);
+    static void message(std::string& bytes_value, char type, std::string_view payload_value) {
+        bytes_value.push_back(type);
+        append_integer(bytes_value, static_cast<std::uint32_t>(payload_value.size() + 4));
+        bytes_value.append(payload_value);
     }
 
     asio::awaitable<void> serve() {
@@ -140,15 +140,15 @@ private:
     std::thread thread_;
 };
 
-ruvia::Task<void> connectUntilStopped(ruvia::DbClient& client, bool& cancelled) {
+ruvia::task<void> connect_until_stopped(ruvia::db_client& client, bool& cancelled) {
     try {
         co_await client.connect();
-    } catch (const ruvia::DbError&) {
+    } catch (const ruvia::db_error&) {
         cancelled = true;
     }
 }
 
-ruvia::Task<bool> canCreateOperation(ruvia::DbClient& client) {
+ruvia::task<bool> can_create_operation(ruvia::db_client& client) {
     try {
         // A cold operation exercises the public connected-client contract
         // without requiring the startup peer to implement query execution.
@@ -163,10 +163,10 @@ ruvia::Task<bool> canCreateOperation(ruvia::DbClient& client) {
 }  // namespace
 
 RUVIA_TEST(db_client_rejects_duplicate_connect_without_interrupting_startup) {
-    PostgreSqlStartupPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    postgresql_startup_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
-    ruvia::DbClient client(loop, peer.config());
+    ruvia::db_client client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
     peer.wait_for_startup();
@@ -185,16 +185,16 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_interrupting_startup) {
     }
     RUVIA_CHECK(rejected);
     RUVIA_CHECK(connected);
-    RUVIA_CHECK(loop.start(canCreateOperation(client)).get());
+    RUVIA_CHECK(loop.start(can_create_operation(client)).get());
     loop.start(client.shutdown()).get();
     pool.join();
 }
 
 RUVIA_TEST(db_client_rejects_duplicate_connect_without_closing_connected_client) {
-    PostgreSqlStartupPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    postgresql_startup_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
-    ruvia::DbClient client(loop, peer.config());
+    ruvia::db_client client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
     peer.wait_for_startup();
@@ -207,15 +207,15 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_closing_connected_client)
         rejected = true;
     }
     RUVIA_CHECK(rejected);
-    RUVIA_CHECK(loop.start(canCreateOperation(client)).get());
+    RUVIA_CHECK(loop.start(can_create_operation(client)).get());
     loop.start(client.shutdown()).get();
     pool.join();
 }
 
 RUVIA_TEST(db_client_fresh_close_and_loop_stop_share_worker_completion) {
     for (int iteration = 0; iteration < 64; ++iteration) {
-        ruvia::EventLoopPool pool({.loopCount = 1});
-        ruvia::DbClient client(pool.loop(0), {.driver = ruvia::DbDriver::kPostgreSql});
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::db_client client(pool.loop(0), {.driver_ = ruvia::db_driver::postgresql});
         pool.start();
         std::barrier rendezvous(2);
         std::thread closer([&] {
@@ -231,9 +231,9 @@ RUVIA_TEST(db_client_fresh_close_and_loop_stop_share_worker_completion) {
 }
 
 RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     {
-        ruvia::DbClient client(pool.loop(0), {.driver = ruvia::DbDriver::kPostgreSql});
+        ruvia::db_client client(pool.loop(0), {.driver_ = ruvia::db_driver::postgresql});
         auto cold = client.connect();
         (void)cold;
     }
@@ -242,15 +242,15 @@ RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
 }
 
 RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
-    for (const bool useAttachmentRun : {false, true}) {
-        PostgreSqlStartupPeer peer;
+    for (const bool use_attachment_run : {false, true}) {
+        postgresql_startup_peer peer;
         asio::io_context io;
-        auto attachment = ruvia::attachEventLoop(io);
-        ruvia::DbClient client(attachment.loop(), peer.config());
+        auto attachment = ruvia::attach_event_loop(io);
+        ruvia::db_client client(attachment.loop(), peer.config());
         bool cancelled = false;
-        auto root = attachment.loop().start(connectUntilStopped(client, cancelled));
+        auto root = attachment.loop().start(connect_until_stopped(client, cancelled));
         std::thread driver([&] {
-            if (useAttachmentRun) {
+            if (use_attachment_run) {
                 attachment.run();
             } else {
                 io.run();
@@ -266,10 +266,10 @@ RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication
 }
 
 RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
-    PostgreSqlStartupPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    postgresql_startup_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
-    ruvia::DbClient client(loop, peer.config());
+    ruvia::db_client client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
     peer.wait_for_startup();
@@ -277,7 +277,7 @@ RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
     bool cancelled = false;
     try {
         first.get();
-    } catch (const ruvia::DbError&) {
+    } catch (const ruvia::db_error&) {
         cancelled = true;
     }
     closing.get();

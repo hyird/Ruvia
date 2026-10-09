@@ -2,26 +2,26 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/Http1Connect.h"
-#include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/http1_connect.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "test_harness.h"
 
-RUVIA_TEST(http1ConnectHeadTransfersToTunnelWithoutMessageFramingForEverySuccessfulStatus) {
+RUVIA_TEST(http1_connect_head_transfers_to_tunnel_without_message_framing_for_every_successful_status) {
     std::pmr::unsynchronized_pool_resource resource;
-    for (const auto version : {ruvia::HttpProtocolVersion::kHttp10, ruvia::HttpProtocolVersion::kHttp11}) {
+    for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
         for (unsigned status = 200; status != 300; ++status) {
-            ruvia::HttpResponse response({.resource = &resource});
-            response.status(ruvia::HttpStatusCode::fromValue(static_cast<std::uint16_t>(status)));
+            ruvia::http_response response({.resource_ = &resource});
+            response.status(ruvia::http_status_code::from_value(static_cast<std::uint16_t>(status)));
             response.header("x-tunnel", "established");
-            const auto plan = ruvia::prepareHttp1ConnectResponseHead(response, version);
+            const auto plan = ruvia::prepare_http1_connect_response_head(response, version);
             RUVIA_CHECK((plan.index() == 0));
             if ((plan.index() != 0)) {
                 continue;
             }
-            ruvia::HttpResponseHeadBuffer head{std::pmr::polymorphic_allocator<char>(&resource)};
-            ruvia::appendHttp1ResponseHead(response, head, std::get<0>(plan));
-            RUVIA_CHECK(head.view().starts_with(version == ruvia::HttpProtocolVersion::kHttp10 ? "HTTP/1.0 " : "HTTP/1.1 "));
+            ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>(&resource)};
+            ruvia::append_http1_response_head(response, head, std::get<0>(plan));
+            RUVIA_CHECK(head.view().starts_with(version == ruvia::http_protocol_version::http10 ? "HTTP/1.0 " : "HTTP/1.1 "));
             RUVIA_CHECK(head.view().find("x-tunnel: established\r\n") != std::string_view::npos);
             RUVIA_CHECK(head.view().find("Content-Length:") == std::string_view::npos);
             RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);
@@ -30,17 +30,17 @@ RUVIA_TEST(http1ConnectHeadTransfersToTunnelWithoutMessageFramingForEverySuccess
     }
 }
 
-RUVIA_TEST(http1ConnectHeadRejectsFailedStatusPayloadAndFramingFieldsBeforeCommit) {
+RUVIA_TEST(http1_connect_head_rejects_failed_status_payload_and_framing_fields_before_commit) {
     std::pmr::unsynchronized_pool_resource resource;
     for (const auto name : {"Content-Length", "Transfer-Encoding"}) {
-        ruvia::HttpResponse response({.resource = &resource});
+        ruvia::http_response response({.resource_ = &resource});
         response.header(name, name == std::string_view("Content-Length") ? "0" : "chunked");
-        RUVIA_CHECK((ruvia::prepareHttp1ConnectResponseHead(response, ruvia::HttpProtocolVersion::kHttp11).index() != 0));
+        RUVIA_CHECK((ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11).index() != 0));
     }
-    ruvia::HttpResponse response({.resource = &resource});
-    response.status(ruvia::http_status::kForbidden);
-    RUVIA_CHECK((ruvia::prepareHttp1ConnectResponseHead(response, ruvia::HttpProtocolVersion::kHttp11).index() != 0));
-    response.status(ruvia::http_status::kOk);
+    ruvia::http_response response({.resource_ = &resource});
+    response.status(ruvia::http_status::forbidden);
+    RUVIA_CHECK((ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11).index() != 0));
+    response.status(ruvia::http_status::ok);
     response.body("HTTP payload");
-    RUVIA_CHECK((ruvia::prepareHttp1ConnectResponseHead(response, ruvia::HttpProtocolVersion::kHttp11).index() != 0));
+    RUVIA_CHECK((ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11).index() != 0));
 }

@@ -9,24 +9,24 @@
 namespace ruvia {
 
 struct quic_aead_key_operations {
-    void (*destroy)(void* state) noexcept {};
-    void (*seal)(void* state, std::span<const std::byte, 12> nonce,
+    void (*destroy_)(void* state) noexcept {};
+    void (*seal_)(void* state, std::span<const std::byte, 12> nonce,
         std::span<const std::byte> associated_data, std::span<const std::byte> plaintext,
         std::span<std::byte> ciphertext_and_tag){};
     // rejected is normal unauthenticated input; callers must ignore output bytes.
     struct open_result {
         enum class status : std::uint8_t { authenticated,
-            rejected } value{status::rejected};
-        std::size_t plaintext_size{};
+            rejected } value_{status::rejected};
+        std::size_t plaintext_size_{};
     };
-    open_result (*open)(void* state, std::span<const std::byte, 12> nonce,
+    open_result (*open_)(void* state, std::span<const std::byte, 12> nonce,
         std::span<const std::byte> associated_data,
         std::span<const std::byte> ciphertext_and_tag, std::span<std::byte> plaintext){};
 };
 
 struct quic_header_protection_key_operations {
-    void (*destroy)(void* state) noexcept {};
-    void (*mask)(void* state, std::span<const std::byte, 16> sample, std::span<std::byte, 5> output){};
+    void (*destroy_)(void* state) noexcept {};
+    void (*mask_)(void* state, std::span<const std::byte, 16> sample, std::span<std::byte, 5> output){};
 };
 
 class quic_aead_key {
@@ -83,17 +83,17 @@ private:
 // Creator callbacks return typed owners. Provider exceptions may cross C++ protocol
 // calls, but C ABI callback adapters must catch and latch them for outer rethrow.
 struct quic_crypto_provider_view {
-    void* context{};
-    void (*random_bytes)(void* context, std::span<std::byte> output){};
-    void (*hkdf_extract)(void* context, quic_cipher_suite suite, std::span<const std::byte> salt,
+    void* context_{};
+    void (*random_bytes_)(void* context, std::span<std::byte> output){};
+    void (*hkdf_extract_)(void* context, quic_cipher_suite suite, std::span<const std::byte> salt,
         std::span<const std::byte> input_key_material, std::span<std::byte> output){};
-    void (*hkdf_expand)(void* context, quic_cipher_suite suite, std::span<const std::byte> secret,
+    void (*hkdf_expand_)(void* context, quic_cipher_suite suite, std::span<const std::byte> secret,
         std::span<const std::byte> info, std::span<std::byte> output){};
-    quic_aead_key (*create_aead_key)(void* context, quic_cipher_suite suite,
+    quic_aead_key (*create_aead_key_)(void* context, quic_cipher_suite suite,
         quic_crypto_direction direction, std::span<const std::byte> key){};
-    quic_header_protection_key (*create_header_protection_key)(
+    quic_header_protection_key (*create_header_protection_key_)(
         void* context, quic_cipher_suite suite, std::span<const std::byte> key){};
-    void (*secure_erase)(void* context, std::span<std::byte> bytes) noexcept {};
+    void (*secure_erase_)(void* context, std::span<std::byte> bytes) noexcept {};
 
     void validate() const;
 };

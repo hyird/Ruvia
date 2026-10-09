@@ -28,16 +28,16 @@ using state_owner = std::unique_ptr<detail::quic_connection_state,
 
 class server_cid_publication_transaction final {
 public:
-    explicit server_cid_publication_transaction(detail::quic_connection_state& state) noexcept
-        : state_(state),
-          registry_(state.server_cid_registry_),
-          first_(state.server_cid_publication_journal_.ids.size()) {}
+    explicit server_cid_publication_transaction(detail::quic_connection_state& state_value) noexcept
+        : state_(state_value),
+          registry_(state_value.server_cid_registry_),
+          first_(state_value.server_cid_publication_journal_.ids_.size()) {}
 
     server_cid_publication_transaction(const server_cid_publication_transaction&) = delete;
     server_cid_publication_transaction& operator=(const server_cid_publication_transaction&) = delete;
 
     ~server_cid_publication_transaction() noexcept {
-        auto& ids = state_.server_cid_publication_journal_.ids;
+        auto& ids = state_.server_cid_publication_journal_.ids_;
         for (auto it = ids.begin() + static_cast<std::ptrdiff_t>(first_); it != ids.end(); ++it) {
             detail::quic_retire_connection_id(registry_, it->view());
         }
@@ -45,7 +45,7 @@ public:
     }
 
     void commit() noexcept {
-        auto& ids = state_.server_cid_publication_journal_.ids;
+        auto& ids = state_.server_cid_publication_journal_.ids_;
         ids.erase(ids.begin() + static_cast<std::ptrdiff_t>(first_), ids.end());
     }
 
@@ -64,39 +64,39 @@ std::uint64_t timestamp_value(quic_timestamp value) {
 }
 
 ngtcp2_cid native_cid(const quic_connection_id& id) {
-    ngtcp2_cid result{};
-    result.datalen = id.size();
+    ngtcp2_cid result_value{};
+    result_value.datalen = id.size();
     if (id.size() != 0) {
-        std::memcpy(result.data, id.view().data(), id.size());
+        std::memcpy(result_value.data, id.view().data(), id.size());
     }
-    return result;
+    return result_value;
 }
 
 void fill_transport_params(ngtcp2_transport_params& params,
-    const detail::quic_connection_state& state) {
+    const detail::quic_connection_state& state_value) {
     ngtcp2_transport_params_default(&params);
-    const auto& source = state.config_.local_transport_parameters;
-    params.initial_max_data = source.initial_max_data;
-    params.initial_max_stream_data_bidi_local = source.initial_max_stream_data_bidi_local;
-    params.initial_max_stream_data_bidi_remote = source.initial_max_stream_data_bidi_remote;
-    params.initial_max_stream_data_uni = source.initial_max_stream_data_uni;
-    params.initial_max_streams_bidi = source.initial_max_streams_bidi;
-    params.initial_max_streams_uni = source.initial_max_streams_uni;
-    params.max_idle_timeout = source.idle_timeout_ms * NGTCP2_MILLISECONDS;
-    params.max_udp_payload_size = source.max_udp_payload_size;
-    params.max_datagram_frame_size = source.max_datagram_frame_size;
-    params.active_connection_id_limit = source.active_connection_id_limit;
-    params.disable_active_migration = source.disable_active_migration;
-    if (state.config_.role == quic_role::server) {
+    const auto& source_value = state_value.config_.local_transport_parameters_;
+    params.initial_max_data = source_value.initial_max_data_;
+    params.initial_max_stream_data_bidi_local = source_value.initial_max_stream_data_bidi_local_;
+    params.initial_max_stream_data_bidi_remote = source_value.initial_max_stream_data_bidi_remote_;
+    params.initial_max_stream_data_uni = source_value.initial_max_stream_data_uni_;
+    params.initial_max_streams_bidi = source_value.initial_max_streams_bidi_;
+    params.initial_max_streams_uni = source_value.initial_max_streams_uni_;
+    params.max_idle_timeout = source_value.idle_timeout_ms_ * NGTCP2_MILLISECONDS;
+    params.max_udp_payload_size = source_value.max_udp_payload_size_;
+    params.max_datagram_frame_size = source_value.max_datagram_frame_size_;
+    params.active_connection_id_limit = source_value.active_connection_id_limit_;
+    params.disable_active_migration = source_value.disable_active_migration_;
+    if (state_value.config_.role_ == quic_role::server) {
         // ngtcp2 derives initial_scid from the scid argument and requires this input field unset.
-        const auto original_dcid = native_cid(*state.config_.original_destination_connection_id);
+        const auto original_dcid = native_cid(*state_value.config_.original_destination_connection_id_);
         params.original_dcid = original_dcid;
         params.original_dcid_present = 1;
     }
 }
 
 struct alignas(std::max_align_t) allocation_header {
-    std::size_t size;
+    std::size_t size_;
 };
 
 detail::quic_connection_state* allocator_state(void* user_data) noexcept {
@@ -107,14 +107,14 @@ void* native_allocate(std::size_t size, void* user_data) noexcept {
     if (size > std::numeric_limits<std::size_t>::max() - sizeof(allocation_header)) {
         return nullptr;
     }
-    auto* state = allocator_state(user_data);
+    auto* state_value = allocator_state(user_data);
     try {
-        auto* header = static_cast<allocation_header*>(state->resource_->allocate(
+        auto* header_value = static_cast<allocation_header*>(state_value->resource_->allocate(
             sizeof(allocation_header) + size, alignof(std::max_align_t)));
-        header->size = size;
-        return header + 1;
+        header_value->size_ = size;
+        return header_value + 1;
     } catch (...) {
-        state->latch_failure(std::current_exception());
+        state_value->latch_failure(std::current_exception());
         return nullptr;
     }
 }
@@ -123,9 +123,9 @@ void native_free(void* pointer, void* user_data) noexcept {
     if (!pointer) {
         return;
     }
-    auto* state = allocator_state(user_data);
-    auto* header = static_cast<allocation_header*>(pointer) - 1;
-    state->resource_->deallocate(header, sizeof(allocation_header) + header->size,
+    auto* state_value = allocator_state(user_data);
+    auto* header_value = static_cast<allocation_header*>(pointer) - 1;
+    state_value->resource_->deallocate(header_value, sizeof(allocation_header) + header_value->size_,
         alignof(std::max_align_t));
 }
 
@@ -133,10 +133,10 @@ void* native_calloc(std::size_t count, std::size_t size, void* user_data) noexce
     if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size) {
         return nullptr;
     }
-    const auto bytes = count * size;
-    auto* memory = native_allocate(bytes, user_data);
-    if (memory && bytes) {
-        std::memset(memory, 0, bytes);
+    const auto bytes_value = count * size;
+    auto* memory = native_allocate(bytes_value, user_data);
+    if (memory && bytes_value) {
+        std::memset(memory, 0, bytes_value);
     }
     return memory;
 }
@@ -150,7 +150,7 @@ void* native_realloc(void* pointer, std::size_t size, void* user_data) noexcept 
         return nullptr;
     }
     auto* old_header = static_cast<allocation_header*>(pointer) - 1;
-    const auto old_size = old_header->size;
+    const auto old_size = old_header->size_;
     auto* replacement = native_allocate(size, user_data);
     if (!replacement) {
         return nullptr;
@@ -162,13 +162,13 @@ void* native_realloc(void* pointer, std::size_t size, void* user_data) noexcept 
 
 int path_challenge_callback(ngtcp2_conn*, ngtcp2_path_challenge_data* data,
     void* user_data) noexcept {
-    auto* state = allocator_state(user_data);
+    auto* state_value = allocator_state(user_data);
     try {
-        state->crypto_.random_bytes(state->crypto_.context,
+        state_value->crypto_.random_bytes_(state_value->crypto_.context_,
             std::span<std::byte>(reinterpret_cast<std::byte*>(data->data), sizeof(data->data)));
         return 0;
     } catch (...) {
-        state->latch_failure(std::current_exception());
+        state_value->latch_failure(std::current_exception());
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
 }
@@ -176,51 +176,51 @@ int path_challenge_callback(ngtcp2_conn*, ngtcp2_path_challenge_data* data,
 int get_new_cid_callback(ngtcp2_conn*, ngtcp2_cid* cid,
     ngtcp2_stateless_reset_token* token, std::size_t cid_length,
     void* user_data) noexcept {
-    auto* state = allocator_state(user_data);
+    auto* state_value = allocator_state(user_data);
     try {
         if (cid_length > sizeof(cid->data)) {
             throw quic_error(quic_error_code::resource_limit, "ngtcp2 requested an oversized connection ID");
         }
-        auto bytes = std::span<std::byte>(reinterpret_cast<std::byte*>(cid->data), cid_length);
-        if (state->config_.role == quic_role::server) {
+        auto bytes_value = std::span<std::byte>(reinterpret_cast<std::byte*>(cid->data), cid_length);
+        if (state_value->config_.role_ == quic_role::server) {
             detail::generate_quic_server_connection_id(
-                state->crypto_, bytes, state->config_.cid_partition);
+                state_value->crypto_, bytes_value, state_value->config_.cid_partition_);
         } else {
-            state->crypto_.random_bytes(state->crypto_.context, bytes);
+            state_value->crypto_.random_bytes_(state_value->crypto_.context_, bytes_value);
         }
-        state->crypto_.random_bytes(state->crypto_.context,
+        state_value->crypto_.random_bytes_(state_value->crypto_.context_,
             std::span<std::byte>(reinterpret_cast<std::byte*>(token->data), sizeof(token->data)));
         cid->datalen = cid_length;
-        if (state->config_.role == quic_role::server && state->server_cid_registry_) {
-            detail::quic_publish_connection_id(state->server_cid_registry_, bytes);
+        if (state_value->config_.role_ == quic_role::server && state_value->server_cid_registry_) {
+            detail::quic_publish_connection_id(state_value->server_cid_registry_, bytes_value);
             try {
-                state->server_cid_publication_journal_.ids.emplace_back(bytes);
+                state_value->server_cid_publication_journal_.ids_.emplace_back(bytes_value);
             } catch (...) {
-                detail::quic_retire_connection_id(state->server_cid_registry_, bytes);
+                detail::quic_retire_connection_id(state_value->server_cid_registry_, bytes_value);
                 throw;
             }
         }
         return 0;
     } catch (...) {
-        state->latch_failure(std::current_exception());
+        state_value->latch_failure(std::current_exception());
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
 }
 
 int remove_cid_callback(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) noexcept {
-    auto* state = allocator_state(user_data);
+    auto* state_value = allocator_state(user_data);
     try {
-        if (!state || !cid || cid->datalen > quic_max_connection_id_size) {
+        if (!state_value || !cid || cid->datalen > quic_max_connection_id_size) {
             throw std::invalid_argument("ngtcp2 supplied an invalid retired local CID");
         }
-        if (state->config_.role == quic_role::server && state->server_cid_registry_) {
-            detail::quic_retire_connection_id(state->server_cid_registry_,
+        if (state_value->config_.role_ == quic_role::server && state_value->server_cid_registry_) {
+            detail::quic_retire_connection_id(state_value->server_cid_registry_,
                 {reinterpret_cast<const std::byte*>(cid->data), cid->datalen});
         }
         return 0;
     } catch (...) {
-        if (state) {
-            state->latch_failure(std::current_exception());
+        if (state_value) {
+            state_value->latch_failure(std::current_exception());
         }
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
@@ -235,27 +235,27 @@ state_owner make_state(quic_connection_config config, quic_crypto_provider_view 
     }
     auto* selected = resource;
     std::pmr::polymorphic_allocator<detail::quic_connection_state> allocator(selected);
-    auto* state = allocator.allocate(1);
+    auto* state_value = allocator.allocate(1);
     try {
-        std::construct_at(state, std::move(config), crypto, driver, selected, now,
+        std::construct_at(state_value, std::move(config), crypto, driver, selected, now,
             early_transport_parameters);
     } catch (...) {
-        allocator.deallocate(state, 1);
+        allocator.deallocate(state_value, 1);
         throw;
     }
-    return state_owner(state, detail::quic_connection_state_deleter{selected});
+    return state_owner(state_value, detail::quic_connection_state_deleter{selected});
 }
 
 int path_validation_callback(ngtcp2_conn*, uint32_t, const ngtcp2_path* path,
-    const ngtcp2_path*, ngtcp2_path_validation_result result, void* user_data) {
-    auto& state = *static_cast<detail::quic_connection_state*>(user_data);
+    const ngtcp2_path*, ngtcp2_path_validation_result result_value, void* user_data) {
+    auto& state_value = *static_cast<detail::quic_connection_state*>(user_data);
     if (path != nullptr) {
-        state.on_path_validation(*path, result);
+        state_value.on_path_validation(*path, result_value);
     }
     return 0;
 }
 
-void initialize_native_connection(detail::quic_connection_state& state, quic_timestamp now) {
+void initialize_native_connection(detail::quic_connection_state& state_value, quic_timestamp now) {
     const auto ts = timestamp_value(now);
     ngtcp2_callbacks callbacks{};
     detail::fill_quic_crypto_callbacks(callbacks);
@@ -267,8 +267,8 @@ void initialize_native_connection(detail::quic_connection_state& state, quic_tim
 
     ngtcp2_settings settings{};
     ngtcp2_settings_default(&settings);
-    const auto preferred_version = static_cast<std::uint32_t>(state.config_.preferred_version);
-    const auto initial_version = static_cast<std::uint32_t>(state.config_.version);
+    const auto preferred_version = static_cast<std::uint32_t>(state_value.config_.preferred_version_);
+    const auto initial_version = static_cast<std::uint32_t>(state_value.config_.version_);
     // RFC 9368 compatible versions can negotiate in-place; incompatible versions require
     // a fresh TLS/QUIC connection and are intentionally not advertised here.
     static constexpr std::array<std::uint32_t, 2> v1_first_versions{
@@ -281,46 +281,46 @@ void initialize_native_connection(detail::quic_connection_state& state, quic_tim
     static constexpr std::array<std::uint32_t, 2> available_versions{
         NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
     settings.preferred_versions = preferred_versions.data();
-    settings.preferred_versionslen = state.config_.role == quic_role::client ||
+    settings.preferred_versionslen = state_value.config_.role_ == quic_role::client ||
                                              preferred_version != initial_version
                                          ? preferred_versions.size()
                                          : 1;
     settings.available_versions = available_versions.data();
     settings.available_versionslen = available_versions.size();
-    settings.original_version = state.config_.role == quic_role::client
-                                    ? static_cast<std::uint32_t>(state.config_.version)
+    settings.original_version = state_value.config_.role_ == quic_role::client
+                                    ? static_cast<std::uint32_t>(state_value.config_.version_)
                                     : 0;
     settings.initial_ts = ts;
-    settings.max_tx_udp_payload_size = state.config_.local_transport_parameters.max_udp_payload_size;
-    settings.max_window = state.config_.limits.max_connection_buffer_size;
-    settings.max_stream_window = state.config_.limits.max_stream_buffer_size;
-    detail::initialize_quic_random_context(settings.rand_ctx, state);
+    settings.max_tx_udp_payload_size = state_value.config_.local_transport_parameters_.max_udp_payload_size_;
+    settings.max_window = state_value.config_.limits_.max_connection_buffer_size_;
+    settings.max_stream_window = state_value.config_.limits_.max_stream_buffer_size_;
+    detail::initialize_quic_random_context(settings.rand_ctx, state_value);
 
     ngtcp2_transport_params params{};
-    fill_transport_params(params, state);
-    detail::fill_quic_path(state.path_, state.config_.local_address, state.config_.peer_address);
-    auto dcid = native_cid(state.config_.destination_connection_id);
-    auto scid = native_cid(*state.config_.source_connection_id);
-    state.ngtcp_memory_ = {&state, native_allocate, native_free, native_calloc, native_realloc};
-    int result{};
-    if (state.config_.role == quic_role::client) {
-        result = ngtcp2_conn_client_new(&state.connection_, &dcid, &scid,
-            &state.path_.path, static_cast<std::uint32_t>(state.config_.version),
-            &callbacks, &settings, &params, &state.ngtcp_memory_, &state);
+    fill_transport_params(params, state_value);
+    detail::fill_quic_path(state_value.path_, state_value.config_.local_address_, state_value.config_.peer_address_);
+    auto dcid = native_cid(state_value.config_.destination_connection_id_);
+    auto scid = native_cid(*state_value.config_.source_connection_id_);
+    state_value.ngtcp_memory_ = {&state_value, native_allocate, native_free, native_calloc, native_realloc};
+    int result_value{};
+    if (state_value.config_.role_ == quic_role::client) {
+        result_value = ngtcp2_conn_client_new(&state_value.connection_, &dcid, &scid,
+            &state_value.path_.path, static_cast<std::uint32_t>(state_value.config_.version_),
+            &callbacks, &settings, &params, &state_value.ngtcp_memory_, &state_value);
     } else {
-        result = ngtcp2_conn_server_new(&state.connection_, &dcid, &scid,
-            &state.path_.path, static_cast<std::uint32_t>(state.config_.version),
-            &callbacks, &settings, &params, &state.ngtcp_memory_, &state);
+        result_value = ngtcp2_conn_server_new(&state_value.connection_, &dcid, &scid,
+            &state_value.path_.path, static_cast<std::uint32_t>(state_value.config_.version_),
+            &callbacks, &settings, &params, &state_value.ngtcp_memory_, &state_value);
     }
-    if (result != 0) {
-        detail::rethrow_quic_callback_failure(state);
-        throw quic_error(result == NGTCP2_ERR_NOMEM ? quic_error_code::resource_limit
-                                                    : quic_error_code::protocol_failure,
-            std::string("failed to initialize ngtcp2 connection: ") + ngtcp2_strerror(result));
+    if (result_value != 0) {
+        detail::rethrow_quic_callback_failure(state_value);
+        throw quic_error(result_value == NGTCP2_ERR_NOMEM ? quic_error_code::resource_limit
+                                                          : quic_error_code::protocol_failure,
+            std::string("failed to initialize ngtcp2 connection: ") + ngtcp2_strerror(result_value));
     }
-    if (state.config_.role == quic_role::client) {
-        detail::install_quic_initial_keys(state, state.config_.destination_connection_id.view());
-        detail::encode_quic_local_transport_parameters(state);
+    if (state_value.config_.role_ == quic_role::client) {
+        detail::install_quic_initial_keys(state_value, state_value.config_.destination_connection_id_.view());
+        detail::encode_quic_local_transport_parameters(state_value);
     } else {
         // Seed the TLS capability before ngtcp2 commits server parameters at Handshake keys.
         auto local_params = params;
@@ -333,17 +333,17 @@ void initialize_native_connection(detail::quic_connection_state& state, quic_tim
             throw quic_error(quic_error_code::protocol_failure,
                 "failed to encode provisional server QUIC transport parameters");
         }
-        std::pmr::vector<std::byte> owned(state.resource_);
+        std::pmr::vector<std::byte> owned(state_value.resource_);
         owned.reserve(static_cast<std::size_t>(encoded_size));
         for (ngtcp2_ssize index = 0; index < encoded_size; ++index) {
             owned.push_back(static_cast<std::byte>(encoded[static_cast<std::size_t>(index)]));
         }
-        state.local_transport_parameters_.swap(owned);
+        state_value.local_transport_parameters_.swap(owned);
     }
 }
 
-quic_operation_status idle_status(const detail::quic_connection_state& state) noexcept {
-    switch (state.state_) {
+quic_operation_status idle_status(const detail::quic_connection_state& state_value) noexcept {
+    switch (state_value.state_) {
         case quic_connection_state::closing:
             return quic_operation_status::closing;
         case quic_connection_state::draining:
@@ -358,38 +358,38 @@ quic_operation_status idle_status(const detail::quic_connection_state& state) no
     return quic_operation_status::need_input;
 }
 
-quic_error_code native_error_category(int result) noexcept {
-    if (result == NGTCP2_ERR_NOMEM || result == NGTCP2_ERR_CRYPTO_BUFFER_EXCEEDED) {
+quic_error_code native_error_category(int result_value) noexcept {
+    if (result_value == NGTCP2_ERR_NOMEM || result_value == NGTCP2_ERR_CRYPTO_BUFFER_EXCEEDED) {
         return quic_error_code::resource_limit;
     }
-    if (result == NGTCP2_ERR_CRYPTO || result == NGTCP2_ERR_AEAD_LIMIT_REACHED) {
+    if (result_value == NGTCP2_ERR_CRYPTO || result_value == NGTCP2_ERR_AEAD_LIMIT_REACHED) {
         return quic_error_code::crypto_failure;
     }
     return quic_error_code::protocol_failure;
 }
 
-void check_native_result(detail::quic_connection_state& state, int result,
+void check_native_result(detail::quic_connection_state& state_value, int result_value,
     const char* operation) {
-    detail::rethrow_quic_callback_failure(state);
-    if (result == 0) {
+    detail::rethrow_quic_callback_failure(state_value);
+    if (result_value == 0) {
         return;
     }
-    if (result == NGTCP2_ERR_DRAINING) {
-        state.close_error_code_ = ngtcp2_conn_get_ccerr2(state.connection_)->error_code;
-        state.state_ = quic_connection_state::draining;
+    if (result_value == NGTCP2_ERR_DRAINING) {
+        state_value.close_error_code_ = ngtcp2_conn_get_ccerr2(state_value.connection_)->error_code;
+        state_value.state_ = quic_connection_state::draining;
         return;
     }
-    if (result == NGTCP2_ERR_CLOSING) {
-        state.state_ = quic_connection_state::closing;
+    if (result_value == NGTCP2_ERR_CLOSING) {
+        state_value.state_ = quic_connection_state::closing;
         return;
     }
-    if (result == NGTCP2_ERR_DROP_CONN || result == NGTCP2_ERR_IDLE_CLOSE) {
-        state.retire();
+    if (result_value == NGTCP2_ERR_DROP_CONN || result_value == NGTCP2_ERR_IDLE_CLOSE) {
+        state_value.retire();
         return;
     }
-    state.latch_failure(std::make_exception_ptr(quic_error(native_error_category(result),
-        std::string(operation) + ": " + ngtcp2_strerror(result))));
-    state.rethrow_failure();
+    state_value.latch_failure(std::make_exception_ptr(quic_error(native_error_category(result_value),
+        std::string(operation) + ": " + ngtcp2_strerror(result_value))));
+    state_value.rethrow_failure();
 }
 
 state_owner make_connection(quic_connection_config config, quic_crypto_provider_view crypto,
@@ -397,47 +397,47 @@ state_owner make_connection(quic_connection_config config, quic_crypto_provider_
     std::span<const std::byte> early_transport_parameters = {}) {
     crypto.validate();
     tls_driver.validate();
-    detail::validate_quic_cid_partition(config.cid_partition);
-    switch (config.role) {
+    detail::validate_quic_cid_partition(config.cid_partition_);
+    switch (config.role_) {
         case quic_role::client:
-            if (config.original_destination_connection_id) {
+            if (config.original_destination_connection_id_) {
                 throw std::invalid_argument("client QUIC configuration must not specify an Original Destination CID");
             }
-            if (config.destination_connection_id.size() == 0) {
+            if (config.destination_connection_id_.size() == 0) {
                 std::array<std::byte, NGTCP2_MIN_INITIAL_DCIDLEN> random{};
-                crypto.random_bytes(crypto.context, random);
-                config.destination_connection_id = quic_connection_id(random);
-            } else if (config.destination_connection_id.size() < NGTCP2_MIN_INITIAL_DCIDLEN) {
+                crypto.random_bytes_(crypto.context_, random);
+                config.destination_connection_id_ = quic_connection_id(random);
+            } else if (config.destination_connection_id_.size() < NGTCP2_MIN_INITIAL_DCIDLEN) {
                 throw std::invalid_argument("client QUIC Initial destination connection ID must be at least 8 bytes");
             }
             break;
         case quic_role::server:
-            if (!config.original_destination_connection_id) {
+            if (!config.original_destination_connection_id_) {
                 throw std::invalid_argument("server QUIC configuration requires an Original Destination CID");
             }
             break;
         default:
             throw std::invalid_argument("invalid QUIC connection role");
     }
-    if (!config.source_connection_id) {
+    if (!config.source_connection_id_) {
         std::array<std::byte, detail::quic_server_connection_id_size> random{};
-        if (config.role == quic_role::server) {
-            detail::generate_quic_server_connection_id(crypto, random, config.cid_partition);
+        if (config.role_ == quic_role::server) {
+            detail::generate_quic_server_connection_id(crypto, random, config.cid_partition_);
         } else {
-            crypto.random_bytes(crypto.context, random);
+            crypto.random_bytes_(crypto.context_, random);
         }
-        config.source_connection_id = quic_connection_id(random);
+        config.source_connection_id_ = quic_connection_id(random);
     }
-    if (config.role == quic_role::server && config.cid_partition.count != 1 &&
-        (config.source_connection_id->size() != detail::quic_server_connection_id_size ||
-            detail::quic_connection_id_partition(config.source_connection_id->view(),
-                config.cid_partition.count) != config.cid_partition.index)) {
+    if (config.role_ == quic_role::server && config.cid_partition_.count_ != 1 &&
+        (config.source_connection_id_->size() != detail::quic_server_connection_id_size ||
+            detail::quic_connection_id_partition(config.source_connection_id_->view(),
+                config.cid_partition_.count_) != config.cid_partition_.index_)) {
         throw std::invalid_argument("server QUIC source CID does not match its routing partition");
     }
-    auto state = make_state(std::move(config), crypto, tls_driver, resource, now,
+    auto state_value = make_state(std::move(config), crypto, tls_driver, resource, now,
         early_transport_parameters);
-    initialize_native_connection(*state, now);
-    return state;
+    initialize_native_connection(*state_value, now);
+    return state_value;
 }
 
 }  // namespace
@@ -453,12 +453,12 @@ quic_connection::quic_connection(quic_initial_offer offer,
     quic_connection_config config, quic_crypto_provider_view crypto,
     quic_tls_driver_view tls_driver, std::pmr::memory_resource* resource,
     quic_timestamp now) {
-    config.role = quic_role::server;
-    config.version = offer.version;
-    config.local_address = offer.local_address;
-    config.peer_address = offer.peer_address;
-    config.destination_connection_id = offer.source_connection_id;
-    config.original_destination_connection_id = offer.original_destination_connection_id;
+    config.role_ = quic_role::server;
+    config.version_ = offer.version_;
+    config.local_address_ = offer.local_address_;
+    config.peer_address_ = offer.peer_address_;
+    config.destination_connection_id_ = offer.source_connection_id_;
+    config.original_destination_connection_id_ = offer.original_destination_connection_id_;
     impl_ = make_connection(std::move(config), crypto, tls_driver, resource, now);
 }
 
@@ -472,20 +472,20 @@ quic_connection_info quic_connection::info() const noexcept {
 
 std::size_t quic_connection::encode_early_transport_parameters(
     std::span<std::byte> output) const {
-    const auto& state = *impl_;
-    if (state.config_.role != quic_role::client || !state.connection_ ||
-        !state.tls_handshake_complete_ || output.empty()) {
+    const auto& state_value = *impl_;
+    if (state_value.config_.role_ != quic_role::client || !state_value.connection_ ||
+        !state_value.tls_handshake_complete_ || output.empty()) {
         throw quic_error(quic_error_code::invalid_state,
             "remembered QUIC transport parameters require a completed client handshake");
     }
-    const auto result = ngtcp2_conn_encode_0rtt_transport_params2(
-        state.connection_, reinterpret_cast<uint8_t*>(output.data()), output.size());
-    if (result < 0) {
-        throw quic_error(result == NGTCP2_ERR_NOBUF ? quic_error_code::resource_limit
-                                                    : quic_error_code::protocol_failure,
+    const auto result_value = ngtcp2_conn_encode_0rtt_transport_params2(
+        state_value.connection_, reinterpret_cast<uint8_t*>(output.data()), output.size());
+    if (result_value < 0) {
+        throw quic_error(result_value == NGTCP2_ERR_NOBUF ? quic_error_code::resource_limit
+                                                          : quic_error_code::protocol_failure,
             "ngtcp2 failed to encode remembered QUIC transport parameters");
     }
-    return static_cast<std::size_t>(result);
+    return static_cast<std::size_t>(result_value);
 }
 
 quic_path_migration quic_connection::start_path_migration(const quic_address& local_address) {
@@ -515,16 +515,16 @@ quic_operation_status quic_connection::receive(const quic_datagram_view& datagra
         throw std::invalid_argument("QUIC timestamps must be monotonic");
     }
     impl_->last_supplied_time_ = now;
-    detail::fill_quic_path(impl_->path_, datagram.local, datagram.peer);
+    detail::fill_quic_path(impl_->path_, datagram.local_, datagram.peer_);
     server_cid_publication_transaction cid_transaction(*impl_);
-    const int result = ngtcp2_conn_read_pkt(impl_->connection_, &impl_->path_.path, nullptr,
-        reinterpret_cast<const std::uint8_t*>(datagram.bytes.data()), datagram.bytes.size(), timestamp_value(now));
-    if (result == NGTCP2_ERR_DECRYPT || result == NGTCP2_ERR_DISCARD_PKT) {
+    const int result_value = ngtcp2_conn_read_pkt(impl_->connection_, &impl_->path_.path, nullptr,
+        reinterpret_cast<const std::uint8_t*>(datagram.bytes_.data()), datagram.bytes_.size(), timestamp_value(now));
+    if (result_value == NGTCP2_ERR_DECRYPT || result_value == NGTCP2_ERR_DISCARD_PKT) {
         detail::rethrow_quic_callback_failure(*impl_);
         return quic_operation_status::need_input;
     }
-    check_native_result(*impl_, result, "ngtcp2 packet receive failed");
-    if (result == 0) {
+    check_native_result(*impl_, result_value, "ngtcp2 packet receive failed");
+    if (result_value == 0) {
         cid_transaction.commit();
         impl_->quic_handshake_complete_ = ngtcp2_conn_get_handshake_completed2(impl_->connection_) != 0;
     }
@@ -535,7 +535,7 @@ quic_operation_status quic_connection::receive(const quic_datagram_view& datagra
 quic_packet_result quic_connection::write_packet(std::span<std::byte> output, quic_timestamp now) {
     impl_->rethrow_failure();
     if (!impl_->connection_ || impl_->state_ == quic_connection_state::retired) {
-        return {.status = quic_operation_status::retired};
+        return {.status_ = quic_operation_status::retired};
     }
     const auto ts = timestamp_value(now);
     if (ts < timestamp_value(impl_->last_supplied_time_)) {
@@ -543,7 +543,7 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
     }
     impl_->last_supplied_time_ = now;
     if (output.empty()) {
-        return {.status = idle_status(*impl_)};
+        return {.status_ = idle_status(*impl_)};
     }
     server_cid_publication_transaction cid_transaction(*impl_);
     ngtcp2_pkt_info packet_info{};
@@ -551,13 +551,13 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
     if (impl_->state_ == quic_connection_state::closing) {
         ngtcp2_ccerr error{};
         const auto reason = impl_->close_reason();
-        if (reason.kind == quic_close_kind::application) {
-            ngtcp2_ccerr_set_application_error(&error, reason.code,
-                reinterpret_cast<const uint8_t*>(reason.reason.data()), reason.reason.size());
+        if (reason.kind_ == quic_close_kind::application) {
+            ngtcp2_ccerr_set_application_error(&error, reason.code_,
+                reinterpret_cast<const uint8_t*>(reason.reason_.data()), reason.reason_.size());
         } else {
-            ngtcp2_ccerr_set_transport_error(&error, reason.code,
-                reinterpret_cast<const uint8_t*>(reason.reason.data()), reason.reason.size());
-            error.frame_type = reason.frame_type;
+            ngtcp2_ccerr_set_transport_error(&error, reason.code_,
+                reinterpret_cast<const uint8_t*>(reason.reason_.data()), reason.reason_.size());
+            error.frame_type = reason.frame_type_;
         }
         written = ngtcp2_conn_write_connection_close(impl_->connection_, &impl_->path_.path,
             &packet_info, reinterpret_cast<uint8_t*>(output.data()), output.size(), &error, ts);
@@ -571,13 +571,13 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
             check_native_result(*impl_, static_cast<int>(written), "ngtcp2 close packet write failed");
         }
         if (!impl_->connection_) {
-            return {.status = quic_operation_status::retired};
+            return {.status_ = quic_operation_status::retired};
         }
     } else {
-        const auto blocked = [](ngtcp2_ssize result) noexcept {
-            return result == NGTCP2_ERR_STREAM_DATA_BLOCKED ||
-                   result == NGTCP2_ERR_STREAM_NOT_FOUND ||
-                   result == NGTCP2_ERR_STREAM_SHUT_WR || result == NGTCP2_ERR_NOBUF;
+        const auto blocked = [](ngtcp2_ssize result_value) noexcept {
+            return result_value == NGTCP2_ERR_STREAM_DATA_BLOCKED ||
+                   result_value == NGTCP2_ERR_STREAM_NOT_FOUND ||
+                   result_value == NGTCP2_ERR_STREAM_SHUT_WR || result_value == NGTCP2_ERR_NOBUF;
         };
         const auto try_datagram = [&]() {
             if (!impl_->connection_) {
@@ -588,17 +588,17 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
                 return false;
             }
             const ngtcp2_vec vector{
-                reinterpret_cast<std::uint8_t*>(const_cast<std::byte*>(datagram.bytes.data())),
-                datagram.bytes.size()};
+                reinterpret_cast<std::uint8_t*>(const_cast<std::byte*>(datagram.bytes_.data())),
+                datagram.bytes_.size()};
             int accepted{};
             written = ngtcp2_conn_writev_datagram(impl_->connection_, &impl_->path_.path,
                 &packet_info, reinterpret_cast<uint8_t*>(output.data()), output.size(), &accepted,
-                NGTCP2_WRITE_DATAGRAM_FLAG_NONE, datagram.id, &vector, 1, ts);
+                NGTCP2_WRITE_DATAGRAM_FLAG_NONE, datagram.id_, &vector, 1, ts);
             detail::rethrow_quic_callback_failure(*impl_);
             if (written >= 0) {
                 cid_transaction.commit();
             }
-            detail::commit_datagram_write(*impl_, datagram.id, accepted != 0);
+            detail::commit_datagram_write(*impl_, datagram.id_, accepted != 0);
             if (written < 0 && !blocked(written)) {
                 check_native_result(*impl_, static_cast<int>(written), "ngtcp2 DATAGRAM write failed");
             }
@@ -614,23 +614,23 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
             }
             std::array<ngtcp2_vec, detail::quic_stream_write_range_count> vectors{};
             std::size_t offered_size{};
-            for (std::size_t i = 0; i < stream.range_count; ++i) {
+            for (std::size_t i = 0; i < stream.range_count_; ++i) {
                 vectors[i] = {
-                    reinterpret_cast<std::uint8_t*>(const_cast<std::byte*>(stream.ranges[i].data())),
-                    stream.ranges[i].size()};
-                offered_size += stream.ranges[i].size();
+                    reinterpret_cast<std::uint8_t*>(const_cast<std::byte*>(stream.ranges_[i].data())),
+                    stream.ranges_[i].size()};
+                offered_size += stream.ranges_[i].size();
             }
             ngtcp2_ssize accepted{};
-            const auto flags = stream.fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : NGTCP2_WRITE_STREAM_FLAG_NONE;
+            const auto flags = stream.fin_ ? NGTCP2_WRITE_STREAM_FLAG_FIN : NGTCP2_WRITE_STREAM_FLAG_NONE;
             written = ngtcp2_conn_writev_stream(impl_->connection_, &impl_->path_.path,
                 &packet_info, reinterpret_cast<uint8_t*>(output.data()), output.size(), &accepted,
-                flags, static_cast<std::int64_t>(stream.stream_id), vectors.data(), stream.range_count, ts);
+                flags, static_cast<std::int64_t>(stream.stream_id_), vectors.data(), stream.range_count_, ts);
             detail::rethrow_quic_callback_failure(*impl_);
             if (written >= 0) {
                 cid_transaction.commit();
             }
             const auto accepted_bytes = accepted < 0 ? 0U : static_cast<std::size_t>(accepted);
-            const bool fin_submitted = stream.fin && accepted >= 0 && accepted_bytes == offered_size && written > 0;
+            const bool fin_submitted = stream.fin_ && accepted >= 0 && accepted_bytes == offered_size && written > 0;
             detail::commit_stream_write(*impl_, stream, accepted_bytes, fin_submitted);
             if (written < 0 && !blocked(written)) {
                 check_native_result(*impl_, static_cast<int>(written), "ngtcp2 STREAM write failed");
@@ -661,7 +661,7 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
         }
         (void)attempted_stream;
         if (!impl_->connection_) {
-            return {.status = quic_operation_status::retired};
+            return {.status_ = quic_operation_status::retired};
         }
         if (written > 0) {
             impl_->prefer_datagram_ = !impl_->prefer_datagram_;
@@ -670,7 +670,7 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
         }
     }
     if (!impl_->connection_) {
-        return {.status = quic_operation_status::retired};
+        return {.status_ = quic_operation_status::retired};
     }
     ngtcp2_conn_update_pkt_tx_time(impl_->connection_, ts);
     detail::rethrow_quic_callback_failure(*impl_);
@@ -680,15 +680,15 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
             if (impl_->send_datagram_bytes_ != 0) {
                 impl_->prefer_datagram_ = true;
             }
-            return {.status = idle_status(*impl_)};
+            return {.status_ = idle_status(*impl_)};
         }
         check_native_result(*impl_, static_cast<int>(written), "ngtcp2 packet write failed");
-        return {.status = idle_status(*impl_)};
+        return {.status_ = idle_status(*impl_)};
     }
     if (written == 0) {
-        return {.status = idle_status(*impl_)};
+        return {.status_ = idle_status(*impl_)};
     }
-    return {.status = quic_operation_status::accepted, .size = static_cast<std::size_t>(written), .local = detail::decode_quic_address(impl_->path_.path.local), .peer = detail::decode_quic_address(impl_->path_.path.remote)};
+    return {.status_ = quic_operation_status::accepted, .size_ = static_cast<std::size_t>(written), .local_ = detail::decode_quic_address(impl_->path_.path.local), .peer_ = detail::decode_quic_address(impl_->path_.path.remote)};
 }
 
 std::optional<quic_timestamp> quic_connection::next_expiry() const noexcept {
@@ -699,8 +699,8 @@ std::optional<quic_timestamp> quic_connection::next_expiry() const noexcept {
     if (expiry == std::numeric_limits<ngtcp2_tstamp>::max()) {
         return std::nullopt;
     }
-    const auto max = static_cast<std::uint64_t>(std::numeric_limits<quic_timestamp::duration::rep>::max());
-    if (expiry > max) {
+    const auto max_value = static_cast<std::uint64_t>(std::numeric_limits<quic_timestamp::duration::rep>::max());
+    if (expiry > max_value) {
         return quic_timestamp::max();
     }
     return quic_timestamp(std::chrono::duration_cast<quic_timestamp::duration>(std::chrono::nanoseconds(expiry)));
@@ -717,9 +717,9 @@ quic_operation_status quic_connection::handle_expiry(quic_timestamp now) {
     }
     impl_->last_supplied_time_ = now;
     server_cid_publication_transaction cid_transaction(*impl_);
-    const auto result = ngtcp2_conn_handle_expiry(impl_->connection_, ts);
-    check_native_result(*impl_, result, "ngtcp2 expiry handling failed");
-    if (result == 0) {
+    const auto result_value = ngtcp2_conn_handle_expiry(impl_->connection_, ts);
+    check_native_result(*impl_, result_value, "ngtcp2 expiry handling failed");
+    if (result_value == 0) {
         cid_transaction.commit();
     }
     return idle_status(*impl_) == quic_operation_status::need_input
@@ -741,12 +741,12 @@ quic_operation_status quic_connection::update_key(quic_timestamp now) {
         return quic_operation_status::would_block;
     }
     server_cid_publication_transaction cid_transaction(*impl_);
-    const int result = ngtcp2_conn_initiate_key_update(impl_->connection_, ts);
+    const int result_value = ngtcp2_conn_initiate_key_update(impl_->connection_, ts);
     detail::rethrow_quic_callback_failure(*impl_);
-    if (result == NGTCP2_ERR_INVALID_STATE) {
+    if (result_value == NGTCP2_ERR_INVALID_STATE) {
         return quic_operation_status::would_block;
     }
-    check_native_result(*impl_, result, "ngtcp2 key update failed");
+    check_native_result(*impl_, result_value, "ngtcp2 key update failed");
     cid_transaction.commit();
     return impl_->connection_ ? quic_operation_status::accepted
                               : quic_operation_status::retired;
@@ -770,7 +770,7 @@ quic_operation_status quic_connection::retire_from_server() noexcept {
 }
 
 void quic_connection::bind_server_cid_registry(detail::quic_cid_registry_view registry) {
-    if (!impl_ || !impl_->connection_ || impl_->config_.role != quic_role::server) {
+    if (!impl_ || !impl_->connection_ || impl_->config_.role_ != quic_role::server) {
         throw std::logic_error("server CID registry requires an initialized server connection");
     }
     if (!registry) {

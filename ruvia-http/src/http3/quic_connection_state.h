@@ -23,80 +23,80 @@ namespace ruvia::detail {
 class quic_connection_state;
 
 struct quic_aead_key_slot final {
-    quic_connection_state* owner{};
-    std::pmr::memory_resource* resource{};
-    quic_aead_key key;
-    quic_cipher_suite_parameters parameters{};
-    std::uint64_t encryptions{};
-    std::uint64_t decryption_failures{};
+    quic_connection_state* owner_{};
+    std::pmr::memory_resource* resource_{};
+    quic_aead_key key_;
+    quic_cipher_suite_parameters parameters_{};
+    std::uint64_t encryptions_{};
+    std::uint64_t decryption_failures_{};
 };
 
 struct quic_header_key_slot final {
-    quic_connection_state* owner{};
-    std::pmr::memory_resource* resource{};
-    quic_header_protection_key key;
+    quic_connection_state* owner_{};
+    std::pmr::memory_resource* resource_{};
+    quic_header_protection_key key_;
 };
 
 struct quic_server_cid_publication_journal final {
     explicit quic_server_cid_publication_journal(std::pmr::memory_resource* resource)
-        : ids(resource) {}
+        : ids_(resource) {}
 
-    std::pmr::vector<quic_connection_id> ids;
+    std::pmr::vector<quic_connection_id> ids_;
 };
 
 class quic_connection_state final {
 public:
     struct crypto_record final {
         explicit crypto_record(std::pmr::memory_resource* resource) noexcept
-            : bytes(resource) {}
+            : bytes_(resource) {}
 
-        std::pmr::vector<std::byte> bytes;
-        std::size_t offset{};
+        std::pmr::vector<std::byte> bytes_;
+        std::size_t offset_{};
     };
 
     struct send_block final {
         explicit send_block(std::pmr::memory_resource* resource) noexcept
-            : bytes(resource) {}
+            : bytes_(resource) {}
 
-        std::pmr::string bytes;
-        std::uint64_t offset{};
-        std::size_t submitted{};
+        std::pmr::string bytes_;
+        std::uint64_t offset_{};
+        std::size_t submitted_{};
     };
 
     struct stream_state final {
         explicit stream_state(std::pmr::memory_resource* resource) noexcept
-            : input(resource),
-              output(resource) {}
+            : input_(resource),
+              output_(resource) {}
 
-        std::pmr::string input;
-        std::pmr::deque<send_block> output;
-        std::uint64_t received_offset{};
-        std::uint64_t send_offset{};
-        std::size_t input_offset{};
-        std::size_t retained_output_bytes{};
-        std::optional<std::uint64_t> peer_reset_error{};
-        bool peer_initiated{};
-        bool accepted{};
-        bool readable{};
-        bool writable{};
-        bool receive_fin{};
-        bool receive_end_observed{};
-        bool received_early_data{};
-        bool early_data_candidate{};
-        bool send_fin{};
-        bool fin_submitted{};
-        bool send_reset{};
-        bool send_stopped{};
-        bool retired{};
-        bool library_closed{};
+        std::pmr::string input_;
+        std::pmr::deque<send_block> output_;
+        std::uint64_t received_offset_{};
+        std::uint64_t send_offset_{};
+        std::size_t input_offset_{};
+        std::size_t retained_output_bytes_{};
+        std::optional<std::uint64_t> peer_reset_error_{};
+        bool peer_initiated_{};
+        bool accepted_{};
+        bool readable_{};
+        bool writable_{};
+        bool receive_fin_{};
+        bool receive_end_observed_{};
+        bool received_early_data_{};
+        bool early_data_candidate_{};
+        bool send_fin_{};
+        bool fin_submitted_{};
+        bool send_reset_{};
+        bool send_stopped_{};
+        bool retired_{};
+        bool library_closed_{};
     };
 
     struct datagram final {
         explicit datagram(std::pmr::memory_resource* resource) noexcept
-            : bytes(resource) {}
+            : bytes_(resource) {}
 
-        std::pmr::vector<std::byte> bytes;
-        std::uint64_t id{};
+        std::pmr::vector<std::byte> bytes_;
+        std::uint64_t id_{};
     };
 
     explicit quic_connection_state(quic_connection_config config,

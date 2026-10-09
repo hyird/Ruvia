@@ -6,7 +6,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/protocol_byte_limit.h"
 
 namespace ruvia::detail {
 
@@ -25,31 +25,31 @@ enum class chunk_trailer_role : std::uint8_t { request,
     response };
 
 struct chunk_framing_config final {
-    ProtocolByteLimit body_limit;
-    std::size_t framing_limit;
+    protocol_byte_limit body_limit_;
+    std::size_t framing_limit_;
     // Whole-message scanning bounds the encoded trailer section separately.
     // Incremental decoding first validates fields, then charges framing bytes.
-    ProtocolByteLimit trailer_section_limit;
-    chunk_trailer_role trailer_role;
+    protocol_byte_limit trailer_section_limit_;
+    chunk_trailer_role trailer_role_;
 };
 
 struct chunk_framing_need_more final {
-    std::size_t consumed_bytes;
+    std::size_t consumed_bytes_;
 };
 
 struct chunk_framing_body final {
-    std::size_t consumed_bytes;
-    std::string_view bytes;
+    std::size_t consumed_bytes_;
+    std::string_view bytes_;
 };
 
 struct chunk_framing_complete final {
-    std::size_t consumed_bytes;
-    std::string_view trailers;
+    std::size_t consumed_bytes_;
+    std::string_view trailers_;
 };
 
 struct chunk_framing_failure final {
-    std::size_t consumed_bytes;
-    chunk_framing_error error;
+    std::size_t consumed_bytes_;
+    chunk_framing_error error_;
 };
 
 using chunk_framing_result = std::variant<chunk_framing_need_more, chunk_framing_body,

@@ -44,20 +44,20 @@ public:
     }
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (bytes > limit_ - used_) {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (bytes_value > limit_ - used_) {
             throw inbound_buffer_limit_error();
         }
-        auto* allocation = upstream_->allocate(bytes, alignment);
-        used_ += bytes;
+        auto* allocation = upstream_->allocate(bytes_value, alignment);
+        used_ += bytes_value;
         return allocation;
     }
-    void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override {
-        if (bytes > used_) {
+    void do_deallocate(void* allocation, std::size_t bytes_value, std::size_t alignment) override {
+        if (bytes_value > used_) {
             std::terminate();
         }
-        upstream_->deallocate(allocation, bytes, alignment);
-        used_ -= bytes;
+        upstream_->deallocate(allocation, bytes_value, alignment);
+        used_ -= bytes_value;
     }
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;

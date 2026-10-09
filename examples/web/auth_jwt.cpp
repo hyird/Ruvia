@@ -9,103 +9,103 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
-#include "ruvia/web/auth/Jwt.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/auth/jwt.h"
+#include "ruvia/web/controller.h"
 
 namespace {
 
 // Demonstration only. Production must load an independently generated random
 // key from protected configuration, never reuse this public example key.
-constexpr std::string_view kJwtSecret =
+constexpr std::string_view jwt_secret =
     "development-only-not-for-production-0123456789abcdef0123456789abcdef";
 
-ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
-    ruvia::JwtSignOptions options;
-    options.secret = kJwtSecret;
-    options.issuer.assign("ruvia-example");
-    options.audience.assign("ruvia-api");
-    options.expiresIn = std::chrono::minutes(30);
-    options.claims.emplace_back(ruvia::JwtClaimOptions{.name = "scope", .value = "example"});
-    options.resource = c.arena();
+ruvia::jwt_sign_options sign_options(ruvia::context& c) {
+    ruvia::jwt_sign_options options;
+    options.secret_ = jwt_secret;
+    options.issuer_.assign("ruvia-example");
+    options.audience_.assign("ruvia-api");
+    options.expires_in_ = std::chrono::minutes(30);
+    options.claims_.emplace_back(ruvia::jwt_claim_options{.name_ = "scope", .value_ = "example"});
+    options.resource_ = c.arena();
     return options;
 }
 
-ruvia::JwtVerifyOptions verifyOptions(std::string_view token, std::pmr::memory_resource* resource) {
-    ruvia::JwtVerifyOptions options;
-    options.token = token;
-    options.secret = kJwtSecret;
-    options.issuer.assign("ruvia-example");
-    options.audience.assign("ruvia-api");
-    options.leeway = std::chrono::seconds(30);
-    options.resource = resource;
+ruvia::jwt_verify_options verify_options(std::string_view token, std::pmr::memory_resource* resource) {
+    ruvia::jwt_verify_options options;
+    options.token_ = token;
+    options.secret_ = jwt_secret;
+    options.issuer_.assign("ruvia-example");
+    options.audience_.assign("ruvia-api");
+    options.leeway_ = std::chrono::seconds(30);
+    options.resource_ = resource;
     return options;
 }
 
 }  // namespace
 
 // What an authenticated caller is, for the routes behind this middleware.
-struct AuthenticatedUser final {
-    std::string_view subject;
+struct authenticated_user final {
+    std::string_view subject_;
 };
 
-class JwtAuthMiddleware final : public ruvia::Middleware {
+class jwt_auth_middleware final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        const auto token = ruvia::jwt_bearer_token(c.req().header("Authorization").value_or(""));
         if (!token) {
-            c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
-                .code = "missing_token",
-                .message = "missing bearer token"}));
+            c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
+                .code_ = "missing_token",
+                .message_ = "missing bearer token"}));
             co_return;
         }
 
         // Only verification is guarded: next() must stay outside the catch, or a
         // downstream handler's exception would be reported as an invalid token
-        // instead of reaching onError.
-        std::optional<ruvia::JwtPayload> payload;
+        // instead of reaching on_error.
+        std::optional<ruvia::jwt_payload> payload;
         try {
-            payload.emplace(ruvia::jwtVerify(verifyOptions(*token, c.arena())));
+            payload.emplace(ruvia::jwt_verify(verify_options(*token, c.arena())));
         } catch (...) {
-            c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
-                .code = "invalid_token",
-                .message = "invalid bearer token"}));
+            c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
+                .code_ = "invalid_token",
+                .message_ = "invalid bearer token"}));
             co_return;
         }
 
         // The payload and the value built from it stay owned by this coroutine
         // frame, which outlives the next() below -- that is what makes binding
         // by address safe and allocation-free.
-        const AuthenticatedUser user{.subject = payload->subject()};
-        const auto binding = c.bindRequestState(user);
-        co_await next();
+        const authenticated_user user_value{.subject_ = payload->subject()};
+        const auto binding = c.bind_request_state(user_value);
+        co_await next_value();
     }
 };
 
-class AuthController final : public ruvia::Controller<AuthController> {
+class auth_controller final : public ruvia::controller<auth_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/auth")
 
     RUVIA_ROUTES_BEGIN
     RUVIA_POST("/token", token);
-    RUVIA_GET("/me", me, JwtAuthMiddleware);
+    RUVIA_GET("/me", me, jwt_auth_middleware);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
-        auto options = signOptions(c);
-        options.subject.assign(c.req().query("sub").value_or("example-user"));
-        auto jwt = ruvia::jwtSign(options);
+    ruvia::task<ruvia::http_response> token(ruvia::context& c) {
+        auto options = sign_options(c);
+        options.subject_.assign(c.req().query("sub").value_or("example-user"));
+        auto jwt = ruvia::jwt_sign(options);
         co_return c.text(std::move(jwt));
     }
 
     // The middleware published the verified identity as request state; the
     // handler reads it back by type, with no out-of-band channel.
-    ruvia::Task<ruvia::HttpResponse> me(ruvia::Context& c) {
-        const auto& user = c.requestState<AuthenticatedUser>();
+    ruvia::task<ruvia::http_response> me(ruvia::context& c) {
+        const auto& user_value = c.request_state<authenticated_user>();
         std::pmr::string reply(c.arena());
         reply.append("authenticated as ");
-        reply.append(user.subject);
+        reply.append(user_value.subject_);
         reply.push_back('\n');
         co_return c.text(std::move(reply));
     }
@@ -113,8 +113,8 @@ private:
 
 int main() {
     ruvia::app()
-        .listen({.address = "0.0.0.0", .http = 8085})
-        .server({.worker_count = 2,
-            .process_signal_handlers = ruvia::process_signal_handler_policy::install})
+        .listen({.address_ = "0.0.0.0", .http_ = 8085})
+        .server({.worker_count_ = 2,
+            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
         .run();
 }

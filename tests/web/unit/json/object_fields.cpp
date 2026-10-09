@@ -4,26 +4,26 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/json/JsonObjectFields.h"
+#include "ruvia/web/detail/json/json_object_fields.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using Field = std::pair<std::string, std::string>;
+using field_type = std::pair<std::string, std::string>;
 
 // Collect (decoded key, raw value) pairs; returns whether parsing succeeded.
-bool collect(std::string_view body, std::vector<Field>& out) {
-    return ruvia::detail::visitJsonObjectFields(body, std::pmr::get_default_resource(),
+bool collect(std::string_view body, std::vector<field_type>& out) {
+    return ruvia::detail::visit_json_object_fields(body, std::pmr::get_default_resource(),
                [&out](std::string_view key, std::string_view value) {
                    out.emplace_back(std::string(key), std::string(value));
-               }) == ruvia::detail::JsonObjectVisitResult::kComplete;
+               }) == ruvia::detail::json_object_visit_result::complete;
 }
 
 }  // namespace
 
 RUVIA_TEST(json_object_fields_basic) {
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     RUVIA_CHECK(collect(R"({"a":1,"b":"x","c":true,"d":null})", fields));
     RUVIA_CHECK_EQ(fields.size(), std::size_t{4});
     RUVIA_CHECK_EQ(fields[0].first, std::string("a"));
@@ -38,7 +38,7 @@ RUVIA_TEST(json_object_fields_emits_duplicate_keys_in_order) {
     // Duplicate keys are a JSON parser-differential surface. The iterator emits
     // every occurrence in source order -- it neither dedups nor rejects -- so the
     // binding layer's last-write-wins is well defined and reviewable.
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     RUVIA_CHECK(collect(R"({"a":1,"b":2,"a":3})", fields));
     RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
     RUVIA_CHECK_EQ(fields[0].first, std::string("a"));
@@ -48,13 +48,13 @@ RUVIA_TEST(json_object_fields_emits_duplicate_keys_in_order) {
 }
 
 RUVIA_TEST(json_object_fields_empty_object) {
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     RUVIA_CHECK(collect("{}", fields));
     RUVIA_CHECK(fields.empty());
 }
 
 RUVIA_TEST(json_object_fields_captures_nested_values) {
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     RUVIA_CHECK(collect(R"({"obj":{"x":1},"arr":[1,2,3]})", fields));
     RUVIA_CHECK_EQ(fields.size(), std::size_t{2});
     RUVIA_CHECK_EQ(fields[0].second, std::string(R"({"x":1})"));  // whole nested object
@@ -62,7 +62,7 @@ RUVIA_TEST(json_object_fields_captures_nested_values) {
 }
 
 RUVIA_TEST(json_object_fields_decodes_escaped_key) {
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     // The escaped key "ab" must be decoded to "ab" before it reaches the visitor.
     RUVIA_CHECK(collect(R"({"a\u0062":1})", fields));
     RUVIA_CHECK_EQ(fields.size(), std::size_t{1});
@@ -70,7 +70,7 @@ RUVIA_TEST(json_object_fields_decodes_escaped_key) {
 }
 
 RUVIA_TEST(json_object_fields_rejects_malformed) {
-    std::vector<Field> fields;
+    std::vector<field_type> fields;
     RUVIA_CHECK(!collect("", fields));                  // not an object
     RUVIA_CHECK(!collect("[]", fields));                // array, not object
     RUVIA_CHECK(!collect("{", fields));                 // unterminated
@@ -86,11 +86,11 @@ RUVIA_TEST(json_object_fields_rejects_malformed) {
 
 RUVIA_TEST(json_object_fields_visitor_can_stop_early) {
     int visited = 0;
-    const auto result = ruvia::detail::visitJsonObjectFields(R"({"a":1,"b":2,"c":3})",
+    const auto result_value = ruvia::detail::visit_json_object_fields(R"({"a":1,"b":2,"c":3})",
         std::pmr::get_default_resource(), [&visited](std::string_view, std::string_view) {
             ++visited;
             return false;  // stop after the first field
         });
-    RUVIA_CHECK(result == ruvia::detail::JsonObjectVisitResult::kStopped);
+    RUVIA_CHECK(result_value == ruvia::detail::json_object_visit_result::stopped);
     RUVIA_CHECK_EQ(visited, 1);
 }

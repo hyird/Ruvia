@@ -1,8 +1,8 @@
 #include <string_view>
 
-#include "ruvia/http/HttpOrigin.h"
+#include "ruvia/http/http_origin.h"
 
-#include "field/HttpOriginFields.h"
+#include "field/http_origin_fields.h"
 #include "test_harness.h"
 
 RUVIA_TEST(http_origin_field_accepts_opaque_origin_and_serialized_origin_lists) {

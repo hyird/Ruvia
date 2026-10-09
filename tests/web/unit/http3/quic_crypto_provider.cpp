@@ -12,19 +12,19 @@
 namespace {
 
 struct counting_resource final : std::pmr::memory_resource {
-    std::size_t allocations{};
-    std::size_t deallocations{};
-    std::size_t live_bytes{};
+    std::size_t allocations_{};
+    std::size_t deallocations_{};
+    std::size_t live_bytes_{};
 
     void* do_allocate(std::size_t size, std::size_t alignment) override {
         void* const pointer = std::pmr::new_delete_resource()->allocate(size, alignment);
-        ++allocations;
-        live_bytes += size;
+        ++allocations_;
+        live_bytes_ += size;
         return pointer;
     }
     void do_deallocate(void* pointer, std::size_t size, std::size_t alignment) override {
-        ++deallocations;
-        live_bytes -= size;
+        ++deallocations_;
+        live_bytes_ -= size;
         std::pmr::new_delete_resource()->deallocate(pointer, size, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -100,22 +100,22 @@ RUVIA_TEST(openssl_quic_crypto_provider_supports_all_tls13_suites_and_authentica
         }
         associated_data = {std::byte{0x51}, std::byte{0x55}, std::byte{0x49}, std::byte{0x43},
             std::byte{0x2d}, std::byte{0x41}, std::byte{0x44}};
-        auto aead = crypto.create_aead_key(crypto.context, suite, ruvia::quic_crypto_direction::write,
+        auto aead = crypto.create_aead_key_(crypto.context_, suite, ruvia::quic_crypto_direction::write,
             std::span(key_material).first(key_size));
         aead.seal(nonce, associated_data, plaintext, encrypted);
         const auto opened = aead.open(nonce, associated_data, encrypted, decrypted);
-        RUVIA_CHECK(opened.value == ruvia::quic_aead_key_operations::open_result::status::authenticated);
-        RUVIA_CHECK(opened.plaintext_size == plaintext.size());
+        RUVIA_CHECK(opened.value_ == ruvia::quic_aead_key_operations::open_result::status::authenticated);
+        RUVIA_CHECK(opened.plaintext_size_ == plaintext.size());
         RUVIA_CHECK(decrypted == plaintext);
         encrypted.back() ^= std::byte{1};
         const auto rejected_tag = aead.open(nonce, associated_data, encrypted, decrypted);
-        RUVIA_CHECK(rejected_tag.value == ruvia::quic_aead_key_operations::open_result::status::rejected);
+        RUVIA_CHECK(rejected_tag.value_ == ruvia::quic_aead_key_operations::open_result::status::rejected);
         encrypted.back() ^= std::byte{1};
         associated_data.front() ^= std::byte{1};
         const auto rejected_aad = aead.open(nonce, associated_data, encrypted, decrypted);
-        RUVIA_CHECK(rejected_aad.value == ruvia::quic_aead_key_operations::open_result::status::rejected);
+        RUVIA_CHECK(rejected_aad.value_ == ruvia::quic_aead_key_operations::open_result::status::rejected);
 
-        auto hp = crypto.create_header_protection_key(crypto.context, suite,
+        auto hp = crypto.create_header_protection_key_(crypto.context_, suite,
             std::span(key_material).first(key_size));
         hp.mask(sample, mask);
         RUVIA_CHECK((mask != std::array<std::byte, 5>{}));
@@ -142,18 +142,18 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc5869_sha256_vector) {
         std::byte{0x22}, std::byte{0xec}, std::byte{0x84}, std::byte{0x4a}, std::byte{0xd7}, std::byte{0xc2},
         std::byte{0xb3}, std::byte{0xe5}};
     std::array<std::byte, 32> prk{};
-    crypto.hkdf_extract(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, salt, ikm, prk);
+    crypto.hkdf_extract_(crypto.context_, ruvia::quic_cipher_suite::aes_128_gcm_sha256, salt, ikm, prk);
     RUVIA_CHECK(prk == expected_prk);
     std::array<std::byte, 42> okm{};
-    crypto.hkdf_expand(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, info, okm);
+    crypto.hkdf_expand_(crypto.context_, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, info, okm);
     RUVIA_CHECK(std::vector<std::byte>(okm.begin(), okm.end()) ==
                 hex_bytes("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"));
 
     // RFC 5869 A.3 includes zero-length salt and info.
-    crypto.hkdf_extract(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, {}, ikm, prk);
+    crypto.hkdf_extract_(crypto.context_, ruvia::quic_cipher_suite::aes_128_gcm_sha256, {}, ikm, prk);
     RUVIA_CHECK(std::vector<std::byte>(prk.begin(), prk.end()) ==
                 hex_bytes("19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"));
-    crypto.hkdf_expand(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, {}, okm);
+    crypto.hkdf_expand_(crypto.context_, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, {}, okm);
     RUVIA_CHECK(std::vector<std::byte>(okm.begin(), okm.end()) ==
                 hex_bytes("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"));
 }
@@ -161,11 +161,11 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc5869_sha256_vector) {
 RUVIA_TEST(openssl_quic_crypto_provider_rejects_invalid_provider_inputs) {
     ruvia::detail::openssl_quic_crypto_provider provider(std::pmr::get_default_resource());
     const auto crypto = provider.view();
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        crypto.create_aead_key(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        crypto.create_aead_key_(crypto.context_, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
             ruvia::quic_crypto_direction::read, std::array<std::byte, 15>{});
     }));
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::quic_crypto_provider_view{}.validate(); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::quic_crypto_provider_view{}.validate(); }));
 }
 
 RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
@@ -175,7 +175,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
     const auto salt = hex_bytes("38762cf7f55934b34d179ae6a4c80cadccbb7f0a");
     const auto destination_connection_id = hex_bytes("8394c8f03e515708");
     std::array<std::byte, 32> initial_secret{};
-    crypto.hkdf_extract(crypto.context, quic_cipher_suite::aes_128_gcm_sha256,
+    crypto.hkdf_extract_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256,
         salt, destination_connection_id, initial_secret);
     RUVIA_CHECK(std::vector<std::byte>(initial_secret.begin(), initial_secret.end()) ==
                 hex_bytes("7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44"));
@@ -184,9 +184,9 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
     std::array<std::byte, 32> server_secret{};
     const auto client_label = tls13_label("client in", client_secret.size());
     const auto server_label = tls13_label("server in", server_secret.size());
-    crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256,
+    crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256,
         initial_secret, client_label, client_secret);
-    crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256,
+    crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256,
         initial_secret, server_label, server_secret);
     RUVIA_CHECK(std::vector<std::byte>(client_secret.begin(), client_secret.end()) ==
                 hex_bytes("c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea"));
@@ -201,9 +201,9 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
         const auto key_label = tls13_label("quic key", key.size());
         const auto iv_label = tls13_label("quic iv", iv.size());
         const auto hp_label = tls13_label("quic hp", hp_key.size());
-        crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256, secret, key_label, key);
-        crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256, secret, iv_label, iv);
-        crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256, secret, hp_label, hp_key);
+        crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256, secret, key_label, key);
+        crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256, secret, iv_label, iv);
+        crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256, secret, hp_label, hp_key);
         RUVIA_CHECK(std::vector<std::byte>(key.begin(), key.end()) == hex_bytes(expected_key));
         RUVIA_CHECK(std::vector<std::byte>(iv.begin(), iv.end()) == hex_bytes(expected_iv));
         RUVIA_CHECK(std::vector<std::byte>(hp_key.begin(), hp_key.end()) == hex_bytes(expected_hp));
@@ -213,7 +213,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
     check_keys(server_secret, "cf3a5331653c364c88f0f379b6067e37",
         "0ac1493ca1905853b0bba03e", "c206b8d9b9f0f37644430b490eeaa314");
 
-    auto header_key = crypto.create_header_protection_key(crypto.context,
+    auto header_key = crypto.create_header_protection_key_(crypto.context_,
         quic_cipher_suite::aes_128_gcm_sha256,
         hex_bytes("9f50449e04a0e810283a1e9933adedd2"));
     const auto sample_bytes = hex_bytes("d1b1c98dd7689fb8ec11d242b123dc9b");
@@ -267,7 +267,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_decrypts_rfc9001_client_initial_packet_v
         "e221af44860018ab0856972e194cd934");
     RUVIA_CHECK(packet.size() == 1200);
 
-    auto header_key = crypto.create_header_protection_key(crypto.context,
+    auto header_key = crypto.create_header_protection_key_(crypto.context_,
         quic_cipher_suite::aes_128_gcm_sha256,
         hex_bytes("9f50449e04a0e810283a1e9933adedd2"));
     constexpr std::size_t packet_number_offset = 18;
@@ -298,14 +298,14 @@ RUVIA_TEST(openssl_quic_crypto_provider_decrypts_rfc9001_client_initial_packet_v
         iv[iv.size() - index - 1] ^= static_cast<std::byte>((packet_number >> (index * 8)) & 0xff);
     }
     RUVIA_CHECK(iv == hex_bytes("fa044b2f42a3fd3b46fb255e"));
-    auto aead = crypto.create_aead_key(crypto.context,
+    auto aead = crypto.create_aead_key_(crypto.context_,
         quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::read,
         hex_bytes("1f369613dd76d5467730efcbe3b1a22d"));
     std::vector<std::byte> plaintext(1162);
     const auto opened = aead.open(std::span<const std::byte, 12>(iv.data(), 12),
         unprotected_header, std::span<const std::byte>(packet).subspan(header_size), plaintext);
-    RUVIA_CHECK(opened.value == quic_aead_key_operations::open_result::status::authenticated);
-    RUVIA_CHECK(opened.plaintext_size == plaintext.size());
+    RUVIA_CHECK(opened.value_ == quic_aead_key_operations::open_result::status::authenticated);
+    RUVIA_CHECK(opened.plaintext_size_ == plaintext.size());
     const auto rfc_crypto_frame = hex_bytes(
         "060040f1010000ed0303ebf8fa56f12939b9584a3896472ec40bb863cfd3e868"
         "04fe3a47f06a2b69484c00000413011302010000c000000010000e00000b6578"
@@ -326,7 +326,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_handles_empty_payload_and_nonempty_aad) 
     {
         ruvia::detail::openssl_quic_crypto_provider provider(&resource);
         const auto crypto = provider.view();
-        const auto provider_live_bytes = resource.live_bytes;
+        const auto provider_live_bytes = resource.live_bytes_;
         const std::array<std::byte, 29> aad{
             std::byte{8}, std::byte{0x83}, std::byte{0x94}, std::byte{0xc8}, std::byte{0xf0},
             std::byte{0x3e}, std::byte{0x51}, std::byte{0x57}, std::byte{0x08}, std::byte{0xff},
@@ -345,23 +345,23 @@ RUVIA_TEST(openssl_quic_crypto_provider_handles_empty_payload_and_nonempty_aad) 
             std::array<std::byte, 32> key_material{};
             key_material.fill(std::byte{0x5a});
             {
-                auto aead = crypto.create_aead_key(crypto.context, suite,
+                auto aead = crypto.create_aead_key_(crypto.context_, suite,
                     ruvia::quic_crypto_direction::write,
                     std::span<const std::byte>(key_material).first(key_size));
                 std::array<std::byte, 16> tag{};
                 aead.seal(nonce, aad, std::span<const std::byte>{}, tag);
                 std::span<std::byte> empty_output;
                 const auto opened = aead.open(nonce, aad, tag, empty_output);
-                RUVIA_CHECK(opened.value == ruvia::quic_aead_key_operations::open_result::status::authenticated);
-                RUVIA_CHECK(opened.plaintext_size == 0);
+                RUVIA_CHECK(opened.value_ == ruvia::quic_aead_key_operations::open_result::status::authenticated);
+                RUVIA_CHECK(opened.plaintext_size_ == 0);
 
                 tag.back() ^= std::byte{1};
                 const auto rejected = aead.open(nonce, aad, tag, empty_output);
-                RUVIA_CHECK(rejected.value == ruvia::quic_aead_key_operations::open_result::status::rejected);
-                RUVIA_CHECK(rejected.plaintext_size == 0);
+                RUVIA_CHECK(rejected.value_ == ruvia::quic_aead_key_operations::open_result::status::rejected);
+                RUVIA_CHECK(rejected.plaintext_size_ == 0);
 
                 std::array<std::byte, 15> short_tag{};
-                RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+                RUVIA_CHECK(ruvia::testing::throws_on([&] {
                     aead.seal(nonce, aad, std::span<const std::byte>{}, short_tag);
                 }));
                 const std::array<std::byte, 3> plaintext{
@@ -369,22 +369,22 @@ RUVIA_TEST(openssl_quic_crypto_provider_handles_empty_payload_and_nonempty_aad) 
                 std::array<std::byte, 19> ciphertext{};
                 aead.seal(nonce, aad, plaintext, ciphertext);
                 std::array<std::byte, 2> short_plaintext{};
-                RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+                RUVIA_CHECK(ruvia::testing::throws_on([&] {
                     (void)aead.open(nonce, aad, ciphertext, short_plaintext);
                 }));
                 std::array<std::byte, 3> rejected_plaintext{};
                 ciphertext.back() ^= std::byte{1};
                 const auto rejected_payload = aead.open(nonce, aad, ciphertext, rejected_plaintext);
-                RUVIA_CHECK(rejected_payload.value == ruvia::quic_aead_key_operations::open_result::status::rejected);
+                RUVIA_CHECK(rejected_payload.value_ == ruvia::quic_aead_key_operations::open_result::status::rejected);
                 RUVIA_CHECK(std::all_of(rejected_plaintext.begin(), rejected_plaintext.end(),
                     [](std::byte value) { return value == std::byte{0}; }));
             }
-            crypto.secure_erase(crypto.context, key_material);
-            RUVIA_CHECK(resource.live_bytes == provider_live_bytes);
+            crypto.secure_erase_(crypto.context_, key_material);
+            RUVIA_CHECK(resource.live_bytes_ == provider_live_bytes);
         }
     }
-    RUVIA_CHECK(resource.allocations == resource.deallocations);
-    RUVIA_CHECK(resource.live_bytes == 0);
+    RUVIA_CHECK(resource.allocations_ == resource.deallocations_);
+    RUVIA_CHECK(resource.live_bytes_ == 0);
 }
 
 RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_retry_integrity_tag) {
@@ -397,9 +397,9 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_retry_integrity_tag) {
     const auto iv_label = tls13_label("quic iv", 12);
     std::array<std::byte, 16> key{};
     std::array<std::byte, 12> nonce{};
-    crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256,
+    crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256,
         retry_secret, key_label, key);
-    crypto.hkdf_expand(crypto.context, quic_cipher_suite::aes_128_gcm_sha256,
+    crypto.hkdf_expand_(crypto.context_, quic_cipher_suite::aes_128_gcm_sha256,
         retry_secret, iv_label, nonce);
     RUVIA_CHECK(std::vector<std::byte>(key.begin(), key.end()) ==
                 hex_bytes("be0c690b9f66575a1d766b54e368c84e"));
@@ -408,7 +408,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_retry_integrity_tag) {
 
     const auto pseudo_packet = hex_bytes(
         "088394c8f03e515708ff000000010008f067a5502a4262b5746f6b656e");
-    auto retry_key = crypto.create_aead_key(crypto.context,
+    auto retry_key = crypto.create_aead_key_(crypto.context_,
         quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write, key);
     std::array<std::byte, 16> tag{};
     retry_key.seal(nonce, pseudo_packet, {}, tag);
@@ -417,5 +417,5 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_retry_integrity_tag) {
     tag.back() ^= std::byte{1};
     std::array<std::byte, 1> plaintext{};
     const auto rejected = retry_key.open(nonce, pseudo_packet, tag, plaintext);
-    RUVIA_CHECK(rejected.value == quic_aead_key_operations::open_result::status::rejected);
+    RUVIA_CHECK(rejected.value_ == quic_aead_key_operations::open_result::status::rejected);
 }

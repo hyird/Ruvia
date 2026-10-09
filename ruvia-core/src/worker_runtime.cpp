@@ -8,21 +8,21 @@
 
 #include <asio/executor_work_guard.hpp>
 
-#include "ruvia/core/detail/util/FailureReport.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/detail/util/failure_report.h"
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/memory/process_resource.h"
 
 namespace ruvia {
 
 class worker_runtime::impl final {
 public:
     explicit impl(worker_runtime_options options)
-        : io_context_(options.io_policy == worker_io_policy::single_owner
+        : io_context_(options.io_policy_ == worker_io_policy::single_owner
                           ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                           : ASIO_CONCURRENCY_HINT_DEFAULT),
           work_(asio::make_work_guard(io_context_)),
-          context_(io_context_, options.queue_capacity) {}
+          context_(io_context_, options.queue_capacity_) {}
 
     void record_failure(std::exception_ptr failure, bool observed = false) noexcept {
         const std::lock_guard lock(mutex_);
@@ -43,7 +43,7 @@ public:
 
     void configure(worker_runtime_hooks hooks) {
         const std::lock_guard lock(mutex_);
-        if (configured_ || lifecycle_.state() != RuntimeLifecycle::State::kReady) {
+        if (configured_ || lifecycle_.state() != runtime_lifecycle::state_type::ready) {
             throw std::logic_error("worker runtime hooks must be configured once before launch");
         }
         hooks_ = std::move(hooks);
@@ -68,34 +68,34 @@ public:
     }
 
     void request_stop() noexcept {
-        if (!lifecycle_.requestStop()) {
+        if (!lifecycle_.request_stop()) {
             return;
         }
         context_.close();
         try {
             // A racing dispatcher failure may still be notifying listeners.
             // Keep the guard until all of them have published their cleanup.
-            detail::WorkerHandleAccess::whenShutdownNotificationsComplete(context_.handle(),
+            detail::worker_handle_access::when_shutdown_notifications_complete(context_.handle(),
                 [this] {
                     const std::lock_guard lock(mutex_);
                     stop_control_scheduled_ = true;
-                    context_.deferOrTerminate([this] { apply_stop(); });
+                    context_.defer_or_terminate([this] { apply_stop(); });
                 });
         } catch (...) {
             std::terminate();
         }
     }
 
-    [[nodiscard]] bool post_control(MoveOnlyFunction<void()> control) noexcept {
+    [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
         const std::lock_guard lock(mutex_);
-        if (lifecycle_.state() != RuntimeLifecycle::State::kRunning || work_released_) {
+        if (lifecycle_.state() != runtime_lifecycle::state_type::running || work_released_) {
             return false;
         }
-        context_.deferOrTerminate(std::move(control));
+        context_.defer_or_terminate(std::move(control));
         return true;
     }
 
-    void finalize(MoveOnlyFunction<void()> cleanup) noexcept {
+    void finalize(move_only_function<void()> cleanup) noexcept {
         {
             const std::lock_guard lock(mutex_);
             if (finalization_requested_) {
@@ -109,7 +109,7 @@ public:
         // If request_stop is still notifying listeners, its eventual control
         // consumes this request. Never release work before that publication.
         if (stop_control_scheduled_ && !work_released_) {
-            context_.deferOrTerminate([this] { apply_stop(); });
+            context_.defer_or_terminate([this] { apply_stop(); });
         }
     }
 
@@ -117,17 +117,17 @@ public:
         if (!stop_applied_) {
             stop_applied_ = true;
             try {
-                if (hooks_.stop_admission) {
-                    hooks_.stop_admission();
+                if (hooks_.stop_admission_) {
+                    hooks_.stop_admission_();
                 } else {
                     finalize({});
                 }
             } catch (...) {
                 std::terminate();
             }
-            context_.stopTimers();
+            context_.stop_timers();
         }
-        MoveOnlyFunction<void()> cleanup;
+        move_only_function<void()> cleanup;
         {
             const std::lock_guard lock(mutex_);
             if (!finalization_requested_ || work_released_) {
@@ -150,24 +150,24 @@ public:
         try {
             context_.run(
                 [this, launch_startup] {
-                    if (launch_startup && hooks_.startup) {
-                        hooks_.startup();
+                    if (launch_startup && hooks_.startup_) {
+                        hooks_.startup_();
                     }
                 },
                 [this](std::exception_ptr failure) noexcept {
-                    record_failure(failure, static_cast<bool>(hooks_.failure));
+                    record_failure(failure, static_cast<bool>(hooks_.failure_));
                     request_stop();
                     try {
-                        if (hooks_.failure) {
-                            hooks_.failure(std::move(failure));
+                        if (hooks_.failure_) {
+                            hooks_.failure_(std::move(failure));
                         }
                     } catch (...) {
                         std::terminate();
                     }
                 },
                 [this] {
-                    if (hooks_.shutdown) {
-                        hooks_.shutdown();
+                    if (hooks_.shutdown_) {
+                        hooks_.shutdown_();
                     }
                 });
         } catch (...) {
@@ -177,12 +177,12 @@ public:
         // post factories own their stable endpoint, not this execution context.
         context_.detach();
         work_.reset();
-        (void)lifecycle_.requestStop();
-        lifecycle_.completeStop();
+        (void)lifecycle_.request_stop();
+        lifecycle_.complete_stop();
     }
 
     void join() {
-        if (context_.handle().isCurrent()) {
+        if (context_.handle().is_current()) {
             throw std::logic_error("cannot join a worker runtime from its owner");
         }
         request_stop();
@@ -227,15 +227,15 @@ public:
 
     asio::io_context io_context_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
-    WorkerRuntimeContext context_;
-    RuntimeLifecycle lifecycle_;
+    worker_runtime_context context_;
+    runtime_lifecycle lifecycle_;
     worker_runtime_hooks hooks_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::thread thread_;
     std::exception_ptr failure_;
     bool failure_observed_{};
-    MoveOnlyFunction<void()> cleanup_;
+    move_only_function<void()> cleanup_;
     bool configured_{};
     bool started_{};
     bool joining_{};
@@ -247,11 +247,11 @@ public:
 };
 
 void worker_runtime::impl_deleter::operator()(impl* value) const noexcept {
-    detail::destroyPmrObject(value, detail::processResource());
+    detail::destroy_pmr_object(value, detail::process_resource());
 }
 
 worker_runtime::worker_runtime(worker_runtime_options options)
-    : impl_(detail::constructPmrObject<impl>(detail::processResource(), options)) {}
+    : impl_(detail::construct_pmr_object<impl>(detail::process_resource(), options)) {}
 
 worker_runtime::~worker_runtime() {
     impl_->request_stop();
@@ -262,7 +262,7 @@ worker_runtime::~worker_runtime() {
         std::terminate();
     }
     if (const auto failure = impl_->unobserved_failure()) {
-        detail::reportUnhandledFailure("worker runtime", failure);
+        detail::report_unhandled_failure("worker runtime", failure);
     }
 }
 
@@ -278,11 +278,11 @@ void worker_runtime::request_stop() noexcept {
     impl_->request_stop();
 }
 
-bool worker_runtime::post_control(MoveOnlyFunction<void()> control) noexcept {
+bool worker_runtime::post_control(move_only_function<void()> control) noexcept {
     return impl_->post_control(std::move(control));
 }
 
-void worker_runtime::finalize(MoveOnlyFunction<void()> cleanup) noexcept {
+void worker_runtime::finalize(move_only_function<void()> cleanup) noexcept {
     impl_->finalize(std::move(cleanup));
 }
 
@@ -302,7 +302,7 @@ void worker_runtime::rethrow_failure() const {
     }
 }
 
-RuntimeLifecycle::State worker_runtime::state() const noexcept {
+runtime_lifecycle::state_type worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
 }
 
@@ -311,7 +311,7 @@ bool worker_runtime::started() const noexcept {
     return impl_->started_;
 }
 
-WorkerRuntimeContext& worker_runtime::context() & noexcept {
+worker_runtime_context& worker_runtime::context() & noexcept {
     return impl_->context_;
 }
 

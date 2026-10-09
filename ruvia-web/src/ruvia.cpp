@@ -4,7 +4,7 @@ namespace ruvia {
 
 namespace {
 
-[[maybe_unused]] constexpr auto kLinkedVersion = RUVIA_VERSION_STRING;
+[[maybe_unused]] constexpr auto linked_version = RUVIA_VERSION_STRING;
 
 }  // namespace
 

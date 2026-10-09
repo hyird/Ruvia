@@ -12,18 +12,18 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/OperationTimeout.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/WorkerTimer.h"
-#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
-#include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
+#include "ruvia/web/http_client_types.h"
 
 namespace ruvia::detail {
 
-struct HttpClientConfigStorage;
-class HttpClientResponseState;
+struct http_client_config_storage;
+class http_client_response_state;
 
 enum class client_abort_reason : std::uint8_t { none,
     timeout,
@@ -34,8 +34,8 @@ enum class client_deadline_kind : std::uint8_t { resolve,
     response_buffer };
 
 struct client_wire_counters final {
-    std::size_t sent{};
-    std::size_t received{};
+    std::size_t sent_{};
+    std::size_t received_{};
 };
 
 // One worker owns the socket, resolver, deadline and borrowed response waiter.
@@ -43,7 +43,7 @@ struct client_wire_counters final {
 class client_tcp_transport final {
 public:
     client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
-        const WorkerHandle& worker, const HttpClientConfigStorage& config,
+        const worker_handle& worker_value, const http_client_config_storage& config,
         client_wire_counters& counters, std::pmr::memory_resource* resource);
     ~client_tcp_transport();
     client_tcp_transport(const client_tcp_transport&) = delete;
@@ -72,30 +72,30 @@ public:
         tls_started_ = true;
     }
     void stop_output() noexcept;
-    void bind_response(HttpClientResponseState* response) noexcept {
+    void bind_response(http_client_response_state* response) noexcept {
         response_ = response;
     }
-    [[nodiscard]] HttpClientResponseState* response() const noexcept {
+    [[nodiscard]] http_client_response_state* response() const noexcept {
         return response_;
     }
-    [[nodiscard]] bool arm_deadline(const OperationTimeout& timeout, client_deadline_kind kind);
+    [[nodiscard]] bool arm_deadline(const operation_timeout& timeout, client_deadline_kind kind);
     [[nodiscard]] bool clear_deadline() noexcept;
     void throw_if_aborted() const;
-    [[nodiscard]] HttpClientError::Code error_code(const std::error_code& error) const noexcept;
-    [[nodiscard]] Task<void> write(std::string_view bytes, const OperationTimeout& timeout);
-    [[nodiscard]] Task<std::size_t> read_some(std::span<char> bytes, const OperationTimeout& timeout, bool allow_eof = false);
+    [[nodiscard]] http_client_error::code_type error_code(const std::error_code& error) const noexcept;
+    [[nodiscard]] task<void> write(std::string_view bytes, const operation_timeout& timeout);
+    [[nodiscard]] task<std::size_t> read_some(std::span<char> bytes, const operation_timeout& timeout, bool allow_eof = false);
 
 private:
-    const WorkerHandle& worker_;
-    const HttpClientConfigStorage& config_;
+    const worker_handle& worker_;
+    const http_client_config_storage& config_;
     client_wire_counters& counters_;
     asio::ip::tcp::resolver resolver_;
     asio::ssl::stream<asio::ip::tcp::socket> stream_;
     operation_deadline<client_deadline_kind> deadline_;
-    std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>> timer_;
+    std::unique_ptr<worker_timer_registration, pmr_object_deleter<worker_timer_registration>> timer_;
     client_abort_reason abort_reason_{client_abort_reason::none};
     // Borrowed only while the serialized HTTP/1 operation remains active.
-    HttpClientResponseState* response_{};
+    http_client_response_state* response_{};
     bool tls_started_{};
 };
 

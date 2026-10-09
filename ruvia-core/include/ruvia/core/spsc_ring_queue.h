@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/memory/process_resource.h"
 
 namespace ruvia {
 
@@ -20,14 +20,14 @@ enum class ring_synchronization { local,
 
 template <typename value_type>
 struct ring_batch final {
-    std::span<value_type> first;
-    std::span<value_type> second;
+    std::span<value_type> first_;
+    std::span<value_type> second_;
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return first.size() + second.size();
+        return first_.size() + second_.size();
     }
     [[nodiscard]] bool empty() const noexcept {
-        return first.empty();
+        return first_.empty();
     }
 };
 
@@ -95,7 +95,7 @@ public:
 
     [[nodiscard]] value_type* prepare_push() noexcept {
         const auto batch = prepare_push_batch(1);
-        return batch.empty() ? nullptr : batch.first.data();
+        return batch.empty() ? nullptr : batch.first_.data();
     }
 
     void commit_push(std::size_t count = 1) noexcept {
@@ -129,12 +129,12 @@ public:
 
     [[nodiscard]] value_type* front() noexcept {
         const auto batch = front_batch(1);
-        return batch.empty() ? nullptr : batch.first.data();
+        return batch.empty() ? nullptr : batch.first_.data();
     }
 
     [[nodiscard]] const value_type* front() const noexcept {
         const auto batch = front_batch(1);
-        return batch.empty() ? nullptr : batch.first.data();
+        return batch.empty() ? nullptr : batch.first_.data();
     }
 
     void pop(std::size_t count = 1) noexcept {
@@ -226,7 +226,7 @@ private:
             throw std::invalid_argument("ring queue capacity must be nonzero");
         }
         if (!resource) {
-            resource = detail::processResource();
+            resource = detail::process_resource();
         }
         std::pmr::polymorphic_allocator<value_type> allocator(resource);
         storage_owner storage(allocator.allocate(capacity), storage_deleter{resource, capacity, 0});

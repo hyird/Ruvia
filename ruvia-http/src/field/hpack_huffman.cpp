@@ -31,27 +31,27 @@ consteval huffman_tree build_tree() {
     huffman_tree tree;
     std::size_t size = 1;
     for (std::size_t symbol = 0; symbol < symbol_count; ++symbol) {
-        std::size_t node = 0;
+        std::size_t node_value = 0;
         const auto code = hpack_huffman_codes[symbol];
         const auto length = hpack_huffman_lengths[symbol];
         if (length < 5) {
             throw "Four-bit transitions require Huffman codes of at least five bits";
         }
         for (std::uint8_t remaining = length; remaining != 0; --remaining) {
-            if (tree.nodes_[node].symbol_ >= 0) {
+            if (tree.nodes_[node_value].symbol_ >= 0) {
                 throw "HPACK Huffman code has an existing symbol as a prefix";
             }
             const auto bit = (code >> (remaining - 1)) & 1U;
-            auto& next = tree.nodes_[node].child_[bit];
-            if (next < 0) {
+            auto& next_value = tree.nodes_[node_value].child_[bit];
+            if (next_value < 0) {
                 if (size == node_count) {
                     throw "HPACK Huffman tree exceeds the complete-tree node count";
                 }
-                next = static_cast<std::int16_t>(size++);
+                next_value = static_cast<std::int16_t>(size++);
             }
-            node = static_cast<std::size_t>(next);
+            node_value = static_cast<std::size_t>(next_value);
         }
-        auto& leaf = tree.nodes_[node];
+        auto& leaf = tree.nodes_[node_value];
         if (leaf.symbol_ >= 0 || leaf.child_[0] >= 0 || leaf.child_[1] >= 0) {
             throw "HPACK Huffman code duplicates or prefixes another symbol";
         }
@@ -60,28 +60,28 @@ consteval huffman_tree build_tree() {
     if (size != node_count) {
         throw "HPACK Huffman tree is incomplete";
     }
-    std::size_t state = 0;
-    for (std::size_t node = 0; node < node_count; ++node) {
-        auto& entry = tree.nodes_[node];
-        if (entry.symbol_ < 0) {
-            if (state == state_count || entry.child_[0] < 0 || entry.child_[1] < 0) {
+    std::size_t state_value = 0;
+    for (std::size_t node_value = 0; node_value < node_count; ++node_value) {
+        auto& entry_value = tree.nodes_[node_value];
+        if (entry_value.symbol_ < 0) {
+            if (state_value == state_count || entry_value.child_[0] < 0 || entry_value.child_[1] < 0) {
                 throw "HPACK Huffman tree has invalid internal nodes";
             }
-            entry.state_ = static_cast<std::uint8_t>(state);
-            tree.states_[state++] = node;
+            entry_value.state_ = static_cast<std::uint8_t>(state_value);
+            tree.states_[state_value++] = node_value;
         }
     }
-    if (state != state_count) {
+    if (state_value != state_count) {
         throw "HPACK Huffman tree has an unexpected state count";
     }
     // RFC 7541 section 5.2: only zero to seven leading bits of EOS may remain.
     if (hpack_huffman_codes.back() != 0x3fffffffU || hpack_huffman_lengths.back() != 30) {
         throw "HPACK Huffman EOS must consist of thirty one bits";
     }
-    std::size_t node = 0;
+    std::size_t node_value = 0;
     for (std::size_t depth = 0; depth <= 7; ++depth) {
-        tree.nodes_[node].accepting_ = true;
-        node = static_cast<std::size_t>(tree.nodes_[node].child_[1]);
+        tree.nodes_[node_value].accepting_ = true;
+        node_value = static_cast<std::size_t>(tree.nodes_[node_value].child_[1]);
     }
     return tree;
 }
@@ -98,14 +98,14 @@ struct huffman_step final {
 };
 
 consteval auto build_transitions() {
-    std::array<std::array<huffman_step, 16>, state_count> result{};
-    for (std::size_t state = 0; state < state_count; ++state) {
+    std::array<std::array<huffman_step, 16>, state_count> result_value{};
+    for (std::size_t state_value = 0; state_value < state_count; ++state_value) {
         for (std::size_t nibble = 0; nibble < 16; ++nibble) {
-            auto node = tree.states_[state];
-            auto& step = result[state][nibble];
+            auto node_value = tree.states_[state_value];
+            auto& step = result_value[state_value][nibble];
             for (int shift = 3; shift >= 0; --shift) {
-                node = static_cast<std::size_t>(tree.nodes_[node].child_[(nibble >> shift) & 1U]);
-                const auto symbol = tree.nodes_[node].symbol_;
+                node_value = static_cast<std::size_t>(tree.nodes_[node_value].child_[(nibble >> shift) & 1U]);
+                const auto symbol = tree.nodes_[node_value].symbol_;
                 if (symbol == 256) {
                     step.flags_ = invalid;
                     break;
@@ -116,18 +116,18 @@ consteval auto build_transitions() {
                     }
                     step.symbol_ = static_cast<std::uint8_t>(symbol);
                     step.flags_ = emit;
-                    node = 0;
+                    node_value = 0;
                 }
             }
             if ((step.flags_ & invalid) == 0) {
-                step.state_ = tree.nodes_[node].state_;
-                if (tree.nodes_[node].accepting_) {
+                step.state_ = tree.nodes_[node_value].state_;
+                if (tree.nodes_[node_value].accepting_) {
                     step.flags_ |= accepting;
                 }
             }
         }
     }
-    return result;
+    return result_value;
 }
 
 constexpr auto transitions = build_transitions();
@@ -135,11 +135,11 @@ constexpr auto transitions = build_transitions();
 }  // namespace
 
 bool append_hpack_huffman(std::string_view encoded, std::pmr::string& output) {
-    std::uint8_t state = 0;
+    std::uint8_t state_value = 0;
     std::uint8_t flags = accepting;
     const auto advance = [&](std::uint8_t nibble) {
-        const auto step = transitions[state][nibble];
-        state = step.state_;
+        const auto step = transitions[state_value][nibble];
+        state_value = step.state_;
         flags = step.flags_;
         if ((flags & emit) != 0) {
             output.push_back(static_cast<char>(step.symbol_));

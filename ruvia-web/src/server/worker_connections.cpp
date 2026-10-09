@@ -9,32 +9,32 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/Async.h"
-#include "ruvia/core/Socket.h"
-#include "ruvia/http/HttpAscii.h"
+#include "ruvia/core/async.h"
+#include "ruvia/core/socket.h"
+#include "ruvia/http/http_ascii.h"
 
-#include "context/ContextServices.h"
-#include "http2/CleartextUpgrade.h"
-#include "http2/Http2SansIoSession.h"
-#include "integration/WorkerCapabilities.h"
-#include "server/HttpServerAlpn.h"
-#include "server/HttpServerConnectionGuards.h"
-#include "server/HttpServerStreamSession.h"
-#include "server/HttpServerTlsHandshake.h"
-#include "server/HttpServerTlsIdentity.h"
+#include "context/context_services.h"
+#include "http2/cleartext_upgrade.h"
+#include "http2/http2_sans_io_session.h"
+#include "integration/worker_capabilities.h"
+#include "server/http_server_alpn.h"
+#include "server/http_server_connection_guards.h"
+#include "server/http_server_stream_session.h"
+#include "server/http_server_tls_handshake.h"
+#include "server/http_server_tls_identity.h"
 
 namespace ruvia::detail {
 namespace {
 
-int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength,
-    const unsigned char* in, unsigned int inLength, void*) noexcept {
+int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
+    const unsigned char* in, unsigned int in_length, void*) noexcept {
     // This is the TCP TLS context, so it offers only h2 and http/1.1. HTTP/3
     // negotiates "h3" on this worker's separate QUIC/TLS context and is never
     // advertised through this TCP callback.
     static constexpr unsigned char protocols[] = {
         2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols,
-            static_cast<unsigned int>(sizeof(protocols)), in, inLength) == OPENSSL_NPN_NEGOTIATED) {
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
+            static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_NOACK;
@@ -42,7 +42,7 @@ int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength
 
 // RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's
 // server name matches a configured certificate; otherwise keep the default.
-int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
+int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     if (ssl == nullptr || arg == nullptr) {
         return SSL_TLSEXT_ERR_OK;
     }
@@ -50,9 +50,9 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     if (name == nullptr) {
         return SSL_TLSEXT_ERR_OK;
     }
-    const auto& lookup = *static_cast<const SniContextLookup*>(arg);
+    const auto& lookup = *static_cast<const sni_context_lookup_type*>(arg);
     for (const auto& [host, context] : lookup) {
-        if (httpAsciiEqualsIgnoreCase(host, name)) {
+        if (http_ascii_equals_ignore_case(host, name)) {
             SSL_set_SSL_CTX(ssl, context->native_handle());
             break;
         }
@@ -60,40 +60,40 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     return SSL_TLSEXT_ERR_OK;
 }
 
-[[nodiscard]] ruvia::ConnectionScannerOptions makeConnectionScannerOptions(
-    const HttpServerOptions& options) noexcept {
-    return ruvia::ConnectionScannerOptions{.scanInterval = options.scanInterval,
-        .idle_timeout = options.idle_timeout,
-        .initialReadTimeout = options.request_header_timeout,
-        .payloadReadTimeout = options.request_body_timeout,
-        .write_timeout = options.write_timeout,
-        .initial_read_completion_timeout = options.header_completion_timeout,
-        .payload_read_completion_timeout = options.body_completion_timeout};
+[[nodiscard]] ruvia::connection_scanner_options make_connection_scanner_options(
+    const http_server_options& options) noexcept {
+    return ruvia::connection_scanner_options{.scan_interval_ = options.scan_interval_,
+        .idle_timeout_ = options.idle_timeout_,
+        .initial_read_timeout_ = options.request_header_timeout_,
+        .payload_read_timeout_ = options.request_body_timeout_,
+        .write_timeout_ = options.write_timeout_,
+        .initial_read_completion_timeout_ = options.header_completion_timeout_,
+        .payload_read_completion_timeout_ = options.body_completion_timeout_};
 }
 
 }  // namespace
 
-worker_connections::worker_connections(asio::io_context& io, const WorkerHandle& worker,
-    WorkerMemory& memory, const RouteTable& routes, WorkerCapabilities& capabilities,
-    HttpServerOptions& options, const StopToken& stop_token, HttpServerWorkerState& state,
-    TaskScope& tasks, std::span<const HttpServerListenerDefinition> listeners)
+worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
+    worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
+    http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
+    task_scope& tasks, std::span<const http_server_listener_definition> listeners)
     : io_(io),
-      worker_(worker),
+      worker_(worker_value),
       memory_(memory),
-      routes_(routes),
+      routes_(routes_value),
       capabilities_(capabilities),
       options_(options),
-      stop_token_(stop_token),
-      state_(state),
+      stop_token_(stop_token_value),
+      state_(state_value),
       tasks_(tasks),
       listeners_(memory.resource()),
-      scanner_(worker, makeConnectionScannerOptions(options)),
+      scanner_(worker_value, make_connection_scanner_options(options)),
       work_sets_(memory) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
-        listeners_.push_back(makePmrObject<HttpServerSessionConfig>(memory.resource(), listener, memory.resource()));
+        listeners_.push_back(make_pmr_object<http_server_session_config>(memory.resource(), listener, memory.resource()));
     }
-    options_.connectionFailure.counter = &failures_;
+    options_.connection_failure_.counter_ = &failures_;
 }
 void worker_connections::prepare() {
     for (auto& listener : listeners_) {
@@ -107,121 +107,121 @@ void worker_connections::open_admission() noexcept {
 void worker_connections::stop() noexcept {
     serving_.store(false, std::memory_order_release);
     scanner_.stop();
-    scanner_.closeAll();
+    scanner_.close_all();
 }
 void worker_connections::retire_tls() noexcept {
     for (auto& listener : listeners_) {
-        listener->tlsContext.reset();
-        listener->sniLookup.clear();
-        listener->sniContexts.clear();
+        listener->tls_context_.reset();
+        listener->sni_lookup_.clear();
+        listener->sni_contexts_.clear();
     }
 }
 bool worker_connections::available() const noexcept {
     return serving_.load(std::memory_order_acquire) &&
-           (!options_.maxConnections || active_.load(std::memory_order_relaxed) < *options_.maxConnections);
+           (!options_.max_connections_ || active_.load(std::memory_order_relaxed) < *options_.max_connections_);
 }
-HttpServerStats worker_connections::stats() const noexcept {
-    HttpServerStats result;
-    result.activeConnections = active_.load(std::memory_order_relaxed);
-    result.connectionsRefused = refused_.load(std::memory_order_relaxed);
-    result.connectionFailures = failures_.load(std::memory_order_relaxed);
-    result.acceptFailures = accept_failures_.load(std::memory_order_relaxed);
+http_server_stats worker_connections::stats() const noexcept {
+    http_server_stats result;
+    result.active_connections_ = active_.load(std::memory_order_relaxed);
+    result.connections_refused_ = refused_.load(std::memory_order_relaxed);
+    result.connection_failures_ = failures_.load(std::memory_order_relaxed);
+    result.accept_failures_ = accept_failures_.load(std::memory_order_relaxed);
     return result;
 }
 
-void worker_connections::configure_tls(HttpServerSessionConfig& listener) {
-    listener.sniContexts.clear();
-    listener.sniLookup.clear();
-    const auto* tls = listener.tls();
+void worker_connections::configure_tls(http_server_session_config& listener_value) {
+    listener_value.sni_contexts_.clear();
+    listener_value.sni_lookup_.clear();
+    const auto* tls = listener_value.tls();
     if (tls == nullptr) {
-        listener.tlsContext.reset();
+        listener_value.tls_context_.reset();
         return;
     }
-    const auto configure = [tls](asio::ssl::context& context,
-                               const HttpServerListenerDefinition::TlsIdentity& identity) {
-        context.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-                            asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
-                            asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
-        SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
-        SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
-        configureHttpServerTlsIdentity(
-            context.native_handle(), identity, tls->clientCertificates);
+    const auto configure = [tls](asio::ssl::context& context_value,
+                               const http_server_listener_definition::tls_identity_type& identity) {
+        context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+                                  asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
+                                  asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
+        SSL_CTX_set_options(context_value.native_handle(), SSL_OP_NO_COMPRESSION);
+        SSL_CTX_set_alpn_select_cb(context_value.native_handle(), select_alpn_protocol, nullptr);
+        configure_http_server_tls_identity(
+            context_value.native_handle(), identity, tls->client_certificates_);
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
-    listener.sniContexts.reserve(tls->sniIdentities.size());
-    for (const auto& sni : tls->sniIdentities) {
-        auto& context = listener.sniContexts.emplace_back(asio::ssl::context::tls_server);
-        configure(context, sni.identity);
+    listener_value.sni_contexts_.reserve(tls->sni_identities_.size());
+    for (const auto& sni : tls->sni_identities_) {
+        auto& context_value = listener_value.sni_contexts_.emplace_back(asio::ssl::context::tls_server);
+        configure(context_value, sni.identity_);
     }
-    listener.sniLookup.reserve(tls->sniIdentities.size());
-    for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
-        listener.sniLookup.emplace_back(tls->sniIdentities[i].host, &listener.sniContexts[i]);
+    listener_value.sni_lookup_.reserve(tls->sni_identities_.size());
+    for (std::size_t i = 0; i < tls->sni_identities_.size(); ++i) {
+        listener_value.sni_lookup_.emplace_back(tls->sni_identities_[i].host_, &listener_value.sni_contexts_[i]);
     }
 
-    listener.tlsContext.emplace(asio::ssl::context::tls_server);
-    auto& context = *listener.tlsContext;
-    configure(context, tls->identity);
-    if (!listener.sniLookup.empty()) {
-        SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
-        SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &listener.sniLookup);
+    listener_value.tls_context_.emplace(asio::ssl::context::tls_server);
+    auto& context_value = *listener_value.tls_context_;
+    configure(context_value, tls->identity_);
+    if (!listener_value.sni_lookup_.empty()) {
+        SSL_CTX_set_tlsext_servername_callback(context_value.native_handle(), &select_sni_context);
+        SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &listener_value.sni_lookup_);
     }
 }
 
-Task<void> worker_connections::run_session(
-    HttpServerSessionConfig& listener, AcceptedConnectionLease connection) {
+task<void> worker_connections::run_session(
+    http_server_session_config& listener_value, accepted_connection_lease connection) {
     auto& socket = connection.socket();
     // Declared outside the try so the failure report below can name the peer.
     // It stays empty if the failure happened before the address was resolved.
-    std::pmr::string remoteAddress(memory_.allocator<char>());
-    std::uint16_t remotePort = 0;
+    std::pmr::string remote_address(memory_.allocator<char>());
+    std::uint16_t remote_port = 0;
     try {
-        std::error_code remoteEc;
-        const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
-        if (!remoteEc) {
-            ruvia::assignRemoteAddress(remoteAddress, remoteEndpoint.address());
-            remotePort = remoteEndpoint.port();
+        std::error_code remote_ec;
+        const auto remote_endpoint = socket.remote_endpoint(remote_ec);
+        if (!remote_ec) {
+            ruvia::assign_remote_address(remote_address, remote_endpoint.address());
+            remote_port = remote_endpoint.port();
         }
-        ContextServices baseServices = capabilities_.contextServices(stop_token_);
-        if (listener.tls() != nullptr) {
-            asio::ssl::stream<TcpSocket&> tlsStream(socket, *listener.tlsContext);
+        context_services base_services = capabilities_.make_context_services(stop_token_);
+        if (listener_value.tls() != nullptr) {
+            asio::ssl::stream<tcp_socket_type&> tls_stream(socket, *listener_value.tls_context_);
             {
                 // The TLS handshake has its own initial-read deadline. It must be
                 // released the moment the handshake resolves and before the
                 // session is dispatched: the session installs and continuously
                 // refreshes its own scanner entry, but this handshake entry stays
-                // pinned at kReadingInitial with a frozen last-active time. Left
+                // pinned at reading_initial with a frozen last-active time. Left
                 // registered across the session, the scanner would close an active
                 // connection's socket one request_header_timeout after the handshake
                 // regardless of session activity -- severing long-lived TLS
-                // sessions (WebSocket, keep-alive, slow uploads, streaming).
-                ruvia::ConnectionScanner::Entry handshakeEntry;
-                ruvia::ConnectionScanner::Guard handshakeGuard(
-                    &scanner_, handshakeEntry, socket);
-                handshakeEntry.setPhase(ruvia::ConnectionScanner::Phase::kReadingInitial);
-                const auto handshakeCompletion =
-                    co_await ruvia::asyncAsio(TlsServerHandshakeInitiator{&tlsStream});
-                if (handshakeCompletion.errorCode()) {
-                    ruvia::closeSocket(socket);
+                // sessions (websocket, keep-alive, slow uploads, streaming).
+                ruvia::connection_scanner::entry_type handshake_entry;
+                ruvia::connection_scanner::guard_type handshake_guard(
+                    &scanner_, handshake_entry, socket);
+                handshake_entry.set_phase(ruvia::connection_scanner::phase_type::reading_initial);
+                const auto handshake_completion =
+                    co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
+                if (handshake_completion.error_code()) {
+                    ruvia::close_socket(socket);
                     co_return;
                 }
             }
-            std::pmr::string clientCertificate(memory_.allocator<char>());
-            extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-            const auto tlsServices = baseServices
-                                         .withTlsTransport(
-                                             remoteAddress, clientCertificate, remotePort)
-                                         .withAutomaticAltSvc(listener.tls()->altSvc);
-            if (isHttp2AlpnSelected(tlsStream)) {
-                co_await run_http2(tlsStream, socket, tlsServices);
+            std::pmr::string client_certificate(memory_.allocator<char>());
+            extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
+            const auto tls_services = base_services
+                                          .with_tls_transport(
+                                              remote_address, client_certificate, remote_port)
+                                          .with_automatic_alt_svc(listener_value.tls()->alt_svc_);
+            if (is_http2_alpn_selected(tls_stream)) {
+                co_await run_http2(tls_stream, socket, tls_services);
             } else {
-                co_await run_stream(listener, tlsStream, socket, tlsServices);
+                co_await run_stream(listener_value, tls_stream, socket, tls_services);
             }
-            ruvia::closeSocket(socket);
+            ruvia::close_socket(socket);
             co_return;
         }
         co_await run_stream(
-            listener, socket, socket, baseServices.withPlainTransport(remoteAddress, remotePort));
+            listener_value, socket, socket, base_services.with_plain_transport(remote_address, remote_port));
     } catch (...) {
         // Last-resort safety net: any exception that escapes the session
         // body (including bad_alloc, error-handler failures, or framework
@@ -233,88 +233,88 @@ Task<void> worker_connections::run_session(
         // only place that reason exists, so it goes to the connection-failure
         // sink before the frame unwinds.
         const auto failure = std::current_exception();
-        ruvia::closeSocket(socket);
-        options_.connectionFailure.invoke(remoteAddress, failure);
+        ruvia::close_socket(socket);
+        options_.connection_failure_.invoke(remote_address, failure);
     }
 }
 
-template <typename Stream>
-Task<void> worker_connections::run_http2(
-    Stream& stream, TcpSocket& socket, ContextServices services, std::string_view initialBytes) {
-    ruvia::ConnectionScanner::Entry scannerEntry;
-    ruvia::ConnectionScanner::Guard scannerGuard(&scanner_, scannerEntry, socket);
+template <typename stream_type>
+task<void> worker_connections::run_http2(
+    stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial_bytes) {
+    ruvia::connection_scanner::entry_type scanner_entry;
+    ruvia::connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
 
-    co_await runHttp2ServerSession(
-        Http2ServerSessionSetup<Stream>{
-            .stream = stream,
-            .socket = socket,
-            .memory = memory_,
-            .routes = routes_,
-            .options = options_,
-            .scannerEntry = scannerEntry,
-            .services = services,
-            .workerState = state_,
+    co_await run_http2_server_session(
+        http2_server_session_setup<stream_type>{
+            .stream_ = stream,
+            .socket_ = socket,
+            .memory_ = memory_,
+            .routes_ = routes_,
+            .options_ = options_,
+            .scanner_entry_ = scanner_entry,
+            .services_ = services,
+            .worker_state_ = state_,
         },
-        initialBytes);
+        initial_bytes);
 }
 
-void worker_connections::accept_socket(std::size_t listenerIndex, TcpSocket socket) {
-    if (!httpServerWorkerRunning(state_)) {
+void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
+    if (!http_server_worker_running(state_)) {
         return;
     }
-    if (listenerIndex >= listeners_.size()) {
+    if (listener_index >= listeners_.size()) {
         return;
     }
-    if (options_.maxConnections.has_value() &&
-        active_.load(std::memory_order_relaxed) >= *options_.maxConnections) {
+    if (options_.max_connections_.has_value() &&
+        active_.load(std::memory_order_relaxed) >= *options_.max_connections_) {
         refused_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     try {
-        ruvia::configureAcceptedSocket(socket);
-        AcceptedConnectionLease connection(std::move(socket), active_);
-        tasks_.spawn(run_session(*listeners_[listenerIndex], std::move(connection)));
+        ruvia::configure_accepted_socket(socket);
+        accepted_connection_lease connection(std::move(socket), active_);
+        tasks_.spawn(run_session(*listeners_[listener_index], std::move(connection)));
     } catch (...) {
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
-        options_.connectionFailure.invoke({}, std::current_exception());
+        options_.connection_failure_.invoke({}, std::current_exception());
     }
 }
 
-void worker_connections::accept(NativeAcceptedSocketTicket&& ticket) noexcept {
+void worker_connections::accept(native_accepted_socket_ticket&& ticket) noexcept {
     if (!ticket.valid()) {
         return;
     }
-    const auto listenerIndex = ticket.listenerIndex();
-    if (!httpServerWorkerRunning(state_) || listenerIndex >= listeners_.size()) {
+    const auto listener_index = ticket.listener_index();
+    if (!http_server_worker_running(state_) || listener_index >= listeners_.size()) {
         return;
     }
 
     try {
-        TcpSocket socket(io_);
+        tcp_socket_type socket(io_);
         asio::error_code error;
         try {
-            socket.assign(ticket.protocol(), ticket.nativeHandle(), error);
+            socket.assign(ticket.protocol(), ticket.native_handle(), error);
         } catch (...) {
             // Some Asio implementations can take the handle before reporting an
             // exception. Disarm the ticket before socket's RAII cleanup in that case.
-            if (socket.is_open() && socket.native_handle() == ticket.nativeHandle()) {
+            if (socket.is_open() && socket.native_handle() == ticket.native_handle()) {
                 static_cast<void>(ticket.release());
             }
             accept_failures_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         if (error) {
-            if (socket.is_open() && socket.native_handle() == ticket.nativeHandle()) {
+            if (socket.is_open() && socket.native_handle() == ticket.native_handle()) {
                 static_cast<void>(ticket.release());
             }
             accept_failures_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         static_cast<void>(ticket.release());  // ownership now belongs to socket.
-        accept_socket(listenerIndex, std::move(socket));
+        accept_socket(listener_index, std::move(socket));
     } catch (...) {
-        // Includes TcpSocket construction and any unexpected accept-path failure.
+        // Includes tcp_socket_type construction and any unexpected accept-path failure.
         // Until assign transfers ownership the ticket remains responsible for close.
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
     }

@@ -4,29 +4,29 @@
 #include <exception>
 #include <memory>
 
-#include "ruvia/core/MoveOnlyFunction.h"
-#include "ruvia/core/RuntimeLifecycle.h"
-#include "ruvia/core/WorkerRuntimeContext.h"
+#include "ruvia/core/move_only_function.h"
+#include "ruvia/core/runtime_lifecycle.h"
+#include "ruvia/core/worker_runtime_context.h"
 
 namespace ruvia {
 
-enum class worker_io_policy { synchronized,
+enum class worker_io_policy { synchronized_value,
     single_owner };
 
 struct worker_runtime_options final {
-    std::size_t queue_capacity{4096};
-    worker_io_policy io_policy{worker_io_policy::synchronized};
+    std::size_t queue_capacity_{4096};
+    worker_io_policy io_policy_{worker_io_policy::synchronized_value};
 };
 
 struct worker_runtime_hooks final {
-    MoveOnlyFunction<void()> startup{};
+    move_only_function<void()> startup_{};
     // Runs on the owner after dispatcher admission and shutdown notifications
     // close. A custom policy must eventually call finalize(), after its external
     // producers are quiescent. Without a policy, stopping finalizes immediately.
-    MoveOnlyFunction<void()> stop_admission{};
-    MoveOnlyFunction<void(std::exception_ptr)> failure{};
+    move_only_function<void()> stop_admission_{};
+    move_only_function<void(std::exception_ptr)> failure_{};
     // Terminal owner-thread cleanup, after I/O and completion handlers drain.
-    MoveOnlyFunction<void()> shutdown{};
+    move_only_function<void()> shutdown_{};
 };
 
 // The unique owner of a worker's thread, io_context, dispatcher, and generic
@@ -48,21 +48,21 @@ public:
     void request_stop() noexcept;
     // Cold-path lifecycle control, serialized with finalization. Returns false
     // once stopping starts; it cannot strand a control after the thread barrier.
-    [[nodiscard]] bool post_control(MoveOnlyFunction<void()> control) noexcept;
+    [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept;
     // A reliable owner-thread phase-two control. The first call wins. Its
     // callback retires domain resources before the work guard is released.
     // Pending I/O/continuations still drain; the io_context is never stopped.
-    void finalize(MoveOnlyFunction<void()> cleanup = {}) noexcept;
+    void finalize(move_only_function<void()> cleanup = {}) noexcept;
     // Establishes the thread barrier, including owner-affine draining when
     // stopped before start. Concurrent joins wait for the same barrier. This
     // does not rethrow run failures: inspect/rethrow them after all owners join.
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
     void rethrow_failure() const;
-    [[nodiscard]] RuntimeLifecycle::State state() const noexcept;
+    [[nodiscard]] runtime_lifecycle::state_type state() const noexcept;
     [[nodiscard]] bool started() const noexcept;
-    [[nodiscard]] WorkerRuntimeContext& context() & noexcept;
-    WorkerRuntimeContext& context() && = delete;
+    [[nodiscard]] worker_runtime_context& context() & noexcept;
+    worker_runtime_context& context() && = delete;
 
 private:
     class impl;

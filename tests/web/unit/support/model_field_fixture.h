@@ -8,33 +8,33 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/web/Model.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/web/model.h"
 
 #include "test_harness.h"
 
 namespace model_field_test {
 
-RUVIA_MODEL(AccessorSurfaceRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(accessor_surface_request, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
-RUVIA_MODEL(AccessorSurfaceResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(accessor_surface_response, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
-RUVIA_MODEL(NestedModelItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
-    RUVIA_OPTIONAL_FIELD(label, ruvia::String));
+RUVIA_MODEL(nested_model_item, RUVIA_REQUIRED_FIELD(id, ruvia::uint32),
+    RUVIA_OPTIONAL_FIELD(label, ruvia::string));
 
-RUVIA_MODEL(NestedModelEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedModelItem),
-    RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedModelItem>),
-    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
+RUVIA_MODEL(nested_model_envelope, RUVIA_REQUIRED_FIELD(primary, nested_model_item),
+    RUVIA_REQUIRED_FIELD(items, ruvia::array<nested_model_item>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
 
-RUVIA_MODEL(NestedResponseItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
-    RUVIA_OPTIONAL_FIELD(label, ruvia::String));
+RUVIA_MODEL(nested_response_item, RUVIA_REQUIRED_FIELD(id, ruvia::uint32),
+    RUVIA_OPTIONAL_FIELD(label, ruvia::string));
 
-RUVIA_MODEL(NestedResponseEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedResponseItem),
-    RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedResponseItem>),
-    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
+RUVIA_MODEL(nested_response_envelope, RUVIA_REQUIRED_FIELD(primary, nested_response_item),
+    RUVIA_REQUIRED_FIELD(items, ruvia::array<nested_response_item>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
 
-#define RUVIA_TEST_BOOL_FIELD(field) RUVIA_OPTIONAL_FIELD(field, ruvia::Bool)
-RUVIA_MODEL(UnlimitedFieldCountResponse, RUVIA_TEST_BOOL_FIELD(f01),
+#define RUVIA_TEST_BOOL_FIELD(field) RUVIA_OPTIONAL_FIELD(field, ruvia::bool_value)
+RUVIA_MODEL(unlimited_field_count_response, RUVIA_TEST_BOOL_FIELD(f01),
     RUVIA_TEST_BOOL_FIELD(f02), RUVIA_TEST_BOOL_FIELD(f03), RUVIA_TEST_BOOL_FIELD(f04),
     RUVIA_TEST_BOOL_FIELD(f05), RUVIA_TEST_BOOL_FIELD(f06), RUVIA_TEST_BOOL_FIELD(f07),
     RUVIA_TEST_BOOL_FIELD(f08), RUVIA_TEST_BOOL_FIELD(f09), RUVIA_TEST_BOOL_FIELD(f10),

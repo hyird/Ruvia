@@ -4,34 +4,34 @@
 #include <ranges>
 #include <utility>
 
-#include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/model_types.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::test::CountingMemoryResource;
+using ruvia::test::counting_memory_resource;
 
-class TrackedValue final {
+class tracked_value final {
 public:
-    explicit TrackedValue(int value) noexcept
+    explicit tracked_value(int value) noexcept
         : value_(value) {
         ++alive_;
     }
 
-    TrackedValue(const TrackedValue&) = delete;
-    TrackedValue& operator=(const TrackedValue&) = delete;
+    tracked_value(const tracked_value&) = delete;
+    tracked_value& operator=(const tracked_value&) = delete;
 
-    TrackedValue(TrackedValue&& other) noexcept
+    tracked_value(tracked_value&& other) noexcept
         : value_(other.value_) {
         other.value_ = -1;
         ++alive_;
     }
 
-    TrackedValue& operator=(TrackedValue&&) = delete;
+    tracked_value& operator=(tracked_value&&) = delete;
 
-    ~TrackedValue() {
+    ~tracked_value() {
         --alive_;
     }
 
@@ -51,62 +51,62 @@ private:
 }  // namespace
 
 RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
-    CountingMemoryResource resource;
+    counting_memory_resource resource;
     {
-        ruvia::BoxedArray<TrackedValue> values({.resource = &resource});
+        ruvia::boxed_array<tracked_value> values({.resource_ = &resource});
         values.emplace(1);
         values.emplace(2);
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{2});
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{2});
 
         values.clear();
         RUVIA_CHECK(values.empty());
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{0});
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{0});
 
         values.emplace(3);
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{1});
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{1});
     }
 
-    RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
-    CountingMemoryResource sourceResource;
-    CountingMemoryResource targetResource;
+    counting_memory_resource source_resource;
+    counting_memory_resource target_resource;
     {
-        ruvia::BoxedArray<TrackedValue> source({.resource = &sourceResource});
-        source.emplace(4);
-        source.emplace(5);
+        ruvia::boxed_array<tracked_value> source_value({.resource_ = &source_resource});
+        source_value.emplace(4);
+        source_value.emplace(5);
 
-        ruvia::BoxedArray<TrackedValue> target({.resource = &targetResource});
+        ruvia::boxed_array<tracked_value> target({.resource_ = &target_resource});
         target.emplace(9);
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{3});
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{3});
 
-        target = std::move(source);
-        RUVIA_CHECK_EQ(target.resource(), &targetResource);
-        RUVIA_CHECK_EQ(source.resource(), &sourceResource);
+        target = std::move(source_value);
+        RUVIA_CHECK_EQ(target.resource(), &target_resource);
+        RUVIA_CHECK_EQ(source_value.resource(), &source_resource);
         RUVIA_CHECK_EQ(target.size(), std::size_t{2});
         RUVIA_CHECK_EQ(target[0].value(), 4);
         RUVIA_CHECK_EQ(target[1].value(), 5);
-        RUVIA_CHECK(source.empty());
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{2});
-        RUVIA_CHECK(targetResource.liveAllocations() > 0);
+        RUVIA_CHECK(source_value.empty());
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{2});
+        RUVIA_CHECK(target_resource.live_allocations() > 0);
 
-        source.emplace(6);
-        RUVIA_CHECK_EQ(source.front().value(), 6);
-        RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{3});
+        source_value.emplace(6);
+        RUVIA_CHECK_EQ(source_value.front().value(), 6);
+        RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{3});
     }
 
-    RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{0});
-    RUVIA_CHECK_EQ(sourceResource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(sourceResource.allocationCount(), sourceResource.deallocationCount());
-    RUVIA_CHECK_EQ(targetResource.allocationCount(), targetResource.deallocationCount());
+    RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{0});
+    RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(source_resource.allocation_count(), source_resource.deallocation_count());
+    RUVIA_CHECK_EQ(target_resource.allocation_count(), target_resource.deallocation_count());
 }
 
 RUVIA_TEST(model_boxed_array_supports_standard_range_algorithms) {
-    ruvia::BoxedArray<TrackedValue> values;
+    ruvia::boxed_array<tracked_value> values;
     RUVIA_CHECK(std::ranges::find_if(values, [](const auto&) { return true; }) == values.end());
     RUVIA_CHECK_EQ(std::ranges::distance(values), std::ptrdiff_t{0});
     values.emplace(1);

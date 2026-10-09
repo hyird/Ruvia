@@ -10,18 +10,18 @@ namespace ruvia {
 
 struct quic_server_config {
     // Preferred version for compatible version negotiation; incoming offer versions are retained per connection.
-    quic_version version{quic_version::v1};
-    quic_transport_parameters local_transport_parameters{};
-    quic_limits limits{};
-    quic_cid_partition cid_partition{};
-    std::size_t max_active_connections{4096};
-    std::size_t max_pending_connections{256};
-    std::size_t max_pending_datagram_bytes{1U << 20};
+    quic_version version_{quic_version::v1};
+    quic_transport_parameters local_transport_parameters_{};
+    quic_limits limits_{};
+    quic_cid_partition cid_partition_{};
+    std::size_t max_active_connections_{4096};
+    std::size_t max_pending_connections_{256};
+    std::size_t max_pending_datagram_bytes_{1U << 20};
 };
 
 struct quic_server_admit_result {
-    quic_operation_status status{quic_operation_status::would_block};
-    quic_connection_token connection{};
+    quic_operation_status status_{quic_operation_status::would_block};
+    quic_connection_token connection_{};
 };
 
 // Stateless destination-CID routing using the same header parser as quic_server.
@@ -64,7 +64,7 @@ public:
 private:
     struct impl;
     struct impl_deleter {
-        std::pmr::memory_resource* resource{};
+        std::pmr::memory_resource* resource_{};
         void operator()(impl* value) const noexcept;
     };
     std::unique_ptr<impl, impl_deleter> impl_{nullptr, impl_deleter{}};

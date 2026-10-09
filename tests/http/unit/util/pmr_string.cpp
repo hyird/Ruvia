@@ -1,15 +1,16 @@
+#include "util/pmr_string.h"
+
 #include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
 #include "test_harness.h"
-#include "util/PmrString.h"
 
 namespace {
 
-using ruvia::detail::clearPmrStringRetainingSmall;
-using ruvia::detail::compactConsumedPrefix;
+using ruvia::detail::clear_pmr_string_retaining_small;
+using ruvia::detail::compact_consumed_prefix;
 
 std::pmr::string make(std::string_view value) {
     std::pmr::string out(std::pmr::get_default_resource());
@@ -22,13 +23,13 @@ std::pmr::string make(std::string_view value) {
 RUVIA_TEST(compact_consumed_prefix_clears_when_fully_consumed) {
     auto buffer = make("hello");
     std::size_t offset = 5;  // offset == size
-    compactConsumedPrefix(buffer, offset, 2);
+    compact_consumed_prefix(buffer, offset, 2);
     RUVIA_CHECK(buffer.empty());
     RUVIA_CHECK_EQ(offset, std::size_t{0});
 
     auto over = make("hi");
     std::size_t past = 10;  // offset past the end
-    compactConsumedPrefix(over, past, 2);
+    compact_consumed_prefix(over, past, 2);
     RUVIA_CHECK(over.empty());
     RUVIA_CHECK_EQ(past, std::size_t{0});
 }
@@ -36,7 +37,7 @@ RUVIA_TEST(compact_consumed_prefix_clears_when_fully_consumed) {
 RUVIA_TEST(compact_consumed_prefix_is_lazy_below_threshold) {
     auto buffer = make("hello world");
     std::size_t offset = 3;  // below the compaction threshold -> no move
-    compactConsumedPrefix(buffer, offset, 100);
+    compact_consumed_prefix(buffer, offset, 100);
     RUVIA_CHECK_EQ(std::string_view(buffer), std::string_view("hello world"));
     RUVIA_CHECK_EQ(offset, std::size_t{3});
 }
@@ -44,24 +45,24 @@ RUVIA_TEST(compact_consumed_prefix_is_lazy_below_threshold) {
 RUVIA_TEST(compact_consumed_prefix_moves_tail_at_threshold) {
     auto buffer = make("PREFIXtail");  // 6-byte consumed prefix + "tail"
     std::size_t offset = 6;            // >= threshold
-    compactConsumedPrefix(buffer, offset, 4);
+    compact_consumed_prefix(buffer, offset, 4);
     RUVIA_CHECK_EQ(std::string_view(buffer), std::string_view("tail"));  // tail moved to front
     RUVIA_CHECK_EQ(offset, std::size_t{0});
     // A further compaction of the compacted buffer is stable.
     std::size_t zero = 0;
-    compactConsumedPrefix(buffer, zero, 4);
+    compact_consumed_prefix(buffer, zero, 4);
     RUVIA_CHECK_EQ(std::string_view(buffer), std::string_view("tail"));
 }
 
 RUVIA_TEST(clear_pmr_string_releases_large_capacity) {
     auto buffer = make(std::string(10000, 'x'));  // capacity well above the retained size
-    clearPmrStringRetainingSmall(buffer, 4096);
+    clear_pmr_string_retaining_small(buffer, 4096);
     RUVIA_CHECK(buffer.empty());
     RUVIA_CHECK(buffer.capacity() <= 4096);  // oversized capacity is released
 
     // A buffer within the retained size is just cleared.
     auto small = make("short");
-    clearPmrStringRetainingSmall(small, 4096);
+    clear_pmr_string_retaining_small(small, 4096);
     RUVIA_CHECK(small.empty());
 }
 
@@ -72,9 +73,9 @@ RUVIA_TEST(clear_pmr_string_retains_heap_buffer_below_threshold) {
     // it cannot demonstrate a heap buffer surviving. Use a string large enough to be
     // heap allocated but well under the threshold: its capacity must be unchanged.
     auto buffer = make(std::string(200, 'y'));  // heap (> SSO), well under 4096
-    const auto capacityBefore = buffer.capacity();
-    RUVIA_CHECK(capacityBefore >= 200);
-    clearPmrStringRetainingSmall(buffer, 4096);
+    const auto capacity_before = buffer.capacity();
+    RUVIA_CHECK(capacity_before >= 200);
+    clear_pmr_string_retaining_small(buffer, 4096);
     RUVIA_CHECK(buffer.empty());
-    RUVIA_CHECK_EQ(buffer.capacity(), capacityBefore);  // retained for reuse, not released
+    RUVIA_CHECK_EQ(buffer.capacity(), capacity_before);  // retained for reuse, not released
 }

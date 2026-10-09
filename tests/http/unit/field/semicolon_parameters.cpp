@@ -3,24 +3,24 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_expectations.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::httpClientExpectationIsValid;
-using ruvia::HttpRequestContentIndication;
-using ruvia::HttpRequestExpectations;
-using ruvia::HttpUnsupportedExpectationPolicy;
-using ruvia::detail::HttpConnectionOptions;
-using ruvia::detail::HttpFieldListParseStatus;
-using ruvia::detail::HttpFieldListRole;
-using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
-using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
-using ruvia::detail::HttpUpgradeProtocols;
+using ruvia::http_client_expectation_is_valid;
+using ruvia::http_request_content_indication;
+using ruvia::http_request_expectations;
+using ruvia::http_unsupported_expectation_policy;
+using ruvia::detail::http_connection_options;
+using ruvia::detail::http_field_list_parse_status;
+using ruvia::detail::http_field_list_role;
+using ruvia::detail::http_find_semicolon_parameter_ignore_case;
+using ruvia::detail::http_find_semicolon_parameter_quoted_ignore_case;
+using ruvia::detail::http_upgrade_protocols;
 
 }  // namespace
 
@@ -29,45 +29,45 @@ using ruvia::detail::HttpUpgradeProtocols;
 RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case) {
     // Extract a media-type parameter, matching the key case-insensitively.
     const auto boundary =
-        httpFindSemicolonParameterQuotedIgnoreCase("multipart/form-data; boundary=xyz", "boundary");
+        http_find_semicolon_parameter_quoted_ignore_case("multipart/form-data; boundary=xyz", "boundary");
     RUVIA_CHECK(boundary.has_value());
     RUVIA_CHECK_EQ(*boundary, std::string_view("xyz"));
 
     const auto charset =
-        httpFindSemicolonParameterQuotedIgnoreCase("text/html; CHARSET=utf-8", "charset");
+        http_find_semicolon_parameter_quoted_ignore_case("text/html; CHARSET=utf-8", "charset");
     RUVIA_CHECK(charset.has_value());
     RUVIA_CHECK_EQ(*charset, std::string_view("utf-8"));
 
     // A quoted value keeps an embedded ';' rather than splitting on it.
     const auto quoted =
-        httpFindSemicolonParameterQuotedIgnoreCase("form-data; name=\"a;b\"", "name");
+        http_find_semicolon_parameter_quoted_ignore_case("form-data; name=\"a;b\"", "name");
     RUVIA_CHECK(quoted.has_value());
     RUVIA_CHECK_EQ(*quoted, std::string_view("\"a;b\""));
 
     // A quoted-pair (\") does not close the quote, so a ';' after it stays
     // inside the value (e.g. a multipart filename containing an escaped quote),
     // and a real parameter following the quoted value is still parsed.
-    const std::string_view withPair = "form-data; name=\"a\\\"b;c\"; charset=utf-8";
-    const auto pairValue = httpFindSemicolonParameterQuotedIgnoreCase(withPair, "name");
-    RUVIA_CHECK(pairValue.has_value());
-    RUVIA_CHECK_EQ(*pairValue, std::string_view("\"a\\\"b;c\""));
-    const auto trailing = httpFindSemicolonParameterQuotedIgnoreCase(withPair, "charset");
+    const std::string_view with_pair = "form-data; name=\"a\\\"b;c\"; charset=utf-8";
+    const auto pair_value = http_find_semicolon_parameter_quoted_ignore_case(with_pair, "name");
+    RUVIA_CHECK(pair_value.has_value());
+    RUVIA_CHECK_EQ(*pair_value, std::string_view("\"a\\\"b;c\""));
+    const auto trailing = http_find_semicolon_parameter_quoted_ignore_case(with_pair, "charset");
     RUVIA_CHECK(trailing.has_value());
     RUVIA_CHECK_EQ(*trailing, std::string_view("utf-8"));
 
     // Absent parameter -> nullopt.
-    RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase("text/html", "charset").has_value());
+    RUVIA_CHECK(!http_find_semicolon_parameter_quoted_ignore_case("text/html", "charset").has_value());
 }
 
 RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case_uses_last_match) {
-    const auto charset = httpFindSemicolonParameterQuotedIgnoreCase(
+    const auto charset = http_find_semicolon_parameter_quoted_ignore_case(
         "text/html; charset=latin1; CHARSET=utf-8", "charset");
     RUVIA_CHECK(charset.has_value());
     RUVIA_CHECK_EQ(*charset, std::string_view("utf-8"));
 }
 
 RUVIA_TEST(find_semicolon_parameter_ignore_case_uses_last_match) {
-    const auto value = httpFindSemicolonParameterIgnoreCase("token=first; TOKEN=second", "token");
+    const auto value = http_find_semicolon_parameter_ignore_case("token=first; TOKEN=second", "token");
     RUVIA_CHECK(value.has_value());
     RUVIA_CHECK_EQ(*value, std::string_view("second"));
 }
@@ -78,41 +78,41 @@ RUVIA_TEST(find_semicolon_parameter_matches_whole_name_not_substring) {
     // NOT match -- otherwise an attacker could smuggle a boundary or charset value
     // through a differently-named parameter (e.g. a "notboundary=" a substring-based
     // find() would latch onto), steering multipart framing or content decoding.
-    RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase(
+    RUVIA_CHECK(!http_find_semicolon_parameter_quoted_ignore_case(
         "multipart/form-data; notboundary=evil", "boundary")
             .has_value());
-    RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase(
+    RUVIA_CHECK(!http_find_semicolon_parameter_quoted_ignore_case(
         "multipart/form-data; boundaryx=evil", "boundary")
             .has_value());
     RUVIA_CHECK(
-        !httpFindSemicolonParameterIgnoreCase("text/html; xcharset=evil", "charset").has_value());
+        !http_find_semicolon_parameter_ignore_case("text/html; xcharset=evil", "charset").has_value());
 
     // A genuine parameter is still found even when a decoy substring-name precedes it.
-    const auto real = httpFindSemicolonParameterQuotedIgnoreCase(
+    const auto real = http_find_semicolon_parameter_quoted_ignore_case(
         "multipart/form-data; notboundary=evil; boundary=real", "boundary");
     RUVIA_CHECK(real.has_value());
     RUVIA_CHECK_EQ(*real, std::string_view("real"));
 }
 
 RUVIA_TEST(find_semicolon_parameter_is_case_sensitive_and_whole_name) {
-    using ruvia::detail::httpFindSemicolonParameter;
+    using ruvia::detail::http_find_semicolon_parameter;
     // This plain finder backs cookie lookup: cookie names are case-SENSITIVE
     // (RFC 6265), unlike the case-insensitive media-type variants. "sid" and
     // "SID" are distinct keys.
     RUVIA_CHECK_EQ(
-        httpFindSemicolonParameter("sid=1; SID=2", "sid").value_or(""), std::string_view("1"));
+        http_find_semicolon_parameter("sid=1; SID=2", "sid").value_or(""), std::string_view("1"));
     RUVIA_CHECK_EQ(
-        httpFindSemicolonParameter("sid=1; SID=2", "SID").value_or(""), std::string_view("2"));
+        http_find_semicolon_parameter("sid=1; SID=2", "SID").value_or(""), std::string_view("2"));
     // OWS around '=' is trimmed; a value may itself contain '='.
     RUVIA_CHECK_EQ(
-        httpFindSemicolonParameter("theme = dark", "theme").value_or(""), std::string_view("dark"));
+        http_find_semicolon_parameter("theme = dark", "theme").value_or(""), std::string_view("dark"));
     RUVIA_CHECK_EQ(
-        httpFindSemicolonParameter("data=a=b", "data").value_or(""), std::string_view("a=b"));
+        http_find_semicolon_parameter("data=a=b", "data").value_or(""), std::string_view("a=b"));
     // An empty value is present (not absent); a valueless item is skipped entirely.
-    RUVIA_CHECK(httpFindSemicolonParameter("flag=", "flag") == std::optional<std::string_view>(""));
-    RUVIA_CHECK(!httpFindSemicolonParameter("flag", "flag").has_value());
+    RUVIA_CHECK(http_find_semicolon_parameter("flag=", "flag") == std::optional<std::string_view>(""));
+    RUVIA_CHECK(!http_find_semicolon_parameter("flag", "flag").has_value());
     // Whole-name match only: a decoy sharing a prefix or suffix must not match, so a
     // "xsid=" can never be read as "sid" (cookie confusion).
-    RUVIA_CHECK(!httpFindSemicolonParameter("xsid=evil", "sid").has_value());
-    RUVIA_CHECK(!httpFindSemicolonParameter("sidx=evil", "sid").has_value());
+    RUVIA_CHECK(!http_find_semicolon_parameter("xsid=evil", "sid").has_value());
+    RUVIA_CHECK(!http_find_semicolon_parameter("sidx=evil", "sid").has_value());
 }

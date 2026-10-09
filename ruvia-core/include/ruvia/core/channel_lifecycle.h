@@ -57,8 +57,8 @@ public:
         }
 
     private:
-        explicit admission_lease(basic_channel_lifecycle& owner) noexcept
-            : owner_(&owner) {}
+        explicit admission_lease(basic_channel_lifecycle& owner_value) noexcept
+            : owner_(&owner_value) {}
         basic_channel_lifecycle* owner_;
         friend class basic_channel_lifecycle;
     };
@@ -69,7 +69,7 @@ public:
     basic_channel_lifecycle(basic_channel_lifecycle&&) = delete;
     basic_channel_lifecycle& operator=(basic_channel_lifecycle&&) = delete;
     ~basic_channel_lifecycle() {
-        if (producer_.admissions != 0 || (producer_.closing && !consumer_finalized())) {
+        if (producer_.admissions_ != 0 || (producer_.closing_ && !consumer_finalized())) {
             std::terminate();
         }
     }
@@ -78,7 +78,7 @@ public:
         if (stop_requested()) {
             return std::nullopt;
         }
-        ++producer_.admissions;
+        ++producer_.admissions_;
         return admission_lease(*this);
     }
 
@@ -91,13 +91,13 @@ public:
 
     void close() noexcept {
         request_stop();
-        producer_.closing = true;
-        if (producer_.admissions == 0) {
-            publish(producer_.closed, true);
+        producer_.closing_ = true;
+        if (producer_.admissions_ == 0) {
+            publish(producer_.closed_, true);
         }
     }
     [[nodiscard]] bool producer_closed() const noexcept {
-        return observe(producer_.closed);
+        return observe(producer_.closed_);
     }
 
     void finalize() noexcept {
@@ -126,18 +126,18 @@ private:
         }
     }
     void retire_admission() noexcept {
-        if (producer_.admissions == 0) {
+        if (producer_.admissions_ == 0) {
             std::terminate();
         }
-        if (--producer_.admissions == 0 && producer_.closing) {
-            publish(producer_.closed, true);
+        if (--producer_.admissions_ == 0 && producer_.closing_) {
+            publish(producer_.closed_, true);
         }
     }
 
     struct alignas(64) producer_state final {
-        flag closed{false};
-        std::size_t admissions{0};
-        bool closing{false};
+        flag closed_{false};
+        std::size_t admissions_{0};
+        bool closing_{false};
     };
 
     alignas(64) flag stop_{false};

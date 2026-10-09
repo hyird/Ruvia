@@ -2,9 +2,9 @@
 #include <string>
 #include <utility>
 
-#include "HttpHeaderAccess.h"
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
+#include "http_header_access.h"
 
 // HTTP/1 client responses: what the head says about the body.
 
@@ -16,7 +16,7 @@ RUVIA_TEST(http_owned_header_string_inputs_survive_allocation_failure) {
         resource.fail_after(0);
         bool failed = false;
         try {
-            (void)ruvia::detail::HttpHeaderAccess::make(std::move(name), std::move(value));
+            (void)ruvia::detail::http_header_access::make(std::move(name), std::move(value));
         } catch (const std::bad_alloc&) {
             failed = true;
         }
@@ -24,9 +24,9 @@ RUVIA_TEST(http_owned_header_string_inputs_survive_allocation_failure) {
         RUVIA_CHECK_EQ(name, "X-Test");
         RUVIA_CHECK_EQ(value, "retained");
         resource.allow_allocations();
-        const auto header = ruvia::detail::HttpHeaderAccess::make(std::move(name), std::move(value));
-        RUVIA_CHECK_EQ(header.name(), "X-Test");
-        RUVIA_CHECK_EQ(header.value(), "retained");
+        const auto header_value = ruvia::detail::http_header_access::make(std::move(name), std::move(value));
+        RUVIA_CHECK_EQ(header_value.name(), "X-Test");
+        RUVIA_CHECK_EQ(header_value.value(), "retained");
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
@@ -35,8 +35,8 @@ RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
     failing_memory_resource first_resource;
     failing_memory_resource second_resource;
     {
-        auto first = ruvia::HttpHeader::copyOf("X-First", "retained", &first_resource);
-        auto second = ruvia::HttpHeader::copyOf("X-Second", "replacement", &second_resource);
+        auto first = ruvia::http_header::copy_of("X-First", "retained", &first_resource);
+        auto second = ruvia::http_header::copy_of("X-Second", "replacement", &second_resource);
         const auto* first_bytes = first.name().data();
         first_resource.fail_after(0);
         bool failed = false;
@@ -69,14 +69,14 @@ RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
 RUVIA_TEST(http_client_response_header_extraction_preserves_owned_fields_on_failure) {
     failing_memory_resource resource;
     {
-        auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
-            ruvia::http_status::kOk, ruvia::HttpProtocolVersion::kHttp11, &resource);
-        ruvia::detail::HttpClientResponseHeadAccess::headers(head).push_back(
-            ruvia::HttpHeader::copyOf("Content-Type", "text/plain", &resource));
+        auto head = ruvia::detail::http_client_response_head_access::make(
+            ruvia::http_status::ok, ruvia::http_protocol_version::http11, &resource);
+        ruvia::detail::http_client_response_head_access::headers(head).push_back(
+            ruvia::http_header::copy_of("Content-Type", "text/plain", &resource));
         resource.fail_after(0);
         bool failed = false;
         try {
-            const auto extracted = std::move(head).takeHeaders();
+            const auto extracted = std::move(head).take_headers();
             RUVIA_CHECK_EQ(extracted.size(), std::size_t{1});
         } catch (const std::bad_alloc&) {
             failed = true;
@@ -85,7 +85,7 @@ RUVIA_TEST(http_client_response_header_extraction_preserves_owned_fields_on_fail
         if (failed) {
             RUVIA_CHECK_EQ(head.headers().size(), std::size_t{1});
             RUVIA_CHECK_EQ(head.headers().front().value(), "text/plain");
-            const auto extracted = std::move(head).takeHeaders();
+            const auto extracted = std::move(head).take_headers();
             RUVIA_CHECK_EQ(extracted.size(), std::size_t{1});
             RUVIA_CHECK_EQ(extracted.front().name(), "Content-Type");
         }
@@ -94,61 +94,61 @@ RUVIA_TEST(http_client_response_header_extraction_preserves_owned_fields_on_fail
 }
 
 RUVIA_TEST(http_client_response_plan_alternatives_are_exclusive) {
-    const ruvia::HttpHeaderView upgradeHeaders[] = {
+    const ruvia::http_header_view upgrade_headers[] = {
         {"Connection", "Upgrade"},
         {"Upgrade", "websocket"},
     };
-    const auto informational = parseHead("GET", "HTTP/1.1 103 Early Hints");
-    const auto withoutContent = parseHead("GET", "HTTP/1.1 204 No Content");
-    const auto knownLength = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 1");
-    const auto chunked = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
-    const auto closeDelimited = parseHead("GET", "HTTP/1.1 200 OK");
-    const auto tunnel = parseHead("CONNECT", "HTTP/1.1 200 Connection Established");
-    const auto upgrade = parseHead("GET",
+    const auto informational = parse_head("GET", "HTTP/1.1 103 Early Hints");
+    const auto without_content = parse_head("GET", "HTTP/1.1 204 No Content");
+    const auto known_length = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 1");
+    const auto chunked = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
+    const auto close_delimited = parse_head("GET", "HTTP/1.1 200 OK");
+    const auto tunnel = parse_head("CONNECT", "HTTP/1.1 200 Connection Established");
+    const auto upgrade = parse_head("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket",
-        Http1ClosePolicy::kAllowReuse, upgradeHeaders);
+        http1_close_policy::allow_reuse, upgrade_headers);
 
-    for (const auto* plan : {&informational.plan(), &withoutContent.plan(), &knownLength.plan(),
-             &chunked.plan(), &closeDelimited.plan(), &tunnel.plan(), &upgrade.plan()}) {
-        RUVIA_CHECK_EQ(activePlanAlternativeCount(*plan), std::size_t{1});
+    for (const auto* plan : {&informational.plan(), &without_content.plan(), &known_length.plan(),
+             &chunked.plan(), &close_delimited.plan(), &tunnel.plan(), &upgrade.plan()}) {
+        RUVIA_CHECK_EQ(active_plan_alternative_count(*plan), std::size_t{1});
     }
 }
 
 RUVIA_TEST(http_client_response_plan_owns_content_length_framing) {
-    constexpr std::string_view header = "HTTP/1.1 200 OK\r\nContent-Length: 5";
-    const auto head = parseHead("GET", header);
-    const auto& knownLength = requireKnownLength(head.plan());
-    RUVIA_CHECK_EQ(knownLength.contentLength(), std::size_t{5});
-    RUVIA_CHECK(knownLength.requiresBodyConsumption());
-    RUVIA_CHECK(knownLength.persistence() == Http1ClosePolicy::kAllowReuse);
-    RUVIA_CHECK_EQ(head.consumedBytes(), header.size() + 4);
+    constexpr std::string_view header_value = "HTTP/1.1 200 OK\r\nContent-Length: 5";
+    const auto head = parse_head("GET", header_value);
+    const auto& known_length = require_known_length(head.plan());
+    RUVIA_CHECK_EQ(known_length.content_length(), std::size_t{5});
+    RUVIA_CHECK(known_length.requires_body_consumption());
+    RUVIA_CHECK(known_length.persistence() == http1_close_policy::allow_reuse);
+    RUVIA_CHECK_EQ(head.consumed_bytes(), header_value.size() + 4);
 
-    const auto empty = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0");
-    RUVIA_CHECK(!requireKnownLength(empty.plan()).requiresBodyConsumption());
+    const auto empty = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0");
+    RUVIA_CHECK(!require_known_length(empty.plan()).requires_body_consumption());
 }
 
 RUVIA_TEST(http_client_content_length_combined_and_repeated_equal_values) {
-    const auto combined = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5, 5");
-    RUVIA_CHECK_EQ(requireKnownLength(combined.plan()).contentLength(), std::size_t{5});
+    const auto combined = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5, 5");
+    RUVIA_CHECK_EQ(require_known_length(combined.plan()).content_length(), std::size_t{5});
 
     const auto repeated =
-        parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5");
-    RUVIA_CHECK_EQ(requireKnownLength(repeated.plan()).contentLength(), std::size_t{5});
+        parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5");
+    RUVIA_CHECK_EQ(require_known_length(repeated.plan()).content_length(), std::size_t{5});
 
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5, 6"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5, 6"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
 }
 
 RUVIA_TEST(http_client_response_plan_owns_chunked_framing_and_reuse) {
-    const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked");
-    const auto& chunked = requireChunked(head.plan());
-    RUVIA_CHECK(chunked.transferCodings().empty());
-    RUVIA_CHECK(chunked.persistence() == Http1ClosePolicy::kAllowReuse);
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked");
+    const auto& chunked = require_chunked(head.plan());
+    RUVIA_CHECK(chunked.transfer_codings().empty());
+    RUVIA_CHECK(chunked.persistence() == http1_close_policy::allow_reuse);
 }
 
 RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failures) {
-    constexpr std::string_view header =
+    constexpr std::string_view header_value =
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked";
     bool saw_failure = false;
     bool saw_success = false;
@@ -158,9 +158,9 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
         bool allocation_failed = false;
         {
             try {
-                const auto result = parseResult("GET", header,
-                    Http1ClosePolicy::kAllowReuse, {}, &resource);
-                RUVIA_CHECK(result.parsed() != nullptr);
+                const auto result_value = parse_result("GET", header_value,
+                    http1_close_policy::allow_reuse, {}, &resource);
+                RUVIA_CHECK(result_value.parsed() != nullptr);
             } catch (const std::bad_alloc&) {
                 allocation_failed = true;
             }
@@ -173,8 +173,8 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
         }
         saw_failure = true;
         {
-            const auto retry = parseResult("GET", header,
-                Http1ClosePolicy::kAllowReuse, {}, &resource);
+            const auto retry = parse_result("GET", header_value,
+                http1_close_policy::allow_reuse, {}, &resource);
             RUVIA_CHECK(retry.parsed() != nullptr);
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
@@ -184,230 +184,230 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
 }
 
 RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
-    const auto combined = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
-    const auto& combinedChunked = requireChunked(combined.plan());
-    RUVIA_CHECK_EQ(combinedChunked.transferCodings().values.size(), std::size_t{1});
-    RUVIA_CHECK(combinedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
-    RUVIA_CHECK(combinedChunked.persistence() == Http1ClosePolicy::kAllowReuse);
+    const auto combined = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
+    const auto& combined_chunked = require_chunked(combined.plan());
+    RUVIA_CHECK_EQ(combined_chunked.transfer_codings().values_.size(), std::size_t{1});
+    RUVIA_CHECK(combined_chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+    RUVIA_CHECK(combined_chunked.persistence() == http1_close_policy::allow_reuse);
 
     // Transfer-Encoding is list-based: split field lines retain wire order.
-    const auto split = parseHead("GET",
+    const auto split = parse_head("GET",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate\r\n"
         "Transfer-Encoding: chunked");
-    const auto& splitChunked = requireChunked(split.plan());
-    RUVIA_CHECK_EQ(splitChunked.transferCodings().values.size(), std::size_t{1});
-    RUVIA_CHECK(splitChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kDeflate);
+    const auto& split_chunked = require_chunked(split.plan());
+    RUVIA_CHECK_EQ(split_chunked.transfer_codings().values_.size(), std::size_t{1});
+    RUVIA_CHECK(split_chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::deflate);
 
-    const auto repeated = parseHead("GET",
+    const auto repeated = parse_head("GET",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n"
         "Transfer-Encoding: deflate, chunked");
-    const auto& repeatedChunked = requireChunked(repeated.plan());
-    RUVIA_CHECK_EQ(repeatedChunked.transferCodings().values.size(), std::size_t{2});
-    RUVIA_CHECK(repeatedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
-    RUVIA_CHECK(repeatedChunked.transferCodings().values[1] == ruvia::HttpTransferCoding::kDeflate);
+    const auto& repeated_chunked = require_chunked(repeated.plan());
+    RUVIA_CHECK_EQ(repeated_chunked.transfer_codings().values_.size(), std::size_t{2});
+    RUVIA_CHECK(repeated_chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+    RUVIA_CHECK(repeated_chunked.transfer_codings().values_[1] == ruvia::http_transfer_coding::deflate);
 }
 
 RUVIA_TEST(http_client_non_chunked_transfer_coding_is_close_delimited) {
-    const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
-    const auto& closeDelimited = requireCloseDelimited(head.plan());
-    RUVIA_CHECK_EQ(closeDelimited.transferCodings().values.size(), std::size_t{1});
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
+    const auto& close_delimited = require_close_delimited(head.plan());
+    RUVIA_CHECK_EQ(close_delimited.transfer_codings().values_.size(), std::size_t{1});
 }
 
 RUVIA_TEST(http_client_rejects_invalid_or_unsupported_transfer_coding) {
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , chunked"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked;foo=bar"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress, chunked"));
-    const auto malformedAfterUnknown = parseResult("GET",
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , chunked"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked;foo=bar"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress, chunked"));
+    const auto malformed_after_unknown = parse_result("GET",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress\r\n"
         "Transfer-Encoding: deflate, chunked, gzip");
-    RUVIA_CHECK(malformedAfterUnknown.failure() != nullptr);
-    if (const auto* failure = malformedAfterUnknown.failure()) {
-        RUVIA_CHECK(failure->error() == Http1ClientResponseParseError::kInvalidTransferEncoding);
+    RUVIA_CHECK(malformed_after_unknown.failure() != nullptr);
+    if (const auto* failure = malformed_after_unknown.failure()) {
+        RUVIA_CHECK(failure->error() == http1_client_response_parse_error::invalid_transfer_encoding);
     }
-    const auto stacked = parseHead(
+    const auto stacked = parse_head(
         "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked");
-    const auto& stackedChunked = requireChunked(stacked.plan());
-    RUVIA_CHECK_EQ(stackedChunked.transferCodings().values.size(), std::size_t{2});
-    RUVIA_CHECK(stackedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
-    RUVIA_CHECK(stackedChunked.transferCodings().values[1] == ruvia::HttpTransferCoding::kDeflate);
+    const auto& stacked_chunked = require_chunked(stacked.plan());
+    RUVIA_CHECK_EQ(stacked_chunked.transfer_codings().values_.size(), std::size_t{2});
+    RUVIA_CHECK(stacked_chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+    RUVIA_CHECK(stacked_chunked.transfer_codings().values_[1] == ruvia::http_transfer_coding::deflate);
 }
 
 RUVIA_TEST(http_client_content_length_and_transfer_encoding_rejected_for_body) {
-    RUVIA_CHECK(parseFails("GET",
+    RUVIA_CHECK(parse_fails("GET",
         "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n"
         "Transfer-Encoding: chunked"));
-    RUVIA_CHECK(parseFails("GET",
+    RUVIA_CHECK(parse_fails("GET",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
         "Content-Length: 5"));
 }
 
 RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
-    const auto head = parseHead("HEAD",
+    const auto head = parse_head("HEAD",
         "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n"
         "Transfer-Encoding: custom-coding");
-    const auto& withoutContent = requireWithoutContent(head.plan());
-    RUVIA_CHECK(withoutContent.persistence() == Http1ClosePolicy::kAllowReuse);
+    const auto& without_content = require_without_content(head.plan());
+    RUVIA_CHECK(without_content.persistence() == http1_close_policy::allow_reuse);
 
-    const auto notModified = parseHead("GET",
+    const auto not_modified = parse_head("GET",
         "HTTP/1.1 304 Not Modified\r\nContent-Length: 7\r\n"
         "Transfer-Encoding: custom-coding");
-    RUVIA_CHECK(notModified.plan().withoutContent() != nullptr);
+    RUVIA_CHECK(not_modified.plan().without_content() != nullptr);
 
-    const auto noContent = parseHead("GET", "HTTP/1.1 204 No Content");
-    RUVIA_CHECK(noContent.plan().withoutContent() != nullptr);
+    const auto no_content = parse_head("GET", "HTTP/1.1 204 No Content");
+    RUVIA_CHECK(no_content.plan().without_content() != nullptr);
 }
 
 RUVIA_TEST(http_client_no_body_content_length_metadata_must_parse) {
-    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid"));
-    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid"));
+    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid"));
+    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid"));
     RUVIA_CHECK(
-        parseFails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"));
+        parse_fails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"));
 
     const auto repeated =
-        parseHead("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\nContent-Length: 5");
-    RUVIA_CHECK(repeated.plan().withoutContent() != nullptr);
+        parse_head("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\nContent-Length: 5");
+    RUVIA_CHECK(repeated.plan().without_content() != nullptr);
 }
 
 RUVIA_TEST(http_client_204_rejects_framing_fields) {
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: 0"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: invalid"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: custom-coding"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: 0"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: invalid"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: custom-coding"));
 }
 
 RUVIA_TEST(http_client_205_owns_zero_content_framing) {
-    const auto zeroLength = parseHead("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 0");
-    const auto* zeroLengthBody = requireZeroContent(zeroLength.plan()).knownLength();
-    RUVIA_CHECK(zeroLengthBody != nullptr);
-    if (zeroLengthBody == nullptr) {
+    const auto zero_length = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 0");
+    const auto* zero_length_body = require_zero_content(zero_length.plan()).known_length();
+    RUVIA_CHECK(zero_length_body != nullptr);
+    if (zero_length_body == nullptr) {
         return;
     }
-    RUVIA_CHECK(!zeroLengthBody->requiresBodyConsumption());
-    RUVIA_CHECK(zeroLengthBody->persistence() == Http1ClosePolicy::kAllowReuse);
-    RUVIA_CHECK_EQ(activePlanAlternativeCount(zeroLength.plan()), std::size_t{1});
+    RUVIA_CHECK(!zero_length_body->requires_body_consumption());
+    RUVIA_CHECK(zero_length_body->persistence() == http1_close_policy::allow_reuse);
+    RUVIA_CHECK_EQ(active_plan_alternative_count(zero_length.plan()), std::size_t{1});
 
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
-    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
+    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
 
-    const auto chunked = parseHead("GET",
+    const auto chunked = parse_head("GET",
         "HTTP/1.1 205 Reset Content\r\n"
         "Transfer-Encoding: gzip, chunked");
-    const auto& chunkedZero = requireZeroContent(chunked.plan());
-    RUVIA_CHECK(chunkedZero.chunked() != nullptr);
-    RUVIA_CHECK(chunkedZero.closeDelimited() == nullptr);
-    if (chunkedZero.chunked() != nullptr) {
-        RUVIA_CHECK_EQ(chunkedZero.chunked()->transferCodings().values.size(), std::size_t{1});
+    const auto& chunked_zero = require_zero_content(chunked.plan());
+    RUVIA_CHECK(chunked_zero.chunked() != nullptr);
+    RUVIA_CHECK(chunked_zero.close_delimited() == nullptr);
+    if (chunked_zero.chunked() != nullptr) {
+        RUVIA_CHECK_EQ(chunked_zero.chunked()->transfer_codings().values_.size(), std::size_t{1});
         RUVIA_CHECK(
-            chunkedZero.chunked()->transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
+            chunked_zero.chunked()->transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
     }
-    RUVIA_CHECK_EQ(activePlanAlternativeCount(chunked.plan()), std::size_t{1});
+    RUVIA_CHECK_EQ(active_plan_alternative_count(chunked.plan()), std::size_t{1});
 
-    const auto transferCoded =
-        parseHead("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
-    const auto& transferCodedZero = requireZeroContent(transferCoded.plan());
-    RUVIA_CHECK(transferCodedZero.closeDelimited() != nullptr);
-    if (transferCodedZero.closeDelimited() != nullptr) {
-        RUVIA_CHECK_EQ(transferCodedZero.closeDelimited()->transferCodings().values.size(), std::size_t{1});
-        RUVIA_CHECK(transferCodedZero.closeDelimited()->transferCodings().values[0] ==
-                    ruvia::HttpTransferCoding::kGzip);
+    const auto transfer_coded =
+        parse_head("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
+    const auto& transfer_coded_zero = require_zero_content(transfer_coded.plan());
+    RUVIA_CHECK(transfer_coded_zero.close_delimited() != nullptr);
+    if (transfer_coded_zero.close_delimited() != nullptr) {
+        RUVIA_CHECK_EQ(transfer_coded_zero.close_delimited()->transfer_codings().values_.size(), std::size_t{1});
+        RUVIA_CHECK(transfer_coded_zero.close_delimited()->transfer_codings().values_[0] ==
+                    ruvia::http_transfer_coding::gzip);
     }
 
-    const auto unframed = parseHead("GET", "HTTP/1.1 205 Reset Content");
-    const auto& closeZero = requireZeroContent(unframed.plan());
-    RUVIA_CHECK(closeZero.closeDelimited() != nullptr);
-    RUVIA_CHECK(closeZero.chunked() == nullptr);
-    RUVIA_CHECK_EQ(activePlanAlternativeCount(unframed.plan()), std::size_t{1});
+    const auto unframed = parse_head("GET", "HTTP/1.1 205 Reset Content");
+    const auto& close_zero = require_zero_content(unframed.plan());
+    RUVIA_CHECK(close_zero.close_delimited() != nullptr);
+    RUVIA_CHECK(close_zero.chunked() == nullptr);
+    RUVIA_CHECK_EQ(active_plan_alternative_count(unframed.plan()), std::size_t{1});
 
     const auto connect =
-        parseHead("CONNECT", "HTTP/1.1 205 Reset Content\r\nContent-Length: invalid");
-    RUVIA_CHECK(connect.plan().connectTunnel() != nullptr);
-    RUVIA_CHECK(connect.plan().zeroContent() == nullptr);
+        parse_head("CONNECT", "HTTP/1.1 205 Reset Content\r\nContent-Length: invalid");
+    RUVIA_CHECK(connect.plan().connect_tunnel() != nullptr);
+    RUVIA_CHECK(connect.plan().zero_content() == nullptr);
 }
 
 RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
-    ruvia::HttpClientRequestView request;
-    request.method = "POST";
-    request.content = ruvia::HttpClientRequestContentView::bytes("payload");
-    std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
-        ruvia::HttpOriginView::https({.host = "example.test"}), request, requestHead,
-        Http1ClientRequestWirePolicy{
-            .expectation = ruvia::HttpClientRequestExpectation::kContinue});
+    ruvia::http_client_request_view request;
+    request.method_ = "POST";
+    request.content_ = ruvia::http_client_request_content_view::bytes("payload");
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value});
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
     }
 
-    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
-    const auto continueResponse = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
-    RUVIA_CHECK(continueResponse.parsed() != nullptr);
-    if (continueResponse.parsed() != nullptr) {
-        RUVIA_CHECK(continueResponse.parsed()->plan().requestContentSignal() ==
-                    HttpClientRequestContentSignal::kContinue);
+    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(continue_response.parsed() != nullptr);
+    if (continue_response.parsed() != nullptr) {
+        RUVIA_CHECK(continue_response.parsed()->plan().request_content_signal() ==
+                    http_client_request_content_signal::continue_value);
     }
 
-    const auto finalResponse = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(finalResponse.parsed() != nullptr);
-    if (finalResponse.parsed() != nullptr) {
-        RUVIA_CHECK(!finalResponse.parsed()->plan().requestContentSignal());
-        RUVIA_CHECK(requireKnownLength(finalResponse.parsed()->plan()).persistence() ==
-                    Http1ClosePolicy::kAllowReuse);
+    const auto final_response = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(final_response.parsed() != nullptr);
+    if (final_response.parsed() != nullptr) {
+        RUVIA_CHECK(!final_response.parsed()->plan().request_content_signal());
+        RUVIA_CHECK(require_known_length(final_response.parsed()->plan()).persistence() ==
+                    http1_close_policy::allow_reuse);
     }
 }
 
 RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
-    ruvia::HttpClientRequestView request;
-    request.method = "POST";
-    request.content = ruvia::HttpClientRequestContentView::bytes("payload");
-    std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
-        ruvia::HttpOriginView::https({.host = "example.test"}), request, requestHead,
-        Http1ClientRequestWirePolicy{
-            .expectation = ruvia::HttpClientRequestExpectation::kContinue});
+    ruvia::http_client_request_view request;
+    request.method_ = "POST";
+    request.content_ = ruvia::http_client_request_content_view::bytes("payload");
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value});
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
     }
 
-    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
-    const auto continueResponse = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
-    RUVIA_CHECK(continueResponse.parsed() != nullptr);
+    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(continue_response.parsed() != nullptr);
 
-    const auto closingFinal = parser.parse(
+    const auto closing_final = parser.parse(
         "HTTP/1.1 413 Content Too Large\r\n"
         "Connection: close\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(closingFinal.parsed() != nullptr);
-    if (closingFinal.parsed() != nullptr) {
-        RUVIA_CHECK(closingFinal.parsed()->plan().requestContentSignal() ==
-                    HttpClientRequestContentSignal::kExchangeComplete);
-        RUVIA_CHECK(requireKnownLength(closingFinal.parsed()->plan()).persistence() ==
-                    Http1ClosePolicy::kCloseAfterResponse);
+    RUVIA_CHECK(closing_final.parsed() != nullptr);
+    if (closing_final.parsed() != nullptr) {
+        RUVIA_CHECK(closing_final.parsed()->plan().request_content_signal() ==
+                    http_client_request_content_signal::exchange_complete);
+        RUVIA_CHECK(require_known_length(closing_final.parsed()->plan()).persistence() ==
+                    http1_close_policy::close_after_response);
     }
 }
 
 RUVIA_TEST(http_client_response_preserves_typed_protocol_version) {
-    const auto http10 = parseHead("GET", "HTTP/1.0 204 No Content");
-    const auto http11 = parseHead("GET", "HTTP/1.1 204 No Content");
+    const auto http10 = parse_head("GET", "HTTP/1.0 204 No Content");
+    const auto http11 = parse_head("GET", "HTTP/1.1 204 No Content");
 
-    RUVIA_CHECK(http10.head().protocolVersion() == HttpProtocolVersion::kHttp10);
-    RUVIA_CHECK(http11.head().protocolVersion() == HttpProtocolVersion::kHttp11);
+    RUVIA_CHECK(http10.head().protocol_version() == http_protocol_version::http10);
+    RUVIA_CHECK(http11.head().protocol_version() == http_protocol_version::http11);
 }
 
 RUVIA_TEST(http_client_unframed_body_response_is_close_delimited) {
-    const auto head = parseHead("GET", "HTTP/1.1 200 OK");
-    RUVIA_CHECK(head.plan().closeDelimited() != nullptr);
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK");
+    RUVIA_CHECK(head.plan().close_delimited() != nullptr);
 }
 
 RUVIA_TEST(http_client_http10_transfer_encoding_is_faulty_framing) {
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked"));
-    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip"));
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked"));
+    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip"));
 }
 
 RUVIA_TEST(http_client_head_method_is_case_sensitive) {
-    const auto head = parseHead("HEAD", "HTTP/1.1 200 OK");
-    const auto lowercase = parseHead("head", "HTTP/1.1 200 OK");
-    RUVIA_CHECK(head.plan().withoutContent() != nullptr);
-    RUVIA_CHECK(lowercase.plan().closeDelimited() != nullptr);
+    const auto head = parse_head("HEAD", "HTTP/1.1 200 OK");
+    const auto lowercase = parse_head("head", "HTTP/1.1 200 OK");
+    RUVIA_CHECK(head.plan().without_content() != nullptr);
+    RUVIA_CHECK(lowercase.plan().close_delimited() != nullptr);
 }

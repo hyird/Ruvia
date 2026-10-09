@@ -23,11 +23,11 @@
 #include "ruvia/http/quic_connection.h"
 #include "ruvia/http/quic_server.h"
 
-#include "http3/Http3QuicClientTlsContext.h"
-#include "http3/Http3QuicClientTransport.h"
-#include "http3/Http3QuicServerTransport.h"
-#include "http3/Http3QuicSocketAddress.h"
-#include "http3/Http3QuicTlsContext.h"
+#include "http3/http3_quic_client_tls_context.h"
+#include "http3/http3_quic_client_transport.h"
+#include "http3/http3_quic_server_transport.h"
+#include "http3/http3_quic_socket_address.h"
+#include "http3/http3_quic_tls_context.h"
 
 namespace ruvia::testing {
 
@@ -40,7 +40,7 @@ public:
     using address = detail::http3_quic_datagram_address;
     struct server_only_t final {};
 
-    http3_quic_udp_pair(const detail::HttpServerListenerDefinition::Tls& server_config,
+    http3_quic_udp_pair(const detail::http_server_listener_definition::tls_type& server_config,
         std::string_view host = "localhost",
         std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
         bool create_client = true)
@@ -48,7 +48,7 @@ public:
               std::make_unique<detail::http3_quic_tls_context>(server_config, resource),
               nullptr, host, resource, create_client) {}
 
-    http3_quic_udp_pair(const detail::HttpServerListenerDefinition::Tls& server_config,
+    http3_quic_udp_pair(const detail::http_server_listener_definition::tls_type& server_config,
         server_only_t, std::pmr::memory_resource* resource = std::pmr::get_default_resource())
         : http3_quic_udp_pair(server_config, "localhost", resource, false) {}
 
@@ -93,35 +93,35 @@ public:
     }
 
     [[nodiscard]] bool connected() const noexcept {
-        return connection_ && server_.server().connection(*connection_).info().quic_handshake_complete &&
-               (!client_ || client_->connection().info().quic_handshake_complete);
+        return connection_ && server_.server().connection(*connection_).info().quic_handshake_complete_ &&
+               (!client_ || client_->connection().info().quic_handshake_complete_);
     }
 
     void pump(bool drop_server_packets = false, std::size_t max_turns = 32) {
         constexpr std::size_t maximum_turns = 32;
         for (std::size_t turn = 0; turn < std::min(max_turns, maximum_turns); ++turn) {
-            const auto now = Clock::now();
+            const auto now = clock_type::now();
             (void)server_.server().handle_expiry(now);
             if (client_) {
                 (void)client_->handle_expiry(now);
             }
-            bool progress = client_ && send_client_packets(now);
-            progress = receive_server_packets(now) || progress;
-            progress = send_server_packets(now, drop_server_packets) || progress;
+            bool progress_value = client_ && send_client_packets(now);
+            progress_value = receive_server_packets(now) || progress_value;
+            progress_value = send_server_packets(now, drop_server_packets) || progress_value;
             if (client_) {
-                progress = receive_client_packets(now) || progress;
+                progress_value = receive_client_packets(now) || progress_value;
             }
-            if (!progress) {
+            if (!progress_value) {
                 return;
             }
         }
     }
 
-    template <typename Predicate>
-    [[nodiscard]] bool run_until(Predicate&& predicate,
+    template <typename predicate_type>
+    [[nodiscard]] bool run_until(predicate_type&& predicate,
         std::chrono::steady_clock::duration timeout = std::chrono::seconds(8)) {
-        const auto deadline = Clock::now() + timeout;
-        while (!predicate() && Clock::now() < deadline) {
+        const auto deadline_value = clock_type::now() + timeout;
+        while (!predicate() && clock_type::now() < deadline_value) {
             pump();
             if (!predicate()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -138,8 +138,8 @@ private:
           client_socket_(io_),
           owned_server_tls_(std::move(owned_server_tls)),
           server_tls_(shared_server_tls != nullptr ? shared_server_tls : owned_server_tls_.get()),
-          client_tls_(detail::ClientTransportConfigView{
-              .tlsPeerVerification = TlsPeerVerificationPolicy::kSkipVerification}),
+          client_tls_(detail::client_transport_config_view{
+              .tls_peer_verification_ = tls_peer_verification_policy::skip_verification}),
           server_(*server_tls_, server_config_for_migration(), resource),
           resource_(resource != nullptr ? resource : std::pmr::get_default_resource()) {
         server_socket_.open(udp::v4());
@@ -159,75 +159,75 @@ private:
             throw std::runtime_error("invalid loopback QUIC test socket address");
         }
         ruvia::quic_connection_config config;
-        config.local_address = detail::to_quic_address(std::get<0>(local));
-        config.peer_address = detail::to_quic_address(std::get<0>(peer));
+        config.local_address_ = detail::to_quic_address(std::get<0>(local));
+        config.peer_address_ = detail::to_quic_address(std::get<0>(peer));
         client_ = std::make_unique<detail::http3_quic_client_transport>(
-            client_tls_, config, host, Clock::now(), resource_);
+            client_tls_, config, host, clock_type::now(), resource_);
     }
 
-    using Clock = std::chrono::steady_clock;
+    using clock_type = std::chrono::steady_clock;
 
     [[nodiscard]] static ruvia::quic_server_config server_config_for_migration() {
         ruvia::quic_server_config config;
-        config.local_transport_parameters.disable_active_migration = false;
+        config.local_transport_parameters_.disable_active_migration_ = false;
         return config;
     }
 
-    [[nodiscard]] bool send_client_packets(Clock::time_point now) {
-        bool progress = false;
+    [[nodiscard]] bool send_client_packets(clock_type::time_point now) {
+        bool progress_value = false;
         for (std::size_t count = 0; count < 32; ++count) {
             const auto packet = client_->write_packet(packet_buffer_, now);
-            if (packet.size == 0) {
+            if (packet.size_ == 0) {
                 break;
             }
             asio::error_code error;
-            const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer));
+            const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer_));
             if ((peer.index() != 0)) {
                 throw std::runtime_error("invalid QUIC client output address");
             }
             const auto sent = client_socket_.send_to(
-                asio::buffer(packet_buffer_.data(), packet.size), std::get<0>(peer), 0, error);
-            if (error || sent != packet.size) {
+                asio::buffer(packet_buffer_.data(), packet.size_), std::get<0>(peer), 0, error);
+            if (error || sent != packet.size_) {
                 throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                     "send loopback QUIC client packet");
             }
-            progress = true;
+            progress_value = true;
         }
-        return progress;
+        return progress_value;
     }
 
-    [[nodiscard]] bool send_server_packets(Clock::time_point now, bool drop_packets) {
+    [[nodiscard]] bool send_server_packets(clock_type::time_point now, bool drop_packets) {
         if (!connection_) {
             return false;
         }
-        bool progress = false;
+        bool progress_value = false;
         for (std::size_t count = 0; count < 32; ++count) {
             const auto packet = server().write_packet(packet_buffer_, now);
-            if (packet.size == 0) {
+            if (packet.size_ == 0) {
                 break;
             }
             if (drop_packets) {
-                progress = true;
+                progress_value = true;
                 continue;
             }
             asio::error_code error;
-            const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer));
+            const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer_));
             if ((peer.index() != 0)) {
                 throw std::runtime_error("invalid QUIC server output address");
             }
             const auto sent = server_socket_.send_to(
-                asio::buffer(packet_buffer_.data(), packet.size), std::get<0>(peer), 0, error);
-            if (error || sent != packet.size) {
+                asio::buffer(packet_buffer_.data(), packet.size_), std::get<0>(peer), 0, error);
+            if (error || sent != packet.size_) {
                 throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                     "send loopback QUIC server packet");
             }
-            progress = true;
+            progress_value = true;
         }
-        return progress;
+        return progress_value;
     }
 
-    [[nodiscard]] bool receive_server_packets(Clock::time_point now) {
-        bool progress = false;
+    [[nodiscard]] bool receive_server_packets(clock_type::time_point now) {
+        bool progress_value = false;
         for (std::size_t count = 0; count < 32; ++count) {
             udp::endpoint peer;
             asio::error_code error;
@@ -251,26 +251,26 @@ private:
             }
             const auto routed = server_.route_datagram(
                 std::span<const std::byte>(packet_buffer_).first(size), std::get<0>(local), std::get<0>(remote));
-            if (routed.kind == ruvia::quic_server_route_kind::initial_offer) {
+            if (routed.kind_ == ruvia::quic_server_route_kind::initial_offer) {
                 if (!connection_) {
-                    const auto admitted = server_.admit_initial(routed.offer, now);
-                    if (admitted.status == ruvia::quic_operation_status::accepted) {
-                        connection_ = admitted.connection;
+                    const auto admitted = server_.admit_initial(routed.offer_, now);
+                    if (admitted.status_ == ruvia::quic_operation_status::accepted) {
+                        connection_ = admitted.connection_;
                     }
                 }
-            } else if (routed.kind == ruvia::quic_server_route_kind::existing_connection) {
+            } else if (routed.kind_ == ruvia::quic_server_route_kind::existing_connection) {
                 const ruvia::quic_datagram_view datagram{
                     std::span<const std::byte>(packet_buffer_).first(size),
                     detail::to_quic_address(std::get<0>(local)), detail::to_quic_address(std::get<0>(remote))};
-                (void)server_.server().receive(routed.connection, datagram, now);
+                (void)server_.server().receive(routed.connection_, datagram, now);
             }
-            progress = true;
+            progress_value = true;
         }
-        return progress;
+        return progress_value;
     }
 
-    [[nodiscard]] bool receive_client_packets(Clock::time_point now) {
-        bool progress = false;
+    [[nodiscard]] bool receive_client_packets(clock_type::time_point now) {
+        bool progress_value = false;
         for (std::size_t count = 0; count < 32; ++count) {
             udp::endpoint peer;
             asio::error_code error;
@@ -290,9 +290,9 @@ private:
                 std::span<const std::byte>(packet_buffer_).first(size),
                 detail::to_quic_address(std::get<0>(local)), detail::to_quic_address(std::get<0>(remote))};
             (void)client_->receive(datagram, now);
-            progress = true;
+            progress_value = true;
         }
-        return progress;
+        return progress_value;
     }
 
     asio::io_context io_;

@@ -4,119 +4,119 @@
 #include <cstdlib>
 #include <string_view>
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 
-RUVIA_MODEL(User, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
+RUVIA_MODEL(user, RUVIA_OPTIONAL_FIELD(name, ruvia::string),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::uint32), RUVIA_OPTIONAL_FIELD(email, ruvia::string));
 
-RUVIA_MODEL(StatusResponse, RUVIA_OPTIONAL_FIELD(status, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
+RUVIA_MODEL(status_response, RUVIA_OPTIONAL_FIELD(status, ruvia::string),
+    RUVIA_OPTIONAL_FIELD(framework, ruvia::string));
 
-RUVIA_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String));
+RUVIA_MODEL(user_by_id_response, RUVIA_OPTIONAL_FIELD_NAME("userId", user_id, ruvia::string),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::string));
 
-RUVIA_MODEL(MiddlewareResponse, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
+RUVIA_MODEL(middleware_response, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::uint32));
 
-template <int N>
-class Passthrough final : public ruvia::Middleware {
+template <int n>
+class passthrough final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
-        co_await next();
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+        co_await next_value();
     }
 };
 
-class BenchController final : public ruvia::Controller<BenchController> {
+class bench_controller final : public ruvia::controller<bench_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("")
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", hello);
     RUVIA_GET("/api/status", status);
-    RUVIA_POST("/api/echo", echo, ruvia::JsonBody<User>);
+    RUVIA_POST("/api/echo", echo, ruvia::json_body<::user>);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/middleware/0", middleware0);
-    RUVIA_GET("/middleware/3", middleware3, Passthrough<0>, Passthrough<1>, Passthrough<2>);
-    RUVIA_GET("/middleware/10", middleware10, Passthrough<0>, Passthrough<1>, Passthrough<2>,
-        Passthrough<3>, Passthrough<4>, Passthrough<5>, Passthrough<6>, Passthrough<7>,
-        Passthrough<8>, Passthrough<9>);
+    RUVIA_GET("/middleware/3", middleware3, passthrough<0>, passthrough<1>, passthrough<2>);
+    RUVIA_GET("/middleware/10", middleware10, passthrough<0>, passthrough<1>, passthrough<2>,
+        passthrough<3>, passthrough<4>, passthrough<5>, passthrough<6>, passthrough<7>,
+        passthrough<8>, passthrough<9>);
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> hello(ruvia::context& c) {
         co_return c.text("Hello, World!");
     }
 
-    ruvia::Task<ruvia::HttpResponse> status(ruvia::Context& c) {
-        StatusResponse response({.resource = c.arena()});
+    ruvia::task<ruvia::http_response> status(ruvia::context& c) {
+        status_response response({.resource_ = c.arena()});
         response.set<"status">("running").set<"framework">("ruvia");
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto& user = c.req().validated<User>();
-        co_return c.json(user);
+    ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
+        const auto& user_value = c.req().validated<::user>();
+        co_return c.json(user_value);
     }
 
-    ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> user(ruvia::context& c) {
         const auto id = c.req().param("id").value_or("");
-        UserByIdResponse response({.resource = c.arena()});
+        user_by_id_response response({.resource_ = c.arena()});
         std::pmr::string name(c.allocator<char>());
         name.append("User ");
         name.append(id);
-        response.set<"userId">(id).set<"name">(name);
+        response.set<"user_id">(id).set<"name">(name);
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware0(ruvia::Context& c) {
-        co_return middlewareResponse(c, 0);
+    ruvia::task<ruvia::http_response> middleware0(ruvia::context& c) {
+        co_return middleware_response(c, 0);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware3(ruvia::Context& c) {
-        co_return middlewareResponse(c, 3);
+    ruvia::task<ruvia::http_response> middleware3(ruvia::context& c) {
+        co_return middleware_response(c, 3);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware10(ruvia::Context& c) {
-        co_return middlewareResponse(c, 10);
+    ruvia::task<ruvia::http_response> middleware10(ruvia::context& c) {
+        co_return middleware_response(c, 10);
     }
 
-    static ruvia::HttpResponse middlewareResponse(ruvia::Context& c, std::uint32_t count) {
-        MiddlewareResponse response({.resource = c.arena()});
-        response.set<"middleware_count">(ruvia::UInt32{count});
+    static ruvia::http_response middleware_response(ruvia::context& c, std::uint32_t count) {
+        ::middleware_response response({.resource_ = c.arena()});
+        response.set<"middleware_count">(ruvia::uint32{count});
         return c.json(response);
     }
 };
 
 int main() {
-    const char* portEnv = std::getenv("PORT");
-    const auto port = static_cast<std::uint16_t>(portEnv ? std::atoi(portEnv) : 8080);
+    const char* port_env = std::getenv("PORT");
+    const auto port = static_cast<std::uint16_t>(port_env ? std::atoi(port_env) : 8080);
 
-    const char* tlsCert = std::getenv("TLS_CERT");
-    const char* tlsKey = std::getenv("TLS_KEY");
-    const auto listener = [&] {
-        if (tlsCert == nullptr || tlsKey == nullptr) {
-            return ruvia::ListenConfig{
-                .address = "0.0.0.0",
-                .http = port,
+    const char* tls_cert = std::getenv("TLS_CERT");
+    const char* tls_key = std::getenv("TLS_KEY");
+    const auto listener_value = [&] {
+        if (tls_cert == nullptr || tls_key == nullptr) {
+            return ruvia::listen_config{
+                .address_ = "0.0.0.0",
+                .http_ = port,
             };
         }
-        return ruvia::ListenConfig{
-            .address = "0.0.0.0",
-            .https = port,
-            .tls =
+        return ruvia::listen_config{
+            .address_ = "0.0.0.0",
+            .https_ = port,
+            .tls_ =
                 {
-                    .certificateChainFile = tlsCert,
-                    .privateKeyFile = tlsKey,
+                    .certificate_chain_file_ = tls_cert,
+                    .private_key_file_ = tls_key,
                 },
         };
     }();
 
     auto& app = ruvia::app();
-    app.listen(listener).server({
-        .worker_count = 4,
-        .process_signal_handlers = ruvia::process_signal_handler_policy::install,
-        .max_connections_per_worker = 20000,
-        .max_requests_per_connection = 1u << 30,
+    app.listen(listener_value).server({
+        .worker_count_ = 4,
+        .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+        .max_connections_per_worker_ = 20000,
+        .max_requests_per_connection_ = 1u << 30,
     });
 
     // Response compression is off by default. Enable it explicitly when the

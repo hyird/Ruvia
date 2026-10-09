@@ -5,13 +5,13 @@
 
 namespace ruvia {
 
-quic_aead_key quic_aead_key::adopt(void* state, quic_aead_key_operations operations) {
-    if (!state || !operations.destroy || !operations.seal || !operations.open) {
+quic_aead_key quic_aead_key::adopt(void* state_value, quic_aead_key_operations operations_value) {
+    if (!state_value || !operations_value.destroy_ || !operations_value.seal_ || !operations_value.open_) {
         throw std::invalid_argument("invalid QUIC AEAD primitive ownership");
     }
     quic_aead_key key;
-    key.state_ = state;
-    key.operations_ = operations;
+    key.state_ = state_value;
+    key.operations_ = operations_value;
     return key;
 }
 
@@ -43,7 +43,7 @@ void quic_aead_key::seal(std::span<const std::byte, 12> nonce,
     if (!state_) {
         throw std::logic_error("cannot use an empty QUIC AEAD key");
     }
-    operations_.seal(state_, nonce, associated_data, plaintext, ciphertext_and_tag);
+    operations_.seal_(state_, nonce, associated_data, plaintext, ciphertext_and_tag);
 }
 
 quic_aead_key_operations::open_result quic_aead_key::open(
@@ -52,30 +52,30 @@ quic_aead_key_operations::open_result quic_aead_key::open(
     if (!state_) {
         throw std::logic_error("cannot use an empty QUIC AEAD key");
     }
-    const auto result = operations_.open(state_, nonce, associated_data, ciphertext_and_tag, plaintext);
-    if (result.value == quic_aead_key_operations::open_result::status::authenticated &&
-        result.plaintext_size > plaintext.size()) {
+    const auto result_value = operations_.open_(state_, nonce, associated_data, ciphertext_and_tag, plaintext);
+    if (result_value.value_ == quic_aead_key_operations::open_result::status::authenticated &&
+        result_value.plaintext_size_ > plaintext.size()) {
         throw std::runtime_error("QUIC AEAD provider returned an invalid plaintext size");
     }
-    return result;
+    return result_value;
 }
 
 void quic_aead_key::reset() noexcept {
     if (state_) {
-        operations_.destroy(state_);
+        operations_.destroy_(state_);
         state_ = nullptr;
     }
     operations_ = {};
 }
 
 quic_header_protection_key quic_header_protection_key::adopt(
-    void* state, quic_header_protection_key_operations operations) {
-    if (!state || !operations.destroy || !operations.mask) {
+    void* state_value, quic_header_protection_key_operations operations_value) {
+    if (!state_value || !operations_value.destroy_ || !operations_value.mask_) {
         throw std::invalid_argument("invalid QUIC header protection primitive ownership");
     }
     quic_header_protection_key key;
-    key.state_ = state;
-    key.operations_ = operations;
+    key.state_ = state_value;
+    key.operations_ = operations_value;
     return key;
 }
 
@@ -105,20 +105,20 @@ void quic_header_protection_key::mask(std::span<const std::byte, 16> sample,
     if (!state_) {
         throw std::logic_error("cannot use an empty QUIC header protection key");
     }
-    operations_.mask(state_, sample, output);
+    operations_.mask_(state_, sample, output);
 }
 
 void quic_header_protection_key::reset() noexcept {
     if (state_) {
-        operations_.destroy(state_);
+        operations_.destroy_(state_);
         state_ = nullptr;
     }
     operations_ = {};
 }
 
 void quic_crypto_provider_view::validate() const {
-    if (!random_bytes || !hkdf_extract || !hkdf_expand || !create_aead_key ||
-        !create_header_protection_key || !secure_erase) {
+    if (!random_bytes_ || !hkdf_extract_ || !hkdf_expand_ || !create_aead_key_ ||
+        !create_header_protection_key_ || !secure_erase_) {
         throw std::invalid_argument("QUIC crypto provider view is incomplete");
     }
 }

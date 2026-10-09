@@ -32,8 +32,8 @@ private:
     friend class quic_tls_handshake;
     friend class detail::quic_connection_state;
     using consume_fn = void (*)(void* context, std::size_t size, bool release_lease) noexcept;
-    quic_crypto_record_lease(void* context, consume_fn consume, quic_encryption_level level,
-        std::span<const std::byte> bytes) noexcept;
+    quic_crypto_record_lease(void* context_value, consume_fn consume, quic_encryption_level level,
+        std::span<const std::byte> bytes_value) noexcept;
 
     void* context_{};
     consume_fn consume_{};
@@ -47,8 +47,8 @@ enum class quic_tls_progress : std::uint8_t { progress,
     failed };
 
 struct quic_tls_drive_result {
-    quic_tls_progress progress{quic_tls_progress::need_input};
-    quic_tls_alert alert{quic_tls_alert::internal_error};
+    quic_tls_progress progress_{quic_tls_progress::need_input};
+    quic_tls_alert alert_{quic_tls_alert::internal_error};
 };
 
 // Stable, connection-owned TLS capability. The connection and handshake are
@@ -89,18 +89,18 @@ private:
     friend class quic_connection;
     friend class detail::quic_connection_state;
     friend struct quic_tls_driver_view;
-    explicit quic_tls_handshake(detail::quic_connection_state* state) noexcept;
+    explicit quic_tls_handshake(detail::quic_connection_state* state_value) noexcept;
     detail::quic_connection_state* state_{};
 };
 
 // Borrowed per-connection TLS callback table. A server must receive a distinct view
 // for every admitted connection; context remains alive until that connection retires.
 struct quic_tls_driver_view {
-    void* context{};
-    quic_tls_drive_result (*drive)(void* context, quic_tls_handshake& handshake) noexcept {};
+    void* context_{};
+    quic_tls_drive_result (*drive_)(void* context, quic_tls_handshake& handshake) noexcept {};
     // Required synchronous, non-reentrant teardown. Release driver-owned CRYPTO leases and
     // borrowed handshake/transport-parameter references before returning; never wait or drive Core.
-    void (*retire)(void* context) noexcept {};
+    void (*retire_)(void* context) noexcept {};
 
     void validate() const;
 };

@@ -21,36 +21,36 @@
 #include <asio/post.hpp>
 #include <asio/read.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/App.h"
-#include "ruvia/web/redis/RedisHandle.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "memory_resource_fixture.h"
-#include "redis/RedisHandleHelpers.h"
-#include "redis/RedisRegistry.h"
-#include "redis/RedisTypesAccess.h"
+#include "redis/redis_handle_helpers.h"
+#include "redis/redis_registry.h"
+#include "redis/redis_types_access.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
 
-using ruvia::test::RejectingMemoryResource;
-using ruvia::test::TrackingResource;
+using ruvia::test::rejecting_memory_resource;
+using ruvia::test::tracking_resource;
 
-using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
+using redis_definitions_type = std::span<const ruvia::detail::redis_definition_type>;
 
-class RedisTestWorker final {
+class redis_test_worker final {
 public:
-    explicit RedisTestWorker(asio::io_context& ioContext)
-        : ioContext_(ioContext),
-          attachment_(ruvia::attachEventLoop(ioContext)),
+    explicit redis_test_worker(asio::io_context& io_context)
+        : io_context_(io_context),
+          attachment_(ruvia::attach_event_loop(io_context)),
           handle_(attachment_.loop().handle()) {}
 
-    RedisTestWorker(const RedisTestWorker&) = delete;
-    RedisTestWorker& operator=(const RedisTestWorker&) = delete;
+    redis_test_worker(const redis_test_worker&) = delete;
+    redis_test_worker& operator=(const redis_test_worker&) = delete;
 
-    [[nodiscard]] const ruvia::WorkerHandle& handle() const noexcept {
+    [[nodiscard]] const ruvia::worker_handle& handle() const noexcept {
         return handle_;
     }
 
@@ -59,35 +59,35 @@ public:
     }
 
     void stop() noexcept {
-        ioContext_.stop();
+        io_context_.stop();
         attachment_.stop();
     }
 
 private:
-    asio::io_context& ioContext_;
-    ruvia::EventLoopAttachment attachment_;
-    ruvia::WorkerHandle handle_;
+    asio::io_context& io_context_;
+    ruvia::event_loop_attachment attachment_;
+    ruvia::worker_handle handle_;
 };
 
-[[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias,
-    const ruvia::RedisConfig& config = {},
+[[nodiscard]] ruvia::detail::redis_definition_type redis_definition(std::string_view alias,
+    const ruvia::redis_config& config = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
     return {
         std::pmr::string(alias, resource),
-        ruvia::detail::RedisConfigStorage(config, resource),
+        ruvia::detail::redis_config_storage(config, resource),
     };
 }
 
-class StalledRedisCommandServer final {
+class stalled_redis_command_server final {
 public:
-    StalledRedisCommandServer()
-        : ioContext_(ruvia::test::newTestIoContext()),
-          acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+    stalled_redis_command_server()
+        : io_context_(ruvia::test::new_test_io_context()),
+          acceptor_(io_context_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           port_(acceptor_.local_endpoint().port()),
-          commandReadFuture_(commandRead_.get_future()),
+          command_read_future_(command_read_.get_future()),
           thread_([this] { run(); }) {}
 
-    ~StalledRedisCommandServer() {
+    ~stalled_redis_command_server() {
         std::error_code ignored;
         acceptor_.close(ignored);
         if (thread_.joinable()) {
@@ -95,21 +95,21 @@ public:
         }
     }
 
-    StalledRedisCommandServer(const StalledRedisCommandServer&) = delete;
-    StalledRedisCommandServer& operator=(const StalledRedisCommandServer&) = delete;
+    stalled_redis_command_server(const stalled_redis_command_server&) = delete;
+    stalled_redis_command_server& operator=(const stalled_redis_command_server&) = delete;
 
     [[nodiscard]] std::uint16_t port() const {
         return port_;
     }
 
-    void waitUntilCommandRead() {
-        commandReadFuture_.get();
+    void wait_until_command_read() {
+        command_read_future_.get();
     }
 
 private:
     void run() noexcept {
         try {
-            asio::ip::tcp::socket socket(ioContext_);
+            asio::ip::tcp::socket socket(io_context_);
             acceptor_.accept(socket);
 
             constexpr std::string_view ping = "*1\r\n$4\r\nPING\r\n";
@@ -119,28 +119,28 @@ private:
             if (error) {
                 throw std::system_error(error);
             }
-            commandRead_.set_value();
+            command_read_.set_value();
 
-            std::array<char, 1> ignoredByte{};
-            (void)socket.read_some(asio::buffer(ignoredByte), error);
+            std::array<char, 1> ignored_byte{};
+            (void)socket.read_some(asio::buffer(ignored_byte), error);
         } catch (...) {
             try {
-                commandRead_.set_exception(std::current_exception());
+                command_read_.set_exception(std::current_exception());
             } catch (...) {
             }
         }
     }
 
-    asio::io_context& ioContext_;
+    asio::io_context& io_context_;
     asio::ip::tcp::acceptor acceptor_;
     std::uint16_t port_;
-    std::promise<void> commandRead_;
-    std::future<void> commandReadFuture_;
+    std::promise<void> command_read_;
+    std::future<void> command_read_future_;
     std::thread thread_;
 };
 
-template <typename Fn>
-bool throwsInvalidArgument(Fn&& fn) {
+template <typename fn_type>
+bool throws_invalid_argument(fn_type&& fn) {
     try {
         fn();
         return false;
@@ -153,241 +153,241 @@ bool throwsInvalidArgument(Fn&& fn) {
 
 RUVIA_TEST(
     redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    ruvia::RedisConfig config;
-    config.commandTimeout = std::chrono::milliseconds(1);
-    const std::array definitions{redisDefinition("default", config)};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::operation_scope generalScope;
-    auto redis = registry.get(generalScope);
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    ruvia::redis_config config;
+    config.command_timeout_ = std::chrono::milliseconds(1);
+    const std::array definitions{redis_definition("default", config)};
+    ruvia::detail::redis_registry registry(
+        io_context, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::operation_scope general_scope;
+    auto redis = registry.get(general_scope);
     const std::array<std::string_view, 1> keys{"queue"};
-    const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
+    const std::array streams{ruvia::redis_stream_read_view{.stream_ = "events", .id_ = ">"}};
 
-    bool finitePopAccepted = true;
-    bool finiteStreamAccepted = true;
-    bool finiteRawAccepted = true;
-    bool statefulRejected = false;
-    bool clientStateRejected = false;
-    bool helloRejected = false;
-    bool askingRejected = false;
+    bool finite_pop_accepted = true;
+    bool finite_stream_accepted = true;
+    bool finite_raw_accepted = true;
+    bool stateful_rejected = false;
+    bool client_state_rejected = false;
+    bool hello_rejected = false;
+    bool asking_rejected = false;
     try {
-        (void)redis.blpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
+        (void)redis.blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
     } catch (...) {
-        finitePopAccepted = false;
+        finite_pop_accepted = false;
     }
     try {
-        (void)redis.xreadGroup("workers", "consumer", streams,
-            {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
+        (void)redis.xread_group("workers", "consumer", streams,
+            {.block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(10))});
     } catch (...) {
-        finiteStreamAccepted = false;
+        finite_stream_accepted = false;
     }
     try {
-        (void)redis.withOptions({.timeout = std::chrono::seconds(1)})
+        (void)redis.with_options({.timeout_ = std::chrono::seconds(1)})
             .command("BLPOP", "queue", "1");
     } catch (...) {
-        finiteRawAccepted = false;
+        finite_raw_accepted = false;
     }
     try {
         (void)redis.command("SELECT", "1");
     } catch (const std::invalid_argument&) {
-        statefulRejected = true;
+        stateful_rejected = true;
     }
     try {
         (void)redis.command("CLIENT", "REPLY", "OFF");
     } catch (const std::invalid_argument&) {
-        clientStateRejected = true;
+        client_state_rejected = true;
     }
     try {
         (void)redis.command("HELLO", "3");
     } catch (const std::invalid_argument&) {
-        helloRejected = true;
+        hello_rejected = true;
     }
     try {
         (void)redis.command("ASKING");
     } catch (const std::invalid_argument&) {
-        askingRejected = true;
+        asking_rejected = true;
     }
 
-    bool infiniteStreamRejected = false;
-    bool infinitePopRejected = false;
-    bool unboundedRawRejected = false;
+    bool infinite_stream_rejected = false;
+    bool infinite_pop_rejected = false;
+    bool unbounded_raw_rejected = false;
     try {
-        (void)redis.xreadGroup(
-            "workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
+        (void)redis.xread_group(
+            "workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::indefinitely()});
     } catch (const std::invalid_argument&) {
-        infiniteStreamRejected = true;
+        infinite_stream_rejected = true;
     }
     try {
-        (void)redis.blpop(keys, ruvia::RedisBlockWait::indefinitely());
+        (void)redis.blpop(keys, ruvia::redis_block_wait::indefinitely());
     } catch (const std::invalid_argument&) {
-        infinitePopRejected = true;
+        infinite_pop_rejected = true;
     }
     try {
         (void)redis.command("BLPOP", "queue", "0");
     } catch (const std::invalid_argument&) {
-        unboundedRawRejected = true;
+        unbounded_raw_rejected = true;
     }
 
-    RUVIA_CHECK(finitePopAccepted);
-    RUVIA_CHECK(finiteStreamAccepted);
-    RUVIA_CHECK(finiteRawAccepted);
-    RUVIA_CHECK(statefulRejected);
-    RUVIA_CHECK(clientStateRejected);
-    RUVIA_CHECK(helloRejected);
-    RUVIA_CHECK(askingRejected);
-    RUVIA_CHECK(infiniteStreamRejected);
-    RUVIA_CHECK(infinitePopRejected);
-    RUVIA_CHECK(unboundedRawRejected);
+    RUVIA_CHECK(finite_pop_accepted);
+    RUVIA_CHECK(finite_stream_accepted);
+    RUVIA_CHECK(finite_raw_accepted);
+    RUVIA_CHECK(stateful_rejected);
+    RUVIA_CHECK(client_state_rejected);
+    RUVIA_CHECK(hello_rejected);
+    RUVIA_CHECK(asking_rejected);
+    RUVIA_CHECK(infinite_stream_rejected);
+    RUVIA_CHECK(infinite_pop_rejected);
+    RUVIA_CHECK(unbounded_raw_rejected);
 }
 
 RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    const std::array<ruvia::detail::RedisDefinition, 2> definitions{{
-        redisDefinition("cache"),
-        redisDefinition("default"),
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    const std::array<ruvia::detail::redis_definition_type, 2> definitions{{
+        redis_definition("cache"),
+        redis_definition("default"),
     }};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::operation_scope operationScope;
+    ruvia::detail::redis_registry registry(
+        io_context, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::operation_scope operation_scope;
 
-    bool defaultResolved = true;
-    bool aliasResolved = true;
+    bool default_resolved = true;
+    bool alias_resolved = true;
     try {
-        (void)registry.get(operationScope);
+        (void)registry.get(operation_scope);
     } catch (...) {
-        defaultResolved = false;
+        default_resolved = false;
     }
     try {
-        (void)registry.get("cache", operationScope);
+        (void)registry.get("cache", operation_scope);
     } catch (...) {
-        aliasResolved = false;
+        alias_resolved = false;
     }
-    RUVIA_CHECK(defaultResolved);
-    RUVIA_CHECK(aliasResolved);
+    RUVIA_CHECK(default_resolved);
+    RUVIA_CHECK(alias_resolved);
 }
 
 RUVIA_TEST(redis_registry_rejects_an_invalid_worker) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    const RedisDefinitions definitions;
-    const ruvia::WorkerHandle worker;
+    auto& io_context = ruvia::test::new_test_io_context();
+    const redis_definitions_type definitions;
+    const ruvia::worker_handle worker;
 
-    RUVIA_CHECK(throwsInvalidArgument([&] {
-        ruvia::detail::RedisRegistry registry(
-            ioContext, std::pmr::get_default_resource(), definitions, worker);
+    RUVIA_CHECK(throws_invalid_argument([&] {
+        ruvia::detail::redis_registry registry(
+            io_context, std::pmr::get_default_resource(), definitions, worker);
     }));
 }
 
 RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
-    TrackingResource sourceResource;
-    std::pmr::unsynchronized_pool_resource targetResource;
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    std::optional<ruvia::detail::RedisDefinition> definition;
-    ruvia::RedisConfig config{
-        .host = std::string(80, 'h'),
-        .port = 6379,
-        .username = std::string(80, 'u'),
-        .password = std::string(80, 'p'),
-        .database = 0,
-        .poolSizePerWorker = 1,
+    tracking_resource source_resource;
+    std::pmr::unsynchronized_pool_resource target_resource;
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    std::optional<ruvia::detail::redis_definition_type> definition;
+    ruvia::redis_config config{
+        .host_ = std::string(80, 'h'),
+        .port_ = 6379,
+        .username_ = std::string(80, 'u'),
+        .password_ = std::string(80, 'p'),
+        .database_ = 0,
+        .pool_size_per_worker_ = 1,
     };
-    definition.emplace(redisDefinition("default", config, &sourceResource));
+    definition.emplace(redis_definition("default", config, &source_resource));
 
-    std::optional<ruvia::detail::RedisRegistry> registry;
-    registry.emplace(ioContext, &targetResource,
-        std::span<const ruvia::detail::RedisDefinition>(&*definition, 1), worker.handle());
+    std::optional<ruvia::detail::redis_registry> registry;
+    registry.emplace(io_context, &target_resource,
+        std::span<const ruvia::detail::redis_definition_type>(&*definition, 1), worker.handle());
     definition.reset();
-    sourceResource.release();
+    source_resource.release();
     registry.reset();
 
-    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
+    RUVIA_CHECK(!source_resource.deallocated_after_release());
 }
 
 RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::operation_scope operationScope;
-    auto handle = registry.get(operationScope);
-    auto copiedHandle = handle;
-    auto configuredHandle = handle.withOptions({.timeout = std::chrono::seconds(3)});
-    auto copiedConfiguredHandle = configuredHandle;
-    auto derivedConfiguredHandle = copiedConfiguredHandle.withOptions(
-        {.timeout = std::chrono::seconds(1)});
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    const std::array definitions{redis_definition("default")};
+    ruvia::detail::redis_registry registry(
+        io_context, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::operation_scope operation_scope;
+    auto handle = registry.get(operation_scope);
+    auto copied_handle = handle;
+    auto configured_handle = handle.with_options({.timeout_ = std::chrono::seconds(3)});
+    auto copied_configured_handle = configured_handle;
+    auto derived_configured_handle = copied_configured_handle.with_options(
+        {.timeout_ = std::chrono::seconds(1)});
     auto pipeline = handle.pipeline();
     pipeline.get("key");
-    auto movedPipeline = std::move(pipeline);
+    auto moved_pipeline = std::move(pipeline);
     auto transaction = handle.transaction();
     transaction.get("key");
-    auto movedTransaction = std::move(transaction);
+    auto moved_transaction = std::move(transaction);
 
-    operationScope.close();
-    bool handleRejected = false;
-    bool copyRejected = false;
-    bool builderRejected = false;
-    bool transactionRejected = false;
-    const auto optionFailureOrder = [](const auto& capability) {
-        bool validationWrongOrder = false;
-        bool lifetimeRejected = false;
+    operation_scope.close();
+    bool handle_rejected = false;
+    bool copy_rejected = false;
+    bool builder_rejected = false;
+    bool transaction_rejected = false;
+    const auto option_failure_order = [](const auto& capability) {
+        bool validation_wrong_order = false;
+        bool lifetime_rejected = false;
         try {
-            (void)capability.withOptions({.timeout = std::chrono::milliseconds::zero()});
+            (void)capability.with_options({.timeout_ = std::chrono::milliseconds::zero()});
         } catch (const std::invalid_argument&) {
-            validationWrongOrder = true;
+            validation_wrong_order = true;
         } catch (const std::logic_error&) {
-            lifetimeRejected = true;
+            lifetime_rejected = true;
         }
-        return std::pair{validationWrongOrder, lifetimeRejected};
+        return std::pair{validation_wrong_order, lifetime_rejected};
     };
-    const auto handleOptionFailure = optionFailureOrder(handle);
-    const auto configuredOptionFailure = optionFailureOrder(configuredHandle);
-    const auto copiedConfiguredOptionFailure = optionFailureOrder(copiedConfiguredHandle);
-    const auto derivedConfiguredOptionFailure = optionFailureOrder(derivedConfiguredHandle);
-    const bool expiredOptionsRejectedBeforeValidation =
-        !handleOptionFailure.first && handleOptionFailure.second &&
-        !configuredOptionFailure.first && configuredOptionFailure.second &&
-        !copiedConfiguredOptionFailure.first && copiedConfiguredOptionFailure.second &&
-        !derivedConfiguredOptionFailure.first && derivedConfiguredOptionFailure.second;
+    const auto handle_option_failure = option_failure_order(handle);
+    const auto configured_option_failure = option_failure_order(configured_handle);
+    const auto copied_configured_option_failure = option_failure_order(copied_configured_handle);
+    const auto derived_configured_option_failure = option_failure_order(derived_configured_handle);
+    const bool expired_options_rejected_before_validation =
+        !handle_option_failure.first && handle_option_failure.second &&
+        !configured_option_failure.first && configured_option_failure.second &&
+        !copied_configured_option_failure.first && copied_configured_option_failure.second &&
+        !derived_configured_option_failure.first && derived_configured_option_failure.second;
     try {
         (void)handle.ping();
     } catch (const std::logic_error&) {
-        handleRejected = true;
+        handle_rejected = true;
     }
     try {
-        (void)copiedHandle.ping();
+        (void)copied_handle.ping();
     } catch (const std::logic_error&) {
-        copyRejected = true;
+        copy_rejected = true;
     }
     try {
-        movedPipeline.get("other");
+        moved_pipeline.get("other");
     } catch (const std::logic_error&) {
-        builderRejected = true;
+        builder_rejected = true;
     }
     try {
-        movedTransaction.get("other");
+        moved_transaction.get("other");
     } catch (const std::logic_error&) {
-        transactionRejected = true;
+        transaction_rejected = true;
     }
-    RUVIA_CHECK(expiredOptionsRejectedBeforeValidation);
-    RUVIA_CHECK(handleRejected);
-    RUVIA_CHECK(copyRejected);
-    RUVIA_CHECK(builderRejected);
-    RUVIA_CHECK(transactionRejected);
+    RUVIA_CHECK(expired_options_rejected_before_validation);
+    RUVIA_CHECK(handle_rejected);
+    RUVIA_CHECK(copy_rejected);
+    RUVIA_CHECK(builder_rejected);
+    RUVIA_CHECK(transaction_rejected);
 }
 
 RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
-    auto& io_context = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(io_context);
-    ruvia::test::CountingMemoryResource memory;
-    const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(io_context, &memory, definitions, worker.handle());
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    ruvia::test::counting_memory_resource memory;
+    const std::array definitions{redis_definition("default")};
+    ruvia::detail::redis_registry registry(io_context, &memory, definitions, worker.handle());
     ruvia::operation_scope scope;
     auto handle = registry.get(scope);
-    const auto baseline = memory.liveAllocations();
+    const auto baseline = memory.live_allocations();
     const auto throws_logic_error = [](auto&& operation) {
         try {
             operation();
@@ -402,12 +402,12 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
         std::optional moved(std::move(pipeline));
         RUVIA_CHECK(throws_logic_error([&] { pipeline.get("moved"); }));
         auto cold = std::move(*moved).exec();
-        RUVIA_CHECK(throws_logic_error([&] { moved->incrBy("used", 1); }));
+        RUVIA_CHECK(throws_logic_error([&] { moved->incr_by("used", 1); }));
         RUVIA_CHECK(throws_logic_error([&] { (void)std::move(*moved).exec(); }));
         moved.reset();
-        RUVIA_CHECK(memory.liveAllocations() > baseline);
+        RUVIA_CHECK(memory.live_allocations() > baseline);
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
     {
         auto transaction = handle.transaction();
         transaction.watch(std::string(128, 'w')).unwatch().set(std::string(128, 'k'), std::string(128, 'v'));
@@ -417,40 +417,40 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
         RUVIA_CHECK(throws_logic_error([&] { moved->unwatch(); }));
         RUVIA_CHECK(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
         moved.reset();
-        RUVIA_CHECK(memory.liveAllocations() > baseline);
+        RUVIA_CHECK(memory.live_allocations() > baseline);
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
     {
         auto pipeline = handle.pipeline();
         auto transaction = handle.transaction();
         for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "BLPOP"}) {
-            RUVIA_CHECK(throwsInvalidArgument([&] { pipeline.command(word, "key"); }));
-            RUVIA_CHECK(throwsInvalidArgument([&] { transaction.command(word, "key"); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "key"); }));
         }
         for (auto score : {std::numeric_limits<double>::infinity(),
                  -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
-            RUVIA_CHECK(throwsInvalidArgument([&] { pipeline.zadd("key", score, "member"); }));
-            RUVIA_CHECK(throwsInvalidArgument([&] { transaction.zadd("key", score, "member"); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { pipeline.zadd("key", score, "member"); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { transaction.zadd("key", score, "member"); }));
         }
         pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
         transaction.watch(std::string(128, 'w')).set(std::string(128, 'k'), std::string(128, 'v'));
         scope.close();
-        RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+        RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
         RUVIA_CHECK(throws_logic_error([&] {
             pipeline.zadd("expired", std::numeric_limits<double>::quiet_NaN(), "member");
         }));
         RUVIA_CHECK(throws_logic_error([&] { (void)std::move(transaction).exec(); }));
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
 }
 
 RUVIA_TEST(redis_batch_typed_commands_preserve_order_arguments_and_resource) {
-    auto& io_context = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(io_context);
-    ruvia::test::CountingMemoryResource memory;
-    const ruvia::detail::RedisConfigStorage config(ruvia::RedisConfig{}, &memory);
-    ruvia::detail::RedisPool pool(io_context, config, config.commandTimeout, 1, worker.handle(), &memory);
-    const auto baseline = memory.liveAllocations();
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    ruvia::test::counting_memory_resource memory;
+    const ruvia::detail::redis_config_storage config(ruvia::redis_config{}, &memory);
+    ruvia::detail::redis_pool pool(io_context, config, config.command_timeout_, 1, worker.handle(), &memory);
+    const auto baseline = memory.live_allocations();
     {
         ruvia::detail::redis_command_batch batch(pool, {}, &memory);
         const auto minimum = std::numeric_limits<std::int64_t>::min();
@@ -500,9 +500,9 @@ RUVIA_TEST(redis_batch_typed_commands_preserve_order_arguments_and_resource) {
         source_key.assign(128, 'x');
         source_value.assign(128, 'y');
         auto moved = std::move(batch);
-        auto payload = moved.consume();
-        RUVIA_CHECK_EQ(payload.commands.size(), std::size_t{38});
-        RUVIA_CHECK(payload.commands.get_allocator().resource() == &memory);
+        auto payload_value = moved.consume();
+        RUVIA_CHECK_EQ(payload_value.commands_.size(), std::size_t{38});
+        RUVIA_CHECK(payload_value.commands_.get_allocator().resource() == &memory);
         const std::initializer_list<std::initializer_list<std::string_view>> expected{
             {"GET", "k"},
             {"SET", "k", "v"},
@@ -544,101 +544,101 @@ RUVIA_TEST(redis_batch_typed_commands_preserve_order_arguments_and_resource) {
         };
         std::size_t command_index = 0;
         for (auto arguments : expected) {
-            const auto& command = payload.commands[command_index++];
-            RUVIA_CHECK_EQ(command.args.size(), arguments.size());
+            const auto& command = payload_value.commands_[command_index++];
+            RUVIA_CHECK_EQ(command.args_.size(), arguments.size());
             std::size_t argument_index = 0;
             for (auto argument : arguments) {
-                const auto& actual = command.args[argument_index++];
+                const auto& actual = command.args_[argument_index++];
                 RUVIA_CHECK(actual == argument);
                 RUVIA_CHECK(actual.get_allocator().resource() == &memory);
             }
         }
-        RUVIA_CHECK(payload.commands.back().args[1] == std::string_view(binary_key));
-        RUVIA_CHECK(payload.commands.back().args[2] == std::string_view(binary_value));
+        RUVIA_CHECK(payload_value.commands_.back().args_[1] == std::string_view(binary_key));
+        RUVIA_CHECK(payload_value.commands_.back().args_[2] == std::string_view(binary_value));
         moved.expire();
-        RUVIA_CHECK(payload.commands.back().args[2] == std::string_view(binary_value));
+        RUVIA_CHECK(payload_value.commands_.back().args_[2] == std::string_view(binary_value));
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
 }
 
 RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
-    const auto expiring = ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(1500));
+    const auto expiring = ruvia::redis_set_expiration::expires_after(std::chrono::milliseconds(1500));
     RUVIA_CHECK(expiring.duration() != nullptr);
     RUVIA_CHECK_EQ(expiring.duration()->count(), std::chrono::milliseconds::rep{1500});
-    RUVIA_CHECK(!expiring.keepsExisting());
+    RUVIA_CHECK(!expiring.keeps_existing());
 
-    const auto keep = ruvia::RedisSetExpiration::keepExisting();
+    const auto keep = ruvia::redis_set_expiration::keep_existing();
     RUVIA_CHECK(keep.duration() == nullptr);
-    RUVIA_CHECK(keep.keepsExisting());
+    RUVIA_CHECK(keep.keeps_existing());
 
-    bool zeroRejected = false;
+    bool zero_rejected = false;
     try {
-        (void)ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(0));
+        (void)ruvia::redis_set_expiration::expires_after(std::chrono::milliseconds(0));
     } catch (const std::invalid_argument&) {
-        zeroRejected = true;
+        zero_rejected = true;
     }
-    RUVIA_CHECK(zeroRejected);
+    RUVIA_CHECK(zero_rejected);
 
-    bool negativeRejected = false;
+    bool negative_rejected = false;
     try {
-        (void)ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(-1));
+        (void)ruvia::redis_set_expiration::expires_after(std::chrono::milliseconds(-1));
     } catch (const std::invalid_argument&) {
-        negativeRejected = true;
+        negative_rejected = true;
     }
-    RUVIA_CHECK(negativeRejected);
+    RUVIA_CHECK(negative_rejected);
 }
 
 RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::operation_scope operationScope;
-    auto redis = registry.get(operationScope);
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    const std::array definitions{redis_definition("default")};
+    ruvia::detail::redis_registry registry(
+        io_context, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::operation_scope operation_scope;
+    auto redis = registry.get(operation_scope);
 
-    bool zeroRejected = false;
+    bool zero_rejected = false;
     try {
         (void)redis.expire("key", std::chrono::seconds(0));
     } catch (const std::invalid_argument&) {
-        zeroRejected = true;
+        zero_rejected = true;
     }
-    RUVIA_CHECK(zeroRejected);
+    RUVIA_CHECK(zero_rejected);
 
-    bool negativeRejected = false;
+    bool negative_rejected = false;
     try {
         (void)redis.expire("key", std::chrono::seconds(-1));
     } catch (const std::invalid_argument&) {
-        negativeRejected = true;
+        negative_rejected = true;
     }
-    RUVIA_CHECK(negativeRejected);
+    RUVIA_CHECK(negative_rejected);
 }
 
 RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::operation_scope operationScope;
-    auto redis = registry.get(operationScope);
-    const std::span<const std::string_view> noKeys;
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    const std::array definitions{redis_definition("default")};
+    ruvia::detail::redis_registry registry(
+        io_context, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::operation_scope operation_scope;
+    auto redis = registry.get(operation_scope);
+    const std::span<const std::string_view> no_keys;
 
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.mget(noKeys); }));
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sinter(noKeys); }));
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sunion(noKeys); }));
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sdiff(noKeys); }));
+    RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.mget(no_keys); }));
+    RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sinter(no_keys); }));
+    RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sunion(no_keys); }));
+    RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sdiff(no_keys); }));
 }
 
 RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
-    const auto reply = ruvia::detail::RedisTypesAccess::errorValue(
+    const auto reply = ruvia::detail::redis_types_access::error_value(
         "EXECABORT Transaction discarded because of previous errors.",
         std::pmr::get_default_resource());
     bool preserved = false;
     try {
-        ruvia::detail::throwIfRedisTransactionReplyError(reply, 3);
-    } catch (const ruvia::RedisError& error) {
-        preserved = error.code() == ruvia::RedisError::Code::kCommandError &&
+        ruvia::detail::throw_if_redis_transaction_reply_error(reply, 3);
+    } catch (const ruvia::redis_error& error) {
+        preserved = error.code() == ruvia::redis_error::code_type::command_error &&
                     (std::string_view(error.what()).find("reply 3") != std::string_view::npos) &&
                     (std::string_view(error.what()).find("EXECABORT") != std::string_view::npos);
     }
@@ -646,34 +646,34 @@ RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
 }
 
 RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
-    StalledRedisCommandServer server;
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    auto config = ruvia::RedisConfig{};
-    config.host = "127.0.0.1";
-    config.tls.mode = ruvia::client_tls_mode::disabled;
-    config.port = server.port();
-    config.commandTimeout = std::nullopt;
+    stalled_redis_command_server server;
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    auto config = ruvia::redis_config{};
+    config.host_ = "127.0.0.1";
+    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+    config.port_ = server.port();
+    config.command_timeout_ = std::nullopt;
     auto* const resource = std::pmr::get_default_resource();
-    const auto storedConfig = ruvia::detail::RedisConfigStorage(config, resource);
-    ruvia::detail::RedisPool pool(
-        ioContext, storedConfig, storedConfig.commandTimeout, 1, worker.handle(), resource);
+    const auto stored_config = ruvia::detail::redis_config_storage(config, resource);
+    ruvia::detail::redis_pool pool(
+        io_context, stored_config, stored_config.command_timeout_, 1, worker.handle(), resource);
 
-    auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
+    auto exercise = [&]() -> ruvia::task<ruvia::redis_error::code_type> {
         std::pmr::vector<std::pmr::string> args(resource);
         args.emplace_back("PING");
         try {
-            (void)co_await pool.executeOwned(std::move(args), resource);
-        } catch (const ruvia::RedisError& error) {
+            (void)co_await pool.execute_owned(std::move(args), resource);
+        } catch (const ruvia::redis_error& error) {
             co_return error.code();
         }
-        co_return ruvia::RedisError::Code::kProtocolError;
+        co_return ruvia::redis_error::code_type::protocol_error;
     };
 
-    std::promise<ruvia::RedisError::Code> completion;
-    auto result = completion.get_future();
-    asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
-        [&worker, &completion](std::exception_ptr error, ruvia::RedisError::Code code) {
+    std::promise<ruvia::redis_error::code_type> completion;
+    auto result_value = completion.get_future();
+    asio::co_spawn(io_context, ruvia::as_awaitable(exercise()),
+        [&worker, &completion](std::exception_ptr error, ruvia::redis_error::code_type code) {
             if (error) {
                 completion.set_exception(std::move(error));
             } else {
@@ -682,55 +682,55 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
             worker.stop();
         });
     std::jthread runner([&worker] { worker.run(); });
-    server.waitUntilCommandRead();
-    asio::post(ioContext, [&pool] { pool.closeNow(); });
+    server.wait_until_command_read();
+    asio::post(io_context, [&pool] { pool.close_now(); });
 
     runner.join();
-    const auto code = result.get();
-    RUVIA_CHECK(code == ruvia::RedisError::Code::kClosing);
+    const auto code = result_value.get();
+    RUVIA_CHECK(code == ruvia::redis_error::code_type::closing);
 }
 
 RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failure) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    RedisTestWorker worker(ioContext);
-    const std::array definitions{redisDefinition("default")};
-    ruvia::test::CountingMemoryResource operationMemory;
-    ruvia::detail::RedisRegistry registry(
-        ioContext, &operationMemory, definitions, worker.handle());
-    const auto registryLiveAllocations = operationMemory.liveAllocations();
-    ruvia::operation_scope operationScope;
-    auto redis = registry.get(operationScope);
-    ruvia::StopSource cancellation;
-    cancellation.requestStop();
-    auto cancelled = redis.withOptions({.stopToken = cancellation.token()});
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    const std::array definitions{redis_definition("default")};
+    ruvia::test::counting_memory_resource operation_memory;
+    ruvia::detail::redis_registry registry(
+        io_context, &operation_memory, definitions, worker.handle());
+    const auto registry_live_allocations = operation_memory.live_allocations();
+    ruvia::operation_scope operation_scope;
+    auto redis = registry.get(operation_scope);
+    ruvia::stop_source cancellation;
+    cancellation.request_stop();
+    auto cancelled = redis.with_options({.stop_token_ = cancellation.token()});
     const std::string key(2048, 'k');
 
-    auto exercise = [&]() -> ruvia::Task<void> {
+    auto exercise = [&]() -> ruvia::task<void> {
         for (int index = 0; index != 128; ++index) {
             bool rejected = false;
             try {
                 (void)co_await cancelled.get(key);
-            } catch (const ruvia::RedisError& error) {
-                rejected = error.code() == ruvia::RedisError::Code::kCancelled;
+            } catch (const ruvia::redis_error& error) {
+                rejected = error.code() == ruvia::redis_error::code_type::cancelled;
             }
             RUVIA_CHECK(rejected);
-            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
+            RUVIA_CHECK_EQ(operation_memory.live_allocations(), registry_live_allocations);
         }
-        registry.closeNow();
+        registry.close_now();
         for (int index = 0; index != 128; ++index) {
             bool rejected = false;
             try {
                 (void)co_await redis.get(key);
-            } catch (const ruvia::RedisError& error) {
-                rejected = error.code() == ruvia::RedisError::Code::kClosing;
+            } catch (const ruvia::redis_error& error) {
+                rejected = error.code() == ruvia::redis_error::code_type::closing;
             }
             RUVIA_CHECK(rejected);
-            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
+            RUVIA_CHECK_EQ(operation_memory.live_allocations(), registry_live_allocations);
         }
     };
     std::promise<void> completion;
-    auto result = completion.get_future();
-    asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
+    auto result_value = completion.get_future();
+    asio::co_spawn(io_context, ruvia::as_awaitable(exercise()),
         [&worker, &completion](std::exception_ptr error) {
             if (error) {
                 completion.set_exception(std::move(error));
@@ -740,129 +740,129 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
             worker.stop();
         });
     worker.run();
-    result.get();
+    result_value.get();
 
-    RUVIA_CHECK(operationMemory.allocationCount() > 0);
-    RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
+    RUVIA_CHECK(operation_memory.allocation_count() > 0);
+    RUVIA_CHECK_EQ(operation_memory.live_allocations(), registry_live_allocations);
 }
 
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
-    RejectingMemoryResource rejecting;
-    const auto longValue =
+    rejecting_memory_resource rejecting;
+    const auto long_value =
         std::string_view("redis value large enough to exceed any small-string buffer");
 
-    auto destination = ruvia::detail::RedisTypesAccess::keyValue({}, {}, &rejecting);
-    auto source = ruvia::detail::RedisTypesAccess::keyValue(
-        longValue, longValue, std::pmr::get_default_resource());
-    rejecting.rejectAllocations();
-    bool allocationFailure = false;
+    auto destination = ruvia::detail::redis_types_access::key_value({}, {}, &rejecting);
+    auto source_value = ruvia::detail::redis_types_access::key_value(
+        long_value, long_value, std::pmr::get_default_resource());
+    rejecting.reject_allocations();
+    bool allocation_failure = false;
     try {
-        destination = std::move(source);
+        destination = std::move(source_value);
     } catch (const std::bad_alloc&) {
-        allocationFailure = true;
+        allocation_failure = true;
     }
-    RUVIA_CHECK(allocationFailure);
+    RUVIA_CHECK(allocation_failure);
 
-    rejecting.rejectAllocations(false);
-    auto destinationValue = ruvia::detail::RedisTypesAccess::nullValue(&rejecting);
-    auto sourceValue =
-        ruvia::detail::RedisTypesAccess::stringValue(longValue, std::pmr::get_default_resource());
-    rejecting.rejectAllocations();
-    allocationFailure = false;
+    rejecting.reject_allocations(false);
+    auto destination_value = ruvia::detail::redis_types_access::null_value(&rejecting);
+    auto source_string_value =
+        ruvia::detail::redis_types_access::string_value(long_value, std::pmr::get_default_resource());
+    rejecting.reject_allocations();
+    allocation_failure = false;
     try {
-        destinationValue = std::move(sourceValue);
+        destination_value = std::move(source_string_value);
     } catch (const std::bad_alloc&) {
-        allocationFailure = true;
+        allocation_failure = true;
     }
-    RUVIA_CHECK(allocationFailure);
+    RUVIA_CHECK(allocation_failure);
 }
 
 RUVIA_TEST(redis_value_array_move_assignment_uses_destination_resource) {
-    ruvia::test::CountingMemoryResource source_resource;
-    ruvia::test::CountingMemoryResource destination_resource;
+    ruvia::test::counting_memory_resource source_resource;
+    ruvia::test::counting_memory_resource destination_resource;
     const std::string value(128, 'v');
     {
-        auto destination = ruvia::detail::RedisTypesAccess::nullValue(&destination_resource);
+        auto destination = ruvia::detail::redis_types_access::null_value(&destination_resource);
         {
-            std::pmr::vector<ruvia::RedisValue> values(&source_resource);
-            values.push_back(ruvia::detail::RedisTypesAccess::stringValue(value, &source_resource));
-            auto source = ruvia::detail::RedisTypesAccess::arrayValue(std::move(values), &source_resource);
-            destination = std::move(source);
+            std::pmr::vector<ruvia::redis_value> values(&source_resource);
+            values.push_back(ruvia::detail::redis_types_access::string_value(value, &source_resource));
+            auto source_value = ruvia::detail::redis_types_access::array_value(std::move(values), &source_resource);
+            destination = std::move(source_value);
         }
-        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
         RUVIA_CHECK_EQ(destination.array().size(), std::size_t{1});
         if (destination.array().size() == 1) {
             RUVIA_CHECK_EQ(destination.array().front().string(), std::string_view(value));
         }
     }
-    RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(destination_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
 }
 
 namespace {
-template <typename Factory, typename Populate, typename Check>
-void check_redis_resource_transfer(ruvia::testing::TestContext& ruvia_ctx,
-    Factory factory, Populate populate, Check check) {
+template <typename factory_type, typename populate_type, typename check_type>
+void check_redis_resource_transfer(ruvia::testing::test_context& ruvia_ctx,
+    factory_type factory, populate_type populate, check_type check) {
     for (const bool copy : {false, true}) {
-        ruvia::test::CountingMemoryResource source_resource;
-        ruvia::test::CountingMemoryResource destination_resource;
+        ruvia::test::counting_memory_resource source_resource;
+        ruvia::test::counting_memory_resource destination_resource;
         {
             auto destination = factory(&destination_resource);
             {
-                auto source = factory(&source_resource);
-                populate(source, &source_resource);
+                auto source_value = factory(&source_resource);
+                populate(source_value, &source_resource);
                 if (copy) {
-                    destination = source;
+                    destination = source_value;
                 } else {
-                    destination = std::move(source);
+                    destination = std::move(source_value);
                 }
             }
-            RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
             check(destination);
         }
-        RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(destination_resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(destination_resource.live_allocations(), std::size_t{0});
     }
 }
 }  // namespace
 
 RUVIA_TEST(redis_typed_result_transfers_use_destination_resource) {
-    using Access = ruvia::detail::RedisTypesAccess;
+    using access_type = ruvia::detail::redis_types_access;
     const std::string key(128, 'k');
     const std::string value(128, 'v');
-    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::hashScanResult(resource); }, [&](auto& result, auto* resource) { Access::entries(result).push_back(Access::keyValue(key, value, resource)); }, [&](const auto& result) {
-            RUVIA_CHECK_EQ(result.entries().size(), std::size_t{1});
-            if (result.entries().size() == 1) {
-                RUVIA_CHECK_EQ(result.entries().front().key(), std::string_view(key));
-                RUVIA_CHECK_EQ(result.entries().front().value(), std::string_view(value));
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return access_type::hash_scan_result(resource); }, [&](auto& result_value, auto* resource) { access_type::entries(result_value).push_back(access_type::key_value(key, value, resource)); }, [&](const auto& result_value) {
+            RUVIA_CHECK_EQ(result_value.entries().size(), std::size_t{1});
+            if (result_value.entries().size() == 1) {
+                RUVIA_CHECK_EQ(result_value.entries().front().key(), std::string_view(key));
+                RUVIA_CHECK_EQ(result_value.entries().front().value(), std::string_view(value));
             } });
-    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::zScanResult(resource); }, [&](auto& result, auto* resource) { Access::entries(result).push_back(Access::scoredValue(value, 2.5, resource)); }, [&](const auto& result) {
-            RUVIA_CHECK_EQ(result.entries().size(), std::size_t{1});
-            if (result.entries().size() == 1) {
-                RUVIA_CHECK_EQ(result.entries().front().value(), std::string_view(value));
-                RUVIA_CHECK_EQ(result.entries().front().score(), 2.5);
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return access_type::z_scan_result(resource); }, [&](auto& result_value, auto* resource) { access_type::entries(result_value).push_back(access_type::scored_value(value, 2.5, resource)); }, [&](const auto& result_value) {
+            RUVIA_CHECK_EQ(result_value.entries().size(), std::size_t{1});
+            if (result_value.entries().size() == 1) {
+                RUVIA_CHECK_EQ(result_value.entries().front().value(), std::string_view(value));
+                RUVIA_CHECK_EQ(result_value.entries().front().score(), 2.5);
             } });
-    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return Access::xreadGroupResult(resource); }, [&](auto& result, auto* resource) {
-            auto stream = Access::streamReadResult(key, resource);
-            auto entry = Access::streamEntry(value, resource);
-            Access::fields(entry).push_back(Access::keyValue(key, value, resource));
-            Access::entries(stream).push_back(std::move(entry));
-            Access::streams(result).push_back(std::move(stream)); }, [&](const auto& result) {
-            RUVIA_CHECK_EQ(result.streams().size(), std::size_t{1});
-            if (result.streams().size() != 1) {
+    check_redis_resource_transfer(ruvia_ctx, [](auto* resource) { return access_type::xread_group_result(resource); }, [&](auto& result_value, auto* resource) {
+            auto stream = access_type::stream_read_result(key, resource);
+            auto entry_value = access_type::stream_entry(value, resource);
+            access_type::fields(entry_value).push_back(access_type::key_value(key, value, resource));
+            access_type::entries(stream).push_back(std::move(entry_value));
+            access_type::streams(result_value).push_back(std::move(stream)); }, [&](const auto& result_value) {
+            RUVIA_CHECK_EQ(result_value.streams().size(), std::size_t{1});
+            if (result_value.streams().size() != 1) {
                 return;
             }
-            const auto& stream = result.streams().front();
+            const auto& stream = result_value.streams().front();
             RUVIA_CHECK_EQ(stream.stream(), std::string_view(key));
             RUVIA_CHECK_EQ(stream.entries().size(), std::size_t{1});
             if (stream.entries().size() != 1) {
                 return;
             }
-            const auto& entry = stream.entries().front();
-            RUVIA_CHECK_EQ(entry.id(), std::string_view(value));
-            RUVIA_CHECK_EQ(entry.fields().size(), std::size_t{1});
-            if (entry.fields().size() == 1) {
-                RUVIA_CHECK_EQ(entry.fields().front().key(), std::string_view(key));
-                RUVIA_CHECK_EQ(entry.fields().front().value(), std::string_view(value));
+            const auto& entry_value = stream.entries().front();
+            RUVIA_CHECK_EQ(entry_value.id(), std::string_view(value));
+            RUVIA_CHECK_EQ(entry_value.fields().size(), std::size_t{1});
+            if (entry_value.fields().size() == 1) {
+                RUVIA_CHECK_EQ(entry_value.fields().front().key(), std::string_view(key));
+                RUVIA_CHECK_EQ(entry_value.fields().front().value(), std::string_view(value));
             } });
 }

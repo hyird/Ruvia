@@ -29,12 +29,15 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_link_options(-static)
+endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-include(cmake/RuviaTargets.cmake)
-include(cmake/RuviaDependencies.cmake)
+include(cmake/ruvia_targets.cmake)
+include(cmake/ruvia_dependencies.cmake)
 
 foreach(_ruvia_component IN ITEMS core http web)
     string(TOUPPER ${_ruvia_component} _ruvia_component_upper)
@@ -65,9 +68,9 @@ install(
     FILES
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfigVersion.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencies.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencyConfigure.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaDependencyBuild.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ruvia_dependencies.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ruvia_dependency_configure.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ruvia_dependency_build.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
     COMPONENT Development
 )

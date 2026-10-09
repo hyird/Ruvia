@@ -1,30 +1,31 @@
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/web/Context.h"
+#include "context/context_capabilities.h"
 
-#include "body/HttpRequestBodyFacade.h"
-#include "context/ContextAccess.h"
-#include "context/ContextCapabilities.h"
-#include "context/ContextServices.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_handle.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/web/context.h"
+
+#include "body/http_request_body_facade.h"
+#include "context/context_access.h"
+#include "context/context_services.h"
 #include "context_services_fixture.h"
-#include "http/RequestBodyLoader.h"
-#include "http/SessionAccess.h"
-#include "http/StreamingAccess.h"
-#include "server/RequestDeadline.h"
+#include "http/request_body_loader.h"
+#include "http/session_access.h"
+#include "http/streaming_access.h"
+#include "server/request_deadline.h"
 #include "test_harness.h"
 #include "test_io_context.h"
-#include "websocket/WebSocketAccess.h"
+#include "websocket/websocket_access.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/db.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/Redis.h"
+#include "ruvia/web/redis/redis.h"
 #endif
 
 #include <chrono>
@@ -44,155 +45,155 @@
 
 namespace {
 
-ruvia::Task<std::string_view> loadBody(void*) {
+ruvia::task<std::string_view> load_body(void*) {
     co_return "lazy-body";
 }
 
-ruvia::Task<void> discardBody(void*) {
+ruvia::task<void> discard_body(void*) {
     co_return;
 }
 
-ruvia::Task<std::optional<std::span<const std::byte>>> readBody(void*) {
+ruvia::task<std::optional<std::span<const std::byte>>> read_body(void*) {
     co_return std::nullopt;
 }
 
-struct OutputSink final {
-    std::pmr::string scratch{std::pmr::get_default_resource()};
+struct output_sink final {
+    std::pmr::string scratch_{std::pmr::get_default_resource()};
 };
 
-ruvia::Task<void> writeOutput(void*, std::string_view) {
+ruvia::task<void> write_output(void*, std::string_view) {
     co_return;
 }
 
-ruvia::Task<void> endOutput(void*, std::span<const ruvia::HttpHeaderView>) {
+ruvia::task<void> end_output(void*, std::span<const ruvia::http_header_view>) {
     co_return;
 }
 
-ruvia::Task<ruvia::TimerSleepResult> sleepOutput(
-    void*, std::chrono::milliseconds, const ruvia::StopToken&) {
-    co_return ruvia::TimerSleepResult::kElapsed;
+ruvia::task<ruvia::timer_sleep_result> sleep_output(
+    void*, std::chrono::milliseconds, const ruvia::stop_token&) {
+    co_return ruvia::timer_sleep_result::elapsed;
 }
 
-void bindOutput(void*, ruvia::Context*, ruvia::Task<ruvia::HttpResponse> (*)(ruvia::Context&)) noexcept {}
+void bind_output(void*, ruvia::context*, ruvia::task<ruvia::http_response> (*)(ruvia::context&)) noexcept {}
 
-bool outputFalse(void*) noexcept {
+bool output_false(void*) noexcept {
     return false;
 }
 
-void releaseOutputContext(void*) noexcept {}
+void release_output_context(void*) noexcept {}
 
-ruvia::ResponseStreamWriter makeResponseStreamWriter(OutputSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink, &writeOutput, &endOutput,
-        &sleepOutput, &bindOutput, &releaseOutputContext, &outputFalse, &outputFalse);
+ruvia::response_stream_writer make_response_stream_writer(output_sink& sink_value) noexcept {
+    return ruvia::detail::streaming_access::make_response_stream_writer(*ruvia::detail::process_resource(), &sink_value, &write_output, &end_output,
+        &sleep_output, &bind_output, &release_output_context, &output_false, &output_false);
 }
 
-ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void*) {
+ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void*) {
     co_return std::nullopt;
 }
 
-ruvia::Task<void> writeWebSocket(void*, ruvia::WebSocketOpcode, std::string_view, bool) {
+ruvia::task<void> write_websocket(void*, ruvia::websocket_opcode, std::string_view, bool) {
     co_return;
 }
 
-ruvia::Task<void> closeWebSocket(void*, ruvia::WebSocketCloseOptions) {
+ruvia::task<void> close_websocket(void*, ruvia::websocket_close_options) {
     co_return;
 }
 
-ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource) {
-    auto [request, parseError] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, resource);
-    if (parseError) {
+ruvia::http_request make_request(std::pmr::memory_resource* resource) {
+    auto [request, parse_error] = ruvia::make_parsed_http_request("GET", "/", {}, {}, resource);
+    if (parse_error) {
         throw std::logic_error("invalid context capability test request");
     }
     return std::move(request);
 }
 
-struct BoundBodyReader final {
-    explicit BoundBodyReader(int value) noexcept
-        : value(value) {}
+struct bound_body_reader final {
+    explicit bound_body_reader(int value) noexcept
+        : value_(value) {}
 
-    ruvia::Task<std::optional<std::span<const std::byte>>> read() {
+    ruvia::task<std::optional<std::span<const std::byte>>> read() {
         co_return std::nullopt;
     }
 
-    int value;
+    int value_;
 };
 
-struct BoundBodyLoader final {
-    explicit BoundBodyLoader(int value) noexcept
-        : value(value) {}
+struct bound_body_loader final {
+    explicit bound_body_loader(int value) noexcept
+        : value_(value) {}
 
-    ruvia::Task<std::string_view> readAll() {
+    ruvia::task<std::string_view> read_all() {
         co_return std::string_view{};
     }
-    ruvia::Task<void> discard() {
+    ruvia::task<void> discard() {
         co_return;
     }
 
-    int value;
+    int value_;
 };
 
 }  // namespace
 
 RUVIA_TEST(request_body_capability_binding_constructs_target_and_facade_atomically) {
-    ruvia::detail::BodyReaderBinding<BoundBodyReader> reader(17);
-    ruvia::detail::RequestBodyLoaderBinding<BoundBodyLoader> loader(23);
+    ruvia::detail::body_reader_binding<bound_body_reader> reader_value(17);
+    ruvia::detail::request_body_loader_binding<bound_body_loader> loader(23);
 
-    RUVIA_CHECK_EQ(reader.reader().value, 17);
-    RUVIA_CHECK_EQ(loader.loader().value, 23);
+    RUVIA_CHECK_EQ(reader_value.reader().value_, 17);
+    RUVIA_CHECK_EQ(loader.loader().value_, 23);
 
-    const auto base = ruvia::test::testContextServices();
-    const auto streaming = base.withStreamingRequestBody(reader.facade());
-    const auto lazy = base.withLazyRequestBody(loader.facade());
-    RUVIA_CHECK(&streaming.requestBodySource().streaming()->reader() == &reader.facade());
-    RUVIA_CHECK(&lazy.requestBodySource().lazy()->loader() == &loader.facade());
+    const auto base = ruvia::test::test_context_services();
+    const auto streaming = base.with_streaming_request_body(reader_value.facade());
+    const auto lazy = base.with_lazy_request_body(loader.facade());
+    RUVIA_CHECK(&streaming.request_body_source().streaming()->reader() == &reader_value.facade());
+    RUVIA_CHECK(&lazy.request_body_source().lazy()->loader() == &loader.facade());
 }
 
 RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
-    ruvia::detail::RequestBodyLoader loader(nullptr, &loadBody, &discardBody);
-    std::optional<ruvia::BodyReader> reader;
-    ruvia::detail::StreamingAccess::emplaceBodyReader(reader, nullptr, &readBody);
+    ruvia::detail::request_body_loader loader(nullptr, &load_body, &discard_body);
+    std::optional<ruvia::body_reader> reader;
+    ruvia::detail::streaming_access::emplace_body_reader(reader, nullptr, &read_body);
 
-    const auto base = ruvia::test::testContextServices();
-    RUVIA_CHECK(base.requestBodySource().buffered() != nullptr);
-    RUVIA_CHECK(base.requestBodySource().lazy() == nullptr);
-    RUVIA_CHECK(base.requestBodySource().streaming() == nullptr);
+    const auto base = ruvia::test::test_context_services();
+    RUVIA_CHECK(base.request_body_source().buffered() != nullptr);
+    RUVIA_CHECK(base.request_body_source().lazy() == nullptr);
+    RUVIA_CHECK(base.request_body_source().streaming() == nullptr);
 
-    const auto lazy = base.withLazyRequestBody(loader);
-    RUVIA_CHECK(lazy.requestBodySource().buffered() == nullptr);
-    RUVIA_CHECK(lazy.requestBodySource().lazy() != nullptr);
-    RUVIA_CHECK(lazy.requestBodySource().streaming() == nullptr);
-    RUVIA_CHECK(&lazy.requestBodySource().lazy()->loader() == &loader);
+    const auto lazy = base.with_lazy_request_body(loader);
+    RUVIA_CHECK(lazy.request_body_source().buffered() == nullptr);
+    RUVIA_CHECK(lazy.request_body_source().lazy() != nullptr);
+    RUVIA_CHECK(lazy.request_body_source().streaming() == nullptr);
+    RUVIA_CHECK(&lazy.request_body_source().lazy()->loader() == &loader);
 
-    const auto streaming = lazy.withStreamingRequestBody(*reader);
-    RUVIA_CHECK(streaming.requestBodySource().buffered() == nullptr);
-    RUVIA_CHECK(streaming.requestBodySource().lazy() == nullptr);
-    RUVIA_CHECK(streaming.requestBodySource().streaming() != nullptr);
-    RUVIA_CHECK(&streaming.requestBodySource().streaming()->reader() == &*reader);
+    const auto streaming = lazy.with_streaming_request_body(*reader);
+    RUVIA_CHECK(streaming.request_body_source().buffered() == nullptr);
+    RUVIA_CHECK(streaming.request_body_source().lazy() == nullptr);
+    RUVIA_CHECK(streaming.request_body_source().streaming() != nullptr);
+    RUVIA_CHECK(&streaming.request_body_source().streaming()->reader() == &*reader);
 
     // Functional service refinement must not mutate either earlier value.
-    RUVIA_CHECK(base.requestBodySource().buffered() != nullptr);
-    RUVIA_CHECK(lazy.requestBodySource().lazy() != nullptr);
+    RUVIA_CHECK(base.request_body_source().buffered() != nullptr);
+    RUVIA_CHECK(lazy.request_body_source().lazy() != nullptr);
 }
 
 RUVIA_TEST(context_services_borrows_address_stable_worker_and_stop_token) {
-    auto& ioContext = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 8});
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
     const auto handle = attachment.loop().handle();
-    const ruvia::StopToken stopToken;
-    const ruvia::detail::ContextServices services(handle, stopToken);
-    const auto derived = services.withPlainTransport("127.0.0.1");
+    const ruvia::stop_token stop_token;
+    const ruvia::detail::context_services services(handle, stop_token);
+    const auto derived = services.with_plain_transport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
-    RUVIA_CHECK(&services.stopToken() == &stopToken);
-    RUVIA_CHECK(&derived.stopToken() == &stopToken);
+    RUVIA_CHECK(&services.get_stop_token() == &stop_token);
+    RUVIA_CHECK(&derived.get_stop_token() == &stop_token);
 }
 
 RUVIA_TEST(context_services_rejects_an_invalid_worker_binding) {
-    const ruvia::WorkerHandle worker;
-    const ruvia::StopToken stopToken;
+    const ruvia::worker_handle worker;
+    const ruvia::stop_token stop_token;
     bool rejected = false;
     try {
-        const ruvia::detail::ContextServices services(worker, stopToken);
+        const ruvia::detail::context_services services(worker, stop_token);
         static_cast<void>(services);
     } catch (const std::invalid_argument&) {
         rejected = true;
@@ -201,241 +202,241 @@ RUVIA_TEST(context_services_rejects_an_invalid_worker_binding) {
 }
 
 RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    auto context =
-        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
+    auto context_value =
+        ruvia::detail::context_access::make(memory, request, ruvia::test::test_context_services());
 
-    bool httpClientRejected = false;
+    bool http_client_rejected = false;
     try {
-        static_cast<void>(context.httpClient());
-    } catch (const ruvia::HttpClientError& error) {
-        httpClientRejected = error.code() == ruvia::HttpClientError::Code::kNotConfigured;
+        static_cast<void>(context_value.get_http_client());
+    } catch (const ruvia::http_client_error& error) {
+        http_client_rejected = error.code() == ruvia::http_client_error::code_type::not_configured;
     }
-    RUVIA_CHECK(httpClientRejected);
+    RUVIA_CHECK(http_client_rejected);
 
 #ifdef RUVIA_ENABLE_DATABASE
-    bool databaseRejected = false;
+    bool database_rejected = false;
     try {
-        static_cast<void>(context.db());
-    } catch (const ruvia::DbError& error) {
-        databaseRejected = error.code() == ruvia::DbError::Code::kNotConfigured;
+        static_cast<void>(context_value.db());
+    } catch (const ruvia::db_error& error) {
+        database_rejected = error.code() == ruvia::db_error::code_type::not_configured;
     }
-    RUVIA_CHECK(databaseRejected);
+    RUVIA_CHECK(database_rejected);
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    bool redisRejected = false;
+    bool redis_rejected = false;
     try {
-        static_cast<void>(context.redis());
-    } catch (const ruvia::RedisError& error) {
-        redisRejected = error.code() == ruvia::RedisError::Code::kNotConfigured;
+        static_cast<void>(context_value.redis());
+    } catch (const ruvia::redis_error& error) {
+        redis_rejected = error.code() == ruvia::redis_error::code_type::not_configured;
     }
-    RUVIA_CHECK(redisRejected);
+    RUVIA_CHECK(redis_rejected);
 #endif
 }
 
 RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    auto context =
-        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
+    auto context_value =
+        ruvia::detail::context_access::make(memory, request, ruvia::test::test_context_services());
 
-    RUVIA_CHECK(!context.trySession().has_value());
+    RUVIA_CHECK(!context_value.try_session().has_value());
     bool rejected = false;
     try {
-        static_cast<void>(context.session());
+        static_cast<void>(context_value.session());
     } catch (const std::logic_error&) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
 
-    ruvia::detail::SessionAccess::bind(context);
-    auto session = context.session();
-    session.set("user=42");
-    RUVIA_CHECK_EQ(session.data(), std::string_view("user=42"));
-    RUVIA_CHECK(context.trySession().has_value());
+    ruvia::detail::session_access::bind(context_value);
+    auto session_value = context_value.session();
+    session_value.set("user=42");
+    RUVIA_CHECK_EQ(session_value.data(), std::string_view("user=42"));
+    RUVIA_CHECK(context_value.try_session().has_value());
 }
 
 RUVIA_TEST(context_exposes_the_server_shutdown_stop_token) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    ruvia::StopSource source;
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
+    ruvia::stop_source source;
     const auto token = source.token();
-    const ruvia::detail::ContextServices services(ruvia::test::testWorkerHandle(), token);
-    const auto context = ruvia::detail::ContextAccess::make(memory, request, services);
+    const ruvia::detail::context_services services(ruvia::test::test_worker_handle(), token);
+    const auto context_value = ruvia::detail::context_access::make(memory, request, services);
 
-    RUVIA_CHECK(context.stopToken().stoppable());
-    RUVIA_CHECK(!context.stopToken().stopRequested());
-    source.requestStop();
-    RUVIA_CHECK(context.stopToken().stopRequested());
+    RUVIA_CHECK(context_value.get_stop_token().stoppable());
+    RUVIA_CHECK(!context_value.get_stop_token().stop_requested());
+    source.request_stop();
+    RUVIA_CHECK(context_value.get_stop_token().stop_requested());
 }
 
 RUVIA_TEST(context_services_bind_request_deadline_and_stop_token_atomically) {
-    ruvia::StopSource workerStop;
-    const auto workerToken = workerStop.token();
-    const ruvia::detail::ContextServices base(ruvia::test::testWorkerHandle(), workerToken);
-    ruvia::detail::RequestDeadline deadline(workerToken);
+    ruvia::stop_source worker_stop;
+    const auto worker_token = worker_stop.token();
+    const ruvia::detail::context_services base(ruvia::test::test_worker_handle(), worker_token);
+    ruvia::detail::request_deadline deadline(worker_token);
 
-    const auto request = base.withRequestDeadline(deadline);
+    const auto request = base.with_request_deadline(deadline);
 
-    RUVIA_CHECK(request.requestDeadline() == &deadline);
-    RUVIA_CHECK(&request.stopToken() == &deadline.token());
-    RUVIA_CHECK(base.requestDeadline() == nullptr);
-    RUVIA_CHECK(&base.stopToken() == &workerToken);
+    RUVIA_CHECK(request.request_deadline() == &deadline);
+    RUVIA_CHECK(&request.get_stop_token() == &deadline.token());
+    RUVIA_CHECK(base.request_deadline() == nullptr);
+    RUVIA_CHECK(&base.get_stop_token() == &worker_token);
 }
 
 RUVIA_TEST(context_response_output_has_one_active_alternative) {
-    OutputSink sink;
-    auto writer = makeResponseStreamWriter(sink);
-    const auto workerHandle = ruvia::test::testWorkerHandle();
-    auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+    output_sink sink;
+    auto writer = make_response_stream_writer(sink);
+    const auto worker_handle_value = ruvia::test::test_worker_handle();
+    auto websocket_value = ruvia::detail::websocket_access::make(
+        *ruvia::detail::process_resource(), worker_handle_value, nullptr, &read_websocket, &write_websocket, &close_websocket);
 
-    const auto base = ruvia::test::testContextServices();
-    RUVIA_CHECK(base.responseOutput().buffered() != nullptr);
-    RUVIA_CHECK(base.responseOutput().responseStream() == nullptr);
-    RUVIA_CHECK(base.responseOutput().webSocket() == nullptr);
+    const auto base = ruvia::test::test_context_services();
+    RUVIA_CHECK(base.response_output().buffered() != nullptr);
+    RUVIA_CHECK(base.response_output().response_stream() == nullptr);
+    RUVIA_CHECK(base.response_output().get_websocket() == nullptr);
 
-    const auto streaming = base.withResponseStream(writer);
-    RUVIA_CHECK(streaming.responseOutput().buffered() == nullptr);
-    RUVIA_CHECK(streaming.responseOutput().responseStream() != nullptr);
-    RUVIA_CHECK(streaming.responseOutput().webSocket() == nullptr);
-    RUVIA_CHECK(&streaming.responseOutput().responseStream()->writer() == &writer);
+    const auto streaming = base.with_response_stream(writer);
+    RUVIA_CHECK(streaming.response_output().buffered() == nullptr);
+    RUVIA_CHECK(streaming.response_output().response_stream() != nullptr);
+    RUVIA_CHECK(streaming.response_output().get_websocket() == nullptr);
+    RUVIA_CHECK(&streaming.response_output().response_stream()->writer() == &writer);
 
-    const auto webSocketOutput = ruvia::detail::ContextResponseOutput::webSocket(webSocket);
-    RUVIA_CHECK(webSocketOutput.buffered() == nullptr);
-    RUVIA_CHECK(webSocketOutput.responseStream() == nullptr);
-    RUVIA_CHECK(webSocketOutput.webSocket() != nullptr);
-    RUVIA_CHECK(&webSocketOutput.webSocket()->webSocket() == &webSocket);
+    const auto websocket_output = ruvia::detail::context_response_output::websocket_value(websocket_value);
+    RUVIA_CHECK(websocket_output.buffered() == nullptr);
+    RUVIA_CHECK(websocket_output.response_stream() == nullptr);
+    RUVIA_CHECK(websocket_output.get_websocket() != nullptr);
+    RUVIA_CHECK(&websocket_output.get_websocket()->get_websocket() == &websocket_value);
 
-    RUVIA_CHECK(base.responseOutput().buffered() != nullptr);
-    RUVIA_CHECK(streaming.responseOutput().responseStream() != nullptr);
+    RUVIA_CHECK(base.response_output().buffered() != nullptr);
+    RUVIA_CHECK(streaming.response_output().response_stream() != nullptr);
 }
 
 RUVIA_TEST(context_applies_listener_alt_svc_and_allows_application_override_or_removal) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
     constexpr std::string_view automatic = "h3=\":443\"; ma=86400";
-    auto context = ruvia::detail::ContextAccess::make(memory, request,
-        ruvia::test::testContextServices().withAutomaticAltSvc(automatic));
+    auto context_value = ruvia::detail::context_access::make(memory, request,
+        ruvia::test::test_context_services().with_automatic_alt_svc(automatic));
 
-    const auto defaultResponse = context.text("default");
-    RUVIA_CHECK_EQ(defaultResponse.header("Alt-Svc"), automatic);
+    const auto default_response = context_value.text("default");
+    RUVIA_CHECK_EQ(default_response.header("Alt-Svc"), automatic);
 
-    context.header("Alt-Svc", "clear");
-    const auto overridden = context.text("override");
+    context_value.header("Alt-Svc", "clear");
+    const auto overridden = context_value.text("override");
     RUVIA_CHECK_EQ(overridden.header("alt-svc"), std::string_view("clear"));
 
-    context.removeHeader("ALT-SVC");
-    const auto removed = context.text("removed");
+    context_value.remove_header("ALT-SVC");
+    const auto removed = context_value.text("removed");
     RUVIA_CHECK(!removed.header("Alt-Svc").has_value());
 }
 
 RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
 
-    std::optional<ruvia::BodyReader> reader;
-    ruvia::detail::StreamingAccess::emplaceBodyReader(reader, nullptr, &readBody);
-    auto bodyContext = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::test::testContextServices().withStreamingRequestBody(*reader));
-    RUVIA_CHECK(&bodyContext.req().bodyReader() == &*reader);
+    std::optional<ruvia::body_reader> reader;
+    ruvia::detail::streaming_access::emplace_body_reader(reader, nullptr, &read_body);
+    auto body_context = ruvia::detail::context_access::make(
+        memory, request, ruvia::test::test_context_services().with_streaming_request_body(*reader));
+    RUVIA_CHECK(&body_context.req().get_body_reader() == &*reader);
 
-    OutputSink sink;
-    auto writer = makeResponseStreamWriter(sink);
-    auto streamContext = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::test::testContextServices().withResponseStream(writer));
-    RUVIA_CHECK(&streamContext.stream() == &writer);
-    (void)streamContext.streamSse();
-    const auto sseHead = ruvia::detail::ContextAccess::streamingHead(streamContext);
-    RUVIA_CHECK_EQ(sseHead.header("Content-Type"), std::string_view("text/event-stream"));
-    RUVIA_CHECK_EQ(sseHead.header("Cache-Control"), std::string_view("no-cache"));
+    output_sink sink;
+    auto writer = make_response_stream_writer(sink);
+    auto stream_context = ruvia::detail::context_access::make(
+        memory, request, ruvia::test::test_context_services().with_response_stream(writer));
+    RUVIA_CHECK(&stream_context.stream() == &writer);
+    (void)stream_context.stream_sse();
+    const auto sse_head = ruvia::detail::context_access::streaming_head(stream_context);
+    RUVIA_CHECK_EQ(sse_head.header("Content-Type"), std::string_view("text/event-stream"));
+    RUVIA_CHECK_EQ(sse_head.header("Cache-Control"), std::string_view("no-cache"));
 
-    const auto workerHandle = ruvia::test::testWorkerHandle();
-    auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
-    auto webSocketContext =
-        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    const auto worker_handle_value = ruvia::test::test_worker_handle();
+    auto websocket_value = ruvia::detail::websocket_access::make(
+        *ruvia::detail::process_resource(), worker_handle_value, nullptr, &read_websocket, &write_websocket, &close_websocket);
+    auto websocket_context =
+        ruvia::detail::context_access::make(memory, request, ruvia::test::test_context_services());
     {
-        ruvia::detail::ContextWebSocketBinding binding(webSocketContext, webSocket);
-        RUVIA_CHECK(&webSocketContext.webSocket() == &webSocket);
+        ruvia::detail::context_websocket_binding binding(websocket_context, websocket_value);
+        RUVIA_CHECK(&websocket_context.get_websocket() == &websocket_value);
     }
-    bool unavailableAfterScope = false;
+    bool unavailable_after_scope = false;
     try {
-        (void)webSocketContext.webSocket();
+        (void)websocket_context.get_websocket();
     } catch (const std::logic_error&) {
-        unavailableAfterScope = true;
+        unavailable_after_scope = true;
     }
-    RUVIA_CHECK(unavailableAfterScope);
+    RUVIA_CHECK(unavailable_after_scope);
 }
 
 RUVIA_TEST(context_websocket_binding_restores_capability_during_unwind) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    auto context =
-        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
-    const auto workerHandle = ruvia::test::testWorkerHandle();
-    auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
+    auto context_value =
+        ruvia::detail::context_access::make(memory, request, ruvia::test::test_context_services());
+    const auto worker_handle_value = ruvia::test::test_worker_handle();
+    auto websocket_value = ruvia::detail::websocket_access::make(
+        *ruvia::detail::process_resource(), worker_handle_value, nullptr, &read_websocket, &write_websocket, &close_websocket);
 
     try {
-        ruvia::detail::ContextWebSocketBinding binding(context, webSocket);
-        RUVIA_CHECK(&context.webSocket() == &webSocket);
+        ruvia::detail::context_websocket_binding binding(context_value, websocket_value);
+        RUVIA_CHECK(&context_value.get_websocket() == &websocket_value);
         throw std::runtime_error("leave websocket scope");
     } catch (const std::runtime_error&) {
     }
 
-    bool unavailableAfterUnwind = false;
+    bool unavailable_after_unwind = false;
     try {
-        (void)context.webSocket();
+        (void)context_value.get_websocket();
     } catch (const std::logic_error&) {
-        unavailableAfterUnwind = true;
+        unavailable_after_unwind = true;
     }
-    RUVIA_CHECK(unavailableAfterUnwind);
+    RUVIA_CHECK(unavailable_after_unwind);
 }
 
 RUVIA_TEST(context_request_exposes_matched_route_path) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    auto context = ruvia::detail::ContextAccess::make(
-        memory, request, "/items/:id", 0, ruvia::test::testContextServices());
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    auto request = make_request(memory.resource());
+    auto context_value = ruvia::detail::context_access::make(
+        memory, request, "/items/:id", 0, ruvia::test::test_context_services());
 
-    const auto facade = context.req();
-    RUVIA_CHECK_EQ(facade.routePath(), std::string_view("/items/:id"));
+    const auto facade = context_value.req();
+    RUVIA_CHECK_EQ(facade.route_path(), std::string_view("/items/:id"));
 }
 
 RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
-    const ruvia::HttpHeaderView headers[]{{"Cookie", "theme=dark"}};
-    auto [request, parseError] = ruvia::makeParsedHttpRequest(
+    ruvia::worker_memory worker;
+    ruvia::request_memory memory(worker);
+    const ruvia::http_header_view headers[]{{"Cookie", "theme=dark"}};
+    auto [request, parse_error] = ruvia::make_parsed_http_request(
         "GET", "/?name=ruvia&name=web", headers, {}, memory.resource());
-    RUVIA_CHECK(!parseError);
+    RUVIA_CHECK(!parse_error);
 
     const std::string_view names[]{"id"};
     const std::string_view values[]{"42"};
-    auto context = ruvia::detail::ContextAccess::make(
-        memory, request, "/items/:id", names, values, 1, 0, ruvia::test::testContextServices());
-    const auto* const owner = ruvia::detail::ContextAccess::requestStorage(context);
-    RUVIA_CHECK(owner != nullptr);
-    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
-    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestQueryMaterialized(context));
-    RUVIA_CHECK(!ruvia::detail::ContextAccess::routeParamsMaterialized(context));
+    auto context_value = ruvia::detail::context_access::make(
+        memory, request, "/items/:id", names, values, 1, 0, ruvia::test::test_context_services());
+    const auto* const owner_value = ruvia::detail::context_access::request_storage(context_value);
+    RUVIA_CHECK(owner_value != nullptr);
+    RUVIA_CHECK(!ruvia::detail::context_access::request_cookies_materialized(context_value));
+    RUVIA_CHECK(!ruvia::detail::context_access::request_query_materialized(context_value));
+    RUVIA_CHECK(!ruvia::detail::context_access::route_params_materialized(context_value));
 
-    (void)context.req().headerFields();
-    (void)context.req().queryFields();
-    (void)context.req().cookieFields();
-    (void)context.req().paramFields();
-    RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == owner);
-    RUVIA_CHECK(ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
-    RUVIA_CHECK(ruvia::detail::ContextAccess::requestQueryMaterialized(context));
-    RUVIA_CHECK(ruvia::detail::ContextAccess::routeParamsMaterialized(context));
+    (void)context_value.req().header_fields();
+    (void)context_value.req().query_fields();
+    (void)context_value.req().cookie_fields();
+    (void)context_value.req().param_fields();
+    RUVIA_CHECK(ruvia::detail::context_access::request_storage(context_value) == owner_value);
+    RUVIA_CHECK(ruvia::detail::context_access::request_cookies_materialized(context_value));
+    RUVIA_CHECK(ruvia::detail::context_access::request_query_materialized(context_value));
+    RUVIA_CHECK(ruvia::detail::context_access::route_params_materialized(context_value));
 }

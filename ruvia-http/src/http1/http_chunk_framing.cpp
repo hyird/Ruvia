@@ -4,11 +4,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http_limits.h"
 
-#include "parser/HttpChunkParser.h"
+#include "parser/http_chunk_parser.h"
 
 namespace ruvia::detail {
 
@@ -17,42 +17,42 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
         return chunk_framing_failure{0, std::get<1>(state_)};
     }
 
-    std::size_t cursor = 0;
+    std::size_t cursor_value = 0;
     for (;;) {
         switch (std::get<0>(state_)) {
             case progress::size_line: {
-                const auto line_end = available.find("\r\n", cursor);
+                const auto line_end = available.find("\r\n", cursor_value);
                 if (line_end == std::string_view::npos) {
                     // A future CRLF can begin at most one byte before the end.
-                    if (available.size() - cursor >= kMaxHttpHeaderBytes) {
-                        return fail(cursor, chunk_framing_error::framing_limit_exceeded);
+                    if (available.size() - cursor_value >= max_http_header_bytes) {
+                        return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                     }
-                    return chunk_framing_need_more{cursor};
+                    return chunk_framing_need_more{cursor_value};
                 }
-                if (line_end - cursor + 2 > kMaxHttpHeaderBytes) {
-                    return fail(cursor, chunk_framing_error::framing_limit_exceeded);
+                if (line_end - cursor_value + 2 > max_http_header_bytes) {
+                    return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                 }
                 std::size_t chunk_size = 0;
-                switch (parseHttpChunkSizeLine(available.substr(cursor, line_end - cursor), chunk_size)) {
-                    case ChunkSizeLineStatus::kOk:
+                switch (parse_http_chunk_size_line(available.substr(cursor_value, line_end - cursor_value), chunk_size)) {
+                    case chunk_size_line_status::ok:
                         break;
-                    case ChunkSizeLineStatus::kInvalidSize:
-                        return fail(cursor, chunk_framing_error::invalid_size);
-                    case ChunkSizeLineStatus::kOverflow:
-                        return fail(cursor, chunk_framing_error::size_overflow);
-                    case ChunkSizeLineStatus::kInvalidExtension:
-                        return fail(cursor, chunk_framing_error::invalid_extension);
+                    case chunk_size_line_status::invalid_size:
+                        return fail(cursor_value, chunk_framing_error::invalid_size);
+                    case chunk_size_line_status::overflow:
+                        return fail(cursor_value, chunk_framing_error::size_overflow);
+                    case chunk_size_line_status::invalid_extension:
+                        return fail(cursor_value, chunk_framing_error::invalid_extension);
                 }
-                if (const auto error = account_framing(line_end - cursor + 2)) {
-                    return fail(cursor, *error);
+                if (const auto error = account_framing(line_end - cursor_value + 2)) {
+                    return fail(cursor_value, *error);
                 }
-                cursor = line_end + 2;
+                cursor_value = line_end + 2;
                 if (chunk_size == 0) {
                     state_ = progress::trailers;
                     trailer_search_offset_ = 0;
                 } else {
-                    if (config_.body_limit.additionExceeds(decoded_bytes_, chunk_size)) {
-                        return fail(cursor, chunk_framing_error::body_limit_exceeded);
+                    if (config_.body_limit_.addition_exceeds(decoded_bytes_, chunk_size)) {
+                        return fail(cursor_value, chunk_framing_error::body_limit_exceeded);
                     }
                     decoded_bytes_ += chunk_size;
                     remaining_ = chunk_size;
@@ -61,78 +61,78 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
                 break;
             }
             case progress::body: {
-                const auto bytes = std::min({remaining_, available.size() - cursor, max_body_bytes});
-                if (bytes == 0) {
-                    return chunk_framing_need_more{cursor};
+                const auto bytes_value = std::min({remaining_, available.size() - cursor_value, max_body_bytes});
+                if (bytes_value == 0) {
+                    return chunk_framing_need_more{cursor_value};
                 }
-                const auto body = available.substr(cursor, bytes);
-                remaining_ -= bytes;
-                cursor += bytes;
+                const auto body = available.substr(cursor_value, bytes_value);
+                remaining_ -= bytes_value;
+                cursor_value += bytes_value;
                 if (remaining_ == 0) {
-                    if (available.size() - cursor >= 2) {
-                        if (const auto error = consume_delimiter(available.substr(cursor))) {
-                            return fail(cursor, *error);
+                    if (available.size() - cursor_value >= 2) {
+                        if (const auto error = consume_delimiter(available.substr(cursor_value))) {
+                            return fail(cursor_value, *error);
                         }
-                        cursor += 2;
+                        cursor_value += 2;
                         state_ = progress::size_line;
                     } else {
                         state_ = progress::delimiter;
                     }
                 }
-                return chunk_framing_body{cursor, body};
+                return chunk_framing_body{cursor_value, body};
             }
             case progress::delimiter:
-                if (available.size() - cursor < 2) {
-                    return chunk_framing_need_more{cursor};
+                if (available.size() - cursor_value < 2) {
+                    return chunk_framing_need_more{cursor_value};
                 }
-                if (const auto error = consume_delimiter(available.substr(cursor))) {
-                    return fail(cursor, *error);
+                if (const auto error = consume_delimiter(available.substr(cursor_value))) {
+                    return fail(cursor_value, *error);
                 }
-                cursor += 2;
+                cursor_value += 2;
                 state_ = progress::size_line;
                 break;
             case progress::trailers: {
-                const auto trailers = available.substr(cursor);
+                const auto trailers = available.substr(cursor_value);
                 if (trailers.starts_with("\r\n")) {
                     if (const auto error = account_framing(2)) {
-                        return fail(cursor, *error);
+                        return fail(cursor_value, *error);
                     }
                     state_ = progress::complete;
-                    return chunk_framing_complete{cursor + 2, {}};
+                    return chunk_framing_complete{cursor_value + 2, {}};
                 }
                 const auto trailer_end = trailers.find("\r\n\r\n", trailer_search_offset_);
                 if (trailer_end == std::string_view::npos) {
                     // Keep the final three bytes as a possible delimiter prefix.
-                    if (trailers.size() >= kMaxHttpHeaderBytes) {
-                        return fail(cursor, chunk_framing_error::framing_limit_exceeded);
+                    if (trailers.size() >= max_http_header_bytes) {
+                        return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                     }
                     trailer_search_offset_ = trailers.size() > 3 ? trailers.size() - 3 : 0;
-                    return chunk_framing_need_more{cursor};
+                    return chunk_framing_need_more{cursor_value};
                 }
                 const auto trailer_bytes = trailer_end + 4;
-                if (config_.trailer_section_limit.exceeds(trailer_bytes)) {
-                    return fail(cursor, chunk_framing_error::trailer_limit_exceeded);
+                if (config_.trailer_section_limit_.exceeds(trailer_bytes)) {
+                    return fail(cursor_value, chunk_framing_error::trailer_limit_exceeded);
                 }
                 if (const auto error = validate_trailers(trailers.substr(0, trailer_end))) {
-                    return fail(cursor, *error);
+                    return fail(cursor_value, *error);
                 }
                 if (const auto error = account_framing(trailer_bytes)) {
-                    return fail(cursor, *error);
+                    return fail(cursor_value, *error);
                 }
                 state_ = progress::complete;
-                return chunk_framing_complete{cursor + trailer_bytes, trailers.substr(0, trailer_end)};
+                return chunk_framing_complete{cursor_value + trailer_bytes, trailers.substr(0, trailer_end)};
             }
             case progress::complete:
-                return chunk_framing_complete{cursor, {}};
+                return chunk_framing_complete{cursor_value, {}};
         }
     }
 }
 
-std::optional<chunk_framing_error> http_chunk_framing::account_framing(std::size_t bytes) noexcept {
-    if (bytes > config_.framing_limit - framing_bytes_) {
+std::optional<chunk_framing_error> http_chunk_framing::account_framing(std::size_t bytes_value) noexcept {
+    if (bytes_value > config_.framing_limit_ - framing_bytes_) {
         return chunk_framing_error::framing_limit_exceeded;
     }
-    framing_bytes_ += bytes;
+    framing_bytes_ += bytes_value;
     return std::nullopt;
 }
 
@@ -144,13 +144,13 @@ std::optional<chunk_framing_error> http_chunk_framing::consume_delimiter(std::st
 }
 
 std::optional<chunk_framing_error> http_chunk_framing::validate_trailers(std::string_view trailers) const noexcept {
-    if (config_.trailer_role == chunk_trailer_role::response) {
-        return httpResponseTrailerBlockValid(trailers)
+    if (config_.trailer_role_ == chunk_trailer_role::response) {
+        return http_response_trailer_block_valid(trailers)
                    ? std::nullopt
                    : std::optional(chunk_framing_error::invalid_trailer);
     }
-    if (const auto error = validateHttpChunkTrailers(trailers)) {
-        return *error == HttpChunkScanError::kTooLarge
+    if (const auto error = validate_http_chunk_trailers(trailers)) {
+        return *error == http_chunk_scan_error::too_large
                    ? chunk_framing_error::trailer_limit_exceeded
                    : chunk_framing_error::invalid_trailer;
     }

@@ -4,515 +4,515 @@
 
 namespace {
 
-ruvia::Task<void> exerciseRouteAndPublish(
-    Fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const std::array fields{
-        ruvia::Http3FieldSectionFieldView{"x-input", "present"},
-        ruvia::Http3FieldSectionFieldView{"cookie", "session=one"},
-        ruvia::Http3FieldSectionFieldView{"cookie", "other=two"}};
-    feedRequest(fixture, 0, "POST", "/items", "payload", fields);
-    auto dispatch = fixture.makeDispatch(
-        0, fixture.services.withTlsTransport("127.0.0.1"));
-    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kNotReady);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{0});
-    RUVIA_CHECK(co_await dispatch.prepare() == Dispatch::PrepareStatus::kPrepared);
-    RUVIA_CHECK(co_await dispatch.prepare() == Dispatch::PrepareStatus::kAlreadyPrepared);
-    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kNotReady);
-    const auto notReady = dispatch.publishStep();
-    RUVIA_CHECK(notReady.status == Dispatch::PublishStatus::kNotReady);
-    RUVIA_CHECK(notReady.blockReason == BlockReason::kNone);
-    RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
-    RUVIA_CHECK(fixture.routes.handlers.requestReadCorrectly);
-    bool unexpectedNoDeadlineCallback = false;
-    RUVIA_CHECK(!dispatch.registerPublicationDeadlineCallback(
-        [&unexpectedNoDeadlineCallback]() noexcept { unexpectedNoDeadlineCallback = true; }));
-    RUVIA_CHECK(!unexpectedNoDeadlineCallback);
-    RUVIA_CHECK(dispatch.responseReady());
-    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kData);
+ruvia::task<void> exercise_route_and_publish(
+    fixture& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const std::array fields_value{
+        ruvia::http3_field_section_field_view{"x-input", "present"},
+        ruvia::http3_field_section_field_view{"cookie", "session=one"},
+        ruvia::http3_field_section_field_view{"cookie", "other=two"}};
+    feed_request(fixture_value, 0, "POST", "/items", "payload", fields_value);
+    auto dispatch = fixture_value.make_dispatch(
+        0, fixture_value.services_.with_tls_transport("127.0.0.1"));
+    RUVIA_CHECK(dispatch.publication_demand() == publication_demand_type::not_ready);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{0});
+    RUVIA_CHECK(co_await dispatch.prepare() == dispatch_type::prepare_status_type::prepared);
+    RUVIA_CHECK(co_await dispatch.prepare() == dispatch_type::prepare_status_type::already_prepared);
+    RUVIA_CHECK(dispatch.publication_demand() == publication_demand_type::not_ready);
+    const auto not_ready = dispatch.publish_step();
+    RUVIA_CHECK(not_ready.status_ == dispatch_type::publish_status_type::not_ready);
+    RUVIA_CHECK(not_ready.block_reason_ == block_reason_type::none);
+    RUVIA_CHECK(co_await dispatch.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{1});
+    RUVIA_CHECK(fixture_value.routes_.handlers_.request_read_correctly_);
+    bool unexpected_no_deadline_callback = false;
+    RUVIA_CHECK(!dispatch.register_publication_deadline_callback(
+        [&unexpected_no_deadline_callback]() noexcept { unexpected_no_deadline_callback = true; }));
+    RUVIA_CHECK(!unexpected_no_deadline_callback);
+    RUVIA_CHECK(dispatch.response_ready());
+    RUVIA_CHECK(dispatch.publication_demand() == publication_demand_type::data);
 
-    const auto allocations = fixture.upstream.allocationCount();
-    const auto returns = fixture.upstream.deallocationCount();
-    const auto liveAllocations = fixture.upstream.liveAllocations();
-    for (unsigned attempt = 0; attempt < 4; ++attempt) {
-        RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kData);
+    const auto allocations = fixture_value.upstream_.allocation_count();
+    const auto returns = fixture_value.upstream_.deallocation_count();
+    const auto live_allocations = fixture_value.upstream_.live_allocations();
+    for (unsigned attempt_value = 0; attempt_value < 4; ++attempt_value) {
+        RUVIA_CHECK(dispatch.publication_demand() == publication_demand_type::data);
     }
-    RUVIA_CHECK_EQ(fixture.upstream.allocationCount(), allocations);
-    RUVIA_CHECK_EQ(fixture.upstream.deallocationCount(), returns);
-    RUVIA_CHECK_EQ(fixture.upstream.liveAllocations(), liveAllocations);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
-    PublicationDemand foreignDemand{PublicationDemand::kData};
-    std::thread foreignWorker([&] { foreignDemand = dispatch.publicationDemand(); });
-    foreignWorker.join();
-    RUVIA_CHECK(foreignDemand == PublicationDemand::kWrongWorker);
+    RUVIA_CHECK_EQ(fixture_value.upstream_.allocation_count(), allocations);
+    RUVIA_CHECK_EQ(fixture_value.upstream_.deallocation_count(), returns);
+    RUVIA_CHECK_EQ(fixture_value.upstream_.live_allocations(), live_allocations);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{1});
+    publication_demand_type foreign_demand{publication_demand_type::data};
+    std::thread foreign_worker([&] { foreign_demand = dispatch.publication_demand(); });
+    foreign_worker.join();
+    RUVIA_CHECK(foreign_demand == publication_demand_type::wrong_worker);
 
-    PublishedWire wire;
-    publishAndDrain(dispatch, fixture, 0, wire, ruvia_ctx, true);
-    RUVIA_CHECK(wire.identityMatched);
-    RUVIA_CHECK_EQ(wire.finalWireBytes.value_or(0), wire.bytes.size());
-    RUVIA_CHECK_EQ(wire.finalWireBytes.value_or(0), dispatch.publishedWireBytes());
-    DecodedResponse response;
-    const auto decoded = decodePublished(wire, ruvia::HttpKnownMethod::kPost, 0,
-        fixture.worker.resource(), response);
-    RUVIA_CHECK(decoded.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(response.finalHeads, std::size_t{1});
-    RUVIA_CHECK_EQ(response.status, std::uint16_t{200});
-    RUVIA_CHECK(response.dispatchHeader == "buffered");
-    RUVIA_CHECK(response.body == "buffered-h3-ok");
-    RUVIA_CHECK_EQ(response.messageEnds, std::size_t{1});
+    published_wire wire;
+    publish_and_drain(dispatch, fixture_value, 0, wire, ruvia_ctx, true);
+    RUVIA_CHECK(wire.identity_matched_);
+    RUVIA_CHECK_EQ(wire.final_wire_bytes_.value_or(0), wire.bytes_.size());
+    RUVIA_CHECK_EQ(wire.final_wire_bytes_.value_or(0), dispatch.published_wire_bytes());
+    decoded_response response;
+    const auto decoded = decode_published(wire, ruvia::http_known_method::post, 0,
+        fixture_value.worker_.resource(), response);
+    RUVIA_CHECK(decoded.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(response.final_heads_, std::size_t{1});
+    RUVIA_CHECK_EQ(response.status_, std::uint16_t{200});
+    RUVIA_CHECK(response.dispatch_header_ == "buffered");
+    RUVIA_CHECK(response.body_ == "buffered-h3-ok");
+    RUVIA_CHECK_EQ(response.message_ends_, std::size_t{1});
     RUVIA_CHECK(dispatch.complete());
-    RUVIA_CHECK(fixture.session.request(0) == nullptr);
+    RUVIA_CHECK(fixture_value.session_.request(0) == nullptr);
 }
 
-ruvia::Task<void> exerciseHeadAndFile(Fixture& fixture,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    feedRequest(fixture, 0, "HEAD", "/file");
-    auto head = fixture.makeDispatch(0, fixture.services);
-    RUVIA_CHECK(co_await head.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK(head.publicationDemand() == PublicationDemand::kData);
-    const auto headHeaders = head.publishStep();
-    RUVIA_CHECK(headHeaders.status == Dispatch::PublishStatus::kBytesPublished);
-    RUVIA_CHECK(head.publicationDemand() == PublicationDemand::kControl);
-    PublishedWire headWire;
-    publishAndDrain(head, fixture, 0, headWire, ruvia_ctx);
-    DecodedResponse headResponse;
-    const auto headDecoded = decodePublished(headWire, ruvia::HttpKnownMethod::kHead, 0,
-        fixture.worker.resource(), headResponse);
-    RUVIA_CHECK(headDecoded.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(headResponse.finalHeads, std::size_t{1});
-    RUVIA_CHECK_EQ(headResponse.contentLength.value_or(0), std::uint64_t{5});
-    RUVIA_CHECK_EQ(headResponse.bodyEvents, std::size_t{0});
+ruvia::task<void> exercise_head_and_file(fixture& fixture_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    feed_request(fixture_value, 0, "HEAD", "/file");
+    auto head = fixture_value.make_dispatch(0, fixture_value.services_);
+    RUVIA_CHECK(co_await head.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK(head.publication_demand() == publication_demand_type::data);
+    const auto head_headers = head.publish_step();
+    RUVIA_CHECK(head_headers.status_ == dispatch_type::publish_status_type::bytes_published);
+    RUVIA_CHECK(head.publication_demand() == publication_demand_type::control);
+    published_wire head_wire;
+    publish_and_drain(head, fixture_value, 0, head_wire, ruvia_ctx);
+    decoded_response head_response;
+    const auto head_decoded = decode_published(head_wire, ruvia::http_known_method::head, 0,
+        fixture_value.worker_.resource(), head_response);
+    RUVIA_CHECK(head_decoded.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(head_response.final_heads_, std::size_t{1});
+    RUVIA_CHECK_EQ(head_response.content_length_.value_or(0), std::uint64_t{5});
+    RUVIA_CHECK_EQ(head_response.body_events_, std::size_t{0});
     RUVIA_CHECK(head.complete());
 
-    feedRequest(fixture, 4, "GET", "/file");
-    auto file = fixture.makeDispatch(4, fixture.services);
-    RUVIA_CHECK(co_await file.runHandler() == Dispatch::RunStatus::kResponseReady);
+    feed_request(fixture_value, 4, "GET", "/file");
+    auto file = fixture_value.make_dispatch(4, fixture_value.services_);
+    RUVIA_CHECK(co_await file.run_handler() == dispatch_type::run_status_type::response_ready);
     RUVIA_CHECK(file.failure() == nullptr);
-    PublishedWire unavailableWire;
-    publishAndDrain(file, fixture, 4, unavailableWire, ruvia_ctx);
-    DecodedResponse unavailable;
-    RUVIA_CHECK(decodePublished(unavailableWire, ruvia::HttpKnownMethod::kGet, 4, fixture.worker.resource(), unavailable).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(unavailable.status, std::uint16_t{503});
+    published_wire unavailable_wire;
+    publish_and_drain(file, fixture_value, 4, unavailable_wire, ruvia_ctx);
+    decoded_response unavailable;
+    RUVIA_CHECK(decode_published(unavailable_wire, ruvia::http_known_method::get, 4, fixture_value.worker_.resource(), unavailable).status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(unavailable.status_, std::uint16_t{503});
 
-    feedRequest(fixture, 8, "GET", "/empty-file");
-    auto emptyFile = fixture.makeDispatch(8, fixture.services);
-    RUVIA_CHECK(co_await emptyFile.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK(emptyFile.publicationDemand() == PublicationDemand::kData);
-    const auto emptyFileHeaders = emptyFile.publishStep();
-    RUVIA_CHECK(emptyFileHeaders.status == Dispatch::PublishStatus::kBytesPublished);
-    RUVIA_CHECK(emptyFile.publicationDemand() == PublicationDemand::kControl);
-    PublishedWire emptyFileWire;
-    publishAndDrain(emptyFile, fixture, 8, emptyFileWire, ruvia_ctx);
-    DecodedResponse emptyFileResponse;
-    const auto emptyFileDecoded = decodePublished(emptyFileWire, ruvia::HttpKnownMethod::kGet, 8,
-        fixture.worker.resource(), emptyFileResponse);
-    RUVIA_CHECK(emptyFileDecoded.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(emptyFileResponse.status, std::uint16_t{200});
-    RUVIA_CHECK_EQ(emptyFileResponse.contentLength.value_or(1), std::uint64_t{0});
-    RUVIA_CHECK_EQ(emptyFileResponse.bodyEvents, std::size_t{0});
-    RUVIA_CHECK(emptyFileResponse.body.empty());
-    const auto emptyFileFrame = ruvia::decodeHttp3Frame(
-        std::span<const char>(emptyFileWire.bytes.data(), emptyFileWire.bytes.size()));
-    RUVIA_CHECK((emptyFileFrame.index() == 0));
-    if ((emptyFileFrame.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(emptyFileFrame).type,
-            static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
-        RUVIA_CHECK_EQ(std::get<0>(emptyFileFrame).encodedBytes, emptyFileWire.bytes.size());
+    feed_request(fixture_value, 8, "GET", "/empty-file");
+    auto empty_file = fixture_value.make_dispatch(8, fixture_value.services_);
+    RUVIA_CHECK(co_await empty_file.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK(empty_file.publication_demand() == publication_demand_type::data);
+    const auto empty_file_headers = empty_file.publish_step();
+    RUVIA_CHECK(empty_file_headers.status_ == dispatch_type::publish_status_type::bytes_published);
+    RUVIA_CHECK(empty_file.publication_demand() == publication_demand_type::control);
+    published_wire empty_file_wire;
+    publish_and_drain(empty_file, fixture_value, 8, empty_file_wire, ruvia_ctx);
+    decoded_response empty_file_response;
+    const auto empty_file_decoded = decode_published(empty_file_wire, ruvia::http_known_method::get, 8,
+        fixture_value.worker_.resource(), empty_file_response);
+    RUVIA_CHECK(empty_file_decoded.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(empty_file_response.status_, std::uint16_t{200});
+    RUVIA_CHECK_EQ(empty_file_response.content_length_.value_or(1), std::uint64_t{0});
+    RUVIA_CHECK_EQ(empty_file_response.body_events_, std::size_t{0});
+    RUVIA_CHECK(empty_file_response.body_.empty());
+    const auto empty_file_frame = ruvia::decode_http3_frame(
+        std::span<const char>(empty_file_wire.bytes_.data(), empty_file_wire.bytes_.size()));
+    RUVIA_CHECK((empty_file_frame.index() == 0));
+    if ((empty_file_frame.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(empty_file_frame).type_,
+            static_cast<std::uint64_t>(ruvia::http3_frame_type::headers));
+        RUVIA_CHECK_EQ(std::get<0>(empty_file_frame).encoded_bytes_, empty_file_wire.bytes_.size());
     }
-    RUVIA_CHECK(emptyFile.complete());
+    RUVIA_CHECK(empty_file.complete());
 }
 
-ruvia::Task<void> exerciseColdAndError(Fixture& fixture,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    feedRequest(fixture, 0, "POST", "/items", "payload");
+ruvia::task<void> exercise_cold_and_error(fixture& fixture_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    feed_request(fixture_value, 0, "POST", "/items", "payload");
     {
-        auto cold = fixture.makeDispatch(0, fixture.services);
+        auto cold = fixture_value.make_dispatch(0, fixture_value.services_);
         {
-            auto task = cold.prepare();
+            auto task_value = cold.prepare();
         }
         {
-            auto task = cold.runHandler();
+            auto task_value = cold.run_handler();
         }
     }
-    auto stillReady = fixture.session.acquireRequest(0);
-    RUVIA_CHECK(stillReady.has_value());
-    stillReady.reset();
-    RUVIA_CHECK(fixture.session.release(0));
+    auto still_ready = fixture_value.session_.acquire_request(0);
+    RUVIA_CHECK(still_ready.has_value());
+    still_ready.reset();
+    RUVIA_CHECK(fixture_value.session_.release(0));
 
-    feedRequest(fixture, 4, "GET", "/throw");
-    auto failure = fixture.makeDispatch(4, fixture.services);
-    RUVIA_CHECK(co_await failure.prepare() == Dispatch::PrepareStatus::kPrepared);
-    RUVIA_CHECK(co_await failure.prepare() == Dispatch::PrepareStatus::kAlreadyPrepared);
-    RUVIA_CHECK(co_await failure.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK(fixture.routes.handlers.errorHandlerCalled);
-    PublishedWire wire;
-    publishAndDrain(failure, fixture, 4, wire, ruvia_ctx);
-    DecodedResponse response;
-    const auto decoded = decodePublished(
-        wire, ruvia::HttpKnownMethod::kGet, 4, fixture.worker.resource(), response);
-    RUVIA_CHECK(decoded.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(response.status, std::uint16_t{500});
-    RUVIA_CHECK(response.errorHeader == "used");
-    RUVIA_CHECK(response.body == "handled-error");
+    feed_request(fixture_value, 4, "GET", "/throw");
+    auto failure = fixture_value.make_dispatch(4, fixture_value.services_);
+    RUVIA_CHECK(co_await failure.prepare() == dispatch_type::prepare_status_type::prepared);
+    RUVIA_CHECK(co_await failure.prepare() == dispatch_type::prepare_status_type::already_prepared);
+    RUVIA_CHECK(co_await failure.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK(fixture_value.routes_.handlers_.error_handler_called_);
+    published_wire wire;
+    publish_and_drain(failure, fixture_value, 4, wire, ruvia_ctx);
+    decoded_response response;
+    const auto decoded = decode_published(
+        wire, ruvia::http_known_method::get, 4, fixture_value.worker_.resource(), response);
+    RUVIA_CHECK(decoded.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(response.status_, std::uint16_t{500});
+    RUVIA_CHECK(response.error_header_ == "used");
+    RUVIA_CHECK(response.body_ == "handled-error");
 }
 
-ruvia::Task<void> exerciseEscapingFailure(Fixture& fixture,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    fixture.routes.handlers.throwFromErrorHandler = true;
-    feedRequest(fixture, 0, "GET", "/throw");
+ruvia::task<void> exercise_escaping_failure(fixture& fixture_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    fixture_value.routes_.handlers_.throw_from_error_handler_ = true;
+    feed_request(fixture_value, 0, "GET", "/throw");
     {
-        auto dispatch = fixture.makeDispatch(0, fixture.services);
-        RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-        PublishedWire wire;
-        publishAndDrain(dispatch, fixture, 0, wire, ruvia_ctx);
-        DecodedResponse response;
-        RUVIA_CHECK(decodePublished(wire, ruvia::HttpKnownMethod::kGet, 0,
-                        fixture.worker.resource(), response)
-                        .status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-        RUVIA_CHECK_EQ(response.status, std::uint16_t{500});
-        RUVIA_CHECK(fixture.session.request(0) == nullptr);
+        auto dispatch = fixture_value.make_dispatch(0, fixture_value.services_);
+        RUVIA_CHECK(co_await dispatch.run_handler() == dispatch_type::run_status_type::response_ready);
+        published_wire wire;
+        publish_and_drain(dispatch, fixture_value, 0, wire, ruvia_ctx);
+        decoded_response response;
+        RUVIA_CHECK(decode_published(wire, ruvia::http_known_method::get, 0,
+                        fixture_value.worker_.resource(), response)
+                        .status_ == ruvia::http3_client_response_status::message_end);
+        RUVIA_CHECK_EQ(response.status_, std::uint16_t{500});
+        RUVIA_CHECK(fixture_value.session_.request(0) == nullptr);
     }
 #ifndef _WIN32
     // MSVC may satisfy this request from the worker pool without reaching
     // the upstream allocator.
-    fixture.routes.handlers.throwFromErrorHandler = false;
-    feedRequest(fixture, 4, "GET", "/large");
+    fixture_value.routes_.handlers_.throw_from_error_handler_ = false;
+    feed_request(fixture_value, 4, "GET", "/large");
     {
-        auto dispatch = fixture.makeDispatch(4, fixture.services);
-        fixture.allocations.reject = true;
-        const auto result = co_await dispatch.runHandler();
-        fixture.allocations.reject = false;
-        RUVIA_CHECK(result == Dispatch::RunStatus::kFailed);
-        RUVIA_CHECK(dispatch.failure() != nullptr && !dispatch.handlerActive());
-        RUVIA_CHECK(fixture.session.request(4) == nullptr);
+        auto dispatch = fixture_value.make_dispatch(4, fixture_value.services_);
+        fixture_value.allocations_.reject_ = true;
+        const auto result_value = co_await dispatch.run_handler();
+        fixture_value.allocations_.reject_ = false;
+        RUVIA_CHECK(result_value == dispatch_type::run_status_type::failed);
+        RUVIA_CHECK(dispatch.failure() != nullptr && !dispatch.handler_active());
+        RUVIA_CHECK(fixture_value.session_.request(4) == nullptr);
     }
 #endif
     buffer::borrowed_block block;
-    Control control;
-    RUVIA_CHECK(!fixture.outbound.try_receive(block) && !fixture.outbound.try_receive_control(control));
-    RUVIA_CHECK(!fixture.session.terminated());
+    control_type control;
+    RUVIA_CHECK(!fixture_value.outbound_.try_receive(block) && !fixture_value.outbound_.try_receive_control(control));
+    RUVIA_CHECK(!fixture_value.session_.terminated());
 }
 
-ruvia::Task<void> exerciseRepeatedRequestMemory(Fixture& fixture,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    fixture.routes.handlers.responseBody.assign(32 * 1024, 'r');
-    feedRequest(fixture, 100, "POST", "/items", "payload");
-    auto retained = fixture.session.acquireRequest(100);
+ruvia::task<void> exercise_repeated_request_memory(fixture& fixture_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    fixture_value.routes_.handlers_.response_body_.assign(32 * 1024, 'r');
+    feed_request(fixture_value, 100, "POST", "/items", "payload");
+    auto retained = fixture_value.session_.acquire_request(100);
     RUVIA_CHECK(retained.has_value());
     if (!retained) {
         co_return;
     }
-    const auto retainedBody = retained->request().request().bodyBytes();
-    const auto retainedHeader = retained->request().request().header("host");
-    std::size_t warmedLiveAllocations{};
+    const auto retained_body = retained->request().request().body_bytes();
+    const auto retained_header = retained->request().request().header("host");
+    std::size_t warmed_live_allocations{};
 
     for (std::uint64_t index = 0; index < 8; ++index) {
-        const auto streamId = index * 4;
-        feedRequest(fixture, streamId, "GET", "/large");
-        auto dispatch = fixture.makeDispatch(streamId, fixture.services);
-        RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-        PublishedWire wire;
-        publishAndDrain(dispatch, fixture, streamId, wire, ruvia_ctx);
+        const auto stream_id = index * 4;
+        feed_request(fixture_value, stream_id, "GET", "/large");
+        auto dispatch = fixture_value.make_dispatch(stream_id, fixture_value.services_);
+        RUVIA_CHECK(co_await dispatch.run_handler() == dispatch_type::run_status_type::response_ready);
+        published_wire wire;
+        publish_and_drain(dispatch, fixture_value, stream_id, wire, ruvia_ctx);
         RUVIA_CHECK(dispatch.complete());
-        RUVIA_CHECK_EQ(wire.finalWireBytes.value_or(0), wire.bytes.size());
+        RUVIA_CHECK_EQ(wire.final_wire_bytes_.value_or(0), wire.bytes_.size());
         if (index == 0) {
-            warmedLiveAllocations = fixture.upstream.liveAllocations();
+            warmed_live_allocations = fixture_value.upstream_.live_allocations();
         } else {
-            RUVIA_CHECK_EQ(fixture.upstream.liveAllocations(), warmedLiveAllocations);
+            RUVIA_CHECK_EQ(fixture_value.upstream_.live_allocations(), warmed_live_allocations);
         }
-        const auto body = retained->request().request().bodyBytes();
-        RUVIA_CHECK(body.size() == retainedBody.size());
+        const auto body = retained->request().request().body_bytes();
+        RUVIA_CHECK(body.size() == retained_body.size());
         RUVIA_CHECK(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()) ==
                     "payload");
-        RUVIA_CHECK(retained->request().request().header("host") == retainedHeader);
+        RUVIA_CHECK(retained->request().request().header("host") == retained_header);
     }
 
     retained.reset();
-    RUVIA_CHECK(fixture.session.release(100));
+    RUVIA_CHECK(fixture_value.session_.release(100));
 }
 
-ruvia::Task<void> exerciseEarlyProvenanceAndReplayPolicy(
-    Fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
-    const std::array earlyHeader{ruvia::Http3FieldSectionFieldView{"early-data", "1"}};
-    feedRequest(fixture, 0, "GET", "/throw", {}, earlyHeader, true);
-    auto rejected = fixture.makeDispatch(0, fixture.services, {}, true);
-    RUVIA_CHECK(co_await rejected.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{0});
-    RUVIA_CHECK_EQ(fixture.routes.handlers.replay_safe_middleware_calls, std::size_t{0});
-    PublishedWire rejectedWire;
-    publishAndDrain(rejected, fixture, 0, rejectedWire, ruvia_ctx);
-    DecodedResponse rejectedResponse;
-    const auto rejectedResult = decodePublished(rejectedWire,
-        ruvia::HttpKnownMethod::kGet, 0, fixture.worker.resource(), rejectedResponse);
-    RUVIA_CHECK(rejectedResult.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(rejectedResponse.status, std::uint16_t{425});
+ruvia::task<void> exercise_early_provenance_and_replay_policy(
+    fixture& fixture_value, ruvia::testing::test_context& ruvia_ctx) {
+    const std::array early_header{ruvia::http3_field_section_field_view{"early-data", "1"}};
+    feed_request(fixture_value, 0, "GET", "/throw", {}, early_header, true);
+    auto rejected = fixture_value.make_dispatch(0, fixture_value.services_, {}, true);
+    RUVIA_CHECK(co_await rejected.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{0});
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.replay_safe_middleware_calls_, std::size_t{0});
+    published_wire rejected_wire;
+    publish_and_drain(rejected, fixture_value, 0, rejected_wire, ruvia_ctx);
+    decoded_response rejected_response;
+    const auto rejected_result = decode_published(rejected_wire,
+        ruvia::http_known_method::get, 0, fixture_value.worker_.resource(), rejected_response);
+    RUVIA_CHECK(rejected_result.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(rejected_response.status_, std::uint16_t{425});
     RUVIA_CHECK(rejected.complete());
 
-    feedRequest(fixture, 4, "GET", "/throw", {}, earlyHeader, false);
-    auto spoofed = fixture.makeDispatch(4, fixture.services, {}, false);
-    RUVIA_CHECK(co_await spoofed.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
-    RUVIA_CHECK(!fixture.routes.handlers.early_data_info.received_from_early_data());
-    RUVIA_CHECK(fixture.routes.handlers.early_data_info.upstream_declared_early_data());
-    PublishedWire spoofedWire;
-    publishAndDrain(spoofed, fixture, 4, spoofedWire, ruvia_ctx);
+    feed_request(fixture_value, 4, "GET", "/throw", {}, early_header, false);
+    auto spoofed = fixture_value.make_dispatch(4, fixture_value.services_, {}, false);
+    RUVIA_CHECK(co_await spoofed.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{1});
+    RUVIA_CHECK(!fixture_value.routes_.handlers_.early_data_info_.received_from_early_data());
+    RUVIA_CHECK(fixture_value.routes_.handlers_.early_data_info_.upstream_declared_early_data());
+    published_wire spoofed_wire;
+    publish_and_drain(spoofed, fixture_value, 4, spoofed_wire, ruvia_ctx);
     RUVIA_CHECK(spoofed.complete());
 
-    feedRequest(fixture, 8, "GET", "/early-safe", {}, {}, true);
-    auto safe = fixture.makeDispatch(8, fixture.services, {}, true);
-    RUVIA_CHECK(co_await safe.runHandler() == Dispatch::RunStatus::kResponseReady);
-    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{2});
-    RUVIA_CHECK_EQ(fixture.routes.handlers.replay_safe_middleware_calls, std::size_t{1});
-    RUVIA_CHECK(fixture.routes.handlers.early_data_info.received_from_early_data());
-    RUVIA_CHECK(!fixture.routes.handlers.early_data_info.upstream_declared_early_data());
-    PublishedWire safeWire;
-    publishAndDrain(safe, fixture, 8, safeWire, ruvia_ctx);
-    DecodedResponse safeResponse;
-    const auto safeResult = decodePublished(safeWire,
-        ruvia::HttpKnownMethod::kGet, 8, fixture.worker.resource(), safeResponse);
-    RUVIA_CHECK(safeResult.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-    RUVIA_CHECK_EQ(safeResponse.status, std::uint16_t{200});
+    feed_request(fixture_value, 8, "GET", "/early-safe", {}, {}, true);
+    auto safe = fixture_value.make_dispatch(8, fixture_value.services_, {}, true);
+    RUVIA_CHECK(co_await safe.run_handler() == dispatch_type::run_status_type::response_ready);
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.handler_calls_, std::size_t{2});
+    RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.replay_safe_middleware_calls_, std::size_t{1});
+    RUVIA_CHECK(fixture_value.routes_.handlers_.early_data_info_.received_from_early_data());
+    RUVIA_CHECK(!fixture_value.routes_.handlers_.early_data_info_.upstream_declared_early_data());
+    published_wire safe_wire;
+    publish_and_drain(safe, fixture_value, 8, safe_wire, ruvia_ctx);
+    decoded_response safe_response;
+    const auto safe_result = decode_published(safe_wire,
+        ruvia::http_known_method::get, 8, fixture_value.worker_.resource(), safe_response);
+    RUVIA_CHECK(safe_result.status_ == ruvia::http3_client_response_status::message_end);
+    RUVIA_CHECK_EQ(safe_response.status_, std::uint16_t{200});
     RUVIA_CHECK(safe.complete());
 }
 
-ruvia::Task<void> exerciseWebSocketHandshakeFailures(Fixture& fixture,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    for (const auto& [streamId, version, expectedVersion, expectedCode, requestEnded] : {
+ruvia::task<void> exercise_websocket_handshake_failures(fixture& fixture_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    for (const auto& [stream_id, version, expected_version, expected_code, request_ended] : {
              std::tuple<std::uint64_t, std::string_view, std::string_view,
                  std::string_view, bool>{
                  0, "12", "13", "websocket_version_unsupported", false},
              {4, "", "", "invalid_websocket_handshake", false},
              {8, "12", "13", "websocket_version_unsupported", true}}) {
-        feedWebSocketRequest(fixture.session, fixture.worker, streamId, version);
-        if (requestEnded) {
-            const auto fin = fixture.session.feed(streamId, {}, true);
-            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
+        feed_websocket_request(fixture_value.session_, fixture_value.worker_, stream_id, version);
+        if (request_ended) {
+            const auto fin = fixture_value.session_.feed(stream_id, {}, true);
+            RUVIA_CHECK(fin.scope_ == ruvia::http3_connection_error_scope::none);
         }
-        auto dispatch = fixture.makeDispatch(streamId, fixture.services);
-        RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-        RUVIA_CHECK(fixture.routes.handlers.errorHandlerCalled);
-        RUVIA_CHECK_EQ(fixture.routes.handlers.errorCode, expectedCode);
-        PublishedWire wire;
-        publishAndDrain(dispatch, fixture, streamId, wire, ruvia_ctx);
-        DecodedResponse response;
-        const auto decoded = decodePublished(wire, ruvia::HttpKnownMethod::kConnect,
-            streamId, fixture.worker.resource(), response);
-        RUVIA_CHECK(decoded.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-        RUVIA_CHECK_EQ(response.status, std::uint16_t{400});
-        RUVIA_CHECK_EQ(response.errorHeader, "used");
-        RUVIA_CHECK_EQ(response.websocketVersionHeader, expectedVersion);
-        RUVIA_CHECK(response.connectionHeader.empty());
-        RUVIA_CHECK(response.upgradeHeader.empty());
-        RUVIA_CHECK(response.websocketAcceptHeader.empty());
-        RUVIA_CHECK_EQ(response.body, "handled-error");
-        if (!requestEnded) {
-            RUVIA_CHECK(fixture.session.request(streamId) != nullptr);
-            const auto fin = fixture.session.feed(streamId, {}, true);
-            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
-            RUVIA_CHECK(fixture.session.release(streamId));
+        auto dispatch = fixture_value.make_dispatch(stream_id, fixture_value.services_);
+        RUVIA_CHECK(co_await dispatch.run_handler() == dispatch_type::run_status_type::response_ready);
+        RUVIA_CHECK(fixture_value.routes_.handlers_.error_handler_called_);
+        RUVIA_CHECK_EQ(fixture_value.routes_.handlers_.error_code_, expected_code);
+        published_wire wire;
+        publish_and_drain(dispatch, fixture_value, stream_id, wire, ruvia_ctx);
+        decoded_response response;
+        const auto decoded = decode_published(wire, ruvia::http_known_method::connect,
+            stream_id, fixture_value.worker_.resource(), response);
+        RUVIA_CHECK(decoded.status_ == ruvia::http3_client_response_status::message_end);
+        RUVIA_CHECK_EQ(response.status_, std::uint16_t{400});
+        RUVIA_CHECK_EQ(response.error_header_, "used");
+        RUVIA_CHECK_EQ(response.websocket_version_header_, expected_version);
+        RUVIA_CHECK(response.connection_header_.empty());
+        RUVIA_CHECK(response.upgrade_header_.empty());
+        RUVIA_CHECK(response.websocket_accept_header_.empty());
+        RUVIA_CHECK_EQ(response.body_, "handled-error");
+        if (!request_ended) {
+            RUVIA_CHECK(fixture_value.session_.request(stream_id) != nullptr);
+            const auto fin = fixture_value.session_.feed(stream_id, {}, true);
+            RUVIA_CHECK(fin.scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(fixture_value.session_.release(stream_id));
         }
-        RUVIA_CHECK(fixture.session.request(streamId) == nullptr);
-        fixture.routes.handlers.errorHandlerCalled = false;
+        RUVIA_CHECK(fixture_value.session_.request(stream_id) == nullptr);
+        fixture_value.routes_.handlers_.error_handler_called_ = false;
     }
 }
 
-ruvia::Task<void> exercise_buffered_recovery_coding(Fixture& fixture, bool web_socket,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    auto& state = fixture.routes.handlers;
-    state.responseBody.assign(2048, 'a');
-    state.error_body.assign(2048, 'e');
-    state.response_no_transform = true;
-    state.first_error_no_transform = web_socket;
+ruvia::task<void> exercise_buffered_recovery_coding(fixture& fixture_value, bool websocket_value,
+    ruvia::testing::test_context& ruvia_ctx) {
+    auto& state_value = fixture_value.routes_.handlers_;
+    state_value.response_body_.assign(2048, 'a');
+    state_value.error_body_.assign(2048, 'e');
+    state_value.response_no_transform_ = true;
+    state_value.first_error_no_transform_ = websocket_value;
     for (unsigned mode = 0; mode != 4; ++mode) {
-        state.error_handler_calls = 0;
-        state.errorCode.clear();
-        state.error_no_transform = mode == 1;
-        fixture.options.compression.emplace();
+        state_value.error_handler_calls_ = 0;
+        state_value.error_code_.clear();
+        state_value.error_no_transform_ = mode == 1;
+        fixture_value.options_.compression_.emplace();
         if (mode == 2) {
-            fixture.options.compression.reset();
+            fixture_value.options_.compression_.reset();
         }
         const auto accept_encoding = mode == 3 ? "identity;q=0, *;q=0" : "gzip, identity;q=0";
         const std::uint64_t stream_id = mode * 4;
-        if (web_socket) {
-            feedWebSocketRequest(fixture.session, fixture.worker, stream_id, "12", accept_encoding);
+        if (websocket_value) {
+            feed_websocket_request(fixture_value.session_, fixture_value.worker_, stream_id, "12", accept_encoding);
         } else {
-            const std::array fields{ruvia::Http3FieldSectionFieldView{"accept-encoding", accept_encoding}};
-            feedRequest(fixture, stream_id, "GET", "/large", {}, fields);
+            const std::array fields_value{ruvia::http3_field_section_field_view{"accept-encoding", accept_encoding}};
+            feed_request(fixture_value, stream_id, "GET", "/large", {}, fields_value);
         }
-        auto dispatch = fixture.makeDispatch(stream_id, fixture.services);
-        RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-        RUVIA_CHECK_EQ(state.error_handler_calls, web_socket ? std::size_t{2} : std::size_t{1});
-        RUVIA_CHECK_EQ(state.errorCode, std::string("not_acceptable"));
-        PublishedWire wire;
-        publishAndDrain(dispatch, fixture, stream_id, wire, ruvia_ctx);
-        DecodedResponse response;
-        RUVIA_CHECK(decodePublished(wire, web_socket ? ruvia::HttpKnownMethod::kConnect : ruvia::HttpKnownMethod::kGet,
-                        stream_id, fixture.worker.resource(), response)
-                        .status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-        RUVIA_CHECK_EQ(response.status, std::uint16_t{406});
-        RUVIA_CHECK_EQ(response.finalHeads, std::size_t{1});
-        RUVIA_CHECK_EQ(response.errorHeader, std::string("used"));
-        if (!web_socket && mode == 0) {
-            RUVIA_CHECK_EQ(response.content_encoding, std::string("gzip"));
-            const auto decoded_body = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, response.body,
-                {.maxDecodedBytes = state.error_body.size(), .resource = fixture.worker.resource()});
+        auto dispatch = fixture_value.make_dispatch(stream_id, fixture_value.services_);
+        RUVIA_CHECK(co_await dispatch.run_handler() == dispatch_type::run_status_type::response_ready);
+        RUVIA_CHECK_EQ(state_value.error_handler_calls_, websocket_value ? std::size_t{2} : std::size_t{1});
+        RUVIA_CHECK_EQ(state_value.error_code_, std::string("not_acceptable"));
+        published_wire wire;
+        publish_and_drain(dispatch, fixture_value, stream_id, wire, ruvia_ctx);
+        decoded_response response;
+        RUVIA_CHECK(decode_published(wire, websocket_value ? ruvia::http_known_method::connect : ruvia::http_known_method::get,
+                        stream_id, fixture_value.worker_.resource(), response)
+                        .status_ == ruvia::http3_client_response_status::message_end);
+        RUVIA_CHECK_EQ(response.status_, std::uint16_t{406});
+        RUVIA_CHECK_EQ(response.final_heads_, std::size_t{1});
+        RUVIA_CHECK_EQ(response.error_header_, std::string("used"));
+        if (!websocket_value && mode == 0) {
+            RUVIA_CHECK_EQ(response.content_encoding_, std::string("gzip"));
+            const auto decoded_body = ruvia::decode_http_content(ruvia::http_content_coding::gzip, response.body_,
+                {.max_decoded_bytes_ = state_value.error_body_.size(), .resource_ = fixture_value.worker_.resource()});
             RUVIA_CHECK(decoded_body.decoded() != nullptr);
             if (const auto* content = decoded_body.decoded()) {
-                RUVIA_CHECK_EQ(content->bytes(), state.error_body);
+                RUVIA_CHECK_EQ(content->bytes(), state_value.error_body_);
             }
         } else {
-            RUVIA_CHECK(response.content_encoding.empty());
-            RUVIA_CHECK_EQ(response.body, state.error_body);
+            RUVIA_CHECK(response.content_encoding_.empty());
+            RUVIA_CHECK_EQ(response.body_, state_value.error_body_);
         }
-        if (web_socket) {
-            RUVIA_CHECK(fixture.session.request(stream_id) != nullptr);
-            const auto fin = fixture.session.feed(stream_id, {}, true);
-            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
-            RUVIA_CHECK(fixture.session.release(stream_id));
+        if (websocket_value) {
+            RUVIA_CHECK(fixture_value.session_.request(stream_id) != nullptr);
+            const auto fin = fixture_value.session_.feed(stream_id, {}, true);
+            RUVIA_CHECK(fin.scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(fixture_value.session_.release(stream_id));
         }
-        RUVIA_CHECK(fixture.session.request(stream_id) == nullptr);
+        RUVIA_CHECK(fixture_value.session_.request(stream_id) == nullptr);
     }
 }
 
 }  // namespace
 
-RUVIA_TEST(http3BufferedDispatchRejectsUntrustedAndUnsafeEarlyRequestsBeforeMiddleware) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto worker_handle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
-    Fixture fixture(worker_handle, upstream);
-    runWorkerTask(attachment, exerciseEarlyProvenanceAndReplayPolicy(fixture, ruvia_ctx));
+RUVIA_TEST(http3_buffered_dispatch_rejects_untrusted_and_unsafe_early_requests_before_middleware) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
+    fixture fixture(worker_handle_value, upstream);
+    run_worker_task(attachment, exercise_early_provenance_and_replay_policy(fixture, ruvia_ctx));
 }
 
-RUVIA_TEST(http3BufferedDispatchRoutesBodyAndPublishesBoundedWireResponse) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
-    Fixture fixture(workerHandle, upstream);
-    runWorkerTask(attachment, exerciseRouteAndPublish(fixture, ruvia_ctx));
+RUVIA_TEST(http3_buffered_dispatch_routes_body_and_publishes_bounded_wire_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
+    fixture fixture(worker_handle_value, upstream);
+    run_worker_task(attachment, exercise_route_and_publish(fixture, ruvia_ctx));
 }
 
-RUVIA_TEST(http3BufferedDispatchSupportsHeadFileMetadataAndRejectsFilePayload) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
-    Fixture fixture(workerHandle, upstream);
-    runWorkerTask(attachment, exerciseHeadAndFile(fixture, ruvia_ctx));
+RUVIA_TEST(http3_buffered_dispatch_supports_head_file_metadata_and_rejects_file_payload) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
+    fixture fixture(worker_handle_value, upstream);
+    run_worker_task(attachment, exercise_head_and_file(fixture, ruvia_ctx));
 }
 
-RUVIA_TEST(http3BufferedDispatchColdTasksDoNotLeaseAndRouterErrorsUseErrorHandler) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
-    Fixture fixture(workerHandle, upstream);
-    runWorkerTask(attachment, exerciseColdAndError(fixture, ruvia_ctx));
+RUVIA_TEST(http3_buffered_dispatch_cold_tasks_do_not_lease_and_router_errors_use_error_handler) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
+    fixture fixture(worker_handle_value, upstream);
+    run_worker_task(attachment, exercise_cold_and_error(fixture, ruvia_ctx));
 }
 
-RUVIA_TEST(http3BufferedDispatchErrorHandlerFallbackAndAllocationFailureReleaseStorage) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
+RUVIA_TEST(http3_buffered_dispatch_error_handler_fallback_and_allocation_failure_release_storage) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
     {
-        Fixture fixture(workerHandle, upstream);
-        runWorkerTask(attachment, exerciseEscapingFailure(fixture, ruvia_ctx));
+        fixture fixture(worker_handle_value, upstream);
+        run_worker_task(attachment, exercise_escaping_failure(fixture, ruvia_ctx));
     }
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
-RUVIA_TEST(http3BufferedDispatchReturnsRepeatedRequestMemoryAndPreservesLeasedSibling) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
+RUVIA_TEST(http3_buffered_dispatch_returns_repeated_request_memory_and_preserves_leased_sibling) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
     {
-        Fixture fixture(workerHandle, upstream);
-        runWorkerTask(attachment, exerciseRepeatedRequestMemory(fixture, ruvia_ctx));
+        fixture fixture(worker_handle_value, upstream);
+        run_worker_task(attachment, exercise_repeated_request_memory(fixture, ruvia_ctx));
     }
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
 RUVIA_TEST(http3_buffered_recovery_preserves_ordinary_and_websocket_coding_policies) {
-    for (const bool web_socket : {false, true}) {
-        auto& io = ruvia::test::newTestIoContext();
-        auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-        const auto worker = attachment.loop().handle();
-        ruvia::test::CountingMemoryResource resource;
+    for (const bool websocket : {false, true}) {
+        auto& io = ruvia::test::new_test_io_context();
+        auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+        const auto worker_value = attachment.loop().handle();
+        ruvia::test::counting_memory_resource resource;
         {
-            Fixture fixture(worker, resource);
-            runWorkerTask(attachment, exercise_buffered_recovery_coding(fixture, web_socket, ruvia_ctx));
+            fixture fixture(worker_value, resource);
+            run_worker_task(attachment, exercise_buffered_recovery_coding(fixture, websocket, ruvia_ctx));
         }
-        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
     }
 }
 
-ruvia::Task<void> exercise_buffered_recovery_cancellation(Fixture& fixture,
-    const ruvia::WorkerHandle& worker, bool web_socket, ruvia::testing::TestContext& ruvia_ctx) {
-    auto& state = fixture.routes.handlers;
-    ruvia::WorkerSignal error_started(worker);
-    state.error_started = &error_started;
-    state.suspend_error_call = web_socket ? 2 : 1;
-    state.response_no_transform = true;
-    state.first_error_no_transform = web_socket;
+ruvia::task<void> exercise_buffered_recovery_cancellation(fixture& fixture_value,
+    const ruvia::worker_handle& worker_value, bool websocket_value, ruvia::testing::test_context& ruvia_ctx) {
+    auto& state_value = fixture_value.routes_.handlers_;
+    ruvia::worker_signal error_started(worker_value);
+    state_value.error_started_ = &error_started;
+    state_value.suspend_error_call_ = websocket_value ? 2 : 1;
+    state_value.response_no_transform_ = true;
+    state_value.first_error_no_transform_ = websocket_value;
     const auto accept_encoding = "gzip, identity;q=0";
-    if (web_socket) {
-        feedWebSocketRequest(fixture.session, fixture.worker, 0, "12", accept_encoding);
+    if (websocket_value) {
+        feed_websocket_request(fixture_value.session_, fixture_value.worker_, 0, "12", accept_encoding);
     } else {
-        const std::array fields{ruvia::Http3FieldSectionFieldView{"accept-encoding", accept_encoding}};
-        feedRequest(fixture, 0, "GET", "/large", {}, fields);
+        const std::array fields_value{ruvia::http3_field_section_field_view{"accept-encoding", accept_encoding}};
+        feed_request(fixture_value, 0, "GET", "/large", {}, fields_value);
     }
-    auto dispatch = fixture.makeDispatch(0, fixture.services);
-    ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
-    ruvia::WorkerSignal finished(worker);
-    auto status = Dispatch::RunStatus::kFailed;
+    auto dispatch = fixture_value.make_dispatch(0, fixture_value.services_);
+    ruvia::task_scope tasks(worker_value, {.resource_ = fixture_value.worker_.resource()});
+    ruvia::worker_signal finished(worker_value);
+    auto status = dispatch_type::run_status_type::failed;
     bool joined = false;
-    tasks.spawn(runOwner(dispatch, status, joined, finished));
+    tasks.spawn(run_owner(dispatch, status, joined, finished));
     co_await error_started.wait();
-    RUVIA_CHECK(dispatch.handlerActive());
+    RUVIA_CHECK(dispatch.handler_active());
     dispatch.cancel();
     co_await finished.wait();
     co_await tasks.join();
-    RUVIA_CHECK(joined && status == Dispatch::RunStatus::kCancelled);
-    RUVIA_CHECK(!dispatch.handlerActive() && !dispatch.responseReady());
-    RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), std::uint64_t{0});
+    RUVIA_CHECK(joined && status == dispatch_type::run_status_type::cancelled);
+    RUVIA_CHECK(!dispatch.handler_active() && !dispatch.response_ready());
+    RUVIA_CHECK_EQ(dispatch.published_wire_bytes(), std::uint64_t{0});
     buffer::borrowed_block block;
-    Control control;
-    RUVIA_CHECK(!fixture.outbound.try_receive(block) && !fixture.outbound.try_receive_control(control));
-    RUVIA_CHECK(fixture.session.request(0) == nullptr);
+    control_type control;
+    RUVIA_CHECK(!fixture_value.outbound_.try_receive(block) && !fixture_value.outbound_.try_receive_control(control));
+    RUVIA_CHECK(fixture_value.session_.request(0) == nullptr);
 }
 
 RUVIA_TEST(http3_buffered_recovery_cancellation_joins_error_handler_without_publishing) {
-    for (const bool web_socket : {false, true}) {
-        auto& io = ruvia::test::newTestIoContext();
-        auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-        const auto worker = attachment.loop().handle();
-        ruvia::test::CountingMemoryResource resource;
+    for (const bool websocket : {false, true}) {
+        auto& io = ruvia::test::new_test_io_context();
+        auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+        const auto worker_value = attachment.loop().handle();
+        ruvia::test::counting_memory_resource resource;
         {
-            Fixture fixture(worker, resource);
-            runWorkerTask(attachment, exercise_buffered_recovery_cancellation(fixture, worker, web_socket, ruvia_ctx));
+            fixture fixture(worker_value, resource);
+            run_worker_task(attachment, exercise_buffered_recovery_cancellation(fixture, worker_value, websocket, ruvia_ctx));
         }
-        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
     }
 }
 
-RUVIA_TEST(http3BufferedDispatchWebSocketHandshakeFailureAppliesRequiredHeaders) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
-    const auto workerHandle = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
+RUVIA_TEST(http3_buffered_dispatch_websocket_handshake_failure_applies_required_headers) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 32});
+    const auto worker_handle_value = attachment.loop().handle();
+    ruvia::test::counting_memory_resource upstream;
     {
-        Fixture fixture(workerHandle, upstream);
-        fixture.executor = attachment.loop().executor();
-        runWorkerTask(attachment, exerciseWebSocketHandshakeFailures(fixture, ruvia_ctx));
+        fixture fixture(worker_handle_value, upstream);
+        fixture.executor_ = attachment.loop().executor();
+        run_worker_task(attachment, exercise_websocket_handshake_failures(fixture, ruvia_ctx));
     }
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }

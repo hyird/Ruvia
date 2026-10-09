@@ -8,16 +8,16 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/web/Dotenv.h"
+#include "ruvia/web/dotenv.h"
 
 namespace example {
 
 // Startup-only lookup shared by the examples. Process variables take precedence
-// over an optional App::env() loaded from .env beside the executable. A default
+// over an optional application::env() loaded from .env beside the executable. A default
 // ruvia::Env is empty: it does not import the process environment automatically.
 class environment final {
 public:
-    explicit environment(const ruvia::Env* dotenv = nullptr) noexcept
+    explicit environment(const ruvia::env* dotenv = nullptr) noexcept
         : dotenv_(dotenv) {}
 
     std::optional<std::string_view> get(std::string_view name) const {
@@ -53,7 +53,7 @@ public:
     }
 
 private:
-    const ruvia::Env* dotenv_;
+    const ruvia::env* dotenv_;
 };
 
 }  // namespace example

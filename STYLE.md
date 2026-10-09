@@ -17,7 +17,7 @@ Project headers use quotes. The C++ standard library and third-party headers
 use angle brackets:
 
 ```cpp
-#include "ruvia/core/Task.h"
+#include "ruvia/core/task.h"
 
 #include <algorithm>
 #include <string_view>
@@ -61,16 +61,16 @@ sans-I/O, parser, and pure-function APIs can throw for an operation failure.
 Recoverability or untrusted input alone is not a reason to require a returned
 error. Use one error-handling shape per API family:
 
-| Outcome | Shape | Example |
+| outcome | Shape | example |
 | --- | --- | --- |
 | Normal protocol progress | status enum / progress result | need input, queued, backpressured, completed |
 | Operation cannot complete its assigned task | exception | invalid complete message, encoding failure, invalid configuration |
-| Explicit requirement to return failure as data | `std::variant<T, E>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
-| Unrecoverable lifecycle contract violation | `std::terminate()` | destroying a started `Task` |
+| Explicit requirement to return failure as data | `std::variant<t_type, e_type>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
+| Unrecoverable lifecycle contract violation | `std::terminate()` | destroying a started `task` |
 
 Queuing and backpressure states are not failures and stay in a status enum.
 An operation may return these normal states while throwing for a genuine
-failure. Result variants place the value (or `std::monostate`) first and the error second.
+failure. result variants place the value (or `std::monostate`) first and the error second.
 Returning a result variant does not itself promise `noexcept` or require
 allocation failures to be translated into its error type.
 
@@ -85,8 +85,8 @@ throwing/non-throwing variant of the same operation.
 Use RAII for cleanup during exception propagation. Destructors, deallocation,
 and `swap` must not throw; mark operations `noexcept` when throwing is impossible
 or unacceptable. Catch at a boundary that can handle or translate the failure,
-rather than adding `try` / `catch` to every function. A lifecycle contract
-violation such as destroying a started `Task` remains terminal because unwinding
+rather than adding `try` / `catch` to every function. a lifecycle contract
+violation such as destroying a started `task` remains terminal because unwinding
 cannot safely retire its suspended operations. For a recoverable failure,
 objects retained by the catching boundary must still satisfy their invariants.
 
@@ -103,6 +103,8 @@ Use lowercase `underscore_style` consistently (NL.8 / NL.10):
 - Data members: trailing underscore (`worker_`, `request_count_`).
 - Macros: `ALL_CAPS` (`RUVIA_MODEL`, `RUVIA_ROUTES_BEGIN`). Do not encode type
   information in names.
+- Standard-library customization points, third-party APIs, and protocol tokens
+  retain their required spelling; these are not project-owned identifiers.
 - Files describe the unit, not the directory (`hpack.cpp`, not `unit_hpack.cpp`).
 
 Apply this style to new identifiers and whenever existing identifiers are

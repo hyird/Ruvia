@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "ruvia/http/Http3FieldSection.h"
+#include "ruvia/http/http3_field_section.h"
 
 #include "field/binary_field_name.h"
 
@@ -16,10 +16,10 @@ namespace ruvia::detail {
 template <auto validate_field_policy>
 struct http3_trailer_collector final {
     struct field_storage final {
-        field_storage(Http3FieldSectionFieldView field, std::pmr::memory_resource* resource)
-            : name_(field.name, resource),
-              value_(field.value, resource),
-              never_indexed_(field.neverIndexed) {}
+        field_storage(http3_field_section_field_view field, std::pmr::memory_resource* resource)
+            : name_(field.name_, resource),
+              value_(field.value_, resource),
+              never_indexed_(field.never_indexed_) {}
         std::pmr::string name_;
         std::pmr::string value_;
         bool never_indexed_;
@@ -28,13 +28,13 @@ struct http3_trailer_collector final {
     explicit http3_trailer_collector(std::pmr::memory_resource* resource)
         : fields_(resource) {}
 
-    static bool collect(void* opaque, Http3FieldSectionFieldView field) {
-        auto& collector = *static_cast<http3_trailer_collector*>(opaque);
-        if (!is_valid_binary_field_name(field.name) || !validate_field_policy(field)) {
-            collector.valid_ = false;
+    static bool collect(void* opaque, http3_field_section_field_view field) {
+        auto& collector_value = *static_cast<http3_trailer_collector*>(opaque);
+        if (!is_valid_binary_field_name(field.name_) || !validate_field_policy(field)) {
+            collector_value.valid_ = false;
             return false;
         }
-        collector.fields_.emplace_back(field, collector.fields_.get_allocator().resource());
+        collector_value.fields_.emplace_back(field, collector_value.fields_.get_allocator().resource());
         return true;
     }
 

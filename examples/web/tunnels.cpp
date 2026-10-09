@@ -15,12 +15,12 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/core/EventLoopPool.h"
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
-#include "ruvia/web/HttpClient.h"
-#include "ruvia/web/HttpUdpTunnel.h"
-#include "ruvia/web/Middleware.h"
+#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/http_client.h"
+#include "ruvia/web/http_udp_tunnel.h"
+#include "ruvia/web/middleware.h"
 
 #include "environment.h"
 
@@ -28,28 +28,28 @@ namespace {
 
 constexpr std::uint64_t echo_capsule_type = 0xff37;
 
-class capsule_handshake final : public ruvia::Middleware {
+class capsule_handshake final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         // Negotiate before next(): the tunnel handler starts after the response
         // head is committed, so changing its status or headers there is too late.
         if (c.req().header("capsule-protocol") != "?1") {
-            c.respond(c.error({.status = ruvia::http_status::kBadRequest,
-                .code = "capsules_required",
-                .message = "send Capsule-Protocol: ?1"}));
+            c.respond(c.error({.status_ = ruvia::http_status::bad_request,
+                .code_ = "capsules_required",
+                .message_ = "send Capsule-Protocol: ?1"}));
             co_return;
         }
         c.header("Capsule-Protocol", "?1");
-        co_await next();
+        co_await next_value();
     }
 };
 
-class tunnel_controller final : public ruvia::Controller<tunnel_controller> {
+class tunnel_controller final : public ruvia::controller<tunnel_controller> {
 public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/health", health);
-    const ruvia::HttpTunnelRouteConfig options{
-        .peerTransportFinTimeout = std::chrono::seconds(2), .datagrams = true};
+    const ruvia::http_tunnel_route_config options{
+        .peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};
     RUVIA_CONNECT("echo.example:443", bytes);
     RUVIA_CONNECT_PROTOCOL("example-capsules", "/capsules", capsules, capsule_handshake);
     RUVIA_CONNECT_PROTOCOL_OPTIONS("example-datagrams", "/datagrams", datagrams, options);
@@ -57,11 +57,11 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
+    ruvia::task<ruvia::http_response> health(ruvia::context& c) {
         co_return c.text("ready\n");
     }
 
-    ruvia::Task<void> bytes(ruvia::Context& c) {
+    ruvia::task<void> bytes(ruvia::context& c) {
         auto& tunnel = c.tunnel();
         while (auto chunk = co_await tunnel.read()) {
             // The server owns each received chunk; moving it into write can
@@ -71,10 +71,10 @@ private:
         co_await tunnel.finish();
     }
 
-    ruvia::Task<void> capsules(ruvia::Context& c) {
+    ruvia::task<void> capsules(ruvia::context& c) {
         // capsule_handshake negotiated the custom protocol. CONNECT-UDP's
         // dedicated driver performs its own negotiation automatically.
-        auto stream = c.tunnel().capsules({.maxCapsuleLength = 4096});
+        auto stream = c.tunnel().capsules({.max_capsule_length_ = 4096});
         while (auto capsule = co_await stream.read()) {
             // Unknown types must be ignored by the application protocol.
             if (capsule->type() == echo_capsule_type) {
@@ -84,7 +84,7 @@ private:
         co_await stream.finish();
     }
 
-    ruvia::Task<void> datagrams(ruvia::Context& c) {
+    ruvia::task<void> datagrams(ruvia::context& c) {
         auto stream = c.tunnel().datagrams();
         while (auto packet = co_await stream.read()) {
             // Automatic mode selects native QUIC DATAGRAM when negotiated and
@@ -95,10 +95,10 @@ private:
         co_await stream.finish();
     }
 
-    ruvia::Task<void> udp(ruvia::Context& c) {
-        ruvia::HttpUdpTunnel stream(c.tunnel().datagrams());
+    ruvia::task<void> udp(ruvia::context& c) {
+        ruvia::http_udp_tunnel stream(c.tunnel().datagrams());
         while (auto packet = co_await stream.read()) {
-            // The adapter handles Context ID 0 and ignores unknown contexts.
+            // The adapter handles context ID 0 and ignores unknown contexts.
             // A zero-byte payload is a valid UDP packet, not an EOF marker.
             co_await stream.send(packet->payload());
         }
@@ -106,24 +106,24 @@ private:
     }
 };
 
-std::string_view characters(std::span<const std::byte> bytes) {
-    return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+std::string_view characters(std::span<const std::byte> bytes_value) {
+    return {reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()};
 }
 
-ruvia::Task<void> client_session(ruvia::EventLoop loop, ruvia::HttpClientConfig config,
+ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_config config,
     std::string_view selection) {
-    ruvia::HttpClient client(loop, config);
+    ruvia::http_client client(loop, config);
     std::exception_ptr failure;
     try {
         {
-            auto response = co_await client.send({.target = "/health"});
-            auto body = co_await response.body().readAll();
+            auto response = co_await client.send({.target_ = "/health"});
+            auto body = co_await response.body().read_all();
             std::cout << "service: " << characters(body.bytes());
         }
         if (selection == "all" || selection == "bytes") {
-            auto opened = co_await client.openTunnel({.authority = "echo.example:443"});
+            auto opened = co_await client.open_tunnel({.authority_ = "echo.example:443"});
             if (auto* rejection = opened.response()) {
-                auto body = co_await rejection->body().readAll();
+                auto body = co_await rejection->body().read_all();
                 throw std::runtime_error("CONNECT rejected: " + std::string(characters(body.bytes())));
             }
             auto& tunnel = *opened.tunnel();
@@ -139,19 +139,19 @@ ruvia::Task<void> client_session(ruvia::EventLoop loop, ruvia::HttpClientConfig 
             }
             std::cout << "CONNECT: " << echoed << '\n';
         }
-        if (config.protocol != ruvia::HttpClientProtocol::kHttp1Only) {
+        if (config.protocol_ != ruvia::http_client_protocol::http1_only) {
             if (selection == "all" || selection == "capsules") {
-                const std::array<ruvia::HttpHeaderView, 1> headers{{{"capsule-protocol", "?1"}}};
-                auto opened = co_await client.openTunnel({.authority = "localhost",
-                    .protocol = "example-capsules",
-                    .target = "/capsules",
-                    .headers = headers});
+                const std::array<ruvia::http_header_view, 1> headers{{{"capsule-protocol", "?1"}}};
+                auto opened = co_await client.open_tunnel({.authority_ = "localhost",
+                    .protocol_ = "example-capsules",
+                    .target_ = "/capsules",
+                    .headers_ = headers});
                 if (!opened.tunnel()) {
                     throw std::runtime_error("capsule handshake rejected");
                 }
                 // The adapter takes client tunnel ownership. Never mix raw
                 // tunnel reads/writes with capsule operations after this move.
-                auto stream = std::move(*opened.tunnel()).capsules({.maxCapsuleLength = 4096});
+                auto stream = std::move(*opened.tunnel()).capsules({.max_capsule_length_ = 4096});
                 co_await stream.write(echo_capsule_type, "capsule");
                 auto reply = co_await stream.read();
                 if (!reply || reply->type() != echo_capsule_type || reply->payload() != "capsule") {
@@ -163,10 +163,10 @@ ruvia::Task<void> client_session(ruvia::EventLoop loop, ruvia::HttpClientConfig 
                 }
             }
             if (selection == "all" || selection == "datagrams") {
-                auto opened = co_await client.openTunnel({.authority = "localhost",
-                                                             .protocol = "example-datagrams",
-                                                             .target = "/datagrams"},
-                    {.datagrams = true});
+                auto opened = co_await client.open_tunnel({.authority_ = "localhost",
+                                                              .protocol_ = "example-datagrams",
+                                                              .target_ = "/datagrams"},
+                    {.datagrams_ = true});
                 if (!opened.tunnel()) {
                     throw std::runtime_error("datagram handshake rejected");
                 }
@@ -183,9 +183,9 @@ ruvia::Task<void> client_session(ruvia::EventLoop loop, ruvia::HttpClientConfig 
             }
         }
         if (selection == "all" || selection == "udp") {
-            auto opened = co_await client.openUdpTunnel({.target = "/udp/echo.example/443"});
+            auto opened = co_await client.open_udp_tunnel({.target_ = "/udp/echo.example/443"});
             if (!opened.tunnel()) {
-                auto body = co_await opened.response()->body().readAll();
+                auto body = co_await opened.response()->body().read_all();
                 throw std::runtime_error("CONNECT-UDP rejected: " + std::string(characters(body.bytes())));
             }
             auto stream = std::move(*opened.tunnel()).udp();
@@ -231,19 +231,19 @@ int main(int argc, char** argv) {
             if (protocol == "1" && (selection == "capsules" || selection == "datagrams")) {
                 throw std::invalid_argument("custom capsules/datagrams require HTTP/2 or HTTP/3");
             }
-            const example::environment env;
-            const bool tls = protocol == "3" || env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
-            const ruvia::HttpClientConfig config{
-                .scheme = tls ? ruvia::HttpScheme::kHttps : ruvia::HttpScheme::kHttp,
-                .host = "localhost",
-                .port = tls ? 8445 : 8094,
-                .requestTimeout = std::chrono::seconds(5),
-                .protocol = protocol == "3"   ? ruvia::HttpClientProtocol::kHttp3Only
-                            : protocol == "2" ? ruvia::HttpClientProtocol::kHttp2Only
-                                              : ruvia::HttpClientProtocol::kHttp1Only,
-                .caFile = std::string(env.get("RUVIA_TLS_CA").value_or("")),
+            const example::environment env_value;
+            const bool tls = protocol == "3" || env_value.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
+            const ruvia::http_client_config config{
+                .scheme_ = tls ? ruvia::http_scheme::https : ruvia::http_scheme::http,
+                .host_ = "localhost",
+                .port_ = tls ? 8445 : 8094,
+                .request_timeout_ = std::chrono::seconds(5),
+                .protocol_ = protocol == "3"   ? ruvia::http_client_protocol::http3_only
+                             : protocol == "2" ? ruvia::http_client_protocol::http2_only
+                                               : ruvia::http_client_protocol::http1_only,
+                .ca_file_ = std::string(env_value.get("RUVIA_TLS_CA").value_or("")),
             };
-            ruvia::EventLoopPool loops({.loopCount = 1});
+            ruvia::event_loop_pool loops({.loop_count_ = 1});
             loops.start();
             auto done = loops.loop(0).start(client_session(loops.loop(0), config, selection));
             done.get();
@@ -251,23 +251,23 @@ int main(int argc, char** argv) {
             loops.join();
         } else {
             auto& app = ruvia::app();
-            app.loadDotenv();
-            const example::environment env(&app.env());
-            ruvia::ListenConfig listener{.address = "127.0.0.1", .http = 8094};
-            const auto cert = env.get("RUVIA_TLS_CERT");
-            const auto key = env.get("RUVIA_TLS_KEY");
+            app.load_dotenv();
+            const example::environment env_value(&app.env());
+            ruvia::listen_config listener_value{.address_ = "127.0.0.1", .http_ = 8094};
+            const auto cert = env_value.get("RUVIA_TLS_CERT");
+            const auto key = env_value.get("RUVIA_TLS_KEY");
             if (cert.has_value() != key.has_value()) {
                 throw std::invalid_argument("set both RUVIA_TLS_CERT and RUVIA_TLS_KEY");
             }
             if (cert && key) {
-                listener.https = 8445;
-                listener.tls.certificateChainFile = std::string(*cert);
-                listener.tls.privateKeyFile = std::string(*key);
+                listener_value.https_ = 8445;
+                listener_value.tls_.certificate_chain_file_ = std::string(*cert);
+                listener_value.tls_.private_key_file_ = std::string(*key);
             }
-            app.server({.worker_count = 2,
-                           .process_signal_handlers = ruvia::process_signal_handler_policy::install})
-                .listen(std::move(listener))
-                .onConnectionFailure([](const ruvia::ConnectionFailureRecord& record) noexcept {
+            app.server({.worker_count_ = 2,
+                           .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+                .listen(std::move(listener_value))
+                .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
                     try {
                         std::rethrow_exception(record.exception());
                     } catch (const std::exception& error) {
@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
                 })
                 .run();
         }
-    } catch (const ruvia::HttpClientError& error) {
+    } catch (const ruvia::http_client_error& error) {
         std::cerr << "client error " << static_cast<int>(error.code()) << ": " << error.what() << '\n';
         return 1;
     } catch (const std::exception& error) {

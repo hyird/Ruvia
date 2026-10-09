@@ -1,3 +1,5 @@
+#include "ruvia/core/asio_task.h"
+
 #include <concepts>
 #include <future>
 #include <memory>
@@ -5,33 +7,32 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/event_loop_pool.h"
 
 namespace {
 
-struct ThrowingMove final {
-    ThrowingMove() = default;
-    ThrowingMove(const ThrowingMove&) = delete;
-    ThrowingMove(ThrowingMove&&) noexcept(false) {}
+struct throwing_move final {
+    throwing_move() = default;
+    throwing_move(const throwing_move&) = delete;
+    throwing_move(throwing_move&&) noexcept(false) {}
 };
 
-ruvia::Task<std::unique_ptr<int>> makeValue(ruvia::WorkerHandle worker) {
-    if (!worker.isCurrent()) {
+ruvia::task<std::unique_ptr<int>> make_value(ruvia::worker_handle worker_value) {
+    if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");
     }
     co_return std::make_unique<int>(42);
 }
 
-ruvia::Task<void> completeVoid(ruvia::WorkerHandle worker, bool& completed) {
-    if (!worker.isCurrent()) {
+ruvia::task<void> complete_void(ruvia::worker_handle worker_value, bool& completed) {
+    if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");
     }
     completed = true;
     co_return;
 }
 
-ruvia::Task<void> fail() {
+ruvia::task<void> fail() {
     throw std::runtime_error("root task failure");
     co_return;
 }
@@ -39,42 +40,42 @@ ruvia::Task<void> fail() {
 }  // namespace
 
 int main() {
-    ruvia::EventLoopPool loops({.loopCount = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
-    const auto worker = loop.handle();
-    bool voidCompleted = false;
+    const auto worker_value = loop.handle();
+    bool void_completed = false;
 
-    auto value = loop.start(makeValue(worker));
-    auto noValue = loop.start(completeVoid(worker, voidCompleted));
+    auto value = loop.start(make_value(worker_value));
+    auto no_value = loop.start(complete_void(worker_value, void_completed));
     auto failure = loop.start(fail());
-    std::promise<bool> sameLoopGetRejected;
-    auto sameLoopGetResult = sameLoopGetRejected.get_future();
-    const auto probePosted = loop.post([&] {
+    std::promise<bool> same_loop_get_rejected;
+    auto same_loop_get_result = same_loop_get_rejected.get_future();
+    const auto probe_posted = loop.post([&] {
         try {
             static_cast<void>(value.get());
-            sameLoopGetRejected.set_value(false);
+            same_loop_get_rejected.set_value(false);
         } catch (const std::logic_error&) {
-            sameLoopGetRejected.set_value(value.valid());
+            same_loop_get_rejected.set_value(value.valid());
         }
     });
-    if (!probePosted.accepted()) {
+    if (!probe_posted.accepted()) {
         return 1;
     }
 
     loops.start();
     bool valid = false;
     try {
-        const auto sameLoopGuardHeld = sameLoopGetResult.get();
-        auto result = value.get();
-        noValue.get();
-        bool failureObserved = false;
+        const auto same_loop_guard_held = same_loop_get_result.get();
+        auto result_value = value.get();
+        no_value.get();
+        bool failure_observed = false;
         try {
             failure.get();
         } catch (const std::runtime_error& error) {
-            failureObserved = std::string_view(error.what()) == "root task failure";
+            failure_observed = std::string_view(error.what()) == "root task failure";
         }
-        valid = sameLoopGuardHeld && result != nullptr && *result == 42 && voidCompleted &&
-                failureObserved;
+        valid = same_loop_guard_held && result_value != nullptr && *result_value == 42 && void_completed &&
+                failure_observed;
     } catch (...) {
         valid = false;
     }
@@ -84,14 +85,14 @@ int main() {
         return 1;
     }
 
-    ruvia::EventLoopPool abandonedPool({.loopCount = 1});
+    ruvia::event_loop_pool abandoned_pool({.loop_count_ = 1});
     {
-        auto unobserved = abandonedPool.loop(0).start(fail());
+        auto unobserved = abandoned_pool.loop(0).start(fail());
     }
-    abandonedPool.start();
-    abandonedPool.stop();
+    abandoned_pool.start();
+    abandoned_pool.stop();
     try {
-        abandonedPool.join();
+        abandoned_pool.join();
     } catch (const std::runtime_error& error) {
         return std::string_view(error.what()) == "root task failure" ? 0 : 2;
     }

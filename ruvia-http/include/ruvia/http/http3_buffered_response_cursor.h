@@ -9,9 +9,9 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/Http3DataWritePlan.h"
-#include "ruvia/http/Http3ResponseWriter.h"
-#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/http3_data_write_plan.h"
+#include "ruvia/http/http3_response_writer.h"
+#include "ruvia/http/http_response.h"
 
 namespace ruvia {
 
@@ -43,14 +43,14 @@ public:
         failed };
 
     [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
-        const HttpResponse& response, const HttpBufferedResponseWritePlan& write_plan,
+        const http_response& response, const http_buffered_response_write_plan& write_plan,
         std::pmr::memory_resource* resource) noexcept;
 
     // encoded_head must describe the same response and write plan. Its storage
     // is consumed during creation; the cursor retains no borrow from it.
     [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
-        const HttpResponse& response, const HttpBufferedResponseWritePlan& write_plan,
-        Http3ResponseHead encoded_head, std::pmr::memory_resource* resource) noexcept;
+        const http_response& response, const http_buffered_response_write_plan& write_plan,
+        http3_response_head encoded_head, std::pmr::memory_resource* resource) noexcept;
 
     http3_buffered_response_cursor(const http3_buffered_response_cursor&) = delete;
     http3_buffered_response_cursor& operator=(const http3_buffered_response_cursor&) = delete;
@@ -96,8 +96,8 @@ private:
     std::pmr::vector<char> headers_;
     std::size_t decoded_field_section_size_{0};
     std::string_view body_;
-    std::optional<Http3DataWritePlan> data_plan_;
-    Http3DataWritePlan::Chunk chunk_{};
+    std::optional<http3_data_write_plan> data_plan_;
+    http3_data_write_plan::chunk_type chunk_{};
     std::size_t segment_offset_{0};
     std::size_t body_offset_{0};
     state state_{state::headers};

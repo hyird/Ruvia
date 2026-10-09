@@ -8,27 +8,27 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/HttpAcceptEncoding.h"
-#include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpRequestContentDecoding.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/http_accept_encoding.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_content_decoding.h"
 
-#include "field/HttpAcceptMediaType.h"
-#include "parser/HttpChunkParser.h"
-#include "parser/MultipartDelimiter.h"
-#include "parser/MultipartPartHeaders.h"
+#include "field/http_accept_media_type.h"
+#include "parser/http_chunk_parser.h"
+#include "parser/multipart_delimiter.h"
+#include "parser/multipart_part_headers.h"
 #include "test_harness.h"
 
 namespace field_parsing_test {
 
-using ruvia::HttpContentCoding;
-using ruvia::detail::HttpChunkScanComplete;
-using ruvia::detail::HttpChunkScanFailure;
-using ruvia::detail::HttpChunkScanNeedMore;
-using ruvia::detail::HttpChunkScanResult;
-using ruvia::detail::HttpMultipartPartHeaders;
+using ruvia::http_content_coding;
+using ruvia::detail::http_chunk_scan_complete;
+using ruvia::detail::http_chunk_scan_failure;
+using ruvia::detail::http_chunk_scan_need_more;
+using ruvia::detail::http_chunk_scan_result;
+using ruvia::detail::http_multipart_part_headers;
 
 }  // namespace field_parsing_test
 

@@ -1,11 +1,11 @@
+#include "ruvia/web/static_files.h"
+
 #include <filesystem>
 #include <fstream>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/StaticFiles.h"
-
-#include "http/StaticRootIndex.h"
+#include "http/static_root_index.h"
 #include "test_harness.h"
 
 namespace {
@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 
 // A throwaway document root mixing a normal asset with hidden files and a
 // hidden directory (the .git checkout an operator might accidentally deploy).
-fs::path makeDotfileRoot() {
+fs::path make_dotfile_root() {
     const auto dir = fs::temp_directory_path() / "ruvia_static_dotfiles_test";
     std::error_code ignored;
     fs::remove_all(dir, ignored);
@@ -31,20 +31,20 @@ fs::path makeDotfileRoot() {
     return dir;
 }
 
-[[nodiscard]] bool served(const ruvia::StaticRoot& root, std::string_view path) {
-    return ruvia::detail::StaticRootAccess::find(root, path).has_value();
+[[nodiscard]] bool served(const ruvia::static_root& root, std::string_view path) {
+    return ruvia::detail::static_root_access::find(root, path).has_value();
 }
 
 }  // namespace
 
 RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
-    const auto dir = makeDotfileRoot();
-    ruvia::StaticRootOptions options;
+    const auto dir = make_dotfile_root();
+    ruvia::static_root_options options;
     // all() would otherwise index and serve every file regardless of extension;
     // the hidden-path default-deny must still keep secrets out of the index.
-    options.fileTypes =
-        ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
-    ruvia::StaticRoot root(dir, std::move(options));
+    options.file_types_ =
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
+    ruvia::static_root root(dir, std::move(options));
 
     RUVIA_CHECK(served(root, "app.js"));
     RUVIA_CHECK(!served(root, ".env"));
@@ -57,12 +57,12 @@ RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
 }
 
 RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
-    const auto dir = makeDotfileRoot();
-    ruvia::StaticRootOptions options;
-    options.fileTypes =
-        ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
-    options.dotfiles = ruvia::StaticDotfilePolicy::kServe;
-    ruvia::StaticRoot root(dir, std::move(options));
+    const auto dir = make_dotfile_root();
+    ruvia::static_root_options options;
+    options.file_types_ =
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
+    options.dotfiles_ = ruvia::static_dotfile_policy::serve;
+    ruvia::static_root root(dir, std::move(options));
 
     RUVIA_CHECK(served(root, ".env"));
     RUVIA_CHECK(served(root, ".git/config"));

@@ -2,16 +2,16 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 
 inline constexpr auto binary_field_name_char_table = [] {
-    auto table = kHttpTokenCharTable;
+    auto table_value = http_token_char_table;
     for (unsigned byte = 'A'; byte <= 'Z'; ++byte) {
-        table[byte] = false;
+        table_value[byte] = false;
     }
-    return table;
+    return table_value;
 }();
 
 // HTTP/2 and HTTP/3 regular field names are nonempty lowercase tokens.

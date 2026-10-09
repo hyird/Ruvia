@@ -22,9 +22,9 @@ namespace ruvia::test {
 class tls_identity final {
 public:
     explicit tls_identity(const char* name)
-        : context(asio::ssl::context::tls_server) {
+        : context_(asio::ssl::context::tls_server) {
         std::random_device random;
-        for (int attempt = 0; attempt < 100; ++attempt) {
+        for (int attempt_value = 0; attempt_value < 100; ++attempt_value) {
             directory_ = std::filesystem::temp_directory_path() / ("ruvia-client-tls-" + std::to_string(random()) + "-" + std::to_string(random()));
             if (std::filesystem::create_directory(directory_)) {
                 break;
@@ -58,12 +58,12 @@ public:
                 X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, san.c_str()), X509_EXTENSION_free);
             if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1 ||
                 ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 ||
-                SSL_CTX_use_certificate(context.native_handle(), certificate.get()) != 1 ||
-                SSL_CTX_use_PrivateKey(context.native_handle(), key.get()) != 1) {
+                SSL_CTX_use_certificate(context_.native_handle(), certificate.get()) != 1 ||
+                SSL_CTX_use_PrivateKey(context_.native_handle(), key.get()) != 1) {
                 throw std::runtime_error("cannot sign TLS test identity");
             }
-            ca_file = directory_ / "ca.pem";
-            std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(ca_file.string().c_str(), "w"), BIO_free);
+            ca_file_ = directory_ / "ca.pem";
+            std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(ca_file_.string().c_str(), "w"), BIO_free);
             if (!output || PEM_write_bio_X509(output.get(), certificate.get()) != 1) {
                 throw std::runtime_error("cannot write TLS test certificate");
             }
@@ -77,8 +77,8 @@ public:
         std::error_code ignored;
         std::filesystem::remove_all(directory_, ignored);
     }
-    asio::ssl::context context;
-    std::filesystem::path ca_file;
+    asio::ssl::context context_;
+    std::filesystem::path ca_file_;
 
 private:
     std::filesystem::path directory_;

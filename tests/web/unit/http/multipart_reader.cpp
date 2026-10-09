@@ -1,3 +1,5 @@
+#include "ruvia/web/multipart_reader.h"
+
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
@@ -13,123 +15,122 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/Bytes.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/core/WorkerSignal.h"
-#include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/web/MultipartReader.h"
-#include "ruvia/web/Streaming.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/core/bytes.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/web/streaming.h"
 
-#include "body/HttpRequestBodyFacade.h"
+#include "body/http_request_body_facade.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
 
-using ruvia::BodyReader;
-using ruvia::MultipartReader;
-using ruvia::Task;
+using ruvia::body_reader;
+using ruvia::multipart_reader;
+using ruvia::task;
 
-// A BodyReader source that yields a fixed list of chunks, then end-of-body. The
+// A body_reader source that yields a fixed list of chunks, then end-of-body. The
 // chunks vector must outlive the reads (string_views point into it).
-struct ChunkSource final {
-    std::vector<std::string> chunks;
-    std::size_t index = 0;
+struct chunk_source final {
+    std::vector<std::string> chunks_;
+    std::size_t index_ = 0;
 
-    Task<std::optional<std::span<const std::byte>>> read() {
-        if (index < chunks.size()) {
-            co_return ruvia::asBytes(chunks[index++]);
+    task<std::optional<std::span<const std::byte>>> read() {
+        if (index_ < chunks_.size()) {
+            co_return ruvia::as_bytes(chunks_[index_++]);
         }
         co_return std::nullopt;
     }
 };
 
-struct SuspendedChunkSource final {
-    explicit SuspendedChunkSource(const ruvia::WorkerHandle& worker)
-        : signal(worker) {}
+struct suspended_chunk_source final {
+    explicit suspended_chunk_source(const ruvia::worker_handle& worker_value)
+        : signal_(worker_value) {}
 
-    Task<std::optional<std::span<const std::byte>>> read() {
-        waiting = true;
-        co_await signal.wait();
+    task<std::optional<std::span<const std::byte>>> read() {
+        waiting_ = true;
+        co_await signal_.wait();
         co_return std::nullopt;
     }
 
-    ruvia::WorkerSignal signal;
-    bool waiting = false;
+    ruvia::worker_signal signal_;
+    bool waiting_ = false;
 };
 
-Task<void> completeMultipartRead(MultipartReader& reader, bool& completed) {
+task<void> complete_multipart_read(multipart_reader& reader_value, bool& completed) {
     try {
-        (void)co_await reader.read();
-    } catch (const ruvia::HttpProtocolError&) {
+        (void)co_await reader_value.read();
+    } catch (const ruvia::http_protocol_error&) {
         // EOF without an opening boundary is expected after the suspended read.
     }
     completed = true;
 }
 
-Task<void> rejectConcurrentMultipartRead(MultipartReader& reader, bool& rejected) {
+task<void> reject_concurrent_multipart_read(multipart_reader& reader_value, bool& rejected) {
     try {
-        (void)co_await reader.read();
+        (void)co_await reader_value.read();
     } catch (const std::logic_error&) {
         rejected = true;
     }
 }
 
-struct CollectedPart final {
-    std::string name;
-    std::string filename;
-    std::string contentType;
-    std::string body;
+struct collected_part final {
+    std::string name_;
+    std::string filename_;
+    std::string content_type_;
+    std::string body_;
 };
 
 // Drives the reader to completion, coalescing each part's streamed body chunks.
-Task<void> collectParts(MultipartReader& reader, std::vector<CollectedPart>& out) {
-    CollectedPart current;
-    while (auto part = co_await reader.read()) {
+task<void> collect_parts(multipart_reader& reader_value, std::vector<collected_part>& out) {
+    collected_part current;
+    while (auto part = co_await reader_value.read()) {
         const auto phase = part->phase();
-        if (phase == ruvia::MultipartChunkPhase::kFirst ||
-            phase == ruvia::MultipartChunkPhase::kComplete) {
-            current = CollectedPart{std::string(part->name()), std::string(part->filename()),
-                std::string(part->contentType()), std::string()};
+        if (phase == ruvia::multipart_chunk_phase::first ||
+            phase == ruvia::multipart_chunk_phase::complete) {
+            current = collected_part{std::string(part->name()), std::string(part->filename()),
+                std::string(part->content_type()), std::string()};
         }
-        current.body.append(part->body());
-        if (phase == ruvia::MultipartChunkPhase::kLast ||
-            phase == ruvia::MultipartChunkPhase::kComplete) {
+        current.body_.append(part->body());
+        if (phase == ruvia::multipart_chunk_phase::last ||
+            phase == ruvia::multipart_chunk_phase::complete) {
             out.push_back(current);
         }
     }
     co_return;
 }
 
-std::vector<CollectedPart> parseMultipart(
+std::vector<collected_part> parse_multipart(
     std::vector<std::string> chunks, std::string_view boundary) {
-    ChunkSource source{std::move(chunks), 0};
-    std::optional<BodyReader> bodyReader;
-    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary(boundary),
-                                            .resource = std::pmr::get_default_resource()});
+    chunk_source source_value{std::move(chunks), 0};
+    std::optional<body_reader> body_reader;
+    ruvia::detail::emplace_body_reader_facade(body_reader, source_value);
+    multipart_reader reader_value(*body_reader, {.boundary_ = ruvia::multipart_boundary(boundary),
+                                                    .resource_ = std::pmr::get_default_resource()});
 
-    std::vector<CollectedPart> parts;
+    std::vector<collected_part> parts;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
+        ctx, ruvia::as_awaitable(collect_parts(reader_value, parts)), asio::use_future);
     ctx.run();
     future.get();  // propagate any parsing exception
     return parts;
 }
 
 // Split a string into fixed-size chunks to exercise the streaming reassembly.
-std::vector<std::string> splitChunks(std::string_view body, std::size_t chunkSize) {
+std::vector<std::string> split_chunks(std::string_view body, std::size_t chunk_size) {
     std::vector<std::string> chunks;
-    for (std::size_t offset = 0; offset < body.size(); offset += chunkSize) {
-        chunks.emplace_back(body.substr(offset, chunkSize));
+    for (std::size_t offset = 0; offset < body.size(); offset += chunk_size) {
+        chunks.emplace_back(body.substr(offset, chunk_size));
     }
     return chunks;
 }
 
-const std::string kTwoPartBody =
+const std::string two_part_body =
     "--BOUNDARY\r\n"
     "Content-Disposition: form-data; name=\"field1\"\r\n"
     "\r\n"
@@ -144,92 +145,92 @@ const std::string kTwoPartBody =
 }  // namespace
 
 RUVIA_TEST(multipart_reader_parses_parts_from_a_single_chunk) {
-    const auto parts = parseMultipart({kTwoPartBody}, "BOUNDARY");
+    const auto parts = parse_multipart({two_part_body}, "BOUNDARY");
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(parts[0].name, std::string("field1"));
-    RUVIA_CHECK(parts[0].filename.empty());
-    RUVIA_CHECK_EQ(parts[0].body, std::string("value1"));
-    RUVIA_CHECK_EQ(parts[1].name, std::string("file"));
-    RUVIA_CHECK_EQ(parts[1].filename, std::string("f.txt"));
-    RUVIA_CHECK_EQ(parts[1].contentType, std::string("text/plain"));
-    RUVIA_CHECK_EQ(parts[1].body, std::string("file content"));
+    RUVIA_CHECK_EQ(parts[0].name_, std::string("field1"));
+    RUVIA_CHECK(parts[0].filename_.empty());
+    RUVIA_CHECK_EQ(parts[0].body_, std::string("value1"));
+    RUVIA_CHECK_EQ(parts[1].name_, std::string("file"));
+    RUVIA_CHECK_EQ(parts[1].filename_, std::string("f.txt"));
+    RUVIA_CHECK_EQ(parts[1].content_type_, std::string("text/plain"));
+    RUVIA_CHECK_EQ(parts[1].body_, std::string("file content"));
 }
 
 RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io);
-    const auto worker = attachment.loop().handle();
-    SuspendedChunkSource source(worker);
-    std::optional<BodyReader> bodyReader;
-    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"),
-                                            .resource = std::pmr::get_default_resource()});
-    bool firstCompleted = false;
-    bool secondRejected = false;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker_value = attachment.loop().handle();
+    suspended_chunk_source source(worker_value);
+    std::optional<body_reader> body_reader;
+    ruvia::detail::emplace_body_reader_facade(body_reader, source);
+    multipart_reader reader_value(*body_reader, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+                                                    .resource_ = std::pmr::get_default_resource()});
+    bool first_completed = false;
+    bool second_rejected = false;
 
     {
-        auto cold = reader.read();
-        bool coldRejected = false;
+        auto cold = reader_value.read();
+        bool cold_rejected = false;
         try {
-            auto overlapping = reader.read();
+            auto overlapping = reader_value.read();
         } catch (const std::logic_error&) {
-            coldRejected = true;
+            cold_rejected = true;
         }
-        RUVIA_CHECK(coldRejected);
+        RUVIA_CHECK(cold_rejected);
     }
 
-    std::exception_ptr firstFailure;
-    std::exception_ptr secondFailure;
-    int completedOperations = 0;
-    const auto complete = [&] {
-        if (++completedOperations == 2) {
+    std::exception_ptr first_failure;
+    std::exception_ptr second_failure;
+    int completed_operations = 0;
+    const auto complete_value = [&] {
+        if (++completed_operations == 2) {
             io.stop();
         }
     };
-    asio::co_spawn(io, ruvia::asAwaitable(completeMultipartRead(reader, firstCompleted)),
+    asio::co_spawn(io, ruvia::as_awaitable(complete_multipart_read(reader_value, first_completed)),
         [&](std::exception_ptr failure) {
-            firstFailure = failure;
-            complete();
+            first_failure = failure;
+            complete_value();
         });
     // Pause after the first operation suspends, without stopping its coroutine.
     asio::post(io, [&io] { io.stop(); });
     attachment.run();
-    RUVIA_CHECK(source.waiting);
-    RUVIA_CHECK(!firstCompleted);
+    RUVIA_CHECK(source.waiting_);
+    RUVIA_CHECK(!first_completed);
 
     io.restart();
-    asio::co_spawn(io, ruvia::asAwaitable(rejectConcurrentMultipartRead(reader, secondRejected)),
+    asio::co_spawn(io, ruvia::as_awaitable(reject_concurrent_multipart_read(reader_value, second_rejected)),
         [&](std::exception_ptr failure) {
-            secondFailure = failure;
-            complete();
+            second_failure = failure;
+            complete_value();
         });
-    bool notifyOnWorker = false;
-    asio::post(io, [&source, &attachment, &notifyOnWorker] {
-        notifyOnWorker = attachment.loop().isCurrent();
-        source.signal.notify();
+    bool notify_on_worker = false;
+    asio::post(io, [&source, &attachment, &notify_on_worker] {
+        notify_on_worker = attachment.loop().is_current();
+        source.signal_.notify();
     });
     attachment.run();
-    if (firstFailure) {
-        std::rethrow_exception(firstFailure);
+    if (first_failure) {
+        std::rethrow_exception(first_failure);
     }
-    if (secondFailure) {
-        std::rethrow_exception(secondFailure);
+    if (second_failure) {
+        std::rethrow_exception(second_failure);
     }
 
-    RUVIA_CHECK(firstCompleted);
-    RUVIA_CHECK(secondRejected);
-    RUVIA_CHECK(notifyOnWorker);
+    RUVIA_CHECK(first_completed);
+    RUVIA_CHECK(second_rejected);
+    RUVIA_CHECK(notify_on_worker);
 }
 
 RUVIA_TEST(multipart_reader_reassembles_across_chunk_boundaries) {
     // Feeding the same body three bytes at a time splits boundaries, headers and
     // bodies across reads; the streaming reader must reassemble them identically.
-    const auto parts = parseMultipart(splitChunks(kTwoPartBody, 3), "BOUNDARY");
+    const auto parts = parse_multipart(split_chunks(two_part_body, 3), "BOUNDARY");
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(parts[0].name, std::string("field1"));
-    RUVIA_CHECK_EQ(parts[0].body, std::string("value1"));
-    RUVIA_CHECK_EQ(parts[1].name, std::string("file"));
-    RUVIA_CHECK_EQ(parts[1].body, std::string("file content"));
+    RUVIA_CHECK_EQ(parts[0].name_, std::string("field1"));
+    RUVIA_CHECK_EQ(parts[0].body_, std::string("value1"));
+    RUVIA_CHECK_EQ(parts[1].name_, std::string("file"));
+    RUVIA_CHECK_EQ(parts[1].body_, std::string("file content"));
 }
 
 RUVIA_TEST(multipart_reader_accepts_transport_padding_and_exact_eof_close) {
@@ -239,11 +240,11 @@ RUVIA_TEST(multipart_reader_accepts_transport_padding_and_exact_eof_close) {
         "\r\n"
         "value\r\n"
         "--BOUNDARY-- \t";  // closing delimiter is completed by HTTP body EOF
-    for (const std::size_t chunkSize :
+    for (const std::size_t chunk_size :
         {std::size_t{1}, std::size_t{4}, std::size_t{17}, std::size_t{4096}}) {
-        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        const auto parts = parse_multipart(split_chunks(body, chunk_size), "BOUNDARY");
         RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
+        RUVIA_CHECK_EQ(parts[0].body_, std::string("value"));
     }
 }
 
@@ -258,16 +259,16 @@ RUVIA_TEST(multipart_reader_does_not_commit_ambiguous_close_before_more_input) {
     try {
         // Without an explicit input-finished phase, the first chunk used to be
         // accepted as complete and the invalid suffix was silently ignored.
-        (void)parseMultipart({prefix, "X"}, "BOUNDARY");
-    } catch (const ruvia::HttpProtocolError& error) {
-        threw = error.status() == ruvia::http_status::kBadRequest;
+        (void)parse_multipart({prefix, "X"}, "BOUNDARY");
+    } catch (const ruvia::http_protocol_error& error) {
+        threw = error.status() == ruvia::http_status::bad_request;
     }
     RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(multipart_reader_drains_a_split_epilogue_before_reporting_done) {
-    ChunkSource source;
-    source.chunks = {
+    chunk_source source;
+    source.chunks_ = {
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n"
         "\r\n"
@@ -275,20 +276,20 @@ RUVIA_TEST(multipart_reader_drains_a_split_epilogue_before_reporting_done) {
         "--BOUNDARY--\r\nfirst epilogue bytes",
         " and the remaining epilogue"};
 
-    std::optional<BodyReader> bodyReader;
-    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"),
-                                            .resource = std::pmr::get_default_resource()});
-    std::vector<CollectedPart> parts;
-    asio::io_context context(1);
+    std::optional<body_reader> body_reader;
+    ruvia::detail::emplace_body_reader_facade(body_reader, source);
+    multipart_reader reader_value(*body_reader, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+                                                    .resource_ = std::pmr::get_default_resource()});
+    std::vector<collected_part> parts;
+    asio::io_context context_value(1);
     auto future = asio::co_spawn(
-        context, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
-    context.run();
+        context_value, ruvia::as_awaitable(collect_parts(reader_value, parts)), asio::use_future);
+    context_value.run();
     future.get();
 
     RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
-    RUVIA_CHECK_EQ(source.index, source.chunks.size());
+    RUVIA_CHECK_EQ(parts[0].body_, std::string("value"));
+    RUVIA_CHECK_EQ(source.index_, source.chunks_.size());
 }
 
 RUVIA_TEST(multipart_reader_emits_an_empty_field_body) {
@@ -307,19 +308,19 @@ RUVIA_TEST(multipart_reader_emits_an_empty_field_body) {
         "\r\n"
         "data\r\n"
         "--BOUNDARY--\r\n";
-    const auto parts = parseMultipart({body}, "BOUNDARY");
+    const auto parts = parse_multipart({body}, "BOUNDARY");
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(parts[0].name, std::string("empty"));
-    RUVIA_CHECK(parts[0].body.empty());
-    RUVIA_CHECK_EQ(parts[1].name, std::string("present"));
-    RUVIA_CHECK_EQ(parts[1].body, std::string("data"));
+    RUVIA_CHECK_EQ(parts[0].name_, std::string("empty"));
+    RUVIA_CHECK(parts[0].body_.empty());
+    RUVIA_CHECK_EQ(parts[1].name_, std::string("present"));
+    RUVIA_CHECK_EQ(parts[1].body_, std::string("data"));
 
     // The same holds when the body is fragmented three bytes at a time, so the
     // empty part is recognized even when the boundary straddles reads.
-    const auto split = parseMultipart(splitChunks(body, 3), "BOUNDARY");
+    const auto split = parse_multipart(split_chunks(body, 3), "BOUNDARY");
     RUVIA_CHECK_EQ(split.size(), std::size_t{2});
-    RUVIA_CHECK(split[0].body.empty());
-    RUVIA_CHECK_EQ(split[1].body, std::string("data"));
+    RUVIA_CHECK(split[0].body_.empty());
+    RUVIA_CHECK_EQ(split[1].body_, std::string("data"));
 }
 
 RUVIA_TEST(multipart_reader_rejects_a_body_without_a_final_boundary) {
@@ -332,7 +333,7 @@ RUVIA_TEST(multipart_reader_rejects_a_body_without_a_final_boundary) {
         "value1";  // no trailing CRLF, no closing boundary
     bool threw = false;
     try {
-        (void)parseMultipart({truncated}, "BOUNDARY");
+        (void)parse_multipart({truncated}, "BOUNDARY");
     } catch (const std::exception&) {
         threw = true;
     }
@@ -340,9 +341,9 @@ RUVIA_TEST(multipart_reader_rejects_a_body_without_a_final_boundary) {
 }
 
 RUVIA_TEST(multipart_reader_rejects_malformed_parts) {
-    const auto throwsOn = [](std::string body) {
+    const auto throws_on = [](std::string body) {
         try {
-            (void)parseMultipart({std::move(body)}, "BOUNDARY");
+            (void)parse_multipart({std::move(body)}, "BOUNDARY");
             return false;
         } catch (const std::exception&) {
             return true;
@@ -351,25 +352,25 @@ RUVIA_TEST(multipart_reader_rejects_malformed_parts) {
 
     // A part with no "Content-Disposition: form-data" is rejected.
     RUVIA_CHECK(
-        throwsOn("--BOUNDARY\r\n"
-                 "Content-Type: text/plain\r\n"
-                 "\r\n"
-                 "x\r\n"
-                 "--BOUNDARY--\r\n"));
+        throws_on("--BOUNDARY\r\n"
+                  "Content-Type: text/plain\r\n"
+                  "\r\n"
+                  "x\r\n"
+                  "--BOUNDARY--\r\n"));
 
     // A form-data part with no name parameter is rejected.
     RUVIA_CHECK(
-        throwsOn("--BOUNDARY\r\n"
-                 "Content-Disposition: form-data\r\n"
-                 "\r\n"
-                 "x\r\n"
-                 "--BOUNDARY--\r\n"));
+        throws_on("--BOUNDARY\r\n"
+                  "Content-Disposition: form-data\r\n"
+                  "\r\n"
+                  "x\r\n"
+                  "--BOUNDARY--\r\n"));
 
     // A part whose header block exceeds the 64 KiB cap without ever terminating
     // (\r\n\r\n) is rejected rather than buffered unbounded -- a memory-DoS defense.
-    std::string bigHeaders = "--BOUNDARY\r\nX-Big: ";
-    bigHeaders.append(70 * 1024, 'a');
-    RUVIA_CHECK(throwsOn(std::move(bigHeaders)));
+    std::string big_headers = "--BOUNDARY\r\nX-Big: ";
+    big_headers.append(70 * 1024, 'a');
+    RUVIA_CHECK(throws_on(std::move(big_headers)));
 }
 
 RUVIA_TEST(multipart_reader_boundary_prefix_in_content_is_not_a_delimiter) {
@@ -384,12 +385,12 @@ RUVIA_TEST(multipart_reader_boundary_prefix_in_content_is_not_a_delimiter) {
         "\r\n"
         "before\r\n--BOUNDARYx after"  // "\r\n--BOUNDARYx": false boundary ('x' != CRLF/--)
         "\r\n--BOUNDARY--\r\n";        // the real close delimiter
-    for (const std::size_t chunkSize :
+    for (const std::size_t chunk_size :
         {std::size_t{1}, std::size_t{5}, std::size_t{19}, std::size_t{4096}}) {
-        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        const auto parts = parse_multipart(split_chunks(body, chunk_size), "BOUNDARY");
         RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(parts[0].name, std::string("field"));
-        RUVIA_CHECK_EQ(parts[0].body, std::string("before\r\n--BOUNDARYx after"));
+        RUVIA_CHECK_EQ(parts[0].name_, std::string("field"));
+        RUVIA_CHECK_EQ(parts[0].body_, std::string("before\r\n--BOUNDARYx after"));
     }
 }
 
@@ -406,33 +407,33 @@ RUVIA_TEST(multipart_reader_skips_a_preamble_before_the_first_boundary) {
         "\r\n"
         "value"
         "\r\n--BOUNDARY--\r\n";
-    for (const std::size_t chunkSize :
+    for (const std::size_t chunk_size :
         {std::size_t{1}, std::size_t{7}, std::size_t{64}, std::size_t{4096}}) {
-        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        const auto parts = parse_multipart(split_chunks(body, chunk_size), "BOUNDARY");
         RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(parts[0].name, std::string("field"));
-        RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
+        RUVIA_CHECK_EQ(parts[0].name_, std::string("field"));
+        RUVIA_CHECK_EQ(parts[0].body_, std::string("value"));
     }
 
     // A bare leading CRLF (a minimal/empty preamble) is likewise skipped.
-    const std::string emptyPreamble =
+    const std::string empty_preamble =
         "\r\n--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"f\"\r\n"
         "\r\n"
         "v"
         "\r\n--BOUNDARY--\r\n";
-    const auto parts = parseMultipart({emptyPreamble}, "BOUNDARY");
+    const auto parts = parse_multipart({empty_preamble}, "BOUNDARY");
     RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(parts[0].body, std::string("v"));
+    RUVIA_CHECK_EQ(parts[0].body_, std::string("v"));
 }
 
 RUVIA_TEST(multipart_reader_rejects_an_unbounded_preamble_without_a_boundary) {
     // A preamble that never presents a boundary must be bounded, not buffered
     // without limit -- the same memory-DoS defense as the per-part header cap.
-    std::string noBoundary(70 * 1024, 'x');  // 70 KiB, never a --BOUNDARY line
+    std::string no_boundary(70 * 1024, 'x');  // 70 KiB, never a --BOUNDARY line
     bool threw = false;
     try {
-        (void)parseMultipart({std::move(noBoundary)}, "BOUNDARY");
+        (void)parse_multipart({std::move(no_boundary)}, "BOUNDARY");
     } catch (const std::exception&) {
         threw = true;
     }
@@ -445,34 +446,34 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
     // immediately, NOT by buffering the entire remaining body while waiting for a
     // "\r\n"/"--" that can never appear -- the boundary-terminator phase previously
     // lacked the memory cap the preamble and per-part header phases have.
-    ChunkSource source;
-    source.chunks.push_back("--BOUNDARY\rXX");  // boundary + bare-CR terminator (invalid)
-    source.chunks.push_back(
+    chunk_source source;
+    source.chunks_.push_back("--BOUNDARY\rXX");  // boundary + bare-CR terminator (invalid)
+    source.chunks_.push_back(
         std::string(80 * 1024, 'A'));  // large trailing payload the bug would buffer
-    source.chunks.push_back(std::string(80 * 1024, 'B'));
+    source.chunks_.push_back(std::string(80 * 1024, 'B'));
 
-    std::optional<BodyReader> bodyReader;
-    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"),
-                                            .resource = std::pmr::get_default_resource()});
+    std::optional<body_reader> body_reader;
+    ruvia::detail::emplace_body_reader_facade(body_reader, source);
+    multipart_reader reader_value(*body_reader, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+                                                    .resource_ = std::pmr::get_default_resource()});
 
-    std::vector<CollectedPart> parts;
+    std::vector<collected_part> parts;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
+        ctx, ruvia::as_awaitable(collect_parts(reader_value, parts)), asio::use_future);
     ctx.run();
 
     bool threw = false;
     try {
         future.get();
-    } catch (const ruvia::HttpProtocolError& error) {
-        threw = error.status() == ruvia::http_status::kContentTooLarge;
+    } catch (const ruvia::http_protocol_error& error) {
+        threw = error.status() == ruvia::http_status::content_too_large;
     }
     RUVIA_CHECK(threw);
     // Rejected without pulling the large trailing payload chunks. Without the fix the
-    // reader loops appendMore() over the whole body, consuming every chunk before it
+    // reader loops append_more() over the whole body, consuming every chunk before it
     // finally throws at end-of-body.
-    RUVIA_CHECK(source.index < source.chunks.size());
+    RUVIA_CHECK(source.index_ < source.chunks_.size());
 }
 
 RUVIA_TEST(multipart_reader_decodes_quoted_pairs_in_name_and_filename) {
@@ -485,9 +486,9 @@ RUVIA_TEST(multipart_reader_decodes_quoted_pairs_in_name_and_filename) {
         "\r\n"
         "content"
         "\r\n--BOUNDARY--\r\n";
-    const auto parts = parseMultipart(splitChunks(body, 64), "BOUNDARY");
+    const auto parts = parse_multipart(split_chunks(body, 64), "BOUNDARY");
     RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(parts[0].name, std::string("a\"b"));          // name="a\"b" -> a"b
-    RUVIA_CHECK_EQ(parts[0].filename, std::string("x\\y.txt"));  // filename="x\\y.txt" -> x\y.txt
-    RUVIA_CHECK_EQ(parts[0].body, std::string("content"));
+    RUVIA_CHECK_EQ(parts[0].name_, std::string("a\"b"));          // name="a\"b" -> a"b
+    RUVIA_CHECK_EQ(parts[0].filename_, std::string("x\\y.txt"));  // filename="x\\y.txt" -> x\y.txt
+    RUVIA_CHECK_EQ(parts[0].body_, std::string("content"));
 }

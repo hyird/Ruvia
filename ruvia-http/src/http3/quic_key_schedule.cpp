@@ -30,14 +30,14 @@ std::string_view version_label(quic_version version, std::string_view v1, std::s
 }
 class erase_guard final {
 public:
-    erase_guard(quic_crypto_provider_view provider, std::span<std::byte> bytes) noexcept
+    erase_guard(quic_crypto_provider_view provider, std::span<std::byte> bytes_value) noexcept
         : provider_(provider),
-          bytes_(bytes) {}
+          bytes_(bytes_value) {}
     erase_guard(const erase_guard&) = delete;
     erase_guard& operator=(const erase_guard&) = delete;
     ~erase_guard() noexcept {
         if (!bytes_.empty()) {
-            provider_.secure_erase(provider_.context, bytes_);
+            provider_.secure_erase_(provider_.context_, bytes_);
         }
     }
     void release() noexcept {
@@ -83,21 +83,21 @@ quic_cipher_suite_parameters quic_cipher_suite_parameters_for(quic_cipher_suite 
     constexpr std::uint64_t chacha_max_decryption_failures = std::uint64_t{1} << 36;
     switch (suite) {
         case quic_cipher_suite::aes_128_gcm_sha256:
-            return {.hash_size = 32, .key_size = 16, .iv_size = 12, .tag_size = 16, .max_encryptions = aes_max_encryptions, .max_decryption_failures = aes_max_decryption_failures};
+            return {.hash_size_ = 32, .key_size_ = 16, .iv_size_ = 12, .tag_size_ = 16, .max_encryptions_ = aes_max_encryptions, .max_decryption_failures_ = aes_max_decryption_failures};
         case quic_cipher_suite::aes_256_gcm_sha384:
-            return {.hash_size = 48, .key_size = 32, .iv_size = 12, .tag_size = 16, .max_encryptions = aes_max_encryptions, .max_decryption_failures = aes_max_decryption_failures};
+            return {.hash_size_ = 48, .key_size_ = 32, .iv_size_ = 12, .tag_size_ = 16, .max_encryptions_ = aes_max_encryptions, .max_decryption_failures_ = aes_max_decryption_failures};
         case quic_cipher_suite::chacha20_poly1305_sha256:
-            return {.hash_size = 32, .key_size = 32, .iv_size = 12, .tag_size = 16, .max_encryptions = chacha_max_encryptions, .max_decryption_failures = chacha_max_decryption_failures};
+            return {.hash_size_ = 32, .key_size_ = 32, .iv_size_ = 12, .tag_size_ = 16, .max_encryptions_ = chacha_max_encryptions, .max_decryption_failures_ = chacha_max_decryption_failures};
     }
     throw std::invalid_argument("unsupported QUIC TLS cipher suite");
 }
 
 quic_secret::quic_secret(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, std::span<const std::byte> bytes)
+    std::pmr::memory_resource* resource, std::span<const std::byte> bytes_value)
     : provider_(provider),
       resource_(require_resource(provider, resource)),
       bytes_(resource_) {
-    bytes_.assign(bytes.begin(), bytes.end());
+    bytes_.assign(bytes_value.begin(), bytes_value.end());
 }
 
 quic_secret::quic_secret(quic_secret&& other) noexcept
@@ -113,15 +113,15 @@ std::span<const std::byte> quic_secret::view() const noexcept {
     return bytes_;
 }
 
-void quic_secret::erase(std::span<std::byte> bytes) const noexcept {
-    if (!bytes.empty()) {
-        provider_.secure_erase(provider_.context, bytes);
+void quic_secret::erase(std::span<std::byte> bytes_value) const noexcept {
+    if (!bytes_value.empty()) {
+        provider_.secure_erase_(provider_.context_, bytes_value);
     }
 }
 
 void quic_secret::reset() noexcept {
-    if (!bytes_.empty() && provider_.secure_erase != nullptr) {
-        provider_.secure_erase(provider_.context, bytes_);
+    if (!bytes_.empty() && provider_.secure_erase_ != nullptr) {
+        provider_.secure_erase_(provider_.context_, bytes_);
     }
     bytes_.clear();
     resource_ = nullptr;
@@ -130,8 +130,8 @@ void quic_secret::reset() noexcept {
 
 quic_initial_secrets::quic_initial_secrets(quic_secret client_secret,
     quic_secret server_secret) noexcept
-    : client(std::move(client_secret)),
-      server(std::move(server_secret)) {}
+    : client_(std::move(client_secret)),
+      server_(std::move(server_secret)) {}
 
 quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provider,
     std::pmr::memory_resource* resource, quic_version version,
@@ -148,7 +148,7 @@ quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provi
                       : version == quic_version::v2
                           ? std::span<const std::byte>(v2_initial_salt)
                           : throw std::invalid_argument("unsupported QUIC version");
-    provider.hkdf_extract(provider.context, suite, salt,
+    provider.hkdf_extract_(provider.context_, suite, salt,
         initial_destination_connection_id, initial_secret);
 
     std::array<std::byte, 32> client_secret{};
@@ -165,14 +165,14 @@ quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provi
 
 void hkdf_expand_label(quic_crypto_provider_view provider, quic_cipher_suite suite,
     std::span<const std::byte> secret, std::string_view label,
-    std::span<const std::byte> context, std::span<std::byte> output) {
+    std::span<const std::byte> context_value, std::span<std::byte> output) {
     provider.validate();
     const auto parameters = quic_cipher_suite_parameters_for(suite);
-    if (secret.size() != parameters.hash_size) {
+    if (secret.size() != parameters.hash_size_) {
         throw std::invalid_argument("QUIC traffic secret has the wrong hash length");
     }
     if (output.size() > std::numeric_limits<std::uint16_t>::max() ||
-        label.size() > 249 || context.size() > 255) {
+        label.size() > 249 || context_value.size() > 255) {
         throw std::invalid_argument("TLS 1.3 HKDF label field exceeds its encoded length");
     }
     const auto full_label_size = label.size() + 6;
@@ -188,10 +188,10 @@ void hkdf_expand_label(quic_crypto_provider_view provider, quic_cipher_suite sui
     for (const char value : label) {
         info[offset++] = static_cast<std::byte>(static_cast<unsigned char>(value));
     }
-    info[offset++] = static_cast<std::byte>(context.size());
-    std::ranges::copy(context, info.begin() + static_cast<std::ptrdiff_t>(offset));
-    offset += context.size();
-    provider.hkdf_expand(provider.context, suite, secret,
+    info[offset++] = static_cast<std::byte>(context_value.size());
+    std::ranges::copy(context_value, info.begin() + static_cast<std::ptrdiff_t>(offset));
+    offset += context_value.size();
+    provider.hkdf_expand_(provider.context_, suite, secret,
         std::span<const std::byte>(info.data(), offset), output);
 }
 
@@ -217,10 +217,10 @@ std::span<const std::byte> quic_packet_keys::iv() const noexcept {
     return iv_;
 }
 std::uint64_t quic_packet_keys::max_encryptions() const noexcept {
-    return parameters_.max_encryptions;
+    return parameters_.max_encryptions_;
 }
 std::uint64_t quic_packet_keys::max_decryption_failures() const noexcept {
-    return parameters_.max_decryption_failures;
+    return parameters_.max_decryption_failures_;
 }
 quic_aead_key& quic_packet_keys::aead() noexcept {
     return aead_;
@@ -240,26 +240,26 @@ quic_packet_keys derive_quic_packet_keys(quic_crypto_provider_view provider,
     quic_crypto_direction direction, std::span<const std::byte> traffic_secret) {
     validate_owner(provider, resource);
     const auto parameters = quic_cipher_suite_parameters_for(suite);
-    if (traffic_secret.size() != parameters.hash_size) {
+    if (traffic_secret.size() != parameters.hash_size_) {
         throw std::invalid_argument("QUIC traffic secret has the wrong hash length");
     }
 
     quic_secret owned_secret(provider, resource, traffic_secret);
-    auto key_bytes = make_bytes(resource, parameters.key_size);
+    auto key_bytes = make_bytes(resource, parameters.key_size_);
     erase_guard key_guard(provider, key_bytes);
     derive_label(provider, suite, traffic_secret,
         version_label(version, "quic key", "quicv2 key"), key_bytes);
-    auto iv = make_bytes(resource, parameters.iv_size);
+    auto iv = make_bytes(resource, parameters.iv_size_);
     erase_guard iv_guard(provider, iv);
     derive_label(provider, suite, traffic_secret,
         version_label(version, "quic iv", "quicv2 iv"), iv);
-    auto hp_bytes = make_bytes(resource, parameters.key_size);
+    auto hp_bytes = make_bytes(resource, parameters.key_size_);
     erase_guard hp_guard(provider, hp_bytes);
     derive_label(provider, suite, traffic_secret,
         version_label(version, "quic hp", "quicv2 hp"), hp_bytes);
 
-    auto aead = provider.create_aead_key(provider.context, suite, direction, key_bytes);
-    auto hp = provider.create_header_protection_key(provider.context, suite, hp_bytes);
+    auto aead = provider.create_aead_key_(provider.context_, suite, direction, key_bytes);
+    auto hp = provider.create_header_protection_key_(provider.context_, suite, hp_bytes);
     iv_guard.release();
     quic_packet_keys result(std::move(owned_secret), resource, std::move(iv),
         std::move(aead), std::move(hp), parameters);
@@ -286,10 +286,10 @@ std::span<const std::byte> quic_updated_packet_keys::iv() const noexcept {
     return iv_;
 }
 std::uint64_t quic_updated_packet_keys::max_encryptions() const noexcept {
-    return parameters_.max_encryptions;
+    return parameters_.max_encryptions_;
 }
 std::uint64_t quic_updated_packet_keys::max_decryption_failures() const noexcept {
-    return parameters_.max_decryption_failures;
+    return parameters_.max_decryption_failures_;
 }
 quic_aead_key& quic_updated_packet_keys::aead() noexcept {
     return aead_;
@@ -303,26 +303,26 @@ quic_updated_packet_keys update_quic_packet_keys(quic_crypto_provider_view provi
     quic_crypto_direction direction, std::span<const std::byte> current_traffic_secret) {
     validate_owner(provider, resource);
     const auto parameters = quic_cipher_suite_parameters_for(suite);
-    if (current_traffic_secret.size() != parameters.hash_size) {
+    if (current_traffic_secret.size() != parameters.hash_size_) {
         throw std::invalid_argument("QUIC traffic secret has the wrong hash length");
     }
 
-    auto updated_secret_bytes = make_bytes(resource, parameters.hash_size);
+    auto updated_secret_bytes = make_bytes(resource, parameters.hash_size_);
     erase_guard updated_secret_guard(provider, updated_secret_bytes);
     derive_label(provider, suite, current_traffic_secret,
         version_label(version, "quic ku", "quicv2 ku"), updated_secret_bytes);
     quic_secret owned_secret(provider, resource, updated_secret_bytes);
 
-    auto key_bytes = make_bytes(resource, parameters.key_size);
+    auto key_bytes = make_bytes(resource, parameters.key_size_);
     erase_guard key_guard(provider, key_bytes);
     derive_label(provider, suite, updated_secret_bytes,
         version_label(version, "quic key", "quicv2 key"), key_bytes);
-    auto iv = make_bytes(resource, parameters.iv_size);
+    auto iv = make_bytes(resource, parameters.iv_size_);
     erase_guard iv_guard(provider, iv);
     derive_label(provider, suite, updated_secret_bytes,
         version_label(version, "quic iv", "quicv2 iv"), iv);
 
-    auto aead = provider.create_aead_key(provider.context, suite, direction, key_bytes);
+    auto aead = provider.create_aead_key_(provider.context_, suite, direction, key_bytes);
     iv_guard.release();
     quic_updated_packet_keys result(std::move(owned_secret), resource,
         std::move(iv), std::move(aead), parameters);
@@ -340,7 +340,7 @@ std::array<std::byte, 16> quic_retry_integrity_tag(quic_crypto_provider_view pro
     const auto nonce = version == quic_version::v1
                            ? std::span<const std::byte, 12>(quic_v1_retry_integrity_nonce)
                            : std::span<const std::byte, 12>(quic_v2_retry_integrity_nonce);
-    auto key = provider.create_aead_key(provider.context,
+    auto key = provider.create_aead_key_(provider.context_,
         quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write, key_bytes);
     std::array<std::byte, 16> tag{};
     key.seal(nonce, retry_pseudo_packet, {}, tag);

@@ -80,7 +80,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: build/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-${{ hashFiles('cmake/RuviaDependencies.cmake', 'cmake/RuviaDependencyConfigure.cmake', 'cmake/RuviaDependencyBuild.cmake') }}
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-${{ hashFiles('cmake/ruvia_dependencies.cmake', 'cmake/ruvia_dependency_configure.cmake', 'cmake/ruvia_dependency_build.cmake') }}
           restore-keys: |
             fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-
       - name: Configure
@@ -93,16 +93,16 @@ jobs:
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
       - name: Build dependencies
         run: cmake --build build --config "$BUILD_TYPE" --target ruvia_dependencies -j$(nproc)
-      - name: Build
-        run: cmake --build build --config "$BUILD_TYPE" -j$(nproc)
-      - name: Test
-        run: ctest --test-dir build --output-on-failure --build-config "$BUILD_TYPE"
       - name: Save dependency cache
         if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/_deps
           key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}
+      - name: Build
+        run: cmake --build build --config "$BUILD_TYPE" -j$(nproc)
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --build-config "$BUILD_TYPE"
   windows_build:
     name: Windows
     runs-on: windows-2025
@@ -122,12 +122,15 @@ jobs:
           choco install strawberryperl winflexbison3 jom pkgconfiglite --yes --no-progress
           python -m pip install meson ninja
           "C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
+          $pkg_config = Get-ChildItem -LiteralPath "$env:ChocolateyInstall\lib\pkgconfiglite" -Filter pkg-config.exe -File -Recurse | Select-Object -First 1
+          if (-not $pkg_config) { throw "pkg-config installation was not found" }
+          $pkg_config.DirectoryName >> $env:GITHUB_PATH
       - name: Restore dependency cache
         id: restore-dependency-cache
         uses: actions/cache/restore@v6
         with:
           path: build/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-${{ hashFiles('cmake/RuviaDependencies.cmake', 'cmake/RuviaDependencyConfigure.cmake', 'cmake/RuviaDependencyBuild.cmake') }}
+          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-${{ hashFiles('cmake/ruvia_dependencies.cmake', 'cmake/ruvia_dependency_configure.cmake', 'cmake/ruvia_dependency_build.cmake') }}
           restore-keys: |
             fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-
       - name: Configure
@@ -141,15 +144,15 @@ jobs:
       - name: Build dependencies
         shell: pwsh
         run: cmake --build build --config $env:BUILD_TYPE --target ruvia_dependencies "-j$([Environment]::ProcessorCount)"
-      - name: Build
-        shell: pwsh
-        run: cmake --build build --config $env:BUILD_TYPE "-j$([Environment]::ProcessorCount)"
-      - name: Test
-        shell: pwsh
-        run: ctest --test-dir build --build-config $env:BUILD_TYPE --output-on-failure
       - name: Save dependency cache
         if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/_deps
           key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config $env:BUILD_TYPE "-j$([Environment]::ProcessorCount)"
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build --build-config $env:BUILD_TYPE --output-on-failure

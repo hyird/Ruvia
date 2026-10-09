@@ -9,35 +9,35 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/WorkerNotification.h"
-#include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/buffer_pool.h"
+#include "ruvia/core/worker_notification.h"
 #include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_runtime_context.h"
 
-#include "http3/Http3QuicClientTlsContext.h"
-#include "http3/Http3QuicClientTransport.h"
-#include "http3/Http3QuicPacketIo.h"
-#include "http3/Http3QuicSocketAddress.h"
 #include "http3/http3_datagram_channel.h"
 #include "http3/http3_datagram_endpoint.h"
+#include "http3/http3_quic_client_tls_context.h"
+#include "http3/http3_quic_client_transport.h"
+#include "http3/http3_quic_packet_io.h"
+#include "http3/http3_quic_socket_address.h"
 #include "test_harness.h"
 
 namespace {
 
 class packet_worker final {
-    ruvia::worker_runtime owner_{{.queue_capacity = 8}};
+    ruvia::worker_runtime owner_{{.queue_capacity_ = 8}};
 
 public:
     packet_worker()
-        : runtime(owner_.context()) {
+        : runtime_(owner_.context()) {
         owner_.start();
     }
     template <typename function>
     auto invoke(function operation) {
         using result = decltype(operation());
-        auto task = std::make_shared<std::packaged_task<result()>>(std::move(operation));
-        auto completion = task->get_future();
-        if (!runtime.submission().post([task] { (*task)(); }).accepted() ||
+        auto task_value = std::make_shared<std::packaged_task<result()>>(std::move(operation));
+        auto completion = task_value->get_future();
+        if (!runtime_.submission().post([task_value] { (*task_value)(); }).accepted() ||
             completion.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
             std::terminate();
         }
@@ -47,7 +47,7 @@ public:
         owner_.request_stop();
         owner_.join();
     }
-    ruvia::WorkerRuntimeContext& runtime;
+    ruvia::worker_runtime_context& runtime_;
 };
 
 ruvia::detail::http3_quic_datagram_address address(std::uint16_t port) {
@@ -60,25 +60,25 @@ ruvia::detail::http3_quic_datagram_address address(std::uint16_t port) {
 
 RUVIA_TEST(http3_quic_packet_io_writes_directly_into_reserved_transport_lease) {
     using namespace ruvia::detail;
-    http3_quic_client_tls_context tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(client_transport_config_view{});
     const auto local = address(40000);
     const auto peer = address(4433);
     ruvia::quic_connection_config config;
-    config.local_address = to_quic_address(local);
-    config.peer_address = to_quic_address(peer);
+    config.local_address_ = to_quic_address(local);
+    config.peer_address_ = to_quic_address(peer);
     http3_quic_client_transport transport(tls, config, "example.test",
         std::chrono::steady_clock::now());
 
     asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor(acceptor_io, 8);
+    ruvia::worker_runtime_context acceptor(acceptor_io, 8);
     packet_worker worker;
-    ruvia::WorkerNotification notification(acceptor);
+    ruvia::worker_notification notification(acceptor);
     ruvia::buffer_pool pool(4, http3_datagram_channel::packet_capacity);
     http3_datagram_channel channel(pool, notification, nullptr, 1, 1);
-    channel.stage_worker(worker.runtime);
+    channel.stage_worker(worker.runtime_);
     std::unique_ptr<http3_worker_datagram_endpoint> endpoint;
     std::span<std::byte> packet;
-    const auto result = worker.invoke([&] {
+    const auto result_value = worker.invoke([&] {
         channel.worker_start();
         endpoint = std::make_unique<http3_worker_datagram_endpoint>(channel, std::get<0>(to_udp_endpoint(local)),
             http3_worker_datagram_endpoint::notification{
@@ -88,13 +88,13 @@ RUVIA_TEST(http3_quic_packet_io_writes_directly_into_reserved_transport_lease) {
         packet = endpoint->packet_buffer();
         const auto written = http3_quic_packet_io::write(transport.connection(), packet.first(1500),
             std::chrono::steady_clock::now());
-        RUVIA_CHECK(written.size != 0);
-        RUVIA_CHECK(written.size <= 1500);
+        RUVIA_CHECK(written.size_ != 0);
+        RUVIA_CHECK(written.size_ <= 1500);
         const auto expected_peer = to_quic_address(peer);
-        RUVIA_CHECK(written.peer.bytes == expected_peer.bytes);
-        RUVIA_CHECK(written.peer.port == expected_peer.port);
-        RUVIA_CHECK(written.peer.family == expected_peer.family);
-        RUVIA_CHECK(endpoint->send_datagram(packet.first(written.size),
+        RUVIA_CHECK(written.peer_.bytes_ == expected_peer.bytes_);
+        RUVIA_CHECK(written.peer_.port_ == expected_peer.port_);
+        RUVIA_CHECK(written.peer_.family_ == expected_peer.family_);
+        RUVIA_CHECK(endpoint->send_datagram(packet.first(written.size_),
                         std::get<0>(to_udp_endpoint(local)), std::get<0>(to_udp_endpoint(peer))) ==
                     http3_worker_datagram_endpoint::pump_result::pending);
         RUVIA_CHECK(!endpoint->outbound_capacity());
@@ -102,8 +102,8 @@ RUVIA_TEST(http3_quic_packet_io_writes_directly_into_reserved_transport_lease) {
         return written;
     });
     auto submitted = channel.acceptor_take_output();
-    RUVIA_CHECK(submitted && submitted->view().bytes.data() == packet.data());
-    RUVIA_CHECK(submitted && submitted->size == result.size);
+    RUVIA_CHECK(submitted && submitted->view().bytes_.data() == packet.data());
+    RUVIA_CHECK(submitted && submitted->size_ == result_value.size_);
     channel.acceptor_close();
     worker.invoke([&] {
         endpoint->request_stop();

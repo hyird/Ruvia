@@ -22,7 +22,7 @@ std::uint16_t from_network_port(std::uint16_t port) noexcept {
 }
 
 ngtcp2_socklen address_length(const quic_address& address) {
-    switch (address.family) {
+    switch (address.family_) {
         case quic_address_family::ipv4:
             return static_cast<ngtcp2_socklen>(sizeof(ngtcp2_sockaddr_in));
         case quic_address_family::ipv6:
@@ -32,19 +32,19 @@ ngtcp2_socklen address_length(const quic_address& address) {
 }
 
 void encode_address(ngtcp2_sockaddr_union& storage, const quic_address& address) {
-    switch (address.family) {
+    switch (address.family_) {
         case quic_address_family::ipv4:
             storage.in = {};
             storage.in.sin_family = NGTCP2_AF_INET;
-            storage.in.sin_port = to_network_port(address.port);
-            std::memcpy(&storage.in.sin_addr, address.bytes.data(), sizeof(storage.in.sin_addr));
+            storage.in.sin_port = to_network_port(address.port_);
+            std::memcpy(&storage.in.sin_addr, address.bytes_.data(), sizeof(storage.in.sin_addr));
             return;
         case quic_address_family::ipv6:
             storage.in6 = {};
             storage.in6.sin6_family = NGTCP2_AF_INET6;
-            storage.in6.sin6_port = to_network_port(address.port);
-            std::memcpy(storage.in6.sin6_addr.s6_addr, address.bytes.data(), address.bytes.size());
-            storage.in6.sin6_scope_id = address.scope_id;
+            storage.in6.sin6_port = to_network_port(address.port_);
+            std::memcpy(storage.in6.sin6_addr.s6_addr, address.bytes_.data(), address.bytes_.size());
+            storage.in6.sin6_scope_id = address.scope_id_;
             return;
     }
     throw std::invalid_argument("unsupported QUIC address family");
@@ -69,17 +69,17 @@ quic_address decode_quic_address(const ngtcp2_addr& address) {
 
     decltype(address.addr->sa_family) family{};
     std::memcpy(&family, address.addr, sizeof(family));
-    quic_address result{};
+    quic_address result_value{};
     if (family == NGTCP2_AF_INET) {
         if (address.addrlen != sizeof(ngtcp2_sockaddr_in)) {
             throw std::invalid_argument("invalid IPv4 ngtcp2 address length");
         }
         ngtcp2_sockaddr_in native{};
         std::memcpy(&native, address.addr, sizeof(native));
-        result.family = quic_address_family::ipv4;
-        result.port = from_network_port(native.sin_port);
-        std::memcpy(result.bytes.data(), &native.sin_addr, sizeof(native.sin_addr));
-        return result;
+        result_value.family_ = quic_address_family::ipv4;
+        result_value.port_ = from_network_port(native.sin_port);
+        std::memcpy(result_value.bytes_.data(), &native.sin_addr, sizeof(native.sin_addr));
+        return result_value;
     }
     if (family == NGTCP2_AF_INET6) {
         if (address.addrlen != sizeof(ngtcp2_sockaddr_in6)) {
@@ -87,11 +87,11 @@ quic_address decode_quic_address(const ngtcp2_addr& address) {
         }
         ngtcp2_sockaddr_in6 native{};
         std::memcpy(&native, address.addr, sizeof(native));
-        result.family = quic_address_family::ipv6;
-        result.port = from_network_port(native.sin6_port);
-        std::memcpy(result.bytes.data(), native.sin6_addr.s6_addr, result.bytes.size());
-        result.scope_id = native.sin6_scope_id;
-        return result;
+        result_value.family_ = quic_address_family::ipv6;
+        result_value.port_ = from_network_port(native.sin6_port);
+        std::memcpy(result_value.bytes_.data(), native.sin6_addr.s6_addr, result_value.bytes_.size());
+        result_value.scope_id_ = native.sin6_scope_id;
+        return result_value;
     }
     throw std::invalid_argument("unsupported ngtcp2 address family");
 }

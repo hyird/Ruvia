@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/Callback.h"
+#include "ruvia/web/detail/callback.h"
 
 #include <memory>
 #include <stdexcept>
@@ -57,24 +57,24 @@ private:
 };
 
 template <bool is_noexcept>
-void exercise_callback_ownership(ruvia::testing::TestContext& ruvia_ctx) {
+void exercise_callback_ownership(ruvia::testing::test_context& ruvia_ctx) {
     using signature_type = std::conditional_t<is_noexcept, int(int) noexcept, int(int)>;
-    using owner_type = ruvia::detail::Callback<signature_type>;
+    using owner_type = ruvia::detail::callback<signature_type>;
     callable_lifetime lifetime;
-    ruvia::detail::CallbackRef<signature_type> borrowed;
+    ruvia::detail::callback_ref_type<signature_type> borrowed;
     {
-        owner_type source(tracked_callable<is_noexcept>(lifetime, 10));
-        owner_type copy(source);
+        owner_type source_value(tracked_callable<is_noexcept>(lifetime, 10));
+        owner_type copy(source_value);
         RUVIA_CHECK_EQ(lifetime.live_, 2);
-        RUVIA_CHECK_EQ(source(2), 12);
+        RUVIA_CHECK_EQ(source_value(2), 12);
         RUVIA_CHECK_EQ(copy(2), 12);
-        RUVIA_CHECK(!(source == copy));
+        RUVIA_CHECK(!(source_value == copy));
 
-        borrowed = ruvia::detail::CallbackAccess::ref(source);
+        borrowed = ruvia::detail::callback_access::ref(source_value);
         RUVIA_CHECK_EQ(borrowed(2), 13);
         RUVIA_CHECK_EQ(copy(2), 13);
-        owner_type moved(std::move(source));
-        RUVIA_CHECK(!source);
+        owner_type moved(std::move(source_value));
+        RUVIA_CHECK(!source_value);
         RUVIA_CHECK(moved);
         RUVIA_CHECK_EQ(lifetime.live_, 2);
         RUVIA_CHECK_EQ(borrowed(2), 14);
@@ -82,8 +82,8 @@ void exercise_callback_ownership(ruvia::testing::TestContext& ruvia_ctx) {
         owner_type assigned(tracked_callable<is_noexcept>(lifetime, 99));
         RUVIA_CHECK_EQ(lifetime.live_, 3);
         lifetime.reject_copy_ = true;
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { assigned = moved; }));
-        RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner_type rejected(moved); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { assigned = moved; }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { owner_type rejected(moved); }));
         RUVIA_CHECK_EQ(lifetime.live_, 3);
         RUVIA_CHECK_EQ(assigned(0), 99);
         lifetime.reject_copy_ = false;
@@ -121,22 +121,22 @@ struct moved_argument final {
 };
 
 RUVIA_TEST(callback_owner_and_borrowed_view_transfer_arguments_equivalently) {
-    ruvia::detail::Callback<int(moved_argument)> owner([](moved_argument argument) { return *argument.value_; });
-    const auto view = ruvia::detail::CallbackAccess::ref(owner);
+    ruvia::detail::callback<int(moved_argument)> owner_value([](moved_argument argument) { return *argument.value_; });
+    const auto view = ruvia::detail::callback_access::ref(owner_value);
     int owner_moves{};
     int view_moves{};
-    RUVIA_CHECK_EQ(owner(moved_argument(owner_moves, 7)), 7);
+    RUVIA_CHECK_EQ(owner_value(moved_argument(owner_moves, 7)), 7);
     RUVIA_CHECK_EQ(view(moved_argument(view_moves, 9)), 9);
     RUVIA_CHECK_EQ(owner_moves, view_moves);
 }
 
 RUVIA_TEST(callback_invocation_preserves_operation_failure_and_empty_owner_errors) {
-    ruvia::detail::Callback<int(int)> empty;
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)empty(1); }));
+    ruvia::detail::callback<int(int)> empty;
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)empty(1); }));
     callable_lifetime lifetime;
-    ruvia::detail::Callback<int(int)> callback(tracked_callable<false>(lifetime, 7));
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)callback(-1); }));
-    RUVIA_CHECK_EQ(callback(1), 8);
+    ruvia::detail::callback<int(int)> callback_value(tracked_callable<false>(lifetime, 7));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)callback_value(-1); }));
+    RUVIA_CHECK_EQ(callback_value(1), 8);
 }
 
 }  // namespace

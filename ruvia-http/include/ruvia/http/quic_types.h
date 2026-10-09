@@ -111,12 +111,12 @@ inline constexpr std::size_t quic_max_alpn_size = 255;
 class quic_connection_id {
 public:
     quic_connection_id() noexcept = default;
-    explicit quic_connection_id(std::span<const std::byte> bytes) {
-        if (bytes.size() > bytes_.size()) {
+    explicit quic_connection_id(std::span<const std::byte> bytes_value) {
+        if (bytes_value.size() > bytes_.size()) {
             throw std::invalid_argument("QUIC connection ID exceeds 20 bytes");
         }
-        std::ranges::copy(bytes, bytes_.begin());
-        size_ = static_cast<std::uint8_t>(bytes.size());
+        std::ranges::copy(bytes_value, bytes_.begin());
+        size_ = static_cast<std::uint8_t>(bytes_value.size());
     }
 
     std::size_t size() const noexcept {
@@ -134,108 +134,108 @@ private:
 };
 
 struct quic_address {
-    std::array<std::byte, 16> bytes{};
-    std::uint16_t port{};
-    std::uint32_t scope_id{};
-    quic_address_family family{quic_address_family::ipv4};
+    std::array<std::byte, 16> bytes_{};
+    std::uint16_t port_{};
+    std::uint32_t scope_id_{};
+    quic_address_family family_{quic_address_family::ipv4};
 };
 
 struct quic_transport_parameters {
-    std::uint64_t idle_timeout_ms{30000};
-    std::uint64_t max_udp_payload_size{1200};
-    std::uint64_t initial_max_data{1U << 20};
-    std::uint64_t initial_max_stream_data_bidi_local{64U << 10};
-    std::uint64_t initial_max_stream_data_bidi_remote{64U << 10};
-    std::uint64_t initial_max_stream_data_uni{64U << 10};
-    std::uint64_t initial_max_streams_bidi{100};
-    std::uint64_t initial_max_streams_uni{16};
-    std::uint64_t max_datagram_frame_size{};
-    std::uint64_t active_connection_id_limit{4};
-    bool disable_active_migration{true};
+    std::uint64_t idle_timeout_ms_{30000};
+    std::uint64_t max_udp_payload_size_{1200};
+    std::uint64_t initial_max_data_{1U << 20};
+    std::uint64_t initial_max_stream_data_bidi_local_{64U << 10};
+    std::uint64_t initial_max_stream_data_bidi_remote_{64U << 10};
+    std::uint64_t initial_max_stream_data_uni_{64U << 10};
+    std::uint64_t initial_max_streams_bidi_{100};
+    std::uint64_t initial_max_streams_uni_{16};
+    std::uint64_t max_datagram_frame_size_{};
+    std::uint64_t active_connection_id_limit_{4};
+    bool disable_active_migration_{true};
 };
 
 struct quic_limits {
-    std::size_t max_datagram_size{65527};
-    std::size_t max_crypto_buffer_size{1U << 20};
-    std::size_t max_stream_buffer_size{64U << 10};
-    std::size_t max_connection_buffer_size{1U << 20};
-    std::size_t max_streams{160};
-    std::size_t max_local_streams{32};
-    std::size_t max_datagrams{16};
-    std::size_t max_lifetime_peer_streams{128};
+    std::size_t max_datagram_size_{65527};
+    std::size_t max_crypto_buffer_size_{1U << 20};
+    std::size_t max_stream_buffer_size_{64U << 10};
+    std::size_t max_connection_buffer_size_{1U << 20};
+    std::size_t max_streams_{160};
+    std::size_t max_local_streams_{32};
+    std::size_t max_datagrams_{16};
+    std::size_t max_lifetime_peer_streams_{128};
 };
 
 // Immutable stateless routing partition for server-generated connection IDs.
 // Constructors require count > 0 and index < count; count = 1 preserves the
 // unpartitioned random CID behavior.
 struct quic_cid_partition {
-    std::uint32_t index{};
-    std::uint32_t count{1};
+    std::uint32_t index_{};
+    std::uint32_t count_{1};
 };
 
 struct quic_connection_config {
-    quic_role role{quic_role::client};
+    quic_role role_{quic_role::client};
     // The version of the first packet/Initial offer; it remains unchanged by negotiation.
-    quic_version version{quic_version::v1};
+    quic_version version_{quic_version::v1};
     // Local preference used when RFC 9368 compatible version negotiation selects a version.
-    quic_version preferred_version{quic_version::v1};
-    quic_address local_address{};
-    quic_address peer_address{};
-    quic_connection_id destination_connection_id{};
-    std::optional<quic_connection_id> source_connection_id{};
-    std::optional<quic_connection_id> original_destination_connection_id{};
-    quic_cid_partition cid_partition{};
-    quic_transport_parameters local_transport_parameters{};
-    quic_limits limits{};
+    quic_version preferred_version_{quic_version::v1};
+    quic_address local_address_{};
+    quic_address peer_address_{};
+    quic_connection_id destination_connection_id_{};
+    std::optional<quic_connection_id> source_connection_id_{};
+    std::optional<quic_connection_id> original_destination_connection_id_{};
+    quic_cid_partition cid_partition_{};
+    quic_transport_parameters local_transport_parameters_{};
+    quic_limits limits_{};
 };
 
 struct quic_datagram_view {
-    std::span<const std::byte> bytes;
-    quic_address local;
-    quic_address peer;
+    std::span<const std::byte> bytes_;
+    quic_address local_;
+    quic_address peer_;
 };
 
 struct quic_close_reason_view {
-    quic_close_kind kind{};
-    std::uint64_t code{};
-    std::uint64_t frame_type{};
-    std::span<const char> reason{};
+    quic_close_kind kind_{};
+    std::uint64_t code_{};
+    std::uint64_t frame_type_{};
+    std::span<const char> reason_{};
 };
 
 struct quic_path_migration final {
-    std::uint64_t id{};
-    quic_migration_status status{quic_migration_status::rejected};
-    quic_address local_address{};
+    std::uint64_t id_{};
+    quic_migration_status status_{quic_migration_status::rejected};
+    quic_address local_address_{};
 };
 
 struct quic_connection_info {
-    quic_connection_state state{quic_connection_state::connecting};
-    quic_version negotiated_version{quic_version::v1};
-    quic_address local_address{};
-    quic_address peer_address{};
-    bool tls_handshake_complete{};
-    bool quic_handshake_complete{};
-    bool confirmed{};
-    quic_early_data_state early_data{quic_early_data_state::unavailable};
-    std::uint64_t negotiated_idle_timeout_ms{};
-    std::uint64_t close_error_code{};
+    quic_connection_state state_{quic_connection_state::connecting};
+    quic_version negotiated_version_{quic_version::v1};
+    quic_address local_address_{};
+    quic_address peer_address_{};
+    bool tls_handshake_complete_{};
+    bool quic_handshake_complete_{};
+    bool confirmed_{};
+    quic_early_data_state early_data_{quic_early_data_state::unavailable};
+    std::uint64_t negotiated_idle_timeout_ms_{};
+    std::uint64_t close_error_code_{};
 };
 
 struct quic_tls_info_view {
-    std::span<const std::byte> negotiated_alpn{};
-    quic_cipher_suite cipher_suite{quic_cipher_suite::aes_128_gcm_sha256};
+    std::span<const std::byte> negotiated_alpn_{};
+    quic_cipher_suite cipher_suite_{quic_cipher_suite::aes_128_gcm_sha256};
 };
 
 struct quic_stream_metadata {
-    std::uint64_t stream_id{};
-    bool readable{};
-    bool writable{};
+    std::uint64_t stream_id_{};
+    bool readable_{};
+    bool writable_{};
 };
 
 struct quic_stream_accept_batch {
-    std::array<quic_stream_metadata, quic_max_stream_accept_batch> streams{};
-    std::size_t size{};
-    quic_operation_status status{quic_operation_status::need_input};
+    std::array<quic_stream_metadata, quic_max_stream_accept_batch> streams_{};
+    std::size_t size_{};
+    quic_operation_status status_{quic_operation_status::need_input};
 };
 
 enum class quic_stream_read_status : std::uint8_t { data,
@@ -246,18 +246,18 @@ enum class quic_stream_read_status : std::uint8_t { data,
 
 struct quic_stream_info final {
     // Sticky transport fact: at least one byte on this stream arrived in 0-RTT.
-    bool received_early_data{};
+    bool received_early_data_{};
 };
 
 struct quic_stream_read_result {
-    quic_stream_read_status status{quic_stream_read_status::would_block};
-    std::size_t size{};
-    std::optional<std::uint64_t> peer_reset_error_code{};
+    quic_stream_read_status status_{quic_stream_read_status::would_block};
+    std::size_t size_{};
+    std::optional<std::uint64_t> peer_reset_error_code_{};
 };
 
 struct quic_stream_write_result {
-    quic_operation_status status{quic_operation_status::would_block};
-    std::size_t accepted{};
+    quic_operation_status status_{quic_operation_status::would_block};
+    std::size_t accepted_{};
 };
 
 enum class quic_datagram_status : std::uint8_t { received,
@@ -270,27 +270,27 @@ enum class quic_datagram_write_status : std::uint8_t { queued,
     unavailable };
 
 struct quic_datagram_result {
-    quic_datagram_status status{quic_datagram_status::would_block};
-    std::size_t size{};
-    quic_address local{};
-    quic_address peer{};
+    quic_datagram_status status_{quic_datagram_status::would_block};
+    std::size_t size_{};
+    quic_address local_{};
+    quic_address peer_{};
 };
 
 struct quic_packet_result {
-    quic_operation_status status{quic_operation_status::need_input};
-    std::size_t size{};
-    quic_address local{};
-    quic_address peer{};
+    quic_operation_status status_{quic_operation_status::need_input};
+    std::size_t size_{};
+    quic_address local_{};
+    quic_address peer_{};
 };
 
 struct quic_initial_offer {
-    std::uint64_t offer_id{};
-    quic_address local_address{};
-    quic_address peer_address{};
-    quic_connection_id destination_connection_id{};
-    quic_connection_id source_connection_id{};
-    quic_connection_id original_destination_connection_id{};
-    quic_version version{quic_version::v1};
+    std::uint64_t offer_id_{};
+    quic_address local_address_{};
+    quic_address peer_address_{};
+    quic_connection_id destination_connection_id_{};
+    quic_connection_id source_connection_id_{};
+    quic_connection_id original_destination_connection_id_{};
+    quic_version version_{quic_version::v1};
 };
 
 class quic_version_negotiation_plan final {
@@ -322,16 +322,16 @@ enum class quic_server_route_kind : std::uint8_t { existing_connection,
     rejected };
 
 struct quic_connection_token {
-    std::uint64_t value{};
+    std::uint64_t value_{};
     friend bool operator==(quic_connection_token, quic_connection_token) = default;
 };
 
 struct quic_server_route {
-    quic_server_route_kind kind{quic_server_route_kind::dropped};
-    quic_operation_status status{quic_operation_status::need_input};
-    quic_connection_token connection{};
-    quic_initial_offer offer{};
-    quic_version_negotiation_plan version_negotiation{};
+    quic_server_route_kind kind_{quic_server_route_kind::dropped};
+    quic_operation_status status_{quic_operation_status::need_input};
+    quic_connection_token connection_{};
+    quic_initial_offer offer_{};
+    quic_version_negotiation_plan version_negotiation_{};
 };
 
 }  // namespace ruvia

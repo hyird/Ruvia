@@ -8,54 +8,54 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/Http3FieldSection.h"
-#include "ruvia/http/Http3QpackConnection.h"
-#include "ruvia/http/Http3ResponseWriter.h"
-#include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpResponseStream.h"
+#include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http3_qpack_connection.h"
+#include "ruvia/http/http3_response_writer.h"
+#include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_response_stream.h"
 
 #include "test_harness.h"
 
 namespace {
-struct Fields final {
-    std::vector<std::string> names;
-    std::vector<std::string> values;
+struct fields final {
+    std::vector<std::string> names_;
+    std::vector<std::string> values_;
 };
 
-bool collect(void* opaque, ruvia::Http3FieldSectionFieldView field) {
-    auto& fields = *static_cast<Fields*>(opaque);
-    fields.names.emplace_back(field.name);
-    fields.values.emplace_back(field.value);
+bool collect(void* opaque, ruvia::http3_field_section_field_view field) {
+    auto& fields_value = *static_cast<fields*>(opaque);
+    fields_value.names_.emplace_back(field.name_);
+    fields_value.values_.emplace_back(field.value_);
     return true;
 }
 
-class CountingResource final : public std::pmr::memory_resource {
+class counting_resource final : public std::pmr::memory_resource {
 public:
-    explicit CountingResource(const void* equality_group = nullptr)
+    explicit counting_resource(const void* equality_group = nullptr)
         : equality_group_(equality_group ? equality_group : this) {}
 
-    std::size_t allocations{};
-    std::size_t deallocations{};
+    std::size_t allocations_{};
+    std::size_t deallocations_{};
 
     bool fail_allocations_{};
     std::optional<std::size_t> fail_after_allocations_;
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail_allocations_ || (fail_after_allocations_ && allocations >= *fail_after_allocations_)) {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (fail_allocations_ || (fail_after_allocations_ && allocations_ >= *fail_after_allocations_)) {
             throw std::bad_alloc();
         }
-        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        ++allocations;
-        return result;
+        auto* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        ++allocations_;
+        return result_value;
     }
-    void do_deallocate(void* ptr, std::size_t bytes, std::size_t alignment) override {
-        ++deallocations;
-        std::pmr::new_delete_resource()->deallocate(ptr, bytes, alignment);
+    void do_deallocate(void* ptr, std::size_t bytes_value, std::size_t alignment) override {
+        ++deallocations_;
+        std::pmr::new_delete_resource()->deallocate(ptr, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        const auto* resource = dynamic_cast<const CountingResource*>(&other);
+        const auto* resource = dynamic_cast<const counting_resource*>(&other);
         return resource && equality_group_ == resource->equality_group_;
     }
     const void* equality_group_;
@@ -69,77 +69,77 @@ RUVIA_TEST(http3_response_head_forms_release_storage_after_each_allocation_failu
         streaming };
     const std::string long_value(80, 'v');
     const std::array headers{
-        ruvia::HttpHeaderView{"Date", "Fri, 09 Oct 2026 00:00:00 GMT"},
-        ruvia::HttpHeaderView{"X-Mixed-Name", long_value},
-        ruvia::HttpHeaderView{"Another-Field", "second"}};
+        ruvia::http_header_view{"Date", "Fri, 09 Oct 2026 00:00:00 GMT"},
+        ruvia::http_header_view{"X-Mixed-Name", long_value},
+        ruvia::http_header_view{"Another-Field", "second"}};
     const std::array raw_fields{
-        ruvia::Http3FieldSectionFieldView{"date", headers[0].value()},
-        ruvia::Http3FieldSectionFieldView{"x-mixed-name", long_value},
-        ruvia::Http3FieldSectionFieldView{"another-field", "second"}};
+        ruvia::http3_field_section_field_view{"date", headers[0].value()},
+        ruvia::http3_field_section_field_view{"x-mixed-name", long_value},
+        ruvia::http3_field_section_field_view{"another-field", "second"}};
 
     for (const auto kind : {form::raw, form::buffered, form::interim, form::streaming}) {
         for (const bool connection_owned : {false, true}) {
-            const auto encode = [&](CountingResource& memory) -> std::variant<ruvia::Http3ResponseHead, ruvia::Http3ResponseHeadFailure> {
-                ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
-                constexpr auto method = ruvia::HttpKnownMethod::kGet;
+            const auto encode = [&](counting_resource& memory) -> std::variant<ruvia::http3_response_head, ruvia::http3_response_head_failure> {
+                ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 0, .max_blocked_streams_ = 0});
+                constexpr auto method = ruvia::http_known_method::get;
                 if (kind == form::raw) {
                     return connection_owned
-                               ? ruvia::encodeHttp3ResponseHead(encoder, 0, ruvia::http_status::kOk, method, raw_fields, {}, &memory)
-                               : ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk, method, raw_fields, {}, &memory);
+                               ? ruvia::encode_http3_response_head(encoder, 0, ruvia::http_status::ok, method, raw_fields, {}, &memory)
+                               : ruvia::encode_http3_response_head(ruvia::http_status::ok, method, raw_fields, {}, &memory);
                 }
                 if (kind == form::interim) {
-                    const ruvia::HttpInterimResponseHead response(ruvia::http_status::kEarlyHints, headers);
+                    const ruvia::http_interim_response_head response(ruvia::http_status::early_hints, headers);
                     return connection_owned
-                               ? ruvia::encodeHttp3InterimResponseHead(encoder, 0, response, {}, &memory)
-                               : ruvia::encodeHttp3InterimResponseHead(response, {}, &memory);
+                               ? ruvia::encode_http3_interim_response_head(encoder, 0, response, {}, &memory)
+                               : ruvia::encode_http3_interim_response_head(response, {}, &memory);
                 }
-                ruvia::HttpResponse response;
+                ruvia::http_response response;
                 for (const auto& header : headers) {
                     response.header(header.name(), header.value());
                 }
                 if (kind == form::buffered) {
-                    response.staticBody("body");
-                    const auto plan = ruvia::planBufferedHttpResponseWrite(method, response);
+                    response.static_body("body");
+                    const auto plan = ruvia::plan_buffered_http_response_write(method, response);
                     return connection_owned
-                               ? ruvia::encodeHttp3ResponseHead(encoder, 0, response, plan, {}, &memory)
-                               : ruvia::encodeHttp3ResponseHead(response, plan, {}, &memory);
+                               ? ruvia::encode_http3_response_head(encoder, 0, response, plan, {}, &memory)
+                               : ruvia::encode_http3_response_head(response, plan, {}, &memory);
                 }
-                auto result = connection_owned
-                                  ? ruvia::encodeHttp3StreamingResponseHead(encoder, 0, std::move(response), method,
-                                        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory)
-                                  : ruvia::encodeHttp3StreamingResponseHead(std::move(response), method,
-                                        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory);
-                if ((result.index() != 0)) {
-                    return std::get<1>(result);
+                auto result_value = connection_owned
+                                        ? ruvia::encode_http3_streaming_response_head(encoder, 0, std::move(response), method,
+                                              ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory)
+                                        : ruvia::encode_http3_streaming_response_head(std::move(response), method,
+                                              ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, {}, &memory);
+                if ((result_value.index() != 0)) {
+                    return std::get<1>(result_value);
                 }
-                return std::move(std::get<0>(result).head);
+                return std::move(std::get<0>(result_value).head_);
             };
-            CountingResource complete;
+            counting_resource complete;
             {
-                const auto result = encode(complete);
-                RUVIA_CHECK((result.index() == 0));
-                if ((result.index() == 0)) {
-                    Fields decoded;
-                    RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(result).field_section.fieldSection, collect, &decoded).index() == 0));
+                const auto result_value = encode(complete);
+                RUVIA_CHECK((result_value.index() == 0));
+                if ((result_value.index() == 0)) {
+                    fields decoded;
+                    RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(result_value).field_section_.field_section_, collect, &decoded).index() == 0));
                     const auto count = kind == form::buffered ? 5U : 4U;
-                    RUVIA_CHECK_EQ(decoded.names.size(), count);
-                    if (decoded.names.size() == count) {
-                        RUVIA_CHECK_EQ(decoded.names[0], ":status");
-                        RUVIA_CHECK_EQ(decoded.values[0], kind == form::interim ? "103" : "200");
+                    RUVIA_CHECK_EQ(decoded.names_.size(), count);
+                    if (decoded.names_.size() == count) {
+                        RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+                        RUVIA_CHECK_EQ(decoded.values_[0], kind == form::interim ? "103" : "200");
                         for (std::size_t index = 0; index < raw_fields.size(); ++index) {
-                            RUVIA_CHECK_EQ(decoded.names[index + 1], raw_fields[index].name);
-                            RUVIA_CHECK_EQ(decoded.values[index + 1], raw_fields[index].value);
+                            RUVIA_CHECK_EQ(decoded.names_[index + 1], raw_fields[index].name_);
+                            RUVIA_CHECK_EQ(decoded.values_[index + 1], raw_fields[index].value_);
                         }
                         if (kind == form::buffered) {
-                            RUVIA_CHECK_EQ(decoded.names.back(), "content-length");
-                            RUVIA_CHECK_EQ(decoded.values.back(), "4");
+                            RUVIA_CHECK_EQ(decoded.names_.back(), "content-length");
+                            RUVIA_CHECK_EQ(decoded.values_.back(), "4");
                         }
                     }
                 }
             }
-            RUVIA_CHECK_EQ(complete.allocations, complete.deallocations);
-            for (std::size_t failure = 0; failure < complete.allocations; ++failure) {
-                CountingResource limited;
+            RUVIA_CHECK_EQ(complete.allocations_, complete.deallocations_);
+            for (std::size_t failure = 0; failure < complete.allocations_; ++failure) {
+                counting_resource limited;
                 limited.fail_after_allocations_ = failure;
                 bool threw = false;
                 try {
@@ -148,802 +148,802 @@ RUVIA_TEST(http3_response_head_forms_release_storage_after_each_allocation_failu
                     threw = true;
                 }
                 RUVIA_CHECK(threw);
-                RUVIA_CHECK_EQ(limited.allocations, limited.deallocations);
+                RUVIA_CHECK_EQ(limited.allocations_, limited.deallocations_);
             }
         }
     }
 }
 
 RUVIA_TEST(http3_response_head_field_errors_precede_aggregate_size_errors_without_qpack_mutation) {
-    const auto check = [&](ruvia::Http3FieldSectionFieldView invalid, ruvia::Http3ResponseHeadError expected) {
-        const std::array fields{
-            ruvia::Http3FieldSectionFieldView{"x-first", "new-dynamic-value"},
+    const auto check = [&](ruvia::http3_field_section_field_view invalid, ruvia::http3_response_head_error expected) {
+        const std::array fields_value{
+            ruvia::http3_field_section_field_view{"x-first", "new-dynamic-value"},
             invalid};
-        ruvia::Http3FieldSectionLimits limits;
-        limits.maxDecodedBytes = 0;
+        ruvia::http3_field_section_limits limits;
+        limits.max_decoded_bytes_ = 0;
         for (const bool connection_owned : {false, true}) {
-            ruvia::Http3QpackEncoder encoder({});
-            const auto initial_output = encoder.pendingEncoderOutput();
+            ruvia::http3_qpack_encoder encoder({});
+            const auto initial_output = encoder.pending_encoder_output();
             const std::vector<char> pending_before(initial_output.begin(), initial_output.end());
-            const auto result = connection_owned
-                                    ? ruvia::encodeHttp3ResponseHead(encoder, 0, ruvia::http_status::kOk,
-                                          ruvia::HttpKnownMethod::kGet, fields, limits)
-                                    : ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-                                          ruvia::HttpKnownMethod::kGet, fields, limits);
-            RUVIA_CHECK((result.index() != 0));
-            if ((result.index() != 0)) {
-                RUVIA_CHECK(std::get<1>(result).kind == expected);
+            const auto result_value = connection_owned
+                                          ? ruvia::encode_http3_response_head(encoder, 0, ruvia::http_status::ok,
+                                                ruvia::http_known_method::get, fields_value, limits)
+                                          : ruvia::encode_http3_response_head(ruvia::http_status::ok,
+                                                ruvia::http_known_method::get, fields_value, limits);
+            RUVIA_CHECK((result_value.index() != 0));
+            if ((result_value.index() != 0)) {
+                RUVIA_CHECK(std::get<1>(result_value).kind_ == expected);
             }
-            RUVIA_CHECK_EQ(encoder.insertCount(), 0U);
-            RUVIA_CHECK(std::ranges::equal(encoder.pendingEncoderOutput(), pending_before));
+            RUVIA_CHECK_EQ(encoder.insert_count(), 0U);
+            RUVIA_CHECK(std::ranges::equal(encoder.pending_encoder_output(), pending_before));
         }
     };
-    check({"bad name", "value"}, ruvia::Http3ResponseHeadError::kInvalidField);
-    check({"x-value", "bad\r\nvalue"}, ruvia::Http3ResponseHeadError::kInvalidField);
-    check({"connection", "close"}, ruvia::Http3ResponseHeadError::kForbiddenField);
-    check({"content-length", "invalid"}, ruvia::Http3ResponseHeadError::kInvalidField);
+    check({"bad name", "value"}, ruvia::http3_response_head_error::invalid_field);
+    check({"x-value", "bad\r\nvalue"}, ruvia::http3_response_head_error::invalid_field);
+    check({"connection", "close"}, ruvia::http3_response_head_error::forbidden_field);
+    check({"content-length", "invalid"}, ruvia::http3_response_head_error::invalid_field);
 }
 
 RUVIA_TEST(http3_interim_and_streaming_heads_project_mixed_case_names_in_order) {
     const std::array headers{
-        ruvia::HttpHeaderView{"X-Long-Mixed-Case-Header", "first"},
-        ruvia::HttpHeaderView{"x-lowercase-header-name", "lower"},
-        ruvia::HttpHeaderView{"X-Long-Mixed-Case-Header", "second"}};
-    const ruvia::HttpInterimResponseHead interim(ruvia::http_status::kEarlyHints, headers);
-    CountingResource interim_resource;
+        ruvia::http_header_view{"X-Long-Mixed-Case-Header", "first"},
+        ruvia::http_header_view{"x-lowercase-header-name", "lower"},
+        ruvia::http_header_view{"X-Long-Mixed-Case-Header", "second"}};
+    const ruvia::http_interim_response_head interim(ruvia::http_status::early_hints, headers);
+    counting_resource interim_resource;
     {
-        const auto result = ruvia::encodeHttp3InterimResponseHead(interim, {}, &interim_resource);
-        RUVIA_CHECK((result.index() == 0));
-        if ((result.index() == 0)) {
-            Fields decoded;
-            RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(result).field_section.fieldSection, collect, &decoded).index() == 0));
-            RUVIA_CHECK_EQ(decoded.names.size(), 4U);
-            if (decoded.names.size() == 4) {
-                RUVIA_CHECK_EQ(decoded.names[0], ":status");
-                RUVIA_CHECK_EQ(decoded.values[0], "103");
-                RUVIA_CHECK_EQ(decoded.names[1], "x-long-mixed-case-header");
-                RUVIA_CHECK_EQ(decoded.values[1], "first");
-                RUVIA_CHECK_EQ(decoded.names[2], "x-lowercase-header-name");
-                RUVIA_CHECK_EQ(decoded.values[2], "lower");
-                RUVIA_CHECK_EQ(decoded.names[3], "x-long-mixed-case-header");
-                RUVIA_CHECK_EQ(decoded.values[3], "second");
+        const auto result_value = ruvia::encode_http3_interim_response_head(interim, {}, &interim_resource);
+        RUVIA_CHECK((result_value.index() == 0));
+        if ((result_value.index() == 0)) {
+            fields decoded;
+            RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(result_value).field_section_.field_section_, collect, &decoded).index() == 0));
+            RUVIA_CHECK_EQ(decoded.names_.size(), 4U);
+            if (decoded.names_.size() == 4) {
+                RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+                RUVIA_CHECK_EQ(decoded.values_[0], "103");
+                RUVIA_CHECK_EQ(decoded.names_[1], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values_[1], "first");
+                RUVIA_CHECK_EQ(decoded.names_[2], "x-lowercase-header-name");
+                RUVIA_CHECK_EQ(decoded.values_[2], "lower");
+                RUVIA_CHECK_EQ(decoded.names_[3], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values_[3], "second");
             }
         }
     }
-    RUVIA_CHECK(interim_resource.allocations > 0);
-    RUVIA_CHECK_EQ(interim_resource.allocations, interim_resource.deallocations);
+    RUVIA_CHECK(interim_resource.allocations_ > 0);
+    RUVIA_CHECK_EQ(interim_resource.allocations_, interim_resource.deallocations_);
 
-    CountingResource streaming_resource;
+    counting_resource streaming_resource;
     {
-        ruvia::HttpResponse response;
+        ruvia::http_response response;
         response.header("X-Long-Mixed-Case-Header", "first");
         response.header("x-lowercase-header-name", "lower");
         response.header("X-Long-Mixed-Case-Header", "second",
-            {.mode = ruvia::HttpResponseHeaderMode::kAppend});
-        const auto result = ruvia::encodeHttp3StreamingResponseHead(std::move(response),
-            ruvia::HttpKnownMethod::kGet, ruvia::http_response_stream_kind::generic,
+            {.mode_ = ruvia::http_response_header_mode::append});
+        const auto result_value = ruvia::encode_http3_streaming_response_head(std::move(response),
+            ruvia::http_known_method::get, ruvia::http_response_stream_kind::generic,
             ruvia::http_response_trailer_intent::none, {}, &streaming_resource);
-        RUVIA_CHECK((result.index() == 0));
-        if ((result.index() == 0)) {
-            Fields decoded;
-            RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(result).head.field_section.fieldSection, collect, &decoded).index() == 0));
-            RUVIA_CHECK_EQ(decoded.names.size(), 5U);
-            if (decoded.names.size() == 5) {
-                RUVIA_CHECK_EQ(decoded.names[0], ":status");
-                RUVIA_CHECK_EQ(decoded.values[0], "200");
-                RUVIA_CHECK_EQ(decoded.names[1], "x-long-mixed-case-header");
-                RUVIA_CHECK_EQ(decoded.values[1], "first");
-                RUVIA_CHECK_EQ(decoded.names[2], "x-lowercase-header-name");
-                RUVIA_CHECK_EQ(decoded.values[2], "lower");
-                RUVIA_CHECK_EQ(decoded.names[3], "x-long-mixed-case-header");
-                RUVIA_CHECK_EQ(decoded.values[3], "second");
-                RUVIA_CHECK_EQ(decoded.names[4], "date");
+        RUVIA_CHECK((result_value.index() == 0));
+        if ((result_value.index() == 0)) {
+            fields decoded;
+            RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(result_value).head_.field_section_.field_section_, collect, &decoded).index() == 0));
+            RUVIA_CHECK_EQ(decoded.names_.size(), 5U);
+            if (decoded.names_.size() == 5) {
+                RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+                RUVIA_CHECK_EQ(decoded.values_[0], "200");
+                RUVIA_CHECK_EQ(decoded.names_[1], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values_[1], "first");
+                RUVIA_CHECK_EQ(decoded.names_[2], "x-lowercase-header-name");
+                RUVIA_CHECK_EQ(decoded.values_[2], "lower");
+                RUVIA_CHECK_EQ(decoded.names_[3], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values_[3], "second");
+                RUVIA_CHECK_EQ(decoded.names_[4], "date");
             }
         }
     }
-    RUVIA_CHECK(streaming_resource.allocations > 0);
-    RUVIA_CHECK_EQ(streaming_resource.allocations, streaming_resource.deallocations);
+    RUVIA_CHECK(streaming_resource.allocations_ > 0);
+    RUVIA_CHECK_EQ(streaming_resource.allocations_, streaming_resource.deallocations_);
 }
 
 RUVIA_TEST(http3_streaming_head_preserves_length_projects_sse_and_trailer_semantics) {
-    CountingResource resource;
+    counting_resource resource;
     {
-        ruvia::HttpResponse response({.resource = &resource});
+        ruvia::http_response response({.resource_ = &resource});
         response.header("Content-Length", "17");
-        auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kGet,
+        auto head = ruvia::encode_http3_streaming_response_head(std::move(response), ruvia::http_known_method::get,
             ruvia::http_response_stream_kind::sse, ruvia::http_response_trailer_intent::present, {}, &resource);
         RUVIA_CHECK((head.index() == 0));
         if ((head.index() == 0)) {
-            RUVIA_CHECK_EQ(std::get<0>(head).head.declaredContentLength.value_or(0), 17U);
-            RUVIA_CHECK(std::get<0>(head).commit_plan.head_disposition() == ruvia::http_response_stream_head_disposition::body_open);
-            RUVIA_CHECK(std::get<0>(head).commit_plan.trailer_framing() == ruvia::http_response_stream_trailer_framing::http3_trailing_headers);
-            Fields fields;
-            RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(head).head.field_section.fieldSection, collect, &fields).index() == 0));
-            RUVIA_CHECK(std::ranges::find(fields.values, "text/event-stream") != fields.values.end());
-            RUVIA_CHECK(std::ranges::find(fields.values, "no-store") != fields.values.end());
-            RUVIA_CHECK(std::ranges::find(fields.names, "date") != fields.names.end());
-            RUVIA_CHECK(std::ranges::find(fields.names, "transfer-encoding") == fields.names.end());
+            RUVIA_CHECK_EQ(std::get<0>(head).head_.declared_content_length_.value_or(0), 17U);
+            RUVIA_CHECK(std::get<0>(head).commit_plan_.head_disposition() == ruvia::http_response_stream_head_disposition::body_open);
+            RUVIA_CHECK(std::get<0>(head).commit_plan_.trailer_framing() == ruvia::http_response_stream_trailer_framing::http3_trailing_headers);
+            fields fields;
+            RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(head).head_.field_section_.field_section_, collect, &fields).index() == 0));
+            RUVIA_CHECK(std::ranges::find(fields.values_, "text/event-stream") != fields.values_.end());
+            RUVIA_CHECK(std::ranges::find(fields.values_, "no-store") != fields.values_.end());
+            RUVIA_CHECK(std::ranges::find(fields.names_, "date") != fields.names_.end());
+            RUVIA_CHECK(std::ranges::find(fields.names_, "transfer-encoding") == fields.names_.end());
         }
     }
-    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
-    for (const auto status : {ruvia::http_status::kOk, ruvia::http_status::kNoContent}) {
-        ruvia::HttpResponse response;
+    RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
+    for (const auto status : {ruvia::http_status::ok, ruvia::http_status::no_content}) {
+        ruvia::http_response response;
         response.status(status);
-        const auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kHead,
+        const auto head = ruvia::encode_http3_streaming_response_head(std::move(response), ruvia::http_known_method::head,
             ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
         RUVIA_CHECK((head.index() == 0));
         if ((head.index() == 0)) {
-            RUVIA_CHECK(std::get<0>(head).commit_plan.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
+            RUVIA_CHECK(std::get<0>(head).commit_plan_.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
         }
     }
-    ruvia::HttpResponse forbidden;
-    forbidden.status(ruvia::http_status::kNoContent);
-    RUVIA_CHECK((ruvia::encodeHttp3StreamingResponseHead(std::move(forbidden), ruvia::HttpKnownMethod::kGet,
+    ruvia::http_response forbidden;
+    forbidden.status(ruvia::http_status::no_content);
+    RUVIA_CHECK((ruvia::encode_http3_streaming_response_head(std::move(forbidden), ruvia::http_known_method::get,
                      ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::present)
                      .index() != 0));
 }
 
 RUVIA_TEST(http3_response_head_encodes_status_and_fields_for_qpack_decode) {
-    const std::array fields{ruvia::Http3FieldSectionFieldView{"content-type", "text/plain"}};
+    const std::array fields_value{ruvia::http3_field_section_field_view{"content-type", "text/plain"}};
     std::pmr::monotonic_buffer_resource resource;
-    const auto result = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, fields, {}, &resource);
-    RUVIA_CHECK((result.index() == 0));
-    if ((result.index() != 0)) {
+    const auto result_value = ruvia::encode_http3_response_head(
+        ruvia::http_status::ok, ruvia::http_known_method::get, fields_value, {}, &resource);
+    RUVIA_CHECK((result_value.index() == 0));
+    if ((result_value.index() != 0)) {
         return;
     }
-    Fields decoded;
-    const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(result).field_section.fieldSection, collect, &decoded);
+    fields decoded;
+    const auto count = ruvia::decode_http3_field_section(std::get<0>(result_value).field_section_.field_section_, collect, &decoded);
     RUVIA_CHECK((count.index() == 0));
-    RUVIA_CHECK_EQ(decoded.names.size(), 2U);
-    if (decoded.names.size() == 2) {
-        RUVIA_CHECK_EQ(decoded.names[0], ":status");
-        RUVIA_CHECK_EQ(decoded.values[0], "200");
-        RUVIA_CHECK_EQ(decoded.names[1], "content-type");
-        RUVIA_CHECK_EQ(decoded.values[1], "text/plain");
+    RUVIA_CHECK_EQ(decoded.names_.size(), 2U);
+    if (decoded.names_.size() == 2) {
+        RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+        RUVIA_CHECK_EQ(decoded.values_[0], "200");
+        RUVIA_CHECK_EQ(decoded.names_[1], "content-type");
+        RUVIA_CHECK_EQ(decoded.values_[1], "text/plain");
     }
-    RUVIA_CHECK_EQ(std::get<0>(result).field_section.decodedFieldSectionSize(), 96U);
-    RUVIA_CHECK(std::get<0>(result).bodyPlan.statusAllowsBody());
+    RUVIA_CHECK_EQ(std::get<0>(result_value).field_section_.decoded_field_section_size(), 96U);
+    RUVIA_CHECK(std::get<0>(result_value).body_plan_.status_allows_body());
 }
 
 RUVIA_TEST(http3_response_writer_emits_canonical_rfc_static_references) {
-    const std::array fields{ruvia::Http3FieldSectionFieldView{"content-type", "custom"}};
-    const auto result = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kContinue, ruvia::HttpKnownMethod::kGet, fields);
-    RUVIA_CHECK((result.index() == 0));
-    if ((result.index() != 0)) {
+    const std::array fields_value{ruvia::http3_field_section_field_view{"content-type", "custom"}};
+    const auto result_value = ruvia::encode_http3_response_head(
+        ruvia::http_status::continue_value, ruvia::http_known_method::get, fields_value);
+    RUVIA_CHECK((result_value.index() == 0));
+    if ((result_value.index() != 0)) {
         return;
     }
 
     // :status 100 is static index 63; content-type's static name reference is index 44.
-    constexpr std::array<char, 13> canonicalWire{
+    constexpr std::array<char, 13> canonical_wire{
         '\0', '\0', static_cast<char>(0xff), '\0', static_cast<char>(0x5f),
         static_cast<char>(0x1d), static_cast<char>(0x06), 'c', 'u', 's', 't', 'o', 'm'};
-    RUVIA_CHECK_EQ(std::get<0>(result).field_section.fieldSection.size(), canonicalWire.size());
-    RUVIA_CHECK(std::equal(std::get<0>(result).field_section.fieldSection.begin(), std::get<0>(result).field_section.fieldSection.end(),
-        canonicalWire.begin(), canonicalWire.end()));
+    RUVIA_CHECK_EQ(std::get<0>(result_value).field_section_.field_section_.size(), canonical_wire.size());
+    RUVIA_CHECK(std::equal(std::get<0>(result_value).field_section_.field_section_.begin(), std::get<0>(result_value).field_section_.field_section_.end(),
+        canonical_wire.begin(), canonical_wire.end()));
 }
 
 RUVIA_TEST(http3_interim_response_writer_normalizes_null_resource_and_retains_owned_results) {
-    const std::array headers{ruvia::HttpHeaderView{"Link", "</style.css>; rel=preload"}};
-    const ruvia::HttpInterimResponseHead response(ruvia::http_status::kEarlyHints, headers);
-    const auto static_null = ruvia::encodeHttp3InterimResponseHead(response, {}, nullptr);
+    const std::array headers{ruvia::http_header_view{"Link", "</style.css>; rel=preload"}};
+    const ruvia::http_interim_response_head response(ruvia::http_status::early_hints, headers);
+    const auto static_null = ruvia::encode_http3_interim_response_head(response, {}, nullptr);
     RUVIA_CHECK((static_null.index() == 0));
     if ((static_null.index() == 0)) {
-        Fields decoded;
-        const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(static_null).field_section.fieldSection, collect, &decoded);
+        fields decoded;
+        const auto count = ruvia::decode_http3_field_section(std::get<0>(static_null).field_section_.field_section_, collect, &decoded);
         RUVIA_CHECK((count.index() == 0));
-        RUVIA_CHECK_EQ(decoded.names.size(), 2U);
-        if (decoded.names.size() == 2) {
-            RUVIA_CHECK_EQ(decoded.names[0], ":status");
-            RUVIA_CHECK_EQ(decoded.values[0], "103");
-            RUVIA_CHECK_EQ(decoded.names[1], "link");
-            RUVIA_CHECK_EQ(decoded.values[1], "</style.css>; rel=preload");
+        RUVIA_CHECK_EQ(decoded.names_.size(), 2U);
+        if (decoded.names_.size() == 2) {
+            RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+            RUVIA_CHECK_EQ(decoded.values_[0], "103");
+            RUVIA_CHECK_EQ(decoded.names_[1], "link");
+            RUVIA_CHECK_EQ(decoded.values_[1], "</style.css>; rel=preload");
         }
     }
 
-    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
-    const auto dynamic_null = ruvia::encodeHttp3InterimResponseHead(encoder, 0, response, {}, nullptr);
+    ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 0, .max_blocked_streams_ = 0});
+    const auto dynamic_null = ruvia::encode_http3_interim_response_head(encoder, 0, response, {}, nullptr);
     RUVIA_CHECK((dynamic_null.index() == 0));
     if ((dynamic_null.index() == 0)) {
-        Fields decoded;
-        const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(dynamic_null).field_section.fieldSection, collect, &decoded);
+        fields decoded;
+        const auto count = ruvia::decode_http3_field_section(std::get<0>(dynamic_null).field_section_.field_section_, collect, &decoded);
         RUVIA_CHECK((count.index() == 0));
-        RUVIA_CHECK_EQ(decoded.names.size(), 2U);
-        if (decoded.names.size() == 2) {
-            RUVIA_CHECK_EQ(decoded.names[0], ":status");
-            RUVIA_CHECK_EQ(decoded.values[0], "103");
-            RUVIA_CHECK_EQ(decoded.names[1], "link");
-            RUVIA_CHECK_EQ(decoded.values[1], "</style.css>; rel=preload");
+        RUVIA_CHECK_EQ(decoded.names_.size(), 2U);
+        if (decoded.names_.size() == 2) {
+            RUVIA_CHECK_EQ(decoded.names_[0], ":status");
+            RUVIA_CHECK_EQ(decoded.values_[0], "103");
+            RUVIA_CHECK_EQ(decoded.names_[1], "link");
+            RUVIA_CHECK_EQ(decoded.values_[1], "</style.css>; rel=preload");
         }
     }
 
-    CountingResource static_resource;
+    counting_resource static_resource;
     {
-        const auto first = ruvia::encodeHttp3InterimResponseHead(response, {}, &static_resource);
+        const auto first = ruvia::encode_http3_interim_response_head(response, {}, &static_resource);
         RUVIA_CHECK((first.index() == 0));
         if ((first.index() != 0)) {
             return;
         }
-        RUVIA_CHECK(std::get<0>(first).field_section.fieldSection.get_allocator().resource() == &static_resource);
-        const std::vector<char> retained(std::get<0>(first).field_section.fieldSection.begin(), std::get<0>(first).field_section.fieldSection.end());
-        const auto second = ruvia::encodeHttp3InterimResponseHead(response, {}, &static_resource);
+        RUVIA_CHECK(std::get<0>(first).field_section_.field_section_.get_allocator().resource() == &static_resource);
+        const std::vector<char> retained(std::get<0>(first).field_section_.field_section_.begin(), std::get<0>(first).field_section_.field_section_.end());
+        const auto second = ruvia::encode_http3_interim_response_head(response, {}, &static_resource);
         RUVIA_CHECK((second.index() == 0));
-        RUVIA_CHECK(std::ranges::equal(std::get<0>(first).field_section.fieldSection, retained));
-        RUVIA_CHECK(static_resource.allocations > static_resource.deallocations);
+        RUVIA_CHECK(std::ranges::equal(std::get<0>(first).field_section_.field_section_, retained));
+        RUVIA_CHECK(static_resource.allocations_ > static_resource.deallocations_);
     }
-    RUVIA_CHECK_EQ(static_resource.allocations, static_resource.deallocations);
+    RUVIA_CHECK_EQ(static_resource.allocations_, static_resource.deallocations_);
 
-    CountingResource dynamic_resource;
+    counting_resource dynamic_resource;
     {
-        ruvia::Http3QpackEncoder resource_encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
-        const auto result = ruvia::encodeHttp3InterimResponseHead(resource_encoder, 0, response, {}, &dynamic_resource);
-        RUVIA_CHECK((result.index() == 0));
-        if ((result.index() == 0)) {
-            RUVIA_CHECK(std::get<0>(result).field_section.fieldSection.get_allocator().resource() == &dynamic_resource);
-            RUVIA_CHECK(dynamic_resource.allocations > dynamic_resource.deallocations);
+        ruvia::http3_qpack_encoder resource_encoder({.max_table_capacity_ = 0, .max_blocked_streams_ = 0});
+        const auto result_value = ruvia::encode_http3_interim_response_head(resource_encoder, 0, response, {}, &dynamic_resource);
+        RUVIA_CHECK((result_value.index() == 0));
+        if ((result_value.index() == 0)) {
+            RUVIA_CHECK(std::get<0>(result_value).field_section_.field_section_.get_allocator().resource() == &dynamic_resource);
+            RUVIA_CHECK(dynamic_resource.allocations_ > dynamic_resource.deallocations_);
         }
     }
-    RUVIA_CHECK_EQ(dynamic_resource.allocations, dynamic_resource.deallocations);
+    RUVIA_CHECK_EQ(dynamic_resource.allocations_, dynamic_resource.deallocations_);
 
-    const std::array invalid_headers{ruvia::HttpHeaderView{"Connection", "close"}};
-    const ruvia::HttpInterimResponseHead invalid_response(ruvia::http_status::kEarlyHints, invalid_headers);
-    const auto invalid = ruvia::encodeHttp3InterimResponseHead(invalid_response, {}, nullptr);
+    const std::array invalid_headers{ruvia::http_header_view{"Connection", "close"}};
+    const ruvia::http_interim_response_head invalid_response(ruvia::http_status::early_hints, invalid_headers);
+    const auto invalid = ruvia::encode_http3_interim_response_head(invalid_response, {}, nullptr);
     RUVIA_CHECK((invalid.index() != 0));
     if ((invalid.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(invalid).kind == ruvia::Http3ResponseHeadError::kForbiddenField);
+        RUVIA_CHECK(std::get<1>(invalid).kind_ == ruvia::http3_response_head_error::forbidden_field);
     }
 }
 
 RUVIA_TEST(http3_response_head_body_plan_suppresses_head_and_bodyless_statuses) {
-    for (const auto status : {ruvia::http_status::kOk, ruvia::http_status::kNoContent,
-             ruvia::http_status::kNotModified}) {
-        const auto result = ruvia::encodeHttp3ResponseHead(status, ruvia::HttpKnownMethod::kHead, {});
-        RUVIA_CHECK((result.index() == 0));
-        if ((result.index() == 0)) {
-            RUVIA_CHECK_EQ(std::get<0>(result).field_section.decodedFieldSectionSize(), 42U);
-            RUVIA_CHECK(std::get<0>(result).bodyPlan.bodySuppressed());
+    for (const auto status : {ruvia::http_status::ok, ruvia::http_status::no_content,
+             ruvia::http_status::not_modified}) {
+        const auto result_value = ruvia::encode_http3_response_head(status, ruvia::http_known_method::head, {});
+        RUVIA_CHECK((result_value.index() == 0));
+        if ((result_value.index() == 0)) {
+            RUVIA_CHECK_EQ(std::get<0>(result_value).field_section_.decoded_field_section_size(), 42U);
+            RUVIA_CHECK(std::get<0>(result_value).body_plan_.body_suppressed());
         }
     }
-    const auto noContent = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kNoContent, ruvia::HttpKnownMethod::kGet, {});
-    RUVIA_CHECK((noContent.index() == 0));
-    if ((noContent.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(noContent).field_section.decodedFieldSectionSize(), 42U);
-        RUVIA_CHECK(std::get<0>(noContent).bodyPlan.bodySuppressed());
+    const auto no_content = ruvia::encode_http3_response_head(
+        ruvia::http_status::no_content, ruvia::http_known_method::get, {});
+    RUVIA_CHECK((no_content.index() == 0));
+    if ((no_content.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(no_content).field_section_.decoded_field_section_size(), 42U);
+        RUVIA_CHECK(std::get<0>(no_content).body_plan_.body_suppressed());
     }
 }
 
 RUVIA_TEST(http3_response_head_decoded_size_counts_status_and_multiple_fields) {
-    const auto statusOnly = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, {},
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 42, .maxFields = 1});
-    RUVIA_CHECK((statusOnly.index() == 0));
-    if ((statusOnly.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(statusOnly).field_section.decodedFieldSectionSize(), 42U);
+    const auto status_only = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, {},
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 42, .max_fields_ = 1});
+    RUVIA_CHECK((status_only.index() == 0));
+    if ((status_only.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(status_only).field_section_.decoded_field_section_size(), 42U);
     }
-    const auto statusOverLimit = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, {},
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 41, .maxFields = 1});
-    RUVIA_CHECK((statusOverLimit.index() != 0));
-    if ((statusOverLimit.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(statusOverLimit).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldListTooLarge);
+    const auto status_over_limit = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, {},
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 41, .max_fields_ = 1});
+    RUVIA_CHECK((status_over_limit.index() != 0));
+    if ((status_over_limit.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(status_over_limit).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_list_too_large);
     }
 
-    const std::array fields{ruvia::Http3FieldSectionFieldView{"x", "y"},
-        ruvia::Http3FieldSectionFieldView{"long-name", "value"}};
-    const auto exact = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, fields,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 122, .maxFields = 3});
+    const std::array fields_value{ruvia::http3_field_section_field_view{"x", "y"},
+        ruvia::http3_field_section_field_view{"long-name", "value"}};
+    const auto exact = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, fields_value,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 122, .max_fields_ = 3});
     RUVIA_CHECK((exact.index() == 0));
     if ((exact.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(exact).field_section.decodedFieldSectionSize(), 122U);
+        RUVIA_CHECK_EQ(std::get<0>(exact).field_section_.decoded_field_section_size(), 122U);
     }
-    const auto overLimit = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, fields,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 121, .maxFields = 3});
-    RUVIA_CHECK((overLimit.index() != 0));
-    if ((overLimit.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(overLimit).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldListTooLarge);
+    const auto over_limit = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, fields_value,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 121, .max_fields_ = 3});
+    RUVIA_CHECK((over_limit.index() != 0));
+    if ((over_limit.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(over_limit).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_list_too_large);
     }
 
-    const std::string large_value(ruvia::kMaxHttpHeaderBytes + 1, 'v');
-    const std::array large_fields{ruvia::Http3FieldSectionFieldView{"x", large_value}};
+    const std::string large_value(ruvia::max_http_header_bytes + 1, 'v');
+    const std::array large_fields{ruvia::http3_field_section_field_view{"x", large_value}};
     const auto large_size = std::size_t{42 + 32 + 1} + large_value.size();
-    const auto large = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, large_fields,
-        {.maxEncodedBytes = large_size * 2, .maxDecodedBytes = large_size, .maxFields = 2});
+    const auto large = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, large_fields,
+        {.max_encoded_bytes_ = large_size * 2, .max_decoded_bytes_ = large_size, .max_fields_ = 2});
     RUVIA_CHECK((large.index() == 0));
     if ((large.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(large).field_section.decodedFieldSectionSize(), large_size);
+        RUVIA_CHECK_EQ(std::get<0>(large).field_section_.decoded_field_section_size(), large_size);
     }
 
-    auto source = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, {});
-    RUVIA_CHECK((source.index() == 0));
-    if ((source.index() == 0)) {
-        auto moved = std::move(std::get<0>(source));
-        RUVIA_CHECK_EQ(moved.field_section.decodedFieldSectionSize(), 42U);
-        RUVIA_CHECK_EQ(std::get<0>(source).field_section.decodedFieldSectionSize(), 0U);
-        RUVIA_CHECK(std::get<0>(source).field_section.fieldSection.empty());
-        auto destination = ruvia::encodeHttp3ResponseHead(
-            ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, {});
+    auto source_value = ruvia::encode_http3_response_head(
+        ruvia::http_status::ok, ruvia::http_known_method::get, {});
+    RUVIA_CHECK((source_value.index() == 0));
+    if ((source_value.index() == 0)) {
+        auto moved = std::move(std::get<0>(source_value));
+        RUVIA_CHECK_EQ(moved.field_section_.decoded_field_section_size(), 42U);
+        RUVIA_CHECK_EQ(std::get<0>(source_value).field_section_.decoded_field_section_size(), 0U);
+        RUVIA_CHECK(std::get<0>(source_value).field_section_.field_section_.empty());
+        auto destination = ruvia::encode_http3_response_head(
+            ruvia::http_status::ok, ruvia::http_known_method::get, {});
         RUVIA_CHECK((destination.index() == 0));
         if ((destination.index() == 0)) {
             std::get<0>(destination) = std::move(moved);
-            RUVIA_CHECK_EQ(std::get<0>(destination).field_section.decodedFieldSectionSize(), 42U);
-            RUVIA_CHECK_EQ(moved.field_section.decodedFieldSectionSize(), 0U);
-            RUVIA_CHECK(moved.field_section.fieldSection.empty());
+            RUVIA_CHECK_EQ(std::get<0>(destination).field_section_.decoded_field_section_size(), 42U);
+            RUVIA_CHECK_EQ(moved.field_section_.decoded_field_section_size(), 0U);
+            RUVIA_CHECK(moved.field_section_.field_section_.empty());
         }
     }
 }
 
 RUVIA_TEST(http3_response_head_moves_and_extracts_owned_section_without_allocating) {
-    CountingResource resource;
-    CountingResource equivalent_resource(&resource);
+    counting_resource resource;
+    counting_resource equivalent_resource(&resource);
     for (auto* destination_resource : {&resource, &equivalent_resource}) {
         {
-            ruvia::Http3ResponseHead source(std::pmr::vector<char>(64, 's', &resource),
-                ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk), 91, 17);
-            ruvia::Http3ResponseHead destination(std::pmr::vector<char>(32, 'd', destination_resource),
-                ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk), 42, 3);
-            const auto* bytes = source.field_section.fieldSection.data();
-            const auto allocations = resource.allocations + equivalent_resource.allocations;
-            auto moved = std::move(source);
-            RUVIA_CHECK(moved.field_section.fieldSection.data() == bytes);
-            RUVIA_CHECK_EQ(source.field_section.decodedFieldSectionSize(), 0U);
-            RUVIA_CHECK(source.field_section.fieldSection.empty());
+            ruvia::http3_response_head source_value(std::pmr::vector<char>(64, 's', &resource),
+                ruvia::plan_http_response_body(ruvia::http_known_method::head, ruvia::http_status::ok), 91, 17);
+            ruvia::http3_response_head destination(std::pmr::vector<char>(32, 'd', destination_resource),
+                ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status::ok), 42, 3);
+            const auto* bytes_value = source_value.field_section_.field_section_.data();
+            const auto allocations = resource.allocations_ + equivalent_resource.allocations_;
+            auto moved = std::move(source_value);
+            RUVIA_CHECK(moved.field_section_.field_section_.data() == bytes_value);
+            RUVIA_CHECK_EQ(source_value.field_section_.decoded_field_section_size(), 0U);
+            RUVIA_CHECK(source_value.field_section_.field_section_.empty());
             destination = std::move(moved);
-            RUVIA_CHECK(destination.field_section.fieldSection.data() == bytes);
-            RUVIA_CHECK(destination.field_section.fieldSection.get_allocator().resource() == destination_resource);
-            RUVIA_CHECK_EQ(destination.field_section.decodedFieldSectionSize(), 91U);
-            RUVIA_CHECK(destination.bodyPlan.bodySuppressed());
-            RUVIA_CHECK_EQ(destination.declaredContentLength.value_or(0), 17U);
-            RUVIA_CHECK_EQ(moved.field_section.decodedFieldSectionSize(), 0U);
-            RUVIA_CHECK(moved.field_section.fieldSection.empty());
-            auto section = std::move(destination.field_section);
-            RUVIA_CHECK(section.fieldSection.data() == bytes);
-            RUVIA_CHECK_EQ(section.decodedFieldSectionSize(), 91U);
-            RUVIA_CHECK_EQ(destination.field_section.decodedFieldSectionSize(), 0U);
-            RUVIA_CHECK(destination.field_section.fieldSection.empty());
-            RUVIA_CHECK(destination.bodyPlan.bodySuppressed());
-            RUVIA_CHECK_EQ(destination.declaredContentLength.value_or(0), 17U);
-            RUVIA_CHECK_EQ(resource.allocations + equivalent_resource.allocations, allocations);
+            RUVIA_CHECK(destination.field_section_.field_section_.data() == bytes_value);
+            RUVIA_CHECK(destination.field_section_.field_section_.get_allocator().resource() == destination_resource);
+            RUVIA_CHECK_EQ(destination.field_section_.decoded_field_section_size(), 91U);
+            RUVIA_CHECK(destination.body_plan_.body_suppressed());
+            RUVIA_CHECK_EQ(destination.declared_content_length_.value_or(0), 17U);
+            RUVIA_CHECK_EQ(moved.field_section_.decoded_field_section_size(), 0U);
+            RUVIA_CHECK(moved.field_section_.field_section_.empty());
+            auto section = std::move(destination.field_section_);
+            RUVIA_CHECK(section.field_section_.data() == bytes_value);
+            RUVIA_CHECK_EQ(section.decoded_field_section_size(), 91U);
+            RUVIA_CHECK_EQ(destination.field_section_.decoded_field_section_size(), 0U);
+            RUVIA_CHECK(destination.field_section_.field_section_.empty());
+            RUVIA_CHECK(destination.body_plan_.body_suppressed());
+            RUVIA_CHECK_EQ(destination.declared_content_length_.value_or(0), 17U);
+            RUVIA_CHECK_EQ(resource.allocations_ + equivalent_resource.allocations_, allocations);
         }
-        RUVIA_CHECK_EQ(resource.allocations + equivalent_resource.allocations,
-            resource.deallocations + equivalent_resource.deallocations);
+        RUVIA_CHECK_EQ(resource.allocations_ + equivalent_resource.allocations_,
+            resource.deallocations_ + equivalent_resource.deallocations_);
     }
 }
 
 RUVIA_TEST(http3_response_head_cross_resource_assignment_preserves_metadata_on_allocation_failure) {
-    CountingResource source_resource;
-    CountingResource destination_resource;
+    counting_resource source_resource;
+    counting_resource destination_resource;
     {
-        ruvia::Http3ResponseHead source(std::pmr::vector<char>(64, 's', &source_resource),
-            ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk), 91, 17);
-        ruvia::Http3ResponseHead destination(std::pmr::vector<char>(32, 'd', &destination_resource),
-            ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk), 42, 3);
-        const auto* source_bytes = source.field_section.fieldSection.data();
-        const auto* destination_bytes = destination.field_section.fieldSection.data();
+        ruvia::http3_response_head source_value(std::pmr::vector<char>(64, 's', &source_resource),
+            ruvia::plan_http_response_body(ruvia::http_known_method::head, ruvia::http_status::ok), 91, 17);
+        ruvia::http3_response_head destination(std::pmr::vector<char>(32, 'd', &destination_resource),
+            ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status::ok), 42, 3);
+        const auto* source_bytes = source_value.field_section_.field_section_.data();
+        const auto* destination_bytes = destination.field_section_.field_section_.data();
         destination_resource.fail_allocations_ = true;
         bool threw = false;
         try {
-            destination = std::move(source);
+            destination = std::move(source_value);
         } catch (const std::bad_alloc&) {
             threw = true;
         }
         RUVIA_CHECK(threw);
-        RUVIA_CHECK(destination.field_section.fieldSection.data() == destination_bytes);
-        RUVIA_CHECK_EQ(destination.field_section.fieldSection.size(), 32U);
-        RUVIA_CHECK(std::ranges::all_of(destination.field_section.fieldSection, [](char byte) { return byte == 'd'; }));
-        RUVIA_CHECK_EQ(destination.field_section.decodedFieldSectionSize(), 42U);
-        RUVIA_CHECK(!destination.bodyPlan.bodySuppressed());
-        RUVIA_CHECK_EQ(destination.declaredContentLength.value_or(0), 3U);
-        RUVIA_CHECK(source.field_section.fieldSection.data() == source_bytes);
-        RUVIA_CHECK_EQ(source.field_section.fieldSection.size(), 64U);
-        RUVIA_CHECK(std::ranges::all_of(source.field_section.fieldSection, [](char byte) { return byte == 's'; }));
-        RUVIA_CHECK_EQ(source.field_section.decodedFieldSectionSize(), 91U);
-        RUVIA_CHECK(source.bodyPlan.bodySuppressed());
-        RUVIA_CHECK_EQ(source.declaredContentLength.value_or(0), 17U);
+        RUVIA_CHECK(destination.field_section_.field_section_.data() == destination_bytes);
+        RUVIA_CHECK_EQ(destination.field_section_.field_section_.size(), 32U);
+        RUVIA_CHECK(std::ranges::all_of(destination.field_section_.field_section_, [](char byte) { return byte == 'd'; }));
+        RUVIA_CHECK_EQ(destination.field_section_.decoded_field_section_size(), 42U);
+        RUVIA_CHECK(!destination.body_plan_.body_suppressed());
+        RUVIA_CHECK_EQ(destination.declared_content_length_.value_or(0), 3U);
+        RUVIA_CHECK(source_value.field_section_.field_section_.data() == source_bytes);
+        RUVIA_CHECK_EQ(source_value.field_section_.field_section_.size(), 64U);
+        RUVIA_CHECK(std::ranges::all_of(source_value.field_section_.field_section_, [](char byte) { return byte == 's'; }));
+        RUVIA_CHECK_EQ(source_value.field_section_.decoded_field_section_size(), 91U);
+        RUVIA_CHECK(source_value.body_plan_.body_suppressed());
+        RUVIA_CHECK_EQ(source_value.declared_content_length_.value_or(0), 17U);
 
         destination_resource.fail_allocations_ = false;
-        const auto allocations = destination_resource.allocations;
-        destination = std::move(source);
-        RUVIA_CHECK_EQ(destination_resource.allocations, allocations + 1);
-        RUVIA_CHECK(destination.field_section.fieldSection.get_allocator().resource() == &destination_resource);
-        RUVIA_CHECK_EQ(destination.field_section.fieldSection.size(), 64U);
-        RUVIA_CHECK(std::ranges::all_of(destination.field_section.fieldSection, [](char byte) { return byte == 's'; }));
-        RUVIA_CHECK_EQ(destination.field_section.decodedFieldSectionSize(), 91U);
-        RUVIA_CHECK(destination.bodyPlan.bodySuppressed());
-        RUVIA_CHECK_EQ(destination.declaredContentLength.value_or(0), 17U);
-        RUVIA_CHECK_EQ(source.field_section.decodedFieldSectionSize(), 0U);
-        RUVIA_CHECK(source.field_section.fieldSection.empty());
+        const auto allocations = destination_resource.allocations_;
+        destination = std::move(source_value);
+        RUVIA_CHECK_EQ(destination_resource.allocations_, allocations + 1);
+        RUVIA_CHECK(destination.field_section_.field_section_.get_allocator().resource() == &destination_resource);
+        RUVIA_CHECK_EQ(destination.field_section_.field_section_.size(), 64U);
+        RUVIA_CHECK(std::ranges::all_of(destination.field_section_.field_section_, [](char byte) { return byte == 's'; }));
+        RUVIA_CHECK_EQ(destination.field_section_.decoded_field_section_size(), 91U);
+        RUVIA_CHECK(destination.body_plan_.body_suppressed());
+        RUVIA_CHECK_EQ(destination.declared_content_length_.value_or(0), 17U);
+        RUVIA_CHECK_EQ(source_value.field_section_.decoded_field_section_size(), 0U);
+        RUVIA_CHECK(source_value.field_section_.field_section_.empty());
     }
-    RUVIA_CHECK_EQ(source_resource.allocations, source_resource.deallocations);
-    RUVIA_CHECK_EQ(destination_resource.allocations, destination_resource.deallocations);
+    RUVIA_CHECK_EQ(source_resource.allocations_, source_resource.deallocations_);
+    RUVIA_CHECK_EQ(destination_resource.allocations_, destination_resource.deallocations_);
 }
 
 RUVIA_TEST(http3_response_head_rejects_http1_fields_and_response_te) {
-    for (const auto field : {ruvia::Http3FieldSectionFieldView{"connection", "close"},
-             ruvia::Http3FieldSectionFieldView{"transfer-encoding", "chunked"},
-             ruvia::Http3FieldSectionFieldView{"te", "gzip"},
-             ruvia::Http3FieldSectionFieldView{"te", "trailers"}}) {
-        const std::array fields{field};
-        const auto result = ruvia::encodeHttp3ResponseHead(
-            ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, fields);
-        RUVIA_CHECK((result.index() != 0));
-        if ((result.index() != 0)) {
-            RUVIA_CHECK(std::get<1>(result).kind == ruvia::Http3ResponseHeadError::kForbiddenField);
+    for (const auto field : {ruvia::http3_field_section_field_view{"connection", "close"},
+             ruvia::http3_field_section_field_view{"transfer-encoding", "chunked"},
+             ruvia::http3_field_section_field_view{"te", "gzip"},
+             ruvia::http3_field_section_field_view{"te", "trailers"}}) {
+        const std::array fields_value{field};
+        const auto result_value = ruvia::encode_http3_response_head(
+            ruvia::http_status::ok, ruvia::http_known_method::get, fields_value);
+        RUVIA_CHECK((result_value.index() != 0));
+        if ((result_value.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(result_value).kind_ == ruvia::http3_response_head_error::forbidden_field);
         }
     }
 }
 
 RUVIA_TEST(http3_response_head_validates_content_length_and_status_rules) {
-    const std::array validLength{ruvia::Http3FieldSectionFieldView{"content-length", "18446744073709551615"}};
-    const auto valid = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, validLength);
+    const std::array valid_length{ruvia::http3_field_section_field_view{"content-length", "18446744073709551615"}};
+    const auto valid = ruvia::encode_http3_response_head(
+        ruvia::http_status::ok, ruvia::http_known_method::get, valid_length);
     RUVIA_CHECK((valid.index() == 0));
 
-    const std::array duplicateEqual{
-        ruvia::Http3FieldSectionFieldView{"content-length", "00042"},
-        ruvia::Http3FieldSectionFieldView{"content-length", "42"}};
-    RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(
-                     ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, duplicateEqual)
+    const std::array duplicate_equal{
+        ruvia::http3_field_section_field_view{"content-length", "00042"},
+        ruvia::http3_field_section_field_view{"content-length", "42"}};
+    RUVIA_CHECK((ruvia::encode_http3_response_head(
+                     ruvia::http_status::ok, ruvia::http_known_method::get, duplicate_equal)
                      .index() == 0));
 
     for (const auto value : {"", "+1", "-1", " 1", "1 ", "1, 1", "18446744073709551616"}) {
-        const std::array fields{ruvia::Http3FieldSectionFieldView{"content-length", value}};
-        const auto result = ruvia::encodeHttp3ResponseHead(
-            ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, fields);
-        RUVIA_CHECK((result.index() != 0));
-        if ((result.index() != 0)) {
-            RUVIA_CHECK(std::get<1>(result).kind == ruvia::Http3ResponseHeadError::kInvalidField);
+        const std::array fields_value{ruvia::http3_field_section_field_view{"content-length", value}};
+        const auto result_value = ruvia::encode_http3_response_head(
+            ruvia::http_status::ok, ruvia::http_known_method::get, fields_value);
+        RUVIA_CHECK((result_value.index() != 0));
+        if ((result_value.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(result_value).kind_ == ruvia::http3_response_head_error::invalid_field);
         }
     }
 
     const std::array conflicting{
-        ruvia::Http3FieldSectionFieldView{"content-length", "42"},
-        ruvia::Http3FieldSectionFieldView{"content-length", "43"}};
-    const auto mismatch = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, conflicting);
+        ruvia::http3_field_section_field_view{"content-length", "42"},
+        ruvia::http3_field_section_field_view{"content-length", "43"}};
+    const auto mismatch = ruvia::encode_http3_response_head(
+        ruvia::http_status::ok, ruvia::http_known_method::get, conflicting);
     RUVIA_CHECK((mismatch.index() != 0));
     if ((mismatch.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(mismatch).kind == ruvia::Http3ResponseHeadError::kInvalidField);
+        RUVIA_CHECK(std::get<1>(mismatch).kind_ == ruvia::http3_response_head_error::invalid_field);
     }
 
-    for (const auto status : {ruvia::http_status::kContinue, ruvia::http_status::kNoContent}) {
-        const std::array fields{ruvia::Http3FieldSectionFieldView{"content-length", "0"}};
-        const auto result = ruvia::encodeHttp3ResponseHead(status, ruvia::HttpKnownMethod::kGet, fields);
-        RUVIA_CHECK((result.index() != 0));
-        if ((result.index() != 0)) {
-            RUVIA_CHECK(std::get<1>(result).kind == ruvia::Http3ResponseHeadError::kInvalidField);
+    for (const auto status : {ruvia::http_status::continue_value, ruvia::http_status::no_content}) {
+        const std::array fields_value{ruvia::http3_field_section_field_view{"content-length", "0"}};
+        const auto result_value = ruvia::encode_http3_response_head(status, ruvia::http_known_method::get, fields_value);
+        RUVIA_CHECK((result_value.index() != 0));
+        if ((result_value.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(result_value).kind_ == ruvia::http3_response_head_error::invalid_field);
         }
     }
-    const std::array lengthFor304{ruvia::Http3FieldSectionFieldView{"content-length", "12"}};
-    RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(
-                     ruvia::http_status::kNotModified, ruvia::HttpKnownMethod::kGet, lengthFor304)
+    const std::array length_for304{ruvia::http3_field_section_field_view{"content-length", "12"}};
+    RUVIA_CHECK((ruvia::encode_http3_response_head(
+                     ruvia::http_status::not_modified, ruvia::http_known_method::get, length_for304)
                      .index() == 0));
 
-    const auto switching = ruvia::encodeHttp3ResponseHead(
-        ruvia::http_status::kSwitchingProtocols, ruvia::HttpKnownMethod::kGet, {});
+    const auto switching = ruvia::encode_http3_response_head(
+        ruvia::http_status::switching_protocols, ruvia::http_known_method::get, {});
     RUVIA_CHECK((switching.index() != 0));
     if ((switching.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(switching).kind == ruvia::Http3ResponseHeadError::kUnsupportedStatus);
+        RUVIA_CHECK(std::get<1>(switching).kind_ == ruvia::http3_response_head_error::unsupported_status);
     }
 }
 
 RUVIA_TEST(http3_response_writer_projects_buffered_response_and_canonical_length) {
-    ruvia::HttpResponse response;
+    ruvia::http_response response;
     response.body("payload");
     response.header("X-MiXeD", "ok");
-    response.header("Set-Cookie", "a=1", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
-    response.header("Set-Cookie", "b=2", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
-    const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    const auto encoded = ruvia::encodeHttp3ResponseHead(response, plan);
+    response.header("Set-Cookie", "a=1", {.mode_ = ruvia::http_response_header_mode::append});
+    response.header("Set-Cookie", "b=2", {.mode_ = ruvia::http_response_header_mode::append});
+    const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+    const auto encoded = ruvia::encode_http3_response_head(response, plan);
     RUVIA_CHECK((encoded.index() == 0));
     if ((encoded.index() != 0)) {
         return;
     }
-    Fields decoded;
-    const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(encoded).field_section.fieldSection, collect, &decoded);
+    fields decoded;
+    const auto count = ruvia::decode_http3_field_section(std::get<0>(encoded).field_section_.field_section_, collect, &decoded);
     RUVIA_CHECK((count.index() == 0));
-    RUVIA_CHECK(std::find(decoded.names.begin(), decoded.names.end(), "x-mixed") != decoded.names.end());
-    RUVIA_CHECK(std::count(decoded.names.begin(), decoded.names.end(), "set-cookie") == 2);
-    RUVIA_CHECK(std::find(decoded.values.begin(), decoded.values.end(), "7") != decoded.values.end());
-    RUVIA_CHECK(std::find(decoded.names.begin(), decoded.names.end(), "date") != decoded.names.end());
-    RUVIA_CHECK_EQ(std::get<0>(encoded).field_section.decodedFieldSectionSize(), 285U);
+    RUVIA_CHECK(std::find(decoded.names_.begin(), decoded.names_.end(), "x-mixed") != decoded.names_.end());
+    RUVIA_CHECK(std::count(decoded.names_.begin(), decoded.names_.end(), "set-cookie") == 2);
+    RUVIA_CHECK(std::find(decoded.values_.begin(), decoded.values_.end(), "7") != decoded.values_.end());
+    RUVIA_CHECK(std::find(decoded.names_.begin(), decoded.names_.end(), "date") != decoded.names_.end());
+    RUVIA_CHECK_EQ(std::get<0>(encoded).field_section_.decoded_field_section_size(), 285U);
 
     response.body("change");
-    RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(response, plan).index() != 0));
+    RUVIA_CHECK((ruvia::encode_http3_response_head(response, plan).index() != 0));
 }
 
 RUVIA_TEST(http3_response_writer_preserves_one_application_date) {
-    ruvia::HttpResponse response;
+    ruvia::http_response response;
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
     response.body("ok");
     const auto plan =
-        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    const auto encoded = ruvia::encodeHttp3ResponseHead(response, plan);
+        ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+    const auto encoded = ruvia::encode_http3_response_head(response, plan);
     RUVIA_CHECK((encoded.index() == 0));
     if ((encoded.index() != 0)) {
         return;
     }
-    Fields decoded;
+    fields decoded;
     RUVIA_CHECK(
-        (ruvia::decodeHttp3FieldSection(std::get<0>(encoded).field_section.fieldSection, collect, &decoded).index() == 0));
-    RUVIA_CHECK_EQ(std::count(decoded.names.begin(), decoded.names.end(), "date"), 1);
-    const auto date = std::find(decoded.names.begin(), decoded.names.end(), "date");
-    RUVIA_CHECK(date != decoded.names.end());
-    if (date != decoded.names.end()) {
-        const auto index = static_cast<std::size_t>(date - decoded.names.begin());
-        RUVIA_CHECK_EQ(decoded.values[index], "Wed, 21 Oct 2015 07:28:00 GMT");
+        (ruvia::decode_http3_field_section(std::get<0>(encoded).field_section_.field_section_, collect, &decoded).index() == 0));
+    RUVIA_CHECK_EQ(std::count(decoded.names_.begin(), decoded.names_.end(), "date"), 1);
+    const auto date = std::find(decoded.names_.begin(), decoded.names_.end(), "date");
+    RUVIA_CHECK(date != decoded.names_.end());
+    if (date != decoded.names_.end()) {
+        const auto index = static_cast<std::size_t>(date - decoded.names_.begin());
+        RUVIA_CHECK_EQ(decoded.values_[index], "Wed, 21 Oct 2015 07:28:00 GMT");
     }
 }
 
 RUVIA_TEST(http3_response_writer_reports_final_automatic_and_explicit_content_length_size) {
-    ruvia::HttpResponse automaticResponse;
-    automaticResponse.body("payload");
-    const auto automaticPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet,
-        automaticResponse);
-    const auto automatic = ruvia::encodeHttp3ResponseHead(automaticResponse, automaticPlan,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 154, .maxFields = 3});
+    ruvia::http_response automatic_response;
+    automatic_response.body("payload");
+    const auto automatic_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get,
+        automatic_response);
+    const auto automatic = ruvia::encode_http3_response_head(automatic_response, automatic_plan,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 154, .max_fields_ = 3});
     RUVIA_CHECK((automatic.index() == 0));
     if ((automatic.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(automatic).field_section.decodedFieldSectionSize(), 154U);
+        RUVIA_CHECK_EQ(std::get<0>(automatic).field_section_.decoded_field_section_size(), 154U);
     }
-    const auto automaticOverLimit = ruvia::encodeHttp3ResponseHead(automaticResponse, automaticPlan,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 153, .maxFields = 3});
-    RUVIA_CHECK((automaticOverLimit.index() != 0));
-    if ((automaticOverLimit.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(automaticOverLimit).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldListTooLarge);
+    const auto automatic_over_limit = ruvia::encode_http3_response_head(automatic_response, automatic_plan,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 153, .max_fields_ = 3});
+    RUVIA_CHECK((automatic_over_limit.index() != 0));
+    if ((automatic_over_limit.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(automatic_over_limit).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_list_too_large);
     }
 
-    ruvia::HttpResponse explicitResponse;
-    explicitResponse.body("payload");
-    explicitResponse.header("Content-Length", "0007");
-    const auto explicitPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet,
-        explicitResponse);
-    const auto explicitLength = ruvia::encodeHttp3ResponseHead(explicitResponse, explicitPlan,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 154, .maxFields = 3});
-    RUVIA_CHECK((explicitLength.index() == 0));
-    if ((explicitLength.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(explicitLength).field_section.decodedFieldSectionSize(), 154U);
-        Fields decoded;
-        RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(explicitLength).field_section.fieldSection, collect, &decoded).index() == 0));
-        const auto length = std::find(decoded.names.begin(), decoded.names.end(), "content-length");
-        RUVIA_CHECK(length != decoded.names.end());
-        if (length != decoded.names.end()) {
-            const auto index = static_cast<std::size_t>(length - decoded.names.begin());
-            RUVIA_CHECK_EQ(decoded.values[index], "7");
+    ruvia::http_response explicit_response;
+    explicit_response.body("payload");
+    explicit_response.header("Content-Length", "0007");
+    const auto explicit_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get,
+        explicit_response);
+    const auto explicit_length = ruvia::encode_http3_response_head(explicit_response, explicit_plan,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 154, .max_fields_ = 3});
+    RUVIA_CHECK((explicit_length.index() == 0));
+    if ((explicit_length.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(explicit_length).field_section_.decoded_field_section_size(), 154U);
+        fields decoded;
+        RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(explicit_length).field_section_.field_section_, collect, &decoded).index() == 0));
+        const auto length = std::find(decoded.names_.begin(), decoded.names_.end(), "content-length");
+        RUVIA_CHECK(length != decoded.names_.end());
+        if (length != decoded.names_.end()) {
+            const auto index = static_cast<std::size_t>(length - decoded.names_.begin());
+            RUVIA_CHECK_EQ(decoded.values_[index], "7");
         }
     }
 }
 
 RUVIA_TEST(http3_response_writer_head_and_status_content_length_projection) {
-    ruvia::HttpResponse headResponse;
-    headResponse.fileBody("unused.bin", 123, 0, 123, ruvia::HttpResponseFileIdentity::unchecked());
-    const auto headPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kHead, headResponse);
-    const auto head = ruvia::encodeHttp3ResponseHead(headResponse, headPlan);
+    ruvia::http_response head_response;
+    head_response.file_body("unused.bin", 123, 0, 123, ruvia::http_response_file_identity::unchecked());
+    const auto head_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::head, head_response);
+    const auto head = ruvia::encode_http3_response_head(head_response, head_plan);
     RUVIA_CHECK((head.index() == 0));
     if ((head.index() == 0)) {
-        Fields decoded;
-        RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(head).field_section.fieldSection, collect, &decoded).index() == 0));
-        RUVIA_CHECK(std::find(decoded.values.begin(), decoded.values.end(), "123") != decoded.values.end());
-        RUVIA_CHECK_EQ(std::get<0>(head).field_section.decodedFieldSectionSize(), 156U);
-        RUVIA_CHECK(std::get<0>(head).bodyPlan.bodySuppressed());
+        fields decoded;
+        RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(head).field_section_.field_section_, collect, &decoded).index() == 0));
+        RUVIA_CHECK(std::find(decoded.values_.begin(), decoded.values_.end(), "123") != decoded.values_.end());
+        RUVIA_CHECK_EQ(std::get<0>(head).field_section_.decoded_field_section_size(), 156U);
+        RUVIA_CHECK(std::get<0>(head).body_plan_.body_suppressed());
     }
 
-    for (const auto status : {ruvia::http_status::kNoContent, ruvia::http_status::kResetContent}) {
-        ruvia::HttpResponse response;
+    for (const auto status : {ruvia::http_status::no_content, ruvia::http_status::reset_content}) {
+        ruvia::http_response response;
         response.status(status);
-        const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        const auto result = ruvia::encodeHttp3ResponseHead(response, plan);
-        RUVIA_CHECK((result.index() == 0));
-        if ((result.index() == 0)) {
-            Fields decoded;
-            RUVIA_CHECK((ruvia::decodeHttp3FieldSection(std::get<0>(result).field_section.fieldSection, collect, &decoded).index() == 0));
-            const auto expected = status == ruvia::http_status::kResetContent ? "0" : "";
+        const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+        const auto result_value = ruvia::encode_http3_response_head(response, plan);
+        RUVIA_CHECK((result_value.index() == 0));
+        if ((result_value.index() == 0)) {
+            fields decoded;
+            RUVIA_CHECK((ruvia::decode_http3_field_section(std::get<0>(result_value).field_section_.field_section_, collect, &decoded).index() == 0));
+            const auto expected = status == ruvia::http_status::reset_content ? "0" : "";
             if (expected[0] != '\0') {
-                RUVIA_CHECK(std::find(decoded.values.begin(), decoded.values.end(), expected) != decoded.values.end());
+                RUVIA_CHECK(std::find(decoded.values_.begin(), decoded.values_.end(), expected) != decoded.values_.end());
             } else {
-                RUVIA_CHECK(std::find(decoded.names.begin(), decoded.names.end(), "content-length") == decoded.names.end());
+                RUVIA_CHECK(std::find(decoded.names_.begin(), decoded.names_.end(), "content-length") == decoded.names_.end());
             }
         }
     }
-    ruvia::HttpResponse notModified;
-    notModified.status(ruvia::http_status::kNotModified);
-    notModified.header("Content-Length", "12");
-    const auto notModifiedPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, notModified);
-    const auto notModifiedHead = ruvia::encodeHttp3ResponseHead(notModified, notModifiedPlan);
-    RUVIA_CHECK((notModifiedHead.index() == 0));
+    ruvia::http_response not_modified;
+    not_modified.status(ruvia::http_status::not_modified);
+    not_modified.header("Content-Length", "12");
+    const auto not_modified_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, not_modified);
+    const auto not_modified_head = ruvia::encode_http3_response_head(not_modified, not_modified_plan);
+    RUVIA_CHECK((not_modified_head.index() == 0));
 }
 
 RUVIA_TEST(http3_response_writer_accepts_compact_static_qpack_under_encoded_limit) {
-    ruvia::HttpResponse response;
-    response.status(ruvia::http_status::kNotModified);
+    ruvia::http_response response;
+    response.status(ruvia::http_status::not_modified);
     response.header("Content-Type", "application/json");
-    const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    const auto encoded = ruvia::encodeHttp3ResponseHead(response, plan,
-        {.maxEncodedBytes = 64, .maxDecodedBytes = 1024, .maxFields = 3});
+    const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+    const auto encoded = ruvia::encode_http3_response_head(response, plan,
+        {.max_encoded_bytes_ = 64, .max_decoded_bytes_ = 1024, .max_fields_ = 3});
     RUVIA_CHECK((encoded.index() == 0));
     if ((encoded.index() == 0)) {
-        RUVIA_CHECK(std::get<0>(encoded).field_section.fieldSection.size() <= 64);
+        RUVIA_CHECK(std::get<0>(encoded).field_section_.field_section_.size() <= 64);
     }
 }
 
 RUVIA_TEST(http3_response_writer_rejects_invalid_projected_headers_and_limits) {
     for (const auto& [name, value] : {std::pair{"Connection", "close"}}) {
-        ruvia::HttpResponse response;
+        ruvia::http_response response;
         response.header(name, value);
-        const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(response, plan).index() != 0));
+        const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+        RUVIA_CHECK((ruvia::encode_http3_response_head(response, plan).index() != 0));
     }
-    const std::array injected{ruvia::Http3FieldSectionFieldView{"x-test", "bad\r\ninjected: yes"}};
-    RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(
-                     ruvia::http_status::kOk, ruvia::HttpKnownMethod::kGet, injected)
+    const std::array injected{ruvia::http3_field_section_field_view{"x-test", "bad\r\ninjected: yes"}};
+    RUVIA_CHECK((ruvia::encode_http3_response_head(
+                     ruvia::http_status::ok, ruvia::http_known_method::get, injected)
                      .index() != 0));
-    ruvia::HttpResponse response;
+    ruvia::http_response response;
     response.body("x");
     response.header("Content-Length", "2");
-    const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    RUVIA_CHECK((ruvia::encodeHttp3ResponseHead(response, plan).index() != 0));
-    response.removeHeader("Content-Length");
-    const auto validPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    const auto limited = ruvia::encodeHttp3ResponseHead(response, validPlan,
-        {.maxEncodedBytes = 64, .maxDecodedBytes = 64, .maxFields = 1});
+    const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+    RUVIA_CHECK((ruvia::encode_http3_response_head(response, plan).index() != 0));
+    response.remove_header("Content-Length");
+    const auto valid_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+    const auto limited = ruvia::encode_http3_response_head(response, valid_plan,
+        {.max_encoded_bytes_ = 64, .max_decoded_bytes_ = 64, .max_fields_ = 1});
     RUVIA_CHECK((limited.index() != 0));
 }
 
 RUVIA_TEST(http3_response_trailers_encode_allowed_fields_in_order_and_lowercase) {
-    const std::array fields{
-        ruvia::Http3FieldSectionFieldView{"ETag", "\"v1\""},
-        ruvia::Http3FieldSectionFieldView{"Accept-Ranges", "bytes"},
-        ruvia::Http3FieldSectionFieldView{"X-Custom", "one"},
-        ruvia::Http3FieldSectionFieldView{"x-custom", "two"}};
-    const auto encoded = ruvia::encodeHttp3ResponseTrailers(fields);
+    const std::array fields_value{
+        ruvia::http3_field_section_field_view{"ETag", "\"v1\""},
+        ruvia::http3_field_section_field_view{"Accept-Ranges", "bytes"},
+        ruvia::http3_field_section_field_view{"X-Custom", "one"},
+        ruvia::http3_field_section_field_view{"x-custom", "two"}};
+    const auto encoded = ruvia::encode_http3_response_trailers(fields_value);
     RUVIA_CHECK((encoded.index() == 0));
     if ((encoded.index() != 0)) {
         return;
     }
-    Fields decoded;
-    const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(encoded).fieldSection, collect, &decoded);
+    fields decoded;
+    const auto count = ruvia::decode_http3_field_section(std::get<0>(encoded).field_section_, collect, &decoded);
     RUVIA_CHECK((count.index() == 0));
-    RUVIA_CHECK_EQ(decoded.names.size(), fields.size());
-    RUVIA_CHECK_EQ(std::get<0>(encoded).decodedFieldSectionSize(), 176U);
-    if (decoded.names.size() == fields.size()) {
-        RUVIA_CHECK_EQ(decoded.names[0], "etag");
-        RUVIA_CHECK_EQ(decoded.values[0], "\"v1\"");
-        RUVIA_CHECK_EQ(decoded.names[1], "accept-ranges");
-        RUVIA_CHECK_EQ(decoded.names[2], "x-custom");
-        RUVIA_CHECK_EQ(decoded.values[2], "one");
-        RUVIA_CHECK_EQ(decoded.values[3], "two");
+    RUVIA_CHECK_EQ(decoded.names_.size(), fields_value.size());
+    RUVIA_CHECK_EQ(std::get<0>(encoded).decoded_field_section_size(), 176U);
+    if (decoded.names_.size() == fields_value.size()) {
+        RUVIA_CHECK_EQ(decoded.names_[0], "etag");
+        RUVIA_CHECK_EQ(decoded.values_[0], "\"v1\"");
+        RUVIA_CHECK_EQ(decoded.names_[1], "accept-ranges");
+        RUVIA_CHECK_EQ(decoded.names_[2], "x-custom");
+        RUVIA_CHECK_EQ(decoded.values_[2], "one");
+        RUVIA_CHECK_EQ(decoded.values_[3], "two");
     }
 }
 
 RUVIA_TEST(http3_response_trailers_reject_forbidden_and_malformed_fields) {
-    for (const auto field : {ruvia::Http3FieldSectionFieldView{"Content-Length", "1"},
-             ruvia::Http3FieldSectionFieldView{"Date", "today"},
-             ruvia::Http3FieldSectionFieldView{"Location", "/"},
-             ruvia::Http3FieldSectionFieldView{":status", "200"}}) {
-        const std::array fields{field};
-        RUVIA_CHECK((ruvia::encodeHttp3ResponseTrailers(fields).index() != 0));
+    for (const auto field : {ruvia::http3_field_section_field_view{"Content-Length", "1"},
+             ruvia::http3_field_section_field_view{"Date", "today"},
+             ruvia::http3_field_section_field_view{"Location", "/"},
+             ruvia::http3_field_section_field_view{":status", "200"}}) {
+        const std::array fields_value{field};
+        RUVIA_CHECK((ruvia::encode_http3_response_trailers(fields_value).index() != 0));
     }
-    const std::array crlf{ruvia::Http3FieldSectionFieldView{"x-test", "bad\r\ninjected"}};
-    const auto invalid = ruvia::encodeHttp3ResponseTrailers(crlf);
+    const std::array crlf{ruvia::http3_field_section_field_view{"x-test", "bad\r\ninjected"}};
+    const auto invalid = ruvia::encode_http3_response_trailers(crlf);
     RUVIA_CHECK((invalid.index() != 0));
     if ((invalid.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(invalid).kind == ruvia::Http3ResponseHeadError::kInvalidField);
+        RUVIA_CHECK(std::get<1>(invalid).kind_ == ruvia::http3_response_head_error::invalid_field);
     }
-    const std::array contentLength{ruvia::Http3FieldSectionFieldView{"content-length", "1"}};
-    const auto forbidden = ruvia::encodeHttp3ResponseTrailers(contentLength);
+    const std::array content_length{ruvia::http3_field_section_field_view{"content-length", "1"}};
+    const auto forbidden = ruvia::encode_http3_response_trailers(content_length);
     RUVIA_CHECK((forbidden.index() != 0));
     if ((forbidden.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(forbidden).kind == ruvia::Http3ResponseHeadError::kForbiddenField);
+        RUVIA_CHECK(std::get<1>(forbidden).kind_ == ruvia::http3_response_head_error::forbidden_field);
     }
 }
 
 RUVIA_TEST(http3_response_trailers_enforce_field_section_limits_and_empty_section) {
-    const auto empty = ruvia::encodeHttp3ResponseTrailers({});
+    const auto empty = ruvia::encode_http3_response_trailers({});
     RUVIA_CHECK((empty.index() == 0));
     if ((empty.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(empty).decodedFieldSectionSize(), 0U);
-        Fields decoded;
-        const auto count = ruvia::decodeHttp3FieldSection(std::get<0>(empty).fieldSection, collect, &decoded);
+        RUVIA_CHECK_EQ(std::get<0>(empty).decoded_field_section_size(), 0U);
+        fields decoded;
+        const auto count = ruvia::decode_http3_field_section(std::get<0>(empty).field_section_, collect, &decoded);
         RUVIA_CHECK((count.index() == 0));
         if ((count.index() == 0)) {
             RUVIA_CHECK_EQ(std::get<0>(count), 0U);
         }
     }
-    const std::array fields{ruvia::Http3FieldSectionFieldView{"x", "y"}};
-    const auto tooMany = ruvia::encodeHttp3ResponseTrailers(fields,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 1024, .maxFields = 0});
-    RUVIA_CHECK((tooMany.index() != 0));
-    if ((tooMany.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(tooMany).fieldSectionError == ruvia::Http3FieldSectionError::kTooManyFields);
+    const std::array fields_value{ruvia::http3_field_section_field_view{"x", "y"}};
+    const auto too_many = ruvia::encode_http3_response_trailers(fields_value,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 1024, .max_fields_ = 0});
+    RUVIA_CHECK((too_many.index() != 0));
+    if ((too_many.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(too_many).field_section_error_ == ruvia::http3_field_section_error::too_many_fields);
     }
-    const auto exactDecoded = ruvia::encodeHttp3ResponseTrailers(fields,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 34, .maxFields = 1});
-    RUVIA_CHECK((exactDecoded.index() == 0));
-    if ((exactDecoded.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(exactDecoded).decodedFieldSectionSize(), 34U);
+    const auto exact_decoded = ruvia::encode_http3_response_trailers(fields_value,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 34, .max_fields_ = 1});
+    RUVIA_CHECK((exact_decoded.index() == 0));
+    if ((exact_decoded.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(exact_decoded).decoded_field_section_size(), 34U);
     }
-    const auto tooLargeDecoded = ruvia::encodeHttp3ResponseTrailers(fields,
-        {.maxEncodedBytes = 1024, .maxDecodedBytes = 33, .maxFields = 1});
-    RUVIA_CHECK((tooLargeDecoded.index() != 0));
-    if ((tooLargeDecoded.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(tooLargeDecoded).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldListTooLarge);
+    const auto too_large_decoded = ruvia::encode_http3_response_trailers(fields_value,
+        {.max_encoded_bytes_ = 1024, .max_decoded_bytes_ = 33, .max_fields_ = 1});
+    RUVIA_CHECK((too_large_decoded.index() != 0));
+    if ((too_large_decoded.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(too_large_decoded).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_list_too_large);
     }
-    const auto tooLargeEncoded = ruvia::encodeHttp3ResponseTrailers(fields,
-        {.maxEncodedBytes = 1, .maxDecodedBytes = 1024, .maxFields = 1});
-    RUVIA_CHECK((tooLargeEncoded.index() != 0));
-    if ((tooLargeEncoded.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(tooLargeEncoded).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldSectionTooLarge);
+    const auto too_large_encoded = ruvia::encode_http3_response_trailers(fields_value,
+        {.max_encoded_bytes_ = 1, .max_decoded_bytes_ = 1024, .max_fields_ = 1});
+    RUVIA_CHECK((too_large_encoded.index() != 0));
+    if ((too_large_encoded.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(too_large_encoded).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_section_too_large);
     }
 }
 
 RUVIA_TEST(http3_response_trailers_payload_releases_pmr_allocations_on_destruction) {
-    CountingResource resource;
-    CountingResource destinationResource;
+    counting_resource resource;
+    counting_resource destination_resource;
     {
-        const std::array fields{ruvia::Http3FieldSectionFieldView{"X-Test", "value"}};
-        auto encoded = ruvia::encodeHttp3ResponseTrailers(fields, {}, &resource);
+        const std::array fields_value{ruvia::http3_field_section_field_view{"X-Test", "value"}};
+        auto encoded = ruvia::encode_http3_response_trailers(fields_value, {}, &resource);
         RUVIA_CHECK((encoded.index() == 0));
         if ((encoded.index() != 0)) {
             return;
         }
-        RUVIA_CHECK_EQ(std::get<0>(encoded).decodedFieldSectionSize(), 43U);
+        RUVIA_CHECK_EQ(std::get<0>(encoded).decoded_field_section_size(), 43U);
         auto moved = std::move(std::get<0>(encoded));
-        RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), 43U);
-        RUVIA_CHECK_EQ(std::get<0>(encoded).decodedFieldSectionSize(), 0U);
-        RUVIA_CHECK(std::get<0>(encoded).fieldSection.empty());
-        auto destination = ruvia::encodeHttp3ResponseTrailers({}, {}, &destinationResource);
+        RUVIA_CHECK_EQ(moved.decoded_field_section_size(), 43U);
+        RUVIA_CHECK_EQ(std::get<0>(encoded).decoded_field_section_size(), 0U);
+        RUVIA_CHECK(std::get<0>(encoded).field_section_.empty());
+        auto destination = ruvia::encode_http3_response_trailers({}, {}, &destination_resource);
         RUVIA_CHECK((destination.index() == 0));
         if ((destination.index() == 0)) {
             std::get<0>(destination) = std::move(moved);
-            RUVIA_CHECK_EQ(std::get<0>(destination).decodedFieldSectionSize(), 43U);
-            RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), 0U);
-            RUVIA_CHECK(moved.fieldSection.empty());
+            RUVIA_CHECK_EQ(std::get<0>(destination).decoded_field_section_size(), 43U);
+            RUVIA_CHECK_EQ(moved.decoded_field_section_size(), 0U);
+            RUVIA_CHECK(moved.field_section_.empty());
         }
-        RUVIA_CHECK(resource.allocations > resource.deallocations);
+        RUVIA_CHECK(resource.allocations_ > resource.deallocations_);
     }
-    RUVIA_CHECK(resource.allocations > 0);
-    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
-    RUVIA_CHECK(destinationResource.allocations > 0);
-    RUVIA_CHECK_EQ(destinationResource.allocations, destinationResource.deallocations);
+    RUVIA_CHECK(resource.allocations_ > 0);
+    RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
+    RUVIA_CHECK(destination_resource.allocations_ > 0);
+    RUVIA_CHECK_EQ(destination_resource.allocations_, destination_resource.deallocations_);
 }
 
 RUVIA_TEST(http3_response_head_enforces_section_limits_including_status) {
-    const auto tooFewFields = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, {}, {.maxEncodedBytes = 64, .maxDecodedBytes = 1024, .maxFields = 0});
-    RUVIA_CHECK((tooFewFields.index() != 0));
-    if ((tooFewFields.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(tooFewFields).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kTooManyFields);
+    const auto too_few_fields = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, {}, {.max_encoded_bytes_ = 64, .max_decoded_bytes_ = 1024, .max_fields_ = 0});
+    RUVIA_CHECK((too_few_fields.index() != 0));
+    if ((too_few_fields.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(too_few_fields).field_section_error_ ==
+                    ruvia::http3_field_section_error::too_many_fields);
     }
 
-    const auto statusOnlyLimit = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, {}, {.maxEncodedBytes = 64, .maxDecodedBytes = 1024, .maxFields = 1});
-    RUVIA_CHECK((statusOnlyLimit.index() == 0));
+    const auto status_only_limit = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, {}, {.max_encoded_bytes_ = 64, .max_decoded_bytes_ = 1024, .max_fields_ = 1});
+    RUVIA_CHECK((status_only_limit.index() == 0));
 
-    const std::array oneField{ruvia::Http3FieldSectionFieldView{"x", "y"}};
-    const auto oneOverLimit = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, oneField, {.maxEncodedBytes = 64, .maxDecodedBytes = 1024, .maxFields = 1});
-    RUVIA_CHECK((oneOverLimit.index() != 0));
-    if ((oneOverLimit.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(oneOverLimit).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kTooManyFields);
+    const std::array one_field{ruvia::http3_field_section_field_view{"x", "y"}};
+    const auto one_over_limit = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, one_field, {.max_encoded_bytes_ = 64, .max_decoded_bytes_ = 1024, .max_fields_ = 1});
+    RUVIA_CHECK((one_over_limit.index() != 0));
+    if ((one_over_limit.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(one_over_limit).field_section_error_ ==
+                    ruvia::http3_field_section_error::too_many_fields);
     }
 
-    const auto tooSmall = ruvia::encodeHttp3ResponseHead(ruvia::http_status::kOk,
-        ruvia::HttpKnownMethod::kGet, {}, {.maxEncodedBytes = 2, .maxDecodedBytes = 1024, .maxFields = 8});
-    RUVIA_CHECK((tooSmall.index() != 0));
-    if ((tooSmall.index() != 0)) {
-        RUVIA_CHECK(std::get<1>(tooSmall).fieldSectionError ==
-                    ruvia::Http3FieldSectionError::kFieldSectionTooLarge);
+    const auto too_small = ruvia::encode_http3_response_head(ruvia::http_status::ok,
+        ruvia::http_known_method::get, {}, {.max_encoded_bytes_ = 2, .max_decoded_bytes_ = 1024, .max_fields_ = 8});
+    RUVIA_CHECK((too_small.index() != 0));
+    if ((too_small.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(too_small).field_section_error_ ==
+                    ruvia::http3_field_section_error::field_section_too_large);
     }
 }

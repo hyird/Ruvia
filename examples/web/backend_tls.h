@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/ClientTlsConfig.h"
+#include "ruvia/web/client_tls_config.h"
 
 #include "environment.h"
 
@@ -17,13 +17,13 @@ namespace example {
 inline ruvia::client_tls_config backend_tls(std::string_view prefix, const environment& env = environment{}) {
     const std::string base(prefix);
     return {
-        .mode = env.get<bool>(base + "_TLS").value_or(true)
-                    ? ruvia::client_tls_mode::verify_identity
-                    : ruvia::client_tls_mode::disabled,
-        .ca_file = std::string(env.get(base + "_CA").value_or("")),
-        .certificate_file = std::string(env.get(base + "_CERT").value_or("")),
-        .private_key_file = std::string(env.get(base + "_KEY").value_or("")),
-        .server_name = std::string(env.get(base + "_SERVER_NAME").value_or("")),
+        .mode_ = env.get<bool>(base + "_TLS").value_or(true)
+                     ? ruvia::client_tls_mode::verify_identity
+                     : ruvia::client_tls_mode::disabled,
+        .ca_file_ = std::string(env.get(base + "_CA").value_or("")),
+        .certificate_file_ = std::string(env.get(base + "_CERT").value_or("")),
+        .private_key_file_ = std::string(env.get(base + "_KEY").value_or("")),
+        .server_name_ = std::string(env.get(base + "_SERVER_NAME").value_or("")),
     };
 }
 

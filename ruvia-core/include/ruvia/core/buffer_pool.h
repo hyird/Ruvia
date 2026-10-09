@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/memory/process_resource.h"
 
 namespace ruvia {
 
@@ -54,8 +54,8 @@ public:
     }
 
 private:
-    buffer_credit(buffer_pool& owner, std::size_t index) noexcept
-        : owner_(&owner),
+    buffer_credit(buffer_pool& owner_value, std::size_t index) noexcept
+        : owner_(&owner_value),
           index_(index) {}
 
     buffer_pool* owner_{nullptr};
@@ -68,8 +68,8 @@ private:
 // publishes only a credit into its bounded single-producer return channel; it
 // must not touch the pool's owner-affine bookkeeping or memory resource.
 struct return_callback final {
-    void* context{nullptr};
-    void (*function)(void*, buffer_credit) noexcept {nullptr};
+    void* context_{nullptr};
+    void (*function_)(void*, buffer_credit) noexcept {nullptr};
 };
 
 class buffer_lease final {
@@ -108,18 +108,18 @@ public:
     }
 
     // Only the current linear holder may rebind its return destination.
-    void set_return_callback(return_callback callback) noexcept {
-        if (!credit_ || !callback.function) {
+    void set_return_callback(return_callback callback_value) noexcept {
+        if (!credit_ || !callback_value.function_) {
             std::terminate();
         }
-        callback_ = callback;
+        callback_ = callback_value;
     }
 
     // Invalidates every byte borrow. Empty/moved-from leases reset harmlessly.
     void reset() noexcept {
         if (credit_) {
             auto credit = release_credit();
-            callback_.function(callback_.context, std::move(credit));
+            callback_.function_(callback_.context_, std::move(credit));
         }
     }
 
@@ -134,10 +134,10 @@ public:
     }
 
 private:
-    buffer_lease(buffer_pool& owner, std::size_t index, std::span<std::byte> bytes, return_callback callback) noexcept
-        : credit_(owner, index),
-          bytes_(bytes),
-          callback_(callback) {}
+    buffer_lease(buffer_pool& owner_value, std::size_t index, std::span<std::byte> bytes_value, return_callback callback_value) noexcept
+        : credit_(owner_value, index),
+          bytes_(bytes_value),
+          callback_(callback_value) {}
 
     buffer_credit credit_;
     std::span<std::byte> bytes_;
@@ -153,15 +153,15 @@ private:
 // Closing a channel must still drain credits; destroy only after outstanding=0.
 class buffer_pool final {
 public:
-    buffer_pool(std::size_t count, std::size_t bytes, std::pmr::memory_resource* resource = nullptr)
-        : bytes_(resource ? resource : detail::processResource()),
+    buffer_pool(std::size_t count, std::size_t bytes_value, std::pmr::memory_resource* resource = nullptr)
+        : bytes_(resource ? resource : detail::process_resource()),
           free_(bytes_.get_allocator().resource()),
           busy_(bytes_.get_allocator().resource()),
-          slot_bytes_(bytes) {
-        if (count == 0 || bytes == 0 || count > std::numeric_limits<std::size_t>::max() / bytes) {
+          slot_bytes_(bytes_value) {
+        if (count == 0 || bytes_value == 0 || count > std::numeric_limits<std::size_t>::max() / bytes_value) {
             throw std::invalid_argument("buffer pool requires nonzero, representable storage dimensions");
         }
-        bytes_.resize(count * bytes);
+        bytes_.resize(count * bytes_value);
         free_.reserve(count);
         busy_.resize(count, false);
         for (std::size_t index = count; index != 0; --index) {
@@ -183,8 +183,8 @@ public:
         if (free_.empty()) {
             return std::nullopt;
         }
-        if (!callback.function) {
-            if (callback.context) {
+        if (!callback.function_) {
+            if (callback.context_) {
                 std::terminate();
             }
             callback = {this, owner_reclaim};
@@ -216,8 +216,8 @@ public:
     }
 
 private:
-    static void owner_reclaim(void* context, buffer_credit credit) noexcept {
-        static_cast<buffer_pool*>(context)->reclaim(std::move(credit));
+    static void owner_reclaim(void* context_value, buffer_credit credit) noexcept {
+        static_cast<buffer_pool*>(context_value)->reclaim(std::move(credit));
     }
 
     std::pmr::vector<std::byte> bytes_;

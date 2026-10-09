@@ -21,18 +21,18 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/EventLoopPool.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/web/redis/RedisClient.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/web/redis/redis_client.h"
 
-#include "redis/RedisClientRuntime.h"
+#include "redis/redis_client_runtime.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/DbClient.h"
-#include "ruvia/web/detail/db/DbResultAccess.h"
+#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/detail/db/db_result_access.h"
 
-#include "db/DbQueryCache.h"
-#include "db/DbRegistry.h"
+#include "db/db_query_cache.h"
+#include "db/db_registry.h"
 #endif
 
 #include "memory_resource_fixture.h"
@@ -41,23 +41,23 @@
 
 namespace {
 
-RUVIA_REDIS_ENTITY(ClientUser, "client_users",
-    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::String))
+RUVIA_REDIS_ENTITY(client_user, "client_users",
+    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string))
 
 // Deterministic RESP peer, not an external Redis dependency. All sockets and
 // cancellation run on its own thread, including cleanup after a failed test.
-class RedisPeer final {
+class redis_peer final {
 public:
-    enum class Mode { kNormal,
-        kCoalescedPings,
-        kCoalescedArrays,
-        kHugeArray,
-        kNestedArrays,
-        kDeepArrays,
-        kValidNestedArray,
-        kQueryCache,
-        kRejectThenPing,
+    enum class mode_type { normal,
+        coalesced_pings,
+        coalesced_arrays,
+        huge_array,
+        nested_arrays,
+        deep_arrays,
+        valid_nested_array,
+        query_cache,
+        reject_then_ping,
         batch_echo,
         transaction_success,
         transaction_aborted,
@@ -66,7 +66,7 @@ public:
         transaction_queue_error,
         transaction_watch_error };
 
-    explicit RedisPeer(Mode mode = Mode::kNormal, asio::ssl::context* tls_context = nullptr,
+    explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr,
         std::string cache_payload = {})
         : mode_(mode),
           cache_payload_(std::move(cache_payload)),
@@ -78,7 +78,7 @@ public:
           done_(asio::co_spawn(io_, serve(), asio::use_future)),
           thread_([this] { io_.run(); }) {}
 
-    ~RedisPeer() {
+    ~redis_peer() {
         asio::post(io_, [this] {
             std::error_code ignored;
             acceptor_.close(ignored);
@@ -92,11 +92,11 @@ public:
         }
     }
 
-    ruvia::RedisConfig config() const {
-        return {.host = "127.0.0.1", .port = port_, .tls = {.mode = ruvia::client_tls_mode::disabled}, .poolSizePerWorker = 1, .connectTimeout = std::chrono::seconds(2), .commandTimeout = std::chrono::seconds(2)};
+    ruvia::redis_config config() const {
+        return {.host_ = "127.0.0.1", .port_ = port_, .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)};
     }
 
-    void waitForBlockedCommand() {
+    void wait_for_blocked_command() {
         auto blocked = blocked_.get_future();
         if (blocked.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
             throw std::runtime_error("Redis test peer did not receive the command");
@@ -104,7 +104,7 @@ public:
         blocked.get();
     }
 
-    std::vector<std::string> expirationCommand() {
+    std::vector<std::string> expiration_command() {
         return expiration_.get_future().get();
     }
 
@@ -113,8 +113,8 @@ public:
     }
 
 private:
-    template <typename Stream>
-    asio::awaitable<std::string> line(Stream& stream) {
+    template <typename stream_type>
+    asio::awaitable<std::string> line(stream_type& stream) {
         co_await asio::async_read_until(stream, buffer_, "\r\n", asio::use_awaitable);
         std::istream input(&buffer_);
         std::string value;
@@ -128,12 +128,12 @@ private:
         try {
             co_await serve_transport();
         } catch (const std::system_error&) {
-            if (mode_ != Mode::kRejectThenPing) {
+            if (mode_ != mode_type::reject_then_ping) {
                 throw;
             }
         }
-        if (mode_ == Mode::kRejectThenPing) {
-            firstConnection_ = false;
+        if (mode_ == mode_type::reject_then_ping) {
+            first_connection_ = false;
             socket_ = asio::ip::tcp::socket(io_);
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
             co_await serve_transport();
@@ -144,20 +144,20 @@ private:
         if (tls_context_ != nullptr) {
             asio::ssl::stream<asio::ip::tcp::socket&> stream(socket_, *tls_context_);
             co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
-            co_await serveConnection(stream);
+            co_await serve_connection(stream);
         } else {
-            co_await serveConnection(socket_);
+            co_await serve_connection(socket_);
         }
     }
 
-    template <typename Stream>
-    asio::awaitable<void> serveConnection(Stream& stream) {
+    template <typename stream_type>
+    asio::awaitable<void> serve_connection(stream_type& stream) {
         bool in_transaction = false;
         std::vector<std::vector<std::string>> transaction_commands;
         std::vector<std::string> queued_replies;
         for (;;) {
-            const auto header = co_await line(stream);
-            const auto count = std::stoi(header.substr(1));
+            const auto header_value = co_await line(stream);
+            const auto count = std::stoi(header_value.substr(1));
             std::vector<std::string> args;
             for (int index = 0; index < count; ++index) {
                 const auto bulk = co_await line(stream);
@@ -178,17 +178,17 @@ private:
                 continue;
             }
             std::string reply;
-            const bool transaction_mode = mode_ == Mode::transaction_success ||
-                                          mode_ == Mode::transaction_aborted ||
-                                          mode_ == Mode::transaction_exec_error ||
-                                          mode_ == Mode::transaction_wrong_exec ||
-                                          mode_ == Mode::transaction_queue_error ||
-                                          mode_ == Mode::transaction_watch_error;
+            const bool transaction_mode = mode_ == mode_type::transaction_success ||
+                                          mode_ == mode_type::transaction_aborted ||
+                                          mode_ == mode_type::transaction_exec_error ||
+                                          mode_ == mode_type::transaction_wrong_exec ||
+                                          mode_ == mode_type::transaction_queue_error ||
+                                          mode_ == mode_type::transaction_watch_error;
             if (transaction_mode &&
                 (in_transaction || args.front() == "WATCH" || args.front() == "UNWATCH" || args.front() == "MULTI")) {
                 transaction_commands.push_back(args);
                 if (args.front() == "WATCH") {
-                    reply = mode_ == Mode::transaction_watch_error ? "-ERR watch failed\r\n" : "+OK\r\n";
+                    reply = mode_ == mode_type::transaction_watch_error ? "-ERR watch failed\r\n" : "+OK\r\n";
                 } else if (args.front() == "UNWATCH") {
                     reply = "+OK\r\n";
                 } else if (args.front() == "MULTI") {
@@ -197,11 +197,11 @@ private:
                 } else if (args.front() == "EXEC") {
                     in_transaction = false;
                     batch_commands_.set_value(transaction_commands);
-                    if (mode_ == Mode::transaction_aborted) {
+                    if (mode_ == mode_type::transaction_aborted) {
                         reply = "*-1\r\n";
-                    } else if (mode_ == Mode::transaction_exec_error) {
+                    } else if (mode_ == mode_type::transaction_exec_error) {
                         reply = "-EXECABORT discarded\r\n";
-                    } else if (mode_ == Mode::transaction_wrong_exec) {
+                    } else if (mode_ == mode_type::transaction_wrong_exec) {
                         reply = "+OK\r\n";
                     } else {
                         reply = "*" + std::to_string(queued_replies.size()) + "\r\n";
@@ -211,32 +211,32 @@ private:
                     }
                 } else {
                     queued_replies.push_back("$" + std::to_string(args.back().size()) + "\r\n" + args.back() + "\r\n");
-                    reply = mode_ == Mode::transaction_queue_error ? "-ERR queue failed\r\n" : "+QUEUED\r\n";
+                    reply = mode_ == mode_type::transaction_queue_error ? "-ERR queue failed\r\n" : "+QUEUED\r\n";
                 }
-            } else if (mode_ == Mode::batch_echo && args.front() != "PING") {
+            } else if (mode_ == mode_type::batch_echo && args.front() != "PING") {
                 reply = "$" + std::to_string(args.back().size()) + "\r\n" + args.back() + "\r\n";
-            } else if ((mode_ == Mode::kCoalescedPings || mode_ == Mode::kCoalescedArrays) &&
+            } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays) &&
                        args.front() == "PING") {
                 if (co_await line(stream) != "*1" || co_await line(stream) != "$4" ||
                     co_await line(stream) != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
-                reply = mode_ == Mode::kCoalescedArrays
+                reply = mode_ == mode_type::coalesced_arrays
                             ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
                             : "+PONG\r\n+PONG\r\n";
-            } else if ((mode_ == Mode::kHugeArray ||
-                           (mode_ == Mode::kRejectThenPing && firstConnection_)) &&
+            } else if ((mode_ == mode_type::huge_array ||
+                           (mode_ == mode_type::reject_then_ping && first_connection_)) &&
                        args.front() == "PING") {
                 reply = "*1048576\r\n";
-            } else if (mode_ == Mode::kNestedArrays && args.front() == "PING") {
+            } else if (mode_ == mode_type::nested_arrays && args.front() == "PING") {
                 for (int index = 0; index < 100; ++index) {
                     reply.append("*300\r\n");
                 }
-            } else if (mode_ == Mode::kDeepArrays && args.front() == "PING") {
+            } else if (mode_ == mode_type::deep_arrays && args.front() == "PING") {
                 for (int index = 0; index < 5; ++index) {
                     reply.append("*1\r\n");
                 }
-            } else if (mode_ == Mode::kValidNestedArray && args.front() == "PING") {
+            } else if (mode_ == mode_type::valid_nested_array && args.front() == "PING") {
                 for (int index = 0; index < 4; ++index) {
                     reply.append("*1\r\n");
                 }
@@ -244,7 +244,7 @@ private:
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
             } else if (args.front() == "GET") {
-                reply = mode_ == Mode::kQueryCache
+                reply = mode_ == mode_type::query_cache
                             ? "$" + std::to_string(cache_payload_.size()) + "\r\n" + cache_payload_ + "\r\n"
                             : "$128\r\n" + std::string(128, 'v') + "\r\n";
             } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
@@ -259,10 +259,10 @@ private:
         }
     }
 
-    Mode mode_;
+    mode_type mode_;
     std::string cache_payload_;
     asio::ssl::context* tls_context_;
-    bool firstConnection_{true};
+    bool first_connection_{true};
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
@@ -276,44 +276,44 @@ private:
     std::thread thread_;
 };
 
-ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_commands(ruvia::redis_client& client, ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
-    bool duplicateRejected = false;
+    bool duplicate_rejected = false;
     try {
         co_await client.connect();
     } catch (const std::logic_error&) {
-        duplicateRejected = true;
+        duplicate_rejected = true;
     }
-    RUVIA_CHECK(duplicateRejected);
+    RUVIA_CHECK(duplicate_rejected);
     // A rejected second connect must not tear down the successful first one.
     co_await client.ping();
     auto retained = co_await client.get("retained");
     RUVIA_CHECK(retained.has_value());
-    auto users = client.getRepository<ClientUser>();
-    auto user = co_await users.findOne({.where = ClientUser::field<"id">() == "1"});
-    RUVIA_CHECK(user.has_value());
-    std::string mutablePing(128, 'm');
-    auto coldPing = client.ping(mutablePing);
-    mutablePing.assign(128, 'n');
-    const auto ownedEcho = co_await std::move(coldPing);
-    RUVIA_CHECK(ownedEcho == std::string_view(std::string(128, 'm')));
+    auto users = client.get_repository<client_user>();
+    auto user_value = co_await users.find_one({.where_ = client_user::field<"id">() == "1"});
+    RUVIA_CHECK(user_value.has_value());
+    std::string mutable_ping(128, 'm');
+    auto cold_ping = client.ping(mutable_ping);
+    mutable_ping.assign(128, 'n');
+    const auto owned_echo = co_await std::move(cold_ping);
+    RUVIA_CHECK(owned_echo == std::string_view(std::string(128, 'm')));
     for (int index = 0; index < 32; ++index) {
         auto cold = client.get(std::string(128, 'k'));
         (void)cold;
         auto echo = co_await client.ping(std::string(128, 'x'));
         RUVIA_CHECK(echo == std::string_view(std::string(128, 'x')));
         RUVIA_CHECK(*retained == std::string_view(std::string(128, 'v')));
-        RUVIA_CHECK(user->get<"name">().view() == std::string_view(std::string(128, 'n')));
+        RUVIA_CHECK(user_value->get<"name">().view() == std::string_view(std::string(128, 'n')));
     }
     bool failed = false;
     try {
         (void)co_await client.set("bad", "value");
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         failed = true;
     }
     RUVIA_CHECK(failed);
     co_await client.ping();
-    auto handle = client.withOptions({});
+    auto handle = client.with_options({});
     auto cold = handle.get("not-started");
     co_await client.shutdown();
     co_await client.shutdown();
@@ -327,8 +327,8 @@ ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::Test
     RUVIA_CHECK(*retained == std::string_view(std::string(128, 'v')));
 }
 
-ruvia::Task<void> checkCoalescedReplies(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx, bool arrays = false) {
+ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx, bool arrays = false) {
     co_await client.connect();
     auto pipeline = client.pipeline();
     pipeline.command("PING").command("PING");
@@ -337,20 +337,20 @@ ruvia::Task<void> checkCoalescedReplies(ruvia::RedisClient& client,
         const auto replies = co_await std::move(pipeline).exec();
         accepted = replies.size() == 2;
         if (accepted && arrays) {
-            accepted = replies[0].kind() == ruvia::RedisValue::Kind::kArray &&
-                       replies[1].kind() == ruvia::RedisValue::Kind::kArray &&
+            accepted = replies[0].kind() == ruvia::redis_value::kind_type::array &&
+                       replies[1].kind() == ruvia::redis_value::kind_type::array &&
                        replies[0].array().size() == 3 && replies[1].array().size() == 3;
         } else if (accepted) {
             accepted = replies[0].string() == "PONG" && replies[1].string() == "PONG";
         }
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
     }
     RUVIA_CHECK(accepted);
     co_await client.shutdown();
 }
 
-ruvia::Task<void> check_owned_pipeline(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     const std::string binary_key("key\0binary", 10);
     const std::string binary_value("value\0binary", 12);
@@ -358,7 +358,7 @@ ruvia::Task<void> check_owned_pipeline(ruvia::RedisClient& client,
         auto pipeline = client.pipeline();
         auto key = binary_key;
         auto value = binary_value;
-        pipeline.get(key).set(key, value).incrBy(key, std::numeric_limits<std::int64_t>::min()).zadd(key, 1.5, "member");
+        pipeline.get(key).set(key, value).incr_by(key, std::numeric_limits<std::int64_t>::min()).zadd(key, 1.5, "member");
         key.assign(128, 'x');
         value.assign(128, 'y');
         return std::move(pipeline).exec();
@@ -369,17 +369,17 @@ ruvia::Task<void> check_owned_pipeline(ruvia::RedisClient& client,
     RUVIA_CHECK(retained[1].string() == std::string_view(binary_value));
     RUVIA_CHECK(retained[2].string() == "-9223372036854775808");
     RUVIA_CHECK(retained[3].string() == "member");
-    auto next = client.pipeline();
-    next.get(std::string(256, 'n'));
-    const auto replies = co_await std::move(next).exec();
+    auto next_value = client.pipeline();
+    next_value.get(std::string(256, 'n'));
+    const auto replies = co_await std::move(next_value).exec();
     RUVIA_CHECK_EQ(replies.size(), std::size_t{1});
     RUVIA_CHECK(retained[1].string() == std::string_view(binary_value));
     co_await client.shutdown();
     RUVIA_CHECK(retained[0].string() == std::string_view(binary_key));
 }
 
-ruvia::Task<void> check_owned_transaction(ruvia::RedisClient& client, RedisPeer::Mode mode,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_peer::mode_type mode,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     const std::string binary_key("key\0binary", 10);
     const std::string binary_value("value\0binary", 12);
@@ -395,7 +395,7 @@ ruvia::Task<void> check_owned_transaction(ruvia::RedisClient& client, RedisPeer:
     bool accepted = false;
     try {
         const auto retained = co_await std::move(cold);
-        RUVIA_CHECK(mode == RedisPeer::Mode::transaction_success);
+        RUVIA_CHECK(mode == redis_peer::mode_type::transaction_success);
         RUVIA_CHECK_EQ(retained.size(), std::size_t{2});
         RUVIA_CHECK(retained[0].string() == std::string_view(binary_value));
         RUVIA_CHECK(retained[1].string() == std::string_view(binary_key));
@@ -403,19 +403,19 @@ ruvia::Task<void> check_owned_transaction(ruvia::RedisClient& client, RedisPeer:
         co_await client.shutdown();
         RUVIA_CHECK(retained[0].string() == std::string_view(binary_value));
         accepted = true;
-    } catch (const ruvia::RedisError& error) {
-        const auto expected_code = mode == RedisPeer::Mode::transaction_aborted
-                                       ? ruvia::RedisError::Code::kTransactionAborted
-                                       : ruvia::RedisError::Code::kCommandError;
-        RUVIA_CHECK(mode != RedisPeer::Mode::transaction_success);
+    } catch (const ruvia::redis_error& error) {
+        const auto expected_code = mode == redis_peer::mode_type::transaction_aborted
+                                       ? ruvia::redis_error::code_type::transaction_aborted
+                                       : ruvia::redis_error::code_type::command_error;
+        RUVIA_CHECK(mode != redis_peer::mode_type::transaction_success);
         RUVIA_CHECK(error.code() == expected_code);
-        if (mode == RedisPeer::Mode::transaction_queue_error) {
+        if (mode == redis_peer::mode_type::transaction_queue_error) {
             RUVIA_CHECK((std::string_view(error.what()).find("reply 4") != std::string_view::npos));
             RUVIA_CHECK((std::string_view(error.what()).find("queue failed") != std::string_view::npos));
-        } else if (mode == RedisPeer::Mode::transaction_watch_error) {
+        } else if (mode == redis_peer::mode_type::transaction_watch_error) {
             RUVIA_CHECK((std::string_view(error.what()).find("reply 0") != std::string_view::npos));
             RUVIA_CHECK((std::string_view(error.what()).find("watch failed") != std::string_view::npos));
-        } else if (mode == RedisPeer::Mode::transaction_exec_error) {
+        } else if (mode == redis_peer::mode_type::transaction_exec_error) {
             RUVIA_CHECK((std::string_view(error.what()).find("EXECABORT") != std::string_view::npos));
         }
         accepted = true;
@@ -424,166 +424,166 @@ ruvia::Task<void> check_owned_transaction(ruvia::RedisClient& client, RedisPeer:
     co_await client.shutdown();
 }
 
-ruvia::Task<void> checkOversizedReply(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_oversized_reply(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     bool rejected = false;
     try {
         (void)co_await client.get("large");
-    } catch (const ruvia::RedisError& error) {
-        rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
+    } catch (const ruvia::redis_error& error) {
+        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
     }
     RUVIA_CHECK(rejected);
     co_await client.shutdown();
 }
 
-ruvia::Task<void> checkHugeDeclaredArray(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_huge_declared_array(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     bool rejected = false;
     try {
         co_await client.ping();
-    } catch (const ruvia::RedisError& error) {
-        rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
+    } catch (const ruvia::redis_error& error) {
+        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
     }
     RUVIA_CHECK(rejected);
     co_await client.shutdown();
 }
 
-ruvia::Task<void> checkNestedArrayAtDepthLimit(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_nested_array_at_depth_limit(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     const std::string_view command[]{"PING"};
     const auto reply = co_await client.command(std::span<const std::string_view>(command));
-    const ruvia::RedisValue* value = &reply;
+    const ruvia::redis_value* value = &reply;
     bool valid = true;
     for (int index = 0; index < 4; ++index) {
-        if (value->kind() != ruvia::RedisValue::Kind::kArray || value->array().size() != 1) {
+        if (value->kind() != ruvia::redis_value::kind_type::array || value->array().size() != 1) {
             valid = false;
             break;
         }
         value = &value->array()[0];
     }
-    RUVIA_CHECK(valid && value->kind() == ruvia::RedisValue::Kind::kString &&
+    RUVIA_CHECK(valid && value->kind() == ruvia::redis_value::kind_type::string &&
                 value->string() == "PONG");
     co_await client.shutdown();
 }
 
-ruvia::Task<void> checkReconnectAfterBudgetRejection(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_reconnect_after_budget_rejection(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     bool rejected = false;
     try {
         co_await client.ping();
-    } catch (const ruvia::RedisError& error) {
-        rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
+    } catch (const ruvia::redis_error& error) {
+        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
     }
     RUVIA_CHECK(rejected);
     co_await client.ping();
     co_await client.shutdown();
 }
 
-ruvia::Task<void> blockedCommand(ruvia::RedisClient& client) {
+ruvia::task<void> blocked_command(ruvia::redis_client& client) {
     co_await client.connect();
     (void)co_await client.command("STALL");
 }
 
-ruvia::Task<void> connectUntilStopped(ruvia::RedisClient& client, bool& cancelled) {
+ruvia::task<void> connect_until_stopped(ruvia::redis_client& client, bool& cancelled) {
     try {
         co_await client.connect();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
 }
 
-ruvia::Task<void> checkExpiration(ruvia::RedisClient& client,
-    std::chrono::system_clock::time_point expiresAt, ruvia::testing::TestContext& ruvia_ctx) {
+ruvia::task<void> check_expiration(ruvia::redis_client& client,
+    std::chrono::system_clock::time_point expires_at, ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
-    const bool applied = co_await client.expireAt("session", expiresAt);
+    const bool applied = co_await client.expire_at("session", expires_at);
     RUVIA_CHECK(applied);
     co_await client.shutdown();
 }
 
-ruvia::Task<void> checkRuntimeHandleTimeout(ruvia::EventLoop loop, ruvia::RedisConfig config,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    config.commandTimeout.reset();
-    auto worker = loop.handle();
-    ruvia::detail::RedisClientRuntime runtime(loop.ioContext(), worker,
-        ruvia::detail::RedisConfigStorage(config, std::pmr::get_default_resource()),
+ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::redis_config config,
+    ruvia::testing::test_context& ruvia_ctx) {
+    config.command_timeout_.reset();
+    auto worker_value = loop.handle();
+    ruvia::detail::redis_client_runtime runtime(loop.io_context(), worker_value,
+        ruvia::detail::redis_config_storage(config, std::pmr::get_default_resource()),
         std::pmr::get_default_resource());
     ruvia::operation_scope scope;
     co_await runtime.connect();
-    auto handle = runtime.handle(scope, {.timeout = std::chrono::seconds(5)});
+    auto handle = runtime.handle(scope, {.timeout_ = std::chrono::seconds(5)});
     auto copied = handle;
-    auto inherited = copied.withOptions({});
-    auto shortened = inherited.withOptions({.timeout = std::chrono::milliseconds(100)});
-    auto derived = shortened.withOptions({.timeout = std::chrono::seconds(5)});
-    auto coldOperation = derived.command("STALL");
-    (void)co_await ruvia::sleepFor(worker, std::chrono::milliseconds(250));
+    auto inherited = copied.with_options({});
+    auto shortened = inherited.with_options({.timeout_ = std::chrono::milliseconds(100)});
+    auto derived = shortened.with_options({.timeout_ = std::chrono::seconds(5)});
+    auto cold_operation = derived.command("STALL");
+    (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(250));
     const auto started = std::chrono::steady_clock::now();
-    bool commandTimedOut = false;
+    bool command_timed_out = false;
     try {
-        (void)co_await std::move(coldOperation);
-    } catch (const ruvia::RedisError& error) {
-        commandTimedOut = error.code() == ruvia::RedisError::Code::kTimeout;
+        (void)co_await std::move(cold_operation);
+    } catch (const ruvia::redis_error& error) {
+        command_timed_out = error.code() == ruvia::redis_error::code_type::timeout;
     }
     const auto elapsed = std::chrono::steady_clock::now() - started;
-    RUVIA_CHECK(commandTimedOut);
+    RUVIA_CHECK(command_timed_out);
     // Cold time must not consume the deadline; a longer override cannot relax it.
     RUVIA_CHECK(elapsed >= std::chrono::milliseconds(50));
     RUVIA_CHECK(elapsed < std::chrono::seconds(2));
-    runtime.closeNow();
+    runtime.close_now();
     co_await scope.close_and_join();
 }
 
-ruvia::Task<void> checkRuntimeHandleCancellationBridge(ruvia::EventLoop loop,
-    ruvia::RedisConfig config, ruvia::StopSource& baseStop,
-    ruvia::StopSource& overrideStop, ruvia::testing::TestContext& ruvia_ctx) {
-    config.commandTimeout.reset();
-    auto worker = loop.handle();
-    ruvia::detail::RedisClientRuntime runtime(loop.ioContext(), worker,
-        ruvia::detail::RedisConfigStorage(config, std::pmr::get_default_resource()),
+ruvia::task<void> check_runtime_handle_cancellation_bridge(ruvia::event_loop loop,
+    ruvia::redis_config config, ruvia::stop_source& base_stop,
+    ruvia::stop_source& override_stop, ruvia::testing::test_context& ruvia_ctx) {
+    config.command_timeout_.reset();
+    auto worker_value = loop.handle();
+    ruvia::detail::redis_client_runtime runtime(loop.io_context(), worker_value,
+        ruvia::detail::redis_config_storage(config, std::pmr::get_default_resource()),
         std::pmr::get_default_resource());
     ruvia::operation_scope scope;
     co_await runtime.connect();
-    auto configured = runtime.handle(scope, {.stopToken = baseStop.token()});
+    auto configured = runtime.handle(scope, {.stop_token_ = base_stop.token()});
     auto copied = configured;
-    auto derived = copied.withOptions({.stopToken = overrideStop.token()});
+    auto derived = copied.with_options({.stop_token_ = override_stop.token()});
     bool cancelled = false;
     try {
         (void)co_await derived.command("STALL");
-    } catch (const ruvia::RedisError& error) {
-        cancelled = error.code() == ruvia::RedisError::Code::kCancelled;
+    } catch (const ruvia::redis_error& error) {
+        cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
     }
     RUVIA_CHECK(cancelled);
-    runtime.closeNow();
+    runtime.close_now();
     co_await scope.close_and_join();
 }
 
-ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig config,
-    ruvia::testing::TestContext& ruvia_ctx) {
-    ruvia::test::CountingMemoryResource memory;
+ruvia::task<void> check_runtime_memory(ruvia::event_loop loop, ruvia::redis_config config,
+    ruvia::testing::test_context& ruvia_ctx) {
+    ruvia::test::counting_memory_resource memory;
     {
-        auto worker = loop.handle();
-        ruvia::detail::RedisClientRuntime runtime(loop.ioContext(), worker,
-            ruvia::detail::RedisConfigStorage(config, &memory), &memory);
+        auto worker_value = loop.handle();
+        ruvia::detail::redis_client_runtime runtime(loop.io_context(), worker_value,
+            ruvia::detail::redis_config_storage(config, &memory), &memory);
         ruvia::operation_scope scope;
         co_await runtime.connect();
-        auto handle = runtime.handle(scope, {.timeout = std::chrono::seconds(2)});
-        auto copiedHandle = handle;
+        auto handle = runtime.handle(scope, {.timeout_ = std::chrono::seconds(2)});
+        auto copied_handle = handle;
         // Warm connection buffers, then retain a result across later calls.
         {
             auto warm = co_await handle.ping(std::string(256, 'w'));
         }
         auto retained = co_await handle.get("retained");
-        const auto baseline = memory.liveAllocations();
-        const auto allocations = memory.allocationCount();
-        const auto deallocations = memory.deallocationCount();
+        const auto baseline = memory.live_allocations();
+        const auto allocations = memory.allocation_count();
+        const auto deallocations = memory.deallocation_count();
         for (int index = 0; index < 32; ++index) {
             {
                 auto cold = handle.get(std::string(128, 'k'));
             }
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             {
                 auto cold = [&] {
                     auto pipeline = handle.pipeline();
@@ -591,7 +591,7 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
                     return std::move(pipeline).exec();
                 }();
             }
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             {
                 auto cold = [&] {
                     auto transaction = handle.transaction();
@@ -600,34 +600,34 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
                     return std::move(transaction).exec();
                 }();
             }
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             {
-                auto result = co_await handle.ping(std::string(128, 'x'));
+                auto result_value = co_await handle.ping(std::string(128, 'x'));
             }
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             bool failed = false;
             try {
                 (void)co_await handle.set("bad", "value");
-            } catch (const ruvia::RedisError&) {
+            } catch (const ruvia::redis_error&) {
                 failed = true;
             }
             RUVIA_CHECK(failed);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
-            ruvia::StopSource stop;
-            stop.requestStop();
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
+            ruvia::stop_source stop;
+            stop.request_stop();
             bool cancelled = false;
             try {
-                (void)co_await copiedHandle.withOptions({.stopToken = stop.token()})
+                (void)co_await copied_handle.with_options({.stop_token_ = stop.token()})
                     .get(std::string(128, 'c'));
-            } catch (const ruvia::RedisError&) {
+            } catch (const ruvia::redis_error&) {
                 cancelled = true;
             }
             RUVIA_CHECK(cancelled);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             for (const bool transaction_batch : {false, true}) {
                 bool batch_cancelled = false;
                 try {
-                    auto configured = copiedHandle.withOptions({.stopToken = stop.token()});
+                    auto configured = copied_handle.with_options({.stop_token_ = stop.token()});
                     if (transaction_batch) {
                         auto transaction = configured.transaction();
                         transaction.watch(std::string(128, 'w'))
@@ -638,101 +638,101 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
                         pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
                         (void)co_await std::move(pipeline).exec();
                     }
-                } catch (const ruvia::RedisError& error) {
-                    batch_cancelled = error.code() == ruvia::RedisError::Code::kCancelled;
+                } catch (const ruvia::redis_error& error) {
+                    batch_cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
                 }
                 RUVIA_CHECK(batch_cancelled);
-                RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+                RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             }
             RUVIA_CHECK(*retained == std::string_view(std::string(128, 'v')));
         }
-        RUVIA_CHECK(memory.allocationCount() > allocations);
-        RUVIA_CHECK(memory.deallocationCount() > deallocations);
+        RUVIA_CHECK(memory.allocation_count() > allocations);
+        RUVIA_CHECK(memory.deallocation_count() > deallocations);
         retained.reset();
-        RUVIA_CHECK(memory.liveAllocations() < baseline);
+        RUVIA_CHECK(memory.live_allocations() < baseline);
         co_await scope.close_and_join();
-        auto inactiveHandle = runtime.handle(scope);
-        bool inactiveRejected = false;
+        auto inactive_handle = runtime.handle(scope);
+        bool inactive_rejected = false;
         try {
-            (void)inactiveHandle.ping();
+            (void)inactive_handle.ping();
         } catch (const std::logic_error&) {
-            inactiveRejected = true;
+            inactive_rejected = true;
         }
-        RUVIA_CHECK(inactiveRejected);
-        runtime.closeNow();
+        RUVIA_CHECK(inactive_rejected);
+        runtime.close_now();
     }
-    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
 }
 
 }  // namespace
 
 RUVIA_TEST(redis_client_runtime_handle_options_survive_copy_and_derivation) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(checkRuntimeHandleTimeout(pool.loop(0), peer.config(), ruvia_ctx)).get();
+    pool.loop(0).start(check_runtime_handle_timeout(pool.loop(0), peer.config(), ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_client_runtime_handle_bridges_both_stop_tokens_after_copy_and_derivation) {
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    for (const bool stopBase : {true, false}) {
-        RedisPeer peer;
-        ruvia::StopSource baseStop;
-        ruvia::StopSource overrideStop;
-        auto operation = pool.loop(0).start(checkRuntimeHandleCancellationBridge(
-            pool.loop(0), peer.config(), baseStop, overrideStop, ruvia_ctx));
-        peer.waitForBlockedCommand();
-        (stopBase ? baseStop : overrideStop).requestStop();
+    for (const bool stop_base : {true, false}) {
+        redis_peer peer;
+        ruvia::stop_source base_stop;
+        ruvia::stop_source override_stop;
+        auto operation = pool.loop(0).start(check_runtime_handle_cancellation_bridge(
+            pool.loop(0), peer.config(), base_stop, override_stop, ruvia_ctx));
+        peer.wait_for_blocked_command();
+        (stop_base ? base_stop : override_stop).request_stop();
         operation.get();
     }
     pool.join();
 }
 
 RUVIA_TEST(redis_client_runtime_reclaims_operations_independently_of_retained_results) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(checkRuntimeMemory(pool.loop(0), peer.config(), ruvia_ctx)).get();
+    pool.loop(0).start(check_runtime_memory(pool.loop(0), peer.config(), ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 2});
-    ruvia::RedisClient client(pool.loop(0), peer.config());
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 2});
+    ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
-    auto wrongLoop = pool.loop(1).start(client.connect());
+    auto wrong_loop = pool.loop(1).start(client.connect());
     bool rejected = false;
     try {
-        wrongLoop.get();
+        wrong_loop.get();
     } catch (const std::logic_error&) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
-    pool.loop(0).start(checkCommands(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_commands(client, ruvia_ctx)).get();
     pool.stop();
     pool.join();
 }
 
 RUVIA_TEST(redis_pipeline_owns_binary_input_and_retains_ordered_replies) {
-    RedisPeer peer(RedisPeer::Mode::batch_echo);
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), peer.config());
+    redis_peer peer(redis_peer::mode_type::batch_echo);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_owned_pipeline(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
-    for (const auto mode : {RedisPeer::Mode::transaction_success,
-             RedisPeer::Mode::transaction_aborted, RedisPeer::Mode::transaction_exec_error,
-             RedisPeer::Mode::transaction_wrong_exec, RedisPeer::Mode::transaction_queue_error,
-             RedisPeer::Mode::transaction_watch_error}) {
-        RedisPeer peer(mode);
-        ruvia::EventLoopPool pool({.loopCount = 1});
-        ruvia::RedisClient client(pool.loop(0), peer.config());
+    for (const auto mode : {redis_peer::mode_type::transaction_success,
+             redis_peer::mode_type::transaction_aborted, redis_peer::mode_type::transaction_exec_error,
+             redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error,
+             redis_peer::mode_type::transaction_watch_error}) {
+        redis_peer peer(mode);
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), peer.config());
         pool.start();
         pool.loop(0).start(check_owned_transaction(client, mode, ruvia_ctx)).get();
         pool.join();
@@ -752,119 +752,119 @@ RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
 }
 
 RUVIA_TEST(redis_pipeline_reply_limit_counts_each_reply_not_the_tcp_batch) {
-    RedisPeer peer(RedisPeer::Mode::kCoalescedPings);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::coalesced_pings);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 7;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 7;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkCoalescedReplies(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_coalesced_replies(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_pipeline_array_element_budget_resets_for_each_reply) {
-    RedisPeer peer(RedisPeer::Mode::kCoalescedArrays);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::coalesced_arrays);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 13;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 13;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkCoalescedReplies(client, ruvia_ctx, true)).get();
+    pool.loop(0).start(check_coalesced_replies(client, ruvia_ctx, true)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_client_reply_limit_still_rejects_oversized_single_reply) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 7;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 7;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkOversizedReply(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_oversized_reply(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_reply_budget_rejects_impossible_declared_array_before_its_elements_arrive) {
-    RedisPeer peer(RedisPeer::Mode::kHugeArray);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::huge_array);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 1024;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 1024;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_huge_declared_array(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_reply_budget_rejects_aggregate_nested_array_declarations) {
-    RedisPeer peer(RedisPeer::Mode::kNestedArrays);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::nested_arrays);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 1024;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 1024;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_huge_declared_array(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_reply_depth_rejects_incomplete_nested_array) {
-    RedisPeer peer(RedisPeer::Mode::kDeepArrays);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::deep_arrays);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxArrayDepth = 4;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_array_depth_ = 4;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_huge_declared_array(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_reply_array_at_the_depth_limit_is_accepted) {
-    RedisPeer peer(RedisPeer::Mode::kValidNestedArray);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::valid_nested_array);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxArrayDepth = 4;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_array_depth_ = 4;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkNestedArrayAtDepthLimit(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_nested_array_at_depth_limit(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_reader_budget_rebinds_after_protocol_failure_and_reconnect) {
-    RedisPeer peer(RedisPeer::Mode::kRejectThenPing);
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer(redis_peer::mode_type::reject_then_ping);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.maxReplyBytes = 1024;
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.max_reply_bytes_ = 1024;
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
-    pool.loop(0).start(checkReconnectAfterBudgetRejection(client, ruvia_ctx)).get();
+    pool.loop(0).start(check_reconnect_after_budget_rejection(client, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_client_expire_at_preserves_the_requested_deadline) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), peer.config());
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
-    const auto expiresAt = std::chrono::system_clock::time_point{
-                               std::chrono::seconds(2'000'000'000)} +
-                           std::chrono::microseconds(1'001);
-    pool.loop(0).start(checkExpiration(client, expiresAt, ruvia_ctx)).get();
-    const auto command = peer.expirationCommand();
+    const auto expires_at = std::chrono::system_clock::time_point{
+                                std::chrono::seconds(2'000'000'000)} +
+                            std::chrono::microseconds(1'001);
+    pool.loop(0).start(check_expiration(client, expires_at, ruvia_ctx)).get();
+    const auto command = peer.expiration_command();
     pool.join();
     RUVIA_CHECK_EQ(command, (std::vector<std::string>{"PEXPIREAT", "session", "2000000000002"}));
 }
 
 RUVIA_TEST(redis_client_loop_stop_cancels_and_joins_pending_commands) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), peer.config());
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
-    auto pending = pool.loop(0).start(blockedCommand(client));
-    peer.waitForBlockedCommand();
+    auto pending = pool.loop(0).start(blocked_command(client));
+    peer.wait_for_blocked_command();
     pool.stop();
     bool cancelled = false;
     try {
         pending.get();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
     pool.join();
@@ -872,17 +872,17 @@ RUVIA_TEST(redis_client_loop_stop_cancels_and_joins_pending_commands) {
 }
 
 RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), peer.config());
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
-    auto pending = pool.loop(0).start(blockedCommand(client));
-    peer.waitForBlockedCommand();
+    auto pending = pool.loop(0).start(blocked_command(client));
+    peer.wait_for_blocked_command();
     client.close();
     bool cancelled = false;
     try {
         pending.get();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
     pool.loop(0).start(client.shutdown()).get();
@@ -892,23 +892,23 @@ RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
 }
 
 RUVIA_TEST(redis_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
-    for (const bool useAttachmentRun : {false, true}) {
-        RedisPeer peer;
+    for (const bool use_attachment_run : {false, true}) {
+        redis_peer peer;
         auto config = peer.config();
-        config.password = "stall-authentication";
+        config.password_ = "stall-authentication";
         asio::io_context io;
-        auto attachment = ruvia::attachEventLoop(io);
-        ruvia::RedisClient client(attachment.loop(), config);
+        auto attachment = ruvia::attach_event_loop(io);
+        ruvia::redis_client client(attachment.loop(), config);
         bool cancelled = false;
-        auto root = attachment.loop().start(connectUntilStopped(client, cancelled));
+        auto root = attachment.loop().start(connect_until_stopped(client, cancelled));
         std::thread driver([&] {
-            if (useAttachmentRun) {
+            if (use_attachment_run) {
                 attachment.run();
             } else {
                 io.run();
             }
         });
-        peer.waitForBlockedCommand();
+        peer.wait_for_blocked_command();
         attachment.stop();
         driver.join();
         root.get();
@@ -918,26 +918,26 @@ RUVIA_TEST(redis_client_event_loop_stop_awaits_retirement_of_pending_authenticat
 }
 
 RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {
-    RedisPeer peer;
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto config = peer.config();
-    config.password = "stall-authentication";
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.password_ = "stall-authentication";
+    ruvia::redis_client client(pool.loop(0), config);
     pool.start();
     auto connecting = pool.loop(0).start(client.connect());
-    peer.waitForBlockedCommand();
-    bool duplicateRejected = false;
+    peer.wait_for_blocked_command();
+    bool duplicate_rejected = false;
     try {
         pool.loop(0).start(client.connect()).get();
     } catch (const std::logic_error&) {
-        duplicateRejected = true;
+        duplicate_rejected = true;
     }
-    RUVIA_CHECK(duplicateRejected);
+    RUVIA_CHECK(duplicate_rejected);
     auto closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {
         connecting.get();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
     closing.get();
@@ -947,8 +947,8 @@ RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {
 
 RUVIA_TEST(redis_client_fresh_close_and_loop_stop_share_worker_completion) {
     for (int iteration = 0; iteration < 64; ++iteration) {
-        ruvia::EventLoopPool pool({.loopCount = 1});
-        ruvia::RedisClient client(pool.loop(0), {.poolSizePerWorker = 1});
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), {.pool_size_per_worker_ = 1});
         pool.start();
         std::barrier rendezvous(2);
         std::thread closer([&] {
@@ -964,9 +964,9 @@ RUVIA_TEST(redis_client_fresh_close_and_loop_stop_share_worker_completion) {
 }
 
 RUVIA_TEST(redis_client_cold_connect_can_be_discarded_without_starting_the_pool) {
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     {
-        ruvia::RedisClient client(pool.loop(0), {.host = "127.0.0.1"});
+        ruvia::redis_client client(pool.loop(0), {.host_ = "127.0.0.1"});
         auto discarded = client.connect();
         (void)discarded;
     }
@@ -979,16 +979,16 @@ RUVIA_TEST(redis_client_failed_connect_can_be_shutdown) {
     asio::ip::tcp::acceptor unavailable(io);
     unavailable.open(asio::ip::tcp::v4());
     unavailable.bind({asio::ip::tcp::v4(), 0});
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), {.host = "127.0.0.1",
-                                                .port = unavailable.local_endpoint().port(),
-                                                .poolSizePerWorker = 1,
-                                                .connectTimeout = std::chrono::seconds(1)});
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), {.host_ = "127.0.0.1",
+                                                 .port_ = unavailable.local_endpoint().port(),
+                                                 .pool_size_per_worker_ = 1,
+                                                 .connect_timeout_ = std::chrono::seconds(1)});
     pool.start();
     bool failed = false;
     try {
         pool.loop(0).start(client.connect()).get();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         failed = true;
     }
     pool.loop(0).start(client.shutdown()).get();
@@ -998,30 +998,30 @@ RUVIA_TEST(redis_client_failed_connect_can_be_shutdown) {
 
 RUVIA_TEST(redis_tls_authenticates_identity_and_preserves_operation_memory) {
     ruvia::test::tls_identity identity("redis.test");
-    RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+    redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    config.tls = {.ca_file = identity.ca_file.string(), .server_name = "redis.test"};
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    config.tls_ = {.ca_file_ = identity.ca_file_.string(), .server_name_ = "redis.test"};
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(checkRuntimeMemory(pool.loop(0), config, ruvia_ctx)).get();
+    pool.loop(0).start(check_runtime_memory(pool.loop(0), config, ruvia_ctx)).get();
     pool.join();
 }
 
 RUVIA_TEST(redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
     ruvia::test::tls_identity identity("redis.test");
     for (const bool trust_ca : {false, true}) {
-        RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+        redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
         auto config = peer.config();
-        config.password = "must-not-send";
-        config.tls = {.ca_file = trust_ca ? identity.ca_file.string() : "", .server_name = trust_ca ? "wrong.test" : "redis.test"};
-        ruvia::EventLoopPool pool({.loopCount = 1});
-        ruvia::RedisClient client(pool.loop(0), config);
+        config.password_ = "must-not-send";
+        config.tls_ = {.ca_file_ = trust_ca ? identity.ca_file_.string() : "", .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), config);
         pool.start();
         bool rejected = false;
         try {
             pool.loop(0).start(client.connect()).get();
-        } catch (const ruvia::RedisError& error) {
-            rejected = error.code() == ruvia::RedisError::Code::kConnectFailed;
+        } catch (const ruvia::redis_error& error) {
+            rejected = error.code() == ruvia::redis_error::code_type::connect_failed;
         }
         RUVIA_CHECK(rejected);
         pool.loop(0).start(client.shutdown()).get();
@@ -1031,22 +1031,22 @@ RUVIA_TEST(redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
 
 RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     ruvia::test::tls_identity identity("redis.test");
-    RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+    redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    config.tls = {.ca_file = identity.ca_file.string(), .server_name = "redis.test"};
-    ruvia::EventLoopPool pool({.loopCount = 1});
-    ruvia::RedisClient client(pool.loop(0), config);
+    config.tls_ = {.ca_file_ = identity.ca_file_.string(), .server_name_ = "redis.test"};
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), config);
     {
         auto cold = client.connect();
     }
     pool.start();
-    auto pending = pool.loop(0).start(blockedCommand(client));
-    peer.waitForBlockedCommand();
+    auto pending = pool.loop(0).start(blocked_command(client));
+    peer.wait_for_blocked_command();
     client.close();
     bool cancelled = false;
     try {
         pending.get();
-    } catch (const ruvia::RedisError&) {
+    } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
     pool.loop(0).start(client.shutdown()).get();
@@ -1056,48 +1056,48 @@ RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
 
 #ifdef RUVIA_ENABLE_DATABASE
 RUVIA_TEST(db_query_cache_reuses_connected_redis_and_leaves_its_pool_open) {
-    using access = ruvia::detail::DbResultAccess;
+    using access = ruvia::detail::db_result_access;
     auto* resource = std::pmr::get_default_resource();
-    auto rows = access::makeResult(resource);
-    auto row = access::ownedRow(resource);
-    access::ownedColumnNames(row).emplace_back("name");
-    access::ownedFields(row).push_back(access::ownedField("cached", resource));
+    auto rows = access::make_result(resource);
+    auto row = access::owned_row(resource);
+    access::owned_column_names(row).emplace_back("name");
+    access::owned_fields(row).push_back(access::owned_field("cached", resource));
     access::rows(rows).push_back(std::move(row));
-    auto bytes = ruvia::detail::encodeDbCacheRows(rows, resource);
-    RedisPeer peer(RedisPeer::Mode::kQueryCache, nullptr, std::string(bytes));
-    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto bytes_value = ruvia::detail::encode_db_cache_rows(rows, resource);
+    redis_peer peer(redis_peer::mode_type::query_cache, nullptr, std::string(bytes_value));
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
-    ruvia::RedisClient redis(loop, peer.config());
-    auto run = [&]() -> ruvia::Task<void> {
+    ruvia::redis_client redis(loop, peer.config());
+    auto run = [&]() -> ruvia::task<void> {
         co_await redis.connect();
-        auto store = redis.withOptions({});
+        auto store_value = redis.with_options({});
 #ifdef RUVIA_ENABLE_POSTGRESQL
-        ruvia::DbConfig config{.driver = ruvia::DbDriver::kPostgreSql};
+        ruvia::db_config config{.driver_ = ruvia::db_driver::postgresql};
 #else
-        ruvia::DbConfig config{.driver = ruvia::DbDriver::kMariaDb};
+        ruvia::db_config config{.driver_ = ruvia::db_driver::mariadb};
 #endif
-        ruvia::DbClient client(loop, config, store, ruvia::DbCacheConfig{});
-        ruvia::test::CountingMemoryResource operation_memory;
+        ruvia::db_client client(loop, config, store_value, ruvia::db_cache_config{});
+        ruvia::test::counting_memory_resource operation_memory;
         {
-            ruvia::detail::DbRegistry databases(loop.ioContext(), redis.worker(),
-                &operation_memory, config, store, ruvia::DbCacheConfig{});
+            ruvia::detail::db_registry databases(loop.io_context(), redis.worker(),
+                &operation_memory, config, store_value, ruvia::db_cache_config{});
             ruvia::operation_scope scope;
-            auto database = databases.get(scope);
-            ruvia::DbQuery query;
+            auto database_value = databases.get(scope);
+            ruvia::db_query query;
             query.select(query.column("name")).from("items").cache(true);
-            const auto baseline = operation_memory.liveAllocations();
+            const auto baseline = operation_memory.live_allocations();
             for (int index = 0; index < 3; ++index) {
                 {
-                    const auto result = co_await database.query(query);
-                    RUVIA_CHECK_EQ(result.size(), std::size_t{1});
-                    RUVIA_CHECK_EQ(result[0]["name"].as<std::string_view>().value(), std::string_view("cached"));
+                    const auto result_value = co_await database_value.query(query);
+                    RUVIA_CHECK_EQ(result_value.size(), std::size_t{1});
+                    RUVIA_CHECK_EQ(result_value[0]["name"].as<std::string_view>().value(), std::string_view("cached"));
                 }
-                RUVIA_CHECK_EQ(operation_memory.liveAllocations(), baseline);
+                RUVIA_CHECK_EQ(operation_memory.live_allocations(), baseline);
             }
-            databases.closeNow();
+            databases.close_now();
             co_await redis.ping();
         }
-        RUVIA_CHECK_EQ(operation_memory.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(operation_memory.live_allocations(), std::size_t{0});
         co_await client.shutdown();
         co_await redis.ping();
         co_await redis.shutdown();

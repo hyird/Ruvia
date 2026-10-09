@@ -20,7 +20,7 @@ public:
     }
 
 private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         if (armed_ && successful_allocations_ == 0) {
             armed_ = false;
             throw std::bad_alloc();
@@ -28,13 +28,13 @@ private:
         if (armed_) {
             --successful_allocations_;
         }
-        auto* allocation = upstream_->allocate(bytes, alignment);
+        auto* allocation = upstream_->allocate(bytes_value, alignment);
         ++live_allocations_;
         return allocation;
     }
 
-    void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override {
-        upstream_->deallocate(allocation, bytes, alignment);
+    void do_deallocate(void* allocation, std::size_t bytes_value, std::size_t alignment) override {
+        upstream_->deallocate(allocation, bytes_value, alignment);
         --live_allocations_;
     }
 

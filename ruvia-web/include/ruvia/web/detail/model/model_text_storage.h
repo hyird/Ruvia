@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/Attributes.h"
+#include "ruvia/web/attributes.h"
 
 namespace ruvia::detail {
 
@@ -58,11 +58,11 @@ public:
         return static_cast<const model_text_storage&>(*this).rebind(resource);
     }
 
-    void assign_from(model_text_storage&& source, std::pmr::memory_resource* resource) {
-        if (this == &source) {
+    void assign_from(model_text_storage&& source_value, std::pmr::memory_resource* resource) {
+        if (this == &source_value) {
             return;
         }
-        auto rebound = std::move(source).rebind(resource);
+        auto rebound = std::move(source_value).rebind(resource);
         // Rebinding may throw; replacing with an already-owned variant cannot.
         std::destroy_at(&value_);
         std::construct_at(&value_, std::move(rebound.value_));

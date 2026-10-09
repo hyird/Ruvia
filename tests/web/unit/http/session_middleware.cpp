@@ -16,31 +16,31 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/AsioTask.h"
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/web/Session.h"
+#include "ruvia/core/asio_task.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/websocket_handshake.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/session.h"
 
-#include "client/HttpClientRegistry.h"
-#include "context/ContextAccess.h"
-#include "db/DbRegistry.h"
-#include "http/SessionAccess.h"
+#include "client/http_client_registry.h"
+#include "context/context_access.h"
+#include "db/db_registry.h"
+#include "http/session_access.h"
 #include "memory_resource_fixture.h"
-#include "redis/RedisRegistry.h"
-#include "router/RouteTable.h"
-#include "router/RouterImpl.h"
-#include "server/HttpResponseStreamDispatch.h"
+#include "redis/redis_registry.h"
+#include "router/route_table.h"
+#include "router/router_impl.h"
+#include "server/http_response_stream_dispatch.h"
 #include "test_harness.h"
 #include "test_io_context.h"
-#include "websocket/WebSocketResponseHeaders.h"
+#include "websocket/websocket_response_headers.h"
 
 namespace {
 
-ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource, std::string_view target = "/") {
-    auto [request, parseError] = ruvia::makeParsedHttpRequest("GET", target, {}, {}, resource);
-    if (parseError) {
+ruvia::http_request make_request(std::pmr::memory_resource* resource, std::string_view target = "/") {
+    auto [request, parse_error] = ruvia::make_parsed_http_request("GET", target, {}, {}, resource);
+    if (parse_error) {
         throw std::logic_error("invalid session middleware test request");
     }
     return std::move(request);
@@ -48,9 +48,9 @@ ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource, std::string_
 
 // A bounded RESP peer exercises the middleware's actual asynchronous storage
 // boundary without requiring an external Redis process.
-class SessionStoragePeer final {
+class session_storage_peer final {
 public:
-    explicit SessionStoragePeer(asio::io_context& io)
+    explicit session_storage_peer(asio::io_context& io)
         : acceptor_(io, {asio::ip::tcp::v4(), 0}),
           socket_(io) {}
 
@@ -62,11 +62,11 @@ public:
         acceptor_.close(ignored);
         socket_.close(ignored);
     }
-    bool failSet{false};
-    bool failDelete{false};
-    ruvia::StopSource* cancelWrite{nullptr};
-    std::vector<std::vector<std::string>> commands;
-    std::map<std::string, std::string, std::less<>> sessions;
+    bool fail_set_{false};
+    bool fail_delete_{false};
+    ruvia::stop_source* cancel_write_{nullptr};
+    std::vector<std::vector<std::string>> commands_;
+    std::map<std::string, std::string, std::less<>> sessions_;
 
     asio::awaitable<void> serve() {
         try {
@@ -83,38 +83,38 @@ public:
                     }
                     command.push_back(std::move(value));
                 }
-                commands.push_back(std::move(command));
-                const auto& received_command = commands.back();
+                commands_.push_back(std::move(command));
+                const auto& received_command = commands_.back();
                 const auto& verb = received_command.front();
-                if (cancelWrite != nullptr && (verb == "SET" || verb == "EVAL" || verb == "DEL")) {
-                    cancelWrite->requestStop();
+                if (cancel_write_ != nullptr && (verb == "SET" || verb == "EVAL" || verb == "DEL")) {
+                    cancel_write_->request_stop();
                     continue;
                 }
                 std::string reply;
                 if (verb == "GET") {
-                    const auto found = sessions.find(received_command[1]);
-                    reply = found == sessions.end()
+                    const auto found = sessions_.find(received_command[1]);
+                    reply = found == sessions_.end()
                                 ? "$-1\r\n"
                                 : "$" + std::to_string(found->second.size()) + "\r\n" + found->second + "\r\n";
                 } else if (verb == "EVAL") {
-                    if (failSet || failDelete) {
+                    if (fail_set_ || fail_delete_) {
                         reply = "-ERR rotation failed\r\n";
-                    } else if (!sessions.contains(received_command[3]) || sessions.contains(received_command[4])) {
+                    } else if (!sessions_.contains(received_command[3]) || sessions_.contains(received_command[4])) {
                         reply = ":0\r\n";
                     } else {
-                        sessions.emplace(received_command[4], received_command[5]);
-                        sessions.erase(received_command[3]);
+                        sessions_.emplace(received_command[4], received_command[5]);
+                        sessions_.erase(received_command[3]);
                         reply = ":1\r\n";
                     }
                 } else if (verb == "DEL") {
-                    reply = failDelete ? "-ERR delete failed\r\n" : ":" + std::to_string(sessions.erase(received_command[1])) + "\r\n";
+                    reply = fail_delete_ ? "-ERR delete failed\r\n" : ":" + std::to_string(sessions_.erase(received_command[1])) + "\r\n";
                 } else if (verb == "SET") {
-                    if (failSet) {
+                    if (fail_set_) {
                         reply = "-ERR storage failed\r\n";
-                    } else if (sessions.contains(received_command[1])) {
+                    } else if (sessions_.contains(received_command[1])) {
                         reply = "$-1\r\n";
                     } else {
-                        sessions.emplace(received_command[1], received_command[2]);
+                        sessions_.emplace(received_command[1], received_command[2]);
                         reply = "+OK\r\n";
                     }
                 } else {
@@ -142,107 +142,107 @@ private:
     std::string input_;
 };
 
-struct SessionFixture final {
-    asio::io_context& io{ruvia::test::newTestIoContext()};
-    ruvia::EventLoopAttachment attachment{ruvia::attachEventLoop(io)};
-    ruvia::WorkerHandle worker{attachment.loop().handle()};
-    SessionStoragePeer peer{io};
-    ruvia::test::CountingMemoryResource operationMemory;
-    std::array<ruvia::detail::RedisDefinition, 1> definitions{definition()};
-    ruvia::detail::RedisRegistry redis{io, &operationMemory, definitions, worker};
-    ruvia::detail::DbRegistry db{io, worker, &operationMemory, std::span<const ruvia::detail::DbDefinition>{}};
-    ruvia::detail::HttpClientRegistry http{io, worker, &operationMemory, std::span<const ruvia::detail::HttpClientDefinition>{}};
-    ruvia::StopSource stop;
-    ruvia::StopToken token{stop.token()};
-    ruvia::WorkerMemory memory;
-    ruvia::RequestMemory requestMemory{memory};
-    ruvia::HttpRequest request{makeRequest(requestMemory.resource())};
-    ruvia::Context context{ruvia::detail::ContextAccess::make(requestMemory, request,
-        ruvia::detail::ContextServices(worker, token, {db, redis, http}))};
-    ruvia::SessionMiddleware middleware;
+struct session_fixture final {
+    asio::io_context& io_{ruvia::test::new_test_io_context()};
+    ruvia::event_loop_attachment attachment_{ruvia::attach_event_loop(io_)};
+    ruvia::worker_handle worker_{attachment_.loop().handle()};
+    session_storage_peer peer_{io_};
+    ruvia::test::counting_memory_resource operation_memory_;
+    std::array<ruvia::detail::redis_definition_type, 1> definitions_{definition()};
+    ruvia::detail::redis_registry redis_{io_, &operation_memory_, definitions_, worker_};
+    ruvia::detail::db_registry db_{io_, worker_, &operation_memory_, std::span<const ruvia::detail::db_definition>{}};
+    ruvia::detail::http_client_registry http_{io_, worker_, &operation_memory_, std::span<const ruvia::detail::http_client_definition_type>{}};
+    ruvia::stop_source stop_;
+    ruvia::stop_token token_{stop_.token()};
+    ruvia::worker_memory memory_;
+    ruvia::request_memory request_memory_{memory_};
+    ruvia::http_request request_{make_request(request_memory_.resource())};
+    ruvia::context context_{ruvia::detail::context_access::make(request_memory_, request_,
+        ruvia::detail::context_services(worker_, token_, {db_, redis_, http_}))};
+    ruvia::session_middleware middleware_;
 
-    ruvia::detail::RedisDefinition definition() {
-        auto config = ruvia::RedisConfig{};
-        config.host = "127.0.0.1";
-        config.tls.mode = ruvia::client_tls_mode::disabled;
-        config.port = peer.port();
-        config.poolSizePerWorker = 1;
-        return {std::pmr::string("default", &operationMemory),
-            ruvia::detail::RedisConfigStorage(config, &operationMemory)};
+    ruvia::detail::redis_definition_type definition() {
+        auto config = ruvia::redis_config{};
+        config.host_ = "127.0.0.1";
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        config.port_ = peer_.port();
+        config.pool_size_per_worker_ = 1;
+        return {std::pmr::string("default", &operation_memory_),
+            ruvia::detail::redis_config_storage(config, &operation_memory_)};
     }
     void bind() {
-        ruvia::detail::SessionAccess::bind(context, &middleware);
+        ruvia::detail::session_access::bind(context_, &middleware_);
     }
     void load(std::string_view id, std::string_view data) {
-        peer.sessions.emplace("sess:" + std::string(id), data);
-        ruvia::detail::SessionAccess::observePresentedId(context, id);
-        ruvia::detail::SessionAccess::load(context, data);
+        peer_.sessions_.emplace("sess:" + std::string(id), data);
+        ruvia::detail::session_access::observe_presented_id(context_, id);
+        ruvia::detail::session_access::load(context_, data);
     }
-    void run(ruvia::Task<void> task) {
-        auto server = asio::co_spawn(io, peer.serve(), asio::use_future);
-        auto execute = [&]() -> ruvia::Task<void> {
+    void run(ruvia::task<void> task_value) {
+        auto server = asio::co_spawn(io_, peer_.serve(), asio::use_future);
+        auto execute = [&]() -> ruvia::task<void> {
             std::exception_ptr failure;
             try {
-                co_await std::move(task);
+                co_await std::move(task_value);
             } catch (...) {
                 failure = std::current_exception();
             }
-            redis.closeNow();
-            peer.close();
-            attachment.stop();
+            redis_.close_now();
+            peer_.close();
+            attachment_.stop();
             if (failure) {
                 std::rethrow_exception(failure);
             }
         };
-        auto result = asio::co_spawn(io, ruvia::asAwaitable(execute()), asio::use_future);
-        attachment.run();
-        result.get();
+        auto result_value = asio::co_spawn(io_, ruvia::as_awaitable(execute()), asio::use_future);
+        attachment_.run();
+        result_value.get();
         server.get();
     }
 };
 
-bool rejectsMutation(ruvia::Session session) {
+bool rejects_mutation(ruvia::session session_value) {
     int rejections = 0;
     try {
-        session.set("changed");
+        session_value.set("changed");
     } catch (const std::logic_error&) {
         ++rejections;
     }
     try {
-        session.clear();
+        session_value.clear();
     } catch (const std::logic_error&) {
         ++rejections;
     }
     try {
-        session.regenerate();
+        session_value.regenerate();
     } catch (const std::logic_error&) {
         ++rejections;
     }
     return rejections == 3;
 }
 
-class SessionOuterMiddleware final : public ruvia::Middleware {
+class session_outer_middleware final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
-        co_await next();
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+        co_await next_value();
     }
 };
 
-class SessionMutationMiddleware final : public ruvia::Middleware {
+class session_mutation_middleware final : public ruvia::middleware {
 public:
-    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
-        context.session().set("user=1");
-        co_await next();
+    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
+        context_value.session().set("user=1");
+        co_await next_value();
     }
 };
 
-class SessionHeadSink final {
+class session_head_sink final {
 public:
-    void bindContext(ruvia::Context* context, ruvia::Task<ruvia::HttpResponse> (*head)(ruvia::Context&)) {
-        context_ = context;
+    void bind_context(ruvia::context* context_value, ruvia::task<ruvia::http_response> (*head)(ruvia::context&)) {
+        context_ = context_value;
         head_ = head;
     }
-    void releaseContext() noexcept {
+    void release_context() noexcept {
         context_ = nullptr;
         head_ = nullptr;
     }
@@ -252,88 +252,88 @@ public:
     bool aborted() const noexcept {
         return false;
     }
-    ruvia::Task<void> write(std::string_view) {
+    ruvia::task<void> write(std::string_view) {
         co_await commit();
     }
-    ruvia::Task<void> end(std::span<const ruvia::HttpHeaderView>) {
+    ruvia::task<void> end(std::span<const ruvia::http_header_view>) {
         co_await commit();
     }
-    ruvia::Task<ruvia::TimerSleepResult> sleep(std::chrono::milliseconds, const ruvia::StopToken&) {
-        co_return ruvia::TimerSleepResult::kElapsed;
+    ruvia::task<ruvia::timer_sleep_result> sleep(std::chrono::milliseconds, const ruvia::stop_token&) {
+        co_return ruvia::timer_sleep_result::elapsed;
     }
-    std::string cookie;
-    bool frozen{false};
+    std::string cookie_;
+    bool frozen_{false};
 
 private:
-    ruvia::Task<void> commit() {
+    ruvia::task<void> commit() {
         if (committed_) {
             co_return;
         }
         const auto response = co_await head_(*context_);
-        cookie = response.header("Set-Cookie").value_or("");
-        frozen = rejectsMutation(context_->session());
+        cookie_ = response.header("Set-Cookie").value_or("");
+        frozen_ = rejects_mutation(context_->session());
         committed_ = true;
     }
-    ruvia::Context* context_{nullptr};
-    ruvia::Task<ruvia::HttpResponse> (*head_)(ruvia::Context&){nullptr};
+    ruvia::context* context_{nullptr};
+    ruvia::task<ruvia::http_response> (*head_)(ruvia::context&){nullptr};
     bool committed_{false};
 };
 
 }  // namespace
 
 RUVIA_TEST(session_commit_persists_once_and_publishes_cookie_before_head) {
-    SessionFixture fixture;
+    session_fixture fixture;
     fixture.bind();
-    auto session = fixture.context.session();
-    session.set("user=1");
-    fixture.context.header("Set-Cookie", "theme=dark", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
-    auto exercise = [&]() -> ruvia::Task<void> {
+    auto session_value = fixture.context_.session();
+    session_value.set("user=1");
+    fixture.context_.header("Set-Cookie", "theme=dark", {.mode_ = ruvia::http_response_header_mode::append});
+    auto exercise = [&]() -> ruvia::task<void> {
         // Discarding a lazy commit must neither freeze nor persist the session.
         {
-            auto discarded = ruvia::detail::SessionAccess::commit(fixture.context);
+            auto discarded = ruvia::detail::session_access::commit(fixture.context_);
         }
-        session.set("user=2");
-        co_await ruvia::detail::SessionAccess::commit(fixture.context);
-        const auto allocations = fixture.operationMemory.liveAllocations();
-        const auto head = ruvia::detail::webSocketResponseHeaders(fixture.context);
+        session_value.set("user=2");
+        co_await ruvia::detail::session_access::commit(fixture.context_);
+        const auto allocations = fixture.operation_memory_.live_allocations();
+        const auto head = ruvia::detail::websocket_response_headers(fixture.context_);
         RUVIA_CHECK_EQ(head.size(), std::size_t{2});
         RUVIA_CHECK_EQ(head[0].value(), std::string_view("theme=dark"));
         RUVIA_CHECK(head[1].value().starts_with("sid="));
         const std::string cookie(head[1].value());
         for (int i = 0; i != 32; ++i) {
-            co_await ruvia::detail::SessionAccess::commit(fixture.context);
-            RUVIA_CHECK_EQ(fixture.operationMemory.liveAllocations(), allocations);
+            co_await ruvia::detail::session_access::commit(fixture.context_);
+            RUVIA_CHECK_EQ(fixture.operation_memory_.live_allocations(), allocations);
             RUVIA_CHECK_EQ(head[1].value(), std::string_view(cookie));
-            RUVIA_CHECK_EQ(session.data(), std::string_view("user=2"));
+            RUVIA_CHECK_EQ(session_value.data(), std::string_view("user=2"));
         }
-        RUVIA_CHECK(rejectsMutation(session));
-        RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(fixture.peer.commands[0][2], std::string("user=2"));
+        RUVIA_CHECK(rejects_mutation(session_value));
+        RUVIA_CHECK_EQ(fixture.peer_.commands_.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(fixture.peer_.commands_[0][2], std::string("user=2"));
     };
     fixture.run(exercise());
 }
 
 RUVIA_TEST(session_commit_rotates_and_clears_before_publishing_cookie) {
     for (bool clear : {false, true}) {
-        SessionFixture fixture;
+        session_fixture fixture;
         fixture.bind();
         fixture.load("deadbeef", "user=1");
-        auto session = fixture.context.session();
+        auto session_value = fixture.context_.session();
         if (clear) {
-            session.clear();
+            session_value.clear();
         } else {
-            session.regenerate();
+            session_value.regenerate();
         }
-        auto exercise = [&]() -> ruvia::Task<void> {
-            co_await ruvia::detail::SessionAccess::commit(fixture.context);
-            const auto& commands = fixture.peer.commands;
+        auto exercise = [&]() -> ruvia::task<void> {
+            co_await ruvia::detail::session_access::commit(fixture.context_);
+            const auto& commands = fixture.peer_.commands_;
             RUVIA_CHECK_EQ(commands.size(), std::size_t{1});
             RUVIA_CHECK_EQ(commands.back().front(), std::string(clear ? "DEL" : "EVAL"));
             RUVIA_CHECK(commands.back()[clear ? 1 : 3].ends_with("deadbeef"));
-            const auto head = ruvia::detail::webSocketResponseHeaders(fixture.context);
+            const auto head = ruvia::detail::websocket_response_headers(fixture.context_);
             RUVIA_CHECK_EQ(head.size(), std::size_t{1});
             RUVIA_CHECK_EQ((head.front().value().find("Max-Age=0") != std::string_view::npos), clear);
-            RUVIA_CHECK(rejectsMutation(session));
+            RUVIA_CHECK(rejects_mutation(session_value));
         };
         fixture.run(exercise());
     }
@@ -344,39 +344,39 @@ RUVIA_TEST(session_commit_failure_and_cancellation_never_publish_or_retry) {
     // cookie and makes the failed commit terminal for writes and logout alike.
     for (int mode = 0; mode != 3; ++mode) {
         for (const bool cancel : {false, true}) {
-            SessionFixture fixture;
+            session_fixture fixture;
             fixture.bind();
-            fixture.peer.failSet = !cancel;
-            fixture.peer.failDelete = !cancel;
+            fixture.peer_.fail_set_ = !cancel;
+            fixture.peer_.fail_delete_ = !cancel;
             if (cancel) {
-                fixture.peer.cancelWrite = &fixture.stop;
+                fixture.peer_.cancel_write_ = &fixture.stop_;
             }
             if (mode != 0) {
                 fixture.load("deadbeef", "user=1");
             }
             if (mode == 2) {
-                fixture.context.session().clear();
+                fixture.context_.session().clear();
             } else {
-                fixture.context.session().set("user=2");
+                fixture.context_.session().set("user=2");
             }
-            auto exercise = [&]() -> ruvia::Task<void> {
-                for (int attempt = 0; attempt != 2; ++attempt) {
+            auto exercise = [&]() -> ruvia::task<void> {
+                for (int attempt_value = 0; attempt_value != 2; ++attempt_value) {
                     bool failed = false;
                     try {
-                        co_await ruvia::detail::SessionAccess::commit(fixture.context);
-                    } catch (const ruvia::RedisError& error) {
-                        failed = cancel ? error.code() == ruvia::RedisError::Code::kCancelled
-                                        : error.code() == ruvia::RedisError::Code::kCommandError;
+                        co_await ruvia::detail::session_access::commit(fixture.context_);
+                    } catch (const ruvia::redis_error& error) {
+                        failed = cancel ? error.code() == ruvia::redis_error::code_type::cancelled
+                                        : error.code() == ruvia::redis_error::code_type::command_error;
                     }
                     RUVIA_CHECK(failed);
-                    RUVIA_CHECK(ruvia::detail::webSocketResponseHeaders(fixture.context).empty());
-                    RUVIA_CHECK(rejectsMutation(fixture.context.session()));
+                    RUVIA_CHECK(ruvia::detail::websocket_response_headers(fixture.context_).empty());
+                    RUVIA_CHECK(rejects_mutation(fixture.context_.session()));
                 }
-                RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
+                RUVIA_CHECK_EQ(fixture.peer_.commands_.size(), std::size_t{1});
                 if (mode == 0) {
-                    RUVIA_CHECK(fixture.peer.sessions.empty());
+                    RUVIA_CHECK(fixture.peer_.sessions_.empty());
                 } else {
-                    RUVIA_CHECK_EQ(fixture.peer.sessions.at("sess:deadbeef"), std::string("user=1"));
+                    RUVIA_CHECK_EQ(fixture.peer_.sessions_.at("sess:deadbeef"), std::string("user=1"));
                 }
             };
             fixture.run(exercise());
@@ -386,25 +386,25 @@ RUVIA_TEST(session_commit_failure_and_cancellation_never_publish_or_retry) {
 
 RUVIA_TEST(session_commit_rejects_updates_and_rotations_of_revoked_sessions) {
     for (const bool rotate : {false, true}) {
-        SessionFixture fixture;
+        session_fixture fixture;
         fixture.bind();
         fixture.load("deadbeef", "user=1");
-        fixture.context.session().set("user=2");
+        fixture.context_.session().set("user=2");
         if (rotate) {
-            fixture.context.session().regenerate();
+            fixture.context_.session().regenerate();
         }
-        fixture.peer.sessions.erase("sess:deadbeef");
-        auto exercise = [&]() -> ruvia::Task<void> {
+        fixture.peer_.sessions_.erase("sess:deadbeef");
+        auto exercise = [&]() -> ruvia::task<void> {
             bool rejected = false;
             try {
-                co_await ruvia::detail::SessionAccess::commit(fixture.context);
-            } catch (const ruvia::HttpError& error) {
-                rejected = error.info().status() == ruvia::http_status::kConflict;
+                co_await ruvia::detail::session_access::commit(fixture.context_);
+            } catch (const ruvia::http_error& error) {
+                rejected = error.info().status() == ruvia::http_status::conflict;
             }
             RUVIA_CHECK(rejected);
-            RUVIA_CHECK(ruvia::detail::webSocketResponseHeaders(fixture.context).empty());
-            RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
-            RUVIA_CHECK(fixture.peer.sessions.empty());
+            RUVIA_CHECK(ruvia::detail::websocket_response_headers(fixture.context_).empty());
+            RUVIA_CHECK_EQ(fixture.peer_.commands_.size(), std::size_t{1});
+            RUVIA_CHECK(fixture.peer_.sessions_.empty());
         };
         fixture.run(exercise());
     }
@@ -412,56 +412,56 @@ RUVIA_TEST(session_commit_rejects_updates_and_rotations_of_revoked_sessions) {
 
 RUVIA_TEST(session_writes_rotate_existing_identity_and_revoke_the_old_cookie) {
     for (const bool unchanged : {false, true}) {
-        SessionFixture fixture;
+        session_fixture fixture;
         const std::string initial_data = unchanged ? "user=2" : "anonymous";
-        fixture.peer.sessions.emplace("sess:deadbeef", initial_data);
-        auto read_only = [&](std::string_view id, std::string_view expected) -> ruvia::Task<void> {
+        fixture.peer_.sessions_.emplace("sess:deadbeef", initial_data);
+        auto read_only = [&](std::string_view id, std::string_view expected) -> ruvia::task<void> {
             const std::string cookie = "sid=" + std::string(id);
-            const std::array headers{ruvia::HttpHeaderView{"Cookie", cookie}};
-            auto [request, error] = ruvia::makeParsedHttpRequest("GET", "/", headers, {}, fixture.requestMemory.resource());
+            const std::array headers{ruvia::http_header_view{"Cookie", cookie}};
+            auto [request, error] = ruvia::make_parsed_http_request("GET", "/", headers, {}, fixture.request_memory_.resource());
             RUVIA_CHECK(!error);
-            auto context = ruvia::detail::ContextAccess::make(fixture.requestMemory, request,
-                ruvia::detail::ContextServices(fixture.worker, fixture.token, {fixture.db, fixture.redis, fixture.http}));
-            ruvia::detail::NextState::Control control;
-            auto next = ruvia::detail::NextAccess::make({.context = &context, .control = &control},
-                [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
-            co_await fixture.middleware.handle(context, next);
-            const auto session = context.session();
-            RUVIA_CHECK_EQ(session.data(), expected);
-            RUVIA_CHECK(ruvia::detail::webSocketResponseHeaders(context).empty());
+            auto context_value = ruvia::detail::context_access::make(fixture.request_memory_, request,
+                ruvia::detail::context_services(fixture.worker_, fixture.token_, {fixture.db_, fixture.redis_, fixture.http_}));
+            ruvia::detail::next_state::control_type control;
+            auto next_value = ruvia::detail::next_access::make({.context_ = &context_value, .control_ = &control},
+                [](ruvia::detail::next_state) -> ruvia::task<void> { co_return; });
+            co_await fixture.middleware_.handle(context_value, next_value);
+            const auto session_value = context_value.session();
+            RUVIA_CHECK_EQ(session_value.data(), expected);
+            RUVIA_CHECK(ruvia::detail::websocket_response_headers(context_value).empty());
         };
-        auto exercise = [&]() -> ruvia::Task<void> {
+        auto exercise = [&]() -> ruvia::task<void> {
             co_await read_only("deadbeef", initial_data);
-            const std::array headers{ruvia::HttpHeaderView{"Cookie", "sid=deadbeef"}};
-            auto [request, error] = ruvia::makeParsedHttpRequest("POST", "/login", headers, {}, fixture.requestMemory.resource());
+            const std::array headers{ruvia::http_header_view{"Cookie", "sid=deadbeef"}};
+            auto [request, error] = ruvia::make_parsed_http_request("POST", "/login", headers, {}, fixture.request_memory_.resource());
             RUVIA_CHECK(!error);
-            auto context = ruvia::detail::ContextAccess::make(fixture.requestMemory, request,
-                ruvia::detail::ContextServices(fixture.worker, fixture.token, {fixture.db, fixture.redis, fixture.http}));
-            ruvia::detail::NextState::Control control;
-            auto next = ruvia::detail::NextAccess::make({.context = &context, .control = &control},
-                [](ruvia::detail::NextState state) -> ruvia::Task<void> {
-                    auto session = state.context->session();
-                    session.set("user=2");
-                    session.set("user=2");
+            auto context_value = ruvia::detail::context_access::make(fixture.request_memory_, request,
+                ruvia::detail::context_services(fixture.worker_, fixture.token_, {fixture.db_, fixture.redis_, fixture.http_}));
+            ruvia::detail::next_state::control_type control;
+            auto next_value = ruvia::detail::next_access::make({.context_ = &context_value, .control_ = &control},
+                [](ruvia::detail::next_state state_value) -> ruvia::task<void> {
+                    auto session_value = state_value.context_->session();
+                    session_value.set("user=2");
+                    session_value.set("user=2");
                     co_return;
                 });
-            co_await fixture.middleware.handle(context, next);
-            const auto response_headers = ruvia::detail::webSocketResponseHeaders(context);
-            RUVIA_CHECK_EQ(response_headers.size(), std::size_t{1});
-            if (response_headers.empty()) {
+            co_await fixture.middleware_.handle(context_value, next_value);
+            const auto response_headers_value = ruvia::detail::websocket_response_headers(context_value);
+            RUVIA_CHECK_EQ(response_headers_value.size(), std::size_t{1});
+            if (response_headers_value.empty()) {
                 co_return;
             }
-            const auto cookie = response_headers.front().value();
+            const auto cookie = response_headers_value.front().value();
             RUVIA_CHECK(cookie.starts_with("sid="));
             const std::string new_id(cookie.substr(4, cookie.find(';') - 4));
             RUVIA_CHECK(new_id != "deadbeef");
-            RUVIA_CHECK(ruvia::detail::isValidSessionId(new_id));
-            RUVIA_CHECK_EQ(fixture.peer.sessions.size(), std::size_t{1});
-            RUVIA_CHECK_EQ(fixture.peer.sessions.at("sess:" + new_id), std::string("user=2"));
-            RUVIA_CHECK(!fixture.peer.sessions.contains("sess:deadbeef"));
-            const auto commands = fixture.peer.commands.size();
-            co_await ruvia::detail::SessionAccess::commit(context);
-            RUVIA_CHECK_EQ(fixture.peer.commands.size(), commands);
+            RUVIA_CHECK(ruvia::detail::is_valid_session_id(new_id));
+            RUVIA_CHECK_EQ(fixture.peer_.sessions_.size(), std::size_t{1});
+            RUVIA_CHECK_EQ(fixture.peer_.sessions_.at("sess:" + new_id), std::string("user=2"));
+            RUVIA_CHECK(!fixture.peer_.sessions_.contains("sess:deadbeef"));
+            const auto commands = fixture.peer_.commands_.size();
+            co_await ruvia::detail::session_access::commit(context_value);
+            RUVIA_CHECK_EQ(fixture.peer_.commands_.size(), commands);
             co_await read_only("deadbeef", "");
             co_await read_only(new_id, "user=2");
         };
@@ -470,91 +470,91 @@ RUVIA_TEST(session_writes_rotate_existing_identity_and_revoke_the_old_cookie) {
 }
 
 RUVIA_TEST(session_middleware_commits_before_stream_and_websocket_terminal) {
-    // 0: stream; 1: empty stream; 2: WebSocket; 3: failed handshake preparation.
+    // 0: stream; 1: empty stream; 2: websocket; 3: failed handshake preparation.
     for (int mode = 0; mode != 4; ++mode) {
         for (bool fail : {false, true}) {
-            SessionFixture fixture;
-            fixture.peer.failSet = fail;
-            ruvia::detail::Router router;
-            auto& impl = ruvia::detail::RouterImpl::from(router);
+            session_fixture fixture;
+            fixture.peer_.fail_set_ = fail;
+            ruvia::detail::router router;
+            auto& impl = ruvia::detail::router_impl::from(router);
             const std::array middlewares{
-                ruvia::detail::makeMiddlewareDescriptor<SessionOuterMiddleware>(),
-                ruvia::detail::makeMiddlewareDescriptor<ruvia::SessionMiddleware>(),
-                ruvia::detail::makeMiddlewareDescriptor<SessionMutationMiddleware>()};
-            struct Observation {
-                int mode;
-                const ruvia::HttpRequest* request;
-                bool called{false};
-                bool frozen{false};
-                std::string cookie;
-            } observation{mode, &fixture.request};
-            const auto terminal = [](void* target, ruvia::Context& context) -> ruvia::Task<void> {
-                auto& observed = *static_cast<Observation*>(target);
-                observed.called = true;
-                if (observed.mode >= 2) {
-                    if (observed.mode == 3) {
-                        context.header("Sec-WebSocket-Accept", "reserved");
+                ruvia::detail::make_middleware_descriptor<session_outer_middleware>(),
+                ruvia::detail::make_middleware_descriptor<ruvia::session_middleware>(),
+                ruvia::detail::make_middleware_descriptor<session_mutation_middleware>()};
+            struct observation {
+                int mode_;
+                const ruvia::http_request* request_;
+                bool called_{false};
+                bool frozen_{false};
+                std::string cookie_;
+            } observation_value{mode, &fixture.request_};
+            const auto terminal = [](void* target, ruvia::context& context_value) -> ruvia::task<void> {
+                auto& observed_value = *static_cast<observation*>(target);
+                observed_value.called_ = true;
+                if (observed_value.mode_ >= 2) {
+                    if (observed_value.mode_ == 3) {
+                        context_value.header("Sec-WebSocket-Accept", "reserved");
                     }
-                    const auto headers = ruvia::detail::webSocketResponseHeaders(context);
-                    if (observed.mode == 3) {
-                        const auto handshake = ruvia::makeWebSocketServerHandshake(
-                            *observed.request, {.responseHeaders = headers});
+                    const auto headers = ruvia::detail::websocket_response_headers(context_value);
+                    if (observed_value.mode_ == 3) {
+                        const auto handshake = ruvia::make_websocket_server_handshake(
+                            *observed_value.request_, {.response_headers_ = headers});
                         (void)handshake;
                     }
                     if (!headers.empty()) {
-                        observed.cookie = headers.front().value();
+                        observed_value.cookie_ = headers.front().value();
                     }
-                    observed.frozen = rejectsMutation(context.session());
-                    ruvia::detail::ContextAccess::markWebSocketHandshakeStarted(context);
-                } else if (observed.mode == 0) {
-                    co_await context.stream().write("first");
-                    observed.frozen = rejectsMutation(context.session());
-                    co_await context.stream().write("second");
+                    observed_value.frozen_ = rejects_mutation(context_value.session());
+                    ruvia::detail::context_access::mark_websocket_handshake_started(context_value);
+                } else if (observed_value.mode_ == 0) {
+                    co_await context_value.stream().write("first");
+                    observed_value.frozen_ = rejects_mutation(context_value.session());
+                    co_await context_value.stream().write("second");
                 }
             };
-            const ruvia::detail::RouteStreamHandler handler(&observation, terminal);
+            const ruvia::detail::route_stream_handler_type handler(&observation_value, terminal);
             if (mode >= 2) {
-                impl.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
+                impl.register_websocket_route(ruvia::http_known_method::get,
                     std::pmr::string("/session"), handler, {}, middlewares);
             } else {
-                impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet,
+                impl.register_response_stream_route(ruvia::http_known_method::get,
                     std::pmr::string("/session"), handler, {}, middlewares);
             }
             impl.finalize();
-            fixture.request = makeRequest(fixture.requestMemory.resource(), "/session");
-            const auto& routes = impl.routeTable();
-            const auto resolution = routes.resolve(fixture.request);
-            SessionHeadSink sink;
-            auto writer = ruvia::detail::makeResponseStreamWriter(sink, *fixture.memory.resource());
-            auto services = ruvia::detail::ContextServices(fixture.worker, fixture.token,
-                {fixture.db, fixture.redis, fixture.http});
+            fixture.request_ = make_request(fixture.request_memory_.resource(), "/session");
+            const auto& routes_value = impl.route_table();
+            const auto resolution = routes_value.resolve(fixture.request_);
+            session_head_sink sink;
+            auto writer = ruvia::detail::make_response_stream_writer(sink, *fixture.memory_.resource());
+            auto services = ruvia::detail::context_services(fixture.worker_, fixture.token_,
+                {fixture.db_, fixture.redis_, fixture.http_});
             if (mode < 2) {
-                services = services.withResponseStream(writer);
+                services = services.with_response_stream(writer);
             }
-            auto exercise = [&]() -> ruvia::Task<void> {
+            auto exercise = [&]() -> ruvia::task<void> {
                 const auto response = mode >= 2
-                                          ? co_await routes.dispatchWebSocket(fixture.request, *resolution.resolved(),
-                                                fixture.requestMemory, handler, services)
-                                          : co_await routes.dispatchResponseStream(fixture.request, *resolution.resolved(),
-                                                fixture.requestMemory, writer, services);
-                RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
+                                          ? co_await routes_value.dispatch_websocket(fixture.request_, *resolution.resolved(),
+                                                fixture.request_memory_, handler, services)
+                                          : co_await routes_value.dispatch_response_stream(fixture.request_, *resolution.resolved(),
+                                                fixture.request_memory_, writer, services);
+                RUVIA_CHECK_EQ(fixture.peer_.commands_.size(), std::size_t{1});
                 if (fail || mode == 3) {
                     RUVIA_CHECK(response.has_value());
                     if (response) {
-                        RUVIA_CHECK_EQ(response->status(), ruvia::http_status::kInternalServerError);
+                        RUVIA_CHECK_EQ(response->status(), ruvia::http_status::internal_server_error);
                         if (fail) {
                             RUVIA_CHECK(!response->header("Set-Cookie").has_value());
                         }
                     }
                     RUVIA_CHECK(!sink.committed());
                     if (mode >= 2 && fail) {
-                        RUVIA_CHECK(!observation.called);
+                        RUVIA_CHECK(!observation_value.called_);
                     }
                 } else {
                     RUVIA_CHECK(!response.has_value());
-                    RUVIA_CHECK(observation.called);
-                    RUVIA_CHECK(mode == 2 ? observation.frozen : sink.frozen);
-                    RUVIA_CHECK((mode == 2 ? observation.cookie : sink.cookie).starts_with("sid="));
+                    RUVIA_CHECK(observation_value.called_);
+                    RUVIA_CHECK(mode == 2 ? observation_value.frozen_ : sink.frozen_);
+                    RUVIA_CHECK((mode == 2 ? observation_value.cookie_ : sink.cookie_).starts_with("sid="));
                 }
             };
             fixture.run(exercise());

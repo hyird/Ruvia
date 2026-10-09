@@ -6,19 +6,19 @@
 #include <string_view>
 
 #include "test_harness.h"
-#include "websocket/HttpWebSocketAcceptKey.h"
+#include "websocket/http_websocket_accept_key.h"
 
 namespace {
 
 std::string accept(std::string_view key) {
-    ruvia::detail::WebSocketAcceptKey out;
-    ruvia::detail::encodeWebSocketAccept(out, key);
+    ruvia::detail::websocket_accept_key_type out;
+    ruvia::detail::encode_websocket_accept(out, key);
     return std::string(out.data(), out.size());
 }
 
 }  // namespace
 
-// Sec-WebSocket-Accept = base64(SHA-1(key + GUID)), RFC 6455 §1.3. This exercises
+// Sec-websocket-Accept = base64(SHA-1(key + GUID)), RFC 6455 §1.3. This exercises
 // the hand-rolled SHA-1: the canonical example is a known-answer vector.
 RUVIA_TEST(websocket_accept_rfc6455_vector) {
     RUVIA_CHECK_EQ(accept("dGhlIHNhbXBsZSBub25jZQ=="), std::string("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
@@ -63,12 +63,12 @@ RUVIA_TEST(websocket_accept_sha1_block_boundary_vectors) {
 }
 
 RUVIA_TEST(websocket_accept_rejects_unrepresentable_input_before_scanning) {
-    ruvia::detail::WebSocketAcceptKey output{};
-    const std::string_view fakeKey("x", (std::numeric_limits<std::size_t>::max)());
+    ruvia::detail::websocket_accept_key_type output{};
+    const std::string_view fake_key("x", (std::numeric_limits<std::size_t>::max)());
 
     bool rejected = false;
     try {
-        ruvia::detail::encodeWebSocketAccept(output, fakeKey);
+        ruvia::detail::encode_websocket_accept(output, fake_key);
     } catch (const std::length_error&) {
         rejected = true;
     }
