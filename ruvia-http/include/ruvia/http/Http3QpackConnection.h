@@ -2,10 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -62,13 +62,13 @@ public:
     ~Http3QpackDecoder();
     Http3QpackDecoder(const Http3QpackDecoder&) = delete;
     Http3QpackDecoder& operator=(const Http3QpackDecoder&) = delete;
-    [[nodiscard]] std::expected<void, Http3QpackConnectionError> consumeEncoder(
+    [[nodiscard]] std::variant<std::monostate, Http3QpackConnectionError> consumeEncoder(
         std::span<const char> bytes, bool fin = false);
-    [[nodiscard]] std::expected<Http3QpackDecodeResult, Http3QpackConnectionError> decode(
+    [[nodiscard]] std::variant<Http3QpackDecodeResult, Http3QpackConnectionError> decode(
         std::uint64_t streamId, std::span<const char> section,
         Http3FieldSectionCallback callback, void* context);
     // Cancels a blocked or outstanding field section; emits Stream Cancellation.
-    [[nodiscard]] std::expected<void, Http3QpackConnectionError> cancel(std::uint64_t streamId);
+    [[nodiscard]] std::variant<std::monostate, Http3QpackConnectionError> cancel(std::uint64_t streamId);
     [[nodiscard]] std::span<const char> pendingDecoderOutput() const& noexcept;
     std::span<const char> pendingDecoderOutput() const&& = delete;
     [[nodiscard]] bool consumeDecoderOutput(std::size_t bytes) noexcept;
@@ -99,10 +99,10 @@ public:
     ~Http3QpackEncoder();
     Http3QpackEncoder(const Http3QpackEncoder&) = delete;
     Http3QpackEncoder& operator=(const Http3QpackEncoder&) = delete;
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3QpackConnectionError> encode(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3QpackConnectionError> encode(
         std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields,
         Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* result_resource = nullptr);
-    [[nodiscard]] std::expected<void, Http3QpackConnectionError> consumeDecoder(
+    [[nodiscard]] std::variant<std::monostate, Http3QpackConnectionError> consumeDecoder(
         std::span<const char> bytes, bool fin = false);
     [[nodiscard]] std::span<const char> pendingEncoderOutput() const& noexcept;
     std::span<const char> pendingEncoderOutput() const&& = delete;

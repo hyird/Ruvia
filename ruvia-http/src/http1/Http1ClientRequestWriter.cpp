@@ -415,7 +415,7 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnectUdp(cons
     fields.emplace_back("Connection", "Upgrade");
     fields.emplace_back("Upgrade", "connect-udp");
     fields.emplace_back("Host", origin.host());
-    if (!validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp11, .method = "GET", .authority = origin.host(), .path = target.view(), .headers = fields})) {
+    if ((validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp11, .method = "GET", .authority = origin.host(), .path = target.view(), .headers = fields}).index() != 0)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidHeader);
     }
     fields.pop_back();

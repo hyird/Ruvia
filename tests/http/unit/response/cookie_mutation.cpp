@@ -36,6 +36,66 @@ void populate_cookies(ruvia::HttpResponse& response) {
 
 }  // namespace
 
+RUVIA_TEST(response_cookie_plan_and_raw_headers_share_replacement_semantics) {
+    ruvia::HttpResponse response;
+    response.header("Set-Cookie", "first=one");
+    const ruvia::CookieOptions options;
+    response.setCookie(ruvia::SetCookiePlan("second", "two", options));
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
+
+    response.header("Set-Cookie", "final=three");
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(response.header("Set-Cookie").value_or(""), "final=three");
+}
+
+RUVIA_TEST(response_cookie_plan_append_can_retry_after_allocation_failure) {
+    failing_memory_resource resource;
+    {
+        ruvia::HttpResponse response({.resource = &resource});
+        response.header("Set-Cookie", "first=one");
+        const ruvia::CookieOptions options;
+        const ruvia::SetCookiePlan plan("second", "two", options);
+        const auto live = resource.live_allocations();
+        resource.fail_after(0);
+        bool failed = false;
+        try {
+            response.setCookie(plan);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(response.header("Set-Cookie").value_or(""), "first=one");
+        RUVIA_CHECK_EQ(resource.live_allocations(), live);
+
+        resource.allow_allocations();
+        response.setCookie(plan);
+        response.header("Set-Cookie", "final=three");
+        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(response.header("Set-Cookie").value_or(""), "final=three");
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(response_appended_values_can_borrow_existing_header_storage) {
+    ruvia::HttpResponse response;
+    response.header("X-Source", "borrowed");
+    const auto value = *response.header("X-Source");
+    response.header("Link", std::string_view{}, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    for (std::size_t i = 0; i < 64; ++i) {
+        response.header("Link", value, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    }
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{66});
+    std::size_t populated = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == "Link" && !header.value().empty()) {
+            ++populated;
+            RUVIA_CHECK_EQ(header.value(), "borrowed");
+        }
+    }
+    RUVIA_CHECK_EQ(populated, std::size_t{64});
+}
+
 RUVIA_TEST(response_cookie_append_accepts_values_borrowed_from_repeated_rows) {
     for (const auto selected : cookie_values) {
         failing_memory_resource resource;

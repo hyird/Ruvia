@@ -1,6 +1,6 @@
 BasedOnStyle: Google
 Language: Cpp
-Standard: Latest
+Standard: c++20
 AttributeMacros: [RUVIA_LIFETIMEBOUND]
 
 IndentWidth: 4

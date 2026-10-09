@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Hpack.h"
@@ -555,9 +556,9 @@ RUVIA_TEST(http2_public_server_request_view_hides_stream_storage) {
     RUVIA_CHECK(server.streamAborted(3));
 
     auto request = ruvia::makeHttp2ServerRequest(server, 1, &resource, {});
-    RUVIA_CHECK(request.has_value());
-    RUVIA_CHECK(request->method() == "POST");
-    const auto handshake = ruvia::validateHttp2WebSocketHandshake(server, 1, *request);
+    RUVIA_CHECK((request.index() == 0));
+    RUVIA_CHECK(std::get<0>(request).method() == "POST");
+    const auto handshake = ruvia::validateHttp2WebSocketHandshake(server, 1, std::get<0>(request));
     RUVIA_CHECK(handshake.accepted() == nullptr);
 }
 
@@ -1456,18 +1457,18 @@ RUVIA_TEST(http2_public_push_request_lease_preserves_fields_and_releases_repeate
         for (unsigned repeat = 0; repeat != 100; ++repeat) {
             auto pushed = server.submitPushRequest(submitted.submitted()->streamId(),
                 {.authority = "example.test", .path = "/asset?version=1", .headers = headers});
-            RUVIA_CHECK(pushed.has_value());
-            if (!pushed) {
+            RUVIA_CHECK((pushed.index() == 0));
+            if ((pushed.index() != 0)) {
                 break;
             }
-            const auto& request = pushed->request();
+            const auto& request = std::get<0>(pushed).request();
             RUVIA_CHECK(request.scheme() == "https" && request.authority() == "example.test");
             RUVIA_CHECK(request.path() == "/asset" && request.queryString() == "version=1");
             RUVIA_CHECK(request.header("cookie") == "a=1");
             RUVIA_CHECK(request.header("host") == "EXAMPLE.test:443");
             RUVIA_CHECK(request.header("x-push") == "request");
             ruvia::HttpResponse response;
-            RUVIA_CHECK(server.submitBufferedResponse(pushed->streamId(), response) == ruvia::Http2SubmitStatus::kAccepted);
+            RUVIA_CHECK(server.submitBufferedResponse(std::get<0>(pushed).streamId(), response) == ruvia::Http2SubmitStatus::kAccepted);
             exchange(server, client);
             unsigned promised = 0;
             unsigned ended = 0;
@@ -1481,7 +1482,7 @@ RUVIA_TEST(http2_public_push_request_lease_preserves_fields_and_releases_repeate
                 }
             }
             RUVIA_CHECK(promised == 1 && ended == 1);
-            RUVIA_CHECK(server.release(std::move(*pushed)) == ruvia::Http2ServerRequestReleaseStatus::kReleased);
+            RUVIA_CHECK(server.release(std::move(std::get<0>(pushed))) == ruvia::Http2ServerRequestReleaseStatus::kReleased);
             exchange(client, server);
             while (server.nextEvent()) {
             }

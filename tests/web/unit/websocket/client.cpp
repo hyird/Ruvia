@@ -424,10 +424,12 @@ RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {
     require(X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) != nullptr);
     require(X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 3600) != nullptr);
     require(X509_set_pubkey(certificate.get(), key.get()) == 1);
-    auto* name = X509_get_subject_name(certificate.get());
-    require(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+    const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+    require(name != nullptr);
+    require(X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC,
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) == 1);
-    require(X509_set_issuer_name(certificate.get(), name) == 1);
+    require(X509_set_subject_name(certificate.get(), name.get()) == 1);
+    require(X509_set_issuer_name(certificate.get(), name.get()) == 1);
     require(X509_sign(certificate.get(), key.get(), EVP_sha256()) > 0);
     require(SSL_CTX_use_certificate(tls.native_handle(), certificate.get()) == 1);
     require(SSL_CTX_use_PrivateKey(tls.native_handle(), key.get()) == 1);

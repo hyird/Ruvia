@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/Http1WebSocketClientHandshake.h"
@@ -90,9 +91,9 @@ RUVIA_TEST(websocket_client_handshake_matches_subprotocol_case_exactly) {
     auto response = parseResponse(ruvia_ctx, prepared.prepared()->exchangeState(),
         validResponse("Sec-WebSocket-Protocol: Chat\r\n"));
     const auto result = handshake.validateResponse(response);
-    RUVIA_CHECK(result.has_value());
-    if (result.has_value()) {
-        RUVIA_CHECK_EQ(result->selectedSubprotocol, std::string_view("Chat"));
+    RUVIA_CHECK((result.index() == 0));
+    if ((result.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(result).selectedSubprotocol, std::string_view("Chat"));
     }
 }
 
@@ -110,9 +111,9 @@ RUVIA_TEST(websocket_client_handshake_rejects_unoffered_or_duplicate_protocol) {
         auto response = parseResponse(ruvia_ctx, prepared.prepared()->exchangeState(),
             validResponse(extra));
         const auto result = handshake.validateResponse(response);
-        RUVIA_CHECK(!result.has_value());
-        if (!result.has_value()) {
-            RUVIA_CHECK(result.error() ==
+        RUVIA_CHECK(!(result.index() == 0));
+        if (!(result.index() == 0)) {
+            RUVIA_CHECK(std::get<1>(result) ==
                         ruvia::Http1WebSocketClientHandshakeError::kSubprotocol);
         }
     }
@@ -128,17 +129,17 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
         "Sec-WebSocket-Accept: wrong\r\n\r\n");
     RUVIA_CHECK(bad.plan().protocolUpgrade() != nullptr);
     const auto badResult = handshake.validateResponse(bad);
-    RUVIA_CHECK(!badResult.has_value());
-    if (!badResult.has_value()) {
-        RUVIA_CHECK(badResult.error() == ruvia::Http1WebSocketClientHandshakeError::kAccept);
+    RUVIA_CHECK(!(badResult.index() == 0));
+    if (!(badResult.index() == 0)) {
+        RUVIA_CHECK(std::get<1>(badResult) == ruvia::Http1WebSocketClientHandshakeError::kAccept);
     }
 
     auto duplicate = parseResponse(ruvia_ctx, prepared.prepared()->exchangeState(),
         validResponse("Sec-WebSocket-Accept: " + std::string(kAccept) + "\r\n"));
     const auto duplicateResult = handshake.validateResponse(duplicate);
-    RUVIA_CHECK(!duplicateResult.has_value());
-    if (!duplicateResult.has_value()) {
-        RUVIA_CHECK(duplicateResult.error() ==
+    RUVIA_CHECK(!(duplicateResult.index() == 0));
+    if (!(duplicateResult.index() == 0)) {
+        RUVIA_CHECK(std::get<1>(duplicateResult) ==
                     ruvia::Http1WebSocketClientHandshakeError::kAccept);
     }
 
@@ -149,9 +150,9 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     auto response = parseResponse(ruvia_ctx, extensionPrepared.prepared()->exchangeState(),
         validResponse("Sec-WebSocket-Extensions: permessage-deflate\r\n"));
     const auto extensionResult = extension.validateResponse(response);
-    RUVIA_CHECK(!extensionResult.has_value());
-    if (!extensionResult.has_value()) {
-        RUVIA_CHECK(extensionResult.error() ==
+    RUVIA_CHECK(!(extensionResult.index() == 0));
+    if (!(extensionResult.index() == 0)) {
+        RUVIA_CHECK(std::get<1>(extensionResult) ==
                     ruvia::Http1WebSocketClientHandshakeError::kExtensions);
     }
 }
@@ -171,7 +172,7 @@ RUVIA_TEST(websocket_client_handshake_parser_accepts_informational_before_upgrad
     RUVIA_CHECK(final.parsed() != nullptr);
     if (final.parsed() != nullptr) {
         const auto result = handshake.validateResponse(*final.parsed());
-        RUVIA_CHECK(result.has_value());
+        RUVIA_CHECK((result.index() == 0));
     }
 }
 
@@ -230,9 +231,9 @@ RUVIA_TEST(websocket_client_handshake_result_view_is_used_while_response_lives) 
     auto response = parseResponse(ruvia_ctx, prepared.prepared()->exchangeState(),
         validResponse("Sec-WebSocket-Protocol: chat\r\n"));
     const auto result = handshake.validateResponse(response);
-    RUVIA_CHECK(result.has_value());
-    if (result.has_value()) {
-        const auto selected = result->selectedSubprotocol;
+    RUVIA_CHECK((result.index() == 0));
+    if ((result.index() == 0)) {
+        const auto selected = std::get<0>(result).selectedSubprotocol;
         RUVIA_CHECK_EQ(selected, std::string_view("chat"));
         RUVIA_CHECK_EQ(response.head().headers().back().value(), selected);
     }

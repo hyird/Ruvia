@@ -15,6 +15,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <openssl/evp.h>
@@ -355,25 +356,25 @@ private:
     response.body(body);
     const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
     auto created = ruvia::http3_buffered_response_cursor::create(response, plan, resource);
-    if (!created) {
+    if ((created.index() != 0)) {
         throw std::runtime_error("failed to create HTTP/3 buffered response write cursor");
     }
-    auto cursor = std::move(*created);
+    auto cursor = std::move(std::get<0>(created));
     std::pmr::vector<char> bytes(resource);
     for (std::size_t iteration = 0; iteration < 16; ++iteration) {
         const auto segment = cursor.next();
-        if (!segment) {
+        if (segment.index() != 0) {
             throw std::runtime_error("failed to read HTTP/3 response segment");
         }
-        if (segment->empty()) {
+        if (std::get<0>(segment).empty()) {
             break;
         }
-        bytes.insert(bytes.end(), segment->begin(), segment->end());
-        if (!cursor.acknowledge(segment->size())) {
+        bytes.insert(bytes.end(), std::get<0>(segment).begin(), std::get<0>(segment).end());
+        if (cursor.acknowledge(std::get<0>(segment).size()).index() != 0) {
             throw std::runtime_error("failed to acknowledge HTTP/3 response segment");
         }
     }
-    if (!cursor.fin_ready() || !cursor.acknowledge_fin(true) || !cursor.finished()) {
+    if (!cursor.fin_ready() || (cursor.acknowledge_fin(true).index() != 0) || !cursor.finished()) {
         throw std::runtime_error("HTTP/3 response cursor did not finish");
     }
     return bytes;
@@ -1987,11 +1988,11 @@ RUVIA_TEST(http3ServerPushBufferedStreamingAndFileRoutesUseRealQuicUnidirectiona
     QuicPair pair;
     pair.connect();
     auto requestHead = ruvia::encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test", .path = "/push"});
-    RUVIA_CHECK(requestHead.has_value());
+    RUVIA_CHECK((requestHead.index() == 0));
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> frame{};
-    const auto prefix = ruvia::encodeHttp3FrameHeader(frame, 1, requestHead->fieldSection.size());
-    std::vector<char> request(frame.begin(), frame.begin() + *prefix);
-    request.insert(request.end(), requestHead->fieldSection.begin(), requestHead->fieldSection.end());
+    const auto prefix = ruvia::encodeHttp3FrameHeader(frame, 1, std::get<0>(requestHead).fieldSection.size());
+    std::vector<char> request(frame.begin(), frame.begin() + std::get<0>(prefix));
+    request.insert(request.end(), std::get<0>(requestHead).fieldSection.begin(), std::get<0>(requestHead).fieldSection.end());
     const auto parentId = pair.openRequestStream(true, request);
     const auto control = pair.client().open_stream(true);
     RUVIA_CHECK_EQ(control.stream_id, std::uint64_t{2});

@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
@@ -79,8 +80,8 @@ std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
     std::vector<char> output(16);
     const auto header = ruvia::encodeHttp3VarInt(output, type);
     const auto length = ruvia::encodeHttp3VarInt(
-        std::span<char>(output).subspan(*header), payload.size());
-    output.resize(*header + *length);
+        std::span<char>(output).subspan(std::get<0>(header)), payload.size());
+    output.resize(std::get<0>(header) + std::get<0>(length));
     output.insert(output.end(), payload.begin(), payload.end());
     return output;
 }
@@ -102,14 +103,14 @@ std::vector<char> responseHead(std::string_view status = "200",
         fields.push_back({"content-encoding", *contentEncoding});
     }
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &temp);
-    return frame(1, *encoded);
+    return frame(1, std::get<0>(encoded));
 }
 
 std::vector<char> responseTrailer() {
     std::pmr::monotonic_buffer_resource temp;
     constexpr std::array fields{ruvia::Http3FieldSectionFieldView{"x-trailer", "done"}};
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &temp);
-    return frame(1, *encoded);
+    return frame(1, std::get<0>(encoded));
 }
 
 struct FakeRead final {

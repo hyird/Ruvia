@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http3ClientRequestHead.h"
@@ -64,10 +65,10 @@ struct Fixture final {
 std::string frame(std::uint64_t type, std::string_view payload) {
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto encoded = ruvia::encodeHttp3FrameHeader(header, type, payload.size());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 test frame header encoding failed");
     }
-    std::string result(header.data(), *encoded);
+    std::string result(header.data(), std::get<0>(encoded));
     result.append(payload);
     return result;
 }
@@ -80,11 +81,11 @@ std::string requestHeaders(ruvia::WorkerMemory& worker, std::string_view method,
                                                         .path = path,
                                                         .bodyLength = bodyLength},
         {}, worker.resource());
-    if (!head) {
+    if ((head.index() != 0)) {
         throw std::runtime_error("HTTP/3 test request head encoding failed");
     }
     return frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(head->fieldSection.data(), head->fieldSection.size()));
+        std::string_view(std::get<0>(head).fieldSection.data(), std::get<0>(head).fieldSection.size()));
 }
 
 std::string requestWire(ruvia::WorkerMemory& worker, std::string_view body) {
@@ -656,11 +657,11 @@ RUVIA_TEST(http3ServerStreamInputRetainsQpackBlockedSuffixAndFinUntilEncoderAdva
     auto head = ruvia::encodeHttp3ClientRequestHead(encoder, 0,
         {.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7},
         {}, fixture.worker.resource());
-    RUVIA_CHECK(head.has_value());
-    if (!head) {
+    RUVIA_CHECK((head.index() == 0));
+    if ((head.index() != 0)) {
         return;
     }
-    auto wire = frame(1, std::string_view(head->fieldSection.data(), head->fieldSection.size())) + frame(0, "payload");
+    auto wire = frame(1, std::string_view(std::get<0>(head).fieldSection.data(), std::get<0>(head).fieldSection.size())) + frame(0, "payload");
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
     stream_buffer::borrowed_block block;
     RUVIA_CHECK(fixture.buffer.try_receive(block));
@@ -697,11 +698,11 @@ RUVIA_TEST(http3ServerStreamInputResetAfterBlockedFinReleasesSuffixAndCancelsDec
     const std::array fields{ruvia::Http3FieldSectionFieldView{"x-dynamic", "retained"}};
     auto head = ruvia::encodeHttp3ClientRequestHead(encoder, 0,
         {.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7}, {}, fixture.worker.resource());
-    RUVIA_CHECK(head.has_value());
-    if (!head) {
+    RUVIA_CHECK((head.index() == 0));
+    if ((head.index() != 0)) {
         return;
     }
-    const auto wire = frame(1, {head->fieldSection.data(), head->fieldSection.size()}) + frame(0, "payload");
+    const auto wire = frame(1, {std::get<0>(head).fieldSection.data(), std::get<0>(head).fieldSection.size()}) + frame(0, "payload");
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
     stream_buffer::borrowed_block block;
     RUVIA_CHECK(fixture.buffer.try_receive(block));

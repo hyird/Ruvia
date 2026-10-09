@@ -1,5 +1,7 @@
 #include "ruvia/http/http3_critical_stream_output.h"
 
+#include <variant>
+
 #include "ruvia/http/Http3ServerRequestAdmission.h"
 
 namespace ruvia {
@@ -70,10 +72,10 @@ bool http3_critical_stream_output::queue_goaway(std::uint64_t identifier) noexce
         return false;
     }
     const auto frame_size = encodeHttp3ServerGoawayFrame(goaway_, identifier);
-    if (!frame_size) {
+    if ((frame_size.index() != 0)) {
         return false;
     }
-    goaway_size_ = *frame_size;
+    goaway_size_ = std::get<0>(frame_size);
     goaway_queued_ = true;
     return true;
 }

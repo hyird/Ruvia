@@ -10,6 +10,7 @@
 #include <span>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/http/Http3Frames.h"
@@ -427,19 +428,19 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
         co_return co_await writeBufferedAfterInterim(preparation->write_plan);
     }
     auto encodedHead = session_.encodeResponseHead(messageId_.stream_id, *response_, preparation->write_plan);
-    if (!encodedHead) {
-        co_return encodedHead.error().kind == Http3ResponseHeadError::peer_field_section_limit
+    if ((encodedHead.index() != 0)) {
+        co_return std::get<1>(encodedHead).kind == Http3ResponseHeadError::peer_field_section_limit
             ? RunStatus::peer_field_section_limit
             : RunStatus::kFailed;
     }
     auto output = Http3BufferedResponseOutput::create(
-        *response_, preparation->write_plan, std::move(*encodedHead), worker_, outbound_, messageId_);
-    if (!output) {
-        co_return output.error() == Http3BufferedResponseOutputError::kFileBodyUnsupported
+        *response_, preparation->write_plan, std::move(std::get<0>(encodedHead)), worker_, outbound_, messageId_);
+    if ((output.index() != 0)) {
+        co_return std::get<1>(output) == Http3BufferedResponseOutputError::kFileBodyUnsupported
             ? RunStatus::kFilePayloadUnsupported
             : RunStatus::kFailed;
     }
-    output_.emplace(std::move(*output));
+    output_.emplace(std::move(std::get<0>(output)));
     co_return RunStatus::kResponseReady;
 }
 
@@ -506,8 +507,8 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
         throw HttpError({.status = http_status::kServiceUnavailable, .code = "file_io_unavailable", .message = "file output requires the server blocking pool"});
     }
     auto encoded = session_.encodeResponseHead(messageId_.stream_id, *response_, plan);
-    if (!encoded) {
-        if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+    if ((encoded.index() != 0)) {
+        if (std::get<1>(encoded).kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
         }
         throw std::invalid_argument("invalid HTTP/3 file response head");
@@ -524,12 +525,12 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
     // SETTINGS can arrive while the file open is offloaded. Recheck the final
     // decoded size before committing any response bytes.
     const auto peerLimit = session_.peerMaxFieldSectionSize();
-    if (peerLimit && encoded->field_section.decodedFieldSectionSize() > *peerLimit) {
+    if (peerLimit && std::get<0>(encoded).field_section.decodedFieldSectionSize() > *peerLimit) {
         reject_peer_field_section();
     }
-    Http3DataWritePlan data(encoded->bodyPlan, plan.contentLength());
+    Http3DataWritePlan data(std::get<0>(encoded).bodyPlan, plan.contentLength());
     commitFinalResponse();
-    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->field_section.fieldSection);
+    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(encoded).field_section.fieldSection);
     struct ReadResult final {
         ResponseFileInput input;
         std::array<char, 16 * 1024> bytes{};
@@ -543,11 +544,11 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
                 const auto count = std::min<std::size_t>(16 * 1024, segment.bytes_.size() - offset);
                 const auto bytes = segment.bytes_.substr(offset, count);
                 const auto chunk = data.planChunk(std::span<const char>(bytes.data(), bytes.size()), false);
-                if (!chunk) {
+                if ((chunk.index() != 0)) {
                     throw std::length_error("invalid HTTP/3 multipart content length");
                 }
-                co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), chunk->payload);
-                if (!data.commitPayload(bytes.size(), false)) {
+                co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), std::get<0>(chunk).payload);
+                if ((data.commitPayload(bytes.size(), false).index() != 0)) {
                     std::terminate();
                 }
                 offset += count;
@@ -577,11 +578,11 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
                 });
             input = std::move(read.input);
             const auto chunk = data.planChunk(std::span<const char>(read.bytes.data(), read.count), false);
-            if (!chunk) {
+            if ((chunk.index() != 0)) {
                 throw std::length_error("invalid HTTP/3 file content length");
             }
-            co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), chunk->payload);
-            if (!data.commitPayload(read.count, false)) {
+            co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), std::get<0>(chunk).payload);
+            if ((data.commitPayload(read.count, false).index() != 0)) {
                 std::terminate();
             }
             remaining -= read.count;
@@ -592,11 +593,11 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
     if (!matches) {
         throw std::runtime_error("HTTP/3 response file changed while it was being sent");
     }
-    if (!data.planChunk({}, true)) {
+    if ((data.planChunk({}, true).index() != 0)) {
         std::terminate();
     }
     co_await finishResponse();
-    if (!data.commitPayload(0, true)) {
+    if ((data.commitPayload(0, true).index() != 0)) {
         std::terminate();
     }
     co_return RunStatus::kOutputComplete;
@@ -607,7 +608,7 @@ Task<std::optional<HttpResponse>> Http3BufferedRequestDispatch::runTunnelHandler
     const auto& resolved = *lease_->resolution().resolved();
     const auto& endpoint = *resolved.route().endpoint().tunnel();
     const bool udp = endpoint.protocol() == "connect-udp";
-    if (udp && !validateHttpConnectUdpRequest(request)) {
+    if (udp && (validateHttpConnectUdpRequest(request).index() != 0)) {
         co_return co_await routes_.handleError(request, *requestMemory_,
             HttpErrorInfo({.status = http_status::kBadRequest, .message = "invalid CONNECT-UDP request head"}), *requestServices_);
     }
@@ -616,27 +617,27 @@ Task<std::optional<HttpResponse>> Http3BufferedRequestDispatch::runTunnelHandler
         auto response = ContextAccess::streamingHead(context);
         if (udp) {
             auto negotiated = prepareHttpConnectUdpResponse(std::move(response), HttpProtocolVersion::kHttp3);
-            if (!negotiated) {
+            if ((negotiated.index() != 0)) {
                 throw std::invalid_argument("invalid CONNECT-UDP response metadata");
             }
-            response = std::move(*negotiated);
+            response = std::move(std::get<0>(negotiated));
         }
         auto head = session_.encodeConnectResponseHead(messageId_.stream_id, response);
-        if (!head) {
-            if (head.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+        if ((head.index() != 0)) {
+            if (std::get<1>(head).kind == Http3ResponseHeadError::peer_field_section_limit) {
                 reject_peer_field_section();
             }
             throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
         }
-        if (!responseFieldSectionAllowed(head->field_section.decodedFieldSectionSize())) {
+        if (!responseFieldSectionAllowed(std::get<0>(head).field_section.decodedFieldSectionSize())) {
             reject_peer_field_section();
         }
-        std::pmr::vector<char> framed(head->field_section.fieldSection.size() + kHttp3FrameHeaderMaxBytes, worker_.resource());
-        const auto frameSize = encodeHttp3Frame(framed, static_cast<std::uint64_t>(Http3FrameType::kHeaders), head->field_section.fieldSection);
-        if (!frameSize) {
+        std::pmr::vector<char> framed(std::get<0>(head).field_section.fieldSection.size() + kHttp3FrameHeaderMaxBytes, worker_.resource());
+        const auto frameSize = encodeHttp3Frame(framed, static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(head).field_section.fieldSection);
+        if ((frameSize.index() != 0)) {
             throw std::length_error("HTTP/3 CONNECT response framing failed");
         }
-        framed.resize(*frameSize);
+        framed.resize(std::get<0>(frameSize));
         if (tunnelCallbacks_.attachScanner == nullptr ||
             !tunnelCallbacks_.attachScanner(tunnelCallbacks_.context, messageId_.stream_id, scannerEntry_)) {
             throw std::runtime_error("HTTP/3 tunnel scanner attachment failed");
@@ -683,8 +684,8 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
     const auto validation = validateHttp3WebSocketHandshake(
         request, protocol, !session_.tunnelReceiveEnded(messageId_.stream_id));
 
-    if (!validation) {
-        const auto& failure = validation.error();
+    if ((validation.index() != 0)) {
+        const auto& failure = std::get<1>(validation);
         const auto unsupported = failure.kind() ==
                                      Http3WebSocketHandshakeFailure::Kind::kUnsupportedVersion ||
                                  (request.knownMethod() == HttpKnownMethod::kConnect &&
@@ -715,7 +716,7 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
                 .responseHeaders = responseHeaders,
                 .resource = requestMemory_->resource(),
                 .deflate = endpoint.deflate()});
-        if (!handshake) {
+        if ((handshake.index() != 0)) {
             throw std::runtime_error("HTTP/3 WebSocket handshake construction failed");
         }
         if (tunnelCallbacks_.attachScanner == nullptr ||
@@ -724,13 +725,13 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
             throw std::runtime_error("HTTP/3 WebSocket scanner attachment failed");
         }
         ContextAccess::markWebSocketHandshakeStarted(context);
-        if (const auto error = co_await publishTunnelHandshake(handshake->headersFrame()); error) {
+        if (const auto error = co_await publishTunnelHandshake(std::get<0>(handshake).headersFrame()); error) {
             throw std::system_error(error, "failed to publish HTTP/3 WebSocket handshake");
         }
         webSocketConnection.emplace(Http3WebSocketTransport{*this}, services_.worker(),
             scannerEntry_, endpoint.lifecycle(),
             ProtocolByteLimit::limited(options_.max_web_socket_message_bytes),
-            session_.inbound_buffer_pool(), std::string_view{}, handshake->compression(),
+            session_.inbound_buffer_pool(), std::string_view{}, std::get<0>(handshake).compression(),
             endpoint.deflate().compressionLevel);
         co_await invokeWebSocketHandler(*webSocketConnection, scannerEntry_,
             endpoint.handler(), context);
@@ -1074,31 +1075,31 @@ Task<std::error_code> Http3BufferedRequestDispatch::publishTunnelHandshake(
 
 Task<void> Http3BufferedRequestDispatch::writeInterimResponse(const HttpInterimResponseHead& head) {
     auto encoded = session_.encodeInterimResponseHead(messageId_.stream_id, head);
-    if (!encoded) {
-        if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+    if ((encoded.index() != 0)) {
+        if (std::get<1>(encoded).kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
         }
         throw std::invalid_argument("invalid HTTP/3 interim response head");
     }
-    if (!responseFieldSectionAllowed(encoded->field_section.decodedFieldSectionSize())) {
+    if (!responseFieldSectionAllowed(std::get<0>(encoded).field_section.decodedFieldSectionSize())) {
         reject_peer_field_section();
     }
-    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->field_section.fieldSection);
+    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(encoded).field_section.fieldSection);
 }
 
 Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writeBufferedAfterInterim(HttpBufferedResponseWritePlan plan) {
     auto encoded = session_.encodeResponseHead(messageId_.stream_id, *response_, plan);
-    if (!encoded) {
-        if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+    if ((encoded.index() != 0)) {
+        if (std::get<1>(encoded).kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
         }
         throw std::invalid_argument("invalid HTTP/3 buffered response head");
     }
-    if (!responseFieldSectionAllowed(encoded->field_section.decodedFieldSectionSize())) {
+    if (!responseFieldSectionAllowed(std::get<0>(encoded).field_section.decodedFieldSectionSize())) {
         reject_peer_field_section();
     }
     commitFinalResponse();
-    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->field_section.fieldSection);
+    co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(encoded).field_section.fieldSection);
     if (plan.sendBody()) {
         auto body = response_->bodyBytes();
         while (!body.empty()) {
@@ -1120,10 +1121,10 @@ Task<void> Http3BufferedRequestDispatch::publishResponseFrame(std::uint64_t type
     }
     std::array<char, kHttp3FrameHeaderMaxBytes> header{};
     const auto encoded = encodeHttp3FrameHeader(header, type, payload.size());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::length_error("HTTP/3 response frame exceeds its wire limit");
     }
-    streamFrame_.assign(header.data(), *encoded);
+    streamFrame_.assign(header.data(), std::get<0>(encoded));
     streamFrame_.append(payload.data(), payload.size());
     co_await awaitResponsePublication();
 }
@@ -1293,12 +1294,12 @@ Task<std::error_code> Http3BufferedRequestDispatch::writeTunnel(
         std::array<char, maxFrameHeader> header{};
         const auto encoded = encodeHttp3FrameHeader(header,
             static_cast<std::uint64_t>(Http3FrameType::kData), count);
-        if (!encoded) {
+        if ((encoded.index() != 0)) {
             abortTunnel();
             co_return std::make_error_code(std::errc::message_size);
         }
         try {
-            tunnelDataFrame_.assign(header.data(), *encoded);
+            tunnelDataFrame_.assign(header.data(), std::get<0>(encoded));
             tunnelDataFrame_.append(bytes.data() + offset, count);
         } catch (...) {
             abortTunnel();

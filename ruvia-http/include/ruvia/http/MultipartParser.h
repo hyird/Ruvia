@@ -4,7 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -410,33 +409,33 @@ public:
     MultipartBodyParseResult& operator=(MultipartBodyParseResult&&) = delete;
 
     [[nodiscard]] MultipartBody* body() & noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
 
     [[nodiscard]] const MultipartBody* body() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     MultipartBody* body() && = delete;
     const MultipartBody* body() const&& = delete;
 
     [[nodiscard]] const MultipartBodyParseFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const MultipartBodyParseFailure* failure() const&& = delete;
 
 private:
     friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartParseOptions);
 
-    using Value = std::expected<MultipartBody, MultipartBodyParseFailure>;
+    using Value = std::variant<MultipartBody, MultipartBodyParseFailure>;
 
     explicit MultipartBodyParseResult(std::pmr::vector<MultipartPart> parts) noexcept
         : value_(MultipartBody(std::move(parts))) {}
 
     explicit MultipartBodyParseResult(MultipartParseError error) noexcept
-        : value_(std::unexpected(MultipartBodyParseFailure(error))) {}
+        : value_(MultipartBodyParseFailure(error)) {}
 
     explicit MultipartBodyParseResult(const MultipartPollFailure& failure) noexcept
-        : value_(std::unexpected(MultipartBodyParseFailure(failure.error_))) {}
+        : value_(MultipartBodyParseFailure(failure.error_)) {}
 
     Value value_;
 };
@@ -528,7 +527,7 @@ private:
         kBody,
         kDone };
 
-    using State = std::expected<ProgressState, MultipartParseError>;
+    using State = std::variant<ProgressState, MultipartParseError>;
 
     enum class StepProgress : std::uint8_t {
         kNeedInput,
@@ -536,7 +535,7 @@ private:
         kDone,
     };
 
-    using StepResult = std::expected<StepProgress, MultipartParseError>;
+    using StepResult = std::variant<StepProgress, MultipartParseError>;
 
     [[nodiscard]] std::string_view bufferView() const noexcept;
     void consume(std::size_t bytes) noexcept;

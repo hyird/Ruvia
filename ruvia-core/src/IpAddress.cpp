@@ -9,9 +9,9 @@
 
 namespace ruvia::detail {
 
-std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_view text) {
+std::variant<asio::ip::address, std::error_code> parseIpAddress(std::string_view text) {
     if (text.find('\0') != std::string_view::npos) {
-        return std::unexpected(std::make_error_code(std::errc::invalid_argument));
+        return std::make_error_code(std::errc::invalid_argument);
     }
     std::error_code error;
     std::array<char, 64> terminated;
@@ -27,7 +27,7 @@ std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_vie
         return asio::ip::make_address(owned.c_str(), error);
     }();
     if (error) {
-        return std::unexpected(error);
+        return error;
     }
     return address;
 }
@@ -36,7 +36,7 @@ std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_vie
 
 namespace ruvia {
 
-std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_view text) {
+std::variant<asio::ip::address, std::error_code> parseIpAddress(std::string_view text) {
     return detail::parseIpAddress(text);
 }
 

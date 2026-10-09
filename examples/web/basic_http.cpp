@@ -14,6 +14,7 @@
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 #include "ruvia/core/Integer.h"
 #include "ruvia/web/App.h"
@@ -120,14 +121,13 @@ private:
         body.append("\npage=");
         std::uint32_t page = 1;
         if (auto raw = c.req().query("page")) {
-            auto parsed = ruvia::parseInteger<std::uint32_t>(*raw)
-                              .transform([](auto value) { return std::max(std::uint32_t{1}, value); });
-            if (!parsed) {
+            auto parsed = ruvia::parseInteger<std::uint32_t>(*raw);
+            if (parsed.index() != 0) {
                 co_return c.error({.status = ruvia::http_status::kBadRequest,
                     .code = "invalid_page",
                     .message = "page must be a uint32 decimal integer"});
             }
-            page = *parsed;
+            page = std::max(std::uint32_t{1}, std::get<0>(parsed));
         }
         char buffer[16]{};
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page);

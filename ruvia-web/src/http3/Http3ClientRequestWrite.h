@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3DataWritePlan.h"
@@ -42,7 +42,7 @@ public:
 
     // Failure leaves request untouched. Ownership is committed only after all
     // encoding and allocations have succeeded.
-    [[nodiscard]] static std::expected<Http3ClientRequestWrite, Error> create(
+    [[nodiscard]] static std::variant<Http3ClientRequestWrite, Error> create(
         HttpClientRequestStorage&& request, std::string_view scheme, std::string_view authority,
         std::pmr::memory_resource* workerPool, Http3FieldSectionLimits limits = {}) noexcept;
 
@@ -52,9 +52,9 @@ public:
     Http3ClientRequestWrite& operator=(Http3ClientRequestWrite&&) = delete;
 
     [[nodiscard]] bool prepareConnectionHead(std::uint64_t streamId, Http3ClientSansIoSessionEngine& engine);
-    [[nodiscard]] std::expected<Segment, Error> next() noexcept;
-    [[nodiscard]] std::expected<void, Error> acknowledge(std::size_t count) noexcept;
-    [[nodiscard]] std::expected<void, Error> acknowledgeFin(bool successful) noexcept;
+    [[nodiscard]] std::variant<Segment, Error> next() noexcept;
+    [[nodiscard]] std::variant<std::monostate, Error> acknowledge(std::size_t count) noexcept;
+    [[nodiscard]] std::variant<std::monostate, Error> acknowledgeFin(bool successful) noexcept;
     [[nodiscard]] bool requiresConnectSettings() const noexcept {
         return request_.isTunnel() && !request_.tunnelProtocol().empty();
     }
@@ -87,9 +87,9 @@ private:
     [[nodiscard]] static Http3ClientRequestWrite& requireNoOutstandingSegment(
         Http3ClientRequestWrite& other);
     [[nodiscard]] Segment activeSegment() const noexcept;
-    [[nodiscard]] std::expected<void, Error> prepareData() noexcept;
-    [[nodiscard]] std::expected<void, Error> prepareTrailers() noexcept;
-    [[nodiscard]] std::expected<void, Error> failPlan() noexcept;
+    [[nodiscard]] std::variant<std::monostate, Error> prepareData() noexcept;
+    [[nodiscard]] std::variant<std::monostate, Error> prepareTrailers() noexcept;
+    [[nodiscard]] std::variant<std::monostate, Error> failPlan() noexcept;
 
     std::pmr::memory_resource* workerPool_;
     Http3FieldSectionLimits fieldLimits_{};

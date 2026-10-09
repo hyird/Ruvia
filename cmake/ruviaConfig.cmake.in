@@ -1,255 +1,64 @@
 @PACKAGE_INIT@
 
-include(CMakeFindDependencyMacro)
-
 set(ruvia_VERSION "@PROJECT_VERSION@")
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_POSTGRESQL @RUVIA_ENABLE_POSTGRESQL@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
 set(RUVIA_ENABLE_JWT @RUVIA_ENABLE_JWT@)
-
 set(ruvia_AVAILABLE_COMPONENTS)
-foreach(_ruvia_component IN ITEMS core http web)
-    set(ruvia_${_ruvia_component}_FOUND FALSE)
-    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ruvia-${_ruvia_component}-targets.cmake")
-        list(APPEND ruvia_AVAILABLE_COMPONENTS ${_ruvia_component})
+foreach(component IN ITEMS core http web)
+    set(ruvia_${component}_FOUND FALSE)
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ruvia-${component}-targets.cmake")
+        list(APPEND ruvia_AVAILABLE_COMPONENTS ${component})
     endif()
 endforeach()
-list(FIND ruvia_AVAILABLE_COMPONENTS core _ruvia_core_available)
-list(FIND ruvia_AVAILABLE_COMPONENTS http _ruvia_http_available)
-list(FIND ruvia_AVAILABLE_COMPONENTS web _ruvia_web_available)
-if(_ruvia_web_available GREATER -1 AND
-   (_ruvia_core_available EQUAL -1 OR _ruvia_http_available EQUAL -1))
-    list(REMOVE_ITEM ruvia_AVAILABLE_COMPONENTS web)
-    set(_ruvia_web_available -1)
-endif()
-
-set(_ruvia_requested ${ruvia_FIND_COMPONENTS})
-if(NOT _ruvia_requested)
+if(NOT ruvia_FIND_COMPONENTS)
     set(ruvia_FOUND FALSE)
-    set(ruvia_NOT_FOUND_MESSAGE
-        "find_package(ruvia) requires at least one explicit component: core, http, or web")
+    set(ruvia_NOT_FOUND_MESSAGE "find_package(ruvia) requires explicit components: core, http, or web")
     return()
 endif()
-list(FIND _ruvia_requested web _ruvia_web_requested)
-if(_ruvia_web_requested GREATER -1 AND _ruvia_web_available GREATER -1)
-    list(APPEND _ruvia_requested core http)
+
+include("${CMAKE_CURRENT_LIST_DIR}/RuviaDependencies.cmake")
+set(requested ${ruvia_FIND_COMPONENTS})
+if(web IN_LIST requested AND web IN_LIST ruvia_AVAILABLE_COMPONENTS)
+    list(APPEND requested core http)
 endif()
-list(REMOVE_DUPLICATES _ruvia_requested)
-list(FIND _ruvia_requested core _ruvia_core_requested)
-list(FIND _ruvia_requested http _ruvia_http_requested)
-list(FIND _ruvia_requested web _ruvia_web_requested)
-
-# A missing optional dependency disables only its component. Required
-# components keep find_dependency's diagnostics and early return.
-macro(_ruvia_find_component_dependency package)
-    if(_ruvia_component_ready)
-        if(_ruvia_component_required)
-            find_dependency(${package} ${ARGN})
-        else()
-            find_package(${package} QUIET ${ARGN})
-            if(NOT ${package}_FOUND)
-                set(_ruvia_component_ready FALSE)
-            endif()
-        endif()
+foreach(component IN ITEMS core http web)
+    if(NOT component IN_LIST requested OR NOT component IN_LIST ruvia_AVAILABLE_COMPONENTS)
+        continue()
     endif()
-endmacro()
-
-function(_ruvia_find_ngtcp2_core out_ready)
-    if(TARGET ruvia_http_ngtcp2_core)
-        set(${out_ready} TRUE PARENT_SCOPE)
-        return()
+    if(component STREQUAL "core")
+        ruvia_fetch_core_dependencies()
+    elseif(component STREQUAL "http")
+        ruvia_fetch_http_dependencies()
+    elseif(ruvia_core_FOUND AND ruvia_http_FOUND)
+        ruvia_fetch_web_dependencies(@RUVIA_ENABLE_MARIADB@ @RUVIA_ENABLE_POSTGRESQL@ @RUVIA_ENABLE_REDIS@)
+    else()
+        continue()
     endif()
-
-    set(_ruvia_ngtcp2_prefix_hints)
-    foreach(_ruvia_root_var IN ITEMS ngtcp2_ROOT NGTCP2_ROOT)
-        if(DEFINED ${_ruvia_root_var} AND NOT "${${_ruvia_root_var}}" STREQUAL "")
-            list(APPEND _ruvia_ngtcp2_prefix_hints "${${_ruvia_root_var}}")
-        endif()
-    endforeach()
-    if(DEFINED ngtcp2_DIR AND IS_DIRECTORY "${ngtcp2_DIR}")
-        if(ngtcp2_DIR MATCHES "/share/ngtcp2/?$")
-            get_filename_component(_ruvia_ngtcp2_config_prefix
-                "${ngtcp2_DIR}/../.." ABSOLUTE)
-        else()
-            get_filename_component(_ruvia_ngtcp2_config_prefix
-                "${ngtcp2_DIR}/../../.." ABSOLUTE)
-        endif()
-        list(APPEND _ruvia_ngtcp2_prefix_hints "${_ruvia_ngtcp2_config_prefix}")
-    endif()
-
-    find_path(_ruvia_ngtcp2_include_dir NAMES ngtcp2/version.h
-        HINTS ${_ruvia_ngtcp2_prefix_hints}
-        PATH_SUFFIXES include NO_DEFAULT_PATH NO_CACHE)
-    if(NOT _ruvia_ngtcp2_include_dir)
-        find_path(_ruvia_ngtcp2_include_dir NAMES ngtcp2/version.h
-            PATH_SUFFIXES include NO_CACHE)
-    endif()
-    if(_ruvia_ngtcp2_include_dir)
-        get_filename_component(_ruvia_ngtcp2_include_parent
-            "${_ruvia_ngtcp2_include_dir}" DIRECTORY)
-    endif()
-
-    find_library(_ruvia_ngtcp2_core_library NAMES ngtcp2 ngtcp2_static
-        PATHS "${_ruvia_ngtcp2_include_parent}"
-        PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}"
-        NO_DEFAULT_PATH NO_CACHE)
-    find_library(_ruvia_ngtcp2_core_library_debug NAMES ngtcp2 ngtcp2_static
-        PATHS "${_ruvia_ngtcp2_include_parent}/debug"
-        PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}"
-        NO_DEFAULT_PATH NO_CACHE)
-    set(_ruvia_ngtcp2_ready FALSE)
-    if(_ruvia_ngtcp2_include_dir AND _ruvia_ngtcp2_core_library)
-        file(STRINGS "${_ruvia_ngtcp2_include_dir}/ngtcp2/version.h"
-            _ruvia_ngtcp2_version_line REGEX "^#define NGTCP2_VERSION \"[0-9]+\\.[0-9]+\\.[0-9]+\"")
-        if(_ruvia_ngtcp2_version_line MATCHES "NGTCP2_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
-            set(_ruvia_ngtcp2_version "${CMAKE_MATCH_1}")
-            if(NOT _ruvia_ngtcp2_version VERSION_LESS 1.25.0 AND
-               (NOT WIN32 OR NOT MSVC OR _ruvia_ngtcp2_core_library_debug))
-                add_library(ruvia_http_ngtcp2_core UNKNOWN IMPORTED GLOBAL)
-                set_target_properties(ruvia_http_ngtcp2_core PROPERTIES
-                    IMPORTED_LOCATION "${_ruvia_ngtcp2_core_library}"
-                    INTERFACE_INCLUDE_DIRECTORIES "${_ruvia_ngtcp2_include_dir}"
-                )
-                # Without a distinct debug archive, the generic location is
-                # used for non-MSVC configurations; MSVC requires Debug above.
-                if(_ruvia_ngtcp2_core_library_debug)
-                    set_target_properties(ruvia_http_ngtcp2_core PROPERTIES
-                        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;RELWITHDEBINFO;MINSIZEREL"
-                        IMPORTED_LOCATION_DEBUG "${_ruvia_ngtcp2_core_library_debug}"
-                        IMPORTED_LOCATION_RELEASE "${_ruvia_ngtcp2_core_library}"
-                        IMPORTED_LOCATION_RELWITHDEBINFO "${_ruvia_ngtcp2_core_library}"
-                        IMPORTED_LOCATION_MINSIZEREL "${_ruvia_ngtcp2_core_library}"
-                    )
-                endif()
-                if(WIN32 OR _ruvia_ngtcp2_core_library MATCHES "\\.a$")
-                    set_property(TARGET ruvia_http_ngtcp2_core PROPERTY
-                        INTERFACE_COMPILE_DEFINITIONS NGTCP2_STATICLIB)
-                endif()
-                set(_ruvia_ngtcp2_ready TRUE)
-            endif()
-        endif()
-    endif()
-    set(${out_ready} ${_ruvia_ngtcp2_ready} PARENT_SCOPE)
-endfunction()
-
-set(_ruvia_core_ready FALSE)
-if(_ruvia_core_requested GREATER -1 AND _ruvia_core_available GREATER -1)
-    set(_ruvia_component_ready TRUE)
-    set(_ruvia_component_required FALSE)
-    if(ruvia_FIND_REQUIRED_core OR
-       (_ruvia_web_requested GREATER -1 AND ruvia_FIND_REQUIRED_web))
-        set(_ruvia_component_required TRUE)
-    endif()
-    _ruvia_find_component_dependency(asio CONFIG)
-    _ruvia_find_component_dependency(Threads)
-    set(_ruvia_core_ready ${_ruvia_component_ready})
-endif()
-
-set(_ruvia_http_ready FALSE)
-if(_ruvia_http_requested GREATER -1 AND _ruvia_http_available GREATER -1)
-    set(_ruvia_component_ready TRUE)
-    set(_ruvia_component_required FALSE)
-    if(ruvia_FIND_REQUIRED_http OR
-       (_ruvia_web_requested GREATER -1 AND ruvia_FIND_REQUIRED_web))
-        set(_ruvia_component_required TRUE)
-    endif()
-    _ruvia_find_component_dependency(ZLIB)
-    _ruvia_find_component_dependency(unofficial-brotli CONFIG)
-    _ruvia_find_component_dependency(zstd CONFIG)
-    if(_ruvia_component_ready)
-        _ruvia_find_ngtcp2_core(_ruvia_ngtcp2_ready)
-        if(NOT _ruvia_ngtcp2_ready)
-            set(_ruvia_component_ready FALSE)
-            set(ruvia_http_NOT_FOUND_MESSAGE
-                "ruvia-http requires ngtcp2 1.25.0 or newer core headers and library")
-            if(_ruvia_component_required)
-                set(ruvia_NOT_FOUND_MESSAGE "${ruvia_http_NOT_FOUND_MESSAGE}")
-            endif()
-        endif()
-    endif()
-    set(_ruvia_http_ready ${_ruvia_component_ready})
-endif()
-
-set(_ruvia_web_ready FALSE)
-if(_ruvia_web_requested GREATER -1 AND _ruvia_web_available GREATER -1 AND
-   _ruvia_core_ready AND _ruvia_http_ready)
-    set(_ruvia_component_ready TRUE)
-    set(_ruvia_component_required ${ruvia_FIND_REQUIRED_web})
-    _ruvia_find_component_dependency(OpenSSL 3.5 COMPONENTS SSL Crypto)
-    if(_ruvia_component_ready)
-        include(CheckCXXSourceCompiles)
-        include(CMakePushCheckState)
-        cmake_push_check_state(RESET)
-        set(CMAKE_REQUIRED_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
-        unset(RUVIA_PACKAGE_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
-        unset(RUVIA_PACKAGE_OPENSSL_HAS_QUIC_TLS_CALLBACKS CACHE)
-        check_cxx_source_compiles([=[
-#include <openssl/core_dispatch.h>
-#include <openssl/ssl.h>
-
-int main() {
-    SSL* ssl = nullptr;
-    const OSSL_DISPATCH* callbacks = nullptr;
-    (void)SSL_set_quic_tls_cbs(ssl, callbacks, nullptr);
-    (void)SSL_set_quic_tls_transport_params(ssl, nullptr, 0);
-    (void)SSL_set_quic_tls_early_data_enabled(ssl, 0);
-    (void)OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_SEND;
-    (void)OSSL_FUNC_SSL_QUIC_TLS_YIELD_SECRET;
-    return 0;
-}
-]=] RUVIA_PACKAGE_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
-        cmake_pop_check_state()
-        if(NOT RUVIA_PACKAGE_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
-            set(_ruvia_component_ready FALSE)
-            set(ruvia_web_NOT_FOUND_MESSAGE
-                "ruvia-web requires OpenSSL 3.5 or newer with external QUIC TLS callback APIs")
-            if(_ruvia_component_required)
-                set(ruvia_NOT_FOUND_MESSAGE "${ruvia_web_NOT_FOUND_MESSAGE}")
-            endif()
-        endif()
-    endif()
-    if(RUVIA_ENABLE_MARIADB)
-        _ruvia_find_component_dependency(unofficial-libmariadb CONFIG)
-    endif()
-    if(RUVIA_ENABLE_POSTGRESQL)
-        _ruvia_find_component_dependency(PostgreSQL)
-    endif()
-    if(RUVIA_ENABLE_REDIS)
-        _ruvia_find_component_dependency(hiredis CONFIG)
-    endif()
-    set(_ruvia_web_ready ${_ruvia_component_ready})
-endif()
-
-foreach(_ruvia_component IN ITEMS core http web)
-    if(_ruvia_${_ruvia_component}_ready)
-        include("${CMAKE_CURRENT_LIST_DIR}/ruvia-${_ruvia_component}-targets.cmake")
-        set(ruvia_${_ruvia_component}_FOUND TRUE)
-    endif()
+    include("${CMAKE_CURRENT_LIST_DIR}/ruvia-${component}-targets.cmake")
+    set(ruvia_${component}_FOUND TRUE)
 endforeach()
 
-# Controller translation units register through static initialization. Static
-# archives are otherwise free to discard unreferenced objects, so applications
-# link controller targets through this helper instead of linker-specific flags.
+# Controller archives register through static initialization.
 if(ruvia_web_FOUND)
-function(ruvia_link_controllers application)
-    if(NOT TARGET "${application}")
-        message(FATAL_ERROR "ruvia_link_controllers requires an existing application target")
-    endif()
-    foreach(_ruvia_controller_target IN LISTS ARGN)
-        if(NOT TARGET "${_ruvia_controller_target}")
-            message(FATAL_ERROR "ruvia_link_controllers target does not exist: ${_ruvia_controller_target}")
+    function(ruvia_link_controllers application)
+        if(NOT TARGET "${application}")
+            message(FATAL_ERROR "ruvia_link_controllers requires an existing application target")
         endif()
-        get_target_property(_ruvia_controller_type "${_ruvia_controller_target}" TYPE)
-        if(_ruvia_controller_type STREQUAL "STATIC_LIBRARY")
-            target_link_libraries("${application}" PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_ruvia_controller_target}>")
-        elseif(_ruvia_controller_type STREQUAL "OBJECT_LIBRARY")
-            target_sources("${application}" PRIVATE "$<TARGET_OBJECTS:${_ruvia_controller_target}>")
-        else()
-            message(FATAL_ERROR "ruvia_link_controllers accepts only STATIC_LIBRARY or OBJECT_LIBRARY targets")
-        endif()
-    endforeach()
-endfunction()
+        foreach(controller IN LISTS ARGN)
+            if(NOT TARGET "${controller}")
+                message(FATAL_ERROR "ruvia_link_controllers target does not exist: ${controller}")
+            endif()
+            get_target_property(type "${controller}" TYPE)
+            if(type STREQUAL "STATIC_LIBRARY")
+                target_link_libraries("${application}" PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${controller}>")
+            elseif(type STREQUAL "OBJECT_LIBRARY")
+                target_sources("${application}" PRIVATE "$<TARGET_OBJECTS:${controller}>")
+            else()
+                message(FATAL_ERROR "ruvia_link_controllers accepts only STATIC_LIBRARY or OBJECT_LIBRARY targets")
+            endif()
+        endforeach()
+    endfunction()
 endif()
-
 check_required_components(ruvia)

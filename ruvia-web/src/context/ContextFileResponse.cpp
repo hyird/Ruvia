@@ -449,7 +449,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     }
     const std::string_view lookupPath =
         decodedPath.has_value() ? std::string_view(*decodedPath) : relativePath;
-    if (lookupPath.contains('\0')) {
+    if ((lookupPath.find('\0') != std::string_view::npos)) {
         throw HttpError({.status = ruvia::http_status::kForbidden,
             .code = "forbidden",
             .message = "invalid static file path"});

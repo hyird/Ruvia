@@ -51,11 +51,11 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
     RUVIA_CHECK(body.starts_with("{") && body.ends_with("}"));
     RUVIA_CHECK(body.find(R"("code":"bad_request")") != std::string_view::npos);
     RUVIA_CHECK(body.find(R"("detail":"invalid \"input\"")") != std::string_view::npos);
-    RUVIA_CHECK(body.contains(R"("type":"about:blank")"));
-    RUVIA_CHECK(body.contains(R"("title":"Bad Request")"));
-    RUVIA_CHECK(body.contains(R"("status":400)"));
-    RUVIA_CHECK(!body.contains(R"("instance":)"));
-    RUVIA_CHECK(!body.contains(R"("errors":)"));
+    RUVIA_CHECK(body.find(R"("type":"about:blank")") != std::string_view::npos);
+    RUVIA_CHECK(body.find(R"("title":"Bad Request")") != std::string_view::npos);
+    RUVIA_CHECK(body.find(R"("status":400)") != std::string_view::npos);
+    RUVIA_CHECK(body.find(R"("instance":)") == std::string_view::npos);
+    RUVIA_CHECK(body.find(R"("errors":)") == std::string_view::npos);
 }
 
 RUVIA_TEST(default_error_response_serializes_typed_validation_details) {
@@ -114,8 +114,8 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
         const auto body = response.bodyBytes();
         RUVIA_CHECK(body.find(R"("title":"Bad Request")") != std::string_view::npos);
-        RUVIA_CHECK(!body.contains('\r'));
-        RUVIA_CHECK(!body.contains('\n'));
+        RUVIA_CHECK(!(body.find('\r') != std::string_view::npos));
+        RUVIA_CHECK(!(body.find('\n') != std::string_view::npos));
     }
     // An extension status has no conventional reason phrase. The Web JSON
     // envelope gets its own neutral label instead of inventing wire semantics.
@@ -133,8 +133,8 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
                 .message = "specific failure",
                 .statusText = "Custom Label"}));
         const auto body = response.bodyBytes();
-        RUVIA_CHECK(body.contains(R"("title":"Bad Request")"));
-        RUVIA_CHECK(body.contains(R"("detail":"specific failure")"));
+        RUVIA_CHECK(body.find(R"("title":"Bad Request")") != std::string_view::npos);
+        RUVIA_CHECK(body.find(R"("detail":"specific failure")") != std::string_view::npos);
     }
     // A valid in-range status is preserved unchanged.
     {

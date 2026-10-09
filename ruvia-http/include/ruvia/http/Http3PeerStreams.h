@@ -3,11 +3,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <variant>
 
 #include "ruvia/http/Http3VarInt.h"
 
@@ -110,13 +110,13 @@ public:
     explicit Http3PeerStreams(Http3PeerRole localRole, std::pmr::memory_resource* resource,
         Http3PeerStreamLimits limits = {});
 
-    [[nodiscard]] std::expected<Http3PeerStreamFeed, Http3PeerStreamError> feed(
+    [[nodiscard]] std::variant<Http3PeerStreamFeed, Http3PeerStreamError> feed(
         std::uint64_t streamId, std::span<const char> bytes, bool fin = false,
         bool reset = false);
 
     // Validate a peer-initiated bidirectional stream. HTTP/3 servers accept
     // client request streams; clients reject server-initiated bidi streams.
-    [[nodiscard]] static std::expected<void, Http3PeerStreamError> acceptBidirectional(
+    [[nodiscard]] static std::variant<std::monostate, Http3PeerStreamError> acceptBidirectional(
         Http3PeerRole localRole, std::uint64_t streamId) noexcept;
 
     // Called only after transport retirement; critical streams cannot retire
@@ -132,7 +132,7 @@ private:
         std::uint64_t streamType{0};
     };
 
-    [[nodiscard]] std::expected<void, Http3PeerStreamError> validatePeerUni(
+    [[nodiscard]] std::variant<std::monostate, Http3PeerStreamError> validatePeerUni(
         std::uint64_t streamId) const noexcept;
     [[nodiscard]] static bool isCritical(Http3PeerStreamKind kind) noexcept;
 

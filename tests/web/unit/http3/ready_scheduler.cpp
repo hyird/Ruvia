@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Timer.h"
@@ -102,10 +103,10 @@ bool accepted(stream_buffer::control_result result) noexcept {
 std::string frame(std::uint64_t type, std::string_view payload) {
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto size = ruvia::encodeHttp3FrameHeader(header, type, payload.size());
-    if (!size) {
+    if ((size.index() != 0)) {
         throw std::runtime_error("HTTP/3 scheduler test frame encoding failed");
     }
-    std::string wire(header.data(), *size);
+    std::string wire(header.data(), std::get<0>(size));
     wire.append(payload);
     return wire;
 }
@@ -116,11 +117,11 @@ std::string request_wire(fixture& fixture, std::string_view method, std::string_
                                                                  .authority = "example.test",
                                                                  .path = path},
         {}, fixture.worker.resource());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 scheduler request encoding failed");
     }
     return frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(encoded->fieldSection.data(), encoded->fieldSection.size()));
+        std::string_view(std::get<0>(encoded).fieldSection.data(), std::get<0>(encoded).fieldSection.size()));
 }
 
 connection_type::EventResult feed_request(connection_type& owner, stream_buffer& inbound,
@@ -154,11 +155,11 @@ connection_type::EventResult feed_malformed_headers(connection_type& owner, stre
     fixture& fixture, stream_id id) {
     const std::array<ruvia::Http3FieldSectionFieldView, 4> fields{{{":method", "GET"}, {":scheme", "https"}, {"x-before-path", "bad"}, {":path", "/"}}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-    if (!section) {
+    if ((section.index() != 0)) {
         throw std::runtime_error("HTTP/3 malformed scheduler request encoding failed");
     }
     const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(section->data(), section->size()));
+        std::string_view(std::get<0>(section).data(), std::get<0>(section).size()));
     const auto bytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(wire.data()), wire.size());
     if (!accepted(inbound.try_send(id, bytes))) {

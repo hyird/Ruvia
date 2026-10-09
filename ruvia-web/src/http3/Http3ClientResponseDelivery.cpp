@@ -191,7 +191,7 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
                     for (const auto& field : state_.headers) {
                         fields.emplace_back(field.name(), field.value());
                     }
-                    if (!validateHttpConnectUdpResponse(state_.protocolVersion, state_.status.value(), fields)) {
+                    if ((validateHttpConnectUdpResponse(state_.protocolVersion, state_.status.value(), fields).index() != 0)) {
                         requestRetirement(RetirementReason::kProtocolError);
                         return;
                     }

@@ -1,6 +1,7 @@
 #include "ruvia/web/HttpDatagramStream.h"
 
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/web/HttpClientTunnel.h"
 #include "ruvia/web/HttpTunnel.h"
@@ -68,26 +69,26 @@ Task<std::optional<HttpDatagram>> HttpDatagramStream::readOwned(detail::CapsuleS
         std::size_t offset{};
         if (udp) {
             auto decoded = datagrams.receiveUdpDatagram(bytes, transport);
-            if (!decoded) {
+            if ((decoded.index() != 0)) {
                 state.abort();
                 throw std::runtime_error("malformed CONNECT-UDP datagram");
             }
-            if (!*decoded) {
+            if (!std::get<0>(decoded)) {
                 owned.clear();
                 continue;
             }
-            offset = bytes.size() - (*decoded)->payload.size();
+            offset = bytes.size() - (std::get<0>(decoded))->payload.size();
         } else {
             auto decoded = datagrams.receiveDatagram(bytes, transport);
-            if (!decoded) {
+            if ((decoded.index() != 0)) {
                 state.abort();
                 throw std::runtime_error("malformed HTTP Datagram");
             }
-            if (!*decoded) {
+            if (!std::get<0>(decoded)) {
                 owned.clear();
                 continue;
             }
-            offset = bytes.size() - (**decoded).size();
+            offset = bytes.size() - (*std::get<0>(decoded)).size();
         }
         auto result = std::move(owned);
         if (!native) {
@@ -118,18 +119,18 @@ ScopedOperation<void> HttpDatagramStream::sendPayload(std::string_view payload, 
     auto prepare = [&] {
         if (udp) {
             auto plan = session.prepareUdpDatagram(std::span(payload.data(), payload.size()), transport);
-            if (!plan) {
+            if ((plan.index() != 0)) {
                 return false;
             }
-            std::copy_n(plan->prefix.begin(), plan->prefixSize, prefix.begin());
-            size = plan->prefixSize;
+            std::copy_n(std::get<0>(plan).prefix.begin(), std::get<0>(plan).prefixSize, prefix.begin());
+            size = std::get<0>(plan).prefixSize;
         } else {
             auto plan = session.prepareDatagram(std::span(payload.data(), payload.size()), transport);
-            if (!plan) {
+            if ((plan.index() != 0)) {
                 return false;
             }
-            std::copy_n(plan->prefix.begin(), plan->prefixSize, prefix.begin());
-            size = plan->prefixSize;
+            std::copy_n(std::get<0>(plan).prefix.begin(), std::get<0>(plan).prefixSize, prefix.begin());
+            size = std::get<0>(plan).prefixSize;
         }
         return true;
     };

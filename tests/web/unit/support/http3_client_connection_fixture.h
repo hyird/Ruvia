@@ -24,6 +24,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -217,10 +218,11 @@ public:
                 X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
                 throw std::runtime_error("failed to create HTTP/3 test certificate");
             }
-            auto* subject = X509_get_subject_name(certificate.get());
+            const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
             const auto* name = reinterpret_cast<const unsigned char*>("localhost");
-            if (X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, name, -1, -1, 0) != 1 ||
-                X509_set_issuer_name(certificate.get(), subject) != 1) {
+            if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, name, -1, -1, 0) != 1 ||
+                X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
+                X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
                 throw std::runtime_error("failed to name HTTP/3 test identity");
             }
             const std::array extensions{std::pair{NID_subject_alt_name, "IP:127.0.0.1,DNS:localhost"},
@@ -293,15 +295,15 @@ private:
     std::uint64_t type, std::span<const char> payload) {
     std::array<char, 16> header{};
     const auto typeSize = ruvia::encodeHttp3VarInt(header, type);
-    if (!typeSize) {
+    if ((typeSize.index() != 0)) {
         throw std::runtime_error("failed to encode HTTP/3 test frame type");
     }
     const auto payloadSize = ruvia::encodeHttp3VarInt(
-        std::span<char>(header).subspan(*typeSize), payload.size());
-    if (!payloadSize) {
+        std::span<char>(header).subspan(std::get<0>(typeSize)), payload.size());
+    if ((payloadSize.index() != 0)) {
         throw std::runtime_error("failed to encode HTTP/3 test frame length");
     }
-    std::vector<char> output(header.begin(), header.begin() + *typeSize + *payloadSize);
+    std::vector<char> output(header.begin(), header.begin() + std::get<0>(typeSize) + std::get<0>(payloadSize));
     output.insert(output.end(), payload.begin(), payload.end());
     return output;
 }
@@ -343,10 +345,10 @@ public:
         ruvia::Http3FieldSectionFieldView fields[]{{":status", "200"}, {"content-length", contentLength}};
         std::pmr::monotonic_buffer_resource temporary;
         const auto encodedHead = ruvia::encodeHttp3FieldSection(fields, &temporary);
-        if (!encodedHead) {
+        if ((encodedHead.index() != 0)) {
             throw std::runtime_error("failed to encode HTTP/3 test response head");
         }
-        first_part_ = test_http3_frame(1, *encodedHead);
+        first_part_ = test_http3_frame(1, std::get<0>(encodedHead));
         const auto firstData = test_http3_frame(0, std::span<const char>("abc", 3));
         first_part_.insert(first_part_.end(), firstData.begin(), firstData.end());
         if (malformedTail) {
@@ -362,10 +364,10 @@ public:
                 {":status", "200"}, {"sec-websocket-protocol", "chat"},
                 {"sec-websocket-extensions", "permessage-deflate; server_no_context_takeover; client_no_context_takeover"}};
             const auto wsHead = ruvia::encodeHttp3FieldSection(wsFields, &temporary);
-            if (!wsHead) {
+            if ((wsHead.index() != 0)) {
                 throw std::runtime_error("failed to encode WebSocket test response");
             }
-            first_part_ = test_http3_frame(1, *wsHead);
+            first_part_ = test_http3_frame(1, std::get<0>(wsHead));
             ruvia::WebSocketConnection websocket({.resource = &temporary});
             const std::string greeting(100000, 'w');
             if (websocket.submitFrame(ruvia::WebSocketOpcode::kBinary, greeting, false) != ruvia::WebSocketFrameSubmitStatus::kAccepted) {
@@ -384,10 +386,10 @@ public:
         if (tunnel_) {
             const ruvia::Http3FieldSectionFieldView tunnelFields[]{{":status", "200"}, {"x-tunnel", "owned-metadata"}};
             const auto head = ruvia::encodeHttp3FieldSection(tunnelFields, &temporary);
-            if (!head) {
+            if ((head.index() != 0)) {
                 throw std::runtime_error("CONNECT test head encoding failed");
             }
-            first_part_ = test_http3_frame(1, *head);
+            first_part_ = test_http3_frame(1, std::get<0>(head));
             const std::string greeting(100003, 's');
             const auto data = test_http3_frame(0, std::span(greeting.data(), greeting.size()));
             first_part_.insert(first_part_.end(), data.begin(), data.end());
@@ -396,15 +398,15 @@ public:
         if (udp_) {
             const ruvia::Http3FieldSectionFieldView udpFields[]{{":status", "200"}, {"capsule-protocol", "?1"}};
             const auto head = ruvia::encodeHttp3FieldSection(udpFields, &temporary);
-            if (!head) {
+            if ((head.index() != 0)) {
                 throw std::runtime_error("UDP test head encoding failed");
             }
-            first_part_ = test_http3_frame(1, *head);
+            first_part_ = test_http3_frame(1, std::get<0>(head));
             std::string payload(1, '\0');
             payload.append(16003, 's');
             std::array<char, 16> header;
             const auto encoded = ruvia::encodeHttpCapsuleHeader(header, 0, payload.size());
-            std::string capsule(header.data(), *encoded);
+            std::string capsule(header.data(), std::get<0>(encoded));
             capsule.append(payload);
             const auto data = test_http3_frame(0, std::span(capsule.data(), capsule.size()));
             first_part_.insert(first_part_.end(), data.begin(), data.end());
@@ -539,18 +541,18 @@ private:
             auto& pair = *pair_;
             port_.store(pair.server_endpoint().port(), std::memory_order_release);
             auto prefixes = ruvia::Http3LocalCriticalStreams::create({.enableConnectProtocol = webSocket_ || tunnel_});
-            if (!prefixes) {
+            if ((prefixes.index() != 0)) {
                 throw std::runtime_error("failed to create local HTTP/3 critical stream prefixes");
             }
-            const auto controlPrefix = prefixes->controlPrefix();
+            const auto controlPrefix = std::get<0>(prefixes).controlPrefix();
             std::string serverControl(controlPrefix.data(), controlPrefix.size());
             if (advertiseOrigins_) {
                 const std::array<std::string_view, 2> origins{"https://127.0.0.1", "https://localhost"};
                 const auto frame = ruvia::encodeHttp3OriginFrame(origins);
-                if (!frame) {
+                if ((frame.index() != 0)) {
                     throw std::runtime_error("failed to encode HTTP/3 ORIGIN fixture");
                 }
-                serverControl.append(frame->data(), frame->size());
+                serverControl.append(std::get<0>(frame).data(), std::get<0>(frame).size());
             }
             {
                 std::lock_guard lock(mutex_);
@@ -562,7 +564,7 @@ private:
             std::array<std::optional<stream_id>, 3> localCriticalIds;
             std::array<std::size_t, 3> localCriticalOffsets{};
             std::array<std::span<const char>, 3> localCriticalBytes{
-                std::span<const char>(serverControl), prefixes->qpackEncoderPrefix(), prefixes->qpackDecoderPrefix()};
+                std::span<const char>(serverControl), std::get<0>(prefixes).qpackEncoderPrefix(), std::get<0>(prefixes).qpackDecoderPrefix()};
             std::optional<stream_id> requestStream;
             struct PushWire final {
                 stream_id stream{};
@@ -642,11 +644,11 @@ private:
                                 return;
                             }
                             const auto datagram = ruvia::decodeHttpUdpDatagram(std::span(target.capsulePayload.data(), target.capsulePayload.size()));
-                            if (capsule.type != 0 || !datagram || datagram->contextId != 0 ||
-                                !std::ranges::all_of(datagram->payload, [](char ch) { return ch == 't'; })) {
+                            if (capsule.type != 0 || (datagram.index() != 0) || std::get<0>(datagram).contextId != 0 ||
+                                !std::ranges::all_of(std::get<0>(datagram).payload, [](char ch) { return ch == 't'; })) {
                                 throw std::runtime_error("invalid CONNECT-UDP client packet");
                             }
-                            target.tunnel_bytes->fetch_add(datagram->payload.size(), std::memory_order_release);
+                            target.tunnel_bytes->fetch_add(std::get<0>(datagram).payload.size(), std::memory_order_release);
                             target.capsulePayload.clear();
                         };
                         const auto decoded = state.capsules.feed(event.body, false, collect, &state);
@@ -794,15 +796,15 @@ private:
                             response.header("sec-websocket-extensions", "permessage-deflate; server_no_context_takeover; client_no_context_takeover");
                             const auto head = wsRequest.encodeResponseHead(*requestStream, response,
                                 ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kConnect, response));
-                            if (!head) {
+                            if ((head.index() != 0)) {
                                 throw std::runtime_error("failed to encode dynamic WebSocket response");
                             }
                             const auto oldHeader = ruvia::decodeHttp3FrameHeader(first_part_);
-                            if (!oldHeader) {
+                            if ((oldHeader.index() != 0)) {
                                 throw std::runtime_error("invalid static WebSocket response fixture");
                             }
-                            const auto prefix = test_http3_frame(1, head->field_section.fieldSection);
-                            first_part_.erase(first_part_.begin(), first_part_.begin() + static_cast<std::ptrdiff_t>(oldHeader->encodedBytes + oldHeader->length));
+                            const auto prefix = test_http3_frame(1, std::get<0>(head).field_section.fieldSection);
+                            first_part_.erase(first_part_.begin(), first_part_.begin() + static_cast<std::ptrdiff_t>(std::get<0>(oldHeader).encodedBytes + std::get<0>(oldHeader).length));
                             first_part_.insert(first_part_.begin(), prefix.begin(), prefix.end());
                             responseHeadBytes = prefix.size();
                             dynamicHeadPrepared = true;
@@ -825,36 +827,36 @@ private:
                                 const std::string authority = push_->cross_origin ? "other.test" : "127.0.0.1:" + std::to_string(port());
                                 const std::array<ruvia::HttpHeaderView, 1> headers{ruvia::HttpHeaderView("x-promise", "owned")};
                                 auto promise = wsRequest.preparePushPromise(*requestStream, pushId, {.authority = authority, .path = path, .headers = headers});
-                                if (!promise) {
+                                if ((promise.index() != 0)) {
                                     throw std::runtime_error("push fixture promise failed");
                                 }
                                 if (push_->cancel_before_promise) {
                                     auto cancel = wsRequest.prepareCancelPush(pushId);
                                     // The critical initial prefix has already completed; use the stable critical output lane below.
-                                    qpackBytes[1].assign(cancel->data(), cancel->size());
+                                    qpackBytes[1].assign(std::get<0>(cancel).data(), std::get<0>(cancel).size());
                                     qpackOffsets[1] = 0;
                                 }
                                 if (push_->promise_only || push_->cancel_before_promise) {
-                                    promises.emplace_back(promise->begin(), promise->end());
+                                    promises.emplace_back(std::get<0>(promise).begin(), std::get<0>(promise).end());
                                 } else {
                                     auto prefix = wsRequest.preparePushStream(*openedPush, pushId);
-                                    if (!prefix) {
+                                    if ((prefix.index() != 0)) {
                                         throw std::runtime_error("push fixture stream prefix failed");
                                     }
-                                    PushWire wire{*openedPush, std::vector<char>(prefix->begin(), prefix->end())};
+                                    PushWire wire{*openedPush, std::vector<char>(std::get<0>(prefix).begin(), std::get<0>(prefix).end())};
                                     const std::string length = std::to_string(push_->body_bytes + (push_->malformed_response ? 1 : 0));
                                     const std::array<ruvia::Http3FieldSectionFieldView, 2> fields{{{":status", "200"}, {"content-length", length}}};
                                     const auto encoded = ruvia::encodeHttp3FieldSection(fields, &resource_);
-                                    auto head = test_http3_frame(1, *encoded);
+                                    auto head = test_http3_frame(1, std::get<0>(encoded));
                                     wire.bytes.insert(wire.bytes.end(), head.begin(), head.end());
                                     const std::string content(push_->body_bytes, 'p');
                                     auto body = test_http3_frame(0, content);
                                     wire.bytes.insert(wire.bytes.end(), body.begin(), body.end());
                                     if (push_->stream_before_promise) {
-                                        wire.promise.assign(promise->begin(), promise->end());
+                                        wire.promise.assign(std::get<0>(promise).begin(), std::get<0>(promise).end());
                                         wire.promise_release = std::chrono::steady_clock::now() + 30ms;
                                     } else {
-                                        promises.emplace_back(promise->begin(), promise->end());
+                                        promises.emplace_back(std::get<0>(promise).begin(), std::get<0>(promise).end());
                                     }
                                     pushStreams.push_back(std::move(wire));
                                 }
@@ -1102,7 +1104,7 @@ public:
     void disarm() noexcept {
         state_->connection = nullptr;
         asio::error_code ignored;
-        timer_.cancel(ignored);
+        timer_.cancel();
     }
 
     [[nodiscard]] bool expired() const noexcept {

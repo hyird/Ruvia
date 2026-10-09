@@ -128,7 +128,7 @@ void http3_quic_client_tls_context::prepare(SSL* ssl, std::string_view host) con
         X509_VERIFY_PARAM* const parameters = SSL_get0_param(ssl);
         const int configured = ip_address
                                    ? X509_VERIFY_PARAM_set1_ip_asc(parameters, normalized.c_str())
-                                   : SSL_set1_host(ssl, normalized.c_str());
+                                   : SSL_set1_dnsname(ssl, normalized.c_str());
         if (configured != 1) {
             throw std::runtime_error("failed to configure client TLS peer host verification");
         }

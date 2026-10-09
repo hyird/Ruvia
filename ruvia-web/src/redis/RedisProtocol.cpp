@@ -1,6 +1,6 @@
 #include "redis/RedisProtocol.h"
 
-#include <hiredis/hiredis.h>
+#include <hiredis.h>
 
 #include <cstddef>
 #include <cstdint>

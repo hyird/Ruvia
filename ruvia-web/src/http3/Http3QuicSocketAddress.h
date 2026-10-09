@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
+#include <variant>
 
 #include <asio/ip/udp.hpp>
 
@@ -21,13 +21,13 @@ enum class http3_quic_socket_address_error : std::uint8_t {
 // Address bytes retain network order; ports are represented in host byte order.
 // Datagram peer/source/destination addresses must be concrete; bind addresses may
 // be wildcard because received packets retain their concrete local destination.
-[[nodiscard]] std::expected<http3_quic_datagram_address, http3_quic_socket_address_error>
+[[nodiscard]] std::variant<http3_quic_datagram_address, http3_quic_socket_address_error>
 to_http3_quic_datagram_address(const asio::ip::udp::endpoint& endpoint) noexcept;
 
-[[nodiscard]] std::expected<http3_quic_datagram_address, http3_quic_socket_address_error>
+[[nodiscard]] std::variant<http3_quic_datagram_address, http3_quic_socket_address_error>
 to_http3_quic_bind_address(const asio::ip::udp::endpoint& endpoint) noexcept;
 
-[[nodiscard]] std::expected<asio::ip::udp::endpoint, http3_quic_socket_address_error>
+[[nodiscard]] std::variant<asio::ip::udp::endpoint, http3_quic_socket_address_error>
 to_udp_endpoint(const http3_quic_datagram_address& address) noexcept;
 
 }  // namespace ruvia::detail

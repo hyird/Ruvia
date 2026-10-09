@@ -4,6 +4,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpRequestTarget.h"
 
@@ -24,21 +25,21 @@ RUVIA_TEST(http_authority_host_public_parse_preserves_ip_literal_brackets) {
 
 RUVIA_TEST(uri_port_parser_returns_typed_values_and_errors) {
     using ruvia::detail::parsePortValue;
-    RUVIA_CHECK_EQ(parsePortValue("0").value(), std::uint16_t{0});
-    RUVIA_CHECK_EQ(parsePortValue("65535").value(), std::uint16_t{65535});
-    RUVIA_CHECK_EQ(parsePortValue("00080").value(), std::uint16_t{80});
+    RUVIA_CHECK_EQ(std::get<0>(parsePortValue("0")), std::uint16_t{0});
+    RUVIA_CHECK_EQ(std::get<0>(parsePortValue("65535")), std::uint16_t{65535});
+    RUVIA_CHECK_EQ(std::get<0>(parsePortValue("00080")), std::uint16_t{80});
     for (const std::string_view text : {"", "+80", "-1", " 80", "80 ", "80x"}) {
         const auto port = parsePortValue(text);
-        RUVIA_CHECK(!port.has_value());
-        if (!port) {
-            RUVIA_CHECK_EQ(port.error(), std::errc::invalid_argument);
+        RUVIA_CHECK(!(port.index() == 0));
+        if ((port.index() != 0)) {
+            RUVIA_CHECK_EQ(std::get<1>(port), std::errc::invalid_argument);
         }
     }
     for (const std::string_view text : {"65536", "99999999999999999999999999"}) {
         const auto port = parsePortValue(text);
-        RUVIA_CHECK(!port.has_value());
-        if (!port) {
-            RUVIA_CHECK_EQ(port.error(), std::errc::result_out_of_range);
+        RUVIA_CHECK(!(port.index() == 0));
+        if ((port.index() != 0)) {
+            RUVIA_CHECK_EQ(std::get<1>(port), std::errc::result_out_of_range);
         }
     }
 }
@@ -96,9 +97,9 @@ RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
             continue;
         }
 
-        RUVIA_CHECK(target.query.empty() || input.contains(target.query));
+        RUVIA_CHECK(target.query.empty() || input.find(target.query) != std::string_view::npos);
         RUVIA_CHECK(
-            target.authority.empty() || input.contains(target.authority));
+            target.authority.empty() || input.find(target.authority) != std::string_view::npos);
         switch (target.form) {
             case HttpRequestTargetForm::kOrigin:
                 RUVIA_CHECK(target.scheme.empty());
@@ -110,7 +111,7 @@ RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
                 RUVIA_CHECK(input.starts_with(target.scheme));
                 RUVIA_CHECK_EQ(target.defaultPort, httpUriSchemeDefaultPort(target.scheme));
                 RUVIA_CHECK(target.path.empty() || target.path == "/" || target.path == "*" ||
-                            input.contains(target.path));
+                            input.find(target.path) != std::string_view::npos);
                 break;
             case HttpRequestTargetForm::kAuthority:
                 RUVIA_CHECK(method == HttpKnownMethod::kConnect);

@@ -1,11 +1,11 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/HttpHeader.h"
@@ -38,9 +38,9 @@ enum class HttpConnectUdpError : std::uint8_t {
 };
 // RFC 9298's default URI template. IPv6 hosts have no brackets or zone ID;
 // all reserved bytes are percent-encoded during template expansion.
-[[nodiscard]] std::expected<std::pmr::string, HttpConnectUdpError> encodeHttpConnectUdpPath(
+[[nodiscard]] std::variant<std::pmr::string, HttpConnectUdpError> encodeHttpConnectUdpPath(
     HttpConnectUdpTargetView target, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
-[[nodiscard]] std::expected<HttpConnectUdpTarget, HttpConnectUdpError> parseHttpConnectUdpPath(
+[[nodiscard]] std::variant<HttpConnectUdpTarget, HttpConnectUdpError> parseHttpConnectUdpPath(
     std::string_view path, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 struct HttpConnectUdpRequestView final {
@@ -53,15 +53,15 @@ struct HttpConnectUdpRequestView final {
     std::string_view path{};
     std::span<const HttpHeaderView> headers{};
 };
-[[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpRequest(HttpConnectUdpRequestView request) noexcept;
-[[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpResponse(
+[[nodiscard]] std::variant<std::monostate, HttpConnectUdpError> validateHttpConnectUdpRequest(HttpConnectUdpRequestView request) noexcept;
+[[nodiscard]] std::variant<std::monostate, HttpConnectUdpError> validateHttpConnectUdpResponse(
     HttpProtocolVersion version, std::uint16_t status, std::span<const HttpHeaderView> headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool isHttpConnectUdpUpgradeRequest(const HttpRequest& request) noexcept;
-[[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpRequest(const HttpRequest& request) noexcept;
+[[nodiscard]] std::variant<std::monostate, HttpConnectUdpError> validateHttpConnectUdpRequest(const HttpRequest& request) noexcept;
 // Takes application response metadata, validates it, and supplies the required
 // Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
 // can only be produced by this dedicated driver boundary.
-[[nodiscard]] std::expected<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse response, HttpProtocolVersion version);
-[[nodiscard]] std::expected<Http1ResponseHeadPlan, HttpConnectUdpError> prepareHttp1ConnectUdpResponseHead(const HttpResponse& response) noexcept;
+[[nodiscard]] std::variant<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse response, HttpProtocolVersion version);
+[[nodiscard]] std::variant<Http1ResponseHeadPlan, HttpConnectUdpError> prepareHttp1ConnectUdpResponseHead(const HttpResponse& response) noexcept;
 }  // namespace ruvia

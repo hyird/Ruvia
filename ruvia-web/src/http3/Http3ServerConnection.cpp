@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3PeerStreams.h"
@@ -179,10 +180,10 @@ struct Http3ServerConnection::RejectionEntry final {
         auto created = Http3BufferedResponseOutput::create(*response, writePlan,
             ownerValue.worker_, ownerValue.outbound_,
             {ownerValue.epoch_, ownerValue.connectionGeneration_, streamId}, std::nullopt, slotValue.responsePreludeBytes);
-        if (!created) {
+        if ((created.index() != 0)) {
             throw std::runtime_error("HTTP/3 rejection response preparation failed");
         }
-        output.emplace(std::move(*created));
+        output.emplace(std::move(std::get<0>(created)));
     }
 
     RequestIndexSlot& slot;
@@ -290,13 +291,13 @@ void Http3ServerConnection::receiveDatagram(std::span<const std::byte> bytes) no
     }
     const auto code = static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode);
     auto decoded = decodeHttp3Datagram(std::span(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-    if (!decoded) {
+    if ((decoded.index() != 0)) {
         requireConnectionClose(TransportCloseReason::kConnectionProtocolError, code);
         return;
     }
     try {
-        const auto status = session_.receiveDatagram(*decoded);
-        auto* slot = requests_.find(decoded->streamId);
+        const auto status = session_.receiveDatagram(std::get<0>(decoded));
+        auto* slot = requests_.find(std::get<0>(decoded).streamId);
         if (status == Http3DatagramReceiveStatus::kConnectionError) {
             requireConnectionClose(TransportCloseReason::kConnectionProtocolError, code);
         } else if (status == Http3DatagramReceiveStatus::kStreamError && slot) {
@@ -1050,8 +1051,8 @@ Task<bool> Http3ServerConnection::pushRequest(std::uint64_t parentStreamId, Http
     }
     const auto pushId = nextPushId_;
     auto promise = session_.preparePushPromise(parentStreamId, pushId, request);
-    if (!promise) {
-        if (promise.error() == Http3ConnectionErrorCode::kMessageError) {
+    if ((promise.index() != 0)) {
+        if (std::get<1>(promise) == Http3ConnectionErrorCode::kMessageError) {
             throw std::invalid_argument("invalid HTTP/3 push request");
         }
         co_return false;
@@ -1084,13 +1085,13 @@ Task<bool> Http3ServerConnection::pushRequest(std::uint64_t parentStreamId, Http
     }
     try {
         auto prefix = session_.admitPushStream(streamId, pushId);
-        if (!prefix) {
+        if ((prefix.index() != 0)) {
             pushed->status = RequestStatus::kCancelled;
             (void)enqueueResetIntent(*pushed);
             co_return false;
         }
-        pushed->pushPrefix.emplace(std::move(*prefix));
-        co_await parent->entry->dispatch.publishResponseBytes(*promise);
+        pushed->pushPrefix.emplace(std::move(std::get<0>(prefix)));
+        co_await parent->entry->dispatch.publishResponseBytes(std::get<0>(promise));
         if (admissionClosed_ || pushed->pushCancelled) {
             pushed->pushPrefix.reset();
             (void)session_.cancelRequest(streamId);
@@ -1372,7 +1373,7 @@ bool Http3ServerConnection::queueContinueResponse(std::uint64_t streamId) {
     }
     auto head = session_.encodeInterimResponseHead(streamId, HttpInterimResponseHead(http_status::kContinue));
     const auto peerLimit = session_.peerMaxFieldSectionSize();
-    if (!head || (peerLimit && head->field_section.decodedFieldSectionSize() > *peerLimit)) {
+    if ((head.index() != 0) || (peerLimit && std::get<0>(head).field_section.decodedFieldSectionSize() > *peerLimit)) {
         slot->status = RequestStatus::kCancelled;
         (void)enqueueResetIntent(*slot);
         (void)retireRequestInput(streamId);
@@ -1380,13 +1381,13 @@ bool Http3ServerConnection::queueContinueResponse(std::uint64_t streamId) {
         return false;
     }
     std::pmr::vector<char> frame(worker_.resource());
-    frame.resize(kHttp3FrameHeaderMaxBytes + head->field_section.fieldSection.size());
-    const auto prefix = encodeHttp3FrameHeader(frame, static_cast<std::uint64_t>(Http3FrameType::kHeaders), head->field_section.fieldSection.size());
-    if (!prefix) {
+    frame.resize(kHttp3FrameHeaderMaxBytes + std::get<0>(head).field_section.fieldSection.size());
+    const auto prefix = encodeHttp3FrameHeader(frame, static_cast<std::uint64_t>(Http3FrameType::kHeaders), std::get<0>(head).field_section.fieldSection.size());
+    if ((prefix.index() != 0)) {
         throw std::runtime_error("HTTP/3 continue response framing failed");
     }
-    frame.resize(*prefix + head->field_section.fieldSection.size());
-    std::copy(head->field_section.fieldSection.begin(), head->field_section.fieldSection.end(), frame.begin() + static_cast<std::ptrdiff_t>(*prefix));
+    frame.resize(std::get<0>(prefix) + std::get<0>(head).field_section.fieldSection.size());
+    std::copy(std::get<0>(head).field_section.fieldSection.begin(), std::get<0>(head).field_section.fieldSection.end(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(prefix)));
     slot->responsePreludeBytes = frame.size();
     slot->interimResponse.emplace(PendingInterimResponse{std::move(frame)});
     enqueueForDemand(*slot, true);

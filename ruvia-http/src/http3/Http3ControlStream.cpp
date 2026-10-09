@@ -2,6 +2,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/Http3VarInt.h"
 
@@ -31,8 +32,8 @@ void Http3ControlStream::consume(Http3StreamFrameEvent event) {
             return;
         }
         const auto advertisement = decodeHttpOriginAdvertisement(settingsPayload_, resource_);
-        if (advertisement && callback_) {
-            callback_(context_, {.kind = event.kind, .id = 0, .originAdvertisement = &*advertisement});
+        if ((advertisement.index() == 0) && callback_) {
+            callback_(context_, {.kind = event.kind, .id = 0, .originAdvertisement = &std::get<0>(advertisement)});
         }
         settingsPayload_.clear();
         return;
@@ -48,19 +49,19 @@ void Http3ControlStream::consume(Http3StreamFrameEvent event) {
         }
         const auto id = decodeHttp3VarInt(settingsPayload_);
         const bool push = event.kind == Http3StreamFrameEventKind::kPushPriorityUpdate;
-        if (!id) {
+        if ((id.index() != 0)) {
             error_ = Http3ControlStreamStatus::kFrameError;
             return;
         }
-        if ((!push && (id->value & 3) != 0) || (push && (!maxPushId_ || id->value > *maxPushId_))) {
+        if ((!push && (std::get<0>(id).value & 3) != 0) || (push && (!maxPushId_ || std::get<0>(id).value > *maxPushId_))) {
             error_ = Http3ControlStreamStatus::kIdError;
             return;
         }
-        auto fields = parseHttpPriority(std::string_view(settingsPayload_.data() + id->encodedBytes,
-            settingsPayload_.size() - id->encodedBytes));
+        auto fields = parseHttpPriority(std::string_view(settingsPayload_.data() + std::get<0>(id).encodedBytes,
+            settingsPayload_.size() - std::get<0>(id).encodedBytes));
         if (callback_) {
-            callback_(context_, {event.kind, id->value,
-                                    fields ? std::optional(HttpPriorityUpdate{id->value, push, *fields}) : std::nullopt});
+            callback_(context_, {event.kind, std::get<0>(id).value,
+                                    (fields.index() == 0) ? std::optional(HttpPriorityUpdate{std::get<0>(id).value, push, std::get<0>(fields)}) : std::nullopt});
         }
         settingsPayload_.clear();
         return;
@@ -76,11 +77,11 @@ void Http3ControlStream::consume(Http3StreamFrameEvent event) {
             return;
         }
         auto decoded = decodeHttp3Settings(settingsPayload_, resource_);
-        if (!decoded) {
+        if ((decoded.index() != 0)) {
             error_ = Http3ControlStreamStatus::kSettingsError;
             return;
         }
-        settings_ = std::move(*decoded);
+        settings_ = std::move(std::get<0>(decoded));
         std::pmr::vector<char> released(resource_);
         settingsPayload_.swap(released);
         return;
@@ -109,11 +110,11 @@ void Http3ControlStream::consume(Http3StreamFrameEvent event) {
         return;
     }
     const auto decoded = decodeHttp3VarInt(std::span<const char>(fixedPayload_).first(fixedPayloadSize_));
-    if (!decoded || decoded->encodedBytes != fixedPayloadSize_) {
+    if ((decoded.index() != 0) || std::get<0>(decoded).encodedBytes != fixedPayloadSize_) {
         error_ = Http3ControlStreamStatus::kFrameError;
         return;
     }
-    const auto value = decoded->value;
+    const auto value = std::get<0>(decoded).value;
     switch (fixedKind_) {
         case Http3StreamFrameEventKind::kCancelPush:
             if (role_ == Http3ControlRole::kServer && (!maxPushId_ || value > *maxPushId_)) {

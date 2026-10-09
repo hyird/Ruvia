@@ -86,10 +86,12 @@ struct tls_pair final {
         require(X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) != nullptr);
         require(X509_gmtime_adj(X509_get_notAfter(certificate.get()), 3600) != nullptr);
         require(X509_set_pubkey(certificate.get(), key.get()) == 1);
-        X509_NAME* const name = X509_get_subject_name(certificate.get());
+        const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+        require(name != nullptr);
         constexpr unsigned char common_name[] = "localhost";
-        require(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, common_name, -1, -1, 0) == 1);
-        require(X509_set_issuer_name(certificate.get(), name) == 1);
+        require(X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, common_name, -1, -1, 0) == 1);
+        require(X509_set_subject_name(certificate.get(), name.get()) == 1);
+        require(X509_set_issuer_name(certificate.get(), name.get()) == 1);
         require(X509_sign(certificate.get(), key.get(), EVP_sha256()) > 0);
         require(SSL_CTX_use_certificate(server_context.get(), certificate.get()) == 1);
         require(SSL_CTX_use_PrivateKey(server_context.get(), key.get()) == 1);

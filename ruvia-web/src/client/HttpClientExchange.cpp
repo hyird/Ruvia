@@ -124,7 +124,7 @@ ScopedOperation<void> HttpClientRequestBodyWriter::end(std::span<const HttpHeade
         for (auto& ch : name) {
             ch = static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(ch)));
         }
-        if (!validation.append(name, field.value())) {
+        if ((validation.append(name, field.value()).index() != 0)) {
             throw std::invalid_argument("invalid request trailer section");
         }
     }

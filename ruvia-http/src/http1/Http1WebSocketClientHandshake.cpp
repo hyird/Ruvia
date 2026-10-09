@@ -2,6 +2,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -92,11 +93,11 @@ Http1ClientRequestPrepareResult Http1WebSocketClientHandshake::prepareRequest(
         .prepare(origin, {.method = "GET", .target = target, .headers = headers}, headBuffer);
 }
 
-std::expected<Http1WebSocketClientHandshakeResultView, Http1WebSocketClientHandshakeError>
+std::variant<Http1WebSocketClientHandshakeResultView, Http1WebSocketClientHandshakeError>
 Http1WebSocketClientHandshake::validateResponse(const Http1ParsedClientResponseHead& response) const {
     if (response.plan().protocolUpgrade() == nullptr ||
         response.head().status() != http_status::kSwitchingProtocols) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kResponseStatus);
+        return Http1WebSocketClientHandshakeError::kResponseStatus;
     }
     detail::WebSocketAcceptKey expected{};
     detail::encodeWebSocketAccept(expected, key_);
@@ -115,19 +116,19 @@ Http1WebSocketClientHandshake::validateResponse(const Http1ParsedClientResponseH
         }
     }
     if (accepts != 1 || !acceptMatches) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kAccept);
+        return Http1WebSocketClientHandshakeError::kAccept;
     }
     if (!hasUpgrade) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kUpgrade);
+        return Http1WebSocketClientHandshakeError::kUpgrade;
     }
     if (!hasConnection) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kConnection);
+        return Http1WebSocketClientHandshakeError::kConnection;
     }
 
     const auto negotiation = negotiation_.validateFields(response.head().headers());
-    if (!negotiation) {
-        return std::unexpected(negotiation.error() == WebSocketClientNegotiationError::kSubprotocol ? Http1WebSocketClientHandshakeError::kSubprotocol : Http1WebSocketClientHandshakeError::kExtensions);
+    if ((negotiation.index() != 0)) {
+        return std::get<1>(negotiation) == WebSocketClientNegotiationError::kSubprotocol ? Http1WebSocketClientHandshakeError::kSubprotocol : Http1WebSocketClientHandshakeError::kExtensions;
     }
-    return Http1WebSocketClientHandshakeResultView{negotiation->selectedSubprotocol, negotiation->compression};
+    return Http1WebSocketClientHandshakeResultView{std::get<0>(negotiation).selectedSubprotocol, std::get<0>(negotiation).compression};
 }
 }  // namespace ruvia

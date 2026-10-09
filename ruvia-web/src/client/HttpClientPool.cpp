@@ -890,7 +890,7 @@ Task<void> HttpClientPool::executeRequestInto(
             co_await executeHttp3(
                 state->connectionIndex, request, timeout, options.stopToken, response);
             if (state->headReady && !state->failure && !state->errorCode) {
-                policy_.retain_response_cookies(request, response);
+                policy_.retain_response_cookies(request, response.headers());
             }
             --requestsInFlight_;
             if (state->failure || state->errorCode) {
@@ -1042,7 +1042,7 @@ Task<void> HttpClientPool::executeRequestInto(
                 co_await executeHttp2(connection, request, timeout, options.stopToken, response);
             }
         }
-        policy_.retain_response_cookies(request, response);
+        policy_.retain_response_cookies(request, response.headers());
         --requestsInFlight_;
         ++completedRequests_;
         co_return;

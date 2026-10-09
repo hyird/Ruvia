@@ -18,6 +18,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/error.hpp>
@@ -151,11 +152,11 @@ TestCertificate generateTestCertificate(EVP_PKEY* subjectKey, const char* common
         throw std::runtime_error("failed to initialize mTLS test certificate");
     }
 
-    X509_NAME* const subject = X509_get_subject_name(certificate.get());
-    if (X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
-            reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
+    const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+    if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
+        X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
         X509_set_issuer_name(certificate.get(),
-            issuer == nullptr ? subject : X509_get_subject_name(issuer)) != 1) {
+            issuer == nullptr ? subject.get() : X509_get_subject_name(issuer)) != 1) {
         throw std::runtime_error("failed to set mTLS test certificate names");
     }
 
@@ -479,10 +480,10 @@ public:
 private:
     [[nodiscard]] static socket_address toAddress(const udp::endpoint& endpoint) {
         const auto address = ruvia::detail::to_http3_quic_datagram_address(endpoint);
-        if (!address) {
+        if ((address.index() != 0)) {
             throw std::runtime_error("invalid plain UDP QUIC fixture endpoint");
         }
-        return *address;
+        return std::get<0>(address);
     }
 
     std::size_t write_client_packets(Client& client, ruvia::quic_timestamp now) {
@@ -548,12 +549,12 @@ private:
                 }
                 const auto destination = ruvia::detail::to_udp_endpoint(
                     ruvia::detail::from_quic_address(packet.peer));
-                if (!destination) {
+                if ((destination.index() != 0)) {
                     throw std::runtime_error("QUIC server output has invalid peer address");
                 }
                 asio::error_code error;
                 const auto sent = server_socket_.send_to(
-                    asio::buffer(packet_buffer_.data(), packet.size), *destination, 0, error);
+                    asio::buffer(packet_buffer_.data(), packet.size), std::get<0>(destination), 0, error);
                 if (error || sent != packet.size) {
                     throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                         "send QUIC server UDP packet");
@@ -636,12 +637,16 @@ int observeClientCertificate(int preverifyOk, X509_STORE_CTX* store) noexcept {
         observation->leafVerified = preverifyOk == 1;
         X509* const certificate = X509_STORE_CTX_get_current_cert(store);
         if (certificate != nullptr) {
-            const int length = X509_NAME_get_text_by_NID(
-                X509_get_subject_name(certificate), NID_commonName,
-                observation->leafCommonName.data(),
-                static_cast<int>(observation->leafCommonName.size()));
-            if (length > 0 && length < static_cast<int>(observation->leafCommonName.size())) {
-                observation->leafNameLength = length;
+            const auto* subject = X509_get_subject_name(certificate);
+            const int name_index = X509_NAME_get_index_by_NID(subject, NID_commonName, -1);
+            if (name_index >= 0) {
+                const auto* name = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject, name_index));
+                const int length = ASN1_STRING_length(name);
+                if (length > 0 && length < static_cast<int>(observation->leafCommonName.size())) {
+                    std::memcpy(observation->leafCommonName.data(), ASN1_STRING_get0_data(name),
+                        static_cast<std::size_t>(length));
+                    observation->leafNameLength = length;
+                }
             }
         }
     }
@@ -667,7 +672,7 @@ public:
         local_ = socket_.local_endpoint();
         const auto local_address = ruvia::detail::to_http3_quic_datagram_address(local_);
         const auto peer_address = ruvia::detail::to_http3_quic_datagram_address(remote_);
-        if (!local_address || !peer_address) {
+        if ((local_address.index() != 0) || (peer_address.index() != 0)) {
             throw std::runtime_error("invalid plain UDP TLS peer endpoint");
         }
 
@@ -678,8 +683,8 @@ public:
 
         ruvia::quic_connection_config config;
         config.role = ruvia::quic_role::client;
-        config.local_address = ruvia::detail::to_quic_address(*local_address);
-        config.peer_address = ruvia::detail::to_quic_address(*peer_address);
+        config.local_address = ruvia::detail::to_quic_address(std::get<0>(local_address));
+        config.peer_address = ruvia::detail::to_quic_address(std::get<0>(peer_address));
         std::array<std::byte, 8> destination_id{};
         std::array<std::byte, 8> source_id{};
         const auto provider = crypto_.view();
@@ -741,13 +746,13 @@ public:
             }
             const auto local_address = ruvia::detail::to_http3_quic_datagram_address(local_);
             const auto peer_address = ruvia::detail::to_http3_quic_datagram_address(source);
-            if (!local_address || !peer_address) {
+            if ((local_address.index() != 0) || (peer_address.index() != 0)) {
                 throw std::runtime_error("invalid received standalone QUIC peer endpoint");
             }
             const ruvia::quic_datagram_view datagram{
                 std::span<const std::byte>(packet_).first(size),
-                ruvia::detail::to_quic_address(*local_address),
-                ruvia::detail::to_quic_address(*peer_address)};
+                ruvia::detail::to_quic_address(std::get<0>(local_address)),
+                ruvia::detail::to_quic_address(std::get<0>(peer_address))};
             const auto status = connection_->receive(datagram, clock::now());
             if (status == ruvia::quic_operation_status::draining ||
                 status == ruvia::quic_operation_status::retired) {
@@ -1215,11 +1220,11 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
     auto& client = fixture.client(0).transport->connection();
 
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    Http3CriticalStreamDriver critical(*prefixes);
+    Http3CriticalStreamDriver critical(std::get<0>(prefixes));
     const auto drive_critical = [&] {
         return critical.drive(
             [&](Http3CriticalStreamDriver::Kind) { return server.open_stream(true); },
@@ -1259,12 +1264,12 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
     RUVIA_CHECK_EQ(application.status, ruvia::quic_operation_status::accepted);
     stream_ids.back() = application.stream_id;
 
-    ruvia::http3_critical_stream_output expected_output(*prefixes);
+    ruvia::http3_critical_stream_output expected_output(std::get<0>(prefixes));
     RUVIA_CHECK(expected_output.queue_goaway(0));
     std::array<std::string, 4> expected{
         std::string{},
-        std::string(prefixes->qpackEncoderPrefix().begin(), prefixes->qpackEncoderPrefix().end()),
-        std::string(prefixes->qpackDecoderPrefix().begin(), prefixes->qpackDecoderPrefix().end()),
+        std::string(std::get<0>(prefixes).qpackEncoderPrefix().begin(), std::get<0>(prefixes).qpackEncoderPrefix().end()),
+        std::string(std::get<0>(prefixes).qpackDecoderPrefix().begin(), std::get<0>(prefixes).qpackDecoderPrefix().end()),
         "graceful close flushes this stream"};
     auto goaway = expected_output.next(ruvia::http3_critical_stream_output::stream_kind::control);
     expected[0].append(goaway.data(), goaway.size());
@@ -1499,15 +1504,15 @@ RUVIA_TEST(http3QuicServerTransportRejectsInvalidUdpAddressWithoutTakingSocketOw
 
     const asio::ip::udp::endpoint zero_port(asio::ip::address_v4::loopback(), 0);
     const auto invalid_peer = ruvia::detail::to_http3_quic_datagram_address(zero_port);
-    RUVIA_CHECK(!invalid_peer.has_value());
-    RUVIA_CHECK_EQ(invalid_peer.error(),
+    RUVIA_CHECK(!(invalid_peer.index() == 0));
+    RUVIA_CHECK_EQ(std::get<1>(invalid_peer),
         ruvia::detail::http3_quic_socket_address_error::zero_port);
 
     ruvia::detail::http3_quic_datagram_address invalid_address;
     invalid_address.port = 0;
     const auto invalid_output = ruvia::detail::to_udp_endpoint(invalid_address);
-    RUVIA_CHECK(!invalid_output.has_value());
-    RUVIA_CHECK_EQ(invalid_output.error(),
+    RUVIA_CHECK(!(invalid_output.index() == 0));
+    RUVIA_CHECK_EQ(std::get<1>(invalid_output),
         ruvia::detail::http3_quic_socket_address_error::zero_port);
     RUVIA_CHECK(socket.is_open());
     RUVIA_CHECK_EQ(socket.local_endpoint(), owned_endpoint);

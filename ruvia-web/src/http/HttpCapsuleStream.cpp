@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/HttpClientTunnel.h"
@@ -137,10 +138,10 @@ ScopedOperation<void> HttpCapsuleStream::write(std::uint64_t type, std::string_v
     }
     std::array<char, 16> header;
     const auto encoded = encodeHttpCapsuleHeader(header, type, payload.size());
-    if (!encoded || payload.size() > state_->config.maxCapsuleLength) {
+    if ((encoded.index() != 0) || payload.size() > state_->config.maxCapsuleLength) {
         throw std::length_error("invalid capsule type or payload length");
     }
-    return writeFrame(std::string_view(header.data(), *encoded), payload);
+    return writeFrame(std::string_view(header.data(), std::get<0>(encoded)), payload);
 }
 ScopedOperation<void> HttpCapsuleStream::writeFrame(std::string_view prefix, std::string_view payload) {
     const auto write = +[](detail::CapsuleWriteInput input) -> Task<void> {

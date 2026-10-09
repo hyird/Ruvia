@@ -13,6 +13,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/error.hpp>
@@ -154,12 +155,12 @@ private:
         client_endpoint_ = client_socket_.local_endpoint();
         const auto local = detail::to_http3_quic_datagram_address(client_endpoint_);
         const auto peer = detail::to_http3_quic_datagram_address(server_endpoint_);
-        if (!local || !peer) {
+        if ((local.index() != 0) || (peer.index() != 0)) {
             throw std::runtime_error("invalid loopback QUIC test socket address");
         }
         ruvia::quic_connection_config config;
-        config.local_address = detail::to_quic_address(*local);
-        config.peer_address = detail::to_quic_address(*peer);
+        config.local_address = detail::to_quic_address(std::get<0>(local));
+        config.peer_address = detail::to_quic_address(std::get<0>(peer));
         client_ = std::make_unique<detail::http3_quic_client_transport>(
             client_tls_, config, host, Clock::now(), resource_);
     }
@@ -181,11 +182,11 @@ private:
             }
             asio::error_code error;
             const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer));
-            if (!peer) {
+            if ((peer.index() != 0)) {
                 throw std::runtime_error("invalid QUIC client output address");
             }
             const auto sent = client_socket_.send_to(
-                asio::buffer(packet_buffer_.data(), packet.size), *peer, 0, error);
+                asio::buffer(packet_buffer_.data(), packet.size), std::get<0>(peer), 0, error);
             if (error || sent != packet.size) {
                 throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                     "send loopback QUIC client packet");
@@ -211,11 +212,11 @@ private:
             }
             asio::error_code error;
             const auto peer = detail::to_udp_endpoint(detail::from_quic_address(packet.peer));
-            if (!peer) {
+            if ((peer.index() != 0)) {
                 throw std::runtime_error("invalid QUIC server output address");
             }
             const auto sent = server_socket_.send_to(
-                asio::buffer(packet_buffer_.data(), packet.size), *peer, 0, error);
+                asio::buffer(packet_buffer_.data(), packet.size), std::get<0>(peer), 0, error);
             if (error || sent != packet.size) {
                 throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
                     "send loopback QUIC server packet");
@@ -245,11 +246,11 @@ private:
             }
             const auto local = detail::to_http3_quic_datagram_address(server_endpoint_);
             const auto remote = detail::to_http3_quic_datagram_address(peer);
-            if (!local || !remote) {
+            if ((local.index() != 0) || (remote.index() != 0)) {
                 throw std::runtime_error("invalid received QUIC server address");
             }
             const auto routed = server_.route_datagram(
-                std::span<const std::byte>(packet_buffer_).first(size), *local, *remote);
+                std::span<const std::byte>(packet_buffer_).first(size), std::get<0>(local), std::get<0>(remote));
             if (routed.kind == ruvia::quic_server_route_kind::initial_offer) {
                 if (!connection_) {
                     const auto admitted = server_.admit_initial(routed.offer, now);
@@ -260,7 +261,7 @@ private:
             } else if (routed.kind == ruvia::quic_server_route_kind::existing_connection) {
                 const ruvia::quic_datagram_view datagram{
                     std::span<const std::byte>(packet_buffer_).first(size),
-                    detail::to_quic_address(*local), detail::to_quic_address(*remote)};
+                    detail::to_quic_address(std::get<0>(local)), detail::to_quic_address(std::get<0>(remote))};
                 (void)server_.server().receive(routed.connection, datagram, now);
             }
             progress = true;
@@ -282,12 +283,12 @@ private:
             }
             const auto local = detail::to_http3_quic_datagram_address(client_endpoint_);
             const auto remote = detail::to_http3_quic_datagram_address(peer);
-            if (!local || !remote) {
+            if ((local.index() != 0) || (remote.index() != 0)) {
                 throw std::runtime_error("invalid received QUIC client address");
             }
             const ruvia::quic_datagram_view datagram{
                 std::span<const std::byte>(packet_buffer_).first(size),
-                detail::to_quic_address(*local), detail::to_quic_address(*remote)};
+                detail::to_quic_address(std::get<0>(local)), detail::to_quic_address(std::get<0>(remote))};
             (void)client_->receive(datagram, now);
             progress = true;
         }

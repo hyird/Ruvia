@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/PmrResource.h"
 
@@ -153,8 +154,8 @@ void TaskScope::finish(Node* node) noexcept {
     try {
         node->task.handle_.promise().result();
     } catch (...) {
-        if (outcome_) {
-            outcome_ = std::unexpected(TaskScopeFailure(std::current_exception()));
+        if ((outcome_.index() == 0)) {
+            outcome_ = TaskScopeFailure(std::current_exception());
             requestStop();
         }
     }
@@ -183,8 +184,8 @@ void TaskScope::finish(Node* node) noexcept {
 }
 
 void TaskScope::rethrowFailure() {
-    if (!outcome_) {
-        std::rethrow_exception(outcome_.error().exception());
+    if ((outcome_.index() != 0)) {
+        std::rethrow_exception(std::get<1>(outcome_).exception());
     }
 }
 

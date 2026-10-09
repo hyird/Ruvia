@@ -10,23 +10,8 @@ endfunction()
 # CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
 # paths against its own directory.
 
-function(ruvia_deduplicate_link_interface target)
-    if(NOT TARGET ${target})
-        return()
-    endif()
-
-    get_target_property(_ruvia_link_interface ${target} INTERFACE_LINK_LIBRARIES)
-    if(NOT _ruvia_link_interface)
-        return()
-    endif()
-
-    list(REMOVE_DUPLICATES _ruvia_link_interface)
-    set_target_properties(${target} PROPERTIES
-        INTERFACE_LINK_LIBRARIES "${_ruvia_link_interface}")
-endfunction()
-
 function(ruvia_configure_library target)
-    target_compile_features(${target} PUBLIC cxx_std_23)
+    target_compile_features(${target} PUBLIC cxx_std_20)
 
     target_include_directories(${target}
         PUBLIC
@@ -57,7 +42,7 @@ function(ruvia_configure_library target)
         # builds with GCC, so the check runs on every push either way.
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             target_compile_options(${target} PRIVATE -Wshadow=local)
-            # GCC prints a psABI note when a function returns std::expected of
+            # GCC prints a psABI note when a function returns std::variant of
             # long double. The note is not a defect in that return and cannot
             # be silenced with a diagnostic pragma.
             target_compile_options(${target} PRIVATE -Wno-psabi)

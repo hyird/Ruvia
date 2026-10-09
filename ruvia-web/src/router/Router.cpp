@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <stdexcept>
+#include <string_view>
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpRequestTarget.h"
@@ -212,7 +213,7 @@ void detail::RouterImpl::validateRouteTarget(
             if (path != "*" && !isValidHttpConnectAuthority(path)) {
                 throw std::invalid_argument("CONNECT route requires host:port authority or *");
             }
-        } else if (path.contains('?') || !isValidHttpOriginFormTarget(path)) {
+        } else if ((path.find('?') != std::string_view::npos) || !isValidHttpOriginFormTarget(path)) {
             throw std::invalid_argument("extended CONNECT route requires an origin-form path");
         }
         return;
@@ -227,7 +228,7 @@ void detail::RouterImpl::validateRouteTarget(
     if (!methodToken.empty() && RouteTable::isDynamicPath(path)) {
         throw std::invalid_argument("extension method routes must use a static path");
     }
-    if (path.contains('?') || !ruvia::isValidHttpOriginFormTarget(path)) {
+    if ((path.find('?') != std::string_view::npos) || !ruvia::isValidHttpOriginFormTarget(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
     }
 }

@@ -2,8 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <span>
+#include <variant>
 
 namespace ruvia {
 
@@ -21,15 +21,15 @@ struct Http3VarInt final {
     std::size_t encodedBytes{0};
 };
 
-[[nodiscard]] inline constexpr std::expected<Http3VarInt, Http3CodecError> decodeHttp3VarInt(
+[[nodiscard]] inline constexpr std::variant<Http3VarInt, Http3CodecError> decodeHttp3VarInt(
     std::span<const char> input) noexcept {
     if (input.empty()) {
-        return std::unexpected(Http3CodecError::kNeedMoreData);
+        return Http3CodecError::kNeedMoreData;
     }
     const auto first = static_cast<std::uint8_t>(input[0]);
     const auto encodedBytes = std::size_t{1} << (first >> 6);
     if (input.size() < encodedBytes) {
-        return std::unexpected(Http3CodecError::kNeedMoreData);
+        return Http3CodecError::kNeedMoreData;
     }
     std::uint64_t value = first & 0x3fU;
     for (std::size_t i = 1; i < encodedBytes; ++i) {
@@ -38,17 +38,17 @@ struct Http3VarInt final {
     return Http3VarInt{.value = value, .encodedBytes = encodedBytes};
 }
 
-[[nodiscard]] inline constexpr std::expected<std::size_t, Http3CodecError> encodeHttp3VarInt(
+[[nodiscard]] inline constexpr std::variant<std::size_t, Http3CodecError> encodeHttp3VarInt(
     std::span<char> output, std::uint64_t value) noexcept {
     if (value > kHttp3VarIntMax) {
-        return std::unexpected(Http3CodecError::kValueOutOfRange);
+        return Http3CodecError::kValueOutOfRange;
     }
     const std::size_t size = value < (std::uint64_t{1} << 6)    ? 1
                              : value < (std::uint64_t{1} << 14) ? 2
                              : value < (std::uint64_t{1} << 30) ? 4
                                                                 : 8;
     if (output.size() < size) {
-        return std::unexpected(Http3CodecError::kOutputTooSmall);
+        return Http3CodecError::kOutputTooSmall;
     }
     for (std::size_t i = size; i > 0; --i) {
         output[i - 1] = static_cast<char>(value & 0xffU);

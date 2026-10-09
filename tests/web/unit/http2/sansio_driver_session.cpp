@@ -2,6 +2,7 @@
 #include <concepts>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 
 #include <asio/io_context.hpp>
 
@@ -396,7 +397,7 @@ RUVIA_TEST(sansio_driver_h2_bodyless_response_survives_empty_accept_encoding_set
                 if (header.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders)) {
                     HpackCollect fields;
                     (void)decoder.decode(payload, [&fields](std::string_view name, std::string_view value) { return HpackCollect::onHeader(&fields, name, value); });
-                    gotNoContentHead = fields.joined.contains(":status=204;");
+                    gotNoContentHead = (fields.joined.find(":status=204;") != std::string_view::npos);
                 } else if (header.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kData)) {
                     sawData = true;
                 }

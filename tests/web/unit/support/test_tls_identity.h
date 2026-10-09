@@ -43,9 +43,10 @@ public:
                 X509_set_pubkey(certificate.get(), key.get()) != 1) {
                 throw std::runtime_error("cannot generate TLS test identity");
             }
-            auto* subject = X509_get_subject_name(certificate.get());
-            if (X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(name), -1, -1, 0) != 1 ||
-                X509_set_issuer_name(certificate.get(), subject) != 1) {
+            const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+            if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(name), -1, -1, 0) != 1 ||
+                X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
+                X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
                 throw std::runtime_error("cannot name TLS test identity");
             }
             X509V3_CTX extension_context{};

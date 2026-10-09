@@ -2,10 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3ConnectionError.h"
@@ -148,17 +148,17 @@ public:
     // associated request stream. The returned bytes use this connection's resource.
     // The associated response's send half must still be open; the driver owns
     // send-side HEADERS/DATA/FIN progression through the message write plans.
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushPromise(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushPromise(
         std::uint64_t associatedStreamId, std::uint64_t pushId, HttpPushRequestView request);
     // Complete control frames, excluding the control stream type and SETTINGS.
     // Queue the returned bytes in order. Protocol state commits at preparation.
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareMaxPushId(std::uint64_t maximum);
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareCancelPush(std::uint64_t pushId);
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareGoaway(std::uint64_t firstUnprocessedId);
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePriorityUpdate(HttpPriorityUpdate update);
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareMaxPushId(std::uint64_t maximum);
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareCancelPush(std::uint64_t pushId);
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareGoaway(std::uint64_t firstUnprocessedId);
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePriorityUpdate(HttpPriorityUpdate update);
     // Server: stream type + push ID. One server unidirectional stream per push.
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushStream(std::uint64_t streamId, std::uint64_t pushId);
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareOriginAdvertisement(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushStream(std::uint64_t streamId, std::uint64_t pushId);
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareOriginAdvertisement(
         std::span<const std::string_view> origins);
     [[nodiscard]] std::optional<std::uint64_t> peerMaxPushId() const noexcept;
     // Validated promise metadata, borrowed until connection retirement. Available
@@ -171,19 +171,19 @@ public:
     // All connection-owned encoders enforce the peer's decoded field-section
     // limit before compression, independently of local encoded-byte budgets.
     // Message helpers validate HTTP semantics; this entry point owns compression.
-    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3QpackConnectionError> encodeFieldSection(
+    [[nodiscard]] std::variant<std::pmr::vector<char>, Http3QpackConnectionError> encodeFieldSection(
         std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields);
-    [[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeClientRequestHead(
+    [[nodiscard]] std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeClientRequestHead(
         std::uint64_t streamId, Http3ClientRequestHeadView view, Http3FieldSectionLimits limits = {});
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId,
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId,
         const HttpResponse& response, Http3FieldSectionLimits limits = {});
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId,
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId,
         const HttpResponse& response, HttpBufferedResponseWritePlan plan, Http3FieldSectionLimits limits = {});
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId,
+    [[nodiscard]] std::variant<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId,
         HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits = {});
-    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId,
+    [[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId,
         const HttpInterimResponseHead& response, Http3FieldSectionLimits limits = {});
-    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId,
+    [[nodiscard]] std::variant<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId,
         std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits = {});
     [[nodiscard]] std::span<const char> pendingQpackEncoderOutput() const& noexcept;
     std::span<const char> pendingQpackEncoderOutput() const&& = delete;

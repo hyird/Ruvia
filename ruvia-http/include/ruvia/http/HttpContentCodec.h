@@ -2,12 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpContentCoding.h"
 
@@ -78,30 +78,30 @@ public:
     HttpContentEncodeResult& operator=(HttpContentEncodeResult&&) = delete;
 
     [[nodiscard]] HttpEncodedContent* encoded() & noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
 
     [[nodiscard]] const HttpEncodedContent* encoded() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     HttpEncodedContent* encoded() && = delete;
     const HttpEncodedContent* encoded() const&& = delete;
 
     [[nodiscard]] const HttpContentEncodeFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const HttpContentEncodeFailure* failure() const&& = delete;
 
 private:
     friend struct detail::HttpContentEncodeResultAccess;
 
-    using Value = std::expected<HttpEncodedContent, HttpContentEncodeFailure>;
+    using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
 
     explicit HttpContentEncodeResult(HttpEncodedContent encoded) noexcept
         : value_(std::move(encoded)) {}
 
     explicit HttpContentEncodeResult(HttpContentEncodeFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     Value value_;
 };
@@ -181,30 +181,30 @@ public:
     HttpContentDecodeResult& operator=(HttpContentDecodeResult&&) = delete;
 
     [[nodiscard]] HttpDecodedContent* decoded() & noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
 
     [[nodiscard]] const HttpDecodedContent* decoded() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     HttpDecodedContent* decoded() && = delete;
     const HttpDecodedContent* decoded() const&& = delete;
 
     [[nodiscard]] const HttpContentDecodeFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const HttpContentDecodeFailure* failure() const&& = delete;
 
 private:
     friend struct detail::HttpContentDecodeResultAccess;
 
-    using Value = std::expected<HttpDecodedContent, HttpContentDecodeFailure>;
+    using Value = std::variant<HttpDecodedContent, HttpContentDecodeFailure>;
 
     explicit HttpContentDecodeResult(HttpDecodedContent decoded) noexcept
         : value_(std::move(decoded)) {}
 
     explicit HttpContentDecodeResult(HttpContentDecodeFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     Value value_;
 };

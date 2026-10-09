@@ -2,9 +2,9 @@
 
 #include <array>
 #include <cstddef>
-#include <expected>
 #include <optional>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/Http3Settings.h"
 
@@ -19,7 +19,7 @@ enum class Http3LocalCriticalStreamsError : unsigned char {
 // must keep all three streams open for their entire connection lifetime.
 class Http3LocalCriticalStreams final {
 public:
-    [[nodiscard]] static std::expected<Http3LocalCriticalStreams, Http3LocalCriticalStreamsError>
+    [[nodiscard]] static std::variant<Http3LocalCriticalStreams, Http3LocalCriticalStreamsError>
     create(const Http3Settings& settings = {}) noexcept;
 
     [[nodiscard]] std::span<const char> controlPrefix() const noexcept {

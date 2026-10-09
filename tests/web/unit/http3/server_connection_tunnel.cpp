@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_server_connection_fixture.h"
 
 namespace ruvia::testing {
@@ -9,15 +11,15 @@ Http3DatagramReceiveStatus plan_connect_datagram_for_peer(
     std::pmr::monotonic_buffer_resource resource;
     auto connection = Access::make_connection(&resource, identity);
     const auto datagram = decodeHttp3Datagram(bytes);
-    if (!datagram) {
+    if ((datagram.index() != 0)) {
         throw std::runtime_error("CONNECT datagram fixture received invalid wire bytes");
     }
-    (void)Access::add_request_stream(connection, datagram->streamId);
+    (void)Access::add_request_stream(connection, std::get<0>(datagram).streamId);
     if (marker && Access::accept_tunnel_established(
                       connection, *marker, accepted_wire_bytes) != Access::tunnel_result::accepted) {
         throw std::runtime_error("CONNECT datagram fixture received invalid establishment");
     }
-    return Access::plan_received_datagram(connection, *datagram);
+    return Access::plan_received_datagram(connection, std::get<0>(datagram));
 }
 }  // namespace ruvia::testing
 
@@ -81,9 +83,9 @@ ruvia::Task<void> exerciseWebSocketFinCancellation(Fixture& fixture,
         ruvia::Http3FieldSectionFieldView{":path", "/socket"},
         ruvia::Http3FieldSectionFieldView{"sec-websocket-version", "13"}};
     const auto encodedHead = ruvia::encodeHttp3FieldSection(requestFields, fixture.worker.resource());
-    RUVIA_CHECK(encodedHead.has_value());
+    RUVIA_CHECK((encodedHead.index() == 0));
     const auto requestHead = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(encodedHead->data(), encodedHead->size()));
+        std::string_view(std::get<0>(encodedHead).data(), std::get<0>(encodedHead).size()));
     const auto request = acceptTunnelHead(connection, inbound, fixture.worker, id);
     RUVIA_CHECK(request.status == Connection::EventStatus::kDispatched);
     for (std::size_t attempt = 0;

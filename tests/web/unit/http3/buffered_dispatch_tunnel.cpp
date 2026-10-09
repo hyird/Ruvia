@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_buffered_dispatch_fixture.h"
 
 namespace {
@@ -65,29 +67,29 @@ void checkWebSocketPublishedWire(const PublishedWire& wire, Fixture& fixture,
     RUVIA_CHECK_EQ(wire.finalWireBytes.value_or(0), wire.bytes.size());
     const auto headers = ruvia::decodeHttp3Frame(
         std::span<const char>(wire.bytes.data(), wire.bytes.size()));
-    RUVIA_CHECK(headers.has_value());
-    if (!headers) {
+    RUVIA_CHECK((headers.index() == 0));
+    if ((headers.index() != 0)) {
         return;
     }
-    RUVIA_CHECK_EQ(headers->type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
+    RUVIA_CHECK_EQ(std::get<0>(headers).type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
     WebSocketStatusCapture status;
-    const auto decoded = ruvia::decodeHttp3FieldSection(headers->payload,
+    const auto decoded = ruvia::decodeHttp3FieldSection(std::get<0>(headers).payload,
         &captureWebSocketStatus, &status, {}, fixture.worker.resource());
-    RUVIA_CHECK(decoded.has_value());
+    RUVIA_CHECK((decoded.index() == 0));
     RUVIA_CHECK(status.status == "200");
 
     std::string webSocketBytes;
-    std::size_t offset = headers->encodedBytes;
+    std::size_t offset = std::get<0>(headers).encodedBytes;
     while (offset < wire.bytes.size()) {
         const auto data = ruvia::decodeHttp3Frame(
             std::span<const char>(wire.bytes.data() + offset, wire.bytes.size() - offset));
-        RUVIA_CHECK(data.has_value());
-        if (!data) {
+        RUVIA_CHECK((data.index() == 0));
+        if ((data.index() != 0)) {
             return;
         }
-        RUVIA_CHECK_EQ(data->type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kData));
-        webSocketBytes.append(data->payload.data(), data->payload.size());
-        offset += data->encodedBytes;
+        RUVIA_CHECK_EQ(std::get<0>(data).type, static_cast<std::uint64_t>(ruvia::Http3FrameType::kData));
+        webSocketBytes.append(std::get<0>(data).payload.data(), std::get<0>(data).payload.size());
+        offset += std::get<0>(data).encodedBytes;
     }
     RUVIA_CHECK_EQ(offset, wire.bytes.size());
     std::size_t webSocketOffset = 0;
@@ -409,18 +411,18 @@ ruvia::Task<void> exercisePeerTransportFinWait(Fixture& fixture,
             while (offset < closeFrameWire.bytes.size()) {
                 const auto data = ruvia::decodeHttp3Frame(std::span<const char>(
                     closeFrameWire.bytes.data() + offset, closeFrameWire.bytes.size() - offset));
-                RUVIA_CHECK(data.has_value());
-                if (!data) {
+                RUVIA_CHECK((data.index() == 0));
+                if ((data.index() != 0)) {
                     break;
                 }
-                if (data->type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kData) &&
-                    data->payload.size() >= 4 &&
-                    static_cast<unsigned char>(data->payload[0]) == 0x88U &&
-                    static_cast<unsigned char>(data->payload[2]) == 0x03U &&
-                    static_cast<unsigned char>(data->payload[3]) == 0xf3U) {
+                if (std::get<0>(data).type == static_cast<std::uint64_t>(ruvia::Http3FrameType::kData) &&
+                    std::get<0>(data).payload.size() >= 4 &&
+                    static_cast<unsigned char>(std::get<0>(data).payload[0]) == 0x88U &&
+                    static_cast<unsigned char>(std::get<0>(data).payload[2]) == 0x03U &&
+                    static_cast<unsigned char>(std::get<0>(data).payload[3]) == 0xf3U) {
                     sawInternalErrorClose = true;
                 }
-                offset += data->encodedBytes;
+                offset += std::get<0>(data).encodedBytes;
             }
             RUVIA_CHECK(sawInternalErrorClose);
         }
@@ -453,10 +455,10 @@ ruvia::Task<void> exerciseConnectTunnel(Fixture& fixture, const ruvia::WorkerHan
             }
         }
         auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-        if (!encoded) {
+        if ((encoded.index() != 0)) {
             throw std::runtime_error("CONNECT fixture field encoding failed");
         }
-        const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(encoded->data(), encoded->size()));
+        const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
         RUVIA_CHECK(fixture.session.feed(id, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(fixture.session.streamState(id) == Engine::StreamState::kReady);
         TunnelCallbacksState callbacks(worker, fixture.scanner);
@@ -476,7 +478,7 @@ ruvia::Task<void> exerciseConnectTunnel(Fixture& fixture, const ruvia::WorkerHan
         if (udp) {
             std::array<char, 16> header;
             const auto capsule_header_size = ruvia::encodeHttpCapsuleHeader(header, 0, payload.size() + 1);
-            tunnelPayload.assign(header.data(), *capsule_header_size);
+            tunnelPayload.assign(header.data(), std::get<0>(capsule_header_size));
             tunnelPayload.push_back('\0');
             tunnelPayload.append(payload);
             tunnelPayload.append("\0\1\0", 3);
@@ -703,11 +705,11 @@ RUVIA_TEST(http3_connect_success_admits_native_datagrams_before_peer_response_vi
                 ruvia::Http3FieldSectionFieldView{":path", "/udp/target.test"},
                 ruvia::Http3FieldSectionFieldView{"capsule-protocol", "?1"}};
             const auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-            if (!encoded) {
+            if ((encoded.index() != 0)) {
                 throw std::runtime_error("CONNECT publication fixture could not encode request");
             }
             const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-                std::string_view(encoded->data(), encoded->size()));
+                std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
             RUVIA_CHECK(fixture.session.feed(stream_id, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
             RUVIA_CHECK(fixture.session.streamState(stream_id) == Engine::StreamState::kReady);
             const auto negotiated = fixture.session.datagramConfig(stream_id);
@@ -728,10 +730,10 @@ RUVIA_TEST(http3_connect_success_admits_native_datagrams_before_peer_response_vi
             ruvia::Http3ClientResponse peer(stream_id, ruvia::HttpKnownMethod::kConnect, fixture.worker.resource());
             std::array<char, 16> native{};
             const auto prefix = ruvia::encodeHttp3DatagramPrefix(native, stream_id);
-            RUVIA_CHECK(prefix.has_value());
-            native[*prefix] = '\0';  // CONNECT-UDP Context ID zero.
-            native[*prefix + 1] = 'c';
-            const auto packet = std::span<const char>(native.data(), *prefix + 2);
+            RUVIA_CHECK((prefix.index() == 0));
+            native[std::get<0>(prefix)] = '\0';  // CONNECT-UDP Context ID zero.
+            native[std::get<0>(prefix) + 1] = 'c';
+            const auto packet = std::span<const char>(native.data(), std::get<0>(prefix) + 2);
             std::optional<Control> marker;
             const auto plan = [&]() {
                 return ruvia::testing::plan_connect_datagram_for_peer(
@@ -802,11 +804,11 @@ RUVIA_TEST(http3_connect_cancellation_before_head_visibility_retires_admitted_tu
                 ruvia::Http3FieldSectionFieldView{":path", "/udp/target.test"},
                 ruvia::Http3FieldSectionFieldView{"capsule-protocol", "?1"}};
             const auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-            if (!encoded) {
+            if ((encoded.index() != 0)) {
                 throw std::runtime_error("CONNECT cancellation fixture could not encode request");
             }
             const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-                std::string_view(encoded->data(), encoded->size()));
+                std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
             RUVIA_CHECK(fixture.session.feed(0, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
             const auto negotiated = fixture.session.datagramConfig(0);
             RUVIA_CHECK(negotiated.localH3Datagram && negotiated.peerH3Datagram && negotiated.quicDatagram);
@@ -880,11 +882,11 @@ RUVIA_TEST(http3BufferedDispatchConnectDrainTimeoutRetiresOnlyItsStream) {
                 ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
                 ruvia::Http3FieldSectionFieldView{":authority", "backend.test:443"}};
             const auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-            if (!encoded) {
+            if ((encoded.index() != 0)) {
                 throw std::runtime_error("CONNECT timeout field encoding failed");
             }
             const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-                std::string_view(encoded->data(), encoded->size()));
+                std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
             RUVIA_CHECK(fixture.session.feed(0, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
             TunnelCallbacksState callbacks(worker, fixture.scanner);
             auto dispatch = fixture.makeDispatch(0, fixture.services, callbacks.callbacks());

@@ -3,10 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <limits>
 #include <optional>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocol.h"
@@ -161,10 +161,10 @@ private:
         static_cast<unsigned char>(data[1]));
 }
 
-[[nodiscard]] constexpr std::expected<std::uint64_t, WebSocketProtocolFailure> readWebSocketUint64(
+[[nodiscard]] constexpr std::variant<std::uint64_t, WebSocketProtocolFailure> readWebSocketUint64(
     std::span<const char, 8> data) noexcept {
     if ((static_cast<unsigned char>(data[0]) & 0x80U) != 0) {
-        return std::unexpected(WebSocketProtocolFailure::kProtocolError);
+        return WebSocketProtocolFailure::kProtocolError;
     }
     std::uint64_t value = 0;
     for (const char byte : data) {

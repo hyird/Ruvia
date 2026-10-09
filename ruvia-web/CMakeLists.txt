@@ -1,42 +1,4 @@
-find_package(OpenSSL 3.5 REQUIRED COMPONENTS SSL Crypto)
-
-include(CheckCXXSourceCompiles)
-include(CMakePushCheckState)
-cmake_push_check_state(RESET)
-set(CMAKE_REQUIRED_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
-unset(RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS CACHE)
-check_cxx_source_compiles([=[
-#include <openssl/core_dispatch.h>
-#include <openssl/ssl.h>
-
-int main() {
-    SSL* ssl = nullptr;
-    const OSSL_DISPATCH* callbacks = nullptr;
-    (void)SSL_set_quic_tls_cbs(ssl, callbacks, nullptr);
-    (void)SSL_set_quic_tls_transport_params(ssl, nullptr, 0);
-    (void)SSL_set_quic_tls_early_data_enabled(ssl, 0);
-    (void)OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_SEND;
-    (void)OSSL_FUNC_SSL_QUIC_TLS_YIELD_SECRET;
-    return 0;
-}
-]=] RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
-cmake_pop_check_state()
-if(NOT RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
-    message(FATAL_ERROR
-        "ruvia-web requires OpenSSL 3.5 or newer with external QUIC TLS callback APIs")
-endif()
-
-if(RUVIA_ENABLE_MARIADB)
-    find_package(unofficial-libmariadb CONFIG REQUIRED)
-    ruvia_deduplicate_link_interface(unofficial::libmariadb)
-endif()
-if(RUVIA_ENABLE_POSTGRESQL)
-    find_package(PostgreSQL REQUIRED)
-    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
-endif()
-if(RUVIA_ENABLE_REDIS)
-    find_package(hiredis CONFIG REQUIRED)
-endif()
+ruvia_fetch_web_dependencies("${RUVIA_ENABLE_MARIADB}" "${RUVIA_ENABLE_POSTGRESQL}" "${RUVIA_ENABLE_REDIS}")
 
 ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
 list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/(db|redis)/")
@@ -136,8 +98,7 @@ target_link_libraries(ruvia-web
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
         # signing are Web-layer capabilities, so Web owns the direct OpenSSL
         # dependency while the sans-I/O HTTP target remains independent.
-        OpenSSL::SSL
-        OpenSSL::Crypto
+        ruvia_dependencies_web
 )
 
 if(WIN32)
@@ -146,37 +107,10 @@ endif()
 
 if(RUVIA_ENABLE_MARIADB)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_MARIADB)
-    target_link_libraries(ruvia-web PRIVATE unofficial::libmariadb)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
-    target_link_libraries(ruvia-web PRIVATE PostgreSQL::PostgreSQL)
-    # vcpkg's static libpq splits internal frontend symbols between pgcommon
-    # and pgport. GNU linkers need to rescan that cyclic pair.
-    if(PostgreSQL_pgcommon_LIBRARY_DEBUG AND
-       PostgreSQL_pgcommon_LIBRARY_RELEASE AND PostgreSQL_pgport_LIBRARY_DEBUG AND
-       PostgreSQL_pgport_LIBRARY_RELEASE)
-        string(CONCAT _ruvia_postgresql_pgcommon
-            "$<$<CONFIG:Debug>:${PostgreSQL_pgcommon_LIBRARY_DEBUG}>"
-            "$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>")
-        string(CONCAT _ruvia_postgresql_pgport
-            "$<$<CONFIG:Debug>:${PostgreSQL_pgport_LIBRARY_DEBUG}>"
-            "$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>")
-        if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            string(CONCAT _ruvia_postgresql_link_group
-                "$<LINK_GROUP:RESCAN,"
-                "${_ruvia_postgresql_pgcommon}"
-                ","
-                "${_ruvia_postgresql_pgport}"
-                ">")
-            target_link_libraries(ruvia-web PRIVATE "${_ruvia_postgresql_link_group}")
-        else()
-            target_link_libraries(ruvia-web PRIVATE
-                "${_ruvia_postgresql_pgcommon}"
-                "${_ruvia_postgresql_pgport}")
-        endif()
-    endif()
 endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
@@ -185,7 +119,6 @@ endif()
 
 if(RUVIA_ENABLE_REDIS)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_REDIS)
-    target_link_libraries(ruvia-web PRIVATE hiredis::hiredis)
 endif()
 
 if(RUVIA_ENABLE_JWT)

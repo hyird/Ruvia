@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 
@@ -172,17 +173,17 @@ std::string request_headers(ruvia::WorkerMemory& memory) {
     const auto fields = ruvia::encodeHttp3ClientRequestHead(
         {.method = "GET", .scheme = "https", .authority = "example.test", .path = "/stall"},
         {}, memory.resource());
-    if (!fields) {
+    if ((fields.index() != 0)) {
         throw std::runtime_error("HTTP/3 request field section encoding failed");
     }
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto size = ruvia::encodeHttp3FrameHeader(header,
-        static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), fields->fieldSection.size());
-    if (!size) {
+        static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::get<0>(fields).fieldSection.size());
+    if ((size.index() != 0)) {
         throw std::runtime_error("HTTP/3 request frame encoding failed");
     }
-    std::string wire(header.data(), *size);
-    wire.append(fields->fieldSection.data(), fields->fieldSection.size());
+    std::string wire(header.data(), std::get<0>(size));
+    wire.append(std::get<0>(fields).fieldSection.data(), std::get<0>(fields).fieldSection.size());
     return wire;
 }
 

@@ -1,5 +1,7 @@
 #include "ruvia/http/Http3DataWritePlan.h"
 
+#include <variant>
+
 #include "ruvia/http/Http3VarInt.h"
 
 namespace ruvia {
@@ -36,36 +38,36 @@ bool Http3DataWritePlan::finished() const noexcept {
     return finished_;
 }
 
-std::expected<Http3DataWritePlan::Chunk, Http3DataWriteError> Http3DataWritePlan::planChunk(
+std::variant<Http3DataWritePlan::Chunk, Http3DataWriteError> Http3DataWritePlan::planChunk(
     std::span<const char> payload, bool finishing) noexcept {
     if (finished_) {
-        return std::unexpected(Http3DataWriteError::kAlreadyFinished);
+        return Http3DataWriteError::kAlreadyFinished;
     }
     if (writePending_) {
-        return std::unexpected(Http3DataWriteError::kWriteAlreadyPending);
+        return Http3DataWriteError::kWriteAlreadyPending;
     }
     if (!requestBody_ &&
         responseBodyPlan_->contentSemantics() == HttpResponseContentSemantics::kConnectTunnel &&
         declaredContentLength_) {
-        return std::unexpected(Http3DataWriteError::kContentLengthForbidden);
+        return Http3DataWriteError::kContentLengthForbidden;
     }
     if (!payload.empty() && !bodyAllowed()) {
-        return std::unexpected(Http3DataWriteError::kBodyNotAllowed);
+        return Http3DataWriteError::kBodyNotAllowed;
     }
     if (payload.size() > kHttp3VarIntMax) {
-        return std::unexpected(Http3DataWriteError::kVarIntOutOfRange);
+        return Http3DataWriteError::kVarIntOutOfRange;
     }
     const auto bytes = static_cast<std::uint64_t>(payload.size());
     if (bytes > UINT64_MAX - committedPayloadBytes_) {
-        return std::unexpected(Http3DataWriteError::kContentLengthOverflow);
+        return Http3DataWriteError::kContentLengthOverflow;
     }
     const auto total = committedPayloadBytes_ + bytes;
     if (declaredContentLength_ && total > *declaredContentLength_) {
-        return std::unexpected(Http3DataWriteError::kContentLengthMismatch);
+        return Http3DataWriteError::kContentLengthMismatch;
     }
     if (finishing && declaredContentLength_ && total != *declaredContentLength_ &&
         (requestBody_ || bodyAllowed())) {
-        return std::unexpected(Http3DataWriteError::kContentLengthMismatch);
+        return Http3DataWriteError::kContentLengthMismatch;
     }
 
     Chunk chunk{.payload = payload,
@@ -74,12 +76,12 @@ std::expected<Http3DataWritePlan::Chunk, Http3DataWriteError> Http3DataWritePlan
     if (chunk.emitsData) {
         const auto encoded = encodeHttp3FrameHeader(chunk.frameHeader,
             static_cast<std::uint64_t>(Http3FrameType::kData), bytes);
-        if (!encoded) {
-            return std::unexpected(encoded.error() == Http3CodecError::kValueOutOfRange
-                                       ? Http3DataWriteError::kVarIntOutOfRange
-                                       : Http3DataWriteError::kFrameHeaderEncoding);
+        if ((encoded.index() != 0)) {
+            return std::get<1>(encoded) == Http3CodecError::kValueOutOfRange
+                       ? Http3DataWriteError::kVarIntOutOfRange
+                       : Http3DataWriteError::kFrameHeaderEncoding;
         }
-        chunk.frameHeaderSize = *encoded;
+        chunk.frameHeaderSize = std::get<0>(encoded);
     }
     pendingPayloadBytes_ = bytes;
     pendingFinishing_ = finishing;
@@ -87,16 +89,16 @@ std::expected<Http3DataWritePlan::Chunk, Http3DataWriteError> Http3DataWritePlan
     return chunk;
 }
 
-std::expected<void, Http3DataWriteError> Http3DataWritePlan::commitPayload(
+std::variant<std::monostate, Http3DataWriteError> Http3DataWritePlan::commitPayload(
     std::uint64_t bytes, bool finishing) noexcept {
     if (finished_) {
-        return std::unexpected(Http3DataWriteError::kAlreadyFinished);
+        return Http3DataWriteError::kAlreadyFinished;
     }
     if (!writePending_) {
-        return std::unexpected(Http3DataWriteError::kNoWritePending);
+        return Http3DataWriteError::kNoWritePending;
     }
     if (bytes != pendingPayloadBytes_ || finishing != pendingFinishing_) {
-        return std::unexpected(Http3DataWriteError::kCommitDoesNotMatchPlan);
+        return Http3DataWriteError::kCommitDoesNotMatchPlan;
     }
     // The planned total was checked before any bytes were committed.
     committedPayloadBytes_ += bytes;

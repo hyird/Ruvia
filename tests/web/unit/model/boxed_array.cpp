@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <ranges>
 #include <utility>
 
 #include "ruvia/web/ModelTypes.h"
@@ -100,4 +103,26 @@ RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
     RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(sourceResource.allocationCount(), sourceResource.deallocationCount());
     RUVIA_CHECK_EQ(targetResource.allocationCount(), targetResource.deallocationCount());
+}
+
+RUVIA_TEST(model_boxed_array_supports_standard_range_algorithms) {
+    ruvia::BoxedArray<TrackedValue> values;
+    RUVIA_CHECK(std::ranges::find_if(values, [](const auto&) { return true; }) == values.end());
+    RUVIA_CHECK_EQ(std::ranges::distance(values), std::ptrdiff_t{0});
+    values.emplace(1);
+    values.emplace(2);
+    values.emplace(3);
+
+    const auto found = std::ranges::find_if(values, [](const auto& value) { return value.value() == 2; });
+    RUVIA_CHECK(found != values.end());
+    if (found != values.end()) {
+        RUVIA_CHECK(&*found == &values[1]);
+    }
+    RUVIA_CHECK_EQ(std::ranges::distance(values), std::ptrdiff_t{3});
+    const auto& constant_values = std::as_const(values);
+    RUVIA_CHECK_EQ(std::ranges::count_if(constant_values,
+                       [](const auto& value) { return value.value() % 2 != 0; }),
+        std::ptrdiff_t{2});
+    RUVIA_CHECK(std::ranges::find_if(constant_values,
+                    [](const auto& value) { return value.value() == 4; }) == constant_values.end());
 }

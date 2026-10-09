@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -564,21 +563,21 @@ private:
 class Http2WebSocketHandshakeSubmitResult final {
 public:
     [[nodiscard]] const Http2WebSocketNegotiation* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const Http2WebSocketNegotiation* submitted() const&& = delete;
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const Http2WebSocketHandshakeSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
-    using Value = std::expected<Http2WebSocketNegotiation, Http2WebSocketHandshakeSubmitFailure>;
+    using Value = std::variant<Http2WebSocketNegotiation, Http2WebSocketHandshakeSubmitFailure>;
     explicit Http2WebSocketHandshakeSubmitResult(Http2WebSocketNegotiation value)
         : value_(std::move(value)) {}
     explicit Http2WebSocketHandshakeSubmitResult(Http2WebSocketHandshakeSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
     Value value_;
 };
 
@@ -634,10 +633,10 @@ public:
         std::uint32_t streamId) noexcept;
     // Commits a promise and returns the server request/storage lease used to
     // produce its response. Release or abandon it exactly like an incoming request.
-    [[nodiscard]] std::expected<Http2RequestHeadEvent, Http2PushSubmitError> submitPushRequest(
+    [[nodiscard]] std::variant<Http2RequestHeadEvent, Http2PushSubmitError> submitPushRequest(
         std::uint32_t associatedStreamId, HttpPushRequestView request);
 
-    [[nodiscard]] std::expected<std::uint32_t, Http2PushSubmitError> submitPushPromise(
+    [[nodiscard]] std::variant<std::uint32_t, Http2PushSubmitError> submitPushPromise(
         std::uint32_t associatedStreamId, HttpPushRequestView request);
     [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
         std::uint32_t streamId, const HttpInterimResponseHead& response);
@@ -706,7 +705,7 @@ public:
     [[nodiscard]] std::optional<Http2ErrorCode> connectionError() const noexcept;
 
 private:
-    friend std::expected<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
+    friend std::variant<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
         Http2Connection&, std::uint32_t, std::pmr::memory_resource*, std::string_view);
     friend WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(
         Http2Connection&, std::uint32_t, const HttpRequest&) noexcept;
@@ -723,7 +722,7 @@ private:
 // Builds a semantic request from a decoded server stream. The request borrows
 // stream metadata/body from `connection`, which must outlive the request, and
 // owns its header descriptors from `resource`.
-[[nodiscard]] std::expected<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
+[[nodiscard]] std::variant<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
     Http2Connection& connection, std::uint32_t streamId,
     std::pmr::memory_resource* resource, std::string_view body);
 

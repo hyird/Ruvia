@@ -82,7 +82,7 @@ struct SegmentedBodyStream final {
         auto& segment = segments[index];
         const auto available = segment.size() - offset;
         const auto count = std::min(capacity, available);
-        std::memcpy(asio::buffer_cast<void*>(buffer), segment.data() + offset, count);
+        asio::buffer_copy(buffer, asio::buffer(segment.data() + offset, count));
         offset += count;
         if (offset >= segment.size()) {
             ++index;

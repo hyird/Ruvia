@@ -57,7 +57,7 @@ std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const
         const auto index = i - 1;
         const auto header = headers_[index];
         if (headers_.kindAt(index) !=
-                std::to_underlying(detail::RequestHeaderKind::kCookie) ||
+                static_cast<std::uint8_t>(detail::RequestHeaderKind::kCookie) ||
             header.value().data() == lastCookie.data()) {
             continue;
         }

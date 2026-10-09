@@ -1,5 +1,6 @@
 #include "ruvia/http/HttpClientRedirect.h"
 
+#include <string_view>
 #include <utility>
 
 #include "ruvia/http/HttpRequestTarget.h"
@@ -186,7 +187,7 @@ HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
 
 HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(
     const HttpOriginView& origin, std::string_view authority) noexcept {
-    if (authority.contains('@')) {
+    if ((authority.find('@') != std::string_view::npos)) {
         return HttpClientOriginAuthorityStatus::kInvalidAuthority;
     }
     const auto parsed = detail::parseHttpAuthority(authority);
@@ -261,7 +262,7 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
         const auto authorityEnd = reference.find_first_of("/?");
         const auto authority =
             authorityEnd == std::string_view::npos ? reference : reference.substr(0, authorityEnd);
-        if (authority.contains('@')) {
+        if ((authority.find('@') != std::string_view::npos)) {
             return HttpClientRedirectResolutionResult::makeFailure(
                 HttpClientRedirectResolutionError::kInvalidLocation);
         }

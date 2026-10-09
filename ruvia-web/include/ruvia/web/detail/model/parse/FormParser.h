@@ -9,6 +9,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/DecimalNumber.h"
 #include "ruvia/core/Integer.h"
@@ -49,10 +50,10 @@ template <typename NumberT>
     NumberT parsed{};
     if constexpr (std::is_floating_point_v<NumberT>) {
         const auto value = ruvia::parseDecimalNumber<NumberT>(decoded);
-        if (!value) {
+        if ((value.index() != 0)) {
             return std::nullopt;
         }
-        parsed = *value;
+        parsed = std::get<0>(value);
         // Floating parsers accept "inf"/"nan", but the rest of the pipeline
         // cannot round-trip them: the JSON number grammar rejects them on input,
         // the model JSON writer replaces them with null, and the finite number
@@ -64,10 +65,10 @@ template <typename NumberT>
         }
     } else {
         const auto integer = parseInteger<NumberT>(decoded);
-        if (!integer) {
+        if ((integer.index() != 0)) {
             return std::nullopt;
         }
-        parsed = *integer;
+        parsed = std::get<0>(integer);
     }
     return parsed;
 }

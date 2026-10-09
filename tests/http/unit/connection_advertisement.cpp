@@ -3,6 +3,7 @@
 #include <limits>
 #include <memory_resource>
 #include <string>
+#include <variant>
 
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http3Frames.h"
@@ -37,19 +38,19 @@ RUVIA_TEST(http_connection_advertisement_origin_frames_preserve_results_and_rele
     {
         const std::array<std::string_view, 2> origins{"https://example.test", "https://other.test"};
         const auto retained = ruvia::encodeHttp2OriginFrame(origins, 16384, &resource);
-        RUVIA_CHECK(retained.has_value());
-        auto parsed = ruvia::decodeHttpOriginAdvertisement(std::span(*retained).subspan(9), &resource);
-        RUVIA_CHECK(parsed && parsed->origins.size() == 2);
+        RUVIA_CHECK((retained.index() == 0));
+        auto parsed = ruvia::decodeHttpOriginAdvertisement(std::span(std::get<0>(retained)).subspan(9), &resource);
+        RUVIA_CHECK((parsed.index() == 0) && std::get<0>(parsed).origins.size() == 2);
         const auto baseline = resource.live;
         for (std::size_t i = 0; i < 32; ++i) {
             {
                 const auto frame = ruvia::encodeHttp3OriginFrame(origins, 65536, &resource);
-                RUVIA_CHECK(frame.has_value());
-                const auto result = ruvia::decodeHttpOriginAdvertisement(std::span(*frame).subspan(2), &resource);
-                RUVIA_CHECK(result && result->origins.front() == origins.front());
+                RUVIA_CHECK((frame.index() == 0));
+                const auto result = ruvia::decodeHttpOriginAdvertisement(std::span(std::get<0>(frame)).subspan(2), &resource);
+                RUVIA_CHECK((result.index() == 0) && std::get<0>(result).origins.front() == origins.front());
             }
             RUVIA_CHECK_EQ(resource.live, baseline);
-            RUVIA_CHECK(parsed->origins.back() == origins.back());
+            RUVIA_CHECK(std::get<0>(parsed).origins.back() == origins.back());
         }
         resource.fail = true;
         bool threw = false;
@@ -74,9 +75,9 @@ RUVIA_TEST(http_connection_advertisement_alternative_service_respects_protocol_p
         bool threw = false;
         try {
             const auto result = ruvia::encodeHttp2AlternativeServiceFrame(1, "", field_value, maximum, &resource);
-            RUVIA_CHECK(!result);
-            if (!result) {
-                RUVIA_CHECK(result.error() == ruvia::HttpConnectionAdvertisementError::kLimit);
+            RUVIA_CHECK((result.index() != 0));
+            if ((result.index() != 0)) {
+                RUVIA_CHECK(std::get<1>(result) == ruvia::HttpConnectionAdvertisementError::kLimit);
             }
         } catch (const std::bad_alloc&) {
             threw = true;
@@ -90,55 +91,55 @@ RUVIA_TEST(http_connection_advertisement_encoders_honor_exact_payload_budgets) {
     const std::array<std::string_view, 2> origins{"https://one.test", "https://two.test"};
     const auto payload_bytes = 4 + origins[0].size() + origins[1].size();
     const auto http2_frame = ruvia::encodeHttp2OriginFrame(origins, static_cast<std::uint32_t>(payload_bytes));
-    RUVIA_CHECK(http2_frame.has_value());
-    if (http2_frame) {
-        const auto header = ruvia::parseHttp2FrameHeader(*http2_frame);
+    RUVIA_CHECK((http2_frame.index() == 0));
+    if ((http2_frame.index() == 0)) {
+        const auto header = ruvia::parseHttp2FrameHeader(std::get<0>(http2_frame));
         RUVIA_CHECK(header.has_value());
         if (header) {
             RUVIA_CHECK_EQ(header->length, payload_bytes);
-            RUVIA_CHECK_EQ(http2_frame->size(), payload_bytes + ruvia::kHttp2FrameHeaderBytes);
+            RUVIA_CHECK_EQ(std::get<0>(http2_frame).size(), payload_bytes + ruvia::kHttp2FrameHeaderBytes);
         }
     }
     const auto http3_frame = ruvia::encodeHttp3OriginFrame(origins, payload_bytes);
-    RUVIA_CHECK(http3_frame.has_value());
-    if (http3_frame) {
-        const auto header = ruvia::decodeHttp3FrameHeader(*http3_frame);
-        RUVIA_CHECK(header.has_value());
-        if (header) {
-            RUVIA_CHECK_EQ(header->length, payload_bytes);
-            RUVIA_CHECK_EQ(http3_frame->size(), payload_bytes + header->encodedBytes);
+    RUVIA_CHECK((http3_frame.index() == 0));
+    if ((http3_frame.index() == 0)) {
+        const auto header = ruvia::decodeHttp3FrameHeader(std::get<0>(http3_frame));
+        RUVIA_CHECK((header.index() == 0));
+        if ((header.index() == 0)) {
+            RUVIA_CHECK_EQ(std::get<0>(header).length, payload_bytes);
+            RUVIA_CHECK_EQ(std::get<0>(http3_frame).size(), payload_bytes + std::get<0>(header).encodedBytes);
         }
     }
     const std::array<std::string_view, 0> no_origins{};
     const auto empty_http2 = ruvia::encodeHttp2OriginFrame(no_origins, 0, nullptr);
     const auto empty_http3 = ruvia::encodeHttp3OriginFrame(no_origins, 0, nullptr);
-    RUVIA_CHECK(empty_http2.has_value());
-    RUVIA_CHECK(empty_http3.has_value());
-    if (empty_http2) {
-        RUVIA_CHECK_EQ(empty_http2->size(), ruvia::kHttp2FrameHeaderBytes);
+    RUVIA_CHECK((empty_http2.index() == 0));
+    RUVIA_CHECK((empty_http3.index() == 0));
+    if ((empty_http2.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(empty_http2).size(), ruvia::kHttp2FrameHeaderBytes);
     }
-    if (empty_http3) {
-        RUVIA_CHECK_EQ(empty_http3->size(), std::size_t{2});
+    if ((empty_http3.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(empty_http3).size(), std::size_t{2});
     }
     for (const auto stream_id : {0u, 1u}) {
         const std::string_view origin = stream_id == 0 ? origins[0] : "";
         const std::string_view value = "clear";
         const auto size = static_cast<std::uint32_t>(2 + origin.size() + value.size());
         const auto result = ruvia::encodeHttp2AlternativeServiceFrame(stream_id, origin, value, size);
-        RUVIA_CHECK(result.has_value());
-        if (result) {
+        RUVIA_CHECK((result.index() == 0));
+        if ((result.index() == 0)) {
             const auto decoded = ruvia::decodeHttp2AlternativeService(stream_id,
-                std::span(*result).subspan(ruvia::kHttp2FrameHeaderBytes));
-            RUVIA_CHECK(decoded.has_value());
-            if (decoded) {
-                RUVIA_CHECK(decoded->origin == origin);
-                RUVIA_CHECK(decoded->fieldValue == value);
+                std::span(std::get<0>(result)).subspan(ruvia::kHttp2FrameHeaderBytes));
+            RUVIA_CHECK((decoded.index() == 0));
+            if ((decoded.index() == 0)) {
+                RUVIA_CHECK(std::get<0>(decoded).origin == origin);
+                RUVIA_CHECK(std::get<0>(decoded).fieldValue == value);
             }
         }
         const auto limited = ruvia::encodeHttp2AlternativeServiceFrame(stream_id, origin, value, size - 1);
-        RUVIA_CHECK(!limited);
-        if (!limited) {
-            RUVIA_CHECK(limited.error() == ruvia::HttpConnectionAdvertisementError::kLimit);
+        RUVIA_CHECK((limited.index() != 0));
+        if ((limited.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(limited) == ruvia::HttpConnectionAdvertisementError::kLimit);
         }
     }
     AdvertisementResource resource;
@@ -147,9 +148,9 @@ RUVIA_TEST(http_connection_advertisement_encoders_honor_exact_payload_budgets) {
         static_cast<std::uint32_t>(payload_bytes - 1), &resource);
     const auto http3_limited = ruvia::encodeHttp3OriginFrame(origins, payload_bytes - 1, &resource);
     for (const auto* result : {&http2_limited, &http3_limited}) {
-        RUVIA_CHECK(!*result);
-        if (!*result) {
-            RUVIA_CHECK(result->error() == ruvia::HttpConnectionAdvertisementError::kLimit);
+        RUVIA_CHECK((*result).index() != 0);
+        if (result->index() != 0) {
+            RUVIA_CHECK(std::get<1>(*result) == ruvia::HttpConnectionAdvertisementError::kLimit);
         }
     }
     RUVIA_CHECK_EQ(resource.live, std::size_t{0});
@@ -171,7 +172,7 @@ RUVIA_TEST(http_connection_advertisement_valid_frame_allocation_failure_releases
         resource.fail = false;
         {
             const auto frame = make_frame();
-            RUVIA_CHECK(frame.has_value());
+            RUVIA_CHECK(frame.index() == 0);
         }
         RUVIA_CHECK_EQ(resource.live, std::size_t{0});
     };
@@ -183,15 +184,15 @@ RUVIA_TEST(http_connection_advertisement_valid_frame_allocation_failure_releases
 RUVIA_TEST(http_connection_advertisement_invalid_entries_truncation_and_alternative_service_association) {
     const std::array<char, 5> invalid{0, 3, 'b', 'a', 'd'};
     const auto ignored = ruvia::decodeHttpOriginAdvertisement(invalid);
-    RUVIA_CHECK(ignored && ignored->origins.empty());
-    RUVIA_CHECK(!ruvia::decodeHttpOriginAdvertisement(std::span(invalid).first(4)));
-    RUVIA_CHECK(!ruvia::encodeHttp2OriginFrame(std::array<std::string_view, 1>{"https://example.test/path"}));
+    RUVIA_CHECK((ignored.index() == 0) && std::get<0>(ignored).origins.empty());
+    RUVIA_CHECK((ruvia::decodeHttpOriginAdvertisement(std::span(invalid).first(4)).index() != 0));
+    RUVIA_CHECK((ruvia::encodeHttp2OriginFrame(std::array<std::string_view, 1>{"https://example.test/path"}).index() != 0));
     const auto encoded = ruvia::encodeHttp2AlternativeServiceFrame(0, "https://example.test", "h3=\":443\"; ma=60");
-    RUVIA_CHECK(encoded.has_value());
-    const auto parsed = ruvia::decodeHttp2AlternativeService(0, std::span(*encoded).subspan(9));
-    RUVIA_CHECK(parsed && parsed->origin == "https://example.test" && parsed->fieldValue == "h3=\":443\"; ma=60");
-    RUVIA_CHECK(!ruvia::encodeHttp2AlternativeServiceFrame(1, "https://example.test", "clear"));
-    RUVIA_CHECK(!ruvia::decodeHttp2AlternativeService(1, std::span(*encoded).subspan(9)));
-    RUVIA_CHECK(!ruvia::encodeHttp2AlternativeServiceFrame(0, "", "clear"));
-    RUVIA_CHECK(!ruvia::encodeHttp2AlternativeServiceFrame(1, "", "clear\r\n"));
+    RUVIA_CHECK((encoded.index() == 0));
+    const auto parsed = ruvia::decodeHttp2AlternativeService(0, std::span(std::get<0>(encoded)).subspan(9));
+    RUVIA_CHECK((parsed.index() == 0) && std::get<0>(parsed).origin == "https://example.test" && std::get<0>(parsed).fieldValue == "h3=\":443\"; ma=60");
+    RUVIA_CHECK((ruvia::encodeHttp2AlternativeServiceFrame(1, "https://example.test", "clear").index() != 0));
+    RUVIA_CHECK((ruvia::decodeHttp2AlternativeService(1, std::span(std::get<0>(encoded)).subspan(9)).index() != 0));
+    RUVIA_CHECK((ruvia::encodeHttp2AlternativeServiceFrame(0, "", "clear").index() != 0));
+    RUVIA_CHECK((ruvia::encodeHttp2AlternativeServiceFrame(1, "", "clear\r\n").index() != 0));
 }

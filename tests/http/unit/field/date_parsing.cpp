@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/HttpDate.h"
 
@@ -290,9 +291,9 @@ RUVIA_TEST(http_date_conversion_rejects_unrepresentable_years) {
         }
         const auto date = ruvia::detail::httpFormatDate(static_cast<std::time_t>(time));
         RUVIA_CHECK(!ruvia::formatHttpDate(static_cast<std::time_t>(time)));
-        RUVIA_CHECK(!date);
-        if (!date) {
-            RUVIA_CHECK(date.error() == ruvia::detail::HttpDateFormatError::kOutOfRange);
+        RUVIA_CHECK((date.index() != 0));
+        if ((date.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(date) == ruvia::detail::HttpDateFormatError::kOutOfRange);
         }
     }
     RUVIA_CHECK_EQ(formatDate(-315619200), std::string("Fri, 01 Jan 1960 00:00:00 GMT"));
@@ -322,7 +323,7 @@ RUVIA_TEST(http_date_cache_omits_unavailable_dates_and_recovers) {
 }
 
 RUVIA_TEST(imf_fixdate_format_known_vector) {
-    const auto date = ruvia::detail::httpFormatDate(784111777).value();
+    const auto date = std::get<0>(ruvia::detail::httpFormatDate(784111777));
     RUVIA_CHECK_EQ(date.size(), ruvia::kHttpImfFixdateSize);
     RUVIA_CHECK_EQ(std::string(date.data(), date.size()), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
 }

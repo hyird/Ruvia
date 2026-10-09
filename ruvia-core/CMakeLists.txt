@@ -1,5 +1,4 @@
-find_package(asio CONFIG REQUIRED)
-find_package(Threads REQUIRED)
+ruvia_fetch_core_dependencies()
 
 set(_ruvia_core_generated_include_dir "${CMAKE_CURRENT_BINARY_DIR}/include")
 set(_ruvia_core_version_header
@@ -28,8 +27,7 @@ target_include_directories(ruvia-core
 
 target_link_libraries(ruvia-core
     PUBLIC
-        asio::asio
-        Threads::Threads
+        ruvia_dependencies_core
 )
 
 ruvia_install_target(ruvia-core core)

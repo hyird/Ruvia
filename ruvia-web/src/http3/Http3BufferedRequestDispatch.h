@@ -148,10 +148,10 @@ public:
 
     // Both tasks are lazy. The first actual start acquires the request lease;
     // constructing and discarding either cold task changes no session state.
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
+    [[nodiscard]] std::variant<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
         return session_.encodeStreamingResponseHead(messageId_.stream_id, std::move(response), method, kind, trailers);
     }
-    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {
+    [[nodiscard]] std::variant<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {
         return session_.encodeResponseTrailers(messageId_.stream_id, fields);
     }
     [[nodiscard]] Task<PrepareStatus> prepare() &;

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
@@ -11,11 +12,11 @@
 RUVIA_TEST(http3CriticalStreamOutputKeepsThreePrefixesIndependentUntilAccepted) {
     using Output = ruvia::http3_critical_stream_output;
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    Output output(*prefixes);
+    Output output(std::get<0>(prefixes));
     RUVIA_CHECK(!output.complete());
     RUVIA_CHECK(!output.acknowledge(Output::stream_kind::control, 1));
 
@@ -51,12 +52,12 @@ RUVIA_TEST(http3CriticalStreamOutputKeepsThreePrefixesIndependentUntilAccepted) 
     RUVIA_CHECK(!output.complete());
     const auto goaway = output.next(Output::stream_kind::control);
     const auto decoded = ruvia::decodeHttp3Frame(goaway);
-    RUVIA_CHECK(decoded && decoded->type ==
-                               static_cast<std::uint64_t>(ruvia::Http3FrameType::kGoaway));
-    if (decoded) {
-        const auto identifier = ruvia::decodeHttp3VarInt(decoded->payload);
-        RUVIA_CHECK(identifier && identifier->value == 16);
-        RUVIA_CHECK_EQ(decoded->encodedBytes, goaway.size());
+    RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).type ==
+                                              static_cast<std::uint64_t>(ruvia::Http3FrameType::kGoaway));
+    if ((decoded.index() == 0)) {
+        const auto identifier = ruvia::decodeHttp3VarInt(std::get<0>(decoded).payload);
+        RUVIA_CHECK((identifier.index() == 0) && std::get<0>(identifier).value == 16);
+        RUVIA_CHECK_EQ(std::get<0>(decoded).encodedBytes, goaway.size());
     }
     RUVIA_CHECK(output.acknowledge(Output::stream_kind::control, 0));
     const auto goawayRetry = output.next(Output::stream_kind::control);

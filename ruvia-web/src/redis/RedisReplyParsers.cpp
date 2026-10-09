@@ -1,6 +1,7 @@
 #include <charconv>
 #include <cmath>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/DecimalNumber.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
@@ -27,10 +28,10 @@ namespace {
 
 double parseRedisDouble(std::string_view value, std::string_view context) {
     const auto output = ruvia::parseDecimalNumber(value);
-    if (!output || !std::isfinite(*output)) {
+    if ((output.index() != 0) || !std::isfinite(std::get<0>(output))) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }
-    return *output;
+    return std::get<0>(output);
 }
 
 std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(

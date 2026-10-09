@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>

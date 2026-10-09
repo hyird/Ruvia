@@ -1,4 +1,4 @@
-#include <hiredis/hiredis.h>
+#include <hiredis.h>
 
 #include <algorithm>
 #include <array>

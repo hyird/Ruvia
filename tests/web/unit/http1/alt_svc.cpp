@@ -322,42 +322,42 @@ RUVIA_TEST(http1_tls_wire_responses_emit_alt_svc_and_honor_application_headers) 
     const auto buffered = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/buffered", true);
     });
-    RUVIA_CHECK(firstResponseHead(buffered).contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((firstResponseHead(buffered).find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
     RUVIA_CHECK(firstResponseHead(buffered).starts_with("HTTP/1.1 200"));
 
     const auto override = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/override", true);
     });
-    RUVIA_CHECK(firstResponseHead(override).contains("Alt-Svc: h3=\":9443\"; ma=10\r\n"));
-    RUVIA_CHECK(!firstResponseHead(override).contains(kAutomaticAltSvc));
+    RUVIA_CHECK((firstResponseHead(override).find("Alt-Svc: h3=\":9443\"; ma=10\r\n") != std::string_view::npos));
+    RUVIA_CHECK(firstResponseHead(override).find(kAutomaticAltSvc) == std::string_view::npos);
 
     const auto erased = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/erase", true);
     });
-    RUVIA_CHECK(!firstResponseHead(erased).contains("Alt-Svc:"));
+    RUVIA_CHECK(!(firstResponseHead(erased).find("Alt-Svc:") != std::string_view::npos));
 
     const auto plain = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/buffered", false);
     });
-    RUVIA_CHECK(!firstResponseHead(plain).contains("Alt-Svc:"));
+    RUVIA_CHECK(!(firstResponseHead(plain).find("Alt-Svc:") != std::string_view::npos));
 
     const auto protocolError = captureHttp1Wire([&](tcp::socket& socket) {
         return emitProtocolError(socket, routes);
     });
     RUVIA_CHECK(firstResponseHead(protocolError).starts_with("HTTP/1.1 400"));
-    RUVIA_CHECK(firstResponseHead(protocolError).contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((firstResponseHead(protocolError).find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
 
     const auto notFound = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/missing", true);
     });
     RUVIA_CHECK(firstResponseHead(notFound).starts_with("HTTP/1.1 404"));
-    RUVIA_CHECK(firstResponseHead(notFound).contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((firstResponseHead(notFound).find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
 
     const auto exception = captureHttp1Wire([&](tcp::socket& socket) {
         return emitBufferedRoute(socket, routes, "/exception", true);
     });
     RUVIA_CHECK(firstResponseHead(exception).starts_with("HTTP/1.1 500"));
-    RUVIA_CHECK(firstResponseHead(exception).contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((firstResponseHead(exception).find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
 }
 
 RUVIA_TEST(http1_tls_streaming_and_websocket_wire_responses_emit_alt_svc) {
@@ -371,16 +371,16 @@ RUVIA_TEST(http1_tls_streaming_and_websocket_wire_responses_emit_alt_svc) {
         return emitStreamingRoute(socket, routes);
     });
     RUVIA_CHECK(firstResponseHead(streaming).starts_with("HTTP/1.1 200"));
-    RUVIA_CHECK(firstResponseHead(streaming).contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
-    RUVIA_CHECK(firstResponseHead(streaming).contains("Transfer-Encoding: chunked\r\n"));
-    RUVIA_CHECK(streaming.contains("streamed"));
+    RUVIA_CHECK((firstResponseHead(streaming).find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
+    RUVIA_CHECK((firstResponseHead(streaming).find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
+    RUVIA_CHECK((streaming.find("streamed") != std::string_view::npos));
 
     const auto webSocket = captureHttp1Wire([&](tcp::socket& socket) {
         return emitWebSocketRoute(socket, routes, "13");
     });
     const auto handshake = firstResponseHead(webSocket);
     RUVIA_CHECK(handshake.starts_with("HTTP/1.1 101"));
-    RUVIA_CHECK(handshake.contains("alt-svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((handshake.find("alt-svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
 }
 
 RUVIA_TEST(http1BufferedResponseWriterSendsMultipartFileSlicesWithExactLength) {
@@ -473,8 +473,8 @@ RUVIA_TEST(http1_tls_unsupported_websocket_version_wire_is_400_without_upgrade_f
     });
     const auto head = firstResponseHead(wire);
     RUVIA_CHECK(head.starts_with("HTTP/1.1 400"));
-    RUVIA_CHECK(head.contains("Sec-WebSocket-Version: 13\r\n"));
-    RUVIA_CHECK(head.contains("Alt-Svc: h3=\":443\"; ma=86400\r\n"));
-    RUVIA_CHECK(!head.contains("Upgrade:"));
-    RUVIA_CHECK(!head.contains("Connection: Upgrade"));
+    RUVIA_CHECK((head.find("Sec-WebSocket-Version: 13\r\n") != std::string_view::npos));
+    RUVIA_CHECK((head.find("Alt-Svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
+    RUVIA_CHECK(!(head.find("Upgrade:") != std::string_view::npos));
+    RUVIA_CHECK(!(head.find("Connection: Upgrade") != std::string_view::npos));
 }

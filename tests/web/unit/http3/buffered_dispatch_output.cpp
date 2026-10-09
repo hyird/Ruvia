@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "http3_buffered_dispatch_fixture.h"
 
 namespace {
@@ -156,11 +158,11 @@ ruvia::Task<void> publishStandardResponseAndMeasure(Fixture& fixture, std::uint6
     decodedFieldSectionSize = response.decodedFieldSectionSize;
     const auto headers = ruvia::decodeHttp3Frame(
         std::span<const char>(wire.bytes.data(), wire.bytes.size()));
-    RUVIA_CHECK(headers.has_value());
-    if (headers) {
-        RUVIA_CHECK_EQ(headers->type,
+    RUVIA_CHECK((headers.index() == 0));
+    if ((headers.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(headers).type,
             static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders));
-        encodedFieldSectionSize = headers->payload.size();
+        encodedFieldSectionSize = std::get<0>(headers).payload.size();
     }
     RUVIA_CHECK(fixture.session.request(streamId) == nullptr);
 }
@@ -193,9 +195,9 @@ ruvia::Task<void> exercise_nonbuffered_peer_refusal(
                 ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
                 ruvia::Http3FieldSectionFieldView{":authority", "backend.test:443"}};
             const auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-            RUVIA_CHECK(encoded.has_value());
+            RUVIA_CHECK((encoded.index() == 0));
             const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-                std::string_view(encoded->data(), encoded->size()));
+                std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
             RUVIA_CHECK(fixture.session.feed(0, wire).scope == ruvia::Http3ConnectionErrorScope::kNone);
         } else {
             feedRequest(fixture, 0, "GET", mode == 2 ? "/large" : "/stream");
@@ -709,9 +711,9 @@ ruvia::Task<void> exerciseStreamingUpload(Fixture& fixture, const ruvia::WorkerH
     } else {
         const std::array fields{ruvia::Http3FieldSectionFieldView{"x-checksum", "final"}};
         const auto section = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
-        RUVIA_CHECK(section.has_value());
-        if (section) {
-            const auto trailers = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(section->data(), section->size()));
+        RUVIA_CHECK((section.index() == 0));
+        if ((section.index() == 0)) {
+            const auto trailers = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(std::get<0>(section).data(), std::get<0>(section).size()));
             RUVIA_CHECK(fixture.session.feed(0, trailers).scope == ruvia::Http3ConnectionErrorScope::kNone);
         }
         RUVIA_CHECK(fixture.session.feed(0, {}, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);

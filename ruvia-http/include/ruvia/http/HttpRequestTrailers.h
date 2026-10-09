@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
@@ -24,8 +24,8 @@ public:
     explicit HttpRequestTrailers(std::pmr::memory_resource* resource);
     HttpRequestTrailers(const HttpRequestTrailers&) = delete;
     HttpRequestTrailers& operator=(const HttpRequestTrailers&) = delete;
-    [[nodiscard]] std::expected<void, HttpRequestTrailerError> append(std::string_view name, std::string_view value);
-    [[nodiscard]] std::expected<void, HttpRequestTrailerError> appendHttp1(std::string_view block);
+    [[nodiscard]] std::variant<std::monostate, HttpRequestTrailerError> append(std::string_view name, std::string_view value);
+    [[nodiscard]] std::variant<std::monostate, HttpRequestTrailerError> appendHttp1(std::string_view block);
     [[nodiscard]] std::pmr::vector<HttpHeader> takeFields() && noexcept {
         bytes_ = 0;
         return std::move(fields_);

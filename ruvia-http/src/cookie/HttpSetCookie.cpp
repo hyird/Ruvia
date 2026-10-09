@@ -3,6 +3,7 @@
 #include <array>
 #include <charconv>
 #include <limits>
+#include <string_view>
 
 #include "ruvia/http/detail/util/AsciiCase.h"
 
@@ -200,7 +201,7 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
     const auto cookiePair = value.substr(0, firstEnd);
     std::string_view name;
     std::string_view cookieValue;
-    if (!cookiePair.contains('=')) {
+    if (!(cookiePair.find('=') != std::string_view::npos)) {
         cookieValue = trimOws(cookiePair);
     } else {
         const auto fields = splitAttribute(cookiePair);

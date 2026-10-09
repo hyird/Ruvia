@@ -2,9 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -69,25 +69,25 @@ private:
 class Http2RequestBuildResult final {
 public:
     [[nodiscard]] constexpr const Http2RequestBuilt* built() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const Http2RequestBuilt* built() const&& = delete;
 
     [[nodiscard]] constexpr const Http2RequestBuildFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const Http2RequestBuildFailure* failure() const&& = delete;
 
 private:
     friend class Http2RequestBuilder;
 
-    using Value = std::expected<Http2RequestBuilt, Http2RequestBuildFailure>;
+    using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>;
 
     explicit constexpr Http2RequestBuildResult(Http2RequestBuilt built) noexcept
         : value_(built) {}
 
     explicit constexpr Http2RequestBuildResult(Http2RequestBuildFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static constexpr Http2RequestBuildResult makeBuilt() noexcept {
         return Http2RequestBuildResult(Http2RequestBuilt());

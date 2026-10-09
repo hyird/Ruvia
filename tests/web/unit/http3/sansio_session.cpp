@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/Bytes.h"
@@ -88,10 +89,10 @@ private:
 std::string frame(std::uint64_t type, std::string_view payload) {
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto encoded = ruvia::encodeHttp3FrameHeader(header, type, payload.size());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("fixture frame header failed to encode");
     }
-    std::string result(header.data(), *encoded);
+    std::string result(header.data(), std::get<0>(encoded));
     result.append(payload);
     return result;
 }
@@ -109,11 +110,11 @@ std::string requestHeaders(ruvia::WorkerMemory& worker, std::string_view method,
                                                         .protocol = protocol,
                                                         .peerEnableConnectProtocol = !protocol.empty()},
         {}, worker.resource());
-    if (!head) {
+    if ((head.index() != 0)) {
         throw std::runtime_error("fixture request head failed to encode");
     }
     return frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(head->fieldSection.data(), head->fieldSection.size()));
+        std::string_view(std::get<0>(head).fieldSection.data(), std::get<0>(head).fieldSection.size()));
 }
 
 std::string data(std::string_view payload) {
@@ -180,7 +181,7 @@ RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker);
     auto prefixes = ruvia::Http3LocalCriticalStreams::create({});
-    const auto prefix = prefixes->controlPrefix();
+    const auto prefix = std::get<0>(prefixes).controlPrefix();
     RUVIA_CHECK(session.feed(2, std::string_view(prefix.data(), prefix.size())).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(session.feed(0, requestHeaders(worker, "GET", "/priority"), true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
     auto lease = session.acquireRequest(0);
@@ -194,11 +195,11 @@ RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
     for (const auto urgency : {1, 7, 2}) {
         const auto encoded = ruvia::encodeHttp3PriorityUpdate(bytes, {.elementId = 0,
                                                                          .fields = {.urgency = static_cast<std::uint8_t>(urgency), .incremental = urgency == 7}});
-        RUVIA_CHECK(encoded.has_value());
-        if (!encoded) {
+        RUVIA_CHECK((encoded.index() == 0));
+        if ((encoded.index() != 0)) {
             return;
         }
-        RUVIA_CHECK(session.feed(2, std::string_view(bytes.data(), *encoded)).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(session.feed(2, std::string_view(bytes.data(), std::get<0>(encoded))).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(observed == session.requestPriorityUpdate(0));
         RUVIA_CHECK(observed->has_value() && observed->value().urgency == urgency && observed->value().incremental == (urgency == 7));
     }

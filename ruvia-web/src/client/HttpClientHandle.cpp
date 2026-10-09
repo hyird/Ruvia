@@ -528,11 +528,12 @@ ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openTunnel(const HttpC
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
     detail::HttpClientRequestStorage request("CONNECT", head.target, detail::pmrResourceOrDefault(resource_));
-    if (head.protocol == "connect-udp" && !validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp2,
-                                              .scheme = scheme() == HttpScheme::kHttps ? "https" : "http",
-                                              .authority = head.authority,
-                                              .path = head.target,
-                                              .headers = head.headers})) {
+    if (head.protocol == "connect-udp" && (validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp2,
+                                                                             .scheme = scheme() == HttpScheme::kHttps ? "https" : "http",
+                                                                             .authority = head.authority,
+                                                                             .path = head.target,
+                                                                             .headers = head.headers})
+                                                  .index() != 0)) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
     request.setTunnel(head.authority, head.protocol);

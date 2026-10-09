@@ -39,7 +39,7 @@ RUVIA_TEST(sse_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
     RUVIA_CHECK_EQ(render({.data = "a\nb"}), std::string("data: a\ndata: b\n\n"));
     RUVIA_CHECK_EQ(render({.data = "a\r\nb"}), std::string("data: a\ndata: b\n\n"));
     RUVIA_CHECK_EQ(render({.data = "a\r\rb"}), std::string("data: a\ndata: \ndata: b\n\n"));
-    RUVIA_CHECK(!render({.data = "x\ry\r\rz"}).contains('\r'));
+    RUVIA_CHECK(!(render({.data = "x\ry\r\rz"}).find('\r') != std::string_view::npos));
 }
 
 RUVIA_TEST(sse_rejects_newline_in_event_or_id_and_nul_in_id) {

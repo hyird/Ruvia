@@ -159,7 +159,7 @@ struct DbMapProjection final {
         }
         std::size_t index = 0;
         forEachEntityColumn<E>([&]<typename C> {
-            selectedColumns_[index++] = selected.empty() || std::ranges::contains(selected, C::name.view());
+            selectedColumns_[index++] = selected.empty() || std::ranges::find(selected, C::name.view()) != selected.end();
         });
     }
     E decode(const DbRow& row, std::pmr::memory_resource* resource) const {

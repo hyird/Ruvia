@@ -367,7 +367,7 @@ private:
         Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent, Http2PushPromiseEvent, HttpPriorityUpdate, HttpOriginAdvertisement, HttpAlternativeServiceAdvertisement>;
 
     static_assert(
-        std::to_underlying(Http2EventKind::kAlternativeServiceAdvertisement) + 1 == std::variant_size_v<Value>);
+        static_cast<std::uint8_t>(Http2EventKind::kAlternativeServiceAdvertisement) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit Http2Event(Event event) noexcept

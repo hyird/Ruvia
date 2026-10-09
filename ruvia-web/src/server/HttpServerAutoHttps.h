@@ -47,7 +47,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
 
     // The raw target retains the distinction between an absent query and an
     // empty query ("/x" versus "/x?"); queryString() alone cannot express it.
-    const bool hasQuery = request.target().contains('?');
+    const bool hasQuery = (request.target().find('?') != std::string_view::npos);
     std::pmr::string location(memory.allocator<char>());
     location.reserve(std::string_view("https://").size() + host.size() +
                      (httpsPort == 443 ? 0U : 6U) + path.size() +

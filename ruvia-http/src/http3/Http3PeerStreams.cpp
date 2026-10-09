@@ -1,6 +1,7 @@
 #include "ruvia/http/Http3PeerStreams.h"
 
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/Http3VarInt.h"
 
@@ -16,10 +17,10 @@ Http3PeerStreams::Http3PeerStreams(Http3PeerRole localRole, std::pmr::memory_res
     }
 }
 
-std::expected<void, Http3PeerStreamError> Http3PeerStreams::validatePeerUni(
+std::variant<std::monostate, Http3PeerStreamError> Http3PeerStreams::validatePeerUni(
     std::uint64_t streamId) const noexcept {
     if (!isHttp3PeerUnidirectionalStreamId(localRole_, streamId)) {
-        return std::unexpected(Http3PeerStreamError::kStreamCreationError);
+        return Http3PeerStreamError::kStreamCreationError;
     }
     return {};
 }
@@ -29,10 +30,10 @@ bool Http3PeerStreams::isCritical(Http3PeerStreamKind kind) noexcept {
            kind == Http3PeerStreamKind::kQpackDecoder;
 }
 
-std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
+std::variant<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
     std::uint64_t streamId, std::span<const char> bytes, bool fin, bool reset) {
-    if (const auto valid = validatePeerUni(streamId); !valid) {
-        return std::unexpected(valid.error());
+    if (const auto valid = validatePeerUni(streamId); (valid.index() != 0)) {
+        return std::get<1>(valid);
     }
 
     auto found = streams_.find(streamId);
@@ -42,7 +43,7 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
             return Http3PeerStreamFeed{.consumed = 0, .remaining = bytes, .fin = fin, .reset = reset, .closed = true};
         }
         if (streams_.size() >= limits_.maxActiveStreams) {
-            return std::unexpected(Http3PeerStreamError::kExcessiveLoad);
+            return Http3PeerStreamError::kExcessiveLoad;
         }
         found = streams_.try_emplace(streamId).first;
     }
@@ -50,7 +51,7 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
     auto& state = found->second;
     if (state.kind != Http3PeerStreamKind::kUnclassified) {
         if ((fin || reset) && isCritical(state.kind)) {
-            return std::unexpected(Http3PeerStreamError::kClosedCriticalStream);
+            return Http3PeerStreamError::kClosedCriticalStream;
         }
         const auto kind = state.kind;
         const auto streamType = state.streamType;
@@ -71,19 +72,19 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
         state.typeBytes[state.typeSize++] = bytes[consumed++];
         const auto decoded = decodeHttp3VarInt(
             std::span<const char>(state.typeBytes).first(state.typeSize));
-        if (!decoded) {
+        if ((decoded.index() != 0)) {
             continue;
         }
 
-        state.streamType = decoded->value;
-        state.kind = decoded->value == 0   ? Http3PeerStreamKind::kControl
-                     : decoded->value == 1 ? Http3PeerStreamKind::kPush
-                     : decoded->value == 2 ? Http3PeerStreamKind::kQpackEncoder
-                     : decoded->value == 3 ? Http3PeerStreamKind::kQpackDecoder
-                                           : Http3PeerStreamKind::kUnknown;
+        state.streamType = std::get<0>(decoded).value;
+        state.kind = std::get<0>(decoded).value == 0   ? Http3PeerStreamKind::kControl
+                     : std::get<0>(decoded).value == 1 ? Http3PeerStreamKind::kPush
+                     : std::get<0>(decoded).value == 2 ? Http3PeerStreamKind::kQpackEncoder
+                     : std::get<0>(decoded).value == 3 ? Http3PeerStreamKind::kQpackDecoder
+                                                       : Http3PeerStreamKind::kUnknown;
         if (localRole_ == Http3PeerRole::kServer && state.kind == Http3PeerStreamKind::kPush) {
             streams_.erase(found);
-            return std::unexpected(Http3PeerStreamError::kStreamCreationError);
+            return Http3PeerStreamError::kStreamCreationError;
         }
 
         bool* seen = state.kind == Http3PeerStreamKind::kControl        ? &controlSeen_
@@ -93,7 +94,7 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
         if (seen != nullptr) {
             if (*seen) {
                 streams_.erase(found);
-                return std::unexpected(Http3PeerStreamError::kStreamCreationError);
+                return Http3PeerStreamError::kStreamCreationError;
             }
             *seen = true;
         }
@@ -109,7 +110,7 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
     }
 
     if ((fin || reset) && isCritical(state.kind)) {
-        return std::unexpected(Http3PeerStreamError::kClosedCriticalStream);
+        return Http3PeerStreamError::kClosedCriticalStream;
     }
     const auto kind = state.kind;
     const auto streamType = state.streamType;
@@ -125,10 +126,10 @@ std::expected<Http3PeerStreamFeed, Http3PeerStreamError> Http3PeerStreams::feed(
         .closed = fin || reset};
 }
 
-std::expected<void, Http3PeerStreamError> Http3PeerStreams::acceptBidirectional(
+std::variant<std::monostate, Http3PeerStreamError> Http3PeerStreams::acceptBidirectional(
     Http3PeerRole localRole, std::uint64_t streamId) noexcept {
     if (!isHttp3PeerBidirectionalStreamId(localRole, streamId)) {
-        return std::unexpected(Http3PeerStreamError::kStreamCreationError);
+        return Http3PeerStreamError::kStreamCreationError;
     }
     return {};
 }

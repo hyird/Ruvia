@@ -16,6 +16,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/TaskScope.h"
@@ -341,10 +342,10 @@ struct Fixture final {
 inline std::string frame(std::uint64_t type, std::string_view payload) {
     std::array<char, ruvia::kHttp3FrameHeaderMaxBytes> header{};
     const auto size = ruvia::encodeHttp3FrameHeader(header, type, payload.size());
-    if (!size) {
+    if ((size.index() != 0)) {
         throw std::runtime_error("HTTP/3 test frame encoding failed");
     }
-    std::string wire(header.data(), *size);
+    std::string wire(header.data(), std::get<0>(size));
     wire.append(payload);
     return wire;
 }
@@ -361,11 +362,11 @@ inline std::string requestWire(ruvia::WorkerMemory& worker, std::string_view met
                                                                                    ? std::nullopt
                                                                                    : std::optional<std::uint64_t>(body.size())},
         {}, worker.resource());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 test request-head encoding failed");
     }
     std::string wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(encoded->fieldSection.data(), encoded->fieldSection.size()));
+        std::string_view(std::get<0>(encoded).fieldSection.data(), std::get<0>(encoded).fieldSection.size()));
     if (!body.empty()) {
         wire += frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData), body);
     }
@@ -426,11 +427,11 @@ inline std::string web_socket_request_wire(ruvia::WorkerMemory& worker, std::str
         ruvia::Http3FieldSectionFieldView{":path", "/socket"},
         ruvia::Http3FieldSectionFieldView{"sec-websocket-version", version}};
     const auto encoded = ruvia::encodeHttp3FieldSection(fields, worker.resource());
-    if (!encoded) {
+    if ((encoded.index() != 0)) {
         throw std::runtime_error("HTTP/3 WebSocket field section encoding failed");
     }
     return frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-        std::string_view(encoded->data(), encoded->size()));
+        std::string_view(std::get<0>(encoded).data(), std::get<0>(encoded).size()));
 }
 
 inline Connection::EventResult acceptWireBytes(Connection& connection, buffer& inbound,

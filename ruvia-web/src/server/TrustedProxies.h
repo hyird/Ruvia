@@ -3,9 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -41,7 +41,7 @@ enum class TrustedProxyParseError : std::uint8_t { kInvalidAddress,
 // Parses "10.0.0.0/8", "2001:db8::/32" or a bare address (an implicit full-width
 // prefix). Returns an error for anything malformed, so a typo in deployment config
 // fails startup instead of silently trusting nothing.
-[[nodiscard]] std::expected<TrustedProxyBlock, TrustedProxyParseError> parseTrustedProxyBlock(std::string_view cidr) noexcept;
+[[nodiscard]] std::variant<TrustedProxyBlock, TrustedProxyParseError> parseTrustedProxyBlock(std::string_view cidr) noexcept;
 
 [[nodiscard]] bool trustedProxyBlockContains(
     const TrustedProxyBlock& block, std::string_view peerAddress) noexcept;

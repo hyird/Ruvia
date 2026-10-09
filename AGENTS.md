@@ -28,7 +28,7 @@ ruvia-web  -> ruvia::web
 ruvia-web  -> ruvia-core + ruvia-http
 ```
 
-- 使用 C++23。源码只放在三个库、examples 和 tests。
+- 使用 C++20。源码只放在三个库、examples 和 tests。
 - 各库自带 CMakeLists.txt、include 和 src。
 - 各库只拥有自己的源码和公开命名根。
 - src 最多一层职责目录。core 的 src 保持扁平。

@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/HttpContentCoding.h"
 
@@ -220,12 +220,12 @@ private:
 class HttpResponseCodingSelectionResult final {
 public:
     [[nodiscard]] const HttpResponseCodingSelection* selected() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const HttpResponseCodingSelection* selected() const&& = delete;
 
     [[nodiscard]] const HttpResponseCodingSelectionFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const HttpResponseCodingSelectionFailure* failure() const&& = delete;
 
@@ -236,9 +236,9 @@ private:
         : value_(selection) {}
 
     explicit HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
-    using Value = std::expected<HttpResponseCodingSelection, HttpResponseCodingSelectionFailure>;
+    using Value = std::variant<HttpResponseCodingSelection, HttpResponseCodingSelectionFailure>;
     Value value_;
 };
 

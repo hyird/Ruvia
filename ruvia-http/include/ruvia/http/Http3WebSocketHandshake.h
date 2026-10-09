@@ -1,10 +1,10 @@
 #pragma once
 
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
@@ -39,9 +39,9 @@ public:
     void applyRequiredResponseHeaders(HttpResponse& response) const;
 
 private:
-    friend std::expected<void, Http3WebSocketHandshakeFailure>
+    friend std::variant<std::monostate, Http3WebSocketHandshakeFailure>
     validateHttp3WebSocketHandshake(const HttpRequest&, std::string_view, bool) noexcept;
-    friend std::expected<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
+    friend std::variant<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
     makeHttp3WebSocketHandshake(const HttpRequest&, std::string_view, bool,
         Http3WebSocketHandshakeOptions);
 
@@ -53,7 +53,7 @@ private:
 
 // The RFC 9220 request checks are deliberately distinct from HTTP/1.1 Upgrade
 // checks. `streamOpen` must be false once the peer has sent FIN or RESET.
-[[nodiscard]] std::expected<void, Http3WebSocketHandshakeFailure>
+[[nodiscard]] std::variant<std::monostate, Http3WebSocketHandshakeFailure>
 validateHttp3WebSocketHandshake(const HttpRequest& request,
     std::string_view protocol, bool streamOpen) noexcept;
 
@@ -81,7 +81,7 @@ public:
     }
 
 private:
-    friend std::expected<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
+    friend std::variant<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
     makeHttp3WebSocketHandshake(const HttpRequest&, std::string_view, bool,
         Http3WebSocketHandshakeOptions);
 
@@ -94,7 +94,7 @@ private:
     std::pmr::vector<char> headersFrame_;
 };
 
-[[nodiscard]] std::expected<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
+[[nodiscard]] std::variant<Http3WebSocketHandshake, Http3WebSocketHandshakeFailure>
 makeHttp3WebSocketHandshake(const HttpRequest& request, std::string_view protocol,
     bool streamOpen, Http3WebSocketHandshakeOptions options = {});
 

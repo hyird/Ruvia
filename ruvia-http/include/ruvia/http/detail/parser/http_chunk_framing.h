@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -78,7 +77,7 @@ private:
     [[nodiscard]] std::optional<chunk_framing_error> validate_trailers(std::string_view trailers) const noexcept;
 
     chunk_framing_config config_;
-    std::expected<progress, chunk_framing_error> state_{progress::size_line};
+    std::variant<progress, chunk_framing_error> state_{progress::size_line};
     std::size_t trailer_search_offset_{0};
     std::size_t remaining_{0};
     std::size_t decoded_bytes_{0};

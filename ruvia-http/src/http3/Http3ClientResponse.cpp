@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3QpackConnection.h"
@@ -68,46 +69,46 @@ struct Http3ClientResponse::Impl final {
         }
         if (frame.kind == Http3StreamFrameEventKind::kPushPromise) {
             const auto id = decodeHttp3VarInt(frame.payload);
-            if (!id) {
+            if ((id.index() != 0)) {
                 self.result = connectionError(Http3ConnectionErrorCode::kFrameError);
                 return;
             }
-            if (!self.limits.maxPushId || id->value > *self.limits.maxPushId || self.limits.pushStream) {
+            if (!self.limits.maxPushId || std::get<0>(id).value > *self.limits.maxPushId || self.limits.pushStream) {
                 self.result = connectionError(Http3ConnectionErrorCode::kIdError);
                 return;
             }
-            const auto section = frame.payload.subspan(id->encodedBytes);
+            const auto section = frame.payload.subspan(std::get<0>(id).encodedBytes);
             const Http3MessageHeadLimits headLimits{self.limits.maxFieldSectionSize,
                 self.limits.maxFields, self.limits.maxEncodedFieldSectionBytes};
-            auto head = [&]() -> std::expected<Http3MessageHead, Http3MessageHeadError> {
+            auto head = [&]() -> std::variant<Http3MessageHead, Http3MessageHeadError> {
                 if (!self.decoder) {
                     return decodeHttp3MessageHead(section, Http3MessageHeadKind::kRequest, self.memory, headLimits);
                 }
                 auto decoded = decodeHttp3MessageHead(*self.decoder, self.streamId, section,
                     Http3MessageHeadKind::kRequest, self.memory, headLimits);
-                if (!decoded) {
-                    return std::unexpected(decoded.error());
+                if ((decoded.index() != 0)) {
+                    return std::get<1>(decoded);
                 }
-                if (auto* result = std::get_if<Http3MessageHead>(&*decoded)) {
+                if (auto* result = std::get_if<Http3MessageHead>(&std::get<0>(decoded))) {
                     return std::move(*result);
                 }
                 self.frames.pause();
-                return std::unexpected(Http3MessageHeadError::kMessageError);
+                return Http3MessageHeadError::kMessageError;
             }();
             if (self.frames.paused()) {
                 return;
             }
-            if (!head || (head->method != "GET" && head->method != "HEAD") ||
-                (head->contentLength && *head->contentLength != 0)) {
-                self.result = connectionError(!head && head.error() == Http3MessageHeadError::kQpackDecompressionFailed
+            if ((head.index() != 0) || (std::get<0>(head).method != "GET" && std::get<0>(head).method != "HEAD") ||
+                (std::get<0>(head).contentLength && *std::get<0>(head).contentLength != 0)) {
+                self.result = connectionError((head.index() != 0) && std::get<1>(head) == Http3MessageHeadError::kQpackDecompressionFailed
                                                   ? Http3ConnectionErrorCode::kQpackDecompressionFailed
                                                   : Http3ConnectionErrorCode::kMessageError);
                 return;
             }
             const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kPushPromise,
                 .streamId = self.streamId,
-                .head = &*head,
-                .pushId = id->value};
+                .head = &std::get<0>(head),
+                .pushId = std::get<0>(id).value};
             self.callback(self.callbackContext, event);
             return;
         }
@@ -157,22 +158,22 @@ struct Http3ClientResponse::Impl final {
                 self.limits.maxFieldSectionSize, self.limits.maxFields};
             if (self.decoder) {
                 const auto decoded = self.decoder->decode(self.streamId, frame.payload, trailer_collector::collect, &collector);
-                if (decoded && decoded->status == Http3QpackDecodeStatus::kBlocked) {
+                if ((decoded.index() == 0) && std::get<0>(decoded).status == Http3QpackDecodeStatus::kBlocked) {
                     self.frames.pause();
                     return;
                 }
-                if (!decoded || !collector.valid_) {
-                    self.result = !decoded ? connectionError(decoded.error() == Http3QpackConnectionError::kLimit
-                                                                 ? Http3ConnectionErrorCode::kExcessiveLoad
-                                                                 : Http3ConnectionErrorCode::kQpackDecompressionFailed)
-                                           : streamError(Http3ConnectionErrorCode::kMessageError);
+                if ((decoded.index() != 0) || !collector.valid_) {
+                    self.result = (decoded.index() != 0) ? connectionError(std::get<1>(decoded) == Http3QpackConnectionError::kLimit
+                                                                               ? Http3ConnectionErrorCode::kExcessiveLoad
+                                                                               : Http3ConnectionErrorCode::kQpackDecompressionFailed)
+                                                         : streamError(Http3ConnectionErrorCode::kMessageError);
                     return;
                 }
             } else {
                 const auto decoded = decodeHttp3FieldSection(frame.payload, trailer_collector::collect, &collector, fieldLimits, self.memory);
-                if (!decoded || !collector.valid_) {
-                    self.result = collector.valid_ ? connectionError(decoded.error() == Http3FieldSectionError::kFieldListTooLarge ||
-                                                                             decoded.error() == Http3FieldSectionError::kFieldSectionTooLarge || decoded.error() == Http3FieldSectionError::kTooManyFields
+                if ((decoded.index() != 0) || !collector.valid_) {
+                    self.result = collector.valid_ ? connectionError(std::get<1>(decoded) == Http3FieldSectionError::kFieldListTooLarge ||
+                                                                             std::get<1>(decoded) == Http3FieldSectionError::kFieldSectionTooLarge || std::get<1>(decoded) == Http3FieldSectionError::kTooManyFields
                                                                          ? Http3ConnectionErrorCode::kExcessiveLoad
                                                                          : Http3ConnectionErrorCode::kQpackDecompressionFailed)
                                                    : streamError(Http3ConnectionErrorCode::kMessageError);
@@ -191,54 +192,54 @@ struct Http3ClientResponse::Impl final {
 
         const Http3MessageHeadLimits headLimits{self.limits.maxFieldSectionSize,
             self.limits.maxFields, self.limits.maxEncodedFieldSectionBytes};
-        auto decoded = [&]() -> std::expected<Http3MessageHead, Http3MessageHeadError> {
+        auto decoded = [&]() -> std::variant<Http3MessageHead, Http3MessageHeadError> {
             if (!self.decoder) {
                 return decodeHttp3MessageHead(frame.payload, Http3MessageHeadKind::kResponse, self.memory, headLimits);
             }
             auto result = decodeHttp3MessageHead(*self.decoder, self.streamId, frame.payload,
                 Http3MessageHeadKind::kResponse, self.memory, headLimits);
-            if (!result) {
-                return std::unexpected(result.error());
+            if ((result.index() != 0)) {
+                return std::get<1>(result);
             }
-            if (auto* head = std::get_if<Http3MessageHead>(&*result)) {
+            if (auto* head = std::get_if<Http3MessageHead>(&std::get<0>(result))) {
                 return std::move(*head);
             }
             self.frames.pause();
-            return std::unexpected(Http3MessageHeadError::kMessageError);
+            return Http3MessageHeadError::kMessageError;
         }();
         if (self.frames.paused()) {
             return;
         }
-        if (!decoded) {
-            self.result = decoded.error() == Http3MessageHeadError::kQpackDecompressionFailed
+        if ((decoded.index() != 0)) {
+            self.result = std::get<1>(decoded) == Http3MessageHeadError::kQpackDecompressionFailed
                               ? connectionError(Http3ConnectionErrorCode::kQpackDecompressionFailed)
-                          : decoded.error() == Http3MessageHeadError::kFieldSectionTooLarge
+                          : std::get<1>(decoded) == Http3MessageHeadError::kFieldSectionTooLarge
                               ? connectionError(Http3ConnectionErrorCode::kExcessiveLoad)
                               : streamError(Http3ConnectionErrorCode::kMessageError);
             return;
         }
-        if (decoded->status < 200) {
-            if (decoded->status == 101) {
+        if (std::get<0>(decoded).status < 200) {
+            if (std::get<0>(decoded).status == 101) {
                 self.result = streamError(Http3ConnectionErrorCode::kMessageError);
                 return;
             }
             const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kInformationalHead,
                 .streamId = self.streamId,
-                .head = &*decoded,
-                .requestContentSignal = decoded->status == 100 ? std::optional{HttpClientRequestContentSignal::kContinue} : std::nullopt};
+                .head = &std::get<0>(decoded),
+                .requestContentSignal = std::get<0>(decoded).status == 100 ? std::optional{HttpClientRequestContentSignal::kContinue} : std::nullopt};
             self.callback(self.callbackContext, event);
             return;
         }
         self.finalHeaders = true;
-        self.tunnel = self.requestMethod == HttpKnownMethod::kConnect && decoded->status >= 200 && decoded->status < 300;
-        self.bodyPlan = planHttpResponseBody(self.requestMethod, HttpStatusCode::fromValue(decoded->status));
+        self.tunnel = self.requestMethod == HttpKnownMethod::kConnect && std::get<0>(decoded).status >= 200 && std::get<0>(decoded).status < 300;
+        self.bodyPlan = planHttpResponseBody(self.requestMethod, HttpStatusCode::fromValue(std::get<0>(decoded).status));
         const bool payloadAllowed = !self.tunnel && self.bodyPlan->statusAllowsBody() && !self.bodyPlan->bodySuppressed();
         // For HEAD and bodyless statuses Content-Length is representation metadata,
         // not a DATA accounting expectation.
-        self.body = Http3MessageBody(payloadAllowed ? decoded->contentLength : std::nullopt, payloadAllowed);
+        self.body = Http3MessageBody(payloadAllowed ? std::get<0>(decoded).contentLength : std::nullopt, payloadAllowed);
         const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kFinalHead,
             .streamId = self.streamId,
-            .head = &*decoded,
+            .head = &std::get<0>(decoded),
             .responseBodyPlan = self.bodyPlan,
             .requestContentSignal = HttpClientRequestContentSignal::kExchangeComplete};
         self.callback(self.callbackContext, event);

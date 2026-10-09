@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "ruvia/core/Timer.h"
 
 #include "http3_client_connection_fixture.h"
@@ -354,9 +356,9 @@ public:
         const asio::ip::udp::endpoint& server, std::uint32_t partition) {
         ruvia::quic_connection_config config;
         config.local_address = ruvia::detail::to_quic_address(
-            *ruvia::detail::to_http3_quic_datagram_address(local));
+            std::get<0>(ruvia::detail::to_http3_quic_datagram_address(local)));
         config.peer_address = ruvia::detail::to_quic_address(
-            *ruvia::detail::to_http3_quic_datagram_address(server));
+            std::get<0>(ruvia::detail::to_http3_quic_datagram_address(server)));
         std::array<std::byte, 16> cid{};
         cid[3] = static_cast<std::byte>(partition);
         cid[15] = std::byte{0xa7};
@@ -372,10 +374,10 @@ public:
             }
             const auto destination = ruvia::detail::to_udp_endpoint(
                 ruvia::detail::from_quic_address(packet.peer));
-            if (!destination) {
+            if ((destination.index() != 0)) {
                 throw std::runtime_error("partition client lost packet destination");
             }
-            socket.send_to(asio::buffer(buffer.data(), packet.size), *destination);
+            socket.send_to(asio::buffer(buffer.data(), packet.size), std::get<0>(destination));
         }
         for (std::size_t count = 0; count < 32; ++count) {
             asio::ip::udp::endpoint source;
@@ -388,9 +390,9 @@ public:
                 throw std::system_error(error, "receive partition client");
             }
             const auto local = ruvia::detail::to_quic_address(
-                *ruvia::detail::to_http3_quic_datagram_address(socket.local_endpoint()));
+                std::get<0>(ruvia::detail::to_http3_quic_datagram_address(socket.local_endpoint())));
             const auto peer = ruvia::detail::to_quic_address(
-                *ruvia::detail::to_http3_quic_datagram_address(source));
+                std::get<0>(ruvia::detail::to_http3_quic_datagram_address(source)));
             static_cast<void>(transport.receive(
                 {std::span<const std::byte>(buffer).first(size), local, peer}, now));
         }
@@ -416,11 +418,11 @@ public:
     void handshake() {
         drive_until([&] { return transport.connection().info().quic_handshake_complete; });
         const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
-        if (!prefixes) {
+        if ((prefixes.index() != 0)) {
             throw std::runtime_error("partition client critical stream encoding failed");
         }
-        for (const auto prefix : {prefixes->controlPrefix(), prefixes->qpackEncoderPrefix(),
-                 prefixes->qpackDecoderPrefix()}) {
+        for (const auto prefix : {std::get<0>(prefixes).controlPrefix(), std::get<0>(prefixes).qpackEncoderPrefix(),
+                 std::get<0>(prefixes).qpackDecoderPrefix()}) {
             const auto opened = transport.connection().open_stream(true);
             if (opened.status != ruvia::quic_operation_status::accepted) {
                 throw std::runtime_error("partition client could not open critical stream");
@@ -442,11 +444,11 @@ public:
             throw std::runtime_error("partition client could not open request stream");
         }
         const auto head = ruvia::encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "127.0.0.1", .path = partition == 0 ? "/partition/0" : "/partition/1"});
-        if (!head) {
+        if ((head.index() != 0)) {
             throw std::runtime_error("partition client could not encode request");
         }
         const auto wire = test_http3_frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
-            head->fieldSection);
+            std::get<0>(head).fieldSection);
         write_stream(opened.stream_id, wire, true);
         return opened.stream_id;
     }

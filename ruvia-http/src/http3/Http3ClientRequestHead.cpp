@@ -6,6 +6,7 @@
 #include <limits>
 #include <memory_resource>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/HttpMediaType.h"
@@ -52,42 +53,42 @@ bool authorityValid(std::string_view authority, std::string_view scheme) noexcep
 
 }  // namespace
 
-static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
+static std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
     Http3ClientRequestHeadView view, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
     auto* memory = resource != nullptr ? resource : std::pmr::get_default_resource();
     const bool connect = view.method == "CONNECT";
     const bool extendedConnect = !view.protocol.empty();
     const bool trace = view.method == "TRACE";
     if (!detail::isValidHttpHeaderName(view.method)) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidMethod));
+        return failure(Http3ClientRequestHeadError::kInvalidMethod);
     }
     if (extendedConnect && (!connect || !detail::isValidHttpHeaderName(view.protocol))) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidProtocol));
+        return failure(Http3ClientRequestHeadError::kInvalidProtocol);
     }
     if (extendedConnect && !view.peerEnableConnectProtocol) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kConnectProtocolDisabled));
+        return failure(Http3ClientRequestHeadError::kConnectProtocolDisabled);
     }
     if (connect && !extendedConnect) {
         const auto tunnel = detail::parseHttpAuthority(view.authority);
         if (!tunnel || tunnel->portKind() != detail::HttpAuthorityPortKind::kValue || *tunnel->port() == 0 ||
             !view.scheme.empty() || !view.path.empty()) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidTarget));
+            return failure(Http3ClientRequestHeadError::kInvalidTarget);
         }
         // CONNECT carries tunnel bytes, not an HTTP representation with a
         // declared Content-Length (RFC 9110, section 9.3.6).
         if (view.bodyLength) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+            return failure(Http3ClientRequestHeadError::kInvalidContentLength);
         }
     } else if (!detail::isValidUriScheme(view.scheme) || !authorityValid(view.authority, view.scheme) ||
                !((view.path == "*" && view.method == "OPTIONS") || isValidHttpOriginFormTarget(view.path))) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidTarget));
+        return failure(Http3ClientRequestHeadError::kInvalidTarget);
     }
 
     if (connect && view.bodyLength) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+        return failure(Http3ClientRequestHeadError::kInvalidContentLength);
     }
     if (trace && view.bodyLength && *view.bodyLength != 0) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+        return failure(Http3ClientRequestHeadError::kInvalidContentLength);
     }
 
     std::size_t projectedCount = (connect && !extendedConnect ? 2 : 4) + (extendedConnect ? 1 : 0);
@@ -98,7 +99,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         ((!connect || extendedConnect) && !sectionSize.add(":scheme", view.scheme)) ||
         !sectionSize.add(":authority", view.authority) ||
         ((!connect || extendedConnect) && !sectionSize.add(":path", view.path))) {
-        return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+        return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
     }
     std::size_t lowercaseBytes = 0;
     bool hostSeen = false;
@@ -106,7 +107,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     detail::HttpContentLengthState<std::uint64_t> contentLength;
     for (const auto& field : view.fields) {
         if (!detail::isValidHttpHeaderName(field.name)) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+            return failure(Http3ClientRequestHeadError::kInvalidField);
         }
         if (!detail::is_valid_http_field_value_bytes(field.value) ||
             (httpAsciiEqualsIgnoreCase(field.name, "origin") &&
@@ -117,71 +118,71 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
                 !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
             (httpAsciiEqualsIgnoreCase(field.name, "expect") &&
                 !detail::isValidHttpExpectFieldValue(field.value))) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+            return failure(Http3ClientRequestHeadError::kInvalidField);
         }
         // RFC 9110 section 9.3.8: never generate known credential/cookie
         // fields in TRACE. Callers must also omit application-specific secrets.
         if (trace && (httpAsciiEqualsIgnoreCase(field.name, "authorization") ||
                          httpAsciiEqualsIgnoreCase(field.name, "proxy-authorization") ||
                          httpAsciiEqualsIgnoreCase(field.name, "cookie"))) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
+            return failure(Http3ClientRequestHeadError::kForbiddenField);
         }
         if (detail::is_forbidden_http_binary_connection_field(field.name)) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
+            return failure(Http3ClientRequestHeadError::kForbiddenField);
         }
         if (httpAsciiEqualsIgnoreCase(field.name, "te") && !httpAsciiEqualsIgnoreCase(field.value, "trailers")) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
+            return failure(Http3ClientRequestHeadError::kForbiddenField);
         }
         if (httpAsciiEqualsIgnoreCase(field.name, "host")) {
             if (hostSeen || field.value != view.authority) {
-                return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidAuthority));
+                return failure(Http3ClientRequestHeadError::kInvalidAuthority);
             }
             hostSeen = true;
         }
         if (httpAsciiEqualsIgnoreCase(field.name, "content-type")) {
             if (contentTypeSeen || !isValidHttpContentTypeFieldValue(field.value)) {
-                return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+                return failure(Http3ClientRequestHeadError::kInvalidField);
             }
             contentTypeSeen = true;
         } else if (httpAsciiEqualsIgnoreCase(field.name, "content-encoding") &&
                    !detail::isValidHttpContentEncodingFieldValue(
                        field.value, detail::HttpFieldListRole::kSender)) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+            return failure(Http3ClientRequestHeadError::kInvalidField);
         }
         if (httpAsciiEqualsIgnoreCase(field.name, "trailer") &&
             !detail::isValidHttpRequestTrailerFieldValue(
                 field.value, detail::HttpFieldListRole::kSender)) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+            return failure(Http3ClientRequestHeadError::kInvalidField);
         }
         if (httpAsciiEqualsIgnoreCase(field.name, "content-length")) {
             if (connect) {
-                return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+                return failure(Http3ClientRequestHeadError::kInvalidContentLength);
             }
             if (contentLength.value() ||
                 contentLength.parse_single_value(field.value) != detail::HttpContentLengthParseStatus::kOk ||
                 (trace && *contentLength.value() != 0) ||
                 (view.bodyLength && *contentLength.value() != *view.bodyLength)) {
-                return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+                return failure(Http3ClientRequestHeadError::kInvalidContentLength);
             }
         }
         const bool hasUppercase = std::any_of(field.name.begin(), field.name.end(),
             [](unsigned char ch) { return ch >= 'A' && ch <= 'Z'; });
         if (hasUppercase) {
             if (field.name.size() > std::numeric_limits<std::size_t>::max() - lowercaseBytes) {
-                return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+                return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
             }
             lowercaseBytes += field.name.size();
         }
         if (projectedCount == std::numeric_limits<std::size_t>::max() ||
             !sectionSize.add(field.name, field.value)) {
-            return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+            return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
         }
         ++projectedCount;
         if (projectedCount > limits.maxFields) {
-            return std::unexpected(fieldFailure(Http3FieldSectionError::kTooManyFields));
+            return fieldFailure(Http3FieldSectionError::kTooManyFields);
         }
         if (sectionSize.bytes() > limits.maxDecodedBytes) {
-            return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+            return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
         }
     }
     const bool emitLength = view.emit_content_length && view.bodyLength && !contentLength.value();
@@ -190,20 +191,20 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     if (emitLength) {
         auto [end, ec] = std::to_chars(lengthBytes.data(), lengthBytes.data() + lengthBytes.size(), *view.bodyLength);
         if (ec != std::errc{}) {
-            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+            return failure(Http3ClientRequestHeadError::kInvalidContentLength);
         }
         lengthSize = static_cast<std::size_t>(end - lengthBytes.data());
         if (projectedCount == std::numeric_limits<std::size_t>::max() ||
             !sectionSize.add("content-length", {lengthBytes.data(), lengthSize})) {
-            return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+            return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
         }
         ++projectedCount;
     }
     if (projectedCount > limits.maxFields) {
-        return std::unexpected(fieldFailure(Http3FieldSectionError::kTooManyFields));
+        return fieldFailure(Http3FieldSectionError::kTooManyFields);
     }
     if (sectionSize.bytes() > limits.maxDecodedBytes) {
-        return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
+        return fieldFailure(Http3FieldSectionError::kFieldListTooLarge);
     }
 
     std::pmr::vector<char> lowercase(memory);
@@ -238,26 +239,26 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         fields.push_back({"content-length", {lengthBytes.data(), lengthSize}, false});
     }
     auto encoded = detail::encodeHttp3Fields(fields, memory, limits, encoder, streamId);
-    if (!encoded) {
-        return std::unexpected(fieldFailure(encoded.error()));
+    if ((encoded.index() != 0)) {
+        return fieldFailure(std::get<1>(encoded));
     }
-    if (encoded->size() > limits.maxEncodedBytes) {
-        return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldSectionTooLarge));
+    if (std::get<0>(encoded).size() > limits.maxEncodedBytes) {
+        return fieldFailure(Http3FieldSectionError::kFieldSectionTooLarge);
     }
 
     Http3ClientRequestHead result(memory);
-    result.fieldSection = std::move(*encoded);
+    result.fieldSection = std::move(std::get<0>(encoded));
     result.bodyPlan.expectedLength = trace             ? std::optional<std::uint64_t>{0}
                                      : view.bodyLength ? view.bodyLength
                                                        : contentLength.value();
     return result;
 }
 
-std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
     Http3ClientRequestHeadView view, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeRequestHead(view, limits, resource, nullptr, 0);
 }
-std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
     Http3QpackEncoder& encoder, std::uint64_t streamId, Http3ClientRequestHeadView view,
     Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeRequestHead(view, limits, resource, &encoder, streamId);

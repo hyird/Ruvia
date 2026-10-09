@@ -28,7 +28,7 @@ inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     if (certificate == nullptr) {
         return;
     }
-    X509_NAME* subject = X509_get_subject_name(certificate.get());
+    const X509_NAME* subject = X509_get_subject_name(certificate.get());
     if (subject == nullptr) {
         return;
     }

@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3PeerStreams.h"
@@ -316,18 +317,18 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
             return progress;
         }
         const auto peer = to_udp_endpoint(from_quic_address(info.peer_address));
-        if (!peer) {
+        if ((peer.index() != 0)) {
             transport->retire(*transport_id_);
             transport_id_.reset();
             handshake_deadline_.reset();
             (void)revoke_reservation();
             return true;
         }
-        remote_address_ = peer->address().to_string();
+        remote_address_ = std::get<0>(peer).address().to_string();
         const auto committed = state_->bind(identity_,
             {.remote_address = remote_address_,
                 .client_certificate_subject = {},
-                .remote_port = peer->port()},
+                .remote_port = std::get<0>(peer).port()},
             config_.local_settings, quic.max_datagram_payload_size());
         if (committed != http3_connection_state::status::changed) {
             throw std::runtime_error("HTTP/3 accepted connection could not publish its binding");
@@ -385,11 +386,11 @@ bool http3_connection_driver::prepare_protocol() noexcept {
         const auto prefixes = Http3LocalCriticalStreams::create(config_.local_settings);
         auto* transport = wire_->transport();
         auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = static_cast<std::uint64_t>(config_.max_requests_per_connection)});
-        if (!prefixes || !planner || !transport || !transport_id_) {
+        if ((prefixes.index() != 0) || (planner.index() != 0) || !transport || !transport_id_) {
             close_connection(protocol_failure_code);
             return true;
         }
-        auto critical = makePmrObject<Http3CriticalStreamDriver>(resource_, *prefixes);
+        auto critical = makePmrObject<Http3CriticalStreamDriver>(resource_, std::get<0>(prefixes));
         auto& quic = wire_->transport()->server().connection(*transport_id_);
         auto output = makePmrObject<Http3ServerStreamOutput>(resource_, quic, resource_,
             identity_.epoch, identity_.connection_generation,
@@ -398,7 +399,7 @@ bool http3_connection_driver::prepare_protocol() noexcept {
                 .maxQueuedBlocks = config_.buffer_capacity,
                 .maxDriveWorkItems = 16,
                 .write_timeout = config_.write_timeout});
-        admission_planner_.emplace(std::move(*planner));
+        admission_planner_.emplace(std::move(std::get<0>(planner)));
         critical_ = std::move(critical);
         output_ = std::move(output);
     } catch (...) {
@@ -969,17 +970,17 @@ bool http3_connection_driver::pump_datagrams() {
         }
         const auto bytes = std::span<const std::byte>(input).first(result.size);
         const auto decoded = decodeHttp3Datagram({reinterpret_cast<const char*>(bytes.data()), bytes.size()});
-        if (!decoded) {
+        if ((decoded.index() != 0)) {
             close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
             break;
         }
-        const auto planned = plan_datagram_receive(*decoded);
+        const auto planned = plan_datagram_receive(std::get<0>(decoded));
         if (planned == Http3DatagramReceiveStatus::kConnectionError) {
             close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
             break;
         }
         if (planned == Http3DatagramReceiveStatus::kDeliver) {
-            (void)channel.publish_request_datagram(identity_, decoded->streamId, bytes);
+            (void)channel.publish_request_datagram(identity_, std::get<0>(decoded).streamId, bytes);
         }
     }
     for (std::size_t count = 0; count < http3_connection_state::datagram_capacity; ++count) {

@@ -21,6 +21,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/error.hpp>
@@ -334,25 +335,25 @@ using TestQuicAddress = ruvia::quic_address;
     std::uint64_t type, std::span<const char> payload) {
     std::array<char, 16> header{};
     const auto typeSize = ruvia::encodeHttp3VarInt(header, type);
-    if (!typeSize) {
+    if ((typeSize.index() != 0)) {
         throw std::runtime_error("failed to encode HTTP/3 GOAWAY test frame type");
     }
     const auto payloadSize = ruvia::encodeHttp3VarInt(
-        std::span<char>(header).subspan(*typeSize), payload.size());
-    if (!payloadSize) {
+        std::span<char>(header).subspan(std::get<0>(typeSize)), payload.size());
+    if ((payloadSize.index() != 0)) {
         throw std::runtime_error("failed to encode HTTP/3 GOAWAY test frame length");
     }
-    std::vector<char> output(header.begin(), header.begin() + *typeSize + *payloadSize);
+    std::vector<char> output(header.begin(), header.begin() + std::get<0>(typeSize) + std::get<0>(payloadSize));
     output.insert(output.end(), payload.begin(), payload.end());
     return output;
 }
 
 [[nodiscard]] ruvia::Http3LocalCriticalStreams makeTestCriticalStreams() {
     auto streams = ruvia::Http3LocalCriticalStreams::create();
-    if (!streams) {
+    if ((streams.index() != 0)) {
         throw std::runtime_error("failed to create HTTP/3 GOAWAY test stream prefixes");
     }
-    return std::move(*streams);
+    return std::move(std::get<0>(streams));
 }
 
 class TestIdentityFiles final {
@@ -464,20 +465,20 @@ public:
         const ruvia::Http3FieldSectionFieldView fields[]{{":status", "200"},
             {"content-length", "2"}};
         const auto encodedHead = ruvia::encodeHttp3FieldSection(fields, &temporary);
-        if (!encodedHead) {
+        if ((encodedHead.index() != 0)) {
             throw std::runtime_error("failed to encode HTTP/3 GOAWAY test response");
         }
-        responseBytes_ = testHttp3Frame(1, *encodedHead);
+        responseBytes_ = testHttp3Frame(1, std::get<0>(encodedHead));
         const auto data = testHttp3Frame(0, std::span<const char>("ok", 2));
         responseBytes_.insert(responseBytes_.end(), data.begin(), data.end());
         std::array<char, ruvia::kHttp3VarIntMaxBytes> goAwayId{};
         const auto goAwayIdSize = ruvia::encodeHttp3VarInt(
             goAwayId, rejectFirstRequestAsUnprocessed_ ? 0 : 4);
-        if (!goAwayIdSize) {
+        if ((goAwayIdSize.index() != 0)) {
             throw std::runtime_error("failed to encode HTTP/3 GOAWAY test identifier");
         }
         goAwayBytes_ = testHttp3Frame(7,
-            std::span<const char>(goAwayId.data(), *goAwayIdSize));
+            std::span<const char>(goAwayId.data(), std::get<0>(goAwayIdSize)));
         thread_ = std::thread([this] { run(); });
         std::unique_lock lock(mutex_);
         if (!condition_.wait_for(lock, 5s,
@@ -889,7 +890,7 @@ public:
     void disarm() noexcept {
         state_->client = nullptr;
         asio::error_code ignored;
-        timer_.cancel(ignored);
+        timer_.cancel();
     }
 
     [[nodiscard]] bool expired() const noexcept {

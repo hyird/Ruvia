@@ -28,7 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -115,26 +114,26 @@ public:
     Http2WebSocketHandshakeSubmitResult& operator=(Http2WebSocketHandshakeSubmitResult&&) = delete;
 
     [[nodiscard]] const WebSocketServerNegotiation* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     [[nodiscard]] const WebSocketServerNegotiation* submitted() const&& = delete;
 
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
 
-    using Value = std::expected<WebSocketServerNegotiation, Http2WebSocketHandshakeSubmitFailure>;
+    using Value = std::variant<WebSocketServerNegotiation, Http2WebSocketHandshakeSubmitFailure>;
 
     explicit Http2WebSocketHandshakeSubmitResult(WebSocketServerNegotiation&& negotiation) noexcept
         : value_(std::move(negotiation)) {}
 
     explicit Http2WebSocketHandshakeSubmitResult(
         Http2WebSocketHandshakeSubmitFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult makeSubmitted(
         WebSocketServerNegotiation&& negotiation) noexcept {
@@ -317,7 +316,7 @@ public:
     // An incomplete declared Content-Length is rejected without changing the
     // body-open phase. A flow-control-blocked body keeps the
     // terminal marker queued behind it once the full length is core-owned.
-    [[nodiscard]] std::expected<std::uint32_t, Http2PushSubmitError> submitPushPromise(
+    [[nodiscard]] std::variant<std::uint32_t, Http2PushSubmitError> submitPushPromise(
         std::uint32_t associatedStreamId, HttpPushRequestView request);
     [[nodiscard]] Http2FinishRequestStatus finishRequest(std::uint32_t streamId,
         std::span<const HttpHeaderView> trailers = {});

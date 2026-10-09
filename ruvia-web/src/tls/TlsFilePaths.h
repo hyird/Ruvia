@@ -10,7 +10,7 @@ namespace ruvia::detail {
 // Passwords are binary data and do not belong to this validation.
 inline void validate_tls_file_paths(std::initializer_list<std::string_view> paths) {
     for (const auto path : paths) {
-        if (path.contains('\0')) {
+        if (path.find('\0') != std::string_view::npos) {
             throw std::invalid_argument("TLS file paths must not contain NUL bytes");
         }
     }

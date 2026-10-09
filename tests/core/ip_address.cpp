@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/core/IpAddress.h"
 
@@ -54,20 +55,20 @@ private:
 
 RUVIA_TEST(ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {
     const auto v4 = ruvia::parseIpAddress("192.0.2.1");
-    RUVIA_CHECK(v4 && v4->is_v4());
+    RUVIA_CHECK((v4.index() == 0) && std::get<0>(v4).is_v4());
     const auto v6 = ruvia::parseIpAddress("2001:0db8:1234:5678:90ab:cdef:1234:5678");
-    RUVIA_CHECK(v6 && v6->is_v6());
+    RUVIA_CHECK((v6.index() == 0) && std::get<0>(v6).is_v6());
     const auto scoped = ruvia::parseIpAddress("fe80::1%12");
-    RUVIA_CHECK(scoped && scoped->is_v6() && scoped->to_v6().scope_id() == 12);
+    RUVIA_CHECK((scoped.index() == 0) && std::get<0>(scoped).is_v6() && std::get<0>(scoped).to_v6().scope_id() == 12);
     constexpr std::string_view storage = "192.0.2.1suffix";
-    RUVIA_CHECK(ruvia::parseIpAddress(storage.substr(0, 9)).has_value());
-    RUVIA_CHECK(!ruvia::parseIpAddress(storage));
+    RUVIA_CHECK((ruvia::parseIpAddress(storage.substr(0, 9)).index() == 0));
+    RUVIA_CHECK((ruvia::parseIpAddress(storage).index() != 0));
 }
 
 RUVIA_TEST(ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
-    RUVIA_CHECK(!ruvia::parseIpAddress(std::string_view{}));
-    RUVIA_CHECK(!ruvia::parseIpAddress("not an address"));
-    RUVIA_CHECK(!ruvia::parseIpAddress(std::string_view("192.0.2.1\0suffix", 16)));
+    RUVIA_CHECK((ruvia::parseIpAddress(std::string_view{}).index() != 0));
+    RUVIA_CHECK((ruvia::parseIpAddress("not an address").index() != 0));
+    RUVIA_CHECK((ruvia::parseIpAddress(std::string_view("192.0.2.1\0suffix", 16)).index() != 0));
 }
 
 RUVIA_TEST(ip_address_parsing_returns_long_input_pmr_storage) {
@@ -77,7 +78,7 @@ RUVIA_TEST(ip_address_parsing_returns_long_input_pmr_storage) {
         return ruvia::parseIpAddress(std::string(1024, 'x'));
     }();
 
-    RUVIA_CHECK(!result);
+    RUVIA_CHECK(result.index() != 0);
     RUVIA_CHECK(resource.allocations > 0);
     RUVIA_CHECK_EQ(resource.live, std::size_t{0});
     RUVIA_CHECK_EQ(resource.allocations, resource.returns);

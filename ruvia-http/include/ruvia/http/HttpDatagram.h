@@ -3,16 +3,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http3VarInt.h"
 
 namespace ruvia {
 // RFC 9297 Capsule-Protocol is a Structured Field Boolean Item.
-[[nodiscard]] std::expected<bool, Http3CodecError> parseHttpCapsuleProtocol(std::string_view value) noexcept;
+[[nodiscard]] std::variant<bool, Http3CodecError> parseHttpCapsuleProtocol(std::string_view value) noexcept;
 
 inline constexpr std::uint64_t kHttpDatagramCapsuleType = 0;
 inline constexpr std::uint64_t kHttp3DatagramErrorCode = 0x33;
@@ -25,16 +25,16 @@ struct Http3DatagramView final {
 // validate the stream-ID range and direction. The connection driver must also
 // check both SETTINGS_H3_DATAGRAM values, QUIC DATAGRAM negotiation, and the
 // request's datagram semantics/open directions before sending or delivering.
-[[nodiscard]] std::expected<Http3DatagramView, Http3CodecError> decodeHttp3Datagram(std::span<const char> input) noexcept;
-[[nodiscard]] std::expected<std::size_t, Http3CodecError> encodeHttp3DatagramPrefix(std::span<char> output, std::uint64_t streamId) noexcept;
+[[nodiscard]] std::variant<Http3DatagramView, Http3CodecError> decodeHttp3Datagram(std::span<const char> input) noexcept;
+[[nodiscard]] std::variant<std::size_t, Http3CodecError> encodeHttp3DatagramPrefix(std::span<char> output, std::uint64_t streamId) noexcept;
 
 struct HttpUdpDatagramView final {
     std::uint64_t contextId{0};
     std::span<const char> payload{};
 };
 // RFC 9298: Context ID zero carries a UDP payload; unknown contexts are dropped.
-[[nodiscard]] std::expected<HttpUdpDatagramView, Http3CodecError> decodeHttpUdpDatagram(std::span<const char> input) noexcept;
-[[nodiscard]] std::expected<std::size_t, Http3CodecError> encodeHttpUdpDatagramPrefix(std::span<char> output, std::uint64_t contextId = 0) noexcept;
+[[nodiscard]] std::variant<HttpUdpDatagramView, Http3CodecError> decodeHttpUdpDatagram(std::span<const char> input) noexcept;
+[[nodiscard]] std::variant<std::size_t, Http3CodecError> encodeHttpUdpDatagramPrefix(std::span<char> output, std::uint64_t contextId = 0) noexcept;
 
 struct HttpCapsuleEvent final {
     std::uint64_t type{0};
@@ -77,7 +77,7 @@ private:
     bool payload_{false}, feeding_{false};
     HttpCapsuleStatus status_{HttpCapsuleStatus::kNeedMoreData};
 };
-[[nodiscard]] std::expected<std::size_t, Http3CodecError> encodeHttpCapsuleHeader(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
+[[nodiscard]] std::variant<std::size_t, Http3CodecError> encodeHttpCapsuleHeader(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
 enum class HttpDatagramTransport : std::uint8_t { kCapsule,
     kQuic };
 enum class HttpDatagramError : std::uint8_t {
@@ -135,15 +135,15 @@ public:
     void closeReceive() noexcept {
         receiveOpen_ = false;
     }
-    [[nodiscard]] std::expected<HttpDatagramWritePlan, HttpDatagramError> prepareDatagram(
+    [[nodiscard]] std::variant<HttpDatagramWritePlan, HttpDatagramError> prepareDatagram(
         std::span<const char> payload, HttpDatagramTransport transport) const noexcept;
-    [[nodiscard]] std::expected<std::optional<std::span<const char>>, HttpDatagramError> receiveDatagram(
+    [[nodiscard]] std::variant<std::optional<std::span<const char>>, HttpDatagramError> receiveDatagram(
         std::span<const char> input, HttpDatagramTransport transport) const noexcept;
-    [[nodiscard]] std::expected<HttpUdpDatagramWritePlan, HttpDatagramError> prepareUdpDatagram(
+    [[nodiscard]] std::variant<HttpUdpDatagramWritePlan, HttpDatagramError> prepareUdpDatagram(
         std::span<const char> payload, HttpDatagramTransport transport) const noexcept;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
     // QUIC input includes Quarter Stream ID. Empty optional means silently dropped.
-    [[nodiscard]] std::expected<std::optional<HttpUdpDatagramView>, HttpDatagramError> receiveUdpDatagram(
+    [[nodiscard]] std::variant<std::optional<HttpUdpDatagramView>, HttpDatagramError> receiveUdpDatagram(
         std::span<const char> input, HttpDatagramTransport transport) const noexcept;
 
 private:

@@ -573,10 +573,11 @@ certificate_owner make_certificate(EVP_PKEY* key) {
         X509_set_pubkey(certificate.get(), key) != 1) {
         throw std::runtime_error("failed to construct QUIC test certificate");
     }
-    X509_NAME* const subject = X509_get_subject_name(certificate.get());
+    const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
     constexpr char common_name[] = "localhost";
-    if (!subject || X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 ||
-        X509_set_issuer_name(certificate.get(), subject) != 1) {
+    if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 ||
+        X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
+        X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
         throw std::runtime_error("failed to set QUIC test certificate subject");
     }
     X509V3_CTX extensions;

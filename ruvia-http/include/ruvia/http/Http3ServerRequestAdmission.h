@@ -2,8 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <span>
+#include <variant>
 
 namespace ruvia {
 
@@ -45,7 +45,7 @@ struct Http3ServerRequestAdmissionDecision final {
 // stream; QUIC guarantees stream IDs are unique for the connection.
 class Http3ServerRequestAdmissionPlanner final {
 public:
-    [[nodiscard]] static std::expected<Http3ServerRequestAdmissionPlanner,
+    [[nodiscard]] static std::variant<Http3ServerRequestAdmissionPlanner,
         Http3ServerRequestAdmissionError>
     create(Http3ServerRequestAdmissionConfig config) noexcept;
 
@@ -79,7 +79,7 @@ private:
 
 // Encodes one complete server GOAWAY frame, including frame header and the
 // varint request-stream boundary. The output is unchanged on failure.
-[[nodiscard]] std::expected<std::size_t, Http3ServerRequestAdmissionError>
+[[nodiscard]] std::variant<std::size_t, Http3ServerRequestAdmissionError>
 encodeHttp3ServerGoawayFrame(std::span<char> output, std::uint64_t goawayId) noexcept;
 
 }  // namespace ruvia

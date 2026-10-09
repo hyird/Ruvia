@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -58,7 +57,7 @@ struct Http3MessageHeadLimits final {
 // Consumes a complete QPACK-encoded field section. maxFieldSectionSize
 // counts each field as name + value + 32, per RFC 9114 Section 4.2.2; it is not
 // an encoded-byte limit. Only ordinary fields are returned in headers.
-[[nodiscard]] std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+[[nodiscard]] std::variant<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     std::span<const char> fieldSection, Http3MessageHeadKind kind,
     std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
     Http3MessageHeadLimits limits = {});
@@ -68,7 +67,7 @@ struct Http3QpackBlocked final {};
 using Http3DecodedMessageHead = std::variant<Http3QpackBlocked, Http3MessageHead>;
 // The shared decoder handles RFC 9204 state and acknowledgments. A blocked
 // result contains no head: retain the section and retry after encoder input.
-[[nodiscard]] std::expected<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+[[nodiscard]] std::variant<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     Http3QpackDecoder& decoder, std::uint64_t streamId, std::span<const char> fieldSection,
     Http3MessageHeadKind kind, std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
     Http3MessageHeadLimits limits = {});

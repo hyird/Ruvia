@@ -81,9 +81,9 @@ template <typename IsAllowed>
     return is_uri_userinfo_literal(byte) || byte == '@';
 }
 
-std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) noexcept {
+std::variant<std::uint16_t, std::errc> parsePortValue(std::string_view value) noexcept {
     if (value.empty()) {
-        return std::unexpected(std::errc::invalid_argument);
+        return std::errc::invalid_argument;
     }
 
     std::uint16_t parsed = 0;
@@ -91,10 +91,10 @@ std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) n
     const auto* end = value.data() + value.size();
     const auto [ptr, ec] = std::from_chars(begin, end, parsed);
     if (ec != std::errc{}) {
-        return std::unexpected(ec);
+        return ec;
     }
     if (ptr != end) {
-        return std::unexpected(std::errc::invalid_argument);
+        return std::errc::invalid_argument;
     }
     return parsed;
 }

@@ -3,6 +3,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/Http3Qpack.h"
 
@@ -10,24 +11,24 @@
 
 RUVIA_TEST(http3_qpack_static_table_uses_rfc_9204_indices) {
     const auto authority = ruvia::http3QpackStaticEntry(0);
-    RUVIA_CHECK(authority.has_value());
-    if (authority) {
-        RUVIA_CHECK_EQ(authority->name, std::string_view(":authority"));
-        RUVIA_CHECK(authority->value.empty());
+    RUVIA_CHECK((authority.index() == 0));
+    if ((authority.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(authority).name, std::string_view(":authority"));
+        RUVIA_CHECK(std::get<0>(authority).value.empty());
     }
     const auto get = ruvia::http3QpackStaticEntry(17);
-    RUVIA_CHECK(get.has_value());
-    if (get) {
-        RUVIA_CHECK_EQ(get->name, std::string_view(":method"));
-        RUVIA_CHECK_EQ(get->value, std::string_view("GET"));
+    RUVIA_CHECK((get.index() == 0));
+    if ((get.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(get).name, std::string_view(":method"));
+        RUVIA_CHECK_EQ(std::get<0>(get).value, std::string_view("GET"));
     }
     const auto last = ruvia::http3QpackStaticEntry(98);
-    RUVIA_CHECK(last.has_value());
-    if (last) {
-        RUVIA_CHECK_EQ(last->name, std::string_view("x-frame-options"));
-        RUVIA_CHECK_EQ(last->value, std::string_view("sameorigin"));
+    RUVIA_CHECK((last.index() == 0));
+    if ((last.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(last).name, std::string_view("x-frame-options"));
+        RUVIA_CHECK_EQ(std::get<0>(last).value, std::string_view("sameorigin"));
     }
-    RUVIA_CHECK(ruvia::http3QpackStaticEntry(99).error() == ruvia::Http3QpackError::kInvalidIndex);
+    RUVIA_CHECK(std::get<1>(ruvia::http3QpackStaticEntry(99)) == ruvia::Http3QpackError::kInvalidIndex);
 }
 
 RUVIA_TEST(http3_qpack_static_table_matches_rfc_9204_critical_indices) {
@@ -44,10 +45,10 @@ RUVIA_TEST(http3_qpack_static_table_matches_rfc_9204_critical_indices) {
     }};
     for (std::size_t offset = 0; offset < cacheAndContentEntries.size(); ++offset) {
         const auto entry = ruvia::http3QpackStaticEntry(36 + offset);
-        RUVIA_CHECK(entry.has_value());
-        if (entry) {
-            RUVIA_CHECK_EQ(entry->name, cacheAndContentEntries[offset].name);
-            RUVIA_CHECK_EQ(entry->value, cacheAndContentEntries[offset].value);
+        RUVIA_CHECK((entry.index() == 0));
+        if ((entry.index() == 0)) {
+            RUVIA_CHECK_EQ(std::get<0>(entry).name, cacheAndContentEntries[offset].name);
+            RUVIA_CHECK_EQ(std::get<0>(entry).value, cacheAndContentEntries[offset].value);
         }
     }
 
@@ -66,18 +67,18 @@ RUVIA_TEST(http3_qpack_static_table_matches_rfc_9204_critical_indices) {
     }};
     for (std::size_t offset = 0; offset < xssStatusAndAcceptEntries.size(); ++offset) {
         const auto entry = ruvia::http3QpackStaticEntry(62 + offset);
-        RUVIA_CHECK(entry.has_value());
-        if (entry) {
-            RUVIA_CHECK_EQ(entry->name, xssStatusAndAcceptEntries[offset].name);
-            RUVIA_CHECK_EQ(entry->value, xssStatusAndAcceptEntries[offset].value);
+        RUVIA_CHECK((entry.index() == 0));
+        if ((entry.index() == 0)) {
+            RUVIA_CHECK_EQ(std::get<0>(entry).name, xssStatusAndAcceptEntries[offset].name);
+            RUVIA_CHECK_EQ(std::get<0>(entry).value, xssStatusAndAcceptEntries[offset].value);
         }
     }
 
     const auto last = ruvia::http3QpackStaticEntry(98);
-    RUVIA_CHECK(last.has_value());
-    if (last) {
-        RUVIA_CHECK_EQ(last->name, std::string_view("x-frame-options"));
-        RUVIA_CHECK_EQ(last->value, std::string_view("sameorigin"));
+    RUVIA_CHECK((last.index() == 0));
+    if ((last.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(last).name, std::string_view("x-frame-options"));
+        RUVIA_CHECK_EQ(std::get<0>(last).value, std::string_view("sameorigin"));
     }
 }
 
@@ -85,18 +86,18 @@ RUVIA_TEST(http3_qpack_prefixed_integer_round_trips_large_values) {
     constexpr std::uint64_t value = 0x123456789abcdef0ULL;
     std::array<char, 16> wire{};
     const auto written = ruvia::encodeHttp3QpackInteger(wire, 5, 0xe0, value);
-    RUVIA_CHECK(written.has_value());
-    if (!written) {
+    RUVIA_CHECK((written.index() == 0));
+    if ((written.index() != 0)) {
         return;
     }
-    const auto decoded = ruvia::decodeHttp3QpackInteger(std::span<const char>(wire).first(*written), 5);
-    RUVIA_CHECK(decoded.has_value());
-    if (decoded) {
-        RUVIA_CHECK_EQ(decoded->value, value);
-        RUVIA_CHECK_EQ(decoded->encodedBytes, *written);
+    const auto decoded = ruvia::decodeHttp3QpackInteger(std::span<const char>(wire).first(std::get<0>(written)), 5);
+    RUVIA_CHECK((decoded.index() == 0));
+    if ((decoded.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(decoded).value, value);
+        RUVIA_CHECK_EQ(std::get<0>(decoded).encodedBytes, std::get<0>(written));
     }
     const std::array<char, 1> truncated{static_cast<char>(0xff)};
-    RUVIA_CHECK(ruvia::decodeHttp3QpackInteger(truncated, 5).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::decodeHttp3QpackInteger(truncated, 5)) ==
                 ruvia::Http3QpackError::kNeedMoreData);
 }
 
@@ -106,27 +107,27 @@ RUVIA_TEST(http3_qpack_prefixed_integer_rejects_overflow_and_bad_prefixes) {
         static_cast<char>(0xff), static_cast<char>(0xff), static_cast<char>(0xff),
         static_cast<char>(0xff), static_cast<char>(0xff), static_cast<char>(0xff),
         static_cast<char>(0xff), static_cast<char>(0x02)};
-    RUVIA_CHECK(ruvia::decodeHttp3QpackInteger(overflow, 5).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::decodeHttp3QpackInteger(overflow, 5)) ==
                 ruvia::Http3QpackError::kIntegerOverflow);
-    RUVIA_CHECK(ruvia::decodeHttp3QpackInteger(overflow, 0).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::decodeHttp3QpackInteger(overflow, 0)) ==
                 ruvia::Http3QpackError::kIntegerOverflow);
     std::array<char, 1> output{};
-    RUVIA_CHECK(ruvia::encodeHttp3QpackInteger(output, 9, 0, 1).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::encodeHttp3QpackInteger(output, 9, 0, 1)) ==
                 ruvia::Http3QpackError::kIntegerOverflow);
 }
 
 RUVIA_TEST(http3_qpack_string_literals_support_raw_and_shared_huffman) {
     std::array<char, 32> wire{};
     const auto written = ruvia::encodeHttp3QpackString(wire, "hello");
-    RUVIA_CHECK(written.has_value());
+    RUVIA_CHECK((written.index() == 0));
     std::pmr::string decoded;
-    if (written) {
+    if ((written.index() == 0)) {
         const auto consumed = ruvia::decodeHttp3QpackString(
-            std::span<const char>(wire).first(*written), decoded);
-        RUVIA_CHECK(consumed.has_value());
+            std::span<const char>(wire).first(std::get<0>(written)), decoded);
+        RUVIA_CHECK((consumed.index() == 0));
         RUVIA_CHECK_EQ(decoded, std::string_view("hello"));
-        if (consumed) {
-            RUVIA_CHECK_EQ(*consumed, *written);
+        if ((consumed.index() == 0)) {
+            RUVIA_CHECK_EQ(std::get<0>(consumed), std::get<0>(written));
         }
     }
 
@@ -137,35 +138,35 @@ RUVIA_TEST(http3_qpack_string_literals_support_raw_and_shared_huffman) {
         static_cast<char>(0xab), static_cast<char>(0x90), static_cast<char>(0xf4),
         static_cast<char>(0xff)};
     const auto consumed = ruvia::decodeHttp3QpackString(huffman, decoded);
-    RUVIA_CHECK(consumed.has_value());
+    RUVIA_CHECK((consumed.index() == 0));
     RUVIA_CHECK_EQ(decoded, std::string_view("www.example.com"));
-    if (consumed) {
-        RUVIA_CHECK_EQ(*consumed, huffman.size());
+    if ((consumed.index() == 0)) {
+        RUVIA_CHECK_EQ(std::get<0>(consumed), huffman.size());
     }
 
     auto invalidPadding = huffman;
     invalidPadding.back() = static_cast<char>(0xfe);
     decoded = "stale";
     const auto badPadding = ruvia::decodeHttp3QpackString(invalidPadding, decoded);
-    RUVIA_CHECK(!badPadding.has_value());
-    if (!badPadding) {
-        RUVIA_CHECK(badPadding.error() == ruvia::Http3QpackError::kInvalidHuffman);
+    RUVIA_CHECK(!(badPadding.index() == 0));
+    if ((badPadding.index() != 0)) {
+        RUVIA_CHECK(std::get<1>(badPadding) == ruvia::Http3QpackError::kInvalidHuffman);
     }
     RUVIA_CHECK(decoded.empty());
 
     constexpr std::array<char, 5> eos{
         static_cast<char>(0x84), static_cast<char>(0xff), static_cast<char>(0xff),
         static_cast<char>(0xff), static_cast<char>(0xfc)};
-    RUVIA_CHECK(ruvia::decodeHttp3QpackString(eos, decoded).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::decodeHttp3QpackString(eos, decoded)) ==
                 ruvia::Http3QpackError::kInvalidHuffman);
 
     const std::array<char, 1> shortLength{static_cast<char>(0x82)};
-    RUVIA_CHECK(ruvia::decodeHttp3QpackString(shortLength, decoded).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::decodeHttp3QpackString(shortLength, decoded)) ==
                 ruvia::Http3QpackError::kNeedMoreData);
     std::array<char, 2> shortOutput{};
-    RUVIA_CHECK(ruvia::encodeHttp3QpackString(shortOutput, "hello").error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::encodeHttp3QpackString(shortOutput, "hello")) ==
                 ruvia::Http3QpackError::kOutputTooSmall);
-    RUVIA_CHECK(ruvia::encodeHttp3QpackInteger(shortOutput, 7, 0, 1000).error() ==
+    RUVIA_CHECK(std::get<1>(ruvia::encodeHttp3QpackInteger(shortOutput, 7, 0, 1000)) ==
                 ruvia::Http3QpackError::kOutputTooSmall);
 }
 
@@ -179,32 +180,32 @@ RUVIA_TEST(http3_qpack_huffman_strings_support_each_prefix_width_and_output_reus
         std::array<char, 16> prefix{};
         const auto written = ruvia::encodeHttp3QpackInteger(
             prefix, prefix_bits, static_cast<std::uint8_t>(1U << prefix_bits), payload.size());
-        RUVIA_CHECK(written.has_value());
-        if (!written) {
+        RUVIA_CHECK((written.index() == 0));
+        if ((written.index() != 0)) {
             continue;
         }
-        std::string encoded(prefix.data(), *written);
+        std::string encoded(prefix.data(), std::get<0>(written));
         encoded.append(payload.data(), payload.size());
         decoded = "old output";
         const auto consumed = ruvia::decodeHttp3QpackString(encoded, prefix_bits, decoded);
-        RUVIA_CHECK(consumed.has_value());
-        if (consumed) {
-            RUVIA_CHECK_EQ(*consumed, encoded.size());
+        RUVIA_CHECK((consumed.index() == 0));
+        if (consumed.index() == 0) {
+            RUVIA_CHECK_EQ(std::get<0>(consumed), encoded.size());
         }
         RUVIA_CHECK_EQ(decoded, std::string_view("www.example.com"));
 
         encoded.back() = '\xfe';
         const auto invalid = ruvia::decodeHttp3QpackString(encoded, prefix_bits, decoded);
-        RUVIA_CHECK(!invalid.has_value());
-        if (!invalid) {
-            RUVIA_CHECK(invalid.error() == ruvia::Http3QpackError::kInvalidHuffman);
+        RUVIA_CHECK(!(invalid.index() == 0));
+        if ((invalid.index() != 0)) {
+            RUVIA_CHECK(std::get<1>(invalid) == ruvia::Http3QpackError::kInvalidHuffman);
         }
         RUVIA_CHECK(decoded.empty());
 
         decoded = "old output";
         const std::array<char, 1> empty{static_cast<char>(1U << prefix_bits)};
         const auto consumed_empty = ruvia::decodeHttp3QpackString(empty, prefix_bits, decoded);
-        RUVIA_CHECK(consumed_empty.has_value());
+        RUVIA_CHECK((consumed_empty.index() == 0));
         RUVIA_CHECK(decoded.empty());
     }
 }

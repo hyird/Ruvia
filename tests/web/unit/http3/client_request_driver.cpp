@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/EventLoopAttachment.h"
@@ -27,10 +28,10 @@ std::optional<ruvia::detail::Http3ClientRequestWrite> makeRequest(
     storage.setBody(body);
     auto created = ruvia::detail::Http3ClientRequestWrite::create(
         std::move(storage), "https", "example.com", pool);
-    if (!created) {
+    if ((created.index() != 0)) {
         return std::nullopt;
     }
-    return std::move(*created);
+    return std::move(std::get<0>(created));
 }
 
 struct Received final {
@@ -68,11 +69,11 @@ RUVIA_TEST(http3ClientRequestDriverRebuildsRejectedEarlyRequestOnFreshStream) {
     ruvia::detail::HttpClientRequestStorage storage("GET", "/safe", &pool);
     auto created = ruvia::detail::Http3ClientRequestWrite::create(
         std::move(storage), "https", "example.com", &pool);
-    RUVIA_CHECK(created.has_value());
-    if (!created) {
+    RUVIA_CHECK((created.index() == 0));
+    if ((created.index() != 0)) {
         return;
     }
-    Driver driver(std::move(*created));
+    Driver driver(std::move(std::get<0>(created)));
     std::array<std::string, 2> wires;
     std::size_t attempt{};
     std::size_t registrations{};
@@ -277,8 +278,8 @@ RUVIA_TEST(http3ClientRequestDriverCanDeferUnopenedRequestToFreshConnection) {
     RUVIA_CHECK(driver.failed() && !driver.takeRequestAfterRetirement());
     auto rebuilt = ruvia::detail::Http3ClientRequestWrite::create(
         std::move(*request), "https", "example.com", &pool);
-    RUVIA_CHECK(rebuilt.has_value());
-    Driver replacement(std::move(*rebuilt));
+    RUVIA_CHECK((rebuilt.index() == 0));
+    Driver replacement(std::move(std::get<0>(rebuilt)));
     for (int i = 0; i < 32 && !replacement.finished(); ++i) {
         RUVIA_CHECK(replacement.drive([] { return ruvia::quic_stream_open_result{.status = ruvia::quic_operation_status::accepted, .stream_id = 8}; },
                         registerResponse, write, finish) != Driver::Result::kFatal);
@@ -320,11 +321,11 @@ RUVIA_TEST(http3ClientRequestDriverWritesExplicitHeadContentButForbidsResponsePa
     storage.setBody("explicit-content");
     auto created = ruvia::detail::Http3ClientRequestWrite::create(
         std::move(storage), "https", "example.com", &pool);
-    RUVIA_CHECK(created.has_value());
-    if (!created) {
+    RUVIA_CHECK((created.index() == 0));
+    if ((created.index() != 0)) {
         return;
     }
-    Driver driver(std::move(*created));
+    Driver driver(std::move(std::get<0>(created)));
     std::string wire;
     ruvia::Http3Connection responses(ruvia::Http3PeerRole::kClient, &pool);
     auto registerResponse = [&](std::uint64_t id, ruvia::HttpKnownMethod method) {
@@ -388,12 +389,12 @@ RUVIA_TEST(http3ClientRequestDriverStreamsBoundedChunksAndTrailingHeadersAfterCo
         ruvia::detail::HttpClientRequestStorage storage("POST", "/upload", &pool);
         storage.bindUpload(upload);
         auto created = ruvia::detail::Http3ClientRequestWrite::create(std::move(storage), "https", "example.test", &pool);
-        RUVIA_CHECK(created.has_value());
-        if (!created) {
+        RUVIA_CHECK((created.index() == 0));
+        if ((created.index() != 0)) {
             attachment.stop();
             co_return;
         }
-        Driver driver(std::move(*created));
+        Driver driver(std::move(std::get<0>(created)));
         std::string wire;
         auto open = [] { return ruvia::quic_stream_open_result{.status = ruvia::quic_operation_status::accepted, .stream_id = 0}; };
         auto registerResponse = [](auto, auto) { return true; };
@@ -448,25 +449,25 @@ RUVIA_TEST(http3ClientRequestTrailersHonorPeerFieldLimitAfterCursorMove) {
         std::pmr::unsynchronized_pool_resource pool;
         ruvia::detail::Http3ClientSansIoSessionEngine engine(&pool);
         const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.maxFieldSectionSize = 512});
-        RUVIA_CHECK(prefixes.has_value());
-        RUVIA_CHECK(engine.feed(3, prefixes->controlPrefix()).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK((prefixes.index() == 0));
+        RUVIA_CHECK(engine.feed(3, std::get<0>(prefixes).controlPrefix()).scope == ruvia::Http3ConnectionErrorScope::kNone);
         const auto worker = attachment.loop().handle();
         ruvia::detail::HttpClientUploadState upload(worker, &pool, {});
         upload.contentReleased = true;
         ruvia::detail::HttpClientRequestStorage storage("POST", "/upload", &pool);
         storage.bindUpload(upload);
         auto cursor = ruvia::detail::Http3ClientRequestWrite::create(std::move(storage), "https", "example.com", &pool);
-        RUVIA_CHECK(cursor.has_value());
+        RUVIA_CHECK((cursor.index() == 0));
         RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kPost).scope == ruvia::Http3ConnectionErrorScope::kNone);
-        RUVIA_CHECK(cursor->prepareConnectionHead(0, engine));
-        ruvia::detail::Http3ClientRequestWrite moved(std::move(*cursor));
+        RUVIA_CHECK(std::get<0>(cursor).prepareConnectionHead(0, engine));
+        ruvia::detail::Http3ClientRequestWrite moved(std::move(std::get<0>(cursor)));
         const auto head = moved.next();
-        RUVIA_CHECK(head.has_value());
-        RUVIA_CHECK(moved.acknowledge(head->size()).has_value());
+        RUVIA_CHECK((head.index() == 0));
+        RUVIA_CHECK((moved.acknowledge(std::get<0>(head).size()).index() == 0));
         upload.trailers.push_back(ruvia::HttpHeader::copyOf("x-end", std::string(513, 't'), &pool));
         upload.output.endRequested = true;
         const auto rejected = moved.next();
-        RUVIA_CHECK(!rejected && moved.failed());
+        RUVIA_CHECK((rejected.index() != 0) && moved.failed());
         RUVIA_CHECK(!upload.output.ended);
         attachment.stop();
         co_return;
@@ -486,7 +487,7 @@ RUVIA_TEST(http3ClientPriorityUpdatesUseControlFramesAndBoundPendingOutput) {
     RUVIA_CHECK(engine.queuePriorityUpdate(0, {.urgency = 1, .incremental = true}));
     RUVIA_CHECK(engine.queuePriorityUpdate(0, {.urgency = 6}));
     auto prefixes = ruvia::Http3LocalCriticalStreams::create({});
-    std::string wire(prefixes->controlPrefix().data(), prefixes->controlPrefix().size());
+    std::string wire(std::get<0>(prefixes).controlPrefix().data(), std::get<0>(prefixes).controlPrefix().size());
     const auto pending = engine.pendingControlOutput();
     wire.append(pending.data(), pending.size());
     ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &pool);
@@ -532,11 +533,11 @@ RUVIA_TEST(http3ClientRequestHeadHonorsPeerFieldLimitWithStaticAndDynamicQpack) 
         const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.qpackMaxTableCapacity = capacity,
             .maxFieldSectionSize = 0,
             .qpackBlockedStreams = 2});
-        RUVIA_CHECK(prefixes.has_value());
-        if (!prefixes) {
+        RUVIA_CHECK((prefixes.index() == 0));
+        if ((prefixes.index() != 0)) {
             continue;
         }
-        RUVIA_CHECK(engine.feed(3, prefixes->controlPrefix(), false, false).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(engine.feed(3, std::get<0>(prefixes).controlPrefix(), false, false).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kPost).scope == ruvia::Http3ConnectionErrorScope::kNone);
         const auto pending = engine.pendingEncoderOutput();
         const std::string encoderBefore(pending.data(), pending.size());
@@ -554,11 +555,11 @@ RUVIA_TEST(http3ClientRequestDriverUsesPeerQpackSettingsAndEmitsDynamicEncoderIn
     std::pmr::unsynchronized_pool_resource pool;
     ruvia::detail::Http3ClientSansIoSessionEngine engine(&pool);
     auto prefixes = ruvia::Http3LocalCriticalStreams::create({.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2});
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    RUVIA_CHECK(engine.feed(3, prefixes->controlPrefix()).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(engine.feed(3, std::get<0>(prefixes).controlPrefix()).scope == ruvia::Http3ConnectionErrorScope::kNone);
     auto created = makeRequest(&pool);
     RUVIA_CHECK(created.has_value());
     if (!created) {

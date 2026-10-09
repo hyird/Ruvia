@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/TaskScope.h"
@@ -48,18 +49,18 @@ struct Sink final {
             throw std::system_error(std::make_error_code(std::errc::broken_pipe));
         }
         const auto encoded = ruvia::encodeHttp2OriginFrame(origins, 16384, sink.resource);
-        if (!encoded) {
+        if ((encoded.index() != 0)) {
             throw std::invalid_argument("invalid advertised origin");
         }
-        sink.wire.append(encoded->data(), encoded->size());
+        sink.wire.append(std::get<0>(encoded).data(), std::get<0>(encoded).size());
     }
     static ruvia::Task<void> service(void* raw, std::string_view value) {
         auto& sink = *static_cast<Sink*>(raw);
         const auto encoded = ruvia::encodeHttp2AlternativeServiceFrame(1, {}, value, 16384, sink.resource);
-        if (!encoded) {
+        if ((encoded.index() != 0)) {
             throw std::invalid_argument("invalid alternative service");
         }
-        sink.wire.append(encoded->data(), encoded->size());
+        sink.wire.append(std::get<0>(encoded).data(), std::get<0>(encoded).size());
         co_return;
     }
 };
@@ -104,7 +105,7 @@ RUVIA_TEST(context_connection_advertisements_own_inputs_reclaim_storage_and_hand
         RUVIA_CHECK(frame.has_value());
         const auto decoded = ruvia::decodeHttpOriginAdvertisement(std::span<const char>(sink.wire).subspan(9, frame->length));
         const auto expected = "https://" + std::string(60, 'a') + ".example.test";
-        RUVIA_CHECK(decoded && decoded->origins.size() == 1 && std::string_view(decoded->origins[0]) == expected);
+        RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).origins.size() == 1 && std::string_view(std::get<0>(decoded).origins[0]) == expected);
         RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
         for (unsigned repeat = 0; repeat != 128; ++repeat) {
             std::string service = "h3=\":443\"; ma=86400";

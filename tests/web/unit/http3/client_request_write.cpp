@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "http3/Http3ClientRequestWrite.h"
 #include "test_harness.h"
@@ -52,51 +53,51 @@ Cursor create(std::string_view body, std::pmr::memory_resource* resource, std::s
     ruvia::detail::HttpClientRequestStorage request(method, "/upload?q=1", resource);
     request.setBody(body);
     auto result = Cursor::create(std::move(request), "https", "example.com", resource);
-    if (!result) {
+    if ((result.index() != 0)) {
         throw std::runtime_error("HTTP/3 request cursor creation failed");
     }
-    return std::move(*result);
+    return std::move(std::get<0>(result));
 }
 
 bool sendHeaders(Cursor& cursor) {
     auto output = cursor.next();
-    return output && !output->empty() && static_cast<bool>(cursor.acknowledge(output->size()));
+    return output.index() == 0 && !std::get<0>(output).empty() && cursor.acknowledge(std::get<0>(output).size()).index() == 0;
 }
 
 void checkEncodedBody(Cursor& cursor, ruvia::testing::TestContext& ruvia_ctx,
     std::string_view expectedHead, std::string_view body, const char* expectedBodyAddress,
     bool sameAddress) {
     auto head = cursor.next();
-    RUVIA_CHECK(head.has_value());
-    if (!head) {
+    RUVIA_CHECK((head.index() == 0));
+    if ((head.index() != 0)) {
         return;
     }
-    RUVIA_CHECK_EQ(std::string_view(head->data(), head->size()), expectedHead);
-    const auto headAck = cursor.acknowledge(head->size());
-    RUVIA_CHECK(headAck.has_value());
-    if (!headAck) {
+    RUVIA_CHECK_EQ(std::string_view(std::get<0>(head).data(), std::get<0>(head).size()), expectedHead);
+    const auto headAck = cursor.acknowledge(std::get<0>(head).size());
+    RUVIA_CHECK((headAck.index() == 0));
+    if ((headAck.index() != 0)) {
         return;
     }
 
     auto frame = cursor.next();
-    RUVIA_CHECK(frame.has_value());
-    if (!frame) {
+    RUVIA_CHECK((frame.index() == 0));
+    if ((frame.index() != 0)) {
         return;
     }
-    const auto frameAck = cursor.acknowledge(frame->size());
-    RUVIA_CHECK(frameAck.has_value());
-    if (!frameAck) {
+    const auto frameAck = cursor.acknowledge(std::get<0>(frame).size());
+    RUVIA_CHECK((frameAck.index() == 0));
+    if ((frameAck.index() != 0)) {
         return;
     }
 
     auto payload = cursor.next();
-    RUVIA_CHECK(payload.has_value());
-    if (!payload) {
+    RUVIA_CHECK((payload.index() == 0));
+    if ((payload.index() != 0)) {
         return;
     }
-    RUVIA_CHECK_EQ(payload->size(), body.size());
-    RUVIA_CHECK_EQ(std::string_view(payload->data(), payload->size()), body);
-    RUVIA_CHECK((payload->data() == expectedBodyAddress) == sameAddress);
+    RUVIA_CHECK_EQ(std::get<0>(payload).size(), body.size());
+    RUVIA_CHECK_EQ(std::string_view(std::get<0>(payload).data(), std::get<0>(payload).size()), body);
+    RUVIA_CHECK((std::get<0>(payload).data() == expectedBodyAddress) == sameAddress);
 }
 }  // namespace
 
@@ -110,19 +111,19 @@ RUVIA_TEST(http3ClientRequestWriteRetiredHandoffPreservesWholeRequestAndReturnsS
         {
             auto cursor = create(body, &memory, method);
             const auto head = cursor.next();
-            RUVIA_CHECK(head && !head->empty());
-            const std::string encodedHead(head->data(), head->size());
+            RUVIA_CHECK((head.index() == 0) && !std::get<0>(head).empty());
+            const std::string encodedHead(std::get<0>(head).data(), std::get<0>(head).size());
             if (phase != 0) {
-                RUVIA_CHECK(cursor.acknowledge(head->size()));
+                RUVIA_CHECK((cursor.acknowledge(std::get<0>(head).size()).index() == 0));
                 const auto framing = cursor.next();
-                RUVIA_CHECK(framing && cursor.acknowledge(framing->size()));
+                RUVIA_CHECK((framing.index() == 0) && (cursor.acknowledge(std::get<0>(framing).size()).index() == 0));
                 const auto payload = cursor.next();
-                RUVIA_CHECK(payload && payload->size() == body.size());
-                RUVIA_CHECK(cursor.acknowledge(phase == 1 ? 7 : payload->size()));
+                RUVIA_CHECK((payload.index() == 0) && std::get<0>(payload).size() == body.size());
+                RUVIA_CHECK((cursor.acknowledge(phase == 1 ? 7 : std::get<0>(payload).size()).index() == 0));
                 if (phase == 1) {
-                    RUVIA_CHECK(cursor.next()->size() == body.size() - 7);
+                    RUVIA_CHECK(std::get<0>(cursor.next()).size() == body.size() - 7);
                 } else {
-                    RUVIA_CHECK(cursor.acknowledgeFin(true));
+                    RUVIA_CHECK((cursor.acknowledgeFin(true).index() == 0));
                 }
             }
             // The caller has now retired transport; a previous WANT span can
@@ -132,12 +133,12 @@ RUVIA_TEST(http3ClientRequestWriteRetiredHandoffPreservesWholeRequestAndReturnsS
             RUVIA_CHECK(request && request->method() == method && request->target() == "/upload?q=1");
             RUVIA_CHECK(request && request->body() == body);
             RUVIA_CHECK_EQ(memory.largeAllocations, beforeTransfer);
-            RUVIA_CHECK(!cursor.next() && !cursor.takeRequestAfterRetirement());
+            RUVIA_CHECK((cursor.next().index() != 0) && !cursor.takeRequestAfterRetirement());
             auto replacement = Cursor::create(std::move(*request), "https", "example.com", &memory);
-            RUVIA_CHECK(replacement.has_value());
-            const auto replayHead = replacement->next();
-            RUVIA_CHECK(replayHead && std::string_view(replayHead->data(), replayHead->size()) == encodedHead);
-            retained.emplace(std::move(*replacement->takeRequestAfterRetirement()));
+            RUVIA_CHECK((replacement.index() == 0));
+            const auto replayHead = std::get<0>(replacement).next();
+            RUVIA_CHECK((replayHead.index() == 0) && std::string_view(std::get<0>(replayHead).data(), std::get<0>(replayHead).size()) == encodedHead);
+            retained.emplace(std::move(*std::get<0>(replacement).takeRequestAfterRetirement()));
         }
         RUVIA_CHECK(retained->body() == body);
         RUVIA_CHECK(memory.allocations > memory.returns);
@@ -159,18 +160,18 @@ RUVIA_TEST(http3ClientRequestWriteHandoffNormalizesIntoNewOwnerBeforeOldResource
                 ruvia::detail::HttpClientRequestStorage request("POST", "/handoff", &source);
                 request.appendHeader("x-retained", header).setBody(body);
                 auto original = Cursor::create(std::move(request), "https", "example.com", &source);
-                RUVIA_CHECK(original.has_value());
-                const auto head = original->next();
-                expectedHead.assign(head->data(), head->size());
-                auto transferred = original->takeRequestAfterRetirement();
+                RUVIA_CHECK((original.index() == 0));
+                const auto head = std::get<0>(original).next();
+                expectedHead.assign(std::get<0>(head).data(), std::get<0>(head).size());
+                auto transferred = std::get<0>(original).takeRequestAfterRetirement();
                 destination.reject = failAllocation;
                 auto rebuilt = Cursor::create(std::move(*transferred), "https", "example.com", &destination);
                 destination.reject = false;
                 if (failAllocation) {
-                    RUVIA_CHECK(!rebuilt && rebuilt.error() == Cursor::Error::kOutOfMemory);
+                    RUVIA_CHECK((rebuilt.index() != 0) && std::get<1>(rebuilt) == Cursor::Error::kOutOfMemory);
                 } else {
-                    RUVIA_CHECK(rebuilt.has_value());
-                    replacement.emplace(std::move(*rebuilt));
+                    RUVIA_CHECK((rebuilt.index() == 0));
+                    replacement.emplace(std::move(std::get<0>(rebuilt)));
                 }
             }
             RUVIA_CHECK_EQ(source.allocations, source.returns);
@@ -179,14 +180,14 @@ RUVIA_TEST(http3ClientRequestWriteHandoffNormalizesIntoNewOwnerBeforeOldResource
         // refer exclusively to the replacement owner's storage.
         if (replacement) {
             const auto head = replacement->next();
-            RUVIA_CHECK(head && std::string_view(head->data(), head->size()) == expectedHead);
-            RUVIA_CHECK(replacement->acknowledge(head->size()));
+            RUVIA_CHECK((head.index() == 0) && std::string_view(std::get<0>(head).data(), std::get<0>(head).size()) == expectedHead);
+            RUVIA_CHECK((replacement->acknowledge(std::get<0>(head).size()).index() == 0));
             const auto frame = replacement->next();
-            RUVIA_CHECK(frame && replacement->acknowledge(frame->size()));
+            RUVIA_CHECK((frame.index() == 0) && (replacement->acknowledge(std::get<0>(frame).size()).index() == 0));
             const auto payload = replacement->next();
-            RUVIA_CHECK(payload && std::string_view(payload->data(), payload->size()) == body);
-            RUVIA_CHECK(replacement->acknowledge(payload->size()));
-            RUVIA_CHECK(replacement->acknowledgeFin(true));
+            RUVIA_CHECK((payload.index() == 0) && std::string_view(std::get<0>(payload).data(), std::get<0>(payload).size()) == body);
+            RUVIA_CHECK((replacement->acknowledge(std::get<0>(payload).size()).index() == 0));
+            RUVIA_CHECK((replacement->acknowledgeFin(true).index() == 0));
         }
         replacement.reset();
         RUVIA_CHECK_EQ(destination.allocations, destination.returns);
@@ -197,37 +198,37 @@ RUVIA_TEST(http3ClientRequestWriteOwnsBodyAndSegmentsTheRequest) {
     auto cursor = create("payload", nullptr);
     RUVIA_CHECK(sendHeaders(cursor));
     auto frame = cursor.next();
-    RUVIA_CHECK(frame && !frame->empty() && static_cast<unsigned char>((*frame)[0]) == 0);
-    if (frame) {
-        RUVIA_CHECK(cursor.acknowledge(frame->size()));
+    RUVIA_CHECK((frame.index() == 0) && !std::get<0>(frame).empty() && static_cast<unsigned char>((std::get<0>(frame))[0]) == 0);
+    if ((frame.index() == 0)) {
+        RUVIA_CHECK((cursor.acknowledge(std::get<0>(frame).size()).index() == 0));
     }
     auto payload = cursor.next();
-    RUVIA_CHECK(payload && std::string_view(payload->data(), payload->size()) == "payload");
-    if (payload) {
-        RUVIA_CHECK(cursor.acknowledge(payload->size()));
+    RUVIA_CHECK((payload.index() == 0) && std::string_view(std::get<0>(payload).data(), std::get<0>(payload).size()) == "payload");
+    if ((payload.index() == 0)) {
+        RUVIA_CHECK((cursor.acknowledge(std::get<0>(payload).size()).index() == 0));
     }
     RUVIA_CHECK(cursor.finReady());
     RUVIA_CHECK(!cursor.finished());
-    RUVIA_CHECK(cursor.acknowledgeFin(true));
+    RUVIA_CHECK((cursor.acknowledgeFin(true).index() == 0));
     RUVIA_CHECK(cursor.finished());
 }
 
 RUVIA_TEST(http3ClientRequestWritePartialAcknowledgementAndWantKeepSameBytes) {
     auto cursor = create("body", nullptr);
     auto offered = cursor.next();
-    RUVIA_CHECK(offered && offered->size() > 1);
-    if (!offered || offered->empty()) {
+    RUVIA_CHECK((offered.index() == 0) && std::get<0>(offered).size() > 1);
+    if ((offered.index() != 0) || std::get<0>(offered).empty()) {
         return;
     }
-    const auto* address = offered->data();
-    const auto length = offered->size();
-    const auto first = offered->front();
-    RUVIA_CHECK(cursor.acknowledge(0));
+    const auto* address = std::get<0>(offered).data();
+    const auto length = std::get<0>(offered).size();
+    const auto first = std::get<0>(offered).front();
+    RUVIA_CHECK((cursor.acknowledge(0).index() == 0));
     auto retry = cursor.next();
-    RUVIA_CHECK(retry && retry->data() == address && retry->size() == length && retry->front() == first);
-    RUVIA_CHECK(cursor.acknowledge(1));
+    RUVIA_CHECK((retry.index() == 0) && std::get<0>(retry).data() == address && std::get<0>(retry).size() == length && std::get<0>(retry).front() == first);
+    RUVIA_CHECK((cursor.acknowledge(1).index() == 0));
     auto rest = cursor.next();
-    RUVIA_CHECK(rest && rest->data() == address + 1 && rest->size() == length - 1);
+    RUVIA_CHECK((rest.index() == 0) && std::get<0>(rest).data() == address + 1 && std::get<0>(rest).size() == length - 1);
 }
 
 RUVIA_TEST(http3ClientRequestWriteParallelCursorsAndNoZeroLengthData) {
@@ -235,17 +236,17 @@ RUVIA_TEST(http3ClientRequestWriteParallelCursorsAndNoZeroLengthData) {
     auto second = create("two", nullptr);
     auto a = first.next();
     auto b = second.next();
-    RUVIA_CHECK(a && b && a->data() != b->data());
+    RUVIA_CHECK((a.index() == 0) && (b.index() == 0) && std::get<0>(a).data() != std::get<0>(b).data());
     auto empty = create("", nullptr);
     RUVIA_CHECK(sendHeaders(empty));
     auto noData = empty.next();
-    RUVIA_CHECK(noData && noData->empty() && empty.finReady());
-    RUVIA_CHECK(empty.acknowledgeFin(true));
+    RUVIA_CHECK((noData.index() == 0) && std::get<0>(noData).empty() && empty.finReady());
+    RUVIA_CHECK((empty.acknowledgeFin(true).index() == 0));
     auto head = create("", nullptr, "HEAD");
     RUVIA_CHECK(sendHeaders(head));
     auto headDone = head.next();
-    RUVIA_CHECK(headDone && headDone->empty() && head.finReady());
-    RUVIA_CHECK(head.acknowledgeFin(true));
+    RUVIA_CHECK((headDone.index() == 0) && std::get<0>(headDone).empty() && head.finReady());
+    RUVIA_CHECK((head.acknowledgeFin(true).index() == 0));
 }
 
 RUVIA_TEST(http3ClientRequestWriteUsesTraceZeroContentPlanWithoutDroppingSuppliedBytes) {
@@ -254,16 +255,16 @@ RUVIA_TEST(http3ClientRequestWriteUsesTraceZeroContentPlanWithoutDroppingSupplie
         ruvia::detail::HttpClientRequestStorage request("TRACE", "/", &resource);
         request.setBody("must-not-be-silently-removed");
         const auto rejected = Cursor::create(std::move(request), "https", "example.com", &resource);
-        RUVIA_CHECK(!rejected && rejected.error() == Cursor::Error::kRequestEncoding);
+        RUVIA_CHECK((rejected.index() != 0) && std::get<1>(rejected) == Cursor::Error::kRequestEncoding);
         auto empty = create("", &resource, "TRACE");
         RUVIA_CHECK(sendHeaders(empty));
         const auto noData = empty.next();
-        RUVIA_CHECK(noData && noData->empty() && empty.finReady());
-        RUVIA_CHECK(empty.acknowledgeFin(true));
+        RUVIA_CHECK((noData.index() == 0) && std::get<0>(noData).empty() && empty.finReady());
+        RUVIA_CHECK((empty.acknowledgeFin(true).index() == 0));
         ruvia::detail::HttpClientRequestStorage sensitive("TRACE", "/", &resource);
         sensitive.appendHeader("Cookie", "session=private");
         const auto unsafe = Cursor::create(std::move(sensitive), "https", "example.com", &resource);
-        RUVIA_CHECK(!unsafe && unsafe.error() == Cursor::Error::kRequestEncoding);
+        RUVIA_CHECK((unsafe.index() != 0) && std::get<1>(unsafe) == Cursor::Error::kRequestEncoding);
     }
     RUVIA_CHECK_EQ(resource.allocations, resource.returns);
 }
@@ -272,54 +273,54 @@ RUVIA_TEST(http3ClientRequestWriteRejectsLengthAndInvalidFields) {
     ruvia::detail::HttpClientRequestStorage mismatch("POST", "/", nullptr);
     mismatch.appendHeader("content-length", "99").setBody("short");
     auto rejected = Cursor::create(std::move(mismatch), "https", "example.com", nullptr);
-    RUVIA_CHECK(!rejected);
+    RUVIA_CHECK((rejected.index() != 0));
     ruvia::detail::HttpClientRequestStorage invalid("GET", "/", nullptr);
     invalid.appendHeader("bad name", "value");
     auto badField = Cursor::create(std::move(invalid), "https", "example.com", nullptr);
-    RUVIA_CHECK(!badField);
+    RUVIA_CHECK((badField.index() != 0));
 
     ruvia::detail::HttpClientRequestStorage bodyless("GET", "/", nullptr);
     bodyless.appendHeader("Content-Length", "3");
     auto badLength = Cursor::create(std::move(bodyless), "https", "example.com", nullptr);
-    RUVIA_CHECK(!badLength && badLength.error() == Cursor::Error::kRequestEncoding);
+    RUVIA_CHECK((badLength.index() != 0) && std::get<1>(badLength) == Cursor::Error::kRequestEncoding);
 
     ruvia::detail::HttpClientRequestStorage head("HEAD", "/", nullptr);
     head.appendHeader("content-length", "4").setBody("body");
     auto headLength = Cursor::create(std::move(head), "https", "example.com", nullptr);
-    RUVIA_CHECK(headLength && sendHeaders(*headLength));
-    if (headLength) {
-        const auto framing = headLength->next();
-        RUVIA_CHECK(framing && headLength->acknowledge(framing->size()));
-        const auto payload = headLength->next();
-        RUVIA_CHECK(payload && std::string_view(payload->data(), payload->size()) == "body");
-        RUVIA_CHECK(headLength->acknowledge(payload->size()));
-        RUVIA_CHECK(headLength->acknowledgeFin(true));
+    RUVIA_CHECK((headLength.index() == 0) && sendHeaders(std::get<0>(headLength)));
+    if ((headLength.index() == 0)) {
+        const auto framing = std::get<0>(headLength).next();
+        RUVIA_CHECK((framing.index() == 0) && (std::get<0>(headLength).acknowledge(std::get<0>(framing).size()).index() == 0));
+        const auto payload = std::get<0>(headLength).next();
+        RUVIA_CHECK((payload.index() == 0) && std::string_view(std::get<0>(payload).data(), std::get<0>(payload).size()) == "body");
+        RUVIA_CHECK((std::get<0>(headLength).acknowledge(std::get<0>(payload).size()).index() == 0));
+        RUVIA_CHECK((std::get<0>(headLength).acknowledgeFin(true).index() == 0));
     }
     ruvia::detail::HttpClientRequestStorage wrongHead("HEAD", "/", nullptr);
     wrongHead.appendHeader("content-length", "5").setBody("body");
     auto wrongHeadLength = Cursor::create(std::move(wrongHead), "https", "example.com", nullptr);
-    RUVIA_CHECK(!wrongHeadLength && wrongHeadLength.error() == Cursor::Error::kRequestEncoding);
+    RUVIA_CHECK((wrongHeadLength.index() != 0) && std::get<1>(wrongHeadLength) == Cursor::Error::kRequestEncoding);
 
     ruvia::detail::HttpClientRequestStorage zero("GET", "/", nullptr);
     zero.appendHeader("content-length", "0");
     auto allowed = Cursor::create(std::move(zero), "https", "example.com", nullptr);
-    RUVIA_CHECK(allowed && sendHeaders(*allowed));
-    if (allowed) {
-        auto noData = allowed->next();
-        RUVIA_CHECK(noData && noData->empty() && allowed->finReady());
+    RUVIA_CHECK((allowed.index() == 0) && sendHeaders(std::get<0>(allowed)));
+    if ((allowed.index() == 0)) {
+        auto noData = std::get<0>(allowed).next();
+        RUVIA_CHECK((noData.index() == 0) && std::get<0>(noData).empty() && std::get<0>(allowed).finReady());
     }
 
     ruvia::detail::HttpClientRequestStorage invalidTarget("GET", "relative", nullptr);
     const auto rejectedTarget = Cursor::create(std::move(invalidTarget), "https", "example.com", nullptr);
-    RUVIA_CHECK(!rejectedTarget && rejectedTarget.error() == Cursor::Error::kRequestEncoding);
+    RUVIA_CHECK((rejectedTarget.index() != 0) && std::get<1>(rejectedTarget) == Cursor::Error::kRequestEncoding);
 
     ruvia::detail::HttpClientRequestStorage invalidConnect("CONNECT", "example.com", nullptr);
     const auto rejectedConnect = Cursor::create(std::move(invalidConnect), "https", "example.com", nullptr);
-    RUVIA_CHECK(!rejectedConnect && rejectedConnect.error() == Cursor::Error::kRequestEncoding);
+    RUVIA_CHECK((rejectedConnect.index() != 0) && std::get<1>(rejectedConnect) == Cursor::Error::kRequestEncoding);
 
     ruvia::detail::HttpClientRequestStorage tunnel("CONNECT", "example.com:443", nullptr);
     auto unsupported = Cursor::create(std::move(tunnel), "https", "example.com:443", nullptr);
-    RUVIA_CHECK(!unsupported && unsupported.error() == Cursor::Error::kUnsupportedTunnel);
+    RUVIA_CHECK((unsupported.index() != 0) && std::get<1>(unsupported) == Cursor::Error::kUnsupportedTunnel);
 }
 
 RUVIA_TEST(http3ClientRequestWriteFailureDoesNotCommitFinAndReleasesPool) {
@@ -328,16 +329,16 @@ RUVIA_TEST(http3ClientRequestWriteFailureDoesNotCommitFinAndReleasesPool) {
         auto cursor = create("body", &pool);
         RUVIA_CHECK(sendHeaders(cursor));
         auto frame = cursor.next();
-        RUVIA_CHECK(frame && cursor.acknowledge(frame->size()));
+        RUVIA_CHECK((frame.index() == 0) && (cursor.acknowledge(std::get<0>(frame).size()).index() == 0));
         auto body = cursor.next();
-        RUVIA_CHECK(body && cursor.acknowledge(body->size()));
+        RUVIA_CHECK((body.index() == 0) && (cursor.acknowledge(std::get<0>(body).size()).index() == 0));
         RUVIA_CHECK(cursor.finReady());
-        RUVIA_CHECK(cursor.acknowledgeFin(false));
+        RUVIA_CHECK((cursor.acknowledgeFin(false).index() == 0));
         RUVIA_CHECK(cursor.failed() && !cursor.finished());
         for (int i = 0; i < 6; ++i) {
             auto repeated = create("reused", &pool);
             RUVIA_CHECK(pool.allocations > pool.returns);
-            RUVIA_CHECK(repeated.next());
+            RUVIA_CHECK((repeated.next().index() == 0));
         }
     }
     RUVIA_CHECK(pool.allocations > 0);
@@ -350,7 +351,7 @@ RUVIA_TEST(http3ClientRequestWriteAllocationFailureIsReported) {
     ruvia::detail::HttpClientRequestStorage request("POST", "/failure", nullptr);
     request.setBody("body");
     auto failed = Cursor::create(std::move(request), "https", "example.com", &pool);
-    RUVIA_CHECK(!failed && failed.error() == Cursor::Error::kOutOfMemory);
+    RUVIA_CHECK((failed.index() != 0) && std::get<1>(failed) == Cursor::Error::kOutOfMemory);
 }
 
 RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesSameResourceRequestRetryable) {
@@ -360,11 +361,11 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesSameResourceRequestRetryabl
         ruvia::detail::HttpClientRequestStorage reference("POST", "/transaction", nullptr);
         reference.appendHeader("x-transaction", "kept").setBody(body);
         auto encoded = Cursor::create(std::move(reference), "https", "example.com", nullptr);
-        RUVIA_CHECK(encoded.has_value());
-        if (encoded) {
-            const auto head = encoded->next();
-            RUVIA_CHECK(head.has_value());
-            expectedHead.assign(head->data(), head->size());
+        RUVIA_CHECK((encoded.index() == 0));
+        if ((encoded.index() == 0)) {
+            const auto head = std::get<0>(encoded).next();
+            RUVIA_CHECK((head.index() == 0));
+            expectedHead.assign(std::get<0>(head).data(), std::get<0>(head).size());
         }
     }
 
@@ -379,21 +380,21 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesSameResourceRequestRetryabl
             resource.failOnAttempt = resource.attempts + failOffset;
             auto result = Cursor::create(std::move(request), "https", "example.com", &resource);
             resource.failOnAttempt = 0;
-            if (!result) {
-                RUVIA_CHECK_EQ(result.error(), Cursor::Error::kOutOfMemory);
+            if ((result.index() != 0)) {
+                RUVIA_CHECK_EQ(std::get<1>(result), Cursor::Error::kOutOfMemory);
                 RUVIA_CHECK_EQ(request.method(), "POST");
                 RUVIA_CHECK_EQ(request.target(), "/transaction");
                 RUVIA_CHECK_EQ(request.body(), body);
                 RUVIA_CHECK_EQ(resource.allocations - resource.returns, liveBefore);
 
                 auto retry = Cursor::create(std::move(request), "https", "example.com", &resource);
-                RUVIA_CHECK(retry.has_value());
-                if (retry) {
-                    checkEncodedBody(*retry, ruvia_ctx, expectedHead, body, bodyAddress, true);
+                RUVIA_CHECK((retry.index() == 0));
+                if ((retry.index() == 0)) {
+                    checkEncodedBody(std::get<0>(retry), ruvia_ctx, expectedHead, body, bodyAddress, true);
                 }
             } else {
                 reachedSuccessfulOffset = true;
-                checkEncodedBody(*result, ruvia_ctx, expectedHead, body, bodyAddress, true);
+                checkEncodedBody(std::get<0>(result), ruvia_ctx, expectedHead, body, bodyAddress, true);
             }
         }
         RUVIA_CHECK(resource.allocations > 0);
@@ -409,11 +410,11 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesCrossResourceRequestRetryab
         ruvia::detail::HttpClientRequestStorage reference("PUT", "/normalize", nullptr);
         reference.appendHeader("x-normalize", "kept").setBody(body);
         auto encoded = Cursor::create(std::move(reference), "https", "example.com", nullptr);
-        RUVIA_CHECK(encoded.has_value());
-        if (encoded) {
-            const auto head = encoded->next();
-            RUVIA_CHECK(head.has_value());
-            expectedHead.assign(head->data(), head->size());
+        RUVIA_CHECK((encoded.index() == 0));
+        if ((encoded.index() == 0)) {
+            const auto head = std::get<0>(encoded).next();
+            RUVIA_CHECK((head.index() == 0));
+            expectedHead.assign(std::get<0>(head).data(), std::get<0>(head).size());
         }
     }
 
@@ -429,8 +430,8 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesCrossResourceRequestRetryab
             destination.failOnAttempt = destination.attempts + failOffset;
             auto result = Cursor::create(std::move(request), "https", "example.com", &destination);
             destination.failOnAttempt = 0;
-            if (!result) {
-                RUVIA_CHECK_EQ(result.error(), Cursor::Error::kOutOfMemory);
+            if ((result.index() != 0)) {
+                RUVIA_CHECK_EQ(std::get<1>(result), Cursor::Error::kOutOfMemory);
                 RUVIA_CHECK_EQ(request.method(), "PUT");
                 RUVIA_CHECK_EQ(request.target(), "/normalize");
                 RUVIA_CHECK_EQ(request.body(), body);
@@ -438,15 +439,15 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesCrossResourceRequestRetryab
                 RUVIA_CHECK_EQ(destination.allocations, destination.returns);
 
                 auto retry = Cursor::create(std::move(request), "https", "example.com", &destination);
-                RUVIA_CHECK(retry.has_value());
+                RUVIA_CHECK((retry.index() == 0));
                 RUVIA_CHECK_EQ(source.largeAllocations, source.largeReturns);
-                if (retry) {
-                    checkEncodedBody(*retry, ruvia_ctx, expectedHead, body, bodyAddress, false);
+                if ((retry.index() == 0)) {
+                    checkEncodedBody(std::get<0>(retry), ruvia_ctx, expectedHead, body, bodyAddress, false);
                 }
             } else {
                 reachedSuccessfulOffset = true;
                 RUVIA_CHECK_EQ(source.largeAllocations, source.largeReturns);
-                checkEncodedBody(*result, ruvia_ctx, expectedHead, body, bodyAddress, false);
+                checkEncodedBody(std::get<0>(result), ruvia_ctx, expectedHead, body, bodyAddress, false);
             }
         }
         RUVIA_CHECK(source.allocations > 0);
@@ -465,21 +466,21 @@ RUVIA_TEST(http3ClientRequestWriteInvalidEncodingPreservesRequestForRetry) {
         request.appendHeader("x-preserved", "yes").setBody(body);
         const auto bodyAddress = request.body().data();
         auto rejected = Cursor::create(std::move(request), "bad^scheme", "example.com", &resource);
-        RUVIA_CHECK(!rejected && rejected.error() == Cursor::Error::kRequestEncoding);
+        RUVIA_CHECK((rejected.index() != 0) && std::get<1>(rejected) == Cursor::Error::kRequestEncoding);
         RUVIA_CHECK_EQ(request.method(), "POST");
         RUVIA_CHECK_EQ(request.target(), "/retry-invalid");
         RUVIA_CHECK_EQ(request.body(), body);
 
         auto retry = Cursor::create(std::move(request), "https", "example.com", &resource);
-        RUVIA_CHECK(retry.has_value());
-        if (retry && sendHeaders(*retry)) {
-            auto frame = retry->next();
-            RUVIA_CHECK(frame.has_value());
-            if (frame && retry->acknowledge(frame->size())) {
-                const auto payload = retry->next();
-                RUVIA_CHECK(payload.has_value());
-                if (payload) {
-                    RUVIA_CHECK(payload->data() == bodyAddress);
+        RUVIA_CHECK((retry.index() == 0));
+        if ((retry.index() == 0) && sendHeaders(std::get<0>(retry))) {
+            auto frame = std::get<0>(retry).next();
+            RUVIA_CHECK((frame.index() == 0));
+            if ((frame.index() == 0) && (std::get<0>(retry).acknowledge(std::get<0>(frame).size()).index() == 0)) {
+                const auto payload = std::get<0>(retry).next();
+                RUVIA_CHECK((payload.index() == 0));
+                if ((payload.index() == 0)) {
+                    RUVIA_CHECK(std::get<0>(payload).data() == bodyAddress);
                 }
             }
         }
@@ -496,9 +497,9 @@ RUVIA_TEST(http3ClientRequestWriteRepeatedTransactionalBuildsReturnStorage) {
             ruvia::detail::HttpClientRequestStorage request("POST", "/repeat", &resource);
             request.appendHeader("x-repeat", "value").setBody(body);
             auto cursor = Cursor::create(std::move(request), "https", "example.com", &resource);
-            RUVIA_CHECK(cursor.has_value());
-            if (cursor) {
-                RUVIA_CHECK(cursor->next());
+            RUVIA_CHECK((cursor.index() == 0));
+            if ((cursor.index() == 0)) {
+                RUVIA_CHECK((std::get<0>(cursor).next().index() == 0));
             }
         }
         RUVIA_CHECK_EQ(resource.allocations, resource.returns);
@@ -512,7 +513,7 @@ RUVIA_TEST(http3ClientRequestWriteColdCursorReturnsStorage) {
         ruvia::detail::HttpClientRequestStorage request("POST", "/cold", &pool);
         request.setBody("body");
         auto cold = Cursor::create(std::move(request), "https", "example.com", &pool);
-        RUVIA_CHECK(cold.has_value());
+        RUVIA_CHECK((cold.index() == 0));
     }
     RUVIA_CHECK_EQ(pool.allocations, pool.returns);
 }

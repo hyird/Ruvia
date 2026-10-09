@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <span>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http3Frames.h"
 
@@ -18,34 +19,34 @@ Http3BufferedResponseOutput::Http3BufferedResponseOutput(const HttpResponse& res
       cursor_(std::move(cursor)),
       publishedWireBytes_(initialPublishedWireBytes) {}
 
-std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
+std::variant<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response,
     const HttpBufferedResponseWritePlan& writePlan, WorkerMemory& worker,
     http3_stream_buffer& buffer, MessageId messageId,
     std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
     auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, worker.resource());
-    if (!cursor) {
-        return std::unexpected(cursorError(cursor.error()));
+    if ((cursor.index() != 0)) {
+        return cursorError(std::get<1>(cursor));
     }
     if (peerMaxFieldSectionSize &&
-        std::cmp_greater(cursor->decoded_field_section_size(), *peerMaxFieldSectionSize)) {
-        return std::unexpected(Error::kPeerFieldSectionLimit);
+        std::cmp_greater(std::get<0>(cursor).decoded_field_section_size(), *peerMaxFieldSectionSize)) {
+        return Error::kPeerFieldSectionLimit;
     }
     return Http3BufferedResponseOutput(
-        response, buffer, messageId, std::move(*cursor), initialPublishedWireBytes);
+        response, buffer, messageId, std::move(std::get<0>(cursor)), initialPublishedWireBytes);
 }
 
-std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
+std::variant<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
     WorkerMemory& worker, http3_stream_buffer& buffer, MessageId messageId, std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
     if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.field_section.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
-        return std::unexpected(Error::kPeerFieldSectionLimit);
+        return Error::kPeerFieldSectionLimit;
     }
     auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, std::move(encodedHead), worker.resource());
-    if (!cursor) {
-        return std::unexpected(cursorError(cursor.error()));
+    if ((cursor.index() != 0)) {
+        return cursorError(std::get<1>(cursor));
     }
-    return Http3BufferedResponseOutput(response, buffer, messageId, std::move(*cursor), initialPublishedWireBytes);
+    return Http3BufferedResponseOutput(response, buffer, messageId, std::move(std::get<0>(cursor)), initialPublishedWireBytes);
 }
 
 Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() noexcept {
@@ -84,8 +85,8 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
                 return fail(Error::buffer_stopped);
             }
             const auto acknowledged = cursor_->acknowledge_fin(true);
-            if (!acknowledged) {
-                return fail(cursorError(acknowledged.error()));
+            if ((acknowledged.index() != 0)) {
+                return fail(cursorError(std::get<1>(acknowledged)));
             }
             state_ = State::kComplete;
             cursor_.reset();
@@ -97,14 +98,14 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
     }
 
     auto segment = cursor_->next();
-    if (!segment || segment->empty()) {
-        return fail(segment ? Error::kInvalidCursorState : cursorError(segment.error()));
+    if ((segment.index() != 0) || std::get<0>(segment).empty()) {
+        return fail((segment.index() == 0) ? Error::kInvalidCursorState : cursorError(std::get<1>(segment)));
     }
-    const auto count = std::min(segment->size(), http3_stream_buffer::max_block_bytes);
+    const auto count = std::min(std::get<0>(segment).size(), http3_stream_buffer::max_block_bytes);
     if (count == 0 || publishedWireBytes_ > kHttp3VarIntMax - count) {
         return fail(Error::kWireByteCountOverflow);
     }
-    const auto* bytes = reinterpret_cast<const std::byte*>(segment->data());
+    const auto* bytes = reinterpret_cast<const std::byte*>(std::get<0>(segment).data());
     const auto sent = buffer_.try_send(messageId_, std::span<const std::byte>(bytes, count));
     if (sent == http3_stream_buffer::send_result::full ||
         sent == http3_stream_buffer::send_result::no_block) {
@@ -119,8 +120,8 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
 
     publishedWireBytes_ += count;
     const auto acknowledged = cursor_->acknowledge(count);
-    if (!acknowledged) {
-        return fail(cursorError(acknowledged.error()), count);
+    if ((acknowledged.index() != 0)) {
+        return fail(cursorError(std::get<1>(acknowledged)), count);
     }
     return result(Status::kBytes, BlockReason::kNone, Error::kNone, count);
 }

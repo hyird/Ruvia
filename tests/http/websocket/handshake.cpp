@@ -383,10 +383,10 @@ RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookie
     cookie.assign(cookie.size(), 'x');
     std::string response;
     handshake.forEachResponsePart([&](std::string_view part) { response.append(part); });
-    RUVIA_CHECK(response.contains("set-cookie: sid=0123456789abcdef; HttpOnly\r\n"));
-    RUVIA_CHECK(response.contains("set-cookie: theme=dark\r\n"));
-    RUVIA_CHECK(response.contains("x-request-id: request-1\r\n"));
-    RUVIA_CHECK(response.contains("alt-svc: h3=\":443\"; ma=86400\r\n"));
+    RUVIA_CHECK((response.find("set-cookie: sid=0123456789abcdef; HttpOnly\r\n") != std::string_view::npos));
+    RUVIA_CHECK((response.find("set-cookie: theme=dark\r\n") != std::string_view::npos));
+    RUVIA_CHECK((response.find("x-request-id: request-1\r\n") != std::string_view::npos));
+    RUVIA_CHECK((response.find("alt-svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
     RUVIA_CHECK(response.ends_with("\r\n\r\n"));
 }
 
@@ -450,5 +450,5 @@ RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {
     const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = headers});
     std::string response;
     handshake.forEachResponsePart([&](std::string_view part) { response.append(part); });
-    RUVIA_CHECK(response.contains("x-test: \r\n"));
+    RUVIA_CHECK((response.find("x-test: \r\n") != std::string_view::npos));
 }

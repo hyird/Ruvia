@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"

@@ -62,7 +62,8 @@ inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
 
 // Unencoded components borrow `input`. Encoded components are owned in
 // `storage` so later lookups do not re-decode. Failure is malformed percent
-// encoding, not an absent value.
+// encoding, not an absent value. The caller must reserve enough storage before
+// publishing views so appending strings cannot relocate their inline buffers.
 [[nodiscard]] inline std::optional<std::string_view> borrowOrDecode(
     std::pmr::vector<std::pmr::string>& storage, std::string_view input,
     UrlDecodeMode mode) {

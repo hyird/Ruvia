@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/connect.hpp>
@@ -220,12 +221,12 @@ Task<void> WebSocketClientState::performHandshake() {
             continue;
         }
         const auto validated = handshake.validateResponse(*parsed);
-        if (!validated) {
+        if ((validated.index() != 0)) {
             throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
                 "invalid WebSocket handshake response");
         }
-        selectedSubprotocol_.assign(validated->selectedSubprotocol);
-        negotiatedCompression_ = validated->compression;
+        selectedSubprotocol_.assign(std::get<0>(validated).selectedSubprotocol);
+        negotiatedCompression_ = std::get<0>(validated).compression;
         input_.erase(0, parsed->consumedBytes());
         co_return;
     }

@@ -15,7 +15,6 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpSetCookie.h"
-#include "ruvia/web/HttpClientHandle.h"
 
 #include "client/ClientTransport.h"
 #include "client/HttpClientConfigStorage.h"
@@ -149,6 +148,16 @@ bool client_request_policy::has_capacity(
            config_.maxCookieBytes - std::min(retainedBytes, config_.maxCookieBytes);
 }
 
+void client_request_policy::discard_expired(std::chrono::system_clock::time_point now) {
+    std::erase_if(cookies_, [this, now](const stored_cookie& cookie) {
+        if (!cookie.expires.has_value() || cookie.expires.value() > now) {
+            return false;
+        }
+        cookie_bytes_ -= storage_bytes(cookie.name, cookie.value, cookie.path, cookie.domain);
+        return true;
+    });
+}
+
 void client_request_policy::append_headers(const HttpClientRequestStorage& request,
     std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
     const auto hasHeader = [&headers](std::string_view name) {
@@ -169,17 +178,7 @@ void client_request_policy::append_headers(const HttpClientRequestStorage& reque
         return true;
     });
 
-    const auto now = std::chrono::system_clock::now();
-    for (auto cookie = cookies_.begin(); cookie != cookies_.end();) {
-        const auto expires = cookie->expires;
-        if (expires.has_value() && expires.value() <= now) {
-            cookie_bytes_ -=
-                storage_bytes(cookie->name, cookie->value, cookie->path, cookie->domain);
-            cookie = cookies_.erase(cookie);
-        } else {
-            ++cookie;
-        }
-    }
+    discard_expired(std::chrono::system_clock::now());
     const auto path = requestPathOnly(request.target());
     for (const auto& cookie : cookies_) {
         if (!cookie.persistent &&
@@ -201,12 +200,13 @@ void client_request_policy::append_headers(const HttpClientRequestStorage& reque
 }
 
 void client_request_policy::retain_response_cookies(
-    const HttpClientRequestStorage& request, const HttpClientResponse& response) {
+    const HttpClientRequestStorage& request, std::span<const HttpHeader> headers) {
     if (config_.receivedCookies == HttpClientReceivedCookiePolicy::kIgnore) {
         return;
     }
     const auto now = std::chrono::system_clock::now();
-    for (const auto& header : response.headers()) {
+    discard_expired(now);
+    for (const auto& header : headers) {
         if (!httpAsciiEqualsIgnoreCase(header.name(), "set-cookie")) {
             continue;
         }

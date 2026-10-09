@@ -1,3 +1,5 @@
+#include <variant>
+
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
@@ -126,16 +128,16 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     const auto headSection = buffer.substr(0, headerBytes - 4);
     auto parsedHead =
         detail::parseHttp1ClientResponseHeadFields(headSection, exchangeState_, resource_);
-    if (!parsedHead) {
-        return fail(parsedHead.error());
+    if ((parsedHead.index() != 0)) {
+        return fail(std::get<1>(parsedHead));
     }
-    const auto& parsed = *parsedHead;
+    const auto& parsed = std::get<0>(parsedHead);
 
     auto planning = detail::planHttp1ClientResponse(exchangeState_, parsed, requestContentPhase_);
-    if (!planning) {
-        return fail(planning.error());
+    if ((planning.index() != 0)) {
+        return fail(std::get<1>(planning));
     }
-    auto plan = std::move(*planning);
+    auto plan = std::move(std::get<0>(planning));
     const auto* const informationalPlan = plan.informational();
     const bool informational = informationalPlan != nullptr;
     const bool closingInformational =

@@ -574,3 +574,64 @@ RUVIA_TEST(context_request_negotiate_folds_repeated_field_lines) {
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("ja"));
 }
+
+RUVIA_TEST(context_request_query_decodes_names_and_values_in_wire_order) {
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(),
+        "/?%61=one+two&%62=three%20four&%61=five+six&plain=borrowed");
+
+    RequestMemory request_memory(worker);
+    auto context = ContextAccess::make(request_memory, request, ruvia::test::testContextServices());
+
+    const auto& fields = context.req().queryFields();
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(fields[0].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(fields[0].value(), std::string_view("one two"));
+    RUVIA_CHECK_EQ(fields[1].name(), std::string_view("b"));
+    RUVIA_CHECK_EQ(fields[1].value(), std::string_view("three four"));
+    RUVIA_CHECK_EQ(fields[2].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(fields[2].value(), std::string_view("five six"));
+    RUVIA_CHECK_EQ(fields[3].value(), std::string_view("borrowed"));
+
+    const auto values = context.req().queries("a");
+    RUVIA_CHECK_EQ(values.size(), std::size_t{2});
+    if (values.size() == 2) {
+        RUVIA_CHECK_EQ(values[0], std::string_view("one two"));
+        RUVIA_CHECK_EQ(values[1], std::string_view("five six"));
+    }
+    const auto value = context.req().query("a");
+    RUVIA_CHECK(value.has_value());
+    if (value) {
+        RUVIA_CHECK_EQ(*value, std::string_view("five six"));
+        RUVIA_CHECK(value->data() == fields[2].value().data());
+    }
+}
+
+RUVIA_TEST(context_request_query_preserves_many_decoded_values) {
+    constexpr std::size_t count = 257;
+    std::string target = "/?";
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            target += '&';
+        }
+        target += "%74ag=v+" + std::to_string(i);
+    }
+
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(), target);
+    RequestMemory request_memory(worker);
+    auto context = ContextAccess::make(request_memory, request, ruvia::test::testContextServices());
+
+    const auto& fields = context.req().queryFields();
+    const auto values = context.req().queries("tag");
+    RUVIA_CHECK_EQ(fields.size(), count);
+    RUVIA_CHECK_EQ(values.size(), count);
+    if (fields.size() == count && values.size() == count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto expected = "v " + std::to_string(i);
+            RUVIA_CHECK_EQ(fields[i].name(), std::string_view("tag"));
+            RUVIA_CHECK_EQ(fields[i].value(), std::string_view(expected));
+            RUVIA_CHECK_EQ(values[i], std::string_view(expected));
+        }
+    }
+}

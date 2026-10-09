@@ -6,6 +6,7 @@
 #include <exception>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -106,7 +107,7 @@ void validateClientOriginHost(
 
 std::pmr::string clientUriHost(std::string_view host, std::pmr::memory_resource* resource) {
     std::pmr::string wireHost(pmrResourceOrDefault(resource));
-    if (host.contains(':')) {
+    if ((host.find(':') != std::string_view::npos)) {
         wireHost.reserve(host.size() + 2);
         wireHost.push_back('[');
         wireHost.append(host);

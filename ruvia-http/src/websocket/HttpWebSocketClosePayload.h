@@ -2,8 +2,8 @@
 
 #include <array>
 #include <cstdint>
-#include <expected>
 #include <string_view>
+#include <variant>
 
 // Building the payload an endpoint sends in a Close frame: a validated status code
 // followed by an optional UTF-8 reason, capped at the 125-byte control-frame
@@ -58,12 +58,12 @@ private:
 class WebSocketClosePayloadEncodeResult final {
 public:
     [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded() const&& = delete;
 
     [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure() const&& = delete;
 
@@ -76,9 +76,9 @@ private:
 
     explicit constexpr WebSocketClosePayloadEncodeResult(
         WebSocketClosePayloadEncodeFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
+        : value_(failure) {}
 
-    using Value = std::expected<WebSocketEncodedClosePayload, WebSocketClosePayloadEncodeFailure>;
+    using Value = std::variant<WebSocketEncodedClosePayload, WebSocketClosePayloadEncodeFailure>;
     Value value_;
 };
 

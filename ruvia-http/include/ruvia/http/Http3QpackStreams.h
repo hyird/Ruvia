@@ -3,8 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <span>
+#include <variant>
 
 namespace ruvia {
 
@@ -19,7 +19,7 @@ enum class Http3QpackStreamError : std::uint8_t {
 // negotiated maximum dynamic table capacity is zero.
 class Http3QpackEncoderStreamValidator final {
 public:
-    [[nodiscard]] std::expected<void, Http3QpackStreamError> consume(
+    [[nodiscard]] std::variant<std::monostate, Http3QpackStreamError> consume(
         std::span<const char> bytes, bool fin = false) noexcept;
 };
 
@@ -27,7 +27,7 @@ public:
 // occur, but Stream Cancellation is still permitted (RFC 9204 §2.2.2.2).
 class Http3QpackDecoderStreamValidator final {
 public:
-    [[nodiscard]] std::expected<void, Http3QpackStreamError> consume(
+    [[nodiscard]] std::variant<std::monostate, Http3QpackStreamError> consume(
         std::span<const char> bytes, bool fin = false) noexcept;
 
 private:

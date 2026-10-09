@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <variant>
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
@@ -64,11 +65,11 @@ struct FakeQuic final {
 
 RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams) {
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    Driver driver(*prefixes);
+    Driver driver(std::get<0>(prefixes));
     FakeQuic quic;
     RUVIA_CHECK(!driver.complete());
     bool wroteBeforeCredit = false;
@@ -92,12 +93,12 @@ RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams
     }
     RUVIA_CHECK(driver.drive(open, write) == Driver::Result::kReady);
     RUVIA_CHECK(driver.complete());
-    RUVIA_CHECK_EQ(quic.accepted[0], std::string(prefixes->controlPrefix().data(),
-                                         prefixes->controlPrefix().size()));
-    RUVIA_CHECK_EQ(quic.accepted[1], std::string(prefixes->qpackEncoderPrefix().data(),
-                                         prefixes->qpackEncoderPrefix().size()));
-    RUVIA_CHECK_EQ(quic.accepted[2], std::string(prefixes->qpackDecoderPrefix().data(),
-                                         prefixes->qpackDecoderPrefix().size()));
+    RUVIA_CHECK_EQ(quic.accepted[0], std::string(std::get<0>(prefixes).controlPrefix().data(),
+                                         std::get<0>(prefixes).controlPrefix().size()));
+    RUVIA_CHECK_EQ(quic.accepted[1], std::string(std::get<0>(prefixes).qpackEncoderPrefix().data(),
+                                         std::get<0>(prefixes).qpackEncoderPrefix().size()));
+    RUVIA_CHECK_EQ(quic.accepted[2], std::string(std::get<0>(prefixes).qpackDecoderPrefix().data(),
+                                         std::get<0>(prefixes).qpackDecoderPrefix().size()));
     RUVIA_CHECK(driver.queueGoaway(12));
     RUVIA_CHECK(!driver.complete());
     RUVIA_CHECK(!driver.queueGoaway(16));
@@ -105,14 +106,14 @@ RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams
     RUVIA_CHECK(driver.complete());
     const auto controlBytes = std::span<const char>(quic.accepted[0].data(),
         quic.accepted[0].size());
-    const auto goaway = controlBytes.subspan(prefixes->controlPrefix().size());
+    const auto goaway = controlBytes.subspan(std::get<0>(prefixes).controlPrefix().size());
     const auto decodedGoaway = ruvia::decodeHttp3Frame(goaway);
-    RUVIA_CHECK(decodedGoaway && decodedGoaway->type ==
-                                     static_cast<std::uint64_t>(ruvia::Http3FrameType::kGoaway));
-    if (decodedGoaway) {
-        const auto identifier = ruvia::decodeHttp3VarInt(decodedGoaway->payload);
-        RUVIA_CHECK(identifier && identifier->value == 12);
-        RUVIA_CHECK_EQ(decodedGoaway->encodedBytes, goaway.size());
+    RUVIA_CHECK((decodedGoaway.index() == 0) && std::get<0>(decodedGoaway).type ==
+                                                    static_cast<std::uint64_t>(ruvia::Http3FrameType::kGoaway));
+    if ((decodedGoaway.index() == 0)) {
+        const auto identifier = ruvia::decodeHttp3VarInt(std::get<0>(decodedGoaway).payload);
+        RUVIA_CHECK((identifier.index() == 0) && std::get<0>(identifier).value == 12);
+        RUVIA_CHECK_EQ(std::get<0>(decodedGoaway).encodedBytes, goaway.size());
     }
     RUVIA_CHECK(driver.streamId(Driver::Kind::control) == 2);
     RUVIA_CHECK(driver.streamId(Driver::Kind::qpack_encoder) == 6);
@@ -122,11 +123,11 @@ RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams
 
 RUVIA_TEST(http3CriticalStreamDriverLatchesFailedCriticalStream) {
     const auto prefixes = ruvia::Http3LocalCriticalStreams::create();
-    RUVIA_CHECK(prefixes.has_value());
-    if (!prefixes) {
+    RUVIA_CHECK((prefixes.index() == 0));
+    if ((prefixes.index() != 0)) {
         return;
     }
-    Driver driver(*prefixes);
+    Driver driver(std::get<0>(prefixes));
     FakeQuic quic;
     quic.failDecoder = true;
     auto open = [&](Driver::Kind kind) { return quic.open(kind); };

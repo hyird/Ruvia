@@ -4,6 +4,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/Http3PeerStreams.h"
 
@@ -53,10 +54,10 @@ bool Http3ClientSansIoSessionEngine::queuePriorityUpdate(std::uint64_t streamId,
     }
     auto frame = connection_.preparePriorityUpdate({.elementId = streamId,
         .fields = {.urgency = priority.urgency, .incremental = priority.incremental}});
-    if (!frame || frame->size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
+    if ((frame.index() != 0) || std::get<0>(frame).size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
         return false;
     }
-    controlOutput_.append(frame->data(), frame->size());
+    controlOutput_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     return true;
 }
 
@@ -68,10 +69,10 @@ bool Http3ClientSansIoSessionEngine::queueMaxPushId(std::uint64_t maximum) {
     // complete bounded control frame cannot allocate after that commit.
     controlOutput_.reserve(controlOutput_.size() + 24);
     auto frame = connection_.prepareMaxPushId(maximum);
-    if (!frame) {
+    if ((frame.index() != 0)) {
         return false;
     }
-    controlOutput_.append(frame->data(), frame->size());
+    controlOutput_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     return true;
 }
 
@@ -81,10 +82,10 @@ bool Http3ClientSansIoSessionEngine::queueCancelPush(std::uint64_t pushId) {
     }
     controlOutput_.reserve(controlOutput_.size() + 24);
     auto frame = connection_.prepareCancelPush(pushId);
-    if (!frame) {
+    if ((frame.index() != 0)) {
         return false;
     }
-    controlOutput_.append(frame->data(), frame->size());
+    controlOutput_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     return true;
 }
 
@@ -93,10 +94,10 @@ bool Http3ClientSansIoSessionEngine::queuePushPriorityUpdate(std::uint64_t pushI
         return false;
     }
     auto frame = connection_.preparePriorityUpdate({.elementId = pushId, .push = true, .fields = {.urgency = priority.urgency, .incremental = priority.incremental}});
-    if (!frame || frame->size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
+    if ((frame.index() != 0) || std::get<0>(frame).size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
         return false;
     }
-    controlOutput_.append(frame->data(), frame->size());
+    controlOutput_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     return true;
 }
 

@@ -261,7 +261,7 @@ public:
         return connection_services_.early_data;
     }
 
-    [[nodiscard]] constexpr ContextServices with_early_data_info(
+    [[nodiscard]] ContextServices with_early_data_info(
         http3_early_data_info value) const noexcept {
         auto services = *this;
         services.connection_services_.early_data = value;

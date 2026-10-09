@@ -3,6 +3,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <variant>
 
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpResponseStream.h"
@@ -23,18 +24,18 @@
 
 namespace ruvia {
 
-static std::expected<HttpRequest, HttpProtocolError> buildHttp2ServerRequest(
+static std::variant<HttpRequest, HttpProtocolError> buildHttp2ServerRequest(
     detail::Http2Connection& connection, std::uint32_t streamId,
     std::pmr::memory_resource* resource, std::string_view body) {
     auto* stream = connection.stream(streamId);
     if (stream == nullptr) {
-        return std::unexpected(HttpProtocolError(
-            http_status::kBadRequest, "missing HTTP/2 request stream"));
+        return HttpProtocolError(
+            http_status::kBadRequest, "missing HTTP/2 request stream");
     }
     auto request = detail::HttpRequestAccess::make();
     auto result = detail::Http2RequestBuilder::build(*stream, request, resource, body);
     if (const auto* failure = result.failure()) {
-        return std::unexpected(failure->protocolError());
+        return failure->protocolError();
     }
     return request;
 }
@@ -428,7 +429,7 @@ Http2Connection::~Http2Connection() = default;
 Http2Connection::Http2Connection(Http2Connection&&) noexcept = default;
 Http2Connection& Http2Connection::operator=(Http2Connection&&) noexcept = default;
 
-std::expected<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
+std::variant<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
     Http2Connection& connection, std::uint32_t streamId,
     std::pmr::memory_resource* resource, std::string_view body) {
     return buildHttp2ServerRequest(connection.impl_->connection, streamId, resource, body);
@@ -787,30 +788,30 @@ Http2FinishResponseStatus Http2Connection::finishResponse(
     std::terminate();
 }
 
-std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
+std::variant<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
     std::uint32_t associatedStreamId, HttpPushRequestView request) {
     return impl_->connection.submitPushPromise(associatedStreamId, request);
 }
 
-std::expected<Http2RequestHeadEvent, Http2PushSubmitError> Http2Connection::submitPushRequest(
+std::variant<Http2RequestHeadEvent, Http2PushSubmitError> Http2Connection::submitPushRequest(
     std::uint32_t associatedStreamId, HttpPushRequestView request) {
     const auto id = submitPushPromise(associatedStreamId, request);
-    if (!id) {
-        return std::unexpected(id.error());
+    if ((id.index() != 0)) {
+        return std::get<1>(id);
     }
     try {
-        auto built = buildHttp2ServerRequest(impl_->connection, *id, impl_->resource, {});
-        if (!built) {
-            (void)impl_->connection.submitReset(*id, detail::Http2ErrorCode::kCancel);
-            return std::unexpected(Http2PushSubmitError::kInvalidRequest);
+        auto built = buildHttp2ServerRequest(impl_->connection, std::get<0>(id), impl_->resource, {});
+        if ((built.index() != 0)) {
+            (void)impl_->connection.submitReset(std::get<0>(id), detail::Http2ErrorCode::kCancel);
+            return Http2PushSubmitError::kInvalidRequest;
         }
-        impl_->connection.pinStream(*id);
-        return Http2RequestHeadEvent(impl_->endpoint, *id, std::move(*built), {},
+        impl_->connection.pinStream(std::get<0>(id));
+        return Http2RequestHeadEvent(impl_->endpoint, std::get<0>(id), std::move(std::get<0>(built)), {},
             HttpRequestContentIndication::kNoContent, {});
     } catch (...) {
         const auto original = std::current_exception();
         try {
-            (void)impl_->connection.submitReset(*id, detail::Http2ErrorCode::kCancel);
+            (void)impl_->connection.submitReset(std::get<0>(id), detail::Http2ErrorCode::kCancel);
         } catch (...) {
         }
         std::rethrow_exception(original);

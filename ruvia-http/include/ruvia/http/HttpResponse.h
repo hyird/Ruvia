@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
@@ -12,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Attributes.h"
@@ -375,7 +375,7 @@ public:
         std::pmr::string&& value, std::string_view contentEncoding);
 
 private:
-    friend std::expected<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse, HttpProtocolVersion);
+    friend std::variant<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse, HttpProtocolVersion);
     friend struct detail::HttpResponseBodyAccess;
     friend struct detail::HttpResponseFileAccess;
     friend struct detail::HttpResponseHeaderStateAccess;

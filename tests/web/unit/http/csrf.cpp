@@ -75,8 +75,8 @@ struct CsrfOutcome final {
 TrustedProxySet trustedProxySetOf(std::initializer_list<std::string_view> cidrs) {
     TrustedProxySet set;
     for (const auto cidr : cidrs) {
-        if (const auto block = ruvia::detail::parseTrustedProxyBlock(cidr)) {
-            set.add(*block);
+        if (const auto block = ruvia::detail::parseTrustedProxyBlock(cidr); block.index() == 0) {
+            set.add(std::get<0>(block));
         }
     }
     return set;

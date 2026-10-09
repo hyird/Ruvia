@@ -58,10 +58,10 @@ HttpEtagPreconditions httpEtagPreconditions(
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto kind = detail::HttpRequestAccess::headerKind(request, i);
-        if (hasIfMatch && kind == std::to_underlying(detail::RequestHeaderKind::kIfMatch)) {
+        if (hasIfMatch && kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kIfMatch)) {
             result.ifMatch.update(headers[i].value(), etag, true);
         } else if (hasIfNoneMatch &&
-                   kind == std::to_underlying(detail::RequestHeaderKind::kIfNoneMatch)) {
+                   kind == static_cast<std::uint8_t>(detail::RequestHeaderKind::kIfNoneMatch)) {
             result.ifNoneMatch.update(headers[i].value(), etag, false);
         }
     }

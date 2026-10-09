@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -65,13 +65,13 @@ struct Http3ClientRequestHeadFailure final {
 
 // Produces the QPACK field-section payload (not an HTTP/3 frame). QPACK's
 // dynamic table capacity is zero; body bytes are never copied or concatenated.
-[[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure>
+[[nodiscard]] std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure>
 encodeHttp3ClientRequestHead(Http3ClientRequestHeadView view,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 class Http3QpackEncoder;
-[[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+[[nodiscard]] std::variant<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
     Http3QpackEncoder& encoder, std::uint64_t streamId, Http3ClientRequestHeadView view,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 

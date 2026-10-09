@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstddef>
-#include <expected>
 #include <memory_resource>
 #include <span>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -91,13 +91,13 @@ struct Http3ResponseHeadFailure final {
 };
 
 // Validates and projects streaming metadata without inventing a buffered length.
-[[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
+[[nodiscard]] std::variant<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeHttp3StreamingResponseHead(HttpResponse response, HttpKnownMethod method,
     http_response_stream_kind kind, http_response_trailer_intent trailers,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 // Projects an interim 1xx head, validating its bodyless message semantics.
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure>
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure>
 encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
@@ -105,7 +105,7 @@ encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,
 // table. Caller fields are borrowed only for this call. The returned bytes are
 // the field section payload (not a complete HTTP/3 HEADERS frame), owned by
 // resource, and contain :status followed by ordinary response fields.
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
     HttpStatusCode status, HttpKnownMethod requestMethod,
     std::span<const Http3FieldSectionFieldView> fields,
     Http3FieldSectionLimits limits = {},
@@ -113,7 +113,7 @@ encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,
 
 // Projects a buffered response into a QPACK field section. The body remains
 // external; the returned body plan describes whether and how DATA may be sent.
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
     const HttpResponse& response, HttpBufferedResponseWritePlan writePlan,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
@@ -123,28 +123,28 @@ encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,
 // FIN); the caller owns transmission and must keep resource alive until the
 // returned field section is destroyed. Its decoded size is the uncompressed
 // field-list size, independent of QPACK representation size.
-[[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure>
+[[nodiscard]] std::variant<Http3ResponseFieldSection, Http3ResponseHeadFailure>
 encodeHttp3ResponseTrailers(std::span<const Http3FieldSectionFieldView> fields,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 class Http3QpackEncoder;
-[[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
+[[nodiscard]] std::variant<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeHttp3StreamingResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, HttpResponse response, HttpKnownMethod method,
     http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure>
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure>
 encodeHttp3InterimResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, const HttpInterimResponseHead& response,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 // Dynamic forms share one encoder for every stream in the connection. Returned
 // storage belongs to resource; encoder-stream output is drained separately.
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
     Http3QpackEncoder& encoder, std::uint64_t streamId, HttpStatusCode status, HttpKnownMethod method,
     std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
-[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+[[nodiscard]] std::variant<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
     Http3QpackEncoder& encoder, std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
-[[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
+[[nodiscard]] std::variant<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
     Http3QpackEncoder& encoder, std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 

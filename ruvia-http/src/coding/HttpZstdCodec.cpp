@@ -125,11 +125,10 @@ HttpContentEncodeResult encodeZstdContent(
         const auto writable = std::min<std::size_t>(8192, maxEncodedBytes - offset);
         const auto beforeInput = in.pos;
         std::size_t result = 0;
-        output.resize_and_overwrite(offset + writable, [&](char* bytes, std::size_t) noexcept {
-            ZSTD_outBuffer out{bytes + offset, writable, 0};
-            result = ZSTD_compressStream2(context, &out, &in, ZSTD_e_end);
-            return offset + out.pos;
-        });
+        output.resize(offset + writable);
+        ZSTD_outBuffer out{output.data() + offset, writable, 0};
+        result = ZSTD_compressStream2(context, &out, &in, ZSTD_e_end);
+        output.resize(offset + out.pos);
         if (ZSTD_isError(result) != 0) {
             allocation_context.rethrow_allocation_failure();
             return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);

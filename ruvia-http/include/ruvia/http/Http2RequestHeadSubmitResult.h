@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <exception>
-#include <expected>
+#include <variant>
 
 #include "ruvia/http/Http2Types.h"
 
@@ -50,21 +50,21 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const Http2SubmittedRequestHead* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
+        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const Http2RequestHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class detail::Http2Connection;
-    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
+    using Value = std::variant<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
     explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead value) noexcept
         : value_(value) {}
     explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure value) noexcept
-        : value_(std::unexpected(value)) {}
+        : value_(value) {}
     [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(std::uint32_t streamId) noexcept {
         return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));
     }

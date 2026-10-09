@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include <asio/post.hpp>
 
@@ -348,16 +349,16 @@ Http3ClientConnection::Submission Http3ClientConnection::submitImpl(
                                      (method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead);
     auto owned = Http3ClientRequestWrite::create(
         std::move(request), "https", authority_, resource_);
-    if (!owned) {
+    if ((owned.index() != 0)) {
         return {.outcome = Outcome::kInvalidRequest};
     }
     const RequestId id = ++nextRequestId_;
     if (response == nullptr) {
-        requests_.emplace_back(id, std::move(*owned), worker_, resource_, deadline, replay_safe);
+        requests_.emplace_back(id, std::move(std::get<0>(owned)), worker_, resource_, deadline, replay_safe);
         requests_.back().early_data_eligible = early_data_eligible;
     } else {
         requests_.emplace_back(
-            id, std::move(*owned), worker_, resource_, deadline, replay_safe, *response,
+            id, std::move(std::get<0>(owned)), worker_, resource_, deadline, replay_safe, *response,
             *receiveBodyBudget_);
         requests_.back().early_data_eligible = early_data_eligible;
         response->retainReference();
@@ -1369,14 +1370,14 @@ bool Http3ClientConnection::receiveDatagrams() {
         const auto bytes = std::span<const char>(
             reinterpret_cast<const char*>(wire.data()), datagram.size);
         const auto decoded = decodeHttp3Datagram(bytes);
-        if (!decoded) {
+        if ((decoded.index() != 0)) {
             failConnection();
         }
         const auto request = std::find_if(requests_.begin(), requests_.end(), [&](const auto& current) {
-            return current.writer.streamId() && *current.writer.streamId() == decoded->streamId && !current.streamRetired;
+            return current.writer.streamId() && *current.writer.streamId() == std::get<0>(decoded).streamId && !current.streamRetired;
         });
         auto* state = request == requests_.end() ? nullptr : request->responseState_;
-        const auto planned = planHttp3DatagramReceive(*decoded,
+        const auto planned = planHttp3DatagramReceive(std::get<0>(decoded),
             {.localH3Datagram = responseEngine_.localSettings().h3Datagram,
                 .streamExists = request != requests_.end(),
                 .receiveOpen = state != nullptr && !state->receiveComplete() && !state->abandoned,
@@ -1385,7 +1386,7 @@ bool Http3ClientConnection::receiveDatagrams() {
             failConnection();
         }
         if (planned == Http3DatagramReceiveStatus::kStreamError) {
-            (void)transport.reset_stream(decoded->streamId, kHttp3DatagramErrorCode);
+            (void)transport.reset_stream(std::get<0>(decoded).streamId, kHttp3DatagramErrorCode);
             finishRequest(*request, Outcome::kProtocolError);
         } else if (planned == Http3DatagramReceiveStatus::kDeliver && state->tunnel->accepted &&
                    state->tunnel->datagrams.size() < ruvia::quic_limits{}.max_datagrams) {

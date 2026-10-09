@@ -332,7 +332,7 @@ RUVIA_TEST(session_commit_rotates_and_clears_before_publishing_cookie) {
             RUVIA_CHECK(commands.back()[clear ? 1 : 3].ends_with("deadbeef"));
             const auto head = ruvia::detail::webSocketResponseHeaders(fixture.context);
             RUVIA_CHECK_EQ(head.size(), std::size_t{1});
-            RUVIA_CHECK_EQ(head.front().value().contains("Max-Age=0"), clear);
+            RUVIA_CHECK_EQ((head.front().value().find("Max-Age=0") != std::string_view::npos), clear);
             RUVIA_CHECK(rejectsMutation(session));
         };
         fixture.run(exercise());

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3ClientResponse.h"
@@ -65,15 +66,15 @@ void collect(void* p, const ruvia::Http3ClientResponseEvent& event) {
 std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
     std::vector<char> result(16 + payload.size());
     auto typeSize = ruvia::encodeHttp3VarInt(result, type);
-    auto lengthSize = ruvia::encodeHttp3VarInt(std::span<char>(result).subspan(*typeSize), payload.size());
-    result.resize(*typeSize + *lengthSize);
+    auto lengthSize = ruvia::encodeHttp3VarInt(std::span<char>(result).subspan(std::get<0>(typeSize)), payload.size());
+    result.resize(std::get<0>(typeSize) + std::get<0>(lengthSize));
     result.insert(result.end(), payload.begin(), payload.end());
     return result;
 }
 std::vector<char> fieldSection(std::span<const ruvia::Http3FieldSectionFieldView> fields) {
     std::pmr::monotonic_buffer_resource resource;
     auto encoded = ruvia::encodeHttp3FieldSection(fields, &resource);
-    return {encoded->begin(), encoded->end()};
+    return {std::get<0>(encoded).begin(), std::get<0>(encoded).end()};
 }
 std::vector<char> responseHead(std::uint16_t status, std::optional<std::uint64_t> contentLength = {}) {
     const auto statusText = std::to_string(status);
@@ -490,10 +491,10 @@ RUVIA_TEST(http3ClientResponseSignalsContinueOnlyFor100AndStopsContentAtFinalHea
         std::string wire;
         std::array<char, 16> prefix{};
         auto type = ruvia::encodeHttp3VarInt(prefix, 1);
-        wire.append(prefix.data(), *type);
-        auto length = ruvia::encodeHttp3VarInt(prefix, encoded->size());
-        wire.append(prefix.data(), *length);
-        wire.append(encoded->data(), encoded->size());
+        wire.append(prefix.data(), std::get<0>(type));
+        auto length = ruvia::encodeHttp3VarInt(prefix, std::get<0>(encoded).size());
+        wire.append(prefix.data(), std::get<0>(length));
+        wire.append(std::get<0>(encoded).data(), std::get<0>(encoded).size());
         return wire;
     };
     RUVIA_CHECK(response.feed(makeHead(early), false, false, collect, &events).scope == ruvia::Http3ConnectionErrorScope::kNone);

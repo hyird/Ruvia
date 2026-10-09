@@ -2,8 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
+#include <variant>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
@@ -64,12 +64,12 @@ public:
     // peerMaxFieldSectionSize is the peer's effective advisory limit, if known.
     // An over-limit response is rejected before any HEADERS bytes can be handed
     // to the buffer. The plan should come from planBufferedHttpResponseWrite().
-    [[nodiscard]] static std::expected<Http3BufferedResponseOutput, Error> create(
+    [[nodiscard]] static std::variant<Http3BufferedResponseOutput, Error> create(
         const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan,
         WorkerMemory& worker, http3_stream_buffer& buffer, MessageId messageId,
         std::optional<std::uint64_t> peerMaxFieldSectionSize = std::nullopt, std::uint64_t initialPublishedWireBytes = 0) noexcept;
 
-    [[nodiscard]] static std::expected<Http3BufferedResponseOutput, Error> create(
+    [[nodiscard]] static std::variant<Http3BufferedResponseOutput, Error> create(
         const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
         WorkerMemory& worker, http3_stream_buffer& buffer, MessageId messageId,
         std::optional<std::uint64_t> peerMaxFieldSectionSize = std::nullopt, std::uint64_t initialPublishedWireBytes = 0) noexcept;

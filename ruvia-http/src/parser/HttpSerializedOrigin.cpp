@@ -4,9 +4,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <system_error>
+#include <variant>
 
 #include "parser/HttpUriGrammar.h"
 
@@ -270,12 +270,12 @@ namespace {
     return isCanonicalSerializedOriginIpv6(literal, pieces);
 }
 
-[[nodiscard]] std::expected<std::uint16_t, std::errc> parseSerializedOriginPort(std::string_view value) noexcept {
+[[nodiscard]] std::variant<std::uint16_t, std::errc> parseSerializedOriginPort(std::string_view value) noexcept {
     // A serialized URL port is the shortest decimal form of the URL record's
     // 16-bit port. Merely accepting five digits admits values such as 99999,
     // while accepting leading zeroes admits spellings no serializer can emit.
     if (value.empty() || (value.size() > 1 && value.front() == '0')) {
-        return std::unexpected(std::errc::invalid_argument);
+        return std::errc::invalid_argument;
     }
     return parsePortValue(value);
 }
@@ -348,11 +348,11 @@ bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
         return true;
     }
     const auto portValue = parseSerializedOriginPort(port);
-    if (!portValue) {
+    if ((portValue.index() != 0)) {
         return false;
     }
     const auto defaultPort = serializedOriginDefaultPort(scheme);
-    return !defaultPort.has_value() || *portValue != *defaultPort;
+    return !defaultPort.has_value() || std::get<0>(portValue) != *defaultPort;
 }
 
 }  // namespace ruvia::detail

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/WorkerHandle.h"
@@ -180,7 +181,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
                 for (const auto& field : response.state_->headers) {
                     fields.emplace_back(field.name(), field.value());
                 }
-                if (!validateHttpConnectUdpResponse(response.state_->protocolVersion, response.state_->status.value(), fields)) {
+                if ((validateHttpConnectUdpResponse(response.state_->protocolVersion, response.state_->status.value(), fields).index() != 0)) {
                     throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid CONNECT-UDP response head");
                 }
             }
@@ -499,17 +500,17 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
             continueTimer.cancel();
             if (upload.output.chunkReady) {
                 const auto chunk = writer.planChunk(std::span<const char>(upload.output.chunk.data(), upload.output.chunk.size()));
-                if (!chunk) {
+                if ((chunk.index() != 0)) {
                     throw HttpClientError(HttpClientError::Code::kInvalidRequest, "HTTP upload content length mismatch");
                 }
-                co_await writeUploadBytes(connection, std::string_view(chunk->prefix.data(), chunk->prefixSize), timeout);
+                co_await writeUploadBytes(connection, std::string_view(std::get<0>(chunk).prefix.data(), std::get<0>(chunk).prefixSize), timeout);
                 if (upload.output.stopped) {
                     writer.abort();
                     co_return;
                 }
-                co_await writeUploadBytes(connection, std::string_view(chunk->payload.data(), chunk->payload.size()), timeout);
-                co_await writeUploadBytes(connection, chunk->suffix, timeout);
-                if (!writer.commitChunk(chunk->payload.size())) {
+                co_await writeUploadBytes(connection, std::string_view(std::get<0>(chunk).payload.data(), std::get<0>(chunk).payload.size()), timeout);
+                co_await writeUploadBytes(connection, std::get<0>(chunk).suffix, timeout);
+                if ((writer.commitChunk(std::get<0>(chunk).payload.size()).index() != 0)) {
                     std::terminate();
                 }
                 upload.output.acknowledgeChunk();
@@ -521,7 +522,7 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
             }
             std::pmr::vector<char> scratch(kMaxHttpHeaderBytes + 1024, state.resource);
             const auto ending = writer.planFinish(scratch, trailers);
-            if (!ending) {
+            if ((ending.index() != 0)) {
                 throw HttpClientError(HttpClientError::Code::kInvalidRequest, "HTTP upload trailer or final length rejected");
             }
             struct CompletionGuard final {
@@ -535,8 +536,8 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
                     upload.output.space.notify();
                 }
             } completion(upload);
-            co_await writeUploadBytes(connection, *ending, timeout);
-            if (!writer.commitFinish()) {
+            co_await writeUploadBytes(connection, std::get<0>(ending), timeout);
+            if ((writer.commitFinish().index() != 0)) {
                 std::terminate();
             }
             const auto completed = parser.completeRequestContent();

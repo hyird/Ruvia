@@ -2,6 +2,7 @@
 #include <exception>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include <asio/post.hpp>
 
@@ -57,7 +58,7 @@ struct CapsuleTransport {
 std::string capsuleWire(std::uint64_t type, std::string_view payload) {
     std::array<char, 16> header;
     const auto encoded = ruvia::encodeHttpCapsuleHeader(header, type, payload.size());
-    std::string bytes(header.data(), *encoded);
+    std::string bytes(header.data(), std::get<0>(encoded));
     bytes.append(payload);
     return bytes;
 }

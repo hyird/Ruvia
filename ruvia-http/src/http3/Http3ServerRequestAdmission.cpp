@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <variant>
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3PeerStreams.h"
@@ -15,18 +16,18 @@ constexpr std::uint64_t kMaxServerGoawayId = kHttp3VarIntMax & ~std::uint64_t{3}
 constexpr std::uint64_t kMaxRequestsPerConnection = kMaxServerGoawayId / 4;
 
 [[nodiscard]] bool isRequestStreamId(std::uint64_t streamId) noexcept {
-    return Http3PeerStreams::acceptBidirectional(Http3PeerRole::kServer, streamId).has_value();
+    return (Http3PeerStreams::acceptBidirectional(Http3PeerRole::kServer, streamId).index() == 0);
 }
 
 }  // namespace
 
-std::expected<Http3ServerRequestAdmissionPlanner, Http3ServerRequestAdmissionError>
+std::variant<Http3ServerRequestAdmissionPlanner, Http3ServerRequestAdmissionError>
 Http3ServerRequestAdmissionPlanner::create(Http3ServerRequestAdmissionConfig config) noexcept {
     if (config.max_requests_per_connection == 0) {
-        return std::unexpected(Http3ServerRequestAdmissionError::kZeroRequestLimit);
+        return Http3ServerRequestAdmissionError::kZeroRequestLimit;
     }
     if (config.max_requests_per_connection > kMaxRequestsPerConnection) {
-        return std::unexpected(Http3ServerRequestAdmissionError::kRequestLimitOutOfRange);
+        return Http3ServerRequestAdmissionError::kRequestLimitOutOfRange;
     }
     return Http3ServerRequestAdmissionPlanner(config.max_requests_per_connection);
 }
@@ -58,23 +59,23 @@ Http3ServerRequestAdmissionDecision Http3ServerRequestAdmissionPlanner::announce
         .emitGoaway = emitGoaway};
 }
 
-std::expected<std::size_t, Http3ServerRequestAdmissionError> encodeHttp3ServerGoawayFrame(
+std::variant<std::size_t, Http3ServerRequestAdmissionError> encodeHttp3ServerGoawayFrame(
     std::span<char> output, std::uint64_t goawayId) noexcept {
     if (!isRequestStreamId(goawayId)) {
-        return std::unexpected(Http3ServerRequestAdmissionError::kInvalidStreamId);
+        return Http3ServerRequestAdmissionError::kInvalidStreamId;
     }
 
     std::array<char, kHttp3VarIntMaxBytes> payload{};
     const auto payloadSize = encodeHttp3VarInt(payload, goawayId);
-    if (!payloadSize) {
-        return std::unexpected(Http3ServerRequestAdmissionError::kInvalidStreamId);
+    if ((payloadSize.index() != 0)) {
+        return Http3ServerRequestAdmissionError::kInvalidStreamId;
     }
     const auto written = encodeHttp3Frame(output, static_cast<std::uint64_t>(Http3FrameType::kGoaway),
-        std::span<const char>(payload).first(*payloadSize));
-    if (!written) {
-        return std::unexpected(Http3ServerRequestAdmissionError::kOutputTooSmall);
+        std::span<const char>(payload).first(std::get<0>(payloadSize)));
+    if ((written.index() != 0)) {
+        return Http3ServerRequestAdmissionError::kOutputTooSmall;
     }
-    return *written;
+    return std::get<0>(written);
 }
 
 }  // namespace ruvia
