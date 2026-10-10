@@ -1,0 +1,58 @@
+{
+  "name": "ruvia",
+  "version-string": "0.2.0",
+  "default-features": [
+    "runtime",
+    "protocol",
+    "framework"
+  ],
+  "features": {
+    "runtime": {
+      "description": "Dependencies for the ruvia-core runtime library.",
+      "dependencies": [
+        "asio"
+      ]
+    },
+    "protocol": {
+      "description": "Dependencies for the standalone ruvia-http protocol library.",
+      "dependencies": [
+        "brotli",
+        "zlib",
+        "zstd",
+        {
+          "name": "ngtcp2",
+          "default-features": false
+        }
+      ]
+    },
+    "framework": {
+      "description": "Dependencies for the complete ruvia-web framework.",
+      "dependencies": [
+        "openssl"
+      ]
+    },
+    "mariadb": {
+      "description": "Build MariaDB-compatible database APIs.",
+      "dependencies": [
+        {
+          "name": "libmariadb",
+          "features": [
+            "openssl"
+          ]
+        }
+      ]
+    },
+    "postgresql": {
+      "description": "Build PostgreSQL database APIs.",
+      "dependencies": [
+        "libpq"
+      ]
+    },
+    "redis": {
+      "description": "Build Redis client APIs.",
+      "dependencies": [
+        "hiredis"
+      ]
+    }
+  }
+}

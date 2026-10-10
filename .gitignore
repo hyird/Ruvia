@@ -6,6 +6,7 @@
 
 # Dependency/build tool caches
 /.cache/
+/vcpkg_installed/
 /.slim/
 /.codegraph/
 /.omo/

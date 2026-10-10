@@ -1,4 +1,4 @@
-#include <hiredis.h>
+#include <hiredis/hiredis.h>
 
 #include <stdexcept>
 #include <string>

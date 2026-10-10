@@ -9,9 +9,14 @@ middleware, streaming, websocket, and optional SQL, Redis, and JWT support.
 | `ruvia::http` | Sans-I/O HTTP/1, HTTP/2, HTTP/3/QUIC, and WebSocket protocols. |
 | `ruvia::web` | Servers, routing, TLS, outbound clients, and data access. |
 
-Requires CMake 3.28+ and a C++20 compiler. All third-party libraries are
-downloaded from pinned, SHA-256-verified release archives by CMake FetchContent.
-Windows builds use MSVC with static dependencies and runtime.
+Requires CMake 3.28+, a C++20 compiler, and vcpkg (`VCPKG_ROOT`). Third-party
+libraries come from the vcpkg manifest [vcpkg.json](vcpkg.json) without a
+version baseline, so they follow the ports of the vcpkg checkout in use; CI
+always uses the latest vcpkg commit. A top-level configure selects
+`$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake` and installs only the manifest
+features of enabled components and options.
+Windows builds use MSVC with static dependencies and runtime; the default vcpkg
+triplet there is `x64-windows-static`.
 The three Ruvia libraries are static archives; Linux executables also link their
 runtime libraries statically.
 Result-returning APIs use C++20 `std::variant` value and error alternatives.
@@ -20,22 +25,16 @@ in separately allocated, owned storage: the compiler can misalign objects stored
 directly in coroutine frames.
 Plain TCP response writes yield under socket backpressure instead of blocking
 the connection's worker.
-Web code targets the OpenSSL 4 API with deprecated interfaces disabled. Crypto
-operations use provider-based EVP APIs; no older OpenSSL compatibility path is built.
-
-Web builds also require Perl and Make (Jom on Windows) for OpenSSL.
-PostgreSQL support additionally requires Python, Meson, Ninja, Bison, Flex, and pkg-config.
-Run Windows configuration and builds in an MSVC developer shell. These are build
-tools; no preinstalled third-party libraries or package-manager toolchain is used.
+Web requires OpenSSL 3.5+ and builds with deprecated OpenSSL interfaces disabled.
 
 ```sh
-# Linux, POSIX shell; prerequisites listed above must be on PATH.
+# Linux, POSIX shell; VCPKG_ROOT points to a bootstrapped vcpkg checkout.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRUVIA_BUILD_TESTS=ON -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Release -j$(nproc)
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Windows, MSVC developer PowerShell (the same prerequisites must be on PATH):
+Windows, PowerShell with MSVC installed and `$env:VCPKG_ROOT` set:
 
 ```powershell
 cmake -S . -B build -DRUVIA_BUILD_TESTS=ON -DRUVIA_BUILD_EXAMPLES=ON
@@ -43,32 +42,12 @@ cmake --build build --config Release "-j$([Environment]::ProcessorCount)"
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-| Dependency | Pinned stable release (2026-10-09) |
-| --- | --- |
-| Asio | 1.38.2 |
-| ngtcp2 (protocol core only) | 1.25.0 |
-| zlib | 1.3.2 |
-| Brotli | 1.2.0 |
-| Zstandard | 1.5.7 |
-| OpenSSL | 4.0.3 |
-| MariaDB Connector/C (optional) | 3.4.11 |
-| PostgreSQL libpq (optional) | 18.6 |
-| hiredis (optional) | 1.4.1 |
-
-Only dependencies of enabled components are fetched. Third-party headers and
-libraries come exclusively from these builds; preinstalled third-party libraries
-and package-manager toolchains are not dependency alternatives. MariaDB and
-PostgreSQL use the fetched OpenSSL static libraries, not a separate OpenSSL
-discovered on the host.
-Sources and native build outputs stay under `build/_deps`; CMake's
-`FETCHCONTENT_BASE_DIR` and `FETCHCONTENT_SOURCE_DIR_RUVIA_<NAME>` overrides support
-shared caches and offline source trees. Installed packages use the same dependency
-definitions when consumed with `find_package(ruvia REQUIRED COMPONENTS core http web)`;
-consumers enable both C and C++ in their CMake project. MSVC consumers also select
-the matching static runtime through `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
-Updating a dependency means changing its release URL and SHA-256 together in
-`cmake/ruvia_dependencies.cmake`. The aggregate `ruvia_dependencies` CMake target
-builds all third-party dependencies ahead of the project targets.
+Installed packages are consumed with
+`find_package(ruvia REQUIRED COMPONENTS core http web)`; the consumer's toolchain
+must provide the same third-party packages (Asio, zlib, Brotli, Zstandard,
+ngtcp2 1.25+, OpenSSL 3.5+, and the enabled MariaDB, libpq, or hiredis clients).
+MSVC consumers also select the matching static runtime through
+`CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
 
 Start with [basic_http.cpp](examples/web/basic_http.cpp). The
 [Web examples](examples/web) contain usage, configuration, and lifetime notes
