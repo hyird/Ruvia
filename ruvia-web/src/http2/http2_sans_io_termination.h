@@ -149,12 +149,18 @@ public:
             return false;
         }
         try {
-            worker_.schedule_timer(timer_, worker_timer_deadline_after(duration_),
+            const auto status = worker_.schedule_timer(timer_, worker_timer_deadline_after(duration_),
                 [this](worker_timer_outcome outcome) noexcept {
                     timer_outcome_ = outcome;
                     termination_.detach(observer_);
                     continuation_.resume();
                 });
+            if (status == worker_timer_schedule_status::worker_stopping) {
+                // Same result stop_timers() delivers to a pending sleep.
+                timer_outcome_ = worker_timer_outcome::cancelled;
+                termination_.detach(observer_);
+                return false;
+            }
             if (stop_token_.stoppable()) {
                 const auto cancellation = timer_.cancellation();
                 stop_token_.register_callback(

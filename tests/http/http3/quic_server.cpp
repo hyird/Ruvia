@@ -56,6 +56,8 @@ struct deterministic_crypto final {
     std::uint8_t next_{0x80};
     std::vector<std::vector<std::byte>> random_outputs_;
     std::optional<std::vector<std::byte>> forced_random_;
+    // Fails exactly one random request after this many successful requests.
+    std::optional<std::size_t> random_calls_before_failure_;
 };
 
 std::uint64_t hash_bytes(std::uint64_t hash, std::span<const std::byte> bytes_value) noexcept {
@@ -76,6 +78,13 @@ void fill_expansion(std::uint64_t seed, std::span<std::byte> output) noexcept {
 
 void deterministic_random(void* opaque, std::span<std::byte> output) {
     auto& crypto = *static_cast<deterministic_crypto*>(opaque);
+    if (crypto.random_calls_before_failure_) {
+        if (*crypto.random_calls_before_failure_ == 0) {
+            crypto.random_calls_before_failure_.reset();
+            throw std::runtime_error("controlled random provider failure");
+        }
+        --*crypto.random_calls_before_failure_;
+    }
     if (crypto.forced_random_ && crypto.forced_random_->size() == output.size()) {
         std::ranges::copy(*crypto.forced_random_, output.begin());
     } else {
@@ -759,13 +768,10 @@ RUVIA_TEST(quic_server_cid_collision_rolls_back_admission_and_preserves_existing
     RUVIA_CHECK_EQ(second_offer.kind_, ruvia::quic_server_route_kind::initial_offer);
     server_crypto.forced_random_ = std::vector<std::byte>(
         existing_cid.view().begin(), existing_cid.view().end());
-    bool collision_failed{};
-    try {
-        (void)server.admit_initial(second_offer.offer_, test_tls_driver(), {});
-    } catch (const std::runtime_error&) {
-        collision_failed = true;
-    }
-    RUVIA_CHECK(collision_failed);
+    // Exhausting collision-free candidates is retryable: nothing is created and
+    // the offer stays pending for a later attempt with fresh randomness.
+    const auto collided = server.admit_initial(second_offer.offer_, test_tls_driver(), {});
+    RUVIA_CHECK_EQ(collided.status_, ruvia::quic_operation_status::would_block);
     RUVIA_CHECK_EQ(server.connection_count(), std::size_t{1});
     RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{1});
     const auto after_failure = server.route_datagram({.bytes_ = probe_value, .local_ = local, .peer_ = peer});
@@ -776,6 +782,113 @@ RUVIA_TEST(quic_server_cid_collision_rolls_back_admission_and_preserves_existing
     const auto second_admitted = server.admit_initial(second_offer.offer_, test_tls_driver(), {});
     RUVIA_CHECK_EQ(second_admitted.status_, ruvia::quic_operation_status::accepted);
     RUVIA_CHECK_EQ(server.connection_count(), std::size_t{2});
+}
+
+ruvia::quic_tls_drive_result failing_tls_drive(void*, ruvia::quic_tls_handshake&) noexcept {
+    return {.progress_ = ruvia::quic_tls_progress::failed};
+}
+
+RUVIA_TEST(quic_server_failed_initial_processing_consumes_pending_offer) {
+    std::pmr::unsynchronized_pool_resource memory;
+    deterministic_crypto server_crypto;
+    ruvia::quic_server server({}, deterministic_provider(server_crypto), &memory);
+    deterministic_crypto client_crypto;
+    auto initial = create_client_initial(0x10, client_crypto, &memory);
+    const ruvia::quic_datagram_view datagram{.bytes_ = std::span(initial.bytes_).first(initial.size_),
+        .local_ = test_address(4433),
+        .peer_ = test_address(43001)};
+    const auto offer = server.route_datagram(datagram);
+    RUVIA_CHECK_EQ(offer.kind_, ruvia::quic_server_route_kind::initial_offer);
+    bool rejected{};
+    try {
+        (void)server.admit_initial(offer.offer_, {.drive_ = failing_tls_drive, .retire_ = test_tls_retire}, {});
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(server.connection_count(), std::size_t{0});
+    // Retrying the same rejected Initial fails again; it must not stay pending.
+    RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{0});
+    const auto retransmitted = server.route_datagram(datagram);
+    RUVIA_CHECK_EQ(retransmitted.kind_, ruvia::quic_server_route_kind::initial_offer);
+    RUVIA_CHECK(retransmitted.offer_.offer_id_ != offer.offer_.offer_id_);
+    RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{1});
+}
+
+RUVIA_TEST(quic_server_failed_admission_releases_pending_offer_and_leaves_no_connection) {
+    std::pmr::unsynchronized_pool_resource memory;
+    deterministic_crypto client_crypto;
+    auto initial = create_client_initial(0x10, client_crypto, &memory);
+    const ruvia::quic_datagram_view datagram{.bytes_ = std::span(initial.bytes_).first(initial.size_),
+        .local_ = test_address(4433),
+        .peer_ = test_address(43001)};
+    std::size_t exercised_failures{};
+    for (std::size_t successful_calls = 0; successful_calls < 16; ++successful_calls) {
+        deterministic_crypto server_crypto;
+        ruvia::quic_server server({}, deterministic_provider(server_crypto), &memory);
+        const auto offer = server.route_datagram(datagram);
+        RUVIA_CHECK_EQ(offer.kind_, ruvia::quic_server_route_kind::initial_offer);
+        server_crypto.random_calls_before_failure_ = successful_calls;
+        bool failed{};
+        try {
+            (void)server.admit_initial(offer.offer_, test_tls_driver(), {});
+        } catch (const std::exception&) {
+            failed = true;
+        }
+        server_crypto.random_calls_before_failure_.reset();
+        if (!failed) {
+            continue;
+        }
+        ++exercised_failures;
+        // A thrown admission consumed the offer, so the bounded pending slot is
+        // released with it and no connection or CID route survives.
+        RUVIA_CHECK_EQ(server.connection_count(), std::size_t{0});
+        RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{0});
+        bool stale{};
+        try {
+            (void)server.admit_initial(offer.offer_, test_tls_driver(), {});
+        } catch (const std::invalid_argument&) {
+            stale = true;
+        }
+        RUVIA_CHECK(stale);
+        const auto retransmitted = server.route_datagram(datagram);
+        RUVIA_CHECK_EQ(retransmitted.kind_, ruvia::quic_server_route_kind::initial_offer);
+        RUVIA_CHECK(retransmitted.offer_.offer_id_ != offer.offer_.offer_id_);
+        const auto admitted = server.admit_initial(retransmitted.offer_, test_tls_driver(), {});
+        RUVIA_CHECK_EQ(admitted.status_, ruvia::quic_operation_status::accepted);
+        RUVIA_CHECK_EQ(server.connection_count(), std::size_t{1});
+        RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{0});
+    }
+    RUVIA_CHECK(exercised_failures >= 1);
+}
+
+RUVIA_TEST(quic_server_discard_initial_releases_only_a_matching_pending_offer) {
+    std::pmr::monotonic_buffer_resource memory;
+    ruvia::quic_server server({}, provider(), &memory);
+    auto packet = initial_packet();
+    const auto route = server.route_datagram({.bytes_ = packet});
+    RUVIA_CHECK_EQ(route.kind_, ruvia::quic_server_route_kind::initial_offer);
+
+    auto forged = route.offer_;
+    forged.peer_address_.port_ = 1234;
+    RUVIA_CHECK(!server.discard_initial(forged));
+    RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{1});
+
+    RUVIA_CHECK(server.discard_initial(route.offer_));
+    RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{0});
+    RUVIA_CHECK(!server.discard_initial(route.offer_));
+    bool stale{};
+    try {
+        (void)server.admit_initial(route.offer_, test_tls_driver(), {});
+    } catch (const std::invalid_argument&) {
+        stale = true;
+    }
+    RUVIA_CHECK(stale);
+
+    const auto retransmitted = server.route_datagram({.bytes_ = packet});
+    RUVIA_CHECK_EQ(retransmitted.kind_, ruvia::quic_server_route_kind::initial_offer);
+    RUVIA_CHECK(retransmitted.offer_.offer_id_ != route.offer_.offer_id_);
+    RUVIA_CHECK_EQ(server.pending_connection_count(), std::size_t{1});
 }
 
 RUVIA_TEST(quic_server_initial_partition_never_falls_back_to_another_worker) {
@@ -988,6 +1101,114 @@ RUVIA_TEST(quic_server_generated_cids_preserve_partition_through_migration_and_r
             RUVIA_CHECK_EQ(server.route_datagram({.bytes_ = probe_value}).kind_,
                 ruvia::quic_server_route_kind::dropped);
         }
+    }
+}
+
+RUVIA_TEST(quic_connection_close_reaches_peer_and_both_closing_periods_retire) {
+    std::pmr::unsynchronized_pool_resource memory;
+    deterministic_crypto client_crypto;
+    deterministic_crypto server_crypto;
+    fake_tls_pair tls_pair;
+    fake_tls_endpoint client_tls{.pair_ = &tls_pair, .client_ = true};
+    fake_tls_endpoint server_tls{.pair_ = &tls_pair, .client_ = false};
+    const auto server_address = test_address(4433);
+    const auto client_address = test_address(43001);
+    std::array<std::byte, 8> initial_dcid{};
+    std::array<std::byte, 8> client_scid{};
+    for (std::size_t i = 0; i < initial_dcid.size(); ++i) {
+        initial_dcid[i] = static_cast<std::byte>(0x10 + i);
+        client_scid[i] = static_cast<std::byte>(0x30 + i);
+    }
+    ruvia::quic_connection_config client_config;
+    client_config.local_address_ = client_address;
+    client_config.peer_address_ = server_address;
+    client_config.destination_connection_id_ = ruvia::quic_connection_id(initial_dcid);
+    client_config.source_connection_id_ = ruvia::quic_connection_id(client_scid);
+    ruvia::quic_connection client(client_config, deterministic_provider(client_crypto),
+        fake_tls_driver(client_tls), &memory, {});
+    std::array<std::byte, 2048> packet{};
+    auto now = ruvia::quic_timestamp{};
+    const auto initial_value = client.write_packet(packet, now);
+    RUVIA_CHECK_EQ(initial_value.status_, ruvia::quic_operation_status::accepted);
+    ruvia::quic_server server({}, deterministic_provider(server_crypto), &memory);
+    const auto offer = server.route_datagram({.bytes_ = std::span(packet).first(initial_value.size_),
+        .local_ = server_address,
+        .peer_ = client_address});
+    RUVIA_CHECK_EQ(offer.kind_, ruvia::quic_server_route_kind::initial_offer);
+    const auto admitted = server.admit_initial(offer.offer_, fake_tls_driver(server_tls), now);
+    RUVIA_CHECK_EQ(admitted.status_, ruvia::quic_operation_status::accepted);
+    if (admitted.status_ != ruvia::quic_operation_status::accepted) {
+        return;
+    }
+    auto& peer = server.connection(admitted.connection_);
+    std::vector<std::byte> server_datagram;
+    for (std::size_t i = 0; i < 16; ++i) {
+        now += std::chrono::milliseconds(10);
+        if (const auto expiry = peer.next_expiry(); expiry && *expiry <= now) {
+            (void)peer.handle_expiry(now);
+        }
+        if (const auto expiry = client.next_expiry(); expiry && *expiry <= now) {
+            (void)client.handle_expiry(now);
+        }
+        const auto outbound = peer.write_packet(packet, now);
+        if (outbound.size_ != 0) {
+            server_datagram.assign(packet.begin(), packet.begin() + static_cast<std::ptrdiff_t>(outbound.size_));
+            (void)client.receive({.bytes_ = server_datagram, .local_ = client_address, .peer_ = server_address}, now);
+        }
+        const auto inbound = client.write_packet(packet, now);
+        if (inbound.size_ != 0) {
+            (void)server.receive(admitted.connection_,
+                {.bytes_ = std::span(packet).first(inbound.size_), .local_ = server_address, .peer_ = client_address}, now);
+        }
+    }
+    RUVIA_CHECK(client.info().confirmed_);
+    RUVIA_CHECK(!server_datagram.empty());
+
+    // H3_NO_ERROR, as an HTTP/3 client reports a graceful close.
+    constexpr std::uint64_t application_code = 0x100;
+    now += std::chrono::milliseconds(10);
+    RUVIA_CHECK_EQ(client.close({.kind_ = ruvia::quic_close_kind::application, .code_ = application_code}),
+        ruvia::quic_operation_status::accepted);
+    const auto close_value = client.write_packet(packet, now);
+    RUVIA_CHECK_EQ(close_value.status_, ruvia::quic_operation_status::accepted);
+    RUVIA_CHECK(close_value.size_ != 0);
+    const std::vector<std::byte> close_packet(packet.begin(), packet.begin() + static_cast<std::ptrdiff_t>(close_value.size_));
+    RUVIA_CHECK_EQ(client.write_packet(packet, now).size_, std::size_t{0});
+
+    // Peer packets in the closing state are answered with the same packet,
+    // waiting for exponentially more input before each answer.
+    for (const bool answered : {true, false, true}) {
+        RUVIA_CHECK_EQ(client.receive({.bytes_ = server_datagram, .local_ = client_address, .peer_ = server_address}, now),
+            ruvia::quic_operation_status::closing);
+        const auto answer = client.write_packet(packet, now);
+        RUVIA_CHECK_EQ(answer.size_, answered ? close_packet.size() : std::size_t{0});
+        if (answer.size_ == close_packet.size()) {
+            RUVIA_CHECK(std::ranges::equal(std::span(packet).first(answer.size_), close_packet));
+        }
+    }
+
+    RUVIA_CHECK_EQ(server.receive(admitted.connection_,
+                       {.bytes_ = close_packet, .local_ = server_address, .peer_ = client_address}, now),
+        ruvia::quic_operation_status::draining);
+    RUVIA_CHECK_EQ(peer.info().state_, ruvia::quic_connection_state::draining);
+    RUVIA_CHECK_EQ(peer.info().close_error_code_, application_code);
+    // A local close cannot answer the peer's close; the owner may still retire.
+    RUVIA_CHECK_EQ(peer.close({.kind_ = ruvia::quic_close_kind::application, .code_ = 0x102}),
+        ruvia::quic_operation_status::draining);
+    RUVIA_CHECK_EQ(peer.info().state_, ruvia::quic_connection_state::draining);
+    RUVIA_CHECK_EQ(peer.info().close_error_code_, application_code);
+
+    for (auto* connection : {&client, &peer}) {
+        const auto expiry = connection->next_expiry();
+        RUVIA_CHECK(expiry.has_value());
+        if (!expiry) {
+            continue;
+        }
+        RUVIA_CHECK(*expiry > now);
+        RUVIA_CHECK(connection->handle_expiry(*expiry - std::chrono::nanoseconds(1)) !=
+                    ruvia::quic_operation_status::retired);
+        RUVIA_CHECK_EQ(connection->handle_expiry(*expiry), ruvia::quic_operation_status::retired);
+        RUVIA_CHECK_EQ(connection->info().state_, ruvia::quic_connection_state::retired);
     }
 }
 

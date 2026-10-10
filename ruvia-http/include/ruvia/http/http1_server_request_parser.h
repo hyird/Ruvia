@@ -223,7 +223,9 @@ private:
 class http1_server_request_parser final {
 public:
     // Allocate the exact header descriptor block only after accepting the head.
-    // The resource must outlive state; field text still borrows buffer.
+    // The resource must outlive state; field text still borrows buffer. Empty
+    // lines before the request-line are ignored (RFC 9112 section 2.2) within
+    // max_http_header_bytes and are counted in header_bytes().
     void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
         std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
 

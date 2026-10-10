@@ -92,6 +92,11 @@ std::optional<parsed_quic_header> parse_quic_header(
     return result;
 }
 
+bool same_address(const quic_address& left, const quic_address& right) noexcept {
+    return left.family_ == right.family_ && left.port_ == right.port_ &&
+           left.scope_id_ == right.scope_id_ && left.bytes_ == right.bytes_;
+}
+
 }  // namespace
 
 std::optional<std::uint32_t> quic_datagram_partition(
@@ -174,6 +179,30 @@ struct quic_server::impl final {
     std::size_t pending_bytes_{};
     std::uint64_t next_offer_id_{1};
     std::uint64_t next_token_{1};
+
+    // The offer must match its cached Initial exactly; a stale or forged offer
+    // never selects another peer's pending state.
+    [[nodiscard]] std::pmr::unordered_map<std::uint64_t, pending>::iterator find_pending(
+        const quic_initial_offer& offer) noexcept {
+        const auto found = pending_by_id_.find(offer.offer_id_);
+        if (found == pending_by_id_.end()) {
+            return found;
+        }
+        const auto& cached = found->second.offer_;
+        const bool matches = cached.destination_connection_id_ == offer.destination_connection_id_ &&
+                             cached.source_connection_id_ == offer.source_connection_id_ &&
+                             cached.original_destination_connection_id_ == offer.original_destination_connection_id_ &&
+                             same_address(cached.local_address_, offer.local_address_) &&
+                             same_address(cached.peer_address_, offer.peer_address_) &&
+                             cached.version_ == offer.version_;
+        return matches ? found : pending_by_id_.end();
+    }
+
+    void consume_pending(std::pmr::unordered_map<std::uint64_t, pending>::iterator found) noexcept {
+        pending_bytes_ -= found->second.bytes_.size();
+        pending_by_dcid_.erase(found->second.offer_.destination_connection_id_);
+        pending_by_id_.erase(found);
+    }
 
     static void publish_cid(void* context_value, std::span<const std::byte> bytes_value) {
         auto& entry_value = *static_cast<active*>(context_value);
@@ -442,19 +471,8 @@ quic_server_admit_result quic_server::admit_initial(const quic_initial_offer& of
     if (!impl_) {
         throw std::logic_error("QUIC server is not initialized");
     }
-    const auto pending_it = impl_->pending_by_id_.find(offer.offer_id_);
+    const auto pending_it = impl_->find_pending(offer);
     if (pending_it == impl_->pending_by_id_.end() ||
-        pending_it->second.offer_.destination_connection_id_ != offer.destination_connection_id_ ||
-        pending_it->second.offer_.source_connection_id_ != offer.source_connection_id_ ||
-        pending_it->second.offer_.original_destination_connection_id_ != offer.original_destination_connection_id_ ||
-        pending_it->second.offer_.local_address_.bytes_ != offer.local_address_.bytes_ ||
-        pending_it->second.offer_.local_address_.port_ != offer.local_address_.port_ ||
-        pending_it->second.offer_.local_address_.scope_id_ != offer.local_address_.scope_id_ ||
-        pending_it->second.offer_.local_address_.family_ != offer.local_address_.family_ ||
-        pending_it->second.offer_.peer_address_.bytes_ != offer.peer_address_.bytes_ ||
-        pending_it->second.offer_.peer_address_.port_ != offer.peer_address_.port_ ||
-        pending_it->second.offer_.peer_address_.scope_id_ != offer.peer_address_.scope_id_ ||
-        pending_it->second.offer_.peer_address_.family_ != offer.peer_address_.family_ ||
         offer.local_address_.port_ == 0 || offer.peer_address_.port_ == 0 ||
         (offer.local_address_.family_ != quic_address_family::ipv4 &&
             offer.local_address_.family_ != quic_address_family::ipv6) ||
@@ -468,79 +486,92 @@ quic_server_admit_result quic_server::admit_initial(const quic_initial_offer& of
         return {.status_ = quic_operation_status::would_block};
     }
     auto& saved = pending_it->second;
-    quic_connection_config config{.role_ = quic_role::server,
-        .version_ = offer.version_,
-        .preferred_version_ = impl_->config_.version_,
-        .local_address_ = offer.local_address_,
-        .peer_address_ = offer.peer_address_,
-        .destination_connection_id_ = offer.source_connection_id_,
-        .original_destination_connection_id_ = offer.original_destination_connection_id_,
-        .cid_partition_ = impl_->config_.cid_partition_,
-        .local_transport_parameters_ = impl_->config_.local_transport_parameters_,
-        .limits_ = impl_->config_.limits_};
-    std::array<std::byte, detail::quic_server_connection_id_size> server_source_id_bytes{};
-    bool source_id_selected{};
-    for (std::size_t attempt_value = 0; attempt_value < 4; ++attempt_value) {
-        detail::generate_quic_server_connection_id(
-            impl_->crypto_, server_source_id_bytes, config.cid_partition_);
-        const quic_connection_id candidate(server_source_id_bytes);
-        if (candidate != offer.original_destination_connection_id_ &&
-            !impl_->cid_to_token_.contains(candidate)) {
-            config.source_connection_id_ = candidate;
-            source_id_selected = true;
-            break;
-        }
-    }
-    if (!source_id_selected) {
-        throw std::runtime_error("QUIC server could not generate a collision-free source CID");
-    }
-    const auto server_source_id = *config.source_connection_id_;
-    const quic_connection_token token{next_nonzero(impl_->next_token_, "QUIC connection token exhausted")};
-    std::pmr::polymorphic_allocator<quic_connection> allocator(impl_->resource_);
-    auto* raw = allocator.allocate(1);
+    quic_connection_token token{};
     try {
-        ::new (static_cast<void*>(raw)) quic_connection(
-            offer, std::move(config), impl_->crypto_, tls_driver, impl_->resource_, now);
+        quic_connection_config config{.role_ = quic_role::server,
+            .version_ = offer.version_,
+            .preferred_version_ = impl_->config_.version_,
+            .local_address_ = offer.local_address_,
+            .peer_address_ = offer.peer_address_,
+            .destination_connection_id_ = offer.source_connection_id_,
+            .original_destination_connection_id_ = offer.original_destination_connection_id_,
+            .cid_partition_ = impl_->config_.cid_partition_,
+            .local_transport_parameters_ = impl_->config_.local_transport_parameters_,
+            .limits_ = impl_->config_.limits_};
+        std::array<std::byte, detail::quic_server_connection_id_size> server_source_id_bytes{};
+        for (std::size_t attempt_value = 0; attempt_value < 4; ++attempt_value) {
+            detail::generate_quic_server_connection_id(
+                impl_->crypto_, server_source_id_bytes, config.cid_partition_);
+            const quic_connection_id candidate(server_source_id_bytes);
+            if (candidate != offer.original_destination_connection_id_ &&
+                !impl_->cid_to_token_.contains(candidate)) {
+                config.source_connection_id_ = candidate;
+                break;
+            }
+        }
+        if (!config.source_connection_id_) {
+            // Nothing was created and existing CID owners are untouched. A later
+            // attempt draws fresh candidates, so the offer stays pending.
+            return {.status_ = quic_operation_status::would_block};
+        }
+        const auto server_source_id = *config.source_connection_id_;
+        token = quic_connection_token{next_nonzero(impl_->next_token_, "QUIC connection token exhausted")};
+        std::pmr::polymorphic_allocator<quic_connection> allocator(impl_->resource_);
+        auto* raw = allocator.allocate(1);
+        try {
+            ::new (static_cast<void*>(raw)) quic_connection(
+                offer, std::move(config), impl_->crypto_, tls_driver, impl_->resource_, now);
+        } catch (...) {
+            allocator.deallocate(raw, 1);
+            throw;
+        }
+        auto active_it = impl_->active_by_token_.end();
+        try {
+            auto insertion = impl_->active_by_token_.try_emplace(
+                token.value_, impl_.get(), token, nullptr, impl_->resource_);
+            active_it = insertion.first;
+            if (!insertion.second) {
+                throw std::logic_error("QUIC connection token collision");
+            }
+        } catch (...) {
+            raw->retire_from_server();
+            std::destroy_at(raw);
+            allocator.deallocate(raw, 1);
+            throw;
+        }
+        active_it->second.connection_.reset(raw);
+        try {
+            raw->bind_server_cid_registry(impl::cid_registry(active_it->second));
+            impl::publish_cid(&active_it->second, server_source_id.view());
+            impl::publish_cid(&active_it->second, offer.original_destination_connection_id_.view());
+            raw->receive({.bytes_ = saved.bytes_, .local_ = offer.local_address_, .peer_ = offer.peer_address_}, now);
+        } catch (...) {
+            impl::retire_all_cids(&active_it->second);
+            active_it->second.connection_->retire_from_server();
+            impl_->active_by_token_.erase(active_it);
+            throw;
+        }
     } catch (...) {
-        allocator.deallocate(raw, 1);
+        // The caller drops an offer whose admission failed: retrying the same
+        // Initial (for example a rejected ClientHello) fails again. Release the
+        // bounded pending slot with it; a retransmission becomes a fresh offer.
+        impl_->consume_pending(pending_it);
         throw;
     }
-    auto active_it = impl_->active_by_token_.end();
-    try {
-        auto insertion = impl_->active_by_token_.try_emplace(
-            token.value_, impl_.get(), token, nullptr, impl_->resource_);
-        active_it = insertion.first;
-        if (!insertion.second) {
-            throw std::logic_error("QUIC connection token collision");
-        }
-    } catch (...) {
-        raw->retire_from_server();
-        std::destroy_at(raw);
-        allocator.deallocate(raw, 1);
-        throw;
-    }
-    active_it->second.connection_.reset(raw);
-    try {
-        raw->bind_server_cid_registry(impl::cid_registry(active_it->second));
-        impl::publish_cid(&active_it->second, server_source_id.view());
-        impl::publish_cid(&active_it->second, offer.original_destination_connection_id_.view());
-        const auto datagram = quic_datagram_view{.bytes_ = saved.bytes_,
-            .local_ = offer.local_address_,
-            .peer_ = offer.peer_address_};
-        raw->receive(datagram, now);
-    } catch (...) {
-        while (!active_it->second.ids_.empty()) {
-            const auto cid = active_it->second.ids_.back();
-            impl::retire_cid(&active_it->second, cid.view());
-        }
-        active_it->second.connection_->retire_from_server();
-        impl_->active_by_token_.erase(active_it);
-        throw;
-    }
-    impl_->pending_bytes_ -= saved.bytes_.size();
-    impl_->pending_by_dcid_.erase(offer.destination_connection_id_);
-    impl_->pending_by_id_.erase(pending_it);
+    impl_->consume_pending(pending_it);
     return {.status_ = quic_operation_status::accepted, .connection_ = token};
+}
+
+bool quic_server::discard_initial(const quic_initial_offer& offer) noexcept {
+    if (!impl_) {
+        return false;
+    }
+    const auto pending_it = impl_->find_pending(offer);
+    if (pending_it == impl_->pending_by_id_.end()) {
+        return false;
+    }
+    impl_->consume_pending(pending_it);
+    return true;
 }
 
 quic_connection& quic_server::connection(quic_connection_token token) {

@@ -1,6 +1,7 @@
 #include <mysql.h>
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -12,6 +13,29 @@
 #include "db/db_sql.h"
 
 namespace ruvia {
+namespace {
+
+// An unbuffered result borrows its connection, and mysql_free_result() would
+// drain the unread rows through it synchronously, or through a connection
+// that close_slot() already freed. Detach it first; the caller closes the
+// connection, which discards those rows.
+void discard_unbuffered_result(void* result_value) noexcept {
+    if (auto* raw_result = static_cast<MYSQL_RES*>(result_value); raw_result != nullptr) {
+        raw_result->handle = nullptr;
+        mysql_free_result(raw_result);
+    }
+}
+
+// Owns an unbuffered result until db_stream_result takes it over, so every
+// failure path before that hand-off detaches and frees it.
+struct unbuffered_result_deleter {
+    void operator()(MYSQL_RES* result) const noexcept {
+        discard_unbuffered_result(result);
+    }
+};
+using unbuffered_result_ptr = std::unique_ptr<MYSQL_RES, unbuffered_result_deleter>;
+
+}  // namespace
 
 task<db_rows> detail::mariadb_pool::query(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options) {
@@ -39,7 +63,7 @@ task<db_stream_result> detail::mariadb_pool::stream(std::pmr::string sql,
         auto& slot = slots_[slot_index];
         co_await run_mysql_statement(
             slot, sql, std::span<const db_value>(params), resource, operation_timeout_value);
-        auto* raw_result = mysql_use_result(slot.connection_);
+        unbuffered_result_ptr raw_result(mysql_use_result(slot.connection_));
         if (raw_result == nullptr) {
             if (mysql_field_count(slot.connection_) != 0) {
                 throw mysql_error(
@@ -51,8 +75,11 @@ task<db_stream_result> detail::mariadb_pool::stream(std::pmr::string sql,
             throw std::invalid_argument("query_stream() requires row-producing SQL");
         }
 
-        co_return db_stream_result(
-            db_pool_ref_type{this}, slot_index, raw_result, resource, std::move(options));
+        db_stream_result stream_result(
+            db_pool_ref_type{this}, slot_index, raw_result.get(), resource, std::move(options));
+        // Ownership now belongs to the stream result.
+        static_cast<void>(raw_result.release());
+        co_return stream_result;
     } catch (...) {
         if (!slot_released) {
             close_slot(slots_[slot_index]);
@@ -82,6 +109,12 @@ task<std::optional<db_row>> detail::mariadb_pool::read_stream_row(std::size_t sl
                 &row, raw_result, co_await wait_for_mysql(slots_[slot], status, deadline_value));
         }
 
+        // With mysql_use_result(), a NULL row means either the end of the
+        // rows or a failed read; only mysql_errno() tells them apart.
+        if (row == nullptr && mysql_errno(slots_[slot].connection_) != 0) {
+            throw mysql_error(
+                *slots_[slot].connection_, "mysql_fetch_row", db_error::code_type::statement_failed);
+        }
         if (row != nullptr) {
             const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
             const auto* lengths = mysql_fetch_lengths(raw_result);
@@ -104,6 +137,7 @@ task<std::optional<db_row>> detail::mariadb_pool::read_stream_row(std::size_t sl
             co_return output_row;
         }
     } catch (...) {
+        discard_unbuffered_result(raw_result);
         close_slot(slots_[slot]);
         cancellation.finish();
         release_slot(slot);
@@ -134,9 +168,12 @@ task<void> detail::mariadb_pool::close_stream(
             status = mysql_free_result_cont(
                 raw_result, co_await wait_for_mysql(slots_[slot], status, deadline_value));
         }
+        raw_result = nullptr;
+        co_await finish_mysql_results(slots_[slot], deadline_value);
         cancellation.finish();
         release_slot(slot);
     } catch (...) {
+        discard_unbuffered_result(raw_result);
         close_slot(slots_[slot]);
         cancellation.finish();
         release_slot(slot);
@@ -144,10 +181,11 @@ task<void> detail::mariadb_pool::close_stream(
     }
 }
 
-void detail::mariadb_pool::abort_stream(std::size_t slot, void*) noexcept {
+void detail::mariadb_pool::abort_stream(std::size_t slot, void* result_value) noexcept {
     if (slot >= slots_.size()) {
         return;
     }
+    discard_unbuffered_result(result_value);
     close_slot(slots_[slot]);
     release_slot(slot);
 }
@@ -182,6 +220,7 @@ task<db_rows> detail::mariadb_pool::query_on_slot(connection_slot_type& slot, st
     }
 
     db_result_access::own_raw_result(result_value, raw_result, &free_stored_result);
+    co_await finish_mysql_results(slot, deadline_value);
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
     const auto row_count = static_cast<std::size_t>(mysql_num_rows(raw_result));
     auto& result_rows = db_result_access::rows(result_value);

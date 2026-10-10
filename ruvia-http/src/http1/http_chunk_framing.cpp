@@ -43,9 +43,6 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
                     case chunk_size_line_status::invalid_extension:
                         return fail(cursor_value, chunk_framing_error::invalid_extension);
                 }
-                if (const auto error = account_framing(line_end - cursor_value + 2)) {
-                    return fail(cursor_value, *error);
-                }
                 cursor_value = line_end + 2;
                 if (chunk_size == 0) {
                     state_ = progress::trailers;
@@ -94,9 +91,6 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
             case progress::trailers: {
                 const auto trailers = available.substr(cursor_value);
                 if (trailers.starts_with("\r\n")) {
-                    if (const auto error = account_framing(2)) {
-                        return fail(cursor_value, *error);
-                    }
                     state_ = progress::complete;
                     return chunk_framing_complete{cursor_value + 2, {}};
                 }
@@ -116,9 +110,6 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
                 if (const auto error = validate_trailers(trailers.substr(0, trailer_end))) {
                     return fail(cursor_value, *error);
                 }
-                if (const auto error = account_framing(trailer_bytes)) {
-                    return fail(cursor_value, *error);
-                }
                 state_ = progress::complete;
                 return chunk_framing_complete{cursor_value + trailer_bytes, trailers.substr(0, trailer_end)};
             }
@@ -128,19 +119,11 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
     }
 }
 
-std::optional<chunk_framing_error> http_chunk_framing::account_framing(std::size_t bytes_value) noexcept {
-    if (bytes_value > config_.framing_limit_ - framing_bytes_) {
-        return chunk_framing_error::framing_limit_exceeded;
-    }
-    framing_bytes_ += bytes_value;
-    return std::nullopt;
-}
-
 std::optional<chunk_framing_error> http_chunk_framing::consume_delimiter(std::string_view available) noexcept {
     if (!available.starts_with("\r\n")) {
         return chunk_framing_error::invalid_crlf;
     }
-    return account_framing(2);
+    return std::nullopt;
 }
 
 std::optional<chunk_framing_error> http_chunk_framing::validate_trailers(std::string_view trailers) const noexcept {

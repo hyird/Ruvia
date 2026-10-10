@@ -63,10 +63,11 @@ public:
         return validated_model_type_key_;
     }
 
-    // Empty means app-wide. Otherwise the middleware runs only on routes whose
-    // path is under this prefix, decided once when the route table is built --
-    // there is no per-request pattern matching. The text is registration-owned
-    // and outlives the table.
+    // Empty means app-wide. Otherwise the middleware runs exactly on requests
+    // whose path is under this prefix. The router decides that per route when
+    // the table is built and only checks the request path at dispatch for a
+    // route serving paths on both sides of the scope. The text is
+    // registration-owned and outlives the table.
     [[nodiscard]] std::string_view prefix() const noexcept {
         return prefix_;
     }

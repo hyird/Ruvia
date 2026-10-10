@@ -21,7 +21,8 @@ enum class timer_sleep_result : std::uint8_t {
 
 // Suspend the current coroutine on its bound worker for `duration`. The result
 // distinguishes a normal elapsed delay from cancellation caused by worker
-// shutdown (stop_timers).
+// shutdown (stop_timers): a sleep pending at that point, or started after the
+// worker's timer queue stopped, returns stop_requested without throwing.
 //
 // The worker is borrowed for the lifetime of the returned task: the caller
 // must keep its address-stable handle alive until the task completes or is

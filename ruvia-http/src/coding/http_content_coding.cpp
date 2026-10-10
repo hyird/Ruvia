@@ -136,6 +136,12 @@ http_content_coding_field_result parse_http_content_coding_headers(
 
 http_content_decode_result decode_http_content(
     http_content_coding coding, std::string_view input, http_content_decode_options options) {
+    if (input.empty() && !http_content_coding_token(coding).empty()) {
+        // A zero-length coded representation carries no content: user agents
+        // treat it as empty rather than as a truncated coding stream.
+        return detail::http_content_decode_result_access::decoded(
+            std::pmr::string(detail::http_pmr_resource_or_default(options.resource_)));
+    }
     switch (coding) {
         case http_content_coding::gzip:
             return detail::decode_gzip_content(input, options.max_decoded_bytes_, options.resource_);

@@ -1,6 +1,7 @@
 #include "ruvia/web/http_datagram_stream.h"
 
 #include <stdexcept>
+#include <utility>
 #include <variant>
 
 #include "ruvia/web/http_client_tunnel.h"
@@ -8,20 +9,31 @@
 
 #include "http/http_capsule_stream_state.h"
 namespace ruvia {
-http_datagram_stream::http_datagram_stream(http_capsule_stream stream, http_datagram_send_policy policy)
-    : stream_(std::move(stream)) {
+namespace {
+void require_valid_send_policy(http_datagram_send_policy policy) {
     if (policy != http_datagram_send_policy::automatic && policy != http_datagram_send_policy::capsule && policy != http_datagram_send_policy::quic) {
         throw std::invalid_argument("invalid HTTP Datagram send policy");
     }
+}
+// Validation precedes the move so an invalid policy leaves the caller's stream intact.
+http_capsule_stream&& validated_stream(http_capsule_stream& stream, http_datagram_send_policy policy) {
+    require_valid_send_policy(policy);
+    return std::move(stream);
+}
+}  // namespace
+http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream, http_datagram_send_policy policy)
+    : stream_(validated_stream(stream, policy)) {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->datagram_policy_ = policy;
 }
 http_datagram_stream http_tunnel::datagrams(http_datagram_config config) & {
+    require_valid_send_policy(config.send_policy_);
     return http_datagram_stream(capsules(config.capsules_), config.send_policy_);
 }
 http_datagram_stream http_client_tunnel::datagrams(http_datagram_config config) && {
+    require_valid_send_policy(config.send_policy_);
     if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->config_.datagrams_ || !response_.state_->tunnel_->accepted_) {
         throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
     }

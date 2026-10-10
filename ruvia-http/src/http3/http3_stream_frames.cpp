@@ -74,14 +74,19 @@ http3_stream_frame_status http3_stream_frames::begin_frame(std::uint64_t type, s
             return http3_stream_frame_status::frame_unexpected;
         }
     } else {
-        if (kind_ == http3_stream_kind::response && frame_type_ == 0x5 && !config_.allow_push_ && !first_frame_) {
+        // An unauthorized PUSH_PROMISE is a push-authorization failure wherever
+        // it appears on a response stream, including before HEADERS, so callers
+        // can apply RFC 9114 §7.2.5 consistently.
+        if (kind_ == http3_stream_kind::response && frame_type_ == 0x5 && !config_.allow_push_) {
             return http3_stream_frame_status::push_promise;
         }
         if (known_frame && frame_type_ != 0x0 && frame_type_ != 0x1 &&
             !(frame_type_ == 0x5 && kind_ == http3_stream_kind::response && config_.allow_push_)) {
             return http3_stream_frame_status::frame_unexpected;
         }
-        if (first_frame_ && frame_type_ != 0x1 &&
+        // RFC 9114 §4.1/§9: unknown and reserved extension frames may precede
+        // HEADERS and are ignored; only a known frame type can be out of order.
+        if (first_frame_ && known_frame && frame_type_ != 0x1 &&
             !(frame_type_ == 0x5 && kind_ == http3_stream_kind::response && config_.allow_push_)) {
             return http3_stream_frame_status::frame_unexpected;
         }

@@ -77,7 +77,7 @@ private:
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
         c.header("content-type", "text/css");
-        co_return c.body("body { color: #234; }\n");
+        co_return c.body(ruvia::static_text("body { color: #234; }\n"));
     }
 
     ruvia::task<ruvia::http_response> safe(ruvia::context& c) {

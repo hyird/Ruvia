@@ -376,7 +376,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
         std::optional<body_reader_binding<http2_sans_io_request_body_reader>> body_reader_storage;
         if (streaming_body != nullptr && !request_head->snapshot().connect_pending_) {
             body_reader_storage.emplace(
-                connection_, stream_id, streaming_body->queue(), *stream_signal);
+                connection_, stream_id, streaming_body->queue(), *stream_signal, write_signal_);
         }
         auto dispatch_services = request_services;
         if (body_reader_storage) {
@@ -480,7 +480,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                             .response_headers_ = response_headers_value});
                     const auto* submitted_handshake = handshake_result.submitted();
                     if (submitted_handshake == nullptr) {
-                        co_return;
+                        // The handshake is not started, so stream dispatch still
+                        // answers this pending CONNECT with an error response.
+                        throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
                     }
                     if (!stream_runtimes_.mark_tunnel(stream_id)) {
                         std::terminate();
@@ -707,6 +709,16 @@ void http2_sans_io_session_engine::drain_events() {
             return;
         }
         auto& request_body = selected_route->body();
+        if (request_body.buffered() != nullptr && stream_runtime->dispatched()) {
+            // A buffered body is dispatched before its end only when its
+            // expectation was rejected: the handler never receives that content
+            // and the request borrows the buffered bytes as they were at
+            // dispatch. Appending would reallocate under that borrowed view, so
+            // later DATA is discarded and only its flow-control credit returned.
+            (void)connection_.acknowledge(std::move(body_chunk->take_credit()));
+            wake_writer();
+            return;
+        }
         const auto* resolved_route_value = selected_route->resolution().resolved();
         const auto total_limit = request_body_byte_limit(request_body.mode(), options.max_stream_body_bytes_,
             options.max_buffered_body_bytes_,

@@ -53,6 +53,36 @@ RUVIA_TEST(http3_websocket_client_drives_extended_connect_deflate_and_fin) {
     peer.rethrow_if_failed();
 }
 
+RUVIA_TEST(http3_websocket_rejection_after_interim_response_is_delivered) {
+    test_identity_files identity;
+    local_http3_peer peer(identity);
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::wss,
+                                                              .protocol_ = ruvia::websocket_client_protocol::http3,
+                                                              .host_ = "localhost",
+                                                              .port_ = peer.port(),
+                                                              .target_ = "/ws-informed-reject",
+                                                              .connect_timeout_ = 5s,
+                                                              .read_timeout_ = 2s,
+                                                              .write_timeout_ = 2s,
+                                                              .ca_file_ = identity.certificate().string()});
+        std::optional<ruvia::websocket_client_error::code_type> code;
+        try {
+            co_await client.connect();
+        } catch (const ruvia::websocket_client_error& error) {
+            code = error.code();
+        }
+        co_await client.shutdown();
+        // The final 403 follows the published 103 on the same stream instead
+        // of the server abandoning the request and closing the connection.
+        RUVIA_CHECK(code == ruvia::websocket_client_error::code_type::handshake_rejected);
+    };
+    run_client_task(attachment, run());
+    peer.rethrow_if_failed();
+}
+
 RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_orders) {
     for (unsigned round = 0; round != 4; ++round) {
         test_identity_files identity;

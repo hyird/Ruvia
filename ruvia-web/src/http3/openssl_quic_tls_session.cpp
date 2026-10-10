@@ -125,7 +125,9 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context_value, quic_
         if (index < 0 || SSL_set_ex_data(ssl_.get(), index, this) != 1) {
             throw std::runtime_error("failed to bind QUIC TLS session owner");
         }
-        SSL_CTX_set_session_cache_mode(context_value, SSL_SESS_CACHE_CLIENT);
+        // Tickets are captured through the callback; OpenSSL's internal store would only
+        // retain unused client sessions until they expire.
+        SSL_CTX_set_session_cache_mode(context_value, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
         SSL_CTX_sess_set_new_cb(context_value, new_session_callback);
     }
     // OpenSSL snapshots the SSL role when the callback table is installed.
@@ -402,7 +404,12 @@ int openssl_quic_tls_session::on_yield_secret(std::uint32_t level, int direction
         direction == 0 ? quic_crypto_direction::read : quic_crypto_direction::write,
         suite, {reinterpret_cast<const std::byte*>(secret), size});
     if (direction == 1) {
-        write_level_ = encryption;
+        // QUIC never carries CRYPTO in 0-RTT. After an HRR OpenSSL resets the 0-RTT
+        // write key to plaintext without yielding a secret, so the second
+        // ClientHello must keep using the Initial level.
+        if (encryption != quic_encryption_level::early_data) {
+            write_level_ = encryption;
+        }
         if (role_ == quic_role::server && encryption == quic_encryption_level::handshake && !params_submitted_) {
             const auto params = handshake_->local_transport_parameters();
             if (SSL_set_quic_tls_transport_params(ssl_.get(),

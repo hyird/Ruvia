@@ -542,13 +542,17 @@ task<void> http_client_pool::write_http1_upload(connection_type& connection, htt
             }
             const auto completed = parser.complete_request_content();
             if (completed == http1_client_request_content_completion_status::exchange_terminal && !state_value.head_ready_) {
-                std::terminate();
+                // The receiver already failed this exchange after the parser
+                // left await_response; it owns and reports that failure.
+                co_return;
             }
             upload.output_.finish();
             co_return;
         }
     } catch (...) {
-        if (!state_value.head_ready_) {
+        // A receiver, timeout, or cancellation stops output before it closes
+        // the socket; the resulting write abort is a consequence, not the cause.
+        if (!state_value.head_ready_ && !upload.output_.stopped_) {
             failure = std::current_exception();
         }
         upload.output_.stop();

@@ -20,9 +20,9 @@ RUVIA_TEST(web_request_decode_accepts_gzip_content) {
     RUVIA_CHECK_EQ(observation_value.body_, plain);
 }
 
-RUVIA_TEST(web_request_decode_rejects_empty_encoded_representation) {
+RUVIA_TEST(web_request_decode_accepts_empty_encoded_representation) {
     const auto observation_value = read_context_gzip_body({});
-    RUVIA_CHECK_EQ(observation_value.error_status_, ruvia::http_status::bad_request);
+    RUVIA_CHECK(!observation_value.error_status_.has_value());
     RUVIA_CHECK(observation_value.body_.empty());
 }
 

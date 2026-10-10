@@ -310,10 +310,35 @@ std::size_t find_http_header_end(std::string_view buffer, std::size_t search_off
     return std::string_view::npos;
 }
 
+std::size_t http_request_leading_empty_line_bytes(std::string_view buffer) noexcept {
+    buffer = buffer.substr(0, max_http_header_bytes);
+    std::size_t cursor_value = 0;
+    for (;;) {
+        if (cursor_value < buffer.size() && buffer[cursor_value] == '\n') {
+            ++cursor_value;
+        } else if (buffer.substr(cursor_value).starts_with("\r\n")) {
+            cursor_value += 2;
+        } else {
+            return cursor_value;
+        }
+    }
+}
+
+std::size_t find_http_request_head_end(std::string_view buffer, std::size_t search_offset) noexcept {
+    const auto leading_bytes = http_request_leading_empty_line_bytes(buffer);
+    if (leading_bytes >= max_http_header_bytes) {
+        return std::string_view::npos;
+    }
+    const auto head_end = find_http_header_end(
+        buffer.substr(leading_bytes, max_http_header_bytes - leading_bytes),
+        search_offset > leading_bytes ? search_offset - leading_bytes : 0);
+    return head_end == std::string_view::npos ? head_end : leading_bytes + head_end;
+}
+
 std::optional<http_parse_error> parse_http_header_block(
     std::string_view buffer, std::size_t header_bytes, parsed_request_header_block& block) {
     const auto headers_end = header_bytes - 2;
-    std::size_t cursor_value = 0;
+    std::size_t cursor_value = http_request_leading_empty_line_bytes(buffer.substr(0, header_bytes));
     bool ignore_upgrade = false;
     if (const auto error = parse_request_line(buffer, headers_end, cursor_value, block, ignore_upgrade)) {
         return error;

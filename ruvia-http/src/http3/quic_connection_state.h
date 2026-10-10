@@ -166,6 +166,16 @@ public:
     std::pmr::deque<datagram> received_datagrams_;
     std::pmr::deque<datagram> send_datagrams_;
     std::pmr::string close_reason_;
+    // RFC 9000 section 10.2: the first CONNECTION_CLOSE packet is retained to
+    // answer peer input, rate limited, until close_deadline_ ends the closing
+    // or draining period and handle_expiry() retires the connection.
+    std::pmr::vector<std::byte> close_packet_;
+    quic_address close_local_address_{};
+    quic_address close_peer_address_{};
+    std::optional<quic_timestamp> close_deadline_{};
+    std::size_t close_input_packets_{};
+    std::size_t close_answer_threshold_{1};
+    bool close_answer_pending_{};
     std::array<std::byte, quic_max_alpn_size> negotiated_alpn_{};
     std::size_t negotiated_alpn_size_{};
     quic_cipher_suite negotiated_cipher_suite_{quic_cipher_suite::aes_128_gcm_sha256};

@@ -399,6 +399,9 @@ void http3_worker_runtime::finish_datagrams() noexcept {
     worker_->target_.server_->response_buffer().set_local_notifications({});
     // wire stop has detached its endpoint; no borrowed channel survives ACK.
     auto* channel = std::exchange(datagrams_, nullptr);
+    // The final wire stop may complete in a poll_stop() after the last pump, so
+    // the drained protocol retires here, where every stop path converges.
+    running_ = false;
     channel->worker_close();
 }
 
@@ -631,9 +634,6 @@ bool http3_worker_runtime::pump_protocol(http3_quic_server_transport* transport,
                 any_progress = true;
             }
             wire_.poll_stop();
-            if (states_done && wire_.stop_status().complete() && workers_done) {
-                running_ = false;
-            }
         } else if (exhausted_budget) {
             // The QUIC wire owner bounds each turn. Queue a coalesced follow-up
             // so a long run of ready buffer work cannot strand the connection

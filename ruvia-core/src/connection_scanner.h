@@ -13,7 +13,11 @@ namespace ruvia {
 
 struct connection_scanner::impl_type final {
     explicit impl_type(connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options);
-    ~impl_type() noexcept;
+
+    // Detaches every entry and registration and disarms the timer. Returns true
+    // when called from inside this scanner's own scan callback: that scan still
+    // runs on this stack and takes ownership of the impl, freeing it on return.
+    [[nodiscard]] bool retire() noexcept;
 
     void start();
     void stop() noexcept;
@@ -51,6 +55,9 @@ struct connection_scanner::impl_type final {
     worker_maintenance_registration_type* worker_maintenance_scan_next_{nullptr};
     std::size_t periodic_check_count_{0};
     std::atomic_bool running_{false};
+    // Worker-local: set only by the timer callback while scan() runs callbacks.
+    bool scanning_{false};
+    bool release_after_scan_{false};
 };
 
 }  // namespace ruvia

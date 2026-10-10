@@ -40,7 +40,7 @@
 namespace ruvia::detail {
 
 template <typename stream_type>
-task<void> worker_connections::run_stream(http_server_session_config& listener_value, stream_type& stream,
+task<http_connection_close> worker_connections::run_stream(http_server_session_config& listener_value, stream_type& stream,
     tcp_socket_type& socket, context_services base_route_services) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, the keep-alive request sequence, the remote address, and the count
@@ -109,7 +109,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                 const auto idle_ec = idle_completion.error_code();
                 const auto idle_bytes = idle_completion.result();
                 if (idle_ec || !http_server_worker_running(state_)) {
-                    co_return;
+                    co_return http_connection_close::abort;
                 }
                 idle_read_bytes = idle_bytes;
             }
@@ -156,7 +156,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
         // the services below, so the deadline's stop source outlives every
         // dispatch that observes its token.
         std::optional<request_deadline> request_deadline;
-        http1_interim_response_sink interim_sink(stream, memory_.resource());
+        http1_interim_response_sink interim_sink(stream, parsed_value.request_, memory_.resource());
         context_services request_services = base_route_services.with_interim_output(interim_sink.output());
         std::optional<http1_session_request_completion> request_completion;
         // Rejections that close the connection funnel through one co_await
@@ -181,9 +181,9 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                             .services_ = base_route_services,
                             .worker_state_ = state_,
                         },
-                        read_buffer, used_bytes, listener_value.redirect() != nullptr);
+                        read_buffer, used_bytes, listener_value.redirect() != nullptr || served_keepalive_request);
                     if (h2_result == cleartext_http2_dispatch_result::session_finished) {
-                        co_return;
+                        co_return http_connection_close::abort;
                     }
                     if (h2_result == cleartext_http2_dispatch_result::continue_read_loop) {
                         continue;
@@ -367,7 +367,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                         used_bytes - request_head->header_bytes());
                     auto completion = co_await dispatch_http_tunnel_route(route_dispatch(), *resolved, pending);
                     if (!completion) {
-                        co_return;
+                        co_return http_connection_close::abort;
                     }
                     request_completion.emplace(std::move(*completion));
                     break;
@@ -380,7 +380,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                     auto websocket_completion = co_await dispatch_http_websocket_route(
                         route_dispatch(), *resolved, pending_frames);
                     if (!websocket_completion.has_value()) {
-                        co_return;
+                        co_return http_connection_close::abort;
                     }
                     request_completion.emplace(std::move(*websocket_completion));
                     break;
@@ -448,7 +448,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                             failure->source() == http1_server_request_parse_failure_source::request_line
                                 ? http1_request_parse_failure_source::request_line
                                 : http1_request_parse_failure_source::message)) {
-                        co_return;
+                        co_return http_connection_close::abort;
                     }
                 }
                 const auto error = failure->protocol_error();
@@ -482,7 +482,11 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
             const auto ec = read_completion.error_code();
             const auto bytes_read = read_completion.result();
             if (ec) {
-                co_return;
+                // A clean peer end (FIN, or TLS close_notify) is answered with
+                // this side's close alert; anything else closes immediately.
+                co_return ec == asio::error::eof&& http_server_worker_running(state_)
+                    ? http_connection_close::peer_finished
+                    : http_connection_close::abort;
             }
 
             used_bytes += bytes_read;
@@ -512,7 +516,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                 parsed_value.request_, response_coding_policy, response, options_, routes_value,
                 request_memory_value, request_services);
             if (!preparation) {
-                co_return;
+                co_return http_connection_close::abort;
             }
             if (preparation->recovered_) {
                 connection_plan = require_http1_final_response_commit(response, connection_plan);
@@ -529,7 +533,7 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
                     *committed_status, request_start);
             }
             if (write_result.completed() == nullptr) {
-                co_return;
+                co_return http_connection_close::abort;
             }
         } else if (const auto* committed = request_completion->committed_stream()) {
             scanner_entry.set_phase(ruvia::connection_scanner::phase_type::idle);
@@ -539,9 +543,11 @@ task<void> worker_connections::run_stream(http_server_session_config& listener_v
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
 
-        if (connection_plan.disposition() == http1_close_policy::close_after_response ||
-            !http_server_worker_running(state_)) {
-            co_return;
+        if (!http_server_worker_running(state_)) {
+            co_return http_connection_close::abort;
+        }
+        if (connection_plan.disposition() == http1_close_policy::close_after_response) {
+            co_return http_connection_close::after_response;
         }
         apply_reusable_http1_request_buffer_completion(
             request_completion->buffer_completion(), read_buffer, used_bytes);

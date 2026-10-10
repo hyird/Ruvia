@@ -57,7 +57,8 @@ struct next_access final {
 
 // One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
 // The prefix is a borrowed view during registration; route_table copies it into
-// owned storage. Selection is longest-prefix-first on whole path segments.
+// owned storage. Selection is deepest-prefix-first on whole path segments
+// (path_is_under_prefix).
 struct http_prefix_error_handler final {
     std::string_view prefix_;
     http_error_handler_ref_type handler_{nullptr};
@@ -89,7 +90,7 @@ public:
     void set_error_handler(http_error_handler_ref_type handler) noexcept;
     void set_not_found_handler(http_not_found_handler_ref_type handler) noexcept;
     // Wholesale replacement (idempotent for an app stop()/run() cycle). The
-    // stored set is normalized (trailing slash stripped) and ordered longest
+    // stored set is normalized (trailing slash stripped) and ordered deepest
     // prefix first so selection is a first-match scan.
     void set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers);
     void set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler> handlers);
@@ -230,6 +231,11 @@ private:
     [[nodiscard]] task<void> invoke_middleware_at(
         const route_entry& route, std::size_t index, context& context) const;
     [[nodiscard]] static task<void> invoke_middleware_continuation(next_state state);
+    // The first frame at or after `index` that applies to this request: a
+    // conditional frame is skipped when the request path is outside its scope.
+    // Routes without conditional frames return `index` untouched.
+    [[nodiscard]] std::size_t applicable_middleware_index(
+        const route_entry& route, std::size_t index, const context& context) const noexcept;
     [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
         const resolved_route& route, request_memory& memory, const route_stream_handler_type& handler,
         context_services services) const;
@@ -272,6 +278,11 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<route_entry> routes_;
     std::pmr::vector<route_middleware_type> middleware_frames_;
+    // Parallel to middleware_frames_: the path scope a conditional frame checks
+    // at dispatch, or empty for an unconditional frame. Only routes flagged
+    // has_conditional_middleware() read it. Views borrow the registration-owned
+    // use_at prefixes, which outlive the table.
+    std::pmr::vector<std::string_view> middleware_scopes_;
     // A contiguous block at the end of middleware_frames_: the app-wide
     // middlewares that declared they also run when no route matched. Kept as a
     // range rather than a separate vector so the fallback chain indexes frames

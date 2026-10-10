@@ -28,6 +28,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_datagram_stream.h"
 #include "ruvia/web/http_tunnel.h"
@@ -108,9 +109,30 @@ public:
     }
 };
 
+// Publishes an interim head before rejecting the upgrade, so the final
+// rejection must follow those already-published response bytes.
+class informed_reject final : public ruvia::middleware {
+public:
+    ruvia::task<void> handle(ruvia::context& context, ruvia::next&) {
+        co_await context.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        throw ruvia::http_error({.status_ = ruvia::http_status::forbidden, .code_ = "forbidden", .message_ = "upgrade rejected after interim response"});
+    }
+};
+
+// Opts a read-only route into HTTP/3 0-RTT replay.
+class replay_safe_route final : public ruvia::middleware {
+public:
+    static constexpr bool ruvia_replay_safe = true;
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next) {
+        co_await next();
+    }
+};
+
 class peer_controller final : public ruvia::controller<peer_controller> {
 public:
     RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/hello", hello);
+    RUVIA_GET("/early", early, replay_safe_route);
     RUVIA_POST_STREAM("/upload", upload);
     RUVIA_CONNECT("target.test:443", tunnel, tunnel_metadata);
     RUVIA_CONNECT_PROTOCOL("test-protocol", "/tunnel", tunnel, tunnel_metadata);
@@ -120,6 +142,7 @@ public:
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp", udp_greeting);
     const ruvia::websocket_route_config websocket_options{.subprotocols_ = {"chat"}, .deflate_ = {.enabled_ = true}};
     RUVIA_GET_WS_OPTIONS("/ws", websocket, websocket_options);
+    RUVIA_GET_WS("/ws-informed-reject", websocket, informed_reject);
     RUVIA_ROUTES_END
 
 private:
@@ -129,6 +152,16 @@ private:
             connection.tls() == nullptr || connection.scheme() != ruvia::http_scheme::https) {
             throw std::runtime_error("HTTP/3 request lost its authenticated peer metadata");
         }
+    }
+
+    ruvia::task<ruvia::http_response> hello(ruvia::context& context) {
+        co_return context.text("hello");
+    }
+
+    // Reports whether QUIC delivered the request in 0-RTT.
+    ruvia::task<ruvia::http_response> early(ruvia::context& context) {
+        co_return context.text(
+            std::string_view(context.early_data_info().received_from_early_data() ? "early" : "full"));
     }
 
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
@@ -274,7 +307,8 @@ class local_http3_peer final {
             asio::ip::udp::socket udp(io, {asio::ip::address_v4::loopback(), port_});
             tcp.close();
             udp.close();
-            app.listen({.address_ = "127.0.0.1", .https_ = port_, .tls_ = {.certificate_chain_file_ = identity.certificate(), .private_key_file_ = identity.private_key()}, .http3_ = {.mode_ = ruvia::http3_mode::enabled}});
+            // Early data only admits replay-safe routes; other cases never offer it.
+            app.listen({.address_ = "127.0.0.1", .https_ = port_, .tls_ = {.certificate_chain_file_ = identity.certificate(), .private_key_file_ = identity.private_key(), .http3_early_data_ = true}, .http3_ = {.mode_ = ruvia::http3_mode::enabled}});
             auto ready = ready_.get_future();
             thread_ = std::thread([this, &app] {
                 try {

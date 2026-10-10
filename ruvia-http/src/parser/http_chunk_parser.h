@@ -196,9 +196,10 @@ private:
 
 [[nodiscard]] std::optional<http_chunk_scan_error> validate_http_chunk_trailers(
     std::string_view trailers) noexcept;
-// Scans one complete request body without retaining payload. Payload and total
-// framing each have default_max_buffered_body_bytes budgets; individual size lines
-// and encoded trailer sections are bounded by max_http_header_bytes.
+// Scans one complete request body without retaining payload. Payload has a
+// default_max_buffered_body_bytes budget; individual size lines and encoded
+// trailer sections are bounded by max_http_header_bytes. The caller bounds the
+// scanned view to its buffered message limit.
 [[nodiscard]] http_chunk_scan_result scan_http_chunked_body(std::string_view body) noexcept;
 
 }  // namespace ruvia::detail

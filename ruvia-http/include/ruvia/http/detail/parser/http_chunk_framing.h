@@ -24,11 +24,16 @@ enum class chunk_framing_error : std::uint8_t {
 enum class chunk_trailer_role : std::uint8_t { request,
     response };
 
+// Framing has no cumulative budget: RFC 9112 places no limit on the chunk
+// count, and an incremental caller retains at most one incomplete framing
+// element. Each chunk-size line (including extensions) and the trailer section
+// are bounded independently by max_http_header_bytes; a zero-size chunk ends
+// the body, so empty chunks cannot repeat.
 struct chunk_framing_config final {
     protocol_byte_limit body_limit_;
-    std::size_t framing_limit_;
-    // Whole-message scanning bounds the encoded trailer section separately.
-    // Incremental decoding first validates fields, then charges framing bytes.
+    // Optional additional bound on the encoded trailer section including its
+    // terminating empty line; field validation always caps the trailer fields
+    // at max_http_header_bytes.
     protocol_byte_limit trailer_section_limit_;
     chunk_trailer_role trailer_role_;
 };
@@ -72,8 +77,7 @@ private:
         complete };
 
     [[nodiscard]] chunk_framing_result fail(std::size_t consumed_bytes, chunk_framing_error error) noexcept;
-    [[nodiscard]] std::optional<chunk_framing_error> account_framing(std::size_t bytes) noexcept;
-    [[nodiscard]] std::optional<chunk_framing_error> consume_delimiter(std::string_view available) noexcept;
+    [[nodiscard]] static std::optional<chunk_framing_error> consume_delimiter(std::string_view available) noexcept;
     [[nodiscard]] std::optional<chunk_framing_error> validate_trailers(std::string_view trailers) const noexcept;
 
     chunk_framing_config config_;
@@ -81,7 +85,6 @@ private:
     std::size_t trailer_search_offset_{0};
     std::size_t remaining_{0};
     std::size_t decoded_bytes_{0};
-    std::size_t framing_bytes_{0};
 };
 
 }  // namespace ruvia::detail

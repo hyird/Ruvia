@@ -96,9 +96,9 @@ http_response context::body(std::span<const std::byte> body) const {
     return response;
 }
 
-http_response context::body_static_view(std::string_view body) const {
+http_response context::body(static_text body) const {
     http_response response({.resource_ = arena()});
-    response.static_body(body);
+    response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
 }
@@ -119,10 +119,10 @@ http_response context::text(std::pmr::string&& body) const {
     return response;
 }
 
-http_response context::text_static_view(std::string_view body) const {
+http_response context::text(static_text body) const {
     http_response response({.resource_ = arena()});
     response.header("Content-Type", "text/plain; charset=UTF-8");
-    response.static_body(body);
+    response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
 }
@@ -151,10 +151,10 @@ http_response context::html(std::pmr::string&& body) const {
     return response;
 }
 
-http_response context::html_static_view(std::string_view body) const {
+http_response context::html(static_text body) const {
     http_response response({.resource_ = arena()});
     response.header("Content-Type", "text/html; charset=UTF-8");
-    response.static_body(body);
+    response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
 }

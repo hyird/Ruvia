@@ -42,6 +42,7 @@
 #include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/request_fields.h"
 #include "ruvia/web/session.h"
+#include "ruvia/web/static_text.h"
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/task.h"
 #include "ruvia/web/validation_types.h"
@@ -181,6 +182,7 @@ public:
     // Immutable snapshot for this request. `received_from_early_data` is trusted
     // local QUIC transport provenance; `upstream_declared_early_data` reflects
     // only the untrusted HTTP field and must not be used as proof of 0-RTT.
+    // Subrequests issued through dispatch() inherit both flags from their parent.
     [[nodiscard]] http3_early_data_info early_data_info() const noexcept {
         return early_data_info_;
     }
@@ -321,6 +323,9 @@ public:
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context and arena.
+    // A subrequest of a 0-RTT request inherits its early-data snapshot and is
+    // answered 425 Too Early unless it is a content-free GET/HEAD to a
+    // replay-safe buffered route (RFC 8470).
     [[nodiscard]] scoped_operation<dispatch_response> dispatch(dispatch_options options);
     [[nodiscard]] bool is_subrequest() const noexcept;
 
@@ -390,10 +395,15 @@ public:
     // uncommitted downstream response.
     void respond(http_response&& response);
 
+    // Body builders copy their input into response-owned storage, except
+    // static_text, which explicitly borrows static bytes without copying.
+    // Character arrays (string literals and filled buffers) are copied up to
+    // their first NUL byte, or in full when they contain none.
     [[nodiscard]] http_response body(std::string_view body) const;
     [[nodiscard]] http_response body(std::nullptr_t) const;
     [[nodiscard]] http_response body(std::pmr::string&& body) const;
     [[nodiscard]] http_response body(std::span<const std::byte> body) const;
+    [[nodiscard]] http_response body(static_text body) const;
     [[nodiscard]] http_response body(std::string& body) const = delete;
     [[nodiscard]] http_response body(const std::string& body) const = delete;
     [[nodiscard]] http_response body(std::string&& body) const = delete;
@@ -403,6 +413,7 @@ public:
 
     [[nodiscard]] http_response text(std::string_view body) const;
     [[nodiscard]] http_response text(std::pmr::string&& body) const;
+    [[nodiscard]] http_response text(static_text body) const;
     [[nodiscard]] http_response text(std::string& body) const = delete;
     [[nodiscard]] http_response text(const std::string& body) const = delete;
     [[nodiscard]] http_response text(std::string&& body) const = delete;
@@ -416,6 +427,7 @@ public:
 
     [[nodiscard]] http_response html(std::string_view body) const;
     [[nodiscard]] http_response html(std::pmr::string&& body) const;
+    [[nodiscard]] http_response html(static_text body) const;
     [[nodiscard]] http_response html(std::string& body) const = delete;
     [[nodiscard]] http_response html(const std::string& body) const = delete;
     [[nodiscard]] http_response html(std::string&& body) const = delete;
@@ -464,10 +476,6 @@ private:
     context& set_stable_response_header(std::string_view name, std::string_view value);
     context& remove_response_header(std::string_view name);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code) const;
-
-    [[nodiscard]] http_response body_static_view(std::string_view body) const;
-    [[nodiscard]] http_response text_static_view(std::string_view body) const;
-    [[nodiscard]] http_response html_static_view(std::string_view body) const;
 
     [[nodiscard]] http_response json_serialized(std::pmr::string& body) const;
 

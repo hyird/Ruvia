@@ -146,6 +146,7 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
         SSL_CTX_set_alpn_select_cb(context_value.native_handle(), select_alpn_protocol, nullptr);
         configure_http_server_tls_identity(
             context_value.native_handle(), identity, tls->client_certificates_);
+        install_tls_session_ticket_keys(*context_value.native_handle(), *tls);
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
@@ -212,16 +213,25 @@ task<void> worker_connections::run_session(
                                           .with_tls_transport(
                                               remote_address, client_certificate, remote_port)
                                           .with_automatic_alt_svc(listener_value.tls()->alt_svc_);
+            auto close_mode = http_connection_close::abort;
             if (is_http2_alpn_selected(tls_stream)) {
-                co_await run_http2(tls_stream, socket, tls_services);
+                close_mode = co_await run_http2(tls_stream, socket, tls_services);
             } else {
-                co_await run_stream(listener_value, tls_stream, socket, tls_services);
+                close_mode = co_await run_stream(listener_value, tls_stream, socket, tls_services);
+            }
+            // Worker stop keeps the immediate close; scanner close_all reaches a
+            // graceful close that is already running.
+            if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
+                co_await close_http_connection_gracefully(tls_stream, scanner_, worker_, close_mode);
             }
             ruvia::close_socket(socket);
             co_return;
         }
-        co_await run_stream(
+        const auto close_mode = co_await run_stream(
             listener_value, socket, socket, base_services.with_plain_transport(remote_address, remote_port));
+        if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
+            co_await close_http_connection_gracefully(socket, scanner_, worker_, close_mode);
+        }
     } catch (...) {
         // Last-resort safety net: any exception that escapes the session
         // body (including bad_alloc, error-handler failures, or framework
@@ -239,12 +249,12 @@ task<void> worker_connections::run_session(
 }
 
 template <typename stream_type>
-task<void> worker_connections::run_http2(
+task<http_connection_close> worker_connections::run_http2(
     stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial_bytes) {
     ruvia::connection_scanner::entry_type scanner_entry;
     ruvia::connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
 
-    co_await run_http2_server_session(
+    co_return co_await run_http2_server_session(
         http2_server_session_setup<stream_type>{
             .stream_ = stream,
             .socket_ = socket,

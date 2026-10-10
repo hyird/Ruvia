@@ -15,6 +15,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/web_worker.h"
 
+#include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
@@ -68,9 +69,9 @@ private:
     void accept_socket(std::size_t index, tcp_socket_type socket);
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
     template <typename stream_type>
-    task<void> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
+    task<http_connection_close> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
     template <typename stream_type>
-    task<void> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial = {});
+    task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial = {});
     asio::io_context& io_;
     const worker_handle& worker_;
     worker_memory& memory_;

@@ -182,6 +182,32 @@ std::error_code exception_code() noexcept {
 }
 #endif
 
+#ifdef _WIN32
+// An overlapped completion reports the Win32 translation of its NTSTATUS rather
+// than the Winsock code a synchronous call returns. Map per-datagram ICMP and
+// truncation results to their portable codes so callers classify both alike.
+std::error_code portable_completion_error(const std::error_code& error) noexcept {
+    if (error.category() != std::system_category()) {
+        return error;
+    }
+    switch (error.value()) {
+        case ERROR_NETNAME_DELETED:
+            return asio::error::make_error_code(asio::error::connection_reset);
+        case ERROR_PORT_UNREACHABLE:
+        case ERROR_CONNECTION_REFUSED:
+            return asio::error::make_error_code(asio::error::connection_refused);
+        case ERROR_HOST_UNREACHABLE:
+            return asio::error::make_error_code(asio::error::host_unreachable);
+        case ERROR_NETWORK_UNREACHABLE:
+            return asio::error::make_error_code(asio::error::network_unreachable);
+        case ERROR_MORE_DATA:
+            return asio::error::make_error_code(asio::error::message_size);
+        default:
+            return error;
+    }
+}
+#endif
+
 }  // namespace
 
 class http3_udp_socket::impl final {
@@ -238,15 +264,10 @@ public:
 #ifdef _WIN32
             load_message_extensions();
             // This socket serves independent QUIC peers. A closed peer's ICMP
-            // port-unreachable must not fail the shared receive operation.
-            BOOL report_port_unreachable = FALSE;
-            DWORD returned_bytes = 0;
-            if (::WSAIoctl(socket_.native_handle(), SIO_UDP_CONNRESET,
-                    &report_port_unreachable, sizeof(report_port_unreachable),
-                    nullptr, 0, &returned_bytes, nullptr, nullptr) == SOCKET_ERROR) {
-                throw std::system_error(WSAGetLastError(), std::system_category(),
-                    "configure HTTP/3 server network UDP peer errors");
-            }
+            // port-unreachable or a TTL-expired ICMP must not fail the shared
+            // receive operation.
+            disable_peer_error_report(SIO_UDP_CONNRESET);
+            disable_peer_error_report(SIO_UDP_NETRESET);
 #endif
             socket_.bind(bind_endpoint_, error);
             if (error) {
@@ -949,6 +970,16 @@ private:
         }
     }
 
+    void disable_peer_error_report(DWORD control) {
+        BOOL report = FALSE;
+        DWORD returned = 0;
+        if (::WSAIoctl(socket_.native_handle(), control, &report, sizeof(report),
+                nullptr, 0, &returned, nullptr, nullptr) == SOCKET_ERROR) {
+            throw std::system_error(WSAGetLastError(), std::system_category(),
+                "configure HTTP/3 server network UDP peer errors");
+        }
+    }
+
     bool start_windows_receive() noexcept {
         handler_storage_type* const storage = acquire_handler_storage(direction_type::receive);
         if (storage == nullptr) {
@@ -975,21 +1006,16 @@ private:
             DWORD received_value = 0;
             const int result_value = receive_message_function_(socket_.native_handle(), &receive_message_,
                 &received_value, operation.get(), nullptr);
-            if (result_value == 0) {
+            const int error = result_value == 0 ? 0 : WSAGetLastError();
+            if (result_value == 0 || error == WSA_IO_PENDING) {
                 receive_overlapped_ = operation.release();
-                submitted = true;
             } else {
-                const int error = WSAGetLastError();
-                if (error == WSA_IO_PENDING) {
-                    receive_overlapped_ = operation.release();
-                    submitted = true;
-                } else if (error == WSAEMSGSIZE) {
-                    // Treat a synchronously truncated datagram like an IOCP packet-local
-                    // error, keeping the normal overlapped callback/slot lifetime.
-                    operation.complete(asio::error_code(error, std::system_category()), 0);
-                    submitted = true;
-                }
+                // Like send, a synchronous failure (a truncated datagram or a
+                // reported per-peer ICMP error) completes through the callback so
+                // its owner can classify packet-local errors.
+                operation.complete(asio::error_code(error, std::system_category()), 0);
             }
+            submitted = true;
         } catch (...) {
             if (storage->allocated_) {
                 std::terminate();
@@ -1062,12 +1088,15 @@ private:
             DWORD sent = 0;
             const int result_value = send_message_function_(socket_.native_handle(), &send_message_,
                 0, &sent, operation.get(), nullptr);
-            const bool accepted = result_value == 0 ||
-                                  (result_value == SOCKET_ERROR && WSAGetLastError() == WSA_IO_PENDING);
-            if (accepted) {
+            const int error = result_value == 0 ? 0 : WSAGetLastError();
+            if (result_value == 0 || error == WSA_IO_PENDING) {
                 send_overlapped_ = operation.release();
-                submitted = true;
+            } else {
+                // Like POSIX, a synchronous send failure completes through the
+                // callback so its owner can classify destination-local errors.
+                operation.complete(asio::error_code(error, std::system_category()), 0);
             }
+            submitted = true;
         } catch (...) {
             if (storage->allocated_) {
                 std::terminate();
@@ -1147,11 +1176,8 @@ private:
             return;
         }
         if (error) {
-            if (error.value() == WSAEMSGSIZE) {
-                complete_receive(bad_message());
-            } else {
-                complete_receive(error);
-            }
+            const auto portable = portable_completion_error(error);
+            complete_receive(portable == asio::error::message_size ? bad_message() : portable);
             return;
         }
 
@@ -1172,7 +1198,7 @@ private:
         if (stopping_) {
             complete_send(aborted());
         } else if (error) {
-            complete_send(error);
+            complete_send(portable_completion_error(error));
         } else if (size != send_.view_.bytes_.size()) {
             complete_send(io_error());
         } else {

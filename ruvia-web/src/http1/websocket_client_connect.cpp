@@ -117,8 +117,9 @@ task<void> websocket_client_state::connect_owned(std::shared_ptr<websocket_clien
             .compression_ = state_value->negotiated_compression_,
             .role_ = websocket_connection_role::client,
             .mask_key_generator_ = &websocket_client_state::generate_mask,
-            .compression_level_ = state_value->config_.compression_level_});
-        (void)state_value->protocol_->feed(state_value->input_);
+            .compression_level_ = state_value->config_.compression_level_,
+            .max_buffered_input_bytes_ = websocket_client_max_buffered_input_bytes(state_value->config_.max_message_bytes_)});
+        state_value->feed_input(state_value->input_);
         std::pmr::string(state_value->input_.get_allocator()).swap(state_value->input_);
         state_value->disarm(state_value->connect_timer_);
         auto open = phase_type::connecting;

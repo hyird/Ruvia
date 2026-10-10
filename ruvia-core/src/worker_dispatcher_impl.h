@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -39,10 +40,13 @@ struct timer_entry final {
 };
 
 // A registration slot, reused through a free list; `generation` invalidates every
-// heap entry that referred to a previous occupant.
+// heap entry that referred to a previous occupant. Slots never move or die
+// before the dispatcher, so a bound registration may read `active_generation_`
+// from any thread: it holds the occupant's generation while the timer is
+// pending and 0 otherwise, and is released before any completion runs.
 struct timer_slot final {
     std::uint64_t generation_{0};
-    bool active_{false};
+    std::atomic<std::uint64_t> active_generation_{0};
     std::size_t next_free_{no_timer_slot};
     move_only_function<void(worker_timer_outcome)> completion_;
 };
@@ -85,7 +89,7 @@ struct worker_dispatcher::impl_type {
         }
         free_head_ = 0;
         timers_.reserve(requested_capacity);
-        timer_slots_.reserve(requested_capacity);
+        // Timer slots are address-stable (deque); they grow on demand.
     }
 
     asio::io_context& io_context_;
@@ -117,7 +121,7 @@ struct worker_dispatcher::impl_type {
     idle_callbacks_type shutdown_notification_waiters_{detail::process_resource()};
     shutdown_listeners_type shutdown_listeners_{detail::process_resource()};
     std::pmr::vector<timer_entry> timers_;
-    std::pmr::vector<timer_slot> timer_slots_;
+    std::pmr::deque<timer_slot> timer_slots_;
     std::size_t free_timer_slot_{no_timer_slot};
     std::uint64_t next_timer_sequence_{0};
     std::uint64_t timer_generation_{0};

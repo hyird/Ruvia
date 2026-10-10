@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <asio.hpp>
@@ -149,9 +150,96 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
         RUVIA_CHECK(observed->bytes_ == initial_value + additional);
     }
 }
+
+class http1_interim_routes final : public ruvia::controller<http1_interim_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/http1-early-hints", hints);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> hints(ruvia::context& context_value) {
+        const std::array<ruvia::http_header_view, 1> links{{{"link", "</asset>; rel=preload"}}};
+        co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, links));
+        co_return context_value.text("final");
+    }
+};
+
+// Sends one closing request and returns every byte the server wrote until EOF.
+std::string exchange_closing_request(std::string_view request) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http2_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    std::string received;
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        try {
+            const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(request), std::move(handler)); });
+            if (written.error_code()) {
+                throw std::system_error(written.error_code());
+            }
+            std::array<char, 4096> input{};
+            for (;;) {
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                if (read.error_code() == asio::error::eof) {
+                    break;
+                }
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
+                }
+                received.append(input.data(), read.result());
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        (void)watchdog_value.cancel();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    ruvia::close_socket(client);
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    return received;
+}
 }  // namespace
 
 RUVIA_TEST(http1_connect_routes_transfer_buffered_bytes_and_keep_receive_direction_after_send_fin) {
     exercise_connect(ruvia_ctx, false);
     exercise_connect(ruvia_ctx, true);
+}
+
+RUVIA_TEST(http1_interim_responses_reach_http11_clients_but_never_http10_clients) {
+    const auto http11 = exchange_closing_request("GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    RUVIA_CHECK(http11.starts_with("HTTP/1.1 103 "));
+    RUVIA_CHECK(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
+    RUVIA_CHECK(http11.ends_with("final"));
+
+    // RFC 9110 15.2: an HTTP/1.0 client would take the 1xx head as the final
+    // response, so the server omits it and sends only the final response.
+    const auto http10 = exchange_closing_request("GET /http1-early-hints HTTP/1.0\r\nHost: localhost\r\n\r\n");
+    RUVIA_CHECK(http10.find(" 103 ") == std::string::npos);
+    RUVIA_CHECK(http10.substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
+    RUVIA_CHECK(http10.ends_with("final"));
+}
+
+RUVIA_TEST(http1_connection_does_not_switch_to_http2_after_an_http1_exchange) {
+    // RFC 9113 3.4: the prior-knowledge preface is the first bytes of a
+    // connection. After a completed HTTP/1 exchange the same bytes are an
+    // HTTP/1 request line that the server answers and then closes on.
+    std::string request = "GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    request += "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    request.append("\0\0\0\x04\0\0\0\0\0", 9);
+    const auto received = exchange_closing_request(request);
+    const auto first_end = received.find("final");
+    RUVIA_CHECK(received.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
+    RUVIA_CHECK(first_end != std::string::npos);
+    if (first_end != std::string::npos) {
+        RUVIA_CHECK(received.substr(first_end + 5).starts_with("HTTP/1."));
+    }
 }

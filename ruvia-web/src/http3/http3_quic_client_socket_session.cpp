@@ -10,8 +10,6 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/core/async.h"
-
 #include "http3/http3_quic_packet_io.h"
 #include "http3/http3_quic_socket_address.h"
 
@@ -542,29 +540,262 @@ void http3_quic_client_socket_session::require_owner_thread() const {
     }
 }
 
+bool http3_quic_client_socket_session::send_pending(pump_result_type& result_value) {
+    if (pending_packet_size_ == 0) {
+        return true;
+    }
+    asio::error_code error;
+    auto& socket = pending_candidate_ && candidate_socket_ ? *candidate_socket_ : socket_;
+    const auto size = socket.send(asio::buffer(packet_buffer_.data(), pending_packet_size_), 0, error);
+    if (error == asio::error::would_block || error == asio::error::try_again) {
+        result_value.output_backpressured_ = true;
+        return true;
+    }
+    if (error || size != pending_packet_size_) {
+        if (pending_candidate_ && migration_id_) {
+            fail_candidate_migration();
+            pending_packet_size_ = 0;
+            pending_candidate_ = false;
+            result_value.output_backpressured_ = false;
+            return true;
+        }
+        result_value.status_ = pump_status_type::fatal;
+        return false;
+    }
+    pending_packet_size_ = 0;
+    pending_candidate_ = false;
+    ++result_value.sent_;
+    return true;
+}
+
+bool http3_quic_client_socket_session::receive_datagrams(pump_result_type& result_value) {
+    auto& connection = transport_.connection();
+    const auto receive_from = [&](asio::ip::udp::socket& socket,
+                                  const asio::ip::udp::endpoint& local_endpoint, bool candidate_value) {
+        for (std::size_t packet = 0; packet < batch_size; ++packet) {
+            asio::ip::udp::endpoint sender;
+            asio::error_code error;
+            const auto size = socket.receive_from(asio::buffer(receive_buffer_), sender, 0, error);
+            if (error == asio::error::would_block || error == asio::error::try_again) {
+                break;
+            }
+            if (error) {
+                if (candidate_value) {
+                    fail_candidate_migration();
+                    return true;
+                }
+                result_value.status_ = pump_status_type::fatal;
+                return false;
+            }
+            if (sender != peer_) {
+                continue;
+            }
+            ++result_value.received_;
+            peer_reached_ = true;
+            if (size == 0) {
+                continue;
+            }
+            const auto datagram = ruvia::quic_datagram_view{
+                std::span<const std::byte>(receive_buffer_.data(), size),
+                to_quic_address(datagram_address(local_endpoint)),
+                to_quic_address(datagram_address(sender))};
+            (void)connection.receive(datagram, std::chrono::steady_clock::now());
+        }
+        return true;
+    };
+    return receive_from(socket_, local_endpoint_, false) &&
+           (!candidate_socket_ || receive_from(*candidate_socket_, *candidate_local_endpoint_, true));
+}
+
+http3_quic_client_socket_session::packet_route_type http3_quic_client_socket_session::route_packet(
+    const ruvia::quic_packet_result& output) {
+    if (output.size_ > packet_buffer_.size()) {
+        return packet_route_type::invalid;
+    }
+    const auto target = to_udp_endpoint(from_quic_address(output.peer_));
+    const auto local = to_udp_endpoint(from_quic_address(output.local_));
+    if ((target.index() != 0) || std::get<0>(target) != peer_ || (local.index() != 0)) {
+        return packet_route_type::invalid;
+    }
+    if (failed_migration_local_endpoint_ &&
+        std::get<0>(local) == *failed_migration_local_endpoint_) {
+        return packet_route_type::skip;
+    }
+    if (std::get<0>(local) == local_endpoint_) {
+        pending_candidate_ = false;
+    } else if (candidate_local_endpoint_ && std::get<0>(local) == *candidate_local_endpoint_) {
+        pending_candidate_ = true;
+    } else {
+        return packet_route_type::invalid;
+    }
+    pending_packet_size_ = output.size_;
+    return packet_route_type::send;
+}
+
 http3_quic_client_socket_session::pump_result_type http3_quic_client_socket_session::pump() {
-    socket_sender_type sender;
-    return pump_with_send(sender);
+    require_owner_thread();
+    pump_result_type result;
+    if (closed_ || stopping_) {
+        result.status_ = pump_status_type::closed;
+        return result;
+    }
+    if (!send_pending(result) || !receive_datagrams(result)) {
+        return result;
+    }
+    settle_migration();
+
+    auto& connection = transport_.connection();
+    const auto now = std::chrono::steady_clock::now();
+    (void)transport_.handle_expiry(now);
+    settle_migration();
+    if (connection.info().early_data_ == ruvia::quic_early_data_state::rejected) {
+        reset_rejected_early_streams();
+    }
+
+    const auto connection_info = connection.info();
+    if (connection_info.state_ == ruvia::quic_connection_state::failed ||
+        connection_info.state_ == ruvia::quic_connection_state::retired) {
+        result.status_ = pump_status_type::fatal;
+        return result;
+    }
+    const bool early_streams_allowed = early_data_enabled_ &&
+                                       connection_info.early_data_ ==
+                                           ruvia::quic_early_data_state::available;
+    if (connection_info.state_ == ruvia::quic_connection_state::ready || early_streams_allowed) {
+        const auto critical = critical_streams_->drive(
+            [&connection](http3_critical_stream_driver::kind_type) {
+                return connection.open_stream(true);
+            },
+            [&connection](std::uint64_t id, std::span<const char> bytes_value) {
+                return connection.write_stream(id, std::as_bytes(bytes_value));
+            });
+        if (critical == http3_critical_stream_driver::result_type::fatal) {
+            result.status_ = pump_status_type::fatal;
+            return result;
+        }
+        result.critical_streams_ready_ = critical == http3_critical_stream_driver::result_type::ready;
+        result.critical_output_progress_ = critical == http3_critical_stream_driver::result_type::progress;
+        for (std::size_t index = 0; index < 3; ++index) {
+            const auto id = critical_streams_->stream_id(
+                static_cast<http3_critical_stream_driver::kind_type>(index));
+            if (!id) {
+                continue;
+            }
+            const auto health = connection.write_health(*id);
+            if (health != ruvia::quic_operation_status::accepted &&
+                health != ruvia::quic_operation_status::would_block &&
+                health != ruvia::quic_operation_status::need_input) {
+                result.status_ = pump_status_type::fatal;
+                return result;
+            }
+        }
+    }
+
+    for (std::size_t packet = 0; pending_packet_size_ == 0 && packet < batch_size; ++packet) {
+        const auto output = transport_.write_packet(packet_buffer_, now);
+        if (output.size_ == 0) {
+            break;
+        }
+        const auto route = route_packet(output);
+        if (route == packet_route_type::invalid) {
+            result.status_ = pump_status_type::fatal;
+            return result;
+        }
+        if (route == packet_route_type::skip) {
+            continue;
+        }
+        if (!send_pending(result) || result.output_backpressured_) {
+            break;
+        }
+        settle_migration();
+    }
+
+    if (connection.info().state_ == ruvia::quic_connection_state::ready) {
+        result.critical_streams_ready_ = critical_streams_->complete();
+    }
+    if (const auto expiry = transport_.next_expiry()) {
+        result.event_timeout_ = *expiry > now ? *expiry - now
+                                              : std::chrono::steady_clock::duration::zero();
+    }
+    if (result.received_ == 0 && result.sent_ == 0 && !result.critical_output_progress_ &&
+        result.status_ == pump_status_type::active) {
+        result.status_ = pump_status_type::would_block;
+    }
+    return result;
 }
 
-task<void> http3_quic_client_socket_session::wait_readable() {
+task<void> http3_quic_client_socket_session::shutdown(
+    ruvia::quic_close_reason_view reason, std::chrono::steady_clock::time_point latest) {
     require_owner_thread();
-    auto completion = co_await ruvia::async_asio([this](auto handler) {
-        socket_.async_wait(asio::ip::udp::socket::wait_read, std::move(handler));
-    });
-    if (completion.error_code()) {
-        throw std::system_error(completion.error_code(), "wait for QUIC UDP input");
+    try {
+        const auto state = closed_ ? ruvia::quic_connection_state::retired
+                                   : transport_.connection().info().state_;
+        if (state != ruvia::quic_connection_state::draining &&
+            state != ruvia::quic_connection_state::retired) {
+            (void)transport_.connection().close(reason);
+            // CONNECTION_CLOSE supersedes a packet still waiting for socket space.
+            pending_packet_size_ = 0;
+            pending_candidate_ = false;
+            bool closing = drive_closing_period();
+            while (closing && !stopping_) {
+                const auto end = closing_period_end(latest);
+                if (!end) {
+                    break;
+                }
+                pump_result_type idle;
+                idle.output_backpressured_ = pending_packet_size_ != 0;
+                const auto wake = co_await wait_for_activity(idle, end);
+                if (wake == wake_reason_type::stopped || wake == wake_reason_type::fatal ||
+                    wake == wake_reason_type::deadline) {
+                    break;
+                }
+                (void)consume_work_notification();
+                closing = drive_closing_period();
+            }
+        }
+    } catch (...) {
+        // The owner is already terminating with its own outcome. A closing
+        // period that cannot send has no further recovery than release below.
     }
+    close();
 }
 
-task<void> http3_quic_client_socket_session::wait_writable() {
-    require_owner_thread();
-    auto completion = co_await ruvia::async_asio([this](auto handler) {
-        socket_.async_wait(asio::ip::udp::socket::wait_write, std::move(handler));
-    });
-    if (completion.error_code()) {
-        throw std::system_error(completion.error_code(), "wait for QUIC UDP output");
+bool http3_quic_client_socket_session::drive_closing_period() {
+    pump_result_type result;
+    if (!send_pending(result) || !receive_datagrams(result)) {
+        return false;
     }
+    auto& connection = transport_.connection();
+    const auto now = std::chrono::steady_clock::now();
+    (void)connection.handle_expiry(now);
+    // A closing connection emits its CONNECTION_CLOSE once, then only answers
+    // peer packets that receive_datagrams() just fed to it.
+    while (pending_packet_size_ == 0) {
+        const auto output = connection.write_packet(packet_buffer_, now);
+        if (output.size_ == 0) {
+            break;
+        }
+        const auto route = route_packet(output);
+        if (route == packet_route_type::invalid) {
+            return false;
+        }
+        if (route == packet_route_type::send && !send_pending(result)) {
+            return false;
+        }
+    }
+    return connection.info().state_ == ruvia::quic_connection_state::closing;
+}
+
+std::optional<std::chrono::steady_clock::time_point> http3_quic_client_socket_session::closing_period_end(
+    std::chrono::steady_clock::time_point latest) const noexcept {
+    if (!peer_reached_) {
+        return std::nullopt;
+    }
+    const auto expiry = transport_.next_expiry();
+    if (!expiry) {
+        return std::nullopt;
+    }
+    return std::min(*expiry, latest);
 }
 
 task<http3_quic_client_socket_session::wake_reason_type> http3_quic_client_socket_session::wait_for_activity(

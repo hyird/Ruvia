@@ -115,7 +115,8 @@ quic_connection_state::quic_connection_state(quic_connection_config config,
       rejected_early_streams_(resource_),
       received_datagrams_(resource_),
       send_datagrams_(resource_),
-      close_reason_(resource_) {
+      close_reason_(resource_),
+      close_packet_(resource_) {
     validate_config(config_, crypto_, resource_);
     if (!early_transport_parameters.empty()) {
         if (config_.role_ != quic_role::client) {

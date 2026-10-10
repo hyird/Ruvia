@@ -122,7 +122,10 @@ public:
 
     void bind_frame(void* target, void (*retire_cold)(void*) noexcept,
         void (*check_affinity)(void*) noexcept, void* affinity_target) noexcept;
-    void begin();
+    // Validates phase and affinity without changing state; the frame owner then
+    // takes the task (rejecting an empty one) before start() commits running.
+    void prepare_start() const;
+    void start() noexcept;
     void prepare_completion() const noexcept;
     void complete() noexcept;
     void retire_frame() noexcept;
@@ -188,9 +191,12 @@ class [[nodiscard]] scoped_operation final {
         explicit awaiter_type(scoped_operation& owner_value)
             : owner_(std::addressof(owner_value)),
               awaiter_([&owner_value]() {
-                  owner_value.registration_.begin();
+                  owner_value.registration_.prepare_start();
+                  // An empty task throws here while the registration is still
+                  // cold, so the owner remains retirable.
                   auto awaiter = std::move(*owner_value.task_).operator co_await();
                   owner_value.task_.reset();
+                  owner_value.registration_.start();
                   return awaiter;
               }()) {}
         scoped_operation* owner_;

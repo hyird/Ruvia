@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <future>
 #include <memory>
@@ -7,6 +10,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -395,6 +399,120 @@ RUVIA_TEST(websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendin
     RUVIA_CHECK(observed_client_close);
 }
 
+RUVIA_TEST(websocket_client_heartbeat_pings_after_a_blocked_message_write) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    constexpr std::size_t payload_size = std::size_t{16} * 1024 * 1024;
+    std::promise<void> ping_received;
+    auto ping_ready = ping_received.get_future();
+    std::exception_ptr peer_failure;
+    std::uint64_t message_bytes = 0;
+    bool message_complete = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::string request;
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n",
+            asio::use_awaitable);
+        const auto response = make_server_handshake_response(request);
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+
+        // Stop reading for many ping intervals so the large client write stays
+        // blocked while its heartbeat becomes due.
+        asio::steady_timer pause(socket.get_executor(), std::chrono::milliseconds(200));
+        co_await pause.async_wait(asio::use_awaitable);
+
+        std::vector<char> discard(64 * 1024);
+        for (;;) {
+            std::array<unsigned char, 2> header_value{};
+            co_await asio::async_read(socket, asio::buffer(header_value), asio::use_awaitable);
+            if ((header_value[1] & 0x80) == 0) {
+                throw std::runtime_error("expected masked client frames");
+            }
+            std::uint64_t payload_bytes = header_value[1] & 0x7f;
+            if (payload_bytes >= 126) {
+                std::array<unsigned char, 8> length_value{};
+                const std::size_t length_size = payload_bytes == 126 ? 2 : 8;
+                co_await asio::async_read(socket, asio::buffer(length_value.data(), length_size), asio::use_awaitable);
+                payload_bytes = 0;
+                for (std::size_t i = 0; i < length_size; ++i) {
+                    payload_bytes = (payload_bytes << 8) | length_value[i];
+                }
+            }
+            std::array<unsigned char, 4> mask{};
+            co_await asio::async_read(socket, asio::buffer(mask), asio::use_awaitable);
+            for (auto remaining = payload_bytes; remaining != 0;) {
+                const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, discard.size()));
+                co_await asio::async_read(socket, asio::buffer(discard.data(), chunk), asio::use_awaitable);
+                remaining -= chunk;
+            }
+            const auto opcode = header_value[0] & 0x0f;
+            if (opcode == 0x9) {
+                if (payload_bytes > 125) {
+                    throw std::runtime_error("expected a client heartbeat ping");
+                }
+                break;
+            }
+            if (opcode != 0x2 && opcode != 0x0) {
+                throw std::runtime_error("unexpected client frame before the heartbeat ping");
+            }
+            message_bytes += payload_bytes;
+            message_complete = (header_value[0] & 0x80) != 0;
+        }
+        ping_received.set_value();
+
+        std::array<char, 1024> input{};
+        std::error_code error;
+        while (co_await socket.async_read_some(asio::buffer(input),
+            asio::redirect_error(asio::use_awaitable, error))) {
+        }
+    };
+    asio::co_spawn(io, serve(), [&peer_failure](std::exception_ptr failure) {
+        peer_failure = failure;
+    });
+
+    bool wrote = false;
+    const auto run_client = [&]() -> ruvia::task<void> {
+        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+                                                              .host_ = "127.0.0.1",
+                                                              .port_ = peer.local_endpoint().port(),
+                                                              .max_message_bytes_ = payload_size,
+                                                              .heartbeat_ = {
+                                                                  .ping_interval_ = std::chrono::milliseconds(20),
+                                                                  .pong_timeout_ = std::chrono::seconds(5),
+                                                              }});
+        co_await client.connect();
+        const std::string payload(payload_size, 'x');
+        co_await client.binary(payload);
+        wrote = true;
+        try {
+            (void)co_await client.read();
+        } catch (const ruvia::websocket_client_error&) {
+        }
+    };
+    auto root = attachment.loop().start(run_client());
+    std::thread driver([&] { attachment.run(); });
+    if (ping_ready.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+        attachment.stop();
+        driver.join();
+        root.get();
+        if (peer_failure != nullptr) {
+            std::rethrow_exception(peer_failure);
+        }
+        throw std::runtime_error("WebSocket client did not ping after its blocked write");
+    }
+    ping_ready.get();
+    attachment.stop();
+    driver.join();
+    root.get();
+    if (peer_failure != nullptr) {
+        std::rethrow_exception(peer_failure);
+    }
+    RUVIA_CHECK(wrote);
+    RUVIA_CHECK(message_complete);
+    RUVIA_CHECK_EQ(message_bytes, std::uint64_t{payload_size});
+}
+
 RUVIA_TEST(websocket_client_close_requires_peer_close) {
     check_peer_exchange(ruvia_ctx, false);
     check_peer_exchange(ruvia_ctx, true);
@@ -402,6 +520,74 @@ RUVIA_TEST(websocket_client_close_requires_peer_close) {
 
 RUVIA_TEST(websocket_client_read_rejects_eof_during_incomplete_frame) {
     check_peer_exchange(ruvia_ctx, false, true);
+}
+
+RUVIA_TEST(websocket_client_reads_frame_above_default_message_limit) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    std::string payload_value(ruvia::default_max_websocket_message_bytes + 1, '\0');
+    for (std::size_t i = 0; i < payload_value.size(); ++i) {
+        payload_value[i] = static_cast<char>('a' + i % 26);
+    }
+    bool saw_close = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::string request;
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+        std::string response = make_server_handshake_response(request);
+        response.push_back('\x82');
+        response.push_back('\x7f');
+        const auto length = static_cast<std::uint64_t>(payload_value.size());
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            response.push_back(static_cast<char>((length >> shift) & 0xffU));
+        }
+        response.append(payload_value);
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        std::array<unsigned char, 2> header_value{};
+        co_await asio::async_read(socket, asio::buffer(header_value), asio::use_awaitable);
+        saw_close = header_value[0] == 0x88 && (header_value[1] & 0x80) != 0;
+        std::array<unsigned char, 129> close_payload{};
+        co_await asio::async_read(socket, asio::buffer(close_payload.data(), 4 + (header_value[1] & 0x7f)), asio::use_awaitable);
+        const std::array<unsigned char, 4> close{0x88, 2, 3, 0xe8};
+        co_await asio::async_write(socket, asio::buffer(close), asio::use_awaitable);
+        socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    bool matched = false;
+    const auto run_client = [&]() -> ruvia::task<void> {
+        // A single frame larger than the protocol's default input bound must be
+        // delivered intact when the configured message limit admits it.
+        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+                                                              .host_ = "127.0.0.1",
+                                                              .port_ = peer.local_endpoint().port(),
+                                                              .max_message_bytes_ = payload_value.size(),
+                                                              .read_timeout_ = std::chrono::seconds(10)});
+        std::exception_ptr failure;
+        try {
+            co_await client.connect();
+            const auto message = co_await client.read();
+            matched = message.has_value() && message->payload() == payload_value;
+            co_await client.close({});
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        peer.close();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run_client());
+    attachment.run();
+    root.get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    RUVIA_CHECK(matched);
+    RUVIA_CHECK(saw_close);
 }
 
 RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {

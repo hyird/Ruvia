@@ -358,6 +358,48 @@ quic_operation_status idle_status(const detail::quic_connection_state& state_val
     return quic_operation_status::need_input;
 }
 
+// RFC 9000 section 10.2: the closing and draining states persist for three
+// times the current PTO, measured from the latest supplied timestamp.
+void start_closing_period(detail::quic_connection_state& state_value) noexcept {
+    if (state_value.close_deadline_ || state_value.connection_ == nullptr) {
+        return;
+    }
+    constexpr auto max_period = static_cast<std::uint64_t>(std::numeric_limits<std::chrono::nanoseconds::rep>::max());
+    const auto pto = static_cast<std::uint64_t>(ngtcp2_conn_get_pto2(state_value.connection_));
+    const auto period = std::chrono::duration_cast<quic_timestamp::duration>(std::chrono::nanoseconds(
+        static_cast<std::chrono::nanoseconds::rep>(pto > max_period / 3 ? max_period : pto * 3)));
+    const auto start = state_value.last_supplied_time_;
+    state_value.close_deadline_ = start > quic_timestamp::max() - period ? quic_timestamp::max() : start + period;
+}
+
+// RFC 9000 section 10.2.1: answer peer input in the closing state with the
+// retained CONNECTION_CLOSE, waiting for exponentially more packets each time.
+void note_closing_input(detail::quic_connection_state& state_value) noexcept {
+    if (state_value.close_packet_.empty() ||
+        ++state_value.close_input_packets_ < state_value.close_answer_threshold_) {
+        return;
+    }
+    state_value.close_input_packets_ = 0;
+    if (state_value.close_answer_threshold_ <= std::numeric_limits<std::size_t>::max() / 2) {
+        state_value.close_answer_threshold_ *= 2;
+    }
+    state_value.close_answer_pending_ = true;
+}
+
+quic_packet_result write_retained_close(detail::quic_connection_state& state_value,
+    std::span<std::byte> output) noexcept {
+    const auto& packet = state_value.close_packet_;
+    if (!state_value.close_answer_pending_ || packet.empty() || packet.size() > output.size()) {
+        return {.status_ = quic_operation_status::closing};
+    }
+    state_value.close_answer_pending_ = false;
+    std::ranges::copy(packet, output.begin());
+    return {.status_ = quic_operation_status::accepted,
+        .size_ = packet.size(),
+        .local_ = state_value.close_local_address_,
+        .peer_ = state_value.close_peer_address_};
+}
+
 quic_error_code native_error_category(int result_value) noexcept {
     if (result_value == NGTCP2_ERR_NOMEM || result_value == NGTCP2_ERR_CRYPTO_BUFFER_EXCEEDED) {
         return quic_error_code::resource_limit;
@@ -377,6 +419,7 @@ void check_native_result(detail::quic_connection_state& state_value, int result_
     if (result_value == NGTCP2_ERR_DRAINING) {
         state_value.close_error_code_ = ngtcp2_conn_get_ccerr2(state_value.connection_)->error_code;
         state_value.state_ = quic_connection_state::draining;
+        start_closing_period(state_value);
         return;
     }
     if (result_value == NGTCP2_ERR_CLOSING) {
@@ -524,6 +567,9 @@ quic_operation_status quic_connection::receive(const quic_datagram_view& datagra
         return quic_operation_status::need_input;
     }
     check_native_result(*impl_, result_value, "ngtcp2 packet receive failed");
+    if (result_value == NGTCP2_ERR_CLOSING) {
+        note_closing_input(*impl_);
+    }
     if (result_value == 0) {
         cid_transaction.commit();
         impl_->quic_handshake_complete_ = ngtcp2_conn_get_handshake_completed2(impl_->connection_) != 0;
@@ -545,6 +591,9 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
     if (output.empty()) {
         return {.status_ = idle_status(*impl_)};
     }
+    if (impl_->state_ == quic_connection_state::closing && impl_->close_deadline_) {
+        return write_retained_close(*impl_, output);
+    }
     server_cid_publication_transaction cid_transaction(*impl_);
     ngtcp2_pkt_info packet_info{};
     ngtcp2_ssize written{};
@@ -565,6 +614,9 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
         if (written >= 0) {
             cid_transaction.commit();
         }
+        // Before the client's first Initial there is no peer state to close.
+        // A transmission limit leaves the close pending for a later write.
+        const bool close_attempted = written != NGTCP2_ERR_NOBUF;
         if (written == NGTCP2_ERR_INVALID_STATE || written == NGTCP2_ERR_NOBUF) {
             written = 0;
         } else if (written < 0) {
@@ -572,6 +624,14 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
         }
         if (!impl_->connection_) {
             return {.status_ = quic_operation_status::retired};
+        }
+        if (written > 0) {
+            impl_->close_packet_.assign(output.begin(), output.begin() + written);
+            impl_->close_local_address_ = detail::decode_quic_address(impl_->path_.path.local);
+            impl_->close_peer_address_ = detail::decode_quic_address(impl_->path_.path.remote);
+        }
+        if (close_attempted) {
+            start_closing_period(*impl_);
         }
     } else {
         const auto blocked = [](ngtcp2_ssize result_value) noexcept {
@@ -695,6 +755,9 @@ std::optional<quic_timestamp> quic_connection::next_expiry() const noexcept {
     if (!impl_->connection_ || impl_->state_ == quic_connection_state::retired) {
         return std::nullopt;
     }
+    if (impl_->close_deadline_) {
+        return impl_->close_deadline_;
+    }
     const auto expiry = ngtcp2_conn_get_expiry2(impl_->connection_);
     if (expiry == std::numeric_limits<ngtcp2_tstamp>::max()) {
         return std::nullopt;
@@ -716,6 +779,14 @@ quic_operation_status quic_connection::handle_expiry(quic_timestamp now) {
         throw std::invalid_argument("QUIC timestamps must be monotonic");
     }
     impl_->last_supplied_time_ = now;
+    if (impl_->close_deadline_) {
+        // No timer other than the closing/draining period remains meaningful.
+        if (now < *impl_->close_deadline_) {
+            return idle_status(*impl_);
+        }
+        impl_->retire();
+        return quic_operation_status::retired;
+    }
     server_cid_publication_transaction cid_transaction(*impl_);
     const auto result_value = ngtcp2_conn_handle_expiry(impl_->connection_, ts);
     check_native_result(*impl_, result_value, "ngtcp2 expiry handling failed");
@@ -753,8 +824,14 @@ quic_operation_status quic_connection::update_key(quic_timestamp now) {
 }
 
 quic_operation_status quic_connection::close(quic_close_reason_view reason) {
-    if (impl_->state_ == quic_connection_state::retired || impl_->state_ == quic_connection_state::draining) {
+    if (impl_->state_ == quic_connection_state::retired) {
         return quic_operation_status::retired;
+    }
+    if (impl_->state_ == quic_connection_state::draining) {
+        // The peer already closed: no CONNECTION_CLOSE may follow (RFC 9000
+        // section 10.2.2), but the connection is not retired before its
+        // draining period ends or its owner retires it.
+        return quic_operation_status::draining;
     }
     impl_->latch_close_reason(reason);
     impl_->latched_failure_ = nullptr;

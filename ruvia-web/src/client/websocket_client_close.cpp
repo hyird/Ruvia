@@ -182,7 +182,7 @@ task<void> websocket_client_state::close_owned(std::shared_ptr<websocket_client_
                 throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                     "WebSocket transport ended before peer Close");
             }
-            (void)state_value->require_protocol().feed(std::string_view(bytes_value.data(), count));
+            state_value->feed_input(std::string_view(bytes_value.data(), count));
             continue;
         }
         if (event->protocol_error() != nullptr) {

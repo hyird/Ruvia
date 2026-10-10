@@ -27,7 +27,10 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 // it while validating a complete http_interim_response_head; receivers use the
 // same state while HPACK progressively yields fields. Keeping the seen-known-
 // field set here prevents protocol drivers from reimplementing the forbidden
-// field and singleton rules with subtly different wire acceptance.
+// field and singleton rules with subtly different wire acceptance. The framing
+// statuses are reported separately so a recipient can apply its transport's
+// rule: RFC 9112 section 6.3 ends an HTTP/1 1xx at its header section, so the
+// HTTP/1 client ignores Content-Length and Transfer-Encoding there.
 class http_interim_response_header_validator final {
 public:
     explicit http_interim_response_header_validator(http_field_list_role role) noexcept

@@ -89,6 +89,12 @@ public:
     // owner to send CONNECTION_CLOSE after catching an operation failure.
     // The first close reason is retained. An error code greater than 2^62 - 1
     // throws quic_error(invalid_configuration) before changing connection state.
+    // The first write_packet() after closing emits CONNECTION_CLOSE and starts
+    // the RFC 9000 closing period; later writes only answer peer packets, rate
+    // limited, with that retained packet. A peer CONNECTION_CLOSE starts the
+    // draining period, in which close() changes nothing and returns draining.
+    // next_expiry() then reports the end of that period (three PTOs) and
+    // handle_expiry() at that time retires the connection.
     quic_operation_status close(quic_close_reason_view reason);
 
 private:

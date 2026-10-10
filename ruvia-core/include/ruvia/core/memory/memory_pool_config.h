@@ -15,8 +15,14 @@ namespace ruvia {
 // request_arena_initial_bytes itself if a larger zero-heap default is wanted.
 inline constexpr std::size_t request_arena_initial_bytes = std::size_t{4} * 1024;
 
+// request_initial_buffer_bytes_ must be greater than zero: it is the initial
+// block size of every request arena.
 struct memory_pool_config {
     std::size_t request_initial_buffer_bytes_{request_arena_initial_bytes};
 };
+
+// The single validation used by worker_memory construction and by integrations
+// that check startup configuration early. Throws std::invalid_argument.
+void validate_memory_pool_config(const memory_pool_config& config);
 
 }  // namespace ruvia

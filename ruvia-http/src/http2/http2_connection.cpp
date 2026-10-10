@@ -523,7 +523,8 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
     const bool new_idle = is_idle_stream_id(id) && !priorities_.contains(id);
     std::size_t active = 0;
     streams_.for_each([&](const auto& stream) {
-        if (!http2_stream_is_closed(stream) && stream.push_reservation() == http2_push_reservation::none) {
+        if ((stream.id() & 1U) != 0 && !http2_stream_is_closed(stream) &&
+            stream.push_reservation() == http2_push_reservation::none) {
             ++active;
         }
     });

@@ -268,23 +268,24 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::pmr::me
         }
         const auto prefix = detail::normalize_fallback_prefix(registration.prefix_);
         for (const auto& existing : normalized) {
-            if (std::string_view(existing.prefix_) == prefix) {
+            if (detail::fallback_prefixes_equivalent(existing.prefix_, prefix)) {
                 throw std::invalid_argument("duplicate fallback prefix");
             }
         }
         normalized.emplace_back(resource, prefix, registration.handler_);
     }
-    // Longest prefix first: selection is a first-match scan. Equal lengths
-    // cannot nest, so their relative order is irrelevant; keep it stable.
+    // Deepest prefix first: selection is a first-match scan. A nested scope
+    // always has more segments; distinct scopes of equal depth cannot nest, so
+    // their relative order is irrelevant; keep it stable.
     std::ranges::stable_sort(normalized, [](const stored_type& left, const stored_type& right) noexcept {
-        return left.prefix_.size() > right.prefix_.size();
+        return detail::fallback_prefix_depth(left.prefix_) > detail::fallback_prefix_depth(right.prefix_);
     });
     stored = std::move(normalized);
 }
 
-// Longest-first stored order: the first hit is the tightest scope. A prefix
-// matches on whole path segments only, so "/api" scopes "/api" and "/api/x"
-// but never "/apix".
+// Deepest-first stored order: the first hit is the tightest scope. Matching
+// follows path_is_under_prefix: whole, percent-decoded path segments, so "/api"
+// scopes "/api" and "/api/x" but never "/apix".
 template <typename stored_type>
 [[nodiscard]] auto select_prefix_handler(
     const std::pmr::vector<stored_type>& stored, std::string_view path) noexcept {

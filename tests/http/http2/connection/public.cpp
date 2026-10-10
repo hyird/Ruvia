@@ -1402,3 +1402,39 @@ RUVIA_TEST(http2_public_closed_request_lease_does_not_overflow_settings) {
                     ruvia::http2_server_request_release_status::released);
     }
 }
+
+RUVIA_TEST(http2_public_server_refuses_stream_beyond_advertised_concurrency) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)server.consume_output(server.pending_output().size());
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block, ":path", "/");
+
+    // The server advertises SETTINGS_MAX_CONCURRENT_STREAMS = 128. One HEADERS
+    // beyond that limit is a stream error (RFC 9113 5.1.2), not a connection error.
+    constexpr std::uint32_t advertised_limit = 128;
+    std::pmr::string wire(ruvia::http2_client_preface, &resource);
+    append_peer_settings(wire);
+    for (std::uint32_t index = 0; index <= advertised_limit; ++index) {
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, index * 2 + 1, block);
+    }
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!server.connection_error().has_value());
+
+    std::pmr::string refused(&resource);
+    constexpr std::array<char, 4> refused_stream_payload{0, 0, 0, 7};
+    append_frame(refused, ruvia::http2_frame_type::rst_stream, 0, advertised_limit * 2 + 1,
+        std::string_view(refused_stream_payload.data(), refused_stream_payload.size()));
+    RUVIA_CHECK(server.pending_output().ends_with(refused));
+
+    std::size_t request_heads = 0;
+    while (auto event = server.next_event()) {
+        if (event->request_head() != nullptr) {
+            ++request_heads;
+        }
+    }
+    RUVIA_CHECK_EQ(request_heads, std::size_t{advertised_limit});
+}

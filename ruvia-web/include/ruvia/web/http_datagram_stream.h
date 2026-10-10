@@ -49,7 +49,8 @@ private:
 // are data and an empty optional is EOF. Use exclusively with the tunnel.
 class http_datagram_stream final {
 public:
-    explicit http_datagram_stream(http_capsule_stream stream, http_datagram_send_policy policy = http_datagram_send_policy::automatic);
+    // An invalid policy throws std::invalid_argument before the stream is moved.
+    explicit http_datagram_stream(http_capsule_stream&& stream, http_datagram_send_policy policy = http_datagram_send_policy::automatic);
     http_datagram_stream(const http_datagram_stream&) = delete;
     http_datagram_stream& operator=(const http_datagram_stream&) = delete;
     http_datagram_stream(http_datagram_stream&&) noexcept = default;

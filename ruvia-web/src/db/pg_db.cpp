@@ -51,16 +51,13 @@ private:
     PGresult* result_;
 };
 
-void clear_remaining_postgresql_results(PGconn* connection) noexcept {
-    while (auto* remaining = PQgetResult(connection)) {
-        PQclear(remaining);
-    }
-}
-
+// Every caller closes the connection after a failed statement, so the rest of
+// the command is never drained here: PQgetResult() blocks the worker until the
+// server's next message arrives, and the server flushes ErrorResponse before
+// the ReadyForQuery that ends the command.
 [[noreturn]] void throw_postgresql_statement_error(PGconn& connection, std::string_view operation, postgresql_result_owner& result_value) {
     auto error = postgresql_error(connection, operation, db_error::code_type::statement_failed, result_value.get());
     result_value.reset();
-    clear_remaining_postgresql_results(&connection);
     throw error;
 }
 
@@ -198,7 +195,6 @@ task<db_exec_result> postgresql_pool::execute_on_slot(connection_slot_type& slot
         }
         if (status == PGRES_TUPLES_OK) {
             result_value.reset();
-            clear_remaining_postgresql_results(slot.connection_);
             throw std::invalid_argument("execute() does not accept row-producing SQL");
         }
         affected_rows = postgresql_affected_rows(*result_value);
@@ -260,6 +256,7 @@ task<std::optional<db_row>> postgresql_pool::read_stream_row(std::size_t slot_in
             status == PGRES_EMPTY_QUERY) {
             result_value.reset();
             while (true) {
+                co_await wait_until_result_ready(slot, deadline_value);
                 postgresql_result_owner remaining(PQgetResult(slot.connection_));
                 if (remaining.get() == nullptr) {
                     break;

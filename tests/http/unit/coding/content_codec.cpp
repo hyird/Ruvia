@@ -812,14 +812,20 @@ RUVIA_TEST(http_identity_content_rejects_oversize_before_allocating) {
     }
 }
 
-RUVIA_TEST(http_content_decode_rejects_empty_encoded_input) {
-    RUVIA_CHECK(
-        decode_error(http_content_coding::gzip, {}) == http_content_decode_error::invalid_content);
-    RUVIA_CHECK(
-        decode_error(http_content_coding::brotli, {}) == http_content_decode_error::invalid_content);
-    RUVIA_CHECK(
-        decode_error(http_content_coding::zstd, {}) == http_content_decode_error::invalid_content);
-    RUVIA_CHECK_EQ(decoded(http_content_coding::identity, {}, 0), std::string{});
+RUVIA_TEST(http_content_decode_accepts_empty_encoded_input_as_empty_content) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
+             http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        RUVIA_CHECK_EQ(decoded(coding, {}, 0), std::string{});
+    }
+
+    constexpr std::array codings{http_content_coding::gzip, http_content_coding::brotli,
+        http_content_coding::zstd};
+    auto stacked = decode_http_content(
+        codings, {}, {.max_decoded_bytes_ = 0, .resource_ = std::pmr::get_default_resource()});
+    RUVIA_CHECK(stacked.decoded() != nullptr);
+    if (const auto* content = stacked.decoded()) {
+        RUVIA_CHECK(content->bytes().empty());
+    }
 }
 
 RUVIA_TEST(http_content_decode_zero_cap_allows_only_empty_content) {

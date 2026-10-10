@@ -94,13 +94,13 @@ void detail::worker_handle_access::wait_for_reservations(const worker_handle& wo
     }
 }
 
-void worker_handle::schedule_timer(worker_timer_registration& registration,
+worker_timer_schedule_status worker_handle::schedule_timer(worker_timer_registration& registration,
     std::chrono::steady_clock::time_point deadline_value,
     move_only_function<void(worker_timer_outcome)> completion) const& {
     if (!dispatcher_) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
-    dispatcher_->schedule_timer(registration, deadline_value, std::move(completion));
+    return dispatcher_->schedule_timer(registration, deadline_value, std::move(completion));
 }
 
 post_status worker_handle::post_factory(move_only_function<move_only_function<void()>()> factory) const {

@@ -13,6 +13,7 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_services.h"
+#include "router/route_early_data.h"
 #include "router/route_table.h"
 #include "server/request_deadline.h"
 
@@ -75,10 +76,16 @@ task<dispatch_response> context::dispatch_task(std::pmr::string wire, operation_
         throw std::system_error(asio::error::operation_aborted);
     }
     detail::request_deadline deadline(stop);
-    auto subrequest_services = services().for_subrequest(conn_info_, services().dispatch_depth() + 1, stop).with_request_deadline(deadline);
+    auto subrequest_services = services().for_subrequest(conn_info_, early_data_info_, services().dispatch_depth() + 1, stop).with_request_deadline(deadline);
     auto timeout = options.timeout_;
     std::optional<http_response> rejected;
-    if (const auto* resolved = resolution.resolved()) {
+    if (early_data_info_.received_from_early_data() &&
+        !detail::early_data_request_allowed(request.known_method(), !parsed_value.parsed()->wire_body().empty(), resolution)) {
+        // The parent passed the early-data policy; work it dispatches is still
+        // replayable and must meet the same policy (RFC 8470 §5.1).
+        rejected = co_await services().routes()->handle_error(request, memory,
+            http_error_info({.status_ = http_status::too_early, .message_ = "subrequest is not replay-safe for early data"}), subrequest_services);
+    } else if (const auto* resolved = resolution.resolved()) {
         const auto& route = resolved->route();
         if (route.deadline_ms() > 0) {
             const auto route_timeout = std::chrono::milliseconds(route.deadline_ms());

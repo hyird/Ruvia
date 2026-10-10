@@ -250,11 +250,68 @@ RUVIA_TEST(http_client_no_body_content_length_metadata_must_parse) {
     RUVIA_CHECK(repeated.plan().without_content() != nullptr);
 }
 
-RUVIA_TEST(http_client_204_rejects_framing_fields) {
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: 0"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: invalid"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: custom-coding"));
+RUVIA_TEST(http_client_bodyless_responses_ignore_framing_fields) {
+    // RFC 9112 section 6.3 rule 1: 1xx, 204, 304 and HEAD responses end at the
+    // header section whatever Content-Length or Transfer-Encoding they carry.
+    for (const std::string_view head_value : {
+             std::string_view("HTTP/1.1 204 No Content\r\nContent-Length: 0"),
+             std::string_view("HTTP/1.1 204 No Content\r\nContent-Length: 5"),
+             std::string_view("HTTP/1.1 204 No Content\r\nContent-Length: invalid"),
+             std::string_view("HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked"),
+             std::string_view("HTTP/1.1 204 No Content\r\nTransfer-Encoding: custom-coding"),
+         }) {
+        const auto head = parse_head("GET", head_value);
+        const auto& without_content = require_without_content(head.plan());
+        RUVIA_CHECK(without_content.persistence() == http1_close_policy::allow_reuse);
+        RUVIA_CHECK_EQ(head.consumed_bytes(), head_value.size() + 4);
+    }
+}
+
+RUVIA_TEST(http_client_bodyless_framing_fields_do_not_desynchronize_the_connection) {
+    // A smuggled body after a bodyless head is the next response, not content.
+    constexpr std::string_view no_content_head =
+        "HTTP/1.1 204 No Content\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n";
+    std::string wire(no_content_head);
+    wire.append("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+    const auto no_content = parse_wire("GET", wire);
+    RUVIA_CHECK(no_content.parsed() != nullptr);
+    if (const auto* parsed = no_content.parsed()) {
+        RUVIA_CHECK(parsed->plan().without_content() != nullptr);
+        RUVIA_CHECK_EQ(parsed->consumed_bytes(), no_content_head.size());
+        // The next exchange starts exactly after the empty line.
+        const auto next = parse_wire("GET", std::string_view(wire).substr(parsed->consumed_bytes()));
+        RUVIA_CHECK(next.parsed() != nullptr);
+        if (const auto* next_head = next.parsed()) {
+            RUVIA_CHECK_EQ(require_known_length(next_head->plan()).content_length(), std::size_t{2});
+        }
+    }
+
+    ruvia::http_client_request_view request;
+    request.method_ = "GET";
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    constexpr std::string_view interim_head = "HTTP/1.1 103 Early Hints\r\nContent-Length: 5\r\n\r\n";
+    std::string interim_wire(interim_head);
+    interim_wire.append("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+    const auto interim = parser.parse(interim_wire);
+    RUVIA_CHECK(interim.parsed() != nullptr);
+    if (interim.parsed() == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(interim.parsed()->plan().informational() != nullptr);
+    RUVIA_CHECK_EQ(interim.parsed()->consumed_bytes(), interim_head.size());
+    const auto final_response =
+        parser.parse(std::string_view(interim_wire).substr(interim.parsed()->consumed_bytes()));
+    RUVIA_CHECK(final_response.parsed() != nullptr);
+    if (final_response.parsed() != nullptr) {
+        RUVIA_CHECK_EQ(require_known_length(final_response.parsed()->plan()).content_length(), std::size_t{2});
+    }
 }
 
 RUVIA_TEST(http_client_205_owns_zero_content_framing) {

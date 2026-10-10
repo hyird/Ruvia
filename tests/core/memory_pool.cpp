@@ -7,6 +7,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
@@ -110,6 +111,27 @@ RUVIA_TEST(worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {
     RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
     RUVIA_CHECK(upstream.matched_returns_);
     RUVIA_CHECK(std::pmr::get_default_resource() == previous_default);
+}
+
+RUVIA_TEST(worker_memory_rejects_zero_request_initial_buffer) {
+    counting_resource upstream;
+    const ruvia::memory_pool_config config{.request_initial_buffer_bytes_ = 0};
+    for (const bool construct : {false, true}) {
+        bool rejected = false;
+        try {
+            if (construct) {
+                ruvia::worker_memory worker_value(upstream, config);
+            } else {
+                ruvia::validate_memory_pool_config(config);
+            }
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    RUVIA_CHECK_EQ(upstream.live_, std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocations_, std::size_t{0});
+    ruvia::validate_memory_pool_config({.request_initial_buffer_bytes_ = 1});
 }
 
 RUVIA_TEST(worker_memory_resource_identity_preserves_live_arena_and_pool_storage) {

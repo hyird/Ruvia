@@ -295,7 +295,7 @@ void scoped_operation_registration::clear_frame_binding() noexcept {
     affinity_target_ = nullptr;
 }
 
-void scoped_operation_registration::begin() {
+void scoped_operation_registration::prepare_start() const {
     if (phase_ == phase::expired) {
         throw std::logic_error("capability operation scope has expired");
     }
@@ -304,6 +304,12 @@ void scoped_operation_registration::begin() {
     }
     if (check_affinity_ != nullptr) {
         check_affinity_(affinity_target_);
+    }
+}
+
+void scoped_operation_registration::start() noexcept {
+    if (phase_ != phase::cold) {
+        std::terminate();
     }
     phase_ = phase::running;
 }

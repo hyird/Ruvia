@@ -1,6 +1,7 @@
 #include "websocket/ws_connection.h"
 
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 
 #include "websocket/http_websocket_close_payload.h"
@@ -121,6 +122,17 @@ websocket_liveness_mode ws_connection::liveness_mode() const noexcept {
             return websocket_liveness_mode::inactive;
     }
     return websocket_liveness_mode::inactive;
+}
+
+void ws_connection::release_consumed_input() noexcept {
+    if (input_offset_ == 0) {
+        return;
+    }
+    const auto remaining = input_->size() - input_offset_;
+    std::memmove(input_->data(), input_->data() + input_offset_, remaining);
+    input_->resize(remaining);
+    input_offset_ = 0;
+    pending_compact_until_ = 0;
 }
 
 void ws_connection::append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1) {

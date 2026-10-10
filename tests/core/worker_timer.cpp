@@ -4,6 +4,8 @@
 #include <exception>
 #include <future>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <thread>
 
 #include <asio/co_spawn.hpp>
@@ -12,10 +14,16 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/asio_task.h"
+#include "ruvia/core/channel.h"
 #include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/one_shot.h"
+#include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_runtime_context.h"
+
+#include "worker_task_fixture.h"
 
 namespace {
 
@@ -258,11 +266,165 @@ bool stoppable_sleep_works() {
     return success;
 }
 
+ruvia::task<void> receive_through_timer_stop(
+    ruvia::channel_receiver<int>& receiver, ruvia::worker_wait_status& status) {
+    const auto result_value = co_await receiver.receive_for(std::chrono::hours(1));
+    status = result_value.status();
+}
+
+ruvia::task<void> acquire_after_timer_stop(
+    ruvia::pool_lease_scheduler& pool, std::optional<ruvia::pool_waiter_result::status_type>& status) {
+    const auto result_value = co_await pool.acquire(std::chrono::milliseconds(1));
+    status = result_value.status();
+}
+
+// Once the worker's timer queue stops, every timed primitive reports its
+// shutdown result instead of throwing, whether it was pending or starts later.
+ruvia::task<void> exercise_after_timer_stop(ruvia::worker_runtime_context& runtime, bool& success) {
+    success = false;
+    const auto& worker_value = runtime.handle();
+    auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+    auto [completion, one_shot_receiver] = ruvia::make_one_shot<int>(worker_value);
+
+    auto pending_status = ruvia::worker_wait_status::value;
+    {
+        ruvia::task_scope scope(worker_value);
+        scope.spawn(receive_through_timer_stop(receiver, pending_status));
+        // Let the receive park on its deadline before the queue stops.
+        static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+        runtime.stop_timers();
+        co_await scope.join();
+    }
+    if (pending_status != ruvia::worker_wait_status::worker_stopping) {
+        co_return;
+    }
+
+    if (co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)) !=
+        ruvia::timer_sleep_result::stop_requested) {
+        co_return;
+    }
+    ruvia::stop_source idle;
+    if (co_await ruvia::sleep_for(worker_value, std::chrono::hours(1), idle.token()) !=
+        ruvia::timer_sleep_result::stop_requested) {
+        co_return;
+    }
+    if ((co_await receiver.receive_for(std::chrono::hours(1))).status() !=
+        ruvia::worker_wait_status::worker_stopping) {
+        co_return;
+    }
+    if ((co_await one_shot_receiver.wait_for(std::chrono::hours(1))).status() !=
+        ruvia::worker_wait_status::worker_stopping) {
+        co_return;
+    }
+
+    ruvia::worker_timer_registration registration;
+    bool invoked = false;
+    const auto schedule_status = worker_value.schedule_timer(registration,
+        std::chrono::steady_clock::now() + std::chrono::hours(1),
+        [&invoked](ruvia::worker_timer_outcome) { invoked = true; });
+    if (schedule_status != ruvia::worker_timer_schedule_status::worker_stopping || registration.registered() ||
+        invoked) {
+        co_return;
+    }
+
+    // A timed acquire keeps waiting without a timer and ends with the pool.
+    ruvia::pool_lease_scheduler pool(1, worker_value);
+    const auto held = co_await pool.acquire(std::nullopt);
+    if (!held.acquired()) {
+        co_return;
+    }
+    std::optional<ruvia::pool_waiter_result::status_type> waiting_status;
+    {
+        ruvia::task_scope scope(worker_value);
+        scope.spawn(acquire_after_timer_stop(pool, waiting_status));
+        static_cast<void>(pool.close());
+        co_await scope.join();
+    }
+    success = waiting_status == ruvia::pool_waiter_result::status_type::closed;
+}
+
+bool timed_primitives_report_timer_stop() {
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 16);
+    bool success = false;
+    ruvia::test::run_worker_tasks(runtime, exercise_after_timer_stop(runtime, success));
+    runtime.detach();
+    return success;
+}
+
+// An expired registration is released by its worker and may be rescheduled on
+// another; a still-pending one is rejected until it is cancelled.
+bool expired_registration_reschedules_on_another_worker() {
+    asio::io_context first_context;
+    asio::io_context second_context;
+    ruvia::worker_runtime_context first(first_context, 8);
+    ruvia::worker_runtime_context second(second_context, 8);
+    ruvia::worker_timer_registration expiring;
+    ruvia::worker_timer_registration pending;
+    bool first_expired = false;
+    bool second_expired = false;
+    bool pending_rejected = false;
+    bool cancelled_rescheduled = false;
+    const auto drive = [](asio::io_context& context) {
+        context.restart();
+        context.run_for(std::chrono::milliseconds(20));
+    };
+
+    const auto first_post = first.handle().post([&] {
+        static_cast<void>(first.handle().schedule_timer(expiring, std::chrono::steady_clock::now(),
+            [&first_expired](ruvia::worker_timer_outcome outcome) {
+                first_expired = outcome == ruvia::worker_timer_outcome::expired;
+            }));
+        static_cast<void>(first.handle().schedule_timer(pending,
+            std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {}));
+    });
+    if (!first_post.accepted()) {
+        return false;
+    }
+    drive(first_context);
+
+    const auto second_post = second.handle().post([&] {
+        try {
+            static_cast<void>(second.handle().schedule_timer(pending,
+                std::chrono::steady_clock::now(), [](ruvia::worker_timer_outcome) {}));
+        } catch (const std::logic_error&) {
+            pending_rejected = true;
+        }
+        static_cast<void>(second.handle().schedule_timer(expiring, std::chrono::steady_clock::now(),
+            [&second_expired](ruvia::worker_timer_outcome outcome) {
+                second_expired = outcome == ruvia::worker_timer_outcome::expired;
+            }));
+    });
+    if (!second_post.accepted()) {
+        return false;
+    }
+    drive(second_context);
+
+    // Cancellation from this thread is applied on the first worker.
+    pending.cancel_quietly();
+    drive(first_context);
+    const auto rescheduled_post = second.handle().post([&] {
+        cancelled_rescheduled = second.handle().schedule_timer(pending,
+                                    std::chrono::steady_clock::now() + std::chrono::hours(1),
+                                    [](ruvia::worker_timer_outcome) {}) ==
+                                ruvia::worker_timer_schedule_status::scheduled;
+        pending.cancel_quietly();
+    });
+    if (!rescheduled_post.accepted()) {
+        return false;
+    }
+    drive(second_context);
+    first.detach();
+    second.detach();
+    return first_expired && second_expired && pending_rejected && cancelled_rescheduled;
+}
+
 int main() {
     if (!timer_immediate_shutdown_works() ||
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
         !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
-        !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works()) {
+        !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||
+        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker()) {
         return 1;
     }
     asio::io_context io_context;

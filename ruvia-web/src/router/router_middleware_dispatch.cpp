@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/error.h"
 
 #include "context/context_access.h"
@@ -108,6 +109,7 @@ task<http_response> detail::route_table::invoke_route_with_middleware(
 
 task<void> detail::route_table::invoke_middleware_at(
     const route_entry& route, std::size_t index, context& context_value) const {
+    index = applicable_middleware_index(route, index, context_value);
     if (index >= route.middleware_count()) {
         const auto* endpoint = route.endpoint().buffered();
         if (endpoint == nullptr) {
@@ -149,6 +151,20 @@ task<void> detail::route_table::invoke_middleware_continuation(next_state state_
     if (exception != nullptr) {
         co_await table_value->store_middleware_exception_response(*context_value, exception);
     }
+}
+
+std::size_t detail::route_table::applicable_middleware_index(
+    const route_entry& route, std::size_t index, const context& context_value) const noexcept {
+    if (!route.has_conditional_middleware()) {
+        return index;
+    }
+    // The same path the route table resolved this request against.
+    const auto path = detail::context_access::request(context_value).path();
+    const auto* scopes = middleware_scopes_.data() + route.middleware_offset();
+    while (index < route.middleware_count() && !path_is_under_prefix(path, scopes[index])) {
+        ++index;
+    }
+    return index;
 }
 
 // The unmatched-request chain. It mirrors the route chain exactly except for
@@ -217,6 +233,7 @@ task<void> detail::route_table::invoke_unmatched_middleware_continuation(next_st
 
 task<void> detail::route_table::invoke_stream_middleware_at(const route_entry& route, std::size_t index,
     context& context_value, stream_middleware_chain_state& chain, const route_stream_handler_type& handler) const {
+    index = applicable_middleware_index(route, index, context_value);
     if (index >= route.middleware_count()) {
         if (route.endpoint().get_websocket() != nullptr && context_value.try_session()) {
             co_await session_access::commit(context_value);

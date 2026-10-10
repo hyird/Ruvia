@@ -15,11 +15,15 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
+#include "ruvia/web/body_limit.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/websocket.h"
 
 #include "test_harness.h"
 #include "test_tls_crypto.h"
@@ -30,6 +34,7 @@ namespace {
 using namespace std::chrono_literals;
 
 enum class startup_outcome { fail,
+    stop_during_worker_startup,
     stop_in_hook,
     stop_from_caller,
     serve };
@@ -41,12 +46,16 @@ struct startup_state final {
     std::atomic<unsigned> requests_{};
     std::atomic<bool> initialized_{};
     std::atomic<bool> startup_job_cancelled_{};
+    std::atomic<bool> worker_startup_blocked_{};
     std::binary_semaphore hook_entered_{0};
     std::binary_semaphore release_hook_{0};
     unsigned second_hooks_{};
     unsigned stop_hooks_{};
     std::thread::id start_thread_{};
     std::thread::id stop_thread_{};
+    std::atomic<bool> websocket_message_{};
+    std::atomic<bool> websocket_end_{};
+    std::atomic<bool> websocket_failed_{};
 };
 
 struct worker_state final {
@@ -65,12 +74,31 @@ class startup_controller final : public ruvia::controller<startup_controller> {
 public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/ready", ready);
+    RUVIA_POST("/limited", limited, ruvia::body_limit<16>);
+    RUVIA_GET_WS("/socket", read_websocket);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> ready(ruvia::context& context) {
         auto& state_value = *context.worker_state<worker_state>().state_;
         state_value.requests_.fetch_add(1);
         co_return context.text(std::string_view(state_value.initialized_.load() ? "initialized" : "premature"));
+    }
+
+    ruvia::task<ruvia::http_response> limited(ruvia::context& context) {
+        co_return context.text(std::string_view("accepted"));
+    }
+
+    ruvia::task<void> read_websocket(ruvia::context& context) {
+        auto& state_value = *context.worker_state<worker_state>().state_;
+        auto& websocket_value = context.get_websocket();
+        try {
+            const auto first = co_await websocket_value.read();
+            state_value.websocket_message_ = first.has_value() && first->payload() == std::string_view("hi");
+            const auto end = co_await websocket_value.read();
+            state_value.websocket_end_ = !end.has_value();
+        } catch (...) {
+            state_value.websocket_failed_ = true;
+        }
     }
 };
 
@@ -125,6 +153,155 @@ std::string read_response(asio::ip::tcp::socket& socket) {
     return response;
 }
 
+// The listener's ticket keys are shared by every worker, so each resumption
+// attempt succeeds regardless of which worker the acceptor selects. Offering
+// the session must never fail a handshake.
+bool resume_tls_session(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)> session(nullptr, SSL_SESSION_free);
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+        asio::error_code error;
+        stream.next_layer().connect(endpoint, error);
+        if (!error && session && SSL_set_session(stream.native_handle(), session.get()) != 1) {
+            return false;
+        }
+        if (!error) {
+            stream.handshake(asio::ssl::stream_base::client, error);
+        }
+        if (error) {
+            return false;
+        }
+        if (!session) {
+            // TLS 1.3 tickets precede the response, so the first response
+            // bytes mean they were processed. Capture the session before the
+            // server can close the connection.
+            constexpr std::string_view request = "GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            asio::write(stream, asio::buffer(request), error);
+            std::array<char, 1024> buffer;
+            if (error || stream.read_some(asio::buffer(buffer), error) == 0 || error) {
+                return false;
+            }
+            session.reset(SSL_get1_session(stream.native_handle()));
+            if (!session || SSL_SESSION_is_resumable(session.get()) != 1) {
+                return false;
+            }
+        } else if (SSL_session_reused(stream.native_handle()) != 1) {
+            return false;
+        }
+        // OpenSSL marks the session of an SSL freed without a local shutdown
+        // as unresumable; record a clean local close so later attempts can offer it.
+        SSL_set_shutdown(stream.native_handle(), SSL_SENT_SHUTDOWN);
+    }
+    return true;
+}
+
+// Reads until the peer ends the stream and returns the terminal error.
+template <typename stream_type>
+asio::error_code read_to_end(stream_type& stream, std::string& received) {
+    std::array<char, 4096> buffer;
+    asio::error_code error;
+    while (!error) {
+        const auto size = stream.read_some(asio::buffer(buffer), error);
+        received.append(buffer.data(), size);
+    }
+    return error;
+}
+
+// RFC 8446 §6.1: closing after a Connection: close response sends close_notify,
+// so the client observes a clean TLS end instead of a truncated stream.
+bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    constexpr std::string_view request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(request), error);
+    }
+    if (error) {
+        return false;
+    }
+    std::string response;
+    const auto end = read_to_end(stream, response);
+    return response.starts_with("HTTP/1.1 404 ") && end == asio::error::eof &&
+           (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
+}
+
+// RFC 9112 §9.6: a response sent before the request content was read (413)
+// is followed by a staged close, so the client can finish sending and still
+// read the complete response instead of a connection reset.
+bool rejected_upload_reads_complete_response(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ip::tcp::socket socket(io);
+    asio::error_code error;
+    socket.connect(endpoint, error);
+    const std::string body(std::size_t{1024} * 1024, 'x');
+    const auto request = "POST /limited HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    if (!error) {
+        asio::write(socket, asio::buffer(request), error);
+    }
+    if (error) {
+        return false;
+    }
+    std::string response;
+    const auto end = read_to_end(socket, response);
+    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
+           end == asio::error::eof;
+}
+
+// A TLS peer that drops TCP without close_notify ends the server websocket
+// read side exactly like an orderly close instead of failing the read.
+bool tls_websocket_truncation_ends_read(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const startup_state& state_value) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    constexpr std::string_view upgrade =
+        "GET /socket HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(upgrade), error);
+    }
+    std::string head;
+    char byte{};
+    while (!error && !head.ends_with("\r\n\r\n")) {
+        if (stream.read_some(asio::buffer(&byte, 1), error) == 1) {
+            head.push_back(byte);
+        }
+    }
+    if (error || !head.starts_with("HTTP/1.1 101 ")) {
+        return false;
+    }
+    // One masked text frame (zero masking key), then a TCP FIN without close_notify.
+    constexpr std::array<char, 8> frame{'\x81', '\x82', '\0', '\0', '\0', '\0', 'h', 'i'};
+    asio::write(stream, asio::buffer(frame), error);
+    if (error) {
+        return false;
+    }
+    stream.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
+    const auto deadline_value = std::chrono::steady_clock::now() + 3s;
+    while (!state_value.websocket_end_.load() && !state_value.websocket_failed_.load() &&
+           std::chrono::steady_clock::now() < deadline_value) {
+        std::this_thread::sleep_for(1ms);
+    }
+    return state_value.websocket_message_.load() && state_value.websocket_end_.load() &&
+           !state_value.websocket_failed_.load();
+}
+
 }  // namespace
 
 // application is a process singleton with sealed controller registration. This functional
@@ -142,7 +319,15 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
         .get_blocking_pool(nullptr)
-        .use_worker_state<worker_state>([state_value] { return state_value; });
+        .use_worker_state<worker_state>([state_value] {
+            if (state_value->outcome_ == startup_outcome::stop_during_worker_startup &&
+                !state_value->worker_startup_blocked_.exchange(true)) {
+                // Hold one worker inside startup while the lifecycle caller waits for it.
+                state_value->hook_entered_.release();
+                state_value->release_hook_.acquire();
+            }
+            return state_value;
+        });
     app.on_start([state_value, &app] {
         state_value->start_thread_ = std::this_thread::get_id();
         auto workers = app.workers();
@@ -200,11 +385,12 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         state_value->stop_thread_ = std::this_thread::get_id();
     });
 
-    for (const auto outcome : {startup_outcome::fail, startup_outcome::stop_in_hook,
-             startup_outcome::stop_from_caller, startup_outcome::serve}) {
+    for (const auto outcome : {startup_outcome::fail, startup_outcome::stop_during_worker_startup,
+             startup_outcome::stop_in_hook, startup_outcome::stop_from_caller, startup_outcome::serve}) {
         state_value->outcome_ = outcome;
         state_value->initialized_.store(false);
         state_value->startup_job_cancelled_.store(false);
+        state_value->worker_startup_blocked_.store(false);
         state_value->requests_.store(0);
         const auto second_hooks = state_value->second_hooks_;
         const auto stop_hooks = state_value->stop_hooks_;
@@ -216,13 +402,28 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto tls_endpoint = tls_reservation.local_endpoint();
         reservation.close();
         tls_reservation.close();
-        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}, .http3_ = {.mode_ = ruvia::http3_mode::enabled, .stream_buffer_capacity_ = 3, .datagram_input_capacity_ = 5, .datagram_output_capacity_ = 2}});
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key, .client_certificates_ = {.verify_file_ = identity.ca_file_}}, .http3_ = {.mode_ = ruvia::http3_mode::enabled, .stream_buffer_capacity_ = 3, .datagram_input_capacity_ = 5, .datagram_output_capacity_ = 2}});
         app_run run(app, *state_value);
         const auto owner_thread = run.id();
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
         RUVIA_CHECK(entered);
         if (!entered) {
             return;
+        }
+        if (outcome == startup_outcome::stop_during_worker_startup) {
+            // A stop request that cancels worker startup is not a startup
+            // failure: run() returns normally and leaves no partial service.
+            std::this_thread::sleep_for(25ms);
+            app.stop();
+            state_value->release_hook_.release();
+            run.join();
+            RUVIA_CHECK(run.failure_ == nullptr);
+            RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 1);
+            RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
+            RUVIA_CHECK_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
+            RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
+            RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
+            continue;
         }
         RUVIA_CHECK(state_value->start_thread_ == owner_thread);
 
@@ -281,6 +482,13 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
                 RUVIA_CHECK(quic_response[1] == std::byte{} && quic_response[2] == std::byte{} &&
                             quic_response[3] == std::byte{} && quic_response[4] == std::byte{});
             }
+            // Optional client-certificate verification must not turn session
+            // resumption into a fatal handshake error, and every resumption
+            // succeeds whichever of the two workers accepts it.
+            RUVIA_CHECK(resume_tls_session(io, tls_endpoint));
+            RUVIA_CHECK(tls_close_sends_close_notify(io, tls_endpoint));
+            RUVIA_CHECK(rejected_upload_reads_complete_response(io, endpoint));
+            RUVIA_CHECK(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
             app.stop();
         }
         run.join();

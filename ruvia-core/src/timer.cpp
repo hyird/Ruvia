@@ -8,6 +8,24 @@
 namespace ruvia {
 namespace {
 
+// Arms the sleep timer and reports whether the coroutine should suspend. A
+// stopped timer queue resolves immediately with the outcome stop_timers()
+// would have delivered to a pending sleep.
+[[nodiscard]] bool schedule_sleep_timer(const worker_handle& worker_value,
+    worker_timer_registration& registration, std::chrono::steady_clock::duration duration,
+    std::coroutine_handle<>& continuation, worker_timer_outcome& outcome) {
+    const auto status = worker_value.schedule_timer(registration, worker_timer_deadline_after(duration),
+        [&continuation, &outcome](worker_timer_outcome value) {
+            outcome = value;
+            continuation.resume();
+        });
+    if (status == worker_timer_schedule_status::worker_stopping) {
+        outcome = worker_timer_outcome::cancelled;
+        return false;
+    }
+    return true;
+}
+
 class sleep_awaiter final {
 public:
     sleep_awaiter(const worker_handle& worker_value, std::chrono::steady_clock::duration duration)
@@ -20,11 +38,7 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        (worker_).schedule_timer(registration_, ::ruvia::worker_timer_deadline_after(duration_), [this](::ruvia::worker_timer_outcome outcome) {
-            outcome_ = outcome;
-            continuation_.resume();
-        });
-        return true;
+        return schedule_sleep_timer(worker_, registration_, duration_, continuation_, outcome_);
     }
 
     // A zero/negative duration never suspends and reports elapsed (the default),
@@ -57,10 +71,9 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        (worker_).schedule_timer(registration_, ::ruvia::worker_timer_deadline_after(duration_), [this](::ruvia::worker_timer_outcome outcome) {
-            outcome_ = outcome;
-            continuation_.resume();
-        });
+        if (!schedule_sleep_timer(worker_, registration_, duration_, continuation_, outcome_)) {
+            return false;
+        }
         stop_token_.register_callback(stop_registration_,
             [cancellation = registration_.cancellation()] { cancellation.cancel(); });
         return true;

@@ -37,6 +37,22 @@ std::error_code io_failure() noexcept {
     return std::make_error_code(std::errc::io_error);
 }
 
+// The listener is one unconnected socket shared by every connection. An
+// ICMP-reported reset, refusal or unreachable path (on Windows also a TTL
+// expiry) concerns one peer and loses at most that packet, which QUIC recovers
+// or times out. A spoofed peer address must not retire the shared listener.
+bool peer_datagram_error(std::error_code error) noexcept {
+    return error == asio::error::connection_reset || error == asio::error::network_reset ||
+           error == asio::error::connection_refused || error == asio::error::host_unreachable ||
+           error == asio::error::network_unreachable;
+}
+
+// A destination rejected by local policy is likewise packet-local on send.
+bool destination_send_error(std::error_code error) noexcept {
+    return peer_datagram_error(error) || error == asio::error::access_denied ||
+           error == std::errc::operation_not_permitted;
+}
+
 asio::ip::udp::endpoint checked_bind_endpoint(asio::ip::udp::endpoint endpoint) {
     if (!(endpoint.address().is_unspecified() || is_concrete_unicast(endpoint.address()))) {
         throw std::invalid_argument("HTTP/3 UDP bind requires wildcard or unicast IPv4/IPv6 without IPv6 scope");
@@ -288,7 +304,7 @@ void http3_acceptor_datagram_endpoint::handle_receive(std::error_code error, htt
     }
     if (error) {
         receive_lease_.reset();
-        if (error == invalid_datagram()) {
+        if (error == invalid_datagram() || peer_datagram_error(error)) {
             (void)arm_receive();
         } else {
             fail(error);
@@ -319,9 +335,9 @@ void http3_acceptor_datagram_endpoint::handle_send(std::error_code error, std::s
     if (stopping_) {
         return;
     }
-    if (error) {
+    if (error && !destination_send_error(error)) {
         fail(error);
-    } else if (size != expected_size) {
+    } else if (!error && size != expected_size) {
         fail(io_failure());
     } else {
         notify(notification_kind::output_drained);

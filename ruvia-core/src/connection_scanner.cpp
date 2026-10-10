@@ -156,21 +156,37 @@ connection_scanner::impl_type::impl_type(
     validate_scanner_timeout(options_.payload_read_completion_timeout_);
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
 }
-connection_scanner::impl_type::~impl_type() noexcept {
+bool connection_scanner::impl_type::retire() noexcept {
     stop();
-    {
+    // scanning_ is worker-local; only the worker thread may observe it. On that
+    // thread a set flag means this call is nested inside the scan callback,
+    // which already holds the timer mutex.
+    const bool nested_in_scan = worker_.is_current() && scanning_;
+    if (nested_in_scan) {
+        timer_state_->owner_ = nullptr;
+        release_after_scan_ = true;
+    } else {
+        // Another thread may be scanning; wait for that callback to finish.
         std::lock_guard lock(timer_state_->mutex_);
         timer_state_->owner_ = nullptr;
     }
+    // Unregistration keeps the scan cursors consistent, so a nested scan ends
+    // without visiting any detached node.
     while (sentinel_.next_ != &sentinel_) {
         unregister_entry(*sentinel_.next_);
     }
     detach_worker_maintenance();
+    return nested_in_scan;
 }
 
 connection_scanner::connection_scanner(worker_handle worker_value, connection_scanner_options options)
     : impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
-connection_scanner::~connection_scanner() noexcept = default;
+connection_scanner::~connection_scanner() noexcept {
+    if (impl_->retire()) {
+        // The scan running further up this stack frees the impl.
+        static_cast<void>(impl_.release());
+    }
+}
 const worker_handle& connection_scanner::worker() const& noexcept {
     return impl_->worker_;
 }
@@ -335,6 +351,8 @@ void connection_scanner::impl_type::schedule() {
         return;
     }
     const auto timer_state = timer_state_;
+    // A stopped timer queue arms nothing: scanning ends with the worker, as it
+    // does for a scan timer that stop_timers() cancels.
     (worker_).schedule_timer(timer_, ::ruvia::worker_timer_deadline_after(options_.scan_interval_), [timer_state](worker_timer_outcome outcome) {
         if (outcome == worker_timer_outcome::cancelled) {
             return;
@@ -345,10 +363,17 @@ void connection_scanner::impl_type::schedule() {
             return;
         }
         // Expiry has consumed this timer. Release its token before callbacks,
-        // which may stop and restart the scanner with a new registration.
+        // which may stop, restart, or destroy the scanner.
         scanner->timer_.cancel_quietly();
         if (scanner->has_scanning_work()) {
+            scanner->scanning_ = true;
             scanner->scan();
+            scanner->scanning_ = false;
+            if (scanner->release_after_scan_) {
+                // A callback destroyed the scanner; its teardown already ran.
+                delete scanner;
+                return;
+            }
         }
         if (!scanner->timer_.registered()) {
             scanner->schedule();

@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cstdint>
 #include <stdexcept>
 #include <utility>
 
@@ -228,14 +227,16 @@ void detail::route_table::sort_dynamic_node(dynamic_node_type& node_value) {
     }
 }
 
+// find_dynamic_node orders every pair of distinct trie branches -- a literal child before the
+// parameter child before the wildcard, backtracking on failure -- so two dynamic routes are only
+// ambiguous when they occupy the same trie slot: segment by segment both are the same literal, both
+// are parameters (whatever their names), or both are the wildcard, and both end at the same depth.
+// Any other pair overlaps at most with a deterministic winner ("/a/*" vs "/:x/:y", "/a/*" vs
+// "/a/:x"), which is legal routing, not a conflict.
 bool detail::route_table::same_dynamic_shape(std::string_view left, std::string_view right) noexcept {
-    enum class fork_priority : std::uint8_t { shared,
-        left_static,
-        right_static };
-
-    // Tracks the first static-vs-param fork. After that fork, the static side has runtime priority
-    // for overlapping paths because find_dynamic_node tries static children before param children.
-    auto priority = fork_priority::shared;
+    const auto is_param = [](std::string_view segment) noexcept {
+        return !segment.empty() && segment.front() == ':';
+    };
     for (;;) {
         std::string_view left_segment;
         std::string_view left_rest;
@@ -244,47 +245,12 @@ bool detail::route_table::same_dynamic_shape(std::string_view left, std::string_
         const auto has_left = split_path_segment(left, left_segment, left_rest);
         const auto has_right = split_path_segment(right, right_segment, right_rest);
         if (!has_left || !has_right) {
-            return has_left == has_right && priority == fork_priority::shared;
+            return has_left == has_right;
         }
 
-        if (left_segment == "*" || right_segment == "*") {
-            if (left_segment == right_segment) {
-                return priority == fork_priority::shared;
-            }
-
-            if (priority == fork_priority::shared) {
-                // At a shared node a wildcard is distinguished by a STATIC sibling (find_dynamic_node
-                // tries the static child before the wildcard), so it is not a conflict — unless
-                // both sides are dynamic, in which case the wildcard shadows the sibling param.
-                // This holds at any depth, not just the root: e.g. "/files/*" + "/files/public/:id"
-                // is fine, but
-                // "/a/*" + "/a/:x" conflicts.
-                const auto left_dynamic =
-                    left_segment == "*" || (!left_segment.empty() && left_segment.front() == ':');
-                const auto right_dynamic =
-                    right_segment == "*" || (!right_segment.empty() && right_segment.front() == ':');
-                if (!(left_dynamic && right_dynamic)) {
-                    return false;
-                }
-            }
-
-            const auto left_wildcard = left_segment == "*";
-            if (priority == fork_priority::left_static) {
-                return left_wildcard;
-            }
-            if (priority == fork_priority::right_static) {
-                return !left_wildcard;
-            }
-            return true;
-        }
-
-        const auto left_param = !left_segment.empty() && left_segment.front() == ':';
-        const auto right_param = !right_segment.empty() && right_segment.front() == ':';
-        if (!left_param && !right_param && left_segment != right_segment) {
+        const auto both_params = is_param(left_segment) && is_param(right_segment);
+        if (!both_params && left_segment != right_segment) {
             return false;
-        }
-        if (priority == fork_priority::shared && left_param != right_param) {
-            priority = left_param ? fork_priority::right_static : fork_priority::left_static;
         }
 
         left = left_rest;

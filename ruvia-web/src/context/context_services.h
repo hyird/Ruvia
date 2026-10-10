@@ -330,10 +330,14 @@ public:
     [[nodiscard]] std::size_t dispatch_depth() const noexcept {
         return request_services_.dispatch_depth_;
     }
-    [[nodiscard]] context_services for_subrequest(const conn_info& connection, std::size_t depth,
-        const stop_token& stop_token_value) const {
+    // Subrequests inherit the parent's connection identity and early-data
+    // snapshot: a request replayed from 0-RTT stays replayable when it
+    // re-enters the router (RFC 8470 §5.1).
+    [[nodiscard]] context_services for_subrequest(const conn_info& connection,
+        http3_early_data_info early_data, std::size_t depth, const stop_token& stop_token_value) const {
         context_services services(worker_services_, stop_token_value);
         services.connection_services_.info_ = connection;
+        services.connection_services_.early_data_ = early_data;
         services.request_services_.dispatch_depth_ = depth;
         return services;
     }

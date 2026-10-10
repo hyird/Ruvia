@@ -10,6 +10,7 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_parse_error.h"
 #include "ruvia/http/http_request.h"
 
@@ -624,6 +625,25 @@ RUVIA_TEST(http1_parse_chunked_body) {
     RUVIA_CHECK(require_chunked(result_value.body_plan_).transfer_codings().empty());
 }
 
+RUVIA_TEST(http1_parse_chunked_body_accepts_many_small_chunks) {
+    // RFC 9112 has no chunk-count limit; only the buffered message size bounds
+    // the framing of a whole-message parse.
+    std::string request = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
+    const auto header_size = request.size();
+    for (std::size_t index = 0; index < 20000; ++index) {
+        request.append("1\r\nx\r\n");
+    }
+    request.append("0\r\n\r\n");
+    http1_server_request_parser parser;
+    const auto result_value = parser.parse_message(request);
+    const auto* message = result_value.message_ready();
+    RUVIA_CHECK(message != nullptr);
+    if (message != nullptr) {
+        RUVIA_CHECK_EQ(message->header_bytes(), header_size);
+        RUVIA_CHECK_EQ(message->message_bytes(), request.size());
+    }
+}
+
 RUVIA_TEST(http1_parse_rejects_non_empty_trailer_header_without_chunked_framing) {
     {
         http1_server_request_parser parser;
@@ -1108,6 +1128,70 @@ RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
         if (need_body->required_total_bytes()) {
             RUVIA_CHECK_EQ(*need_body->required_total_bytes(), request.size());
         }
+    }
+}
+
+RUVIA_TEST(http1_parse_ignores_bounded_empty_lines_before_request_line) {
+    // RFC 9112 section 2.2: a server SHOULD ignore at least one empty line
+    // received before the request-line.
+    http1_server_request_parser parser;
+    for (const std::string_view request : {
+             std::string_view("\r\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
+             std::string_view("\r\n\r\n\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
+         }) {
+        const auto result_value = parser.parse_message(request);
+        const auto* message = result_value.message_ready();
+        RUVIA_CHECK(message != nullptr);
+        if (message != nullptr) {
+            RUVIA_CHECK_EQ(message->message_bytes(), request.size());
+        }
+        RUVIA_CHECK_EQ(result_value.request_.method(), std::string_view("GET"));
+        RUVIA_CHECK_EQ(result_value.request_.path(), std::string_view("/a"));
+    }
+
+    for (const std::string_view partial : {std::string_view("\r\n"), std::string_view("\r\n\r"),
+             std::string_view("\r\n\r\n"), std::string_view("\r\nGET / HTTP/1.1\r\n")}) {
+        http1_server_request_parse_state head;
+        parser.parse_head(partial, head);
+        RUVIA_CHECK(head.need_request_head() != nullptr);
+    }
+
+    // A bare CR is not an empty line.
+    RUVIA_CHECK(is_failure(
+        parser.parse_message("\rGET / HTTP/1.1\r\nHost: x\r\n\r\n"), http_parse_error::invalid_request_line));
+
+    // Ignored lines count toward the head limit.
+    std::string flood;
+    while (flood.size() < ruvia::max_http_header_bytes) {
+        flood.append("\r\n");
+    }
+    flood.append("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(is_failure(parser.parse_message(flood), http_parse_error::header_too_large));
+}
+
+RUVIA_TEST(http1_public_parse_ignores_empty_line_after_pipelined_body) {
+    const ruvia::http1_request_parser public_parser;
+    constexpr std::string_view first_message =
+        "POST /first HTTP/1.1\r\nHost: example.com\r\n"
+        "Content-Length: 5\r\n\r\nhello";
+    constexpr std::string_view second_message = "\r\nGET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    const std::string pipeline = std::string(first_message) + std::string(second_message);
+
+    const auto first_result = public_parser.parse(pipeline);
+    const auto* first = first_result.parsed();
+    RUVIA_CHECK(first != nullptr);
+    if (first == nullptr) {
+        return;
+    }
+    RUVIA_CHECK_EQ(first->wire_body(), std::string_view("hello"));
+    RUVIA_CHECK_EQ(first->consumed_bytes(), first_message.size());
+
+    const auto second_result = public_parser.parse(std::string_view(pipeline).substr(first->consumed_bytes()));
+    const auto* second = second_result.parsed();
+    RUVIA_CHECK(second != nullptr);
+    if (second != nullptr) {
+        RUVIA_CHECK_EQ(second->request().path(), std::string_view("/next"));
+        RUVIA_CHECK_EQ(second->consumed_bytes(), second_message.size());
     }
 }
 

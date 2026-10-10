@@ -109,12 +109,14 @@ endif()
 if(RUVIA_BUILD_WEB)
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/unit/*.cpp)
     list(REMOVE_ITEM _ruvia_web_unit_sources
+        web/unit/app/route_conflict.cpp
         web/unit/app/startup.cpp
         web/unit/auth/jwt.cpp
         web/unit/http3/client_connection_control.cpp
         web/unit/http3/client_connection_tunnel.cpp
         web/unit/http3/client_connection_worker.cpp
         web/unit/http1/connect.cpp
+        web/unit/http1/websocket.cpp
         web/unit/http2/client_tunnel.cpp
         web/unit/http2/connect.cpp
         web/unit/http2/push.cpp
@@ -168,6 +170,11 @@ if(RUVIA_BUILD_WEB)
         support/test_main.cpp)
     target_link_libraries(ruvia_app_startup PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
     target_compile_definitions(ruvia_app_startup PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
+    # A conflicting route pair makes every application in its executable fail
+    # startup, so it cannot share the process-wide controller registry.
+    ruvia_add_test(ruvia_route_conflict ruvia::web TIMEOUT 30 SOURCES
+        web/unit/app/route_conflict.cpp
+        support/test_main.cpp)
     ruvia_add_test(ruvia_http3_client_tests ruvia::web TIMEOUT 60 SOURCES
         web/unit/http3/client_connection_control.cpp
         web/unit/http3/client_connection_tunnel.cpp
@@ -178,6 +185,7 @@ if(RUVIA_BUILD_WEB)
     target_compile_definitions(ruvia_http3_client_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     ruvia_add_test(ruvia_tcp_client_tests ruvia::web TIMEOUT 60 SOURCES
         web/unit/http1/connect.cpp
+        web/unit/http1/websocket.cpp
         web/unit/http2/client_tunnel.cpp
         web/unit/http2/connect.cpp
         web/unit/http2/push.cpp

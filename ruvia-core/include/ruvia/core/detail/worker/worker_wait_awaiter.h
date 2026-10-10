@@ -79,34 +79,43 @@ public:
         auto& owner_value = state();
         auto* waiter = this;
         std::lock_guard lock(owner_value.mutex_);
-        if (!completion_.suspend(handle)) {
-            return false;
-        }
-        if (timeout_) {
+        // Arm the deadline before publishing the continuation: the timer only
+        // fires on this worker after suspension, and a stopped timer queue can
+        // still complete the wait synchronously. A published waiter that is no
+        // longer attached has already completed and needs no deadline.
+        if (timeout_ && owner_value.waiter_ == waiter) {
+            auto status = worker_timer_schedule_status::worker_stopping;
             try {
-                owner_value.worker_.schedule_timer(timer_,
+                status = owner_value.worker_.schedule_timer(timer_,
                     worker_timer_deadline_after(*timeout_),
                     [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
-                        if (outcome == worker_timer_outcome::expired) {
+                        {
                             std::lock_guard state_lock(owner_value.mutex_);
                             if (owner_value.waiter_ == waiter) {
+                                // Still pending: a cancellation reaching a
+                                // pending wait comes only from stop_timers().
                                 owner_value.waiter_ = nullptr;
                                 owner_value.waiter_generation_ = 0;
                                 (void)completion->complete(worker_wait_result_access::outcome<t_type>(
-                                    worker_wait_status::timed_out));
+                                    outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
+                                                                             : worker_wait_status::worker_stopping));
                             }
                         }
                         completion->continuation().resume();
                     });
             } catch (...) {
-                if (owner_value.waiter_ == waiter) {
-                    owner_value.waiter_ = nullptr;
-                    owner_value.waiter_generation_ = 0;
-                }
+                owner_value.waiter_ = nullptr;
+                owner_value.waiter_generation_ = 0;
                 throw;
             }
+            if (status == worker_timer_schedule_status::worker_stopping) {
+                owner_value.waiter_ = nullptr;
+                owner_value.waiter_generation_ = 0;
+                (void)completion_.complete(
+                    worker_wait_result_access::outcome<t_type>(worker_wait_status::worker_stopping));
+            }
         }
-        return true;
+        return completion_.suspend(handle);
     }
 
     [[nodiscard]] worker_wait_result<t_type> take_result() {

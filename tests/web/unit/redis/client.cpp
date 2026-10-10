@@ -1,12 +1,20 @@
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <initializer_list>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
+#include <vector>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/write.hpp>
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/web/redis/redis_client.h"
@@ -138,11 +146,13 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
                 RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
                 RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "key"); }));
             }
-            for (auto score : {std::numeric_limits<double>::infinity(),
-                     -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
-                RUVIA_CHECK(throws_invalid_argument([&] { pipeline.zadd("key", score, "member"); }));
-                RUVIA_CHECK(throws_invalid_argument([&] { transaction.zadd("key", score, "member"); }));
-            }
+            // Infinite scores have a Redis spelling; NaN does not.
+            pipeline.zadd("key", std::numeric_limits<double>::infinity(), "member");
+            transaction.zadd("key", -std::numeric_limits<double>::infinity(), "member");
+            RUVIA_CHECK(throws_invalid_argument(
+                [&] { pipeline.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
+            RUVIA_CHECK(throws_invalid_argument(
+                [&] { transaction.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
         }
         co_return;
     });
@@ -213,4 +223,162 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
         RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sdiff(no_keys); }));
         co_return;
     });
+}
+
+namespace {
+
+// Minimal RESP2 peer: answers each complete command array with the next
+// canned reply and records the received arguments.
+class scripted_redis_peer final {
+public:
+    explicit scripted_redis_peer(std::vector<std::string> replies)
+        : replies_(std::move(replies)),
+          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+          thread_([this] { serve(); }) {}
+
+    ~scripted_redis_peer() {
+        join();
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    // Valid only after join().
+    [[nodiscard]] const std::vector<std::vector<std::string>>& commands() const noexcept {
+        return commands_;
+    }
+
+    void join() {
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+private:
+    // Parses one "*N\r\n($len\r\nbytes\r\n)*N" command from the front of input.
+    static bool take_command(std::string& input, std::vector<std::string>& args) {
+        std::size_t position = 0;
+        const auto read_line = [&](char prefix, std::size_t& number) {
+            if (position >= input.size() || input[position] != prefix) {
+                return false;
+            }
+            const auto end = input.find("\r\n", position);
+            if (end == std::string::npos) {
+                return false;
+            }
+            number = std::stoul(input.substr(position + 1, end - position - 1));
+            position = end + 2;
+            return true;
+        };
+        std::size_t count = 0;
+        if (!read_line('*', count)) {
+            return false;
+        }
+        std::vector<std::string> parsed;
+        for (std::size_t i = 0; i < count; ++i) {
+            std::size_t length = 0;
+            if (!read_line('$', length) || input.size() < position + length + 2) {
+                return false;
+            }
+            parsed.emplace_back(input, position, length);
+            position += length + 2;
+        }
+        input.erase(0, position);
+        args = std::move(parsed);
+        return true;
+    }
+
+    void serve() {
+        asio::ip::tcp::socket socket(io_);
+        acceptor_.accept(socket);
+        std::string input;
+        std::array<char, 1024> buffer{};
+        std::size_t next_reply = 0;
+        for (;;) {
+            std::error_code error;
+            const auto read = socket.read_some(asio::buffer(buffer), error);
+            if (error) {
+                return;
+            }
+            input.append(buffer.data(), read);
+            std::vector<std::string> args;
+            while (take_command(input, args)) {
+                commands_.push_back(args);
+                const std::string reply =
+                    next_reply < replies_.size() ? replies_[next_reply++] : std::string("-ERR unscripted\r\n");
+                asio::write(socket, asio::buffer(reply), error);
+                if (error) {
+                    return;
+                }
+            }
+        }
+    }
+
+    std::vector<std::string> replies_;
+    std::vector<std::vector<std::string>> commands_;
+    asio::io_context io_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::thread thread_;
+};
+
+}  // namespace
+
+RUVIA_TEST(redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    scripted_redis_peer peer({
+        ":1\r\n",
+        "$3\r\ninf\r\n",
+        "$4\r\n-inf\r\n",
+        "*4\r\n$1\r\na\r\n$4\r\n-inf\r\n$1\r\nb\r\n$3\r\ninf\r\n",
+        ":2\r\n",
+        "$3\r\nnan\r\n",
+        "$5\r\n1e999\r\n",
+    });
+    ruvia::redis_config config;
+    config.host_ = "127.0.0.1";
+    config.port_ = peer.port();
+    config.pool_size_per_worker_ = 1;
+    config.tls_ = {.mode_ = ruvia::client_tls_mode::disabled};
+    ruvia::redis_client client(worker.loop(), config);
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.with_options({});
+        constexpr auto infinity = std::numeric_limits<double>::infinity();
+        RUVIA_CHECK_EQ(co_await redis.zadd("scores", infinity, "b"), std::int64_t{1});
+
+        const auto positive = co_await redis.zscore("scores", "b");
+        RUVIA_CHECK(positive.has_value() && *positive == infinity);
+        const auto negative = co_await redis.zscore("scores", "a");
+        RUVIA_CHECK(negative.has_value() && *negative == -infinity);
+
+        const auto ranked = co_await redis.zrange_with_scores("scores", 0, -1);
+        RUVIA_CHECK_EQ(ranked.size(), std::size_t{2});
+        if (ranked.size() == 2) {
+            RUVIA_CHECK(ranked[0].score() == -infinity);
+            RUVIA_CHECK(ranked[1].score() == infinity);
+        }
+
+        RUVIA_CHECK_EQ(co_await redis.zcount("scores", -infinity, infinity), std::int64_t{2});
+
+        const auto not_a_number = co_await redis.zscore("scores", "nan");
+        RUVIA_CHECK(not_a_number.has_value() && std::isnan(*not_a_number));
+
+        // Only the exact Redis spellings are non-finite; overflowing
+        // decimals remain protocol errors.
+        bool rejected = false;
+        try {
+            (void)co_await redis.zscore("scores", "overflow");
+        } catch (const ruvia::redis_error& error) {
+            rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+        }
+        RUVIA_CHECK(rejected);
+    });
+    peer.join();
+    const auto& commands = peer.commands();
+    RUVIA_CHECK_EQ(commands.size(), std::size_t{7});
+    if (commands.size() == 7) {
+        RUVIA_CHECK(commands[0] == (std::vector<std::string>{"ZADD", "scores", "+inf", "b"}));
+        RUVIA_CHECK(commands[4] == (std::vector<std::string>{"ZCOUNT", "scores", "-inf", "+inf"}));
+    }
 }

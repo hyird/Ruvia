@@ -3,18 +3,18 @@
 #include <exception>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <variant>
 
 #include <asio/buffer.hpp>
-#include <asio/error.hpp>
-#include <asio/ssl/error.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/stop_token.h"
 
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
+#include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {
@@ -54,7 +54,7 @@ task<std::optional<websocket_message>> websocket_client_state::read_owned(
                 throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                     "WebSocket transport ended before peer Close");
             }
-            (void)state_value->require_protocol().feed(std::string_view(bytes_value.data(), count));
+            state_value->feed_input(std::string_view(bytes_value.data(), count));
             continue;
         }
         if (const auto* message = event->message()) {
@@ -95,6 +95,16 @@ task<std::size_t> websocket_client_state::read_transport(
     }
 }
 
+void websocket_client_state::feed_input(std::string_view bytes_value) {
+    // A rejected feed consumes nothing. Dropping it would splice later bytes
+    // into the buffered frame, so an exhausted input bound terminates instead.
+    if (require_protocol().feed(bytes_value) == websocket_feed_status::backpressured) {
+        close_on_worker(abort_reason_type::none);
+        throw websocket_client_error(websocket_client_error::code_type::message_too_large,
+            "WebSocket client input exceeds the buffered frame limit");
+    }
+}
+
 task<std::size_t> websocket_client_state::read_socket(std::span<char> output) {
     auto initiate_read = [this, output](auto handler) {
         if (config_.scheme_ == websocket_scheme::wss) {
@@ -106,8 +116,7 @@ task<std::size_t> websocket_client_state::read_socket(std::span<char> output) {
     };
     const auto completion = co_await ruvia::async_asio<std::size_t>(std::move(initiate_read));
     throw_abort();
-    if (completion.error_code() == asio::error::eof ||
-        completion.error_code() == asio::ssl::error::stream_truncated) {
+    if (is_stream_read_end(completion.error_code())) {
         co_return 0;
     }
     if (completion.error_code()) {

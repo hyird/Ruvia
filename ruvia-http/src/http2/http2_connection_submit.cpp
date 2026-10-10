@@ -527,6 +527,7 @@ http2_finish_request_status http2_connection::finish_request(std::uint32_t strea
         append_response_header_frames(*stream, block, http2_end_stream::end_stream);
     }
     (void)stream->commit_local_end_stream();
+    release_local_request_stream_if_closed(*stream);
     return status_type::accepted;
 }
 

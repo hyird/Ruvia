@@ -71,7 +71,6 @@ std::optional<http_chunk_scan_error> validate_http_chunk_trailers(std::string_vi
 http_chunk_scan_result scan_http_chunked_body(std::string_view body) noexcept {
     http_chunk_framing framing({
         .body_limit_ = protocol_byte_limit::limited(default_max_buffered_body_bytes),
-        .framing_limit_ = default_max_buffered_body_bytes,
         .trailer_section_limit_ = protocol_byte_limit::limited(max_http_header_bytes),
         .trailer_role_ = chunk_trailer_role::request,
     });

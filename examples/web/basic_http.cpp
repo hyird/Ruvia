@@ -93,7 +93,10 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> hello(ruvia::context& c) {
-        co_return c.text("hello from ruvia\n");
+        // Strings and character buffers are copied into the response. Static
+        // bytes opt into zero-copy explicitly; static_text only accepts
+        // constants with static storage, so a frame-local buffer cannot dangle.
+        co_return c.text(ruvia::static_text("hello from ruvia\n"));
     }
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {

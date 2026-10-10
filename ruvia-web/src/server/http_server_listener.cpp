@@ -32,6 +32,7 @@ http_server_listener_definition::tls_type clone_tls(
     }
     result_value.alt_svc_ = source_value.alt_svc_;
     result_value.http3_early_data_ = source_value.http3_early_data_;
+    result_value.session_ticket_keys_ = source_value.session_ticket_keys_;
     return result_value;
 }
 

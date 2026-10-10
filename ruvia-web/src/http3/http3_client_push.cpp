@@ -13,13 +13,18 @@ http3_client_connection::push_list_type::iterator http3_client_connection::find_
     return std::find_if(pushes_.begin(), pushes_.end(), [stream_id](const push_type& push) { return push.stream_id_ == stream_id; });
 }
 void http3_client_connection::settle_push(std::uint64_t push_id) noexcept {
-    if (push_id < max_remembered_pushes && !settled_pushes_.test(push_id)) {
-        settled_pushes_.set(push_id);
-        ++pending_push_credits_;
+    if (!attempt_) {
+        return;
+    }
+    auto& attempt = *attempt_;
+    if (push_id < max_remembered_pushes && !attempt.settled_pushes_.test(push_id)) {
+        attempt.settled_pushes_.set(push_id);
+        ++attempt.pending_push_credits_;
     }
 }
 void http3_client_connection::on_push_event(void* raw, const http3_connection_event& event) {
     auto& owner_value = *static_cast<http3_client_connection*>(raw);
+    auto& attempt = owner_value.attempt();
     if (!event.push_id_ || *event.push_id_ >= max_remembered_pushes) {
         return;
     }
@@ -31,7 +36,7 @@ void http3_client_connection::on_push_event(void* raw, const http3_connection_ev
             const auto duration = std::chrono::duration_cast<time_point_type::duration>(*owner_value.push_observer_.config_.timeout_);
             deadline = now > time_point_type::max() - duration ? time_point_type::max() : now + duration;
         }
-        owner_value.peer_push_streams_.push_back({push_id, event.stream_id_, deadline});
+        attempt.peer_push_streams_.push_back({push_id, event.stream_id_, deadline});
         const auto found = std::find_if(owner_value.pushes_.begin(), owner_value.pushes_.end(),
             [push_id](const push_type& push) { return push.push_id_ == push_id; });
         if (found != owner_value.pushes_.end()) {
@@ -45,16 +50,16 @@ void http3_client_connection::on_push_event(void* raw, const http3_connection_ev
         if (found != owner_value.pushes_.end()) {
             found->peer_cancelled_ = true;
         } else {
-            owner_value.seen_pushes_.set(push_id);
+            attempt.seen_pushes_.set(push_id);
             owner_value.settle_push(push_id);
         }
         return;
     }
     if (event.kind_ == http3_connection_event_kind::push_promise) {
-        if (owner_value.seen_pushes_.test(push_id)) {
+        if (attempt.seen_pushes_.test(push_id)) {
             return;  // The core already compared repeated promises byte for byte.
         }
-        owner_value.seen_pushes_.set(push_id);
+        attempt.seen_pushes_.set(push_id);
         if (event.head_ == nullptr) {
             throw std::logic_error("HTTP/3 push promise lacks its parsed request");
         }
@@ -71,9 +76,9 @@ void http3_client_connection::on_push_event(void* raw, const http3_connection_ev
             const auto duration = std::chrono::duration_cast<time_point_type::duration>(*owner_value.push_observer_.config_.timeout_);
             push.deadline_ = now > time_point_type::max() - duration ? time_point_type::max() : now + duration;
         }
-        const auto stream = std::find_if(owner_value.peer_push_streams_.begin(), owner_value.peer_push_streams_.end(),
+        const auto stream = std::find_if(attempt.peer_push_streams_.begin(), attempt.peer_push_streams_.end(),
             [push_id](const peer_push_stream_type& binding) { return binding.push_id_ == push_id; });
-        if (stream != owner_value.peer_push_streams_.end()) {
+        if (stream != attempt.peer_push_streams_.end()) {
             push.stream_id_ = stream->stream_id_;
             if (stream->deadline_ && (!push.deadline_ || *stream->deadline_ < *push.deadline_)) {
                 push.deadline_ = stream->deadline_;
@@ -105,23 +110,26 @@ void http3_client_connection::finish_push(push_list_type::iterator found, outcom
     auto& push = *found;
     // Only the sole driver stops stream delivery, before releasing the parser
     // and the borrowed response sink. SSL_free stops a peer UNI receive half.
+    auto* session = live_session();
     if (push.stream_id_) {
-        if (session_) {
-            const auto closed = session_->transport().close_stream(*push.stream_id_);
+        if (session != nullptr) {
+            const auto closed = session->transport().close_stream(*push.stream_id_);
             if (closed != ruvia::quic_operation_status::accepted &&
                 closed != ruvia::quic_operation_status::completed &&
                 closed != ruvia::quic_operation_status::retired) {
                 throw std::runtime_error("HTTP/3 push receive stream could not retire");
             }
+            if (!attempt_->engine_.retire_push_stream(*push.stream_id_)) {
+                throw std::runtime_error("HTTP/3 push parser could not retire");
+            }
         }
-        if (session_ && !response_engine_.retire_push_stream(*push.stream_id_)) {
-            throw std::runtime_error("HTTP/3 push parser could not retire");
+        if (attempt_) {
+            attempt_->receiver_.retire(*push.stream_id_);
+            std::erase(attempt_->peer_streams_, *push.stream_id_);
+            std::erase_if(attempt_->peer_push_streams_, [&push](const peer_push_stream_type& binding) { return binding.push_id_ == push.push_id_; });
         }
-        receiver_.retire(*push.stream_id_);
-        std::erase(peer_streams_, *push.stream_id_);
-        std::erase_if(peer_push_streams_, [&push](const peer_push_stream_type& binding) { return binding.push_id_ == push.push_id_; });
-    } else if (outcome != outcome_type::complete && !push.peer_cancelled_ && session_) {
-        cancelled_pushes_.set(push.push_id_);
+    } else if (outcome != outcome_type::complete && !push.peer_cancelled_ && session != nullptr) {
+        attempt_->cancelled_pushes_.set(push.push_id_);
     }
     auto* state_value = push.state_;
     if (state_value != nullptr) {
@@ -141,11 +149,16 @@ void http3_client_connection::finish_push(push_list_type::iterator found, outcom
             } else if (outcome == outcome_type::complete) {
                 try {
                     const auto plan = push.delivery_->response_body_plan();
+                    // Only a decode-required body is withheld from incremental
+                    // readers; a streamed body may be borrowed across a pipe write.
+                    const bool body_withheld = state_value->body_decode_required_;
                     decode_http_client_response_content_encoding(*state_value,
                         plan && plan->content_semantics() == http_response_content_semantics_type::with_content,
                         max_response_bytes_);
                     if (push.deadline_ && std::chrono::steady_clock::now() >= *push.deadline_) {
-                        state_value->discard_response_body();
+                        if (body_withheld) {
+                            state_value->discard_response_body();
+                        }
                         (void)push.delivery_->commit_terminal_error(http_client_error::code_type::timeout);
                     } else if (push.delivery_->commit_complete() != http3_client_response_delivery::commit_status_type::committed) {
                         (void)push.delivery_->commit_terminal_error(http_client_error::code_type::protocol_error);
@@ -195,23 +208,25 @@ bool http3_client_connection::sweep_pushes() {
             progress_value = true;
         }
     }
-    for (std::size_t index = 0; index < peer_push_streams_.size();) {
-        const auto binding = peer_push_streams_[index];
+    auto& attempt = this->attempt();
+    auto& peer_push_streams = attempt.peer_push_streams_;
+    for (std::size_t index = 0; index < peer_push_streams.size();) {
+        const auto binding = peer_push_streams[index];
         if (find_push_by_stream(binding.stream_id_) == pushes_.end() &&
-            (settled_pushes_.test(binding.push_id_) || (binding.deadline_ && now >= *binding.deadline_))) {
-            if (session_) {
-                const auto closed = session_->transport().close_stream(binding.stream_id_);
+            (attempt.settled_pushes_.test(binding.push_id_) || (binding.deadline_ && now >= *binding.deadline_))) {
+            if (auto* session = attempt.session_.get()) {
+                const auto closed = session->transport().close_stream(binding.stream_id_);
                 if ((closed != ruvia::quic_operation_status::accepted &&
                         closed != ruvia::quic_operation_status::completed &&
                         closed != ruvia::quic_operation_status::retired) ||
-                    !response_engine_.retire_push_stream(binding.stream_id_)) {
+                    !attempt.engine_.retire_push_stream(binding.stream_id_)) {
                     throw std::runtime_error("HTTP/3 unpromised push stream could not retire");
                 }
             }
-            receiver_.retire(binding.stream_id_);
-            std::erase(peer_streams_, binding.stream_id_);
-            peer_push_streams_.erase(peer_push_streams_.begin() + static_cast<std::ptrdiff_t>(index));
-            seen_pushes_.set(binding.push_id_);
+            attempt.receiver_.retire(binding.stream_id_);
+            std::erase(attempt.peer_streams_, binding.stream_id_);
+            peer_push_streams.erase(peer_push_streams.begin() + static_cast<std::ptrdiff_t>(index));
+            attempt.seen_pushes_.set(binding.push_id_);
             settle_push(binding.push_id_);
             progress_value = true;
         } else {
@@ -225,24 +240,25 @@ bool http3_client_connection::flush_push_control() {
     if (push_observer_.receive_ == nullptr) {
         return false;
     }
+    auto& attempt = this->attempt();
     bool progress_value = false;
-    for (std::size_t id = 0; id < cancelled_pushes_.size(); ++id) {
-        if (cancelled_pushes_.test(id)) {
-            if (!response_engine_.queue_cancel_push(id)) {
+    for (std::size_t id = 0; id < attempt.cancelled_pushes_.size(); ++id) {
+        if (attempt.cancelled_pushes_.test(id)) {
+            if (!attempt.engine_.queue_cancel_push(id)) {
                 return progress_value;
             }
-            cancelled_pushes_.reset(id);
+            attempt.cancelled_pushes_.reset(id);
             progress_value = true;
         }
     }
     // Remembered promise metadata is deliberately finite per connection. It
     // cannot be forgotten while a valid repeated promise may still arrive.
-    while (pending_push_credits_ != 0 && authorized_push_id_ + 1 < max_remembered_pushes) {
-        if (!response_engine_.queue_max_push_id(authorized_push_id_ + 1)) {
+    while (attempt.pending_push_credits_ != 0 && attempt.authorized_push_id_ + 1 < max_remembered_pushes) {
+        if (!attempt.engine_.queue_max_push_id(attempt.authorized_push_id_ + 1)) {
             break;
         }
-        ++authorized_push_id_;
-        --pending_push_credits_;
+        ++attempt.authorized_push_id_;
+        --attempt.pending_push_credits_;
         progress_value = true;
     }
     return progress_value;

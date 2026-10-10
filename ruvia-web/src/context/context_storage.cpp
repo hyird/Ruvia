@@ -18,8 +18,10 @@ context::context(request_memory& memory, const http_request& request,
     detail::context_services services)
     : memory_(memory),
       request_(request),
+      // A subrequest's services carry the parent's snapshot, so replay risk
+      // survives internal dispatch even without a forwarded Early-Data field.
       early_data_info_(services.early_data_info().received_from_early_data(),
-          request.header("early-data").has_value()),
+          services.early_data_info().upstream_declared_early_data() || request.header("early-data").has_value()),
       conn_info_(services.resolve_conn_info(request)),
       capabilities_(services.worker(), services.get_stop_token(), services.worker_states(), services.get_blocking_pool()),
       route_path_(route_path),

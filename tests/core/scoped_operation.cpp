@@ -808,6 +808,34 @@ RUVIA_TEST(scoped_operation_completion_clears_borrowed_start_check) {
     scope.close();
 }
 
+RUVIA_TEST(scoped_operation_rejects_empty_task_without_starting) {
+    ruvia::operation_scope scope;
+    auto source = complete_immediately();
+    auto retained = std::move(source);
+    {
+        auto operation = ruvia::make_scoped_operation(scope, std::move(source));
+        ruvia::event_loop_pool loops({.loop_count_ = 1});
+        const auto loop = loops.loop(0);
+        auto first_root = loop.start(await_scoped_operation(operation));
+        auto repeated_root = loop.start(await_scoped_operation(operation));
+        loops.start();
+        for (auto* root : {&first_root, &repeated_root}) {
+            bool rejected = false;
+            try {
+                root->get();
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+        }
+        RUVIA_CHECK(scope.has_pending_operations());
+        loops.stop();
+        loops.join();
+    }
+    RUVIA_CHECK(!scope.has_pending_operations());
+    static_cast<void>(retained);
+}
+
 RUVIA_TEST(scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_release) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);

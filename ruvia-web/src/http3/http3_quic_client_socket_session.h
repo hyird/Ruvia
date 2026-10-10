@@ -68,10 +68,17 @@ public:
     http3_quic_client_socket_session& operator=(http3_quic_client_socket_session&&) = delete;
 
     [[nodiscard]] pump_result_type pump();
-    [[nodiscard]] task<void> wait_readable();
-    [[nodiscard]] task<void> wait_writable();
     [[nodiscard]] task<wake_reason_type> wait_for_activity(pump_result_type pump,
         std::optional<std::chrono::steady_clock::time_point> absolute_deadline = {});
+    // Closes QUIC with reason (an earlier close reason is retained), sends
+    // CONNECTION_CLOSE, and keeps the socket for the RFC 9000 closing period,
+    // ended no later than latest. The period is skipped when the peer never
+    // sent a datagram, since it has no state to answer from. A stop request
+    // ends only the wait: CONNECTION_CLOSE is still offered once without
+    // blocking. Always releases the transport and sockets before completing;
+    // a send failure only ends this best-effort period early.
+    [[nodiscard]] task<void> shutdown(ruvia::quic_close_reason_view reason,
+        std::chrono::steady_clock::time_point latest);
     void request_stop() noexcept;
     void notify_work() noexcept;
     [[nodiscard]] bool consume_work_notification() noexcept;
@@ -104,7 +111,9 @@ public:
     void close() noexcept;
 
 private:
-    friend struct http3_quic_client_socket_session_test_access;
+    enum class packet_route_type : unsigned char { send,
+        skip,
+        invalid };
 
     [[nodiscard]] static asio::ip::udp::socket make_socket(asio::io_context& io,
         const asio::ip::udp::endpoint& peer);
@@ -116,16 +125,12 @@ private:
     void fail_candidate_migration() noexcept;
     void reset_rejected_early_streams();
     void require_owner_thread() const;
-    struct socket_sender_type final {
-        [[nodiscard]] std::size_t operator()(asio::ip::udp::socket& socket,
-            asio::const_buffer packet, asio::error_code& error) const {
-            return socket.send(packet, 0, error);
-        }
-    };
-    template <typename send_type>
-    [[nodiscard]] bool send_pending(pump_result_type& result_value, send_type& send);
-    template <typename send_type>
-    [[nodiscard]] pump_result_type pump_with_send(send_type& send);
+    [[nodiscard]] bool send_pending(pump_result_type& result_value);
+    [[nodiscard]] bool receive_datagrams(pump_result_type& result_value);
+    [[nodiscard]] packet_route_type route_packet(const ruvia::quic_packet_result& output);
+    [[nodiscard]] bool drive_closing_period();
+    [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> closing_period_end(
+        std::chrono::steady_clock::time_point latest) const noexcept;
 
     std::thread::id owner_thread_;
     asio::ip::udp::endpoint peer_;
@@ -151,9 +156,8 @@ private:
     bool stopping_{};
     bool active_wait_{};
     bool work_pending_{};
+    bool peer_reached_{};
     bool closed_{};
 };
 
 }  // namespace ruvia::detail
-
-#include "http3/http3_quic_client_socket_session.inl"
