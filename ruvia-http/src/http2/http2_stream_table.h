@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/util/http_pmr_object.h"
 
 #include "http2/http2_local_settings.h"
+#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_stream_state.h"
 
 namespace ruvia::detail {
@@ -145,28 +146,32 @@ public:
         }
     }
 
-    [[nodiscard]] bool apply_send_window_delta(std::int64_t delta) noexcept {
-        // SETTINGS_INITIAL_WINDOW_SIZE applies to every active stream as one
-        // protocol transaction. Preflight the complete table first; applying
-        // the delta while discovering a later overflow would leave earlier
-        // streams with a different window even though the SETTINGS is rejected.
+    [[nodiscard]] bool apply_send_window_delta(
+        std::int64_t delta, std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
+        // Preflight the extrema of the ordered SETTINGS transaction before
+        // committing its final delta. Closed streams may remain as lease
+        // storage, but no longer participate in protocol flow control.
         bool fits = true;
-        for_each([&fits, delta](http2_stream_state& stream) noexcept {
-            if (!fits) {
+        for_each([&fits, minimum_delta, maximum_delta](http2_stream_state& stream) noexcept {
+            if (!fits || http2_stream_is_closed(stream)) {
                 return;
             }
             const auto current = static_cast<std::int64_t>(stream.send_window());
-            if (delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) -
-                            current ||
-                delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) -
-                            current) {
+            if (maximum_delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) -
+                                    current ||
+                minimum_delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) -
+                                    current) {
                 fits = false;
             }
         });
         if (!fits) {
             return false;
         }
-        for_each([delta](http2_stream_state& stream) noexcept { (void)stream.add_send_window(delta); });
+        for_each([delta](http2_stream_state& stream) noexcept {
+            if (!http2_stream_is_closed(stream)) {
+                (void)stream.add_send_window(delta);
+            }
+        });
         return true;
     }
 
@@ -242,8 +247,9 @@ private:
 }
 
 inline bool http2_apply_stream_send_window_delta(
-    http2_stream_table& streams, std::int64_t delta) noexcept {
-    return streams.apply_send_window_delta(delta);
+    http2_stream_table& streams, std::int64_t delta,
+    std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
+    return streams.apply_send_window_delta(delta, minimum_delta, maximum_delta);
 }
 
 }  // namespace ruvia::detail

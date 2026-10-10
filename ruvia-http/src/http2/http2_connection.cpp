@@ -200,6 +200,10 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
     // valid entry visible in the live peer model before the fatal GOAWAY is queued.
     http2_peer_settings candidate_value = peer_settings_;
     bool encoder_table_size_reduction = false;
+    const auto initial_window_baseline =
+        static_cast<std::int64_t>(peer_settings_.initial_window_size());
+    std::int64_t minimum_window_delta = 0;
+    std::int64_t maximum_window_delta = 0;
     for (std::size_t offset = 0; offset < payload_value.size(); offset += 6) {
         const auto entry_value = http2_read_setting_entry(payload_value, offset);
         const auto result_value = candidate_value.apply(entry_value.id_, entry_value.value_);
@@ -208,6 +212,12 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
                 http2_peer_setting_error_message(failure->error()));
             return false;
         }
+        if (entry_value.id_ == http2_setting_id::initial_window_size) {
+            const auto delta = static_cast<std::int64_t>(entry_value.value_) -
+                               initial_window_baseline;
+            minimum_window_delta = (std::min)(minimum_window_delta, delta);
+            maximum_window_delta = (std::max)(maximum_window_delta, delta);
+        }
         if (entry_value.id_ == http2_setting_id::header_table_size &&
             entry_value.value_ < encoder_dynamic_table_size_) {
             encoder_table_size_reduction = true;
@@ -215,11 +225,11 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
     }
 
     const auto initial_window_delta = static_cast<std::int64_t>(candidate_value.initial_window_size()) -
-                                      static_cast<std::int64_t>(peer_settings_.initial_window_size());
-    // http2_stream_table preflights every stream before changing any of them. Do
-    // this while the live peer settings are still untouched; a rejected delta can
-    // therefore emit GOAWAY without publishing a partially applied SETTINGS.
-    if (!http2_apply_stream_send_window_delta(streams_, initial_window_delta)) {
+                                      initial_window_baseline;
+    // Validate every intermediate window as well as the final setting before
+    // publishing the candidate or changing any active stream.
+    if (!http2_apply_stream_send_window_delta(
+            streams_, initial_window_delta, minimum_window_delta, maximum_window_delta)) {
         append_goaway(http2_error_code::flow_control_error, "stream window overflow");
         return false;
     }
@@ -294,7 +304,9 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
             const auto applied_initial_window_delta =
                 static_cast<std::int64_t>(peer_settings_.initial_window_size()) -
                 static_cast<std::int64_t>(previous_initial_window_size);
-            if (!http2_apply_stream_send_window_delta(streams_, -applied_initial_window_delta)) {
+            const auto rollback_delta = -applied_initial_window_delta;
+            if (!http2_apply_stream_send_window_delta(
+                    streams_, rollback_delta, rollback_delta, rollback_delta)) {
                 std::terminate();
             }
             peer_settings_.replace_values_from(previous_settings);

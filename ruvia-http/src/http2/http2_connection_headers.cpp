@@ -313,6 +313,11 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
         http2_remote_peer_half_closed(stream) &&
         !(role_ == http2_role::server && stream.tunnel().pending() != nullptr);
     reserve_event_slots(terminal_event ? 2 : 1);
+    // A later frame in the same input batch can close this stream before the
+    // public request event acquires its lease. Keep that event's storage alive.
+    if (role_ == http2_role::server) {
+        pin_stream(stream.id());
+    }
     const auto request_content_signal = stream.request_content_canceled()
                                             ? std::optional<http_client_request_content_signal>(
                                                   http_client_request_content_signal::exchange_complete)

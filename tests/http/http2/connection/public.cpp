@@ -1308,3 +1308,97 @@ RUVIA_TEST(http2_public_push_request_lease_preserves_fields_and_releases_repeate
         RUVIA_CHECK(server.release(std::move(*parent)) == ruvia::http2_server_request_release_status::released);
     }
 }
+
+RUVIA_TEST(http2_public_request_reset_keeps_events_consumable) {
+    for (const bool split_input : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        (void)server.consume_output(server.pending_output().size());
+        auto wire = server_request_wire(&resource, {});
+        if (split_input) {
+            const auto prefix_size = wire.size() - 1;
+            RUVIA_CHECK(server.feed(std::string_view(wire).substr(0, prefix_size)) ==
+                        ruvia::http2_feed_result::need_input);
+            wire.erase(0, prefix_size);
+        }
+        const char cancel[] = {0, 0, 0, 8};
+        append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, 1,
+            std::string_view(cancel, sizeof(cancel)));
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        RUVIA_CHECK(!server.connection_error().has_value());
+        bool saw_close = false;
+        std::size_t request_heads = 0;
+        while (auto event = server.next_event()) {
+            saw_close = saw_close || event->stream_closed() != nullptr;
+            if (auto* request = event->request_head()) {
+                ++request_heads;
+                RUVIA_CHECK_EQ(request->request().path(), std::string_view("/upload"));
+                RUVIA_CHECK(server.release(std::move(*request)) ==
+                            ruvia::http2_server_request_release_status::released);
+            }
+        }
+        RUVIA_CHECK(saw_close);
+        RUVIA_CHECK_EQ(request_heads, std::size_t{1});
+    }
+}
+
+RUVIA_TEST(http2_public_repeated_initial_window_checks_intermediate_overflow) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)server.consume_output(server.pending_output().size());
+    const auto request_wire = server_request_wire(&resource, {});
+    RUVIA_CHECK(server.feed(request_wire) == ruvia::http2_feed_result::accepted);
+    auto request = server.next_event();
+    RUVIA_CHECK(request && request->request_head() != nullptr);
+    while (server.next_event()) {
+    }
+    std::pmr::string wire(&resource);
+    const char increment[] = {0, 0, 0, 1};
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1,
+        std::string_view(increment, sizeof(increment)));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    while (server.next_event()) {
+    }
+    const char settings[] = {
+        0, 4, 0x7f, static_cast<char>(0xff), static_cast<char>(0xff), static_cast<char>(0xff),
+        0, 4, 0, 0, static_cast<char>(0xff), static_cast<char>(0xff)};
+    wire.clear();
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
+        std::string_view(settings, sizeof(settings)));
+    (void)server.feed(wire);
+    RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::flow_control_error);
+}
+
+RUVIA_TEST(http2_public_closed_request_lease_does_not_overflow_settings) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)server.consume_output(server.pending_output().size());
+    const auto request_wire = server_request_wire(&resource, {});
+    RUVIA_CHECK(server.feed(request_wire) == ruvia::http2_feed_result::accepted);
+    auto request = server.next_event();
+    auto* request_head = request ? request->request_head() : nullptr;
+    RUVIA_CHECK(request_head != nullptr);
+    while (server.next_event()) {
+    }
+    std::pmr::string wire(&resource);
+    const char increment[] = {0x7f, static_cast<char>(0xff), 0, 0};
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1,
+        std::string_view(increment, sizeof(increment)));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    ruvia::http_response response({.resource_ = &resource});
+    RUVIA_CHECK(server.submit_buffered_response(1, response) ==
+                ruvia::http2_submit_status::accepted);
+    while (server.next_event()) {
+    }
+    (void)server.consume_output(server.pending_output().size());
+    const char settings[] = {0, 4, 0, 1, 0, 0};
+    wire.clear();
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
+        std::string_view(settings, sizeof(settings)));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!server.connection_error().has_value());
+    if (request_head != nullptr) {
+        RUVIA_CHECK(server.release(std::move(*request_head)) ==
+                    ruvia::http2_server_request_release_status::released);
+    }
+}

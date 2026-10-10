@@ -2,30 +2,7 @@
 
 namespace ruvia::detail {
 
-bool split_route_path_segment(
-    std::string_view path, std::string_view& segment, std::string_view& rest) noexcept {
-    if (path.starts_with('/')) {
-        path.remove_prefix(1);
-    }
-    if (path.empty()) {
-        segment = {};
-        rest = {};
-        return false;
-    }
-
-    const auto slash = path.find('/');
-    if (slash == std::string_view::npos) {
-        segment = path;
-        rest = {};
-        return true;
-    }
-
-    segment = path.substr(0, slash);
-    rest = path.substr(slash + 1);
-    return true;
-}
-
-bool split_request_path_segment(
+bool split_path_segment(
     std::string_view path, std::string_view& segment, std::string_view& rest) noexcept {
     if (path.empty()) {
         segment = {};

@@ -81,8 +81,15 @@ receive the original HEAD request, and the response writer suppresses its body.
 Streaming, SSE, and websocket endpoints require an explicit HEAD route.
 Parameterized routes match with or without a single trailing slash, regardless
 of whether the route declaration includes that slash.
+Interior repeated slashes remain distinct path segments; parameters cannot match
+an empty segment. `url_for` preserves these segments and declared trailing
+slashes so generated URLs match their declared routes.
 Incremental HTTP content encoding accepts empty flushes without ending the stream;
 subsequent writes and `finish()` remain valid.
+
+For the sans-I/O `http2_connection`, drain `next_event()` before feeding more input.
+Request metadata remains valid until its request lease is released, including
+after a peer reset.
 
 CONNECT tunnels support independent send and receive half-closes: a peer FIN
 ends reads without preventing further writes; `finish()` closes only the local

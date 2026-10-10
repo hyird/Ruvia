@@ -620,7 +620,7 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
     const auto dir = fs::temp_directory_path() / "ruvia_if_range_same_second";
     fs::create_directories(dir);
     const auto path = dir / "data.txt";
-    const auto base_time = fs::file_time_type::clock::from_sys(sys_seconds(seconds(1700000000)));
+    const auto base_time = floor<seconds>(fs::file_time_type::clock::now()) - hours(24);
     const auto write_version = [&](std::string_view content, milliseconds fraction) {
         {
             std::ofstream output(path, std::ios::binary | std::ios::trunc);

@@ -155,6 +155,11 @@ public:
     RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_value),
         (counted_on_path()), hello);
     RUVIA_GET("/users/:id", user);
+    RUVIA_GET("/empty//:id", user);
+    RUVIA_GET("/slash-link", slash_link);
+    RUVIA_GET("/literal/", hello);
+    RUVIA_GET("/tail/:id//", user);
+    RUVIA_GET("/trailing-links", trailing_links);
     RUVIA_GET("/head/:id", head_metadata, testing_facade_stamp);
     RUVIA_GET("/greet", greet);
     RUVIA_GET("/link", link);
@@ -304,6 +309,18 @@ private:
         co_return c.body(c.try_request_state<testing_facade_user>() == nullptr
                              ? std::string_view("unbound")
                              : std::string_view("bound"));
+    }
+
+    ruvia::task<ruvia::http_response> slash_link(ruvia::context& c) {
+        co_return c.body(c.url_for("/t/empty//:id", {"456"}));
+    }
+
+    ruvia::task<ruvia::http_response> trailing_links(ruvia::context& c) {
+        std::pmr::string reply(c.arena());
+        reply.append(c.url_for("/t/literal/"));
+        reply.push_back(' ');
+        reply.append(c.url_for("/t/tail/:id//", {"789"}));
+        co_return c.body(std::move(reply));
     }
 };
 
@@ -971,4 +988,50 @@ RUVIA_TEST(testing_facade_router_slash) {
 
     auto res2 = app.request(ruvia::test_request::get("/t/a/123"));
     RUVIA_CHECK_EQ(res2.status(), ruvia::http_status::ok);
+}
+
+RUVIA_TEST(testing_facade_dynamic_paths_preserve_empty_segments) {
+    ruvia::test_app app;
+
+    const auto repeated = app.request(ruvia::test_request::get("/t/empty//42"));
+    RUVIA_CHECK_EQ(repeated.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(repeated.body(), "42");
+
+    const auto missing_empty = app.request(ruvia::test_request::get("/t/empty/42"));
+    RUVIA_CHECK_EQ(missing_empty.status(), ruvia::http_status::not_found);
+
+    const auto extra_empty = app.request(ruvia::test_request::get("/t/empty///42"));
+    RUVIA_CHECK_EQ(extra_empty.status(), ruvia::http_status::not_found);
+
+    const auto empty_param = app.request(ruvia::test_request::get("/t/users//"));
+    RUVIA_CHECK_EQ(empty_param.status(), ruvia::http_status::not_found);
+}
+
+RUVIA_TEST(testing_facade_reverse_routes_preserve_empty_segments) {
+    ruvia::test_app app;
+
+    const auto link = app.request(ruvia::test_request::get("/t/slash-link"));
+    RUVIA_CHECK_EQ(link.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(link.body(), "/t/empty//456");
+
+    const auto response = app.request(ruvia::test_request::get(link.body()));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(response.body(), "456");
+}
+
+RUVIA_TEST(testing_facade_reverse_routes_preserve_trailing_segments) {
+    ruvia::test_app app;
+
+    const auto links = app.request(ruvia::test_request::get("/t/trailing-links"));
+    RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(links.body(), "/t/literal/ /t/tail/789//");
+
+    const auto separator = links.body().find(' ');
+    const auto literal = app.request(ruvia::test_request::get(links.body().substr(0, separator)));
+    RUVIA_CHECK_EQ(literal.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(literal.body(), "hello");
+
+    const auto tail = app.request(ruvia::test_request::get(links.body().substr(separator + 1)));
+    RUVIA_CHECK_EQ(tail.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(tail.body(), "789");
 }
