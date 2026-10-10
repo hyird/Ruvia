@@ -9,7 +9,7 @@ std::size_t detail::route_table::find_dynamic_node(
     const dynamic_node_type& node_value, std::string_view path, route_match& match) noexcept {
     std::string_view segment;
     std::string_view rest;
-    if (!split_request_path_segment(path, segment, rest)) {
+    if (!split_path_segment(path, segment, rest)) {
         if (node_value.route_index_ != no_route_index) {
             return node_value.route_index_;
         }
@@ -54,7 +54,7 @@ std::size_t detail::route_table::find_dynamic_node_no_params(
     const dynamic_node_type& node_value, std::string_view path) noexcept {
     std::string_view segment;
     std::string_view rest;
-    if (!split_request_path_segment(path, segment, rest)) {
+    if (!split_path_segment(path, segment, rest)) {
         return node_value.route_index_ != no_route_index ? node_value.route_index_ : node_value.wildcard_route_index_;
     }
 

@@ -88,7 +88,7 @@ class push_routes final : public ruvia::controller<push_routes> {
 RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_and_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto observation = prepare_observation();
+    const auto observed = prepare_observation();
     ruvia::test::http2_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         std::optional<ruvia::http_client_push> retained;
@@ -149,7 +149,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                     bytes_value += chunk->size();
                 }
                 RUVIA_CHECK_EQ(bytes_value, std::size_t{80 * 16384});
-                RUVIA_CHECK_EQ(observation->streamed_.load(), 1U);
+                RUVIA_CHECK_EQ(observed->streamed_.load(), 1U);
                 auto cancelled_parent = co_await client.send({.target_ = "/large"});
                 RUVIA_CHECK((co_await collect_text(cancelled_parent)) == "parent");
                 auto cancelled_push = client.next_push();
@@ -189,7 +189,7 @@ RUVIA_TEST(http2_push_queue_overflow_and_disabled_permission_keep_parent_respons
     for (const bool enabled : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();
         auto attachment = ruvia::attach_event_loop(io);
-        const auto observation = prepare_observation();
+        const auto observed = prepare_observation();
         ruvia::test::http2_server_fixture server(io);
         auto run = [&]() -> ruvia::task<void> {
             ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
@@ -209,7 +209,7 @@ RUVIA_TEST(http2_push_queue_overflow_and_disabled_permission_keep_parent_respons
                 }
                 RUVIA_CHECK_EQ(client.stats().received_pushes_, enabled ? std::size_t{1} : std::size_t{0});
                 RUVIA_CHECK_EQ(client.stats().rejected_pushes_, enabled ? std::size_t{1} : std::size_t{0});
-                RUVIA_CHECK_EQ(observation->refused_.load(), enabled ? 0U : 2U);
+                RUVIA_CHECK_EQ(observed->refused_.load(), enabled ? 0U : 2U);
             } catch (...) {
                 failure = std::current_exception();
             }

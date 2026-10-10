@@ -3,11 +3,11 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "router/path_segments.h"
 #include "router/route_table.h"
 
-// Building a URL from a registered route pattern: substitute the parameters in
-// order and percent-encode whatever a path segment may not carry verbatim. This
-// is the reverse of resolution and shares nothing with it.
+// Substitute parameters and percent-encode path values while preserving the
+// same segments used to build and resolve the registered route.
 
 namespace ruvia {
 
@@ -63,18 +63,10 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
 
     std::size_t next_value = 0;
     auto remaining = pattern;
-    if (remaining.starts_with('/')) {
-        remaining.remove_prefix(1);
-    }
-    if (remaining.empty()) {
-        url.push_back('/');
-    }
-    while (!remaining.empty()) {
-        const auto slash = remaining.find('/');
-        const auto segment =
-            slash == std::string_view::npos ? remaining : remaining.substr(0, slash);
-        remaining =
-            slash == std::string_view::npos ? std::string_view{} : remaining.substr(slash + 1);
+    std::string_view segment;
+    std::string_view rest;
+    while (detail::split_path_segment(remaining, segment, rest)) {
+        remaining = rest;
 
         if (segment == "*" && remaining.empty()) {
             if (next_value >= values.size()) {
@@ -107,6 +99,9 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
     }
     if (next_value != values.size()) {
         throw std::invalid_argument("url_for received more values than the pattern has parameters");
+    }
+    if (pattern.ends_with('/')) {
+        url.push_back('/');
     }
     return url;
 }

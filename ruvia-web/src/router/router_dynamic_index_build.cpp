@@ -71,11 +71,8 @@ void detail::route_table::bind_dynamic_param_names(route_entry& route) {
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!split_route_path_segment(path, segment, rest)) {
+        if (!split_path_segment(path, segment, rest)) {
             return;
-        }
-        if (segment.empty()) {
-            throw std::invalid_argument("dynamic route path must not contain empty segments");
         }
         if (segment == "*") {
             if (!rest.empty()) {
@@ -84,7 +81,7 @@ void detail::route_table::bind_dynamic_param_names(route_entry& route) {
             append_dynamic_param_name(route, "*");
             return;
         }
-        if (segment.front() == ':') {
+        if (!segment.empty() && segment.front() == ':') {
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
@@ -101,7 +98,7 @@ bool detail::route_table::is_dynamic_path(std::string_view path) noexcept {
     while (!path.empty()) {
         std::string_view segment;
         std::string_view rest;
-        if (!split_route_path_segment(path, segment, rest)) {
+        if (!split_path_segment(path, segment, rest)) {
             return false;
         }
         if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
@@ -118,7 +115,7 @@ std::size_t detail::route_table::dynamic_node_upper_bound(std::string_view path)
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!split_route_path_segment(path, segment, rest)) {
+        if (!split_path_segment(path, segment, rest)) {
             return count;
         }
         if (segment != "*") {
@@ -136,7 +133,7 @@ std::size_t detail::route_table::dynamic_param_name_upper_bound(std::string_view
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!split_route_path_segment(path, segment, rest)) {
+        if (!split_path_segment(path, segment, rest)) {
             return count;
         }
         if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
@@ -172,12 +169,9 @@ void detail::route_table::insert_dynamic(
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!split_route_path_segment(path, segment, rest)) {
+        if (!split_path_segment(path, segment, rest)) {
             node_value->route_index_ = route_index;
             return;
-        }
-        if (segment.empty()) {
-            throw std::invalid_argument("dynamic route path must not contain empty segments");
         }
         if (segment == "*") {
             if (!rest.empty()) {
@@ -186,7 +180,7 @@ void detail::route_table::insert_dynamic(
             node_value->wildcard_route_index_ = route_index;
             return;
         }
-        if (segment.front() == ':') {
+        if (!segment.empty() && segment.front() == ':') {
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
@@ -247,8 +241,8 @@ bool detail::route_table::same_dynamic_shape(std::string_view left, std::string_
         std::string_view left_rest;
         std::string_view right_segment;
         std::string_view right_rest;
-        const auto has_left = split_route_path_segment(left, left_segment, left_rest);
-        const auto has_right = split_route_path_segment(right, right_segment, right_rest);
+        const auto has_left = split_path_segment(left, left_segment, left_rest);
+        const auto has_right = split_path_segment(right, right_segment, right_rest);
         if (!has_left || !has_right) {
             return has_left == has_right && priority == fork_priority::shared;
         }
