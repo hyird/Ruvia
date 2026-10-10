@@ -143,8 +143,11 @@ template <typename visitor_type>
     std::array<std::string_view, 64> names{};
     std::size_t name_count = 0;
     return http_all_parameters(value, [&](std::string_view part) noexcept {
+        if (part.empty()) {
+            return true;
+        }
         const auto equals = part.find('=');
-        if (part.empty() || equals == std::string_view::npos) {
+        if (equals == std::string_view::npos) {
             return false;
         }
         const auto name = http_trim_ows(part.substr(0, equals));

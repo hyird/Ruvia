@@ -323,3 +323,21 @@ RUVIA_TEST(http_accepts_encoding_rfc9110_identity_rules) {
     RUVIA_CHECK(quality.accepts(true));
     RUVIA_CHECK(!quality.accepts(false));
 }
+
+RUVIA_TEST(accepted_encoding_weights_do_not_allow_media_parameter_slots) {
+    for (const std::string_view item : {"gzip;", "gzip;;q=1", "gzip;q=1;", "gzip; ;q=1;"}) {
+        RUVIA_CHECK(!ruvia::http_accepts_encoding(item, "gzip"));
+        http_response_coding_qualities qualities;
+        qualities.update("identity;q=0.5");
+        qualities.update(item);
+        const auto selection = http_response_coding_selection::select(qualities);
+        RUVIA_CHECK(selection.selected() != nullptr);
+        if (const auto* selected = selection.selected()) {
+            RUVIA_CHECK(selected->coding() == http_content_coding::identity);
+            RUVIA_CHECK(!selected->accepts(http_content_coding::gzip));
+        }
+    }
+    RUVIA_CHECK(!ruvia::http_accepts_encoding("*;;q=1", "extension"));
+    RUVIA_CHECK(!ruvia::http_accepts_encoding("extension;q=0.8;", "extension"));
+    RUVIA_CHECK(ruvia::http_accepts_encoding("extension;q=0.8", "extension"));
+}

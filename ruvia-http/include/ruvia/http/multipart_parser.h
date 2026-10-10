@@ -202,7 +202,8 @@ private:
 };
 
 // Extracts the RFC 2046 boundary parameter from multipart/form-data. MIME
-// quoted-pairs are decoded into the owned multipart_boundary value.
+// quoted-pairs are decoded into the owned multipart_boundary value. Empty HTTP
+// parameter slots are ignored; a nonempty, unique boundary remains required.
 [[nodiscard]] multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value);
 
 enum class multipart_chunk_phase : std::uint8_t {

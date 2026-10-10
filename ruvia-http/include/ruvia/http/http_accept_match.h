@@ -16,6 +16,8 @@ enum class http_accept_token_match_mode : std::uint8_t {
 // Language-prefix mode uses the longest matching range; equal specificity takes
 // the highest quality, independently of field order. Token fields allow only
 // an optional q weight; unknown or additional parameters are unacceptable.
+// Media ranges permit empty parameter slots; these do not affect specificity
+// or quality. Nonempty parameters constrain the offered type, even after q.
 class http_accept_match final {
 public:
     void update_media_type(std::string_view field, std::string_view offered) noexcept;

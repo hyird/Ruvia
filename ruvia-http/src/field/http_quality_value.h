@@ -68,8 +68,12 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline bool http_accept_parameters_have_strict_equals(std::string_view value) noexcept {
     return http_all_parameters(value, [](std::string_view part) noexcept {
+        // RFC 9110 section 5.6.6 permits an omitted parameter after ';'.
+        if (part.empty()) {
+            return true;
+        }
         const auto equals = part.find('=');
-        if (part.empty() || equals == std::string_view::npos) {
+        if (equals == std::string_view::npos) {
             return false;
         }
         const auto raw_name = part.substr(0, equals);
