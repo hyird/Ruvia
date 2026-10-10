@@ -75,6 +75,11 @@ Start with [basic_http.cpp](examples/web/basic_http.cpp). The
 in their source comments; [examples/CMakeLists.txt](examples/CMakeLists.txt)
 lists the build targets and optional feature flags.
 
+Dynamic model values default to JSON `null` (`json_value`) and `{}` (`json_object`).
+Model serialization preserves these defaults, including `null` array elements.
+Fields that permit JSON null require `RUVIA_NULLABLE`; see
+[model_values.cpp](examples/web/model_values.cpp).
+
 Ordinary buffered `RUVIA_GET` routes also handle HEAD by default. An explicit
 `RUVIA_HEAD` match takes precedence; otherwise the GET handler and middleware
 receive the original HEAD request, and the response writer suppresses its body.

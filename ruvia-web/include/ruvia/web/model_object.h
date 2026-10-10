@@ -40,6 +40,7 @@ namespace ruvia {
 // Move construction preserves borrowing/ownership. Move assignment keeps the
 // target resource and owns the result (copying borrowed/incompatible storage).
 // Views and potentially borrowed get<T>() results must not outlive their token.
+// Default construction represents JSON null.
 class json_value final {
 public:
     enum class kind_type : unsigned char { object,
@@ -50,7 +51,7 @@ public:
         null };
 
     explicit json_value(model_options options = {})
-        : json_value(detail::resolved_pmr_resource_tag{}, {},
+        : json_value(detail::resolved_pmr_resource_tag{}, "null",
               detail::pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static std::optional<json_value> parse(
@@ -205,10 +206,11 @@ private:
 
 // Object-only dynamic token with the same borrowing, ownership and move
 // contract as json_value. Supplying a resource to parse() does not copy input.
+// Default construction represents an empty JSON object.
 class json_object final {
 public:
     explicit json_object(model_options options = {})
-        : json_object(detail::resolved_pmr_resource_tag{}, {},
+        : json_object(detail::resolved_pmr_resource_tag{}, "{}",
               detail::pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static std::optional<json_object> parse(
