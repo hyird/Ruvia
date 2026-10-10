@@ -205,6 +205,31 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
     }
 }
 
+RUVIA_TEST(multipart_boundary_allows_empty_http_parameter_slots_without_relaxing_validation) {
+    for (const std::string_view valid : {
+             "multipart/form-data;;boundary=abc;",
+             "multipart/form-data; ; boundary=abc; \t;",
+             R"(multipart/form-data;;charset="utf-8";;boundary="a b";;)"}) {
+        const auto result = ruvia::parse_multipart_boundary(valid);
+        RUVIA_CHECK(result.boundary() != nullptr);
+        if (result.boundary()) {
+            const auto expected = valid.find("a b") == std::string_view::npos ? "abc" : "a b";
+            RUVIA_CHECK_EQ(result.boundary()->value(), std::string_view(expected));
+        }
+    }
+    for (const std::string_view invalid : {
+             "multipart/form-data; ; ;",
+             "multipart/form-data;;boundary=;",
+             "multipart/form-data;;boundary=abc;;BOUNDARY=abc;",
+             "multipart/form-data;;boundary=abc;;charset=utf-8;;CHARSET=latin1;",
+             "multipart/form-data;;boundary=abc;;broken;",
+             "multipart/form-data;;boundary =abc;",
+             "multipart/form-data;;boundary= abc;"}) {
+        const auto result = ruvia::parse_multipart_boundary(invalid);
+        RUVIA_CHECK(result.failure() != nullptr);
+    }
+}
+
 RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
     ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
@@ -572,5 +597,123 @@ RUVIA_TEST(multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters
     RUVIA_CHECK_EQ(ended, std::size_t{1});
     if (expected.body() != nullptr) {
         RUVIA_CHECK_EQ(std::string_view(received), expected.body()->parts()[0].body());
+    }
+}
+
+RUVIA_TEST(multipart_preamble_limit_is_independent_of_input_chunking) {
+    constexpr std::size_t preamble_limit = 64 * 1024;
+    constexpr std::string_view expected_body = "value\r\n--abx\r\n--abcX\r\nstill data";
+    for (const auto preamble_bytes : {std::size_t{0}, preamble_limit - 1, preamble_limit, preamble_limit + 1}) {
+        for (const std::string_view close_ending : {"\r\n", ""}) {
+            std::string wire;
+            if (preamble_bytes != 0) {
+                wire.assign(preamble_bytes - 2, 'p');
+                wire += "\r\n";
+            }
+            wire += "--abc \t\r\nContent-Disposition: form-data; name=field\r\nContent-Type: text/plain\r\n\r\n";
+            wire += expected_body;
+            wire += "\r\n--abc-- \t";
+            wire += close_ending;
+            const bool accepted = preamble_bytes <= preamble_limit;
+            const auto buffered = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::multipart_boundary("abc")});
+            RUVIA_CHECK((buffered.body() != nullptr) == accepted);
+            if (const auto* body = buffered.body()) {
+                RUVIA_CHECK_EQ(body->parts().size(), std::size_t{1});
+                if (!body->parts().empty()) {
+                    RUVIA_CHECK_EQ(body->parts()[0].name(), std::string_view("field"));
+                    RUVIA_CHECK_EQ(body->parts()[0].content_type(), std::string_view("text/plain"));
+                    RUVIA_CHECK_EQ(body->parts()[0].body(), expected_body);
+                }
+            } else if (const auto* failure = buffered.failure()) {
+                RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+            }
+
+            for (const auto chunk_bytes : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{7}, wire.size()}) {
+                failing_memory_resource resource;
+                {
+                    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"), .resource_ = &resource});
+                    std::string received;
+                    std::size_t ended = 0;
+                    bool done = false;
+                    bool failed = false;
+                    const auto drain = [&] {
+                        for (;;) {
+                            const auto result_value = parser.poll();
+                            if (const auto* part = result_value.part()) {
+                                RUVIA_CHECK_EQ(part->name(), std::string_view("field"));
+                                RUVIA_CHECK_EQ(part->content_type(), std::string_view("text/plain"));
+                                received += part->body();
+                                if (part->phase() == ruvia::multipart_chunk_phase::complete ||
+                                    part->phase() == ruvia::multipart_chunk_phase::last) {
+                                    ++ended;
+                                }
+                                continue;
+                            }
+                            done = result_value.done() != nullptr;
+                            failed = result_value.failure() != nullptr;
+                            if (const auto* failure = result_value.failure()) {
+                                RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+                            }
+                            break;
+                        }
+                    };
+                    for (std::size_t offset = 0; offset < wire.size() && !done && !failed; offset += chunk_bytes) {
+                        parser.feed(std::string_view(wire).substr(offset, chunk_bytes));
+                        drain();
+                    }
+                    if (!done && !failed) {
+                        parser.finish_input();
+                        drain();
+                    }
+                    RUVIA_CHECK(done == accepted);
+                    RUVIA_CHECK(failed != accepted);
+                    if (accepted) {
+                        RUVIA_CHECK_EQ(ended, std::size_t{1});
+                        RUVIA_CHECK_EQ(std::string_view(received), expected_body);
+                    }
+                }
+                RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+            }
+        }
+    }
+}
+
+RUVIA_TEST(multipart_preamble_limit_counts_misleading_and_incomplete_marker_bytes) {
+    constexpr std::size_t preamble_limit = 64 * 1024;
+    for (const std::string_view misleading : {"-x", "--abx\r\n", "-"}) {
+        std::string wire(preamble_limit - 2, 'p');
+        wire += "\r\n";
+        wire += misleading;
+        if (misleading != "-") {
+            wire += "\r\n--abc\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--abc--\r\n";
+        }
+        const auto buffered = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::multipart_boundary("abc")});
+        RUVIA_CHECK(buffered.body() == nullptr);
+        RUVIA_CHECK(buffered.failure() != nullptr);
+        if (const auto* failure = buffered.failure()) {
+            RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+        }
+
+        ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc")});
+        bool failed = false;
+        for (std::size_t offset = 0; offset < wire.size() && !failed; ++offset) {
+            parser.feed(std::string_view(wire).substr(offset, 1));
+            const auto result_value = parser.poll();
+            RUVIA_CHECK(result_value.part() == nullptr);
+            RUVIA_CHECK(result_value.done() == nullptr);
+            if (const auto* failure = result_value.failure()) {
+                failed = true;
+                RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+            }
+        }
+        if (!failed) {
+            parser.finish_input();
+            const auto result_value = parser.poll();
+            failed = result_value.failure() != nullptr;
+            if (const auto* failure = result_value.failure()) {
+                RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+            }
+        }
+        RUVIA_CHECK(failed);
     }
 }

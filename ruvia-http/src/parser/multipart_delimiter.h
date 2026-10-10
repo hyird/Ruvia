@@ -276,6 +276,12 @@ private:
     if (search_cursor != nullptr) {
         *search_cursor = input.size() > 3 ? input.size() - 3 : 0;
     }
+    // The CRLF belongs to the preamble, but the first marker byte may still
+    // become a delimiter. Keep it out of the preamble quota until the next
+    // byte resolves the candidate or EOF makes the prefix incomplete.
+    if (!input_finished && input.ends_with("\r\n-")) {
+        return http_multipart_delimiter_result::make_need_input(input.size() - 1);
+    }
     return http_multipart_delimiter_result::make_no_match();
 }
 

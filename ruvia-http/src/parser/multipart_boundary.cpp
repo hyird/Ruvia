@@ -72,15 +72,17 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
     while (start <= parameters.size()) {
         const auto end = detail::http_find_unquoted_delimiter(parameters, start, ';');
         const auto parameter = detail::http_trim_ows(parameters.substr(start, end - start));
-        std::string_view key;
-        std::string_view value;
-        if (!detail::http_parse_mime_parameter(parameter, key, value) || !parameter_names.record(key)) {
-            return multipart_boundary_parse_result::make_failure();
-        }
-        if (detail::http_ascii_equals_ignore_case(key, "boundary")) {
-            boundary = decode_multipart_boundary_parameter(value);
-            if (!boundary) {
+        if (!parameter.empty()) {
+            std::string_view key;
+            std::string_view value;
+            if (!detail::http_parse_mime_parameter(parameter, key, value) || !parameter_names.record(key)) {
                 return multipart_boundary_parse_result::make_failure();
+            }
+            if (detail::http_ascii_equals_ignore_case(key, "boundary")) {
+                boundary = decode_multipart_boundary_parameter(value);
+                if (!boundary) {
+                    return multipart_boundary_parse_result::make_failure();
+                }
             }
         }
 

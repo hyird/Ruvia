@@ -92,6 +92,13 @@ slashes so generated URLs match their declared routes.
 Incremental HTTP content encoding accepts empty flushes without ending the stream;
 subsequent writes and `finish()` remain valid.
 
+`Content-Type` validation, multipart boundary extraction, and `Accept` media matching allow empty
+semicolon-delimited parameter slots as specified by
+[RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.6).
+Nonempty parameters still require `name=value` without whitespace around `=`.
+Multipart parsing applies the same preamble limit regardless of input chunk
+boundaries; see [streaming.cpp](examples/web/streaming.cpp).
+
 For the sans-I/O `http2_connection`, drain `next_event()` before feeding more input.
 Request metadata remains valid until its request lease is released, including
 after a peer reset.

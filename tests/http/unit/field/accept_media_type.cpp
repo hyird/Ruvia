@@ -87,6 +87,10 @@ RUVIA_TEST(http_accept_match_token_fields_allow_only_an_optional_weight) {
         {"en;q=0.1234", 0},
         {"*;level=1", 0},
         {"*;q=0.5;level=1", 0},
+        {"en;", 0},
+        {"en;;q=0.5", 0},
+        {"en;q=0.5;", 0},
+        {"*;;", 0},
         {"*;q=0.4", 400},
     };
     for (const auto mode : {ruvia::http_accept_token_match_mode::exact, ruvia::http_accept_token_match_mode::language_prefix}) {
@@ -189,5 +193,60 @@ RUVIA_TEST(accepts_media_type_requires_a_valid_complete_offered_value) {
         match.update_media_type(field, offered);
         RUVIA_CHECK(!match.matched());
         RUVIA_CHECK_EQ(match.quality(), 0);
+    }
+}
+
+RUVIA_TEST(http_accept_match_media_empty_parameter_slots_preserve_quality) {
+    struct media_case final {
+        std::string_view field_;
+        int quality_;
+    };
+    constexpr media_case cases[] = {
+        {"", 0},
+        {", ,", 0},
+        {"text/plain;", 1000},
+        {"text/plain; \t; charset=utf-8;;", 1000},
+        {"text/plain;;q=0.6; ;", 600},
+        {"text/plain;;q=0;;", 0},
+        {"text/*;;q=0.4;", 400},
+        {"*/*;;q=0.3;", 300},
+        {"text/plain;;q=;", 0},
+        {"text/plain;;q=\"0.6\";", 0},
+        {"text/plain;;q=0.6;;Q=0.8;", 0},
+        {"text/plain;;q=0.1234;", 0},
+        {"text/plain;;charset=;q=1;", 0},
+        {"text/plain;;charset =utf-8;q=1;", 0},
+        {"text/plain;;charset= utf-8;q=1;", 0},
+        {"text/plain;;charset=latin1;q=1;", 0},
+    };
+    for (const std::string_view offered : {"text/plain;charset=utf-8", "text/plain;;charset=utf-8; ;"}) {
+        for (const auto& item : cases) {
+            ruvia::http_accept_match match;
+            match.update_media_type(item.field_, offered);
+            RUVIA_CHECK_EQ(match.quality(), item.quality_);
+            RUVIA_CHECK_EQ(match.matched(), item.quality_ > 0);
+        }
+    }
+}
+
+RUVIA_TEST(http_accept_match_media_empty_slots_preserve_specificity_across_fields) {
+    constexpr std::string_view general = "text/plain;;q=0.8;";
+    constexpr std::string_view specific = "text/plain; ;charset=utf-8;;q=0;";
+    for (const bool specific_first : {false, true}) {
+        ruvia::http_accept_match excluded;
+        excluded.update_media_type(specific_first ? specific : general, "text/plain;;charset=utf-8;");
+        excluded.update_media_type(specific_first ? general : specific, "text/plain;;charset=utf-8;");
+        RUVIA_CHECK(!excluded.matched());
+
+        ruvia::http_accept_match other_charset;
+        other_charset.update_media_type(specific_first ? specific : general, "text/plain;;charset=latin1;");
+        other_charset.update_media_type(specific_first ? general : specific, "text/plain;;charset=latin1;");
+        RUVIA_CHECK_EQ(other_charset.quality(), 800);
+    }
+    for (const bool higher_first : {false, true}) {
+        ruvia::http_accept_match repeated;
+        repeated.update_media_type(higher_first ? "text/plain;;q=0.8;" : "text/plain;q=0.2", "text/plain;");
+        repeated.update_media_type(higher_first ? "text/plain;q=0.2" : "text/plain;;q=0.8;", "text/plain;");
+        RUVIA_CHECK_EQ(repeated.quality(), 800);
     }
 }
