@@ -1,5 +1,3 @@
-ruvia_fetch_web_dependencies("${RUVIA_ENABLE_MARIADB}" "${RUVIA_ENABLE_POSTGRESQL}" "${RUVIA_ENABLE_REDIS}")
-
 ruvia_collect_cpp_sources(ruvia_web_sources src)
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
@@ -37,8 +35,9 @@ target_link_libraries(ruvia-web
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
         # signing are Web-layer capabilities, so Web owns the direct OpenSSL
         # dependency while the sans-I/O HTTP target remains independent.
-        ruvia_dependencies_web
+        ${RUVIA_WEB_DEPENDENCIES}
 )
+target_compile_definitions(ruvia-web PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
 
 if(WIN32)
     target_link_libraries(ruvia-web PRIVATE Ws2_32)

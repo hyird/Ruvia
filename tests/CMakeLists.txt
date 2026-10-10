@@ -103,7 +103,7 @@ if(RUVIA_BUILD_HTTP)
         target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
         target_link_libraries(ruvia_http_unit_tests PRIVATE ws2_32)
     endif()
-    target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_dependencies_http)
+    target_link_libraries(ruvia_http_unit_tests PRIVATE ${RUVIA_HTTP_DEPENDENCIES})
 endif()
 
 if(RUVIA_BUILD_WEB)
@@ -166,14 +166,16 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_app_startup ruvia::web TIMEOUT 30 SOURCES
         web/unit/app/startup.cpp
         support/test_main.cpp)
-    target_link_libraries(ruvia_app_startup PRIVATE ruvia_dependencies_web ruvia_dependencies_http)
+    target_link_libraries(ruvia_app_startup PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_compile_definitions(ruvia_app_startup PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     ruvia_add_test(ruvia_http3_client_tests ruvia::web TIMEOUT 60 SOURCES
         web/unit/http3/client_connection_control.cpp
         web/unit/http3/client_connection_tunnel.cpp
         web/unit/http3/client_connection_worker.cpp
         support/test_main.cpp)
     target_link_libraries(ruvia_http3_client_tests PRIVATE
-        ruvia_dependencies_web ruvia_dependencies_http)
+        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_compile_definitions(ruvia_http3_client_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     ruvia_add_test(ruvia_tcp_client_tests ruvia::web TIMEOUT 60 SOURCES
         web/unit/http1/connect.cpp
         web/unit/http2/client_tunnel.cpp
@@ -182,14 +184,16 @@ if(RUVIA_BUILD_WEB)
         web/unit/http/udp_tunnel.cpp
         support/test_main.cpp)
     target_link_libraries(ruvia_tcp_client_tests PRIVATE
-        ruvia_dependencies_web ruvia_dependencies_http)
+        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_compile_definitions(ruvia_tcp_client_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
     # These functional fixtures exercise native TLS/coding/backend behavior.
     # Declare their dependencies here instead of exposing implementation headers
     # and compile options through the installed Web target.
     target_link_libraries(ruvia_web_unit_tests PRIVATE
-        ruvia_dependencies_web ruvia_dependencies_http)
+        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_compile_definitions(ruvia_web_unit_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     if(WIN32)
         target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
         target_compile_definitions(ruvia_http3_client_tests PRIVATE NOMINMAX)

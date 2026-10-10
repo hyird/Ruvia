@@ -165,8 +165,13 @@ void configure_client_tls_context(SSL_CTX& context_value, client_transport_confi
 }
 
 bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
-    return SSL_set1_dnsname(&connection, ip_address ? nullptr : host) == 1 &&
-           SSL_set1_ipaddr(&connection, ip_address ? host : nullptr) == 1;
+    X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
+    if (ip_address) {
+        return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 &&
+               X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
+    }
+    return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 &&
+           X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
 
 client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,

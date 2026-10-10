@@ -1,5 +1,3 @@
-ruvia_fetch_core_dependencies()
-
 set(_ruvia_core_generated_include_dir "${CMAKE_CURRENT_BINARY_DIR}/include")
 set(_ruvia_core_version_header
     "${_ruvia_core_generated_include_dir}/ruvia/core/version.h")
@@ -21,8 +19,9 @@ target_include_directories(ruvia-core
 
 target_link_libraries(ruvia-core
     PUBLIC
-        ruvia_dependencies_core
+        ${RUVIA_CORE_DEPENDENCIES}
 )
+target_compile_definitions(ruvia-core PUBLIC ASIO_STANDALONE)
 
 ruvia_install_target(ruvia-core core)
 
@@ -34,7 +33,7 @@ ruvia_install_generated_public_header(
 ruvia_install_public_header_closure(core include/ruvia/core)
 
 if(WIN32)
-    target_link_libraries(ruvia-core PRIVATE Advapi32 Bcrypt)
+    target_link_libraries(ruvia-core PUBLIC ws2_32 mswsock PRIVATE Advapi32 Bcrypt)
 endif()
 
 ruvia_install_export(core)

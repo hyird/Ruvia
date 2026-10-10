@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
+      - "vcpkg.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
@@ -21,6 +22,7 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
+      - "vcpkg.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
@@ -65,6 +67,8 @@ jobs:
       CC: gcc-13
       CXX: g++-13
       BUILD_TYPE: Debug
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg
     steps:
       - uses: actions/checkout@v6
         with:
@@ -72,33 +76,41 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 ninja-build make perl bison flex pkg-config
-          python3 -m pip install --user meson
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Restore dependency cache
-        id: restore-dependency-cache
+          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar pkg-config bison flex
+      - name: Bootstrap latest vcpkg
+        id: vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          echo "commit=$(git -C "$VCPKG_ROOT" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Restore vcpkg binary cache
+        id: restore-vcpkg-cache
         uses: actions/cache/restore@v6
         with:
-          path: build/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-${{ hashFiles('cmake/ruvia_dependencies.cmake', 'cmake/ruvia_dependency_configure.cmake', 'cmake/ruvia_dependency_build.cmake') }}
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            fetchcontent-${{ runner.os }}-${{ runner.arch }}-gcc13-Debug-
+            vcpkg-${{ runner.os }}-${{ runner.arch }}-gcc13-
       - name: Configure
+        id: configure
         run: |
+          # vcpkg installs during configure; restored archives skip port builds.
+          before=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f | wc -l)
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
-      - name: Build dependencies
-        run: cmake --build build --config "$BUILD_TYPE" --target ruvia_dependencies -j$(nproc)
-      - name: Save dependency cache
-        if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
+          after=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f | wc -l)
+          echo "new-binaries=$([ "$after" -gt "$before" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Save vcpkg binary cache
+        if: github.ref == 'refs/heads/main' && steps.restore-vcpkg-cache.outputs.cache-hit != 'true' && steps.configure.outputs.new-binaries == 'true'
         uses: actions/cache/save@v6
         with:
-          path: build/_deps
-          key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ${{ steps.restore-vcpkg-cache.outputs.cache-primary-key }}
       - name: Build
         run: cmake --build build --config "$BUILD_TYPE" -j$(nproc)
       - name: Test
@@ -108,48 +120,48 @@ jobs:
     runs-on: windows-2025
     env:
       BUILD_TYPE: Debug
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.x'
-      - uses: ilammy/msvc-dev-cmd@v1
-      - name: Install build tools
+      - name: Bootstrap latest vcpkg
+        id: vcpkg
         shell: pwsh
         run: |
-          choco install strawberryperl winflexbison3 jom pkgconfiglite --yes --no-progress
-          python -m pip install meson ninja
-          "C:\Strawberry\perl\bin" >> $env:GITHUB_PATH
-          $pkg_config = Get-ChildItem -LiteralPath "$env:ChocolateyInstall\lib\pkgconfiglite" -Filter pkg-config.exe -File -Recurse | Select-Object -First 1
-          if (-not $pkg_config) { throw "pkg-config installation was not found" }
-          $pkg_config.DirectoryName >> $env:GITHUB_PATH
-      - name: Restore dependency cache
-        id: restore-dependency-cache
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          "commit=$(git -C $env:VCPKG_ROOT rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+      - name: Restore vcpkg binary cache
+        id: restore-vcpkg-cache
         uses: actions/cache/restore@v6
         with:
-          path: build/_deps
-          key: fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-${{ hashFiles('cmake/ruvia_dependencies.cmake', 'cmake/ruvia_dependency_configure.cmake', 'cmake/ruvia_dependency_build.cmake') }}
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-msvc-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            fetchcontent-${{ runner.os }}-${{ runner.arch }}-msvc-Debug-
+            vcpkg-${{ runner.os }}-${{ runner.arch }}-msvc-
       - name: Configure
+        id: configure
         shell: pwsh
         run: |
+          # vcpkg installs during configure; restored archives skip port builds.
+          $before = (Get-ChildItem -Recurse -File $env:VCPKG_DEFAULT_BINARY_CACHE).Count
           cmake -S . -B build `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON
-      - name: Build dependencies
-        shell: pwsh
-        run: cmake --build build --config $env:BUILD_TYPE --target ruvia_dependencies "-j$([Environment]::ProcessorCount)"
-      - name: Save dependency cache
-        if: github.ref == 'refs/heads/main' && steps.restore-dependency-cache.outputs.cache-hit != 'true'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $after = (Get-ChildItem -Recurse -File $env:VCPKG_DEFAULT_BINARY_CACHE).Count
+          "new-binaries=$(($after -gt $before).ToString().ToLower())" >> $env:GITHUB_OUTPUT
+      - name: Save vcpkg binary cache
+        if: github.ref == 'refs/heads/main' && steps.restore-vcpkg-cache.outputs.cache-hit != 'true' && steps.configure.outputs.new-binaries == 'true'
         uses: actions/cache/save@v6
         with:
-          path: build/_deps
-          key: ${{ steps.restore-dependency-cache.outputs.cache-primary-key }}
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ${{ steps.restore-vcpkg-cache.outputs.cache-primary-key }}
       - name: Build
         shell: pwsh
         run: cmake --build build --config $env:BUILD_TYPE "-j$([Environment]::ProcessorCount)"

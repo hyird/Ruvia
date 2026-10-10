@@ -1,5 +1,3 @@
-ruvia_fetch_http_dependencies()
-
 ruvia_collect_cpp_sources(ruvia_http_sources src)
 add_library(ruvia-http STATIC ${ruvia_http_sources})
 
@@ -15,7 +13,7 @@ target_link_libraries(ruvia-http
         # protocol library does no TLS -- client transports are supplied externally and
         # the server driver lives in web -- while WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
         # http consumer would otherwise pull OpenSSL in for nothing.
-        ruvia_dependencies_http
+        ${RUVIA_HTTP_DEPENDENCIES}
 )
 
 ruvia_install_target(ruvia-http http)
