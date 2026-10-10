@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
@@ -43,6 +44,23 @@ RUVIA_TEST(json_object_parse_requires_a_complete_object) {
     RUVIA_CHECK(!ruvia::json_object::parse("[1,2]").has_value());
     RUVIA_CHECK(!ruvia::json_object::parse("null").has_value());
     RUVIA_CHECK(!ruvia::json_object::parse(R"({"name":"ada"} 1)").has_value());
+}
+
+RUVIA_TEST(json_object_default_represents_an_empty_object) {
+    const ruvia::json_object object;
+    RUVIA_CHECK_EQ(object.view(), std::string_view("{}"));
+    const auto parsed = ruvia::json_object::parse(object.view());
+    RUVIA_CHECK(parsed.has_value());
+    if (parsed) {
+        RUVIA_CHECK(object == *parsed);
+    }
+    RUVIA_CHECK(!object.get<ruvia::string>("missing"));
+    std::size_t fields = 0;
+    RUVIA_CHECK(object.for_each_field([&](std::string_view, const ruvia::json_value&) {
+        ++fields;
+        return true;
+    }));
+    RUVIA_CHECK_EQ(fields, std::size_t{0});
 }
 
 RUVIA_TEST(json_object_get_uses_last_match) {

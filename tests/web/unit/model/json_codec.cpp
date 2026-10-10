@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory_resource>
 #include <new>
@@ -59,6 +60,9 @@ RUVIA_MODEL(codec_rules,
 RUVIA_MODEL(codec_dynamic,
     RUVIA_REQUIRED_FIELD(value, ruvia::json_value),
     RUVIA_REQUIRED_FIELD(object, ruvia::json_object));
+RUVIA_MODEL(codec_dynamic_sequences,
+    RUVIA_REQUIRED_FIELD(dense, ruvia::array<ruvia::json_value>),
+    RUVIA_REQUIRED_FIELD(boxed, ruvia::boxed_array<ruvia::json_value>));
 RUVIA_MODEL(codec_empty);
 RUVIA_MODEL(codec_root_nested,
     RUVIA_REQUIRED_FIELD(name, ruvia::string),
@@ -318,6 +322,74 @@ RUVIA_TEST(model_json_codec_parses_and_serializes_without_running_validation_rul
     RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{0});
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*parsed_value)), R"({"value":"invalid"})");
     RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{0});
+}
+
+RUVIA_TEST(model_json_codec_preserves_default_null_dynamic_array_elements) {
+    const auto check = [&ruvia_ctx](
+                           std::initializer_list<std::string_view> tokens, std::string_view expected_array) {
+        ruvia::array<ruvia::json_value> dense;
+        ruvia::boxed_array<ruvia::json_value> boxed;
+        for (const auto token : tokens) {
+            if (token == "null") {
+                dense.emplace_back();
+                boxed.emplace();
+            } else {
+                const auto scalar = ruvia::json_value::parse(token);
+                RUVIA_CHECK(scalar.has_value());
+                if (!scalar) {
+                    return;
+                }
+                dense.push_back(*scalar);
+                boxed.push_back(*scalar);
+            }
+        }
+        codec_dynamic_sequences value;
+        value.set<"dense">(std::move(dense));
+        value.set<"boxed">(std::move(boxed));
+        const auto output = ruvia::to_json(value);
+        const auto expected = "{\"dense\":" + std::string(expected_array) +
+                              ",\"boxed\":" + std::string(expected_array) + "}";
+        RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
+        const auto reparsed = ruvia::from_json<codec_dynamic_sequences>(output);
+        RUVIA_CHECK(reparsed.has_value());
+        if (!reparsed) {
+            return;
+        }
+        RUVIA_CHECK_EQ(reparsed->get<"dense">().size(), tokens.size());
+        RUVIA_CHECK_EQ(reparsed->get<"boxed">().size(), tokens.size());
+        if (reparsed->get<"dense">().size() != tokens.size() ||
+            reparsed->get<"boxed">().size() != tokens.size()) {
+            return;
+        }
+        std::size_t index = 0;
+        for (const auto token : tokens) {
+            RUVIA_CHECK_EQ(reparsed->get<"dense">()[index].view(), token);
+            RUVIA_CHECK_EQ(reparsed->get<"boxed">()[index].view(), token);
+            ++index;
+        }
+    };
+    check({"null"}, "[null]");
+    check({"null", "null", "null"}, "[null,null,null]");
+    check({"null", "true", "null", R"("text")"}, R"([null,true,null,"text"])");
+}
+
+RUVIA_TEST(model_json_codec_roundtrips_default_dynamic_objects) {
+    auto scalar = ruvia::json_value::parse("true");
+    RUVIA_CHECK(scalar.has_value());
+    if (!scalar) {
+        return;
+    }
+    codec_dynamic value;
+    value.set<"value">(std::move(*scalar));
+    value.set<"object">(ruvia::json_object{});
+    const auto output = ruvia::to_json(value);
+    RUVIA_CHECK_EQ(std::string_view(output), R"({"value":true,"object":{}})");
+    const auto reparsed = ruvia::from_json<codec_dynamic>(output);
+    RUVIA_CHECK(reparsed.has_value());
+    if (reparsed) {
+        RUVIA_CHECK_EQ(reparsed->get<"object">().view(), std::string_view("{}"));
+        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*reparsed)), std::string_view(output));
+    }
 }
 
 RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) {

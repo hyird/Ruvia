@@ -5,6 +5,7 @@
 /Testing/
 
 # Dependency/build tool caches
+/.cache/
 /.slim/
 /.codegraph/
 /.omo/

@@ -31,6 +31,9 @@ std::optional<http_authority_view> parse_http_authority(borrowed_text value) noe
 }
 
 std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept {
+    if (value.empty()) {
+        return value.view();
+    }
     const auto authority = detail::parse_http_authority(value.view());
     if (!authority) {
         return std::nullopt;
