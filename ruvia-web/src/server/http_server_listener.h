@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -13,6 +14,8 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/server_config.h"
+
+#include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
 
@@ -75,6 +78,9 @@ struct http_server_listener_definition final {
         // Empty disables automatic injection. Otherwise this complete field
         // value is borrowed by every TCP/TLS request context on this listener.
         std::pmr::string alt_svc_;
+        // Generated once by server configuration validation and shared
+        // read-only by every worker's TCP and QUIC TLS contexts.
+        std::optional<tls_session_ticket_keys> session_ticket_keys_;
     };
 
     struct plain_http_type final {};
@@ -99,6 +105,17 @@ struct http_server_listener_definition final {
     // When enabled, UDP binds this TLS listener's address and numeric port.
     std::optional<http3_listen_config> http3_;
 };
+
+// Every TLS context of a listener uses the configuration's one ticket key set.
+// Only validated configurations carry keys; an unvalidated definition must
+// never reach a serving TLS context.
+inline void install_tls_session_ticket_keys(
+    SSL_CTX& context, const http_server_listener_definition::tls_type& tls) {
+    if (!tls.session_ticket_keys_.has_value()) {
+        throw std::logic_error("TLS listener session ticket keys were not generated");
+    }
+    tls.session_ticket_keys_->install(context);
+}
 
 using sni_context_store_type = std::pmr::vector<asio::ssl::context>;
 using sni_context_lookup_type = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;

@@ -85,6 +85,14 @@ RUVIA_TEST(http2_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::ok);
             RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
             RUVIA_CHECK(!result.tunnel()->header("content-length"));
+            bool rejected_policy = false;
+            try {
+                (void)std::move(*result.tunnel()).udp({.send_policy_ = static_cast<ruvia::http_datagram_send_policy>(0xff)});
+            } catch (const std::invalid_argument&) {
+                rejected_policy = true;
+            }
+            // The rejected policy must not consume the accepted tunnel.
+            RUVIA_CHECK(rejected_policy);
             auto tunnel = std::move(*result.tunnel()).udp();
             bool oversized = false;
             try {

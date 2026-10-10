@@ -33,6 +33,7 @@ void worker_timer_registration::cancel_quietly() noexcept {
 
 void worker_timer_registration::cancel(bool notify) noexcept {
     auto* dispatcher = std::exchange(dispatcher_, nullptr);
+    slot_state_ = nullptr;
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
     if (dispatcher == nullptr || generation == 0) {
@@ -52,42 +53,49 @@ worker_timer_cancellation worker_timer_registration::cancellation() const& {
     return worker_timer_cancellation(*dispatcher_, slot_, generation_);
 }
 
-void worker_timer_registration::bind(
-    detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
+void worker_timer_registration::bind(detail::worker_dispatcher& dispatcher, std::size_t slot,
+    std::uint64_t generation, const detail::timer_slot& slot_state) noexcept {
     dispatcher_ = &dispatcher;
+    slot_state_ = &slot_state;
     slot_ = slot;
     generation_ = generation;
 }
 
 void worker_timer_registration::release() noexcept {
     dispatcher_ = nullptr;
+    slot_state_ = nullptr;
     slot_ = 0;
     generation_ = 0;
+}
+
+bool worker_timer_registration::pending() const noexcept {
+    // Pairs with the release store that deactivates the slot on its own worker
+    // before expiry or cancellation delivers a completion.
+    return slot_state_ != nullptr && generation_ != 0 &&
+           slot_state_->active_generation_.load(std::memory_order_acquire) == generation_;
 }
 
 }  // namespace ruvia
 
 namespace ruvia::detail {
 
-void worker_dispatcher::schedule_timer(worker_timer_registration& registration,
+worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_registration& registration,
     std::chrono::steady_clock::time_point deadline_value,
     move_only_function<void(worker_timer_outcome)> completion) {
     if (!is_current()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
-    if (!attached()) {
-        throw std::runtime_error("worker execution context is detached");
-    }
-    if (impl_->timers_stopping_.load(std::memory_order_acquire)) {
-        throw std::runtime_error("worker timer queue is stopping");
-    }
-
     if (registration.dispatcher_ != nullptr) {
-        if (registration.dispatcher_ != this ||
-            has_timer(registration.slot_, registration.generation_)) {
+        // The previous binding may belong to another worker; its slot state is
+        // the only part of that worker read here.
+        if (registration.pending()) {
             throw std::logic_error("worker timer registration is already active");
         }
         registration.release();
+    }
+    // Detachment also stops the timer queue, so one check covers both.
+    if (impl_->timers_stopping_.load(std::memory_order_acquire)) {
+        return worker_timer_schedule_status::worker_stopping;
     }
 
     std::size_t slot_index = impl_->free_timer_slot_;
@@ -101,9 +109,9 @@ void worker_dispatcher::schedule_timer(worker_timer_registration& registration,
     if (++slot.generation_ == 0) {
         ++slot.generation_;
     }
-    slot.active_ = true;
     slot.next_free_ = no_timer_slot;
     slot.completion_ = std::move(completion);
+    slot.active_generation_.store(slot.generation_, std::memory_order_relaxed);
     try {
         impl_->timers_.push_back(timer_entry{
             .deadline_ = deadline_value,
@@ -112,17 +120,16 @@ void worker_dispatcher::schedule_timer(worker_timer_registration& registration,
             .generation_ = slot.generation_,
         });
     } catch (...) {
-        slot.active_ = false;
-        slot.completion_ = nullptr;
-        slot.next_free_ = impl_->free_timer_slot_;
-        impl_->free_timer_slot_ = slot_index;
+        // Roll the slot back; the moved-in completion is destroyed uninvoked.
+        static_cast<void>(release_timer_slot(slot_index));
         throw;
     }
     std::ranges::push_heap(impl_->timers_, timer_entry_later{});
-    registration.bind(*this, slot_index, slot.generation_);
+    registration.bind(*this, slot_index, slot.generation_, slot);
     if (!impl_->dispatching_timers_) {
         arm_timer();
     }
+    return worker_timer_schedule_status::scheduled;
 }
 
 void worker_dispatcher::request_timer_cancellation(
@@ -160,17 +167,10 @@ void worker_dispatcher::request_timer_cancellation(
 
 void worker_dispatcher::cancel_timer(
     std::size_t slot_index, std::uint64_t generation, bool notify) noexcept {
-    if (slot_index >= impl_->timer_slots_.size()) {
+    if (!has_timer(slot_index, generation)) {
         return;
     }
-    auto& slot = impl_->timer_slots_[slot_index];
-    if (!slot.active_ || slot.generation_ != generation) {
-        return;
-    }
-    slot.active_ = false;
-    auto completion = std::move(slot.completion_);
-    slot.next_free_ = impl_->free_timer_slot_;
-    impl_->free_timer_slot_ = slot_index;
+    auto completion = release_timer_slot(slot_index);
     ++impl_->stale_timer_count_;
     if (impl_->stale_timer_count_ >= 64 && impl_->stale_timer_count_ * 2 >= impl_->timers_.size()) {
         std::erase_if(impl_->timers_,
@@ -213,14 +213,10 @@ void worker_dispatcher::stop_timers() noexcept {
     impl_->timers_.clear();
     impl_->stale_timer_count_ = 0;
     for (std::size_t index = 0; index < impl_->timer_slots_.size(); ++index) {
-        auto& slot = impl_->timer_slots_[index];
-        if (!slot.active_) {
+        if (impl_->timer_slots_[index].active_generation_.load(std::memory_order_relaxed) == 0) {
             continue;
         }
-        slot.active_ = false;
-        auto completion = std::move(slot.completion_);
-        slot.next_free_ = impl_->free_timer_slot_;
-        impl_->free_timer_slot_ = index;
+        auto completion = release_timer_slot(index);
         try {
             if (completion) {
                 completion(worker_timer_outcome::cancelled);
@@ -274,11 +270,7 @@ void worker_dispatcher::fire_timers() {
             }
             continue;
         }
-        auto& slot = impl_->timer_slots_[entry_value.slot_];
-        slot.active_ = false;
-        auto completion = std::move(slot.completion_);
-        slot.next_free_ = impl_->free_timer_slot_;
-        impl_->free_timer_slot_ = entry_value.slot_;
+        auto completion = release_timer_slot(entry_value.slot_);
         if (completion) {
             completion(worker_timer_outcome::expired);
         }
@@ -288,8 +280,18 @@ void worker_dispatcher::fire_timers() {
 }
 
 bool worker_dispatcher::has_timer(std::size_t slot, std::uint64_t generation) const noexcept {
-    return slot < impl_->timer_slots_.size() && impl_->timer_slots_[slot].active_ &&
-           impl_->timer_slots_[slot].generation_ == generation;
+    return generation != 0 && slot < impl_->timer_slots_.size() &&
+           impl_->timer_slots_[slot].active_generation_.load(std::memory_order_relaxed) == generation;
+}
+
+move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(
+    std::size_t slot_index) noexcept {
+    auto& slot = impl_->timer_slots_[slot_index];
+    slot.active_generation_.store(0, std::memory_order_release);
+    auto completion = std::move(slot.completion_);
+    slot.next_free_ = impl_->free_timer_slot_;
+    impl_->free_timer_slot_ = slot_index;
+    return completion;
 }
 
 }  // namespace ruvia::detail

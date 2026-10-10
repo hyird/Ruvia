@@ -60,6 +60,24 @@ namespace {
             version == "HTTP/1.1" ? http_protocol_version::http11 : http_protocol_version::http10};
 }
 
+// RFC 9112 section 6.3 rule 1: a 1xx ends at its header section, so the
+// recipient ignores the framing fields the interim contract forbids senders
+// to emit; every other interim field rule still applies.
+[[nodiscard]] constexpr bool interim_field_acceptable(
+    http_interim_response_header_validation_status status) noexcept {
+    switch (status) {
+        case http_interim_response_header_validation_status::ok:
+        case http_interim_response_header_validation_status::content_length_forbidden:
+        case http_interim_response_header_validation_status::transfer_encoding_forbidden:
+            return true;
+        case http_interim_response_header_validation_status::invalid_header:
+        case http_interim_response_header_validation_status::trailer_forbidden:
+        case http_interim_response_header_validation_status::repeated_singleton:
+            return false;
+    }
+    return false;
+}
+
 }  // namespace
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
@@ -81,6 +99,14 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     const bool reset_content_requires_empty =
         output.status_code_ == http_status::reset_content &&
         content_semantics != http_response_content_semantics_type::connect_tunnel;
+    // RFC 9112 section 6.3 rule 1 ends 1xx, 204, 304 and HEAD responses at the
+    // header section whatever framing fields they carry, so a recipient ignores
+    // them rather than rejecting a message it can still delimit exactly. HEAD
+    // and 304 Content-Length still describes the selected representation.
+    const bool content_length_describes_representation =
+        framing_fields_apply || reset_content_requires_empty ||
+        (content_semantics == http_response_content_semantics_type::without_content &&
+            output.status_code_ != http_status::no_content);
 
     auto remaining = first_line_end == std::string_view::npos ? std::string_view{}
                                                               : head_section.substr(first_line_end + 2);
@@ -96,8 +122,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         const auto name = line.substr(0, colon);
         const auto value = http_trim_ows(line.substr(colon + 1));
         const bool fields_valid = content_semantics == http_response_content_semantics_type::informational
-                                      ? interim_headers.validate(name, value) ==
-                                            http_interim_response_header_validation_status::ok
+                                      ? interim_field_acceptable(interim_headers.validate(name, value))
                                       : is_valid_http_header_name(name) && is_valid_http_header_value(value);
         if (!fields_valid) {
             return http1_client_response_parse_error::invalid_header;
@@ -109,17 +134,9 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
         if (http_ascii_equals_ignore_case(name, "Content-Length")) {
             output.content_length_field_present_ = true;
-            if (output.status_code_ == http_status::no_content) {
-                return http1_client_response_parse_error::invalid_content_length;
-            }
-            // RFC 9112 section 6.3 applies method/status precedence before
-            // Content-Length framing. HEAD and 304 still carry representation
-            // metadata, so their field value must parse even though it does not
-            // decide the body boundary. A 101 still records its forbidden
-            // presence for handshake checks; successful CONNECT ignores it
-            // because the stream becomes a tunnel.
-            if (framing_fields_apply || reset_content_requires_empty ||
-                content_semantics == http_response_content_semantics_type::without_content) {
+            // A 101 still records its forbidden presence for handshake checks;
+            // successful CONNECT ignores it because the stream becomes a tunnel.
+            if (content_length_describes_representation) {
                 switch (output.content_length_.parse_field(value)) {
                     case http_content_length_parse_status::ok:
                         break;
@@ -158,12 +175,8 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
             }
         } else if (http_ascii_equals_ignore_case(name, "Transfer-Encoding")) {
             output.saw_transfer_encoding_ = true;
-            if (output.status_code_ == http_status::no_content) {
-                return http1_client_response_parse_error::invalid_transfer_encoding;
-            }
-            // RFC 9112 method/status precedence decides whether this field can
-            // frame this message. HEAD/304 may legitimately carry representation
-            // metadata; successful CONNECT is ignored by client-side rule.
+            // Only a response with content is framed by Transfer-Encoding;
+            // successful CONNECT is ignored by client-side rule.
             if (framing_fields_apply && output.protocol_version_ == http_protocol_version::http11) {
                 switch (output.transfer_encoding_.parse_field(value)) {
                     case http_transfer_encoding_parse_status::ok:

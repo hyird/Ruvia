@@ -12,6 +12,7 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/error.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
@@ -67,7 +68,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
 }
 
 template <typename stream_type>
-task<void> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket,
+task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket,
     const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes) {
     auto executor = asio::any_io_executor(stream.get_executor());
@@ -154,17 +155,22 @@ task<void> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::so
     if (finish_failure != nullptr) {
         std::rethrow_exception(finish_failure);
     }
+    // A clean peer end (FIN, or TLS close_notify) earns this side's close
+    // alert; protocol failures, transport errors and worker stop do not.
+    co_return reader_terminal_error == asio::error::eof&& engine.worker_running()
+        ? http_connection_close::peer_finished
+        : http_connection_close::abort;
 }
 
 }  // namespace
 
-task<void> run_http2_sans_io_session(asio::ip::tcp::socket& stream, const route_table& routes_value,
+task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& stream, const route_table& routes_value,
     worker_memory& worker_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(
         stream, stream, routes_value, worker_value, std::move(session_value), initial_bytes);
 }
 
-task<void> run_http2_sans_io_session(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
+task<http_connection_close> run_http2_sans_io_session(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
     const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(

@@ -1,5 +1,6 @@
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <variant>
 
@@ -26,7 +27,19 @@ namespace {
 
 }  // namespace
 
+// Redis replies non-finite doubles textually: scores added as +inf/-inf come
+// back as "inf"/"-inf", and RESP3-style doubles may also be "nan". Every other
+// spelling must be a plain finite decimal.
 double parse_redis_double(std::string_view value, std::string_view context_value) {
+    if (value == "inf" || value == "+inf") {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (value == "-inf") {
+        return -std::numeric_limits<double>::infinity();
+    }
+    if (value == "nan") {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
     const auto output = ruvia::parse_decimal_number(value);
     if ((output.index() != 0) || !std::isfinite(std::get<0>(output))) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);

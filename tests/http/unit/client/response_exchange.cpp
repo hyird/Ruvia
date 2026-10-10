@@ -17,9 +17,19 @@ RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {
         "Content-Type: text/html; charset=utf-8");
     RUVIA_CHECK(valid.plan().informational() != nullptr);
 
+    // RFC 9112 section 6.3 rule 1: a 1xx ends at its header section, so the
+    // framing fields a sender must not emit are ignored rather than fatal.
+    for (const auto fields : {std::string_view("Content-Length: 5"),
+             std::string_view("Transfer-Encoding: chunked"),
+             std::string_view("Content-Length: invalid\r\nTransfer-Encoding: gzip")}) {
+        std::string head("HTTP/1.1 103 Early Hints\r\n");
+        head.append(fields);
+        const auto ignored = parse_head("GET", head);
+        RUVIA_CHECK(ignored.plan().informational() != nullptr);
+        RUVIA_CHECK_EQ(ignored.consumed_bytes(), head.size() + 4);
+    }
+
     constexpr std::array invalid_fields{
-        std::string_view("Content-Length: 0"),
-        std::string_view("Transfer-Encoding: chunked"),
         std::string_view("Trailer: X-Checksum"),
         std::string_view("Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n"
                          "date: Thu, 01 Jan 1970 00:00:01 GMT"),

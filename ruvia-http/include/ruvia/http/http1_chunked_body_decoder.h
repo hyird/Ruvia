@@ -136,7 +136,11 @@ struct http1_chunked_body_decoder_config final {
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
 // borrow the supplied input and remain valid only until it is modified. The
 // body limit counts chunk payload bytes, which may still be transfer-encoded.
-// Framing bytes have a separate cumulative max_http_header_bytes budget.
+// There is no chunk-count or cumulative framing budget: each chunk-size line
+// (including extensions) and the trailer section are bounded independently by
+// max_http_header_bytes. An over-long size line or unterminated trailer section
+// reports framing_limit_exceeded; a complete oversized trailer section is
+// invalid_framing.
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});

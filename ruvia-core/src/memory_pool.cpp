@@ -1,6 +1,7 @@
 #include "ruvia/core/memory/memory_pool.h"
 
 #include <array>
+#include <stdexcept>
 
 #include "ruvia/core/detail/task/task_promise.h"
 #include "ruvia/core/memory/pmr_object.h"
@@ -154,11 +155,17 @@ void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcep
     }
 }
 
+void validate_memory_pool_config(const memory_pool_config& config) {
+    if (config.request_initial_buffer_bytes_ == 0) {
+        throw std::invalid_argument("memory pool request initial buffer size must be greater than zero");
+    }
+}
+
 worker_memory::worker_memory(const memory_pool_config& config)
     : worker_memory(*detail::process_resource(), config) {}
 
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
-    : impl_(detail::construct_pmr_object<impl_type>(&upstream, upstream)),
+    : impl_((validate_memory_pool_config(config), detail::construct_pmr_object<impl_type>(&upstream, upstream))),
       resource_(&impl_->pool_),
       request_initial_buffer_bytes_(config.request_initial_buffer_bytes_) {}
 

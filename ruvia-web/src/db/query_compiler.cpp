@@ -525,11 +525,15 @@ private:
                         child_value(n.left_);
                         break;
                     case db_unary_operator::negate:
-                        output_.sql_ += '-';
+                        // Keep the operator apart from its operand: a negative
+                        // literal would otherwise render "--5", which
+                        // PostgreSQL lexes as a line comment, and "~-5", which
+                        // it lexes as the single operator "~-".
+                        output_.sql_ += "- ";
                         child_value(n.left_);
                         break;
                     case db_unary_operator::bit_not:
-                        output_.sql_ += '~';
+                        output_.sql_ += "~ ";
                         child_value(n.left_);
                         break;
                     default:

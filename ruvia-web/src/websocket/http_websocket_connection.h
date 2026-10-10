@@ -218,7 +218,6 @@ private:
         websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress);
     task<void> close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
-    task<void> wait_for_heartbeat_write();
     task<void> wait_for_write_idle();
     task<void> write_exclusive(websocket_opcode opcode, std::string_view payload, bool compress = true);
     task<void> write_frame_now(websocket_opcode opcode, std::string_view payload, bool compress = true);

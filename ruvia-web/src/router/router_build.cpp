@@ -1,12 +1,17 @@
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 
+#include "router/path_segments.h"
 #include "router/router_impl.h"
 
 namespace ruvia {
@@ -23,6 +28,75 @@ namespace {
         }
     }
     return true;
+}
+
+// How much of a route's request-path space one path-scoped middleware covers.
+enum class middleware_scope_coverage : std::uint8_t {
+    // No request the route can match is under the scope: the frame is omitted.
+    none,
+    // Some matched requests are under the scope and some are not: the frame is
+    // kept with its scope and checked against the request path at dispatch.
+    partial,
+    // Every request the route can match is under the scope: the frame is
+    // unconditional.
+    full,
+};
+
+// Classifies a route pattern against a normalized scope prefix with the
+// matcher's own segment rules, so the answer holds for the request paths the
+// route actually serves rather than for the pattern text. A request is under
+// the scope exactly when its leading segments are equivalent to the prefix's
+// segments (path_is_under_prefix); a literal route segment matches only its own
+// raw spelling, so comparing it with the same equivalence is exact.
+[[nodiscard]] middleware_scope_coverage route_scope_coverage(
+    std::string_view pattern, bool dynamic, std::string_view prefix) noexcept {
+    if (!dynamic) {
+        // A static route serves exactly its own path.
+        return detail::path_is_under_prefix(pattern, prefix) ? middleware_scope_coverage::full
+                                                             : middleware_scope_coverage::none;
+    }
+    if (prefix.empty() || prefix == "/") {
+        return middleware_scope_coverage::full;
+    }
+
+    // Set once a parameter faces a prefix segment: it may or may not capture
+    // that exact text, so only the request can decide.
+    bool request_dependent = false;
+    for (;;) {
+        std::string_view prefix_segment;
+        std::string_view prefix_rest;
+        if (!detail::split_path_segment(prefix, prefix_segment, prefix_rest)) {
+            return request_dependent ? middleware_scope_coverage::partial : middleware_scope_coverage::full;
+        }
+        std::string_view pattern_segment;
+        std::string_view pattern_rest;
+        if (!detail::split_path_segment(pattern, pattern_segment, pattern_rest)) {
+            // Every matched request ends above the scope.
+            return middleware_scope_coverage::none;
+        }
+        if (pattern_segment == "*") {
+            // The capture may be empty or may spell out the rest of the prefix.
+            return middleware_scope_coverage::partial;
+        }
+        if (!pattern_segment.empty() && pattern_segment.front() == ':') {
+            if (prefix_segment.empty()) {
+                // A parameter never matches an empty segment.
+                return middleware_scope_coverage::none;
+            }
+            request_dependent = true;
+        } else if (!url_components_equivalent(pattern_segment, prefix_segment, url_decode_mode::percent)) {
+            return middleware_scope_coverage::none;
+        }
+        prefix = prefix_rest;
+        pattern = pattern_rest;
+    }
+}
+
+[[nodiscard]] std::string describe_route(http_known_method method, std::string_view path) {
+    std::string text(known_http_method_token(method));
+    text.push_back(' ');
+    text.append(path);
+    return text;
 }
 
 }  // namespace
@@ -47,6 +121,7 @@ detail::route_table::route_table(std::pmr::memory_resource* resource)
     : resource_(detail::pmr_resource_or_default(resource)),
       routes_(resource_),
       middleware_frames_(resource_),
+      middleware_scopes_(resource_),
       server_extension_method_tokens_(resource_),
       dynamic_param_names_(resource_),
       owned_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource_}) {
@@ -117,9 +192,11 @@ void detail::route_table::capture_route_identities() {
         }
 
         identity.middleware_invokes_.reserve(route.middleware_count());
+        identity.middleware_scopes_.reserve(route.middleware_count());
         for (std::size_t i = 0; i < route.middleware_count(); ++i) {
             identity.middleware_invokes_.push_back(
                 middleware_frames_[route.middleware_offset() + i].invoke());
+            identity.middleware_scopes_.push_back(middleware_scopes_[route.middleware_offset() + i]);
         }
     }
 
@@ -160,7 +237,9 @@ void detail::route_table::bind_compiled_plan(const compiled_route_plan& plan) {
 
         for (std::size_t middleware_value = 0; middleware_value < route.middleware_count(); ++middleware_value) {
             if (middleware_frames_[route.middleware_offset() + middleware_value].invoke() !=
-                identity.middleware_invokes_[middleware_value]) {
+                    identity.middleware_invokes_[middleware_value] ||
+                middleware_scopes_[route.middleware_offset() + middleware_value] !=
+                    identity.middleware_scopes_[middleware_value]) {
                 throw std::logic_error(
                     "worker route table differs from the compiled application plan");
             }
@@ -236,15 +315,24 @@ void detail::router_impl::validate_no_dynamic_route_conflict(std::span<const pen
         if (!left.dynamic()) {
             continue;
         }
+        const auto* left_tunnel = left.endpoint().tunnel();
         for (std::size_t j = i + 1; j < routes_value.size(); ++j) {
             const auto& right = routes_value[j];
-            if (!right.dynamic() || left.method() != right.method() ||
-                (left.endpoint().tunnel() != nullptr && right.endpoint().tunnel() != nullptr &&
-                    left.endpoint().tunnel()->protocol() != right.endpoint().tunnel()->protocol())) {
+            if (!right.dynamic() || left.method() != right.method()) {
+                continue;
+            }
+            // Extended CONNECT routes share one lookup trie per protocol; every
+            // other dynamic route shares one per method. Routes in different
+            // tries never compete for a request.
+            const auto* right_tunnel = right.endpoint().tunnel();
+            if ((left_tunnel == nullptr) != (right_tunnel == nullptr) ||
+                (left_tunnel != nullptr && left_tunnel->protocol() != right_tunnel->protocol())) {
                 continue;
             }
             if (route_table::same_dynamic_shape(left.path(), right.path())) {
-                throw std::invalid_argument("conflicting dynamic route shape");
+                throw std::invalid_argument("conflicting dynamic routes match the same requests with equal precedence: " +
+                                            describe_route(left.method(), left.path()) + " and " +
+                                            describe_route(right.method(), right.path()));
             }
         }
     }
@@ -256,8 +344,10 @@ void detail::router_impl::build_route_table(
     for (const auto& route : pending_routes_) {
         middleware_count += global_middleware_frames_.size() + route.middlewares().size();
     }
+    middleware_count += global_middleware_frames_.size();
     table_value.routes_.reserve(pending_routes_.size());
     table_value.middleware_frames_.reserve(middleware_count);
+    table_value.middleware_scopes_.reserve(middleware_count);
 
     for (const auto& pending : pending_routes_) {
         const auto pending_middlewares = pending.middlewares();
@@ -275,22 +365,34 @@ void detail::router_impl::build_route_table(
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
         //
-        // A path-scoped registration (use_at) is filtered out HERE, when the
-        // table is built, rather than tested per request: a route outside the
-        // scope simply never receives the frame, so scoping costs the request
-        // path nothing. global_middleware_frames_ and global_middleware_descriptors_
-        // are parallel, so the descriptor at i carries frame i's scope.
+        // A path-scoped registration (use_at) applies to the request paths
+        // under its prefix, decided here once per route against every path the
+        // route can match: a route entirely inside the scope gets an
+        // unconditional frame, a route entirely outside gets none, and only a
+        // route that serves paths on both sides (a parameter or wildcard facing
+        // the prefix) keeps the frame with its scope for a dispatch-time check.
+        // middleware_scopes_ runs parallel to middleware_frames_; an empty scope
+        // is unconditional. global_middleware_frames_ and
+        // global_middleware_descriptors_ are parallel, so the descriptor at i
+        // carries frame i's scope.
         const auto middleware_offset = table_value.middleware_frames_.size();
+        bool conditional_middleware = false;
         for (std::size_t i = 0; i < global_middleware_frames_.size(); ++i) {
-            if (!path_is_under_prefix(pending.path(), global_middleware_descriptors_[i].prefix())) {
+            const auto scope = global_middleware_descriptors_[i].prefix();
+            const auto coverage = route_scope_coverage(pending.path(), pending.dynamic(), scope);
+            if (coverage == middleware_scope_coverage::none) {
                 continue;
             }
+            const auto conditional = coverage == middleware_scope_coverage::partial;
+            conditional_middleware = conditional_middleware || conditional;
             table_value.middleware_frames_.push_back(global_middleware_frames_[i]);
+            table_value.middleware_scopes_.push_back(conditional ? scope : std::string_view{});
         }
         table_value.middleware_frames_.insert(
             table_value.middleware_frames_.end(), pending_middlewares.begin(), pending_middlewares.end());
-        route.set_middleware_range(
-            middleware_offset, table_value.middleware_frames_.size() - middleware_offset);
+        table_value.middleware_scopes_.resize(table_value.middleware_frames_.size());
+        route.set_middleware_range(middleware_offset,
+            table_value.middleware_frames_.size() - middleware_offset, conditional_middleware);
         table_value.routes_.push_back(std::move(route));
     }
 
@@ -300,6 +402,7 @@ void detail::router_impl::build_route_table(
     for (std::size_t i = 0; i < global_middleware_frames_.size(); ++i) {
         if (global_middleware_descriptors_[i].runs_on_unmatched_requests()) {
             table_value.middleware_frames_.push_back(global_middleware_frames_[i]);
+            table_value.middleware_scopes_.emplace_back();
         }
     }
     table_value.unmatched_middleware_count_ =

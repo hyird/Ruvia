@@ -89,9 +89,17 @@ public:
         return middleware_count_ != 0;
     }
 
-    void set_middleware_range(std::size_t offset, std::size_t count) noexcept {
+    // True when at least one frame in this route's range is a path-scoped
+    // middleware whose scope covers only part of the route's request paths;
+    // dispatch then checks the request path before running such a frame.
+    [[nodiscard]] bool has_conditional_middleware() const noexcept {
+        return conditional_middleware_;
+    }
+
+    void set_middleware_range(std::size_t offset, std::size_t count, bool conditional) noexcept {
         middleware_offset_ = offset;
         middleware_count_ = count;
+        conditional_middleware_ = conditional;
     }
 
     void set_param_names(std::span<const std::string_view> names) noexcept {
@@ -109,6 +117,7 @@ private:
     std::span<const std::string_view> param_names_{};
     std::size_t middleware_offset_{0};
     std::size_t middleware_count_{0};
+    bool conditional_middleware_{false};
 };
 
 }  // namespace ruvia::detail

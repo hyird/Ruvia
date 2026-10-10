@@ -400,6 +400,71 @@ RUVIA_TEST(http1_response_body_decoder_rejects_truncated_transfer_coding) {
     RUVIA_CHECK(result_value.protocol_failure()->error() == ruvia::http1_client_response_body_error::incomplete_body);
 }
 
+RUVIA_TEST(http1_response_body_decoder_accepts_empty_transfer_coded_body) {
+    std::array<char, 8> scratch{};
+    const auto chunked_head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
+    ruvia::http1_client_response_body_decoder chunked(
+        chunked_head.plan(), std::pmr::get_default_resource());
+    std::string input = "0\r\n\r\nTAIL";
+    std::string body;
+    auto result_value = chunked.decode(input, scratch);
+    for (int step = 0; step < 8 && !result_value.complete() && !result_value.protocol_failure(); ++step) {
+        input.erase(0, result_value.consumed_bytes());
+        if (result_value.output()) {
+            body.append(result_value.output()->bytes());
+        }
+        result_value = chunked.decode(input, scratch);
+    }
+    RUVIA_CHECK(result_value.complete() != nullptr);
+    input.erase(0, result_value.consumed_bytes());
+    RUVIA_CHECK(body.empty());
+    RUVIA_CHECK_EQ(input, "TAIL");
+
+    const auto close_head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
+    ruvia::http1_client_response_body_decoder close_delimited(
+        close_head.plan(), std::pmr::get_default_resource());
+    auto eof_result = close_delimited.finish_input({}, scratch);
+    for (int step = 0; step < 8 && eof_result.need_input() != nullptr; ++step) {
+        eof_result = close_delimited.finish_input({}, scratch);
+    }
+    RUVIA_CHECK(eof_result.complete() != nullptr);
+}
+
+RUVIA_TEST(http1_response_body_decoder_accepts_many_small_chunks) {
+    constexpr std::size_t chunk_count = 20000;
+    std::string wire;
+    wire.reserve(chunk_count * 6 + 9);
+    for (std::size_t index = 0; index < chunk_count; ++index) {
+        wire.append("1\r\nx\r\n");
+    }
+    wire.append("0\r\n\r\nTAIL");
+
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
+    ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
+    std::array<char, 64> scratch{};
+    std::string_view remaining = wire;
+    std::size_t body_bytes = 0;
+    bool complete_value = false;
+    for (std::size_t step = 0; step <= chunk_count * 2 + 8; ++step) {
+        const auto result_value = decoder.decode(remaining, scratch);
+        RUVIA_CHECK(result_value.protocol_failure() == nullptr);
+        if (result_value.protocol_failure() != nullptr) {
+            break;
+        }
+        remaining.remove_prefix(result_value.consumed_bytes());
+        if (const auto* output = result_value.output()) {
+            body_bytes += output->bytes().size();
+        }
+        if (result_value.complete() != nullptr) {
+            complete_value = true;
+            break;
+        }
+    }
+    RUVIA_CHECK(complete_value);
+    RUVIA_CHECK_EQ(body_bytes, chunk_count);
+    RUVIA_CHECK_EQ(remaining, "TAIL");
+}
+
 RUVIA_TEST(http1_response_body_decoder_handles_chunk_extension_and_trailer_over_8k) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());

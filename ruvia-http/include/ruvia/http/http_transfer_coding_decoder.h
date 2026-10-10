@@ -147,6 +147,7 @@ private:
 // its PMR resource alive until destruction. Drain output with decode({}, scratch)
 // before requesting more input; finish_input() commits framing EOF only after
 // all input/output is drained. Each layer enforces decoded_limit independently.
+// A layer that received no coded bytes before framing EOF completes as empty.
 // decode/finish_input return typed failures because incremental drivers must
 // retain the exact wire consumption even when a layer fails; failure is terminal.
 class http_transfer_coding_stack_decoder final {

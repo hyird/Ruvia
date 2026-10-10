@@ -44,7 +44,8 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> hello(ruvia::context& c) {
-        co_return c.text("Hello, World!");
+        // static_text borrows the literal instead of copying it per response.
+        co_return c.text(ruvia::static_text("Hello, World!"));
     }
 
     ruvia::task<ruvia::http_response> status(ruvia::context& c) {

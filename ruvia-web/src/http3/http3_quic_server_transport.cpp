@@ -33,9 +33,18 @@ ruvia::quic_server_route http3_quic_server_transport::route_datagram(
 ruvia::quic_server_admit_result http3_quic_server_transport::admit_initial(
     const ruvia::quic_initial_offer& offer, ruvia::quic_timestamp now,
     std::string_view server_name) {
-    auto session_value = ruvia::detail::make_pmr_object<tls_session>(resource_,
-        tls_context_.default_context(), ruvia::quic_role::server, h3_alpn,
-        server_name, resource_, nullptr, tls_context_.early_data_enabled());
+    // The caller drops an offer whose admission throws, so a failure before the
+    // HTTP server sees it must release the pending Initial too.
+    auto session_value = [&] {
+        try {
+            return ruvia::detail::make_pmr_object<tls_session>(resource_,
+                tls_context_.default_context(), ruvia::quic_role::server, h3_alpn,
+                server_name, resource_, nullptr, tls_context_.early_data_enabled());
+        } catch (...) {
+            (void)server_->discard_initial(offer);
+            throw;
+        }
+    }();
     const auto admitted = server_->admit_initial(offer, session_value->driver_view(), now);
     if (admitted.status_ != ruvia::quic_operation_status::accepted) {
         return admitted;

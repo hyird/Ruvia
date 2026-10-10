@@ -68,9 +68,15 @@ public:
             detail::make_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
 
-    // Prefix membership is compiled into the route plan, using whole path
-    // segments and normalized trailing slashes. Middleware constructor
-    // arguments cannot be confused with the separately named scope.
+    // Runs the middleware exactly on requests whose path is under the prefix:
+    // whole path segments, compared percent-decoded, with trailing slashes
+    // normalized ("/admin" covers "/admin", "/admin/x" and "/%61dmin/x", never
+    // "/administrator"). Scope follows the request path, not the route
+    // pattern: a route "/:section/panel" runs it for "/admin/panel" but not
+    // "/other/panel". Membership is compiled into the route plan; only a route
+    // that serves paths both inside and outside the scope checks the request
+    // path at dispatch. Middleware constructor arguments cannot be confused
+    // with the separately named scope.
     template <typename middleware_type, typename... args_types>
     application& use_at(const middleware_scope_options& options, args_types&&... args) {
         return use_middleware(
@@ -123,11 +129,12 @@ public:
     application& on_error(http_error_handler_type handler);
     application& on_not_found(http_not_found_handler_type handler);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
-    // longest matching registered prefix wins, matching on whole path
-    // segments ("/api" scopes "/api" and "/api/x", never "/apix"); the
-    // prefix-less on_error/not_found remain the app-wide fallback. A trailing
-    // slash is ignored; registering the same normalized prefix twice throws
-    // std::invalid_argument instead of silently choosing by call order.
+    // deepest matching registered prefix wins, matching on whole path
+    // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
+    // percent-decoded; the prefix-less on_error/not_found remain the app-wide
+    // fallback. A trailing slash is ignored; registering an equivalent prefix
+    // twice ("/api", "/api/", "/%61pi") throws std::invalid_argument instead
+    // of silently choosing by call order.
     application& on_error(scoped_error_handler_options options);
     application& on_not_found(scoped_not_found_handler_options options);
     // Peers whose forwarding headers name the real client. Accepts addresses

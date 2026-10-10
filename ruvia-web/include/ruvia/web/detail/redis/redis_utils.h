@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -32,10 +33,17 @@ inline void append_redis_number(std::pmr::string& output, std::int64_t value) {
     return output;
 }
 
+// Redis accepts "+inf"/"-inf" as sorted-set scores and range bounds, and
+// replies them back, so the client round-trips infinities. NaN has no Redis
+// spelling and is rejected.
 [[nodiscard]] inline std::pmr::string redis_score_string(
     double value, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmr_resource_or_default(resource));
-    append_formatted_finite_number(output, value, "redis sorted set score must be finite",
+    if (std::isinf(value)) {
+        output.append(value > 0 ? "+inf" : "-inf");
+        return output;
+    }
+    append_formatted_finite_number(output, value, "redis sorted set score must not be NaN",
         "redis sorted set score is invalid");
     return output;
 }

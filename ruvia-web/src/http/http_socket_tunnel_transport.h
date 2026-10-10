@@ -16,6 +16,7 @@
 
 #include "http/http_stream_read_result.h"
 #include "http/tls_tunnel_output.h"
+#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
 
@@ -38,7 +39,9 @@ public:
             stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, 4096), std::move(handler));
         });
         bytes_value.resize(old_size + result_value.result());
-        if (result_value.error_code() == asio::error::eof) {
+        // A TLS peer that closed TCP without close_notify ends the tunnel byte
+        // stream exactly like an orderly FIN or close_notify.
+        if (is_stream_read_end(result_value.error_code())) {
             co_return http_stream_read_result::make_end();
         }
         if (result_value.error_code()) {

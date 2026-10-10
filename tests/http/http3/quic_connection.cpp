@@ -150,6 +150,18 @@ RUVIA_TEST(quic_connection_closing_keeps_tls_driver_and_packet_keys_until_retire
         RUVIA_CHECK(result_value.status_ == ruvia::quic_operation_status::closing);
         RUVIA_CHECK_EQ(retire_state.calls_, std::size_t{0});
         RUVIA_CHECK(resource.deallocations_ < resource.allocations_);
+        // The closing period ends at its reported expiry, which retires the connection.
+        const auto expiry = connection.next_expiry();
+        RUVIA_CHECK(expiry.has_value());
+        if (expiry) {
+            RUVIA_CHECK(*expiry > ruvia::quic_timestamp{} + std::chrono::seconds(2));
+            RUVIA_CHECK_EQ(connection.handle_expiry(*expiry - std::chrono::nanoseconds(1)),
+                ruvia::quic_operation_status::closing);
+            RUVIA_CHECK_EQ(retire_state.calls_, std::size_t{0});
+            RUVIA_CHECK_EQ(connection.handle_expiry(*expiry), ruvia::quic_operation_status::retired);
+            RUVIA_CHECK_EQ(connection.info().state_, ruvia::quic_connection_state::retired);
+            RUVIA_CHECK_EQ(retire_state.calls_, std::size_t{1});
+        }
     }
     RUVIA_CHECK_EQ(retire_state.calls_, std::size_t{1});
     RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);

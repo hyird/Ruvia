@@ -8,7 +8,8 @@
 
 namespace ruvia::detail {
 class worker_dispatcher;
-}
+struct timer_slot;
+}  // namespace ruvia::detail
 
 namespace ruvia {
 
@@ -40,7 +41,20 @@ private:
 
 enum class worker_timer_outcome : std::uint8_t {
     expired,
+    // Explicit cancel(), a worker_timer_cancellation, or worker shutdown
+    // (stop_timers) ended the pending timer.
     cancelled,
+};
+
+// Result of worker_handle::schedule_timer(). Shutdown is a normal state, not a
+// failure: once the worker's timer queue has stopped, scheduling returns
+// worker_stopping, stores nothing, never invokes the completion, and leaves the
+// registration unbound. That is the same terminal point a pending timer reaches
+// through stop_timers(), which delivers worker_timer_outcome::cancelled; timed
+// primitives map both to their own shutdown result.
+enum class worker_timer_schedule_status : std::uint8_t {
+    scheduled,
+    worker_stopping,
 };
 
 template <typename rep_type, typename period_type>
@@ -107,6 +121,13 @@ template <typename rep_type, typename period_type>
         std::chrono::steady_clock::now(), worker_timer_saturating_duration_cast(delay));
 }
 
+// Borrowed timer token. A registration is bound to the worker of its most
+// recent schedule_timer() until that timer expires, is cancelled, or is
+// released by cancel()/cancel_quietly(). Rescheduling while the timer is still
+// pending (on any worker) throws std::logic_error. Once it has expired or been
+// cancelled the registration may be scheduled again, including on another
+// worker; that worker observes the release with acquire/release ordering, so a
+// caller that learned of the expiry through its completion may reuse it.
 class worker_timer_registration final {
 public:
     worker_timer_registration() noexcept = default;
@@ -129,13 +150,17 @@ public:
 
 private:
     void cancel(bool notify) noexcept;
-    void bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept;
+    void bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation,
+        const detail::timer_slot& slot_state) noexcept;
     void release() noexcept;
+    [[nodiscard]] bool pending() const noexcept;
 
     // The handle supplied to schedule_timer() must outlive this registration.
     // Destruction only removes it; it never queues a callback referencing the
     // destroyed owner.
     detail::worker_dispatcher* dispatcher_{nullptr};
+    // Owned by that dispatcher; its activity is readable from any thread.
+    const detail::timer_slot* slot_state_{nullptr};
     std::size_t slot_{0};
     std::uint64_t generation_{0};
 

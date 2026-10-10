@@ -515,6 +515,18 @@ RUVIA_TEST(db_query_unary_operators_and_parameter_modes_cover_all_semantics) {
     RUVIA_CHECK(testing::throws_on([&] { (void)invalid.binary({}, op_type::equal, invalid.value(1)); }));
 }
 
+RUVIA_TEST(db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_comments) {
+    db_query query;
+    const auto negated = query.unary(db_unary_operator::negate, query.value(-5));
+    const auto inverted = query.unary(db_unary_operator::bit_not, query.value(-5));
+    for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+        const auto negated_sql = db_query::render_expression(negated, driver, nullptr);
+        RUVIA_CHECK_EQ(negated_sql, "(- -5)");
+        RUVIA_CHECK(negated_sql.find("--") == std::string_view::npos);
+        RUVIA_CHECK_EQ(db_query::render_expression(inverted, driver, nullptr), "(~ -5)");
+    }
+}
+
 RUVIA_TEST(db_predicate_public_overloads_cover_comparisons_membership_nulls_and_aliases) {
     using tagged_type = db_entity<"cq_device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>,
         db_column<"tags", std::pmr::vector<std::pmr::string>>>;

@@ -82,6 +82,8 @@ private:
         // fresh state, so credentials and other headers must be passed explicitly.
         // Only buffered requests/responses are supported; streams, files, SSE,
         // and upgrades belong on their own network routes. Nesting is bounded.
+        // A subrequest of an HTTP/3 0-RTT request inherits its early-data
+        // provenance and gets 425 Too Early unless its route is replay-safe.
         const std::array<ruvia::http_header_view, 1> headers{{
             {"X-Demo-Name", c.request_state<request_label>().name_},
         }};

@@ -149,6 +149,37 @@ RUVIA_TEST(http3_stream_frames_delivers_informational_and_final_response_headers
     }
 }
 
+RUVIA_TEST(http3_stream_frames_reports_unauthorized_push_promise_at_any_position) {
+    std::pmr::monotonic_buffer_resource resource;
+    // RFC 9114 §7.2.5: an unauthorized PUSH_PROMISE has one classification
+    // whether it precedes or follows HEADERS on a response stream.
+    constexpr std::array<char, 3> first{0x5, 0x1, 0x0};
+    constexpr std::array<char, 5> after_extension{0x21, 0x0, 0x5, 0x1, 0x0};
+    constexpr std::array<char, 6> after_headers{0x1, 0x1, 'f', 0x5, 0x1, 0x0};
+    for (const std::span<const char> wire :
+        {std::span<const char>(first), std::span<const char>(after_extension), std::span<const char>(after_headers)}) {
+        events events;
+        http3_stream_frames decoder(http3_stream_kind::response, &resource);
+        RUVIA_CHECK(decoder.feed(wire, false, collect, &events) == http3_stream_frame_status::push_promise);
+        for (const auto kind : events.kinds_) {
+            RUVIA_CHECK(kind == http3_stream_frame_event_kind::headers);
+        }
+    }
+
+    events request_events;
+    http3_stream_frames request(http3_stream_kind::request, &resource);
+    RUVIA_CHECK(request.feed(first, false, collect, &request_events) ==
+                http3_stream_frame_status::frame_unexpected);
+
+    events push_events;
+    http3_stream_frames authorized(http3_stream_kind::response, &resource, {.allow_push_ = true});
+    RUVIA_CHECK(authorized.feed(first, false, collect, &push_events) == http3_stream_frame_status::need_more_data);
+    RUVIA_CHECK_EQ(push_events.kinds_.size(), std::size_t{1});
+    if (push_events.kinds_.size() == 1) {
+        RUVIA_CHECK(push_events.kinds_[0] == http3_stream_frame_event_kind::push_promise);
+    }
+}
+
 RUVIA_TEST(http3_stream_frames_rejects_invalid_request_frame_order_and_truncation) {
     std::pmr::monotonic_buffer_resource resource;
     events events;
@@ -224,6 +255,19 @@ RUVIA_TEST(http3_stream_frames_skips_unknown_payload_without_buffering) {
         RUVIA_CHECK(decoder.feed(payload_value, false, collect, &events) == http3_stream_frame_status::need_more_data);
     }
     RUVIA_CHECK_EQ(events.kinds_.size(), std::size_t{1});
+}
+
+RUVIA_TEST(http3_stream_frames_ignores_unknown_frame_before_headers) {
+    std::pmr::monotonic_buffer_resource resource;
+    http3_stream_frames decoder(http3_stream_kind::request, &resource);
+    events events;
+    constexpr std::array<char, 5> grease_then_headers{0x21, 0x1, 'x', 0x1, 0x0};
+    RUVIA_CHECK(decoder.feed(grease_then_headers, true, collect, &events) ==
+                http3_stream_frame_status::message_end);
+    RUVIA_CHECK_EQ(events.kinds_.size(), std::size_t{1});
+    if (events.kinds_.size() == 1) {
+        RUVIA_CHECK(events.kinds_[0] == http3_stream_frame_event_kind::headers);
+    }
 }
 
 RUVIA_TEST(http3_stream_frames_accepts_all_varint_widths_at_every_input_split) {

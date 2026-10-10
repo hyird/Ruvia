@@ -128,6 +128,10 @@ public:
     };
 
     connection_scanner(worker_handle worker_value, connection_scanner_options options);
+    // Detaches every entry and registration. A check or maintenance callback may
+    // destroy its scanner (or stop and restart it): the running scan visits no
+    // further node and releases the remaining scanner state when it returns.
+    // Destruction on another thread waits for an in-progress scan to finish.
     ~connection_scanner() noexcept;
     connection_scanner(const connection_scanner&) = delete;
     connection_scanner& operator=(const connection_scanner&) = delete;

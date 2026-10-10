@@ -107,7 +107,7 @@ http3_server_stream_input::result_type http3_server_stream_input::accept_bytes(
     if (result_value.status_ == status_type::fed && fin) {
         result_value.status_ = status_type::finished;
     }
-    if (reset_pending && result_value.status_ == status_type::fed) {
+    if (reset_pending && (result_value.status_ == status_type::fed || result_value.status_ == status_type::deferred_qpack)) {
         if (state_value->wire_bytes_ == *state_value->reset_published_bytes_) {
             return apply_peer_reset(id.stream_id_, *state_value);
         }
@@ -453,7 +453,10 @@ std::optional<http3_server_stream_input::resumed_input_type> http3_server_stream
         auto& slot = streams_[next_qpack_resume_];
         next_qpack_resume_ = (next_qpack_resume_ + 1) % streams_.size();
         auto& state_value = slot.state_;
-        if (!slot.occupied_ || !state_value.qpack_blocked_ || !session_.can_accept_input(slot.stream_id_, state_value.pending_bytes_.size())) {
+        // A pending peer RESET drops later DATA (see accept_bytes); feeding only
+        // the retained prefix would misframe any bytes fed after it.
+        if (!slot.occupied_ || !state_value.qpack_blocked_ || state_value.phase_ == stream_phase_type::reset_pending ||
+            !session_.can_accept_input(slot.stream_id_, state_value.pending_bytes_.size())) {
             continue;
         }
         const auto result_value = session_.feed(slot.stream_id_, state_value.pending_bytes_, state_value.pending_fin_);

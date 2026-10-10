@@ -342,7 +342,6 @@ void worker_dispatcher::close() noexcept {
 void worker_dispatcher::detach_context() noexcept {
     shutdown_listeners_type abandoned_listeners{process_resource()};
     std::pmr::vector<timer_entry> abandoned_timers(impl_->timers_.get_allocator());
-    std::pmr::vector<timer_slot> abandoned_timer_slots(impl_->timer_slots_.get_allocator());
     std::unique_ptr<asio::steady_timer> detached_timer;
     {
         std::lock_guard lock(impl_->mutex_);
@@ -362,13 +361,17 @@ void worker_dispatcher::detach_context() noexcept {
     // context service invokes it while the context is shutting down. The timer
     // heap is therefore exclusively owned here. All user-owned closures are
     // destroyed outside the mutex so a destructor that releases another worker
-    // primitive cannot deadlock.
+    // primitive cannot deadlock. Slots stay in place: bound registrations may
+    // still read their activity until the dispatcher itself is destroyed.
+    impl_->timers_stopping_.store(true, std::memory_order_release);
     abandoned_timers.swap(impl_->timers_);
-    abandoned_timer_slots.swap(impl_->timer_slots_);
-    impl_->free_timer_slot_ = no_timer_slot;
     impl_->stale_timer_count_ = 0;
     impl_->timer_armed_ = false;
-    impl_->timers_stopping_.store(true, std::memory_order_release);
+    for (std::size_t index = 0; index < impl_->timer_slots_.size(); ++index) {
+        if (impl_->timer_slots_[index].active_generation_.load(std::memory_order_relaxed) != 0) {
+            static_cast<void>(release_timer_slot(index));
+        }
+    }
     detached_timer.reset();
     abandon_queued();
 }

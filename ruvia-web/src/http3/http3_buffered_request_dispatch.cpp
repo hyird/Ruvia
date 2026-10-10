@@ -23,6 +23,7 @@
 #include "context/context_access.h"
 #include "http/http_tunnel_session.h"
 #include "http3/http3_response_stream_sink.h"
+#include "router/route_early_data.h"
 #include "router/route_endpoint.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
@@ -306,13 +307,8 @@ task<http3_buffered_request_dispatch::run_status_type> http3_buffered_request_di
     const auto& request = lease_->request().request();
     const auto& resolution = lease_->resolution();
     const auto* resolved = resolution.resolved();
-    const bool early_request_safe =
-        !message_id_.received_early_data_ ||
-        ((request.known_method() == http_known_method::get ||
-             request.known_method() == http_known_method::head) &&
-            request.body_bytes().empty() && resolved != nullptr &&
-            resolved->route().endpoint().buffered() != nullptr &&
-            resolved->route().endpoint().buffered()->replay_safe());
+    const bool early_request_safe = !message_id_.received_early_data_ ||
+                                    early_data_request_allowed(request.known_method(), !request.body_bytes().empty(), resolution);
     const bool websocket_response = early_request_safe && resolved != nullptr &&
                                     resolved->route().endpoint().get_websocket() != nullptr;
     std::optional<http_response> selected_response;
@@ -382,8 +378,8 @@ task<http3_buffered_request_dispatch::run_status_type> http3_buffered_request_di
         co_return run_status_type::peer_field_section_limit;
     }
     auto response = std::move(*selected_response);
-    // websocket rejection does not consume the tunnel body or enter the file /
-    // interim response drivers; only its uncommitted buffered preparation joins here.
+    // websocket rejection does not consume the tunnel body or enter the file
+    // response driver; only its uncommitted buffered preparation joins here.
     if (!websocket_response && session_.streaming_request(message_id_.stream_id_)) {
         co_await drain_request_body();
     }
@@ -424,7 +420,9 @@ task<http3_buffered_request_dispatch::run_status_type> http3_buffered_request_di
             co_return run_status_type::cancelled;
         }
     }
-    if (!websocket_response && stream_output_active_) {
+    // Interim/push prelude bytes already own the stream's send offset; only the
+    // stream path accounts for them in its FIN (websocket rejection included).
+    if (stream_output_active_) {
         co_return co_await write_buffered_after_interim(preparation->write_plan_);
     }
     auto encoded_head = session_.encode_response_head(message_id_.stream_id_, *response_, preparation->write_plan_);

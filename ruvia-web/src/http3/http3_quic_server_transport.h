@@ -43,6 +43,8 @@ public:
     [[nodiscard]] ruvia::quic_server_route route_datagram(
         std::span<const std::byte> bytes, const http3_quic_datagram_address& local,
         const http3_quic_datagram_address& peer);
+    // Same offer contract as ruvia::quic_server::admit_initial: only would_block
+    // keeps the offer pending; a thrown failure has consumed it.
     [[nodiscard]] ruvia::quic_server_admit_result admit_initial(
         const ruvia::quic_initial_offer& offer, ruvia::quic_timestamp now,
         std::string_view server_name = {});

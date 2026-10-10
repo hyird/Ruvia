@@ -354,6 +354,42 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
 
+RUVIA_TEST(transfer_coded_chunked_request_accepts_empty_coded_body) {
+    http1_server_request_parser parser;
+    constexpr std::string_view wire_body = "0\r\n\r\n";
+    const std::string raw_request = std::string(
+                                        "POST / HTTP/1.1\r\nHost: x\r\n"
+                                        "Transfer-Encoding: gzip, chunked\r\n\r\n") +
+                                    std::string(wire_body);
+    const auto parsed_value = parser.parse_message(raw_request);
+    RUVIA_CHECK(parsed_value.message_ready());
+    const auto* chunked_body = parsed_value.body_plan_.chunked();
+    RUVIA_CHECK(chunked_body != nullptr);
+    if (chunked_body == nullptr) {
+        return;
+    }
+
+    auto* resource = std::pmr::get_default_resource();
+    http1_chunked_body_decoder chunks({.body_limit_ = protocol_byte_limit::limited(1024)});
+    const auto terminal = chunks.decode(wire_body);
+    RUVIA_CHECK(terminal.complete() != nullptr);
+    RUVIA_CHECK_EQ(terminal.consumed_bytes(), wire_body.size());
+
+    http_transfer_coding_stack_decoder transfer(
+        chunked_body->transfer_codings().values_, resource, protocol_byte_limit::limited(1024));
+    const auto finish_result = transfer.finish_input();
+    RUVIA_CHECK(finish_result.complete() != nullptr);
+
+    // Every layer of a stacked coding treats absent coded bytes as empty.
+    constexpr std::array codings{http_transfer_coding::gzip, http_transfer_coding::deflate};
+    http_transfer_coding_stack_decoder stacked(codings, resource, protocol_byte_limit::limited(1024));
+    std::array<char, 16> scratch{};
+    const auto drained = stacked.decode({}, scratch);
+    RUVIA_CHECK(drained.need_input() != nullptr);
+    const auto stacked_finish = stacked.finish_input();
+    RUVIA_CHECK(stacked_finish.complete() != nullptr);
+}
+
 RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     auto* resource = std::pmr::get_default_resource();
     // A 1 MiB body compresses to a tiny gzip; the decoder must abort the

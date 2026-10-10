@@ -211,7 +211,8 @@ private:
 
 // gzip members and zstd frames are consumed through the end of input; Brotli
 // trailing bytes are rejected. The exact decoded-size cap applies across the
-// complete representation.
+// complete representation. An empty representation decodes to empty content
+// for every coding.
 [[nodiscard]] http_content_decode_result decode_http_content(
     http_content_coding coding, std::string_view input, http_content_decode_options options);
 

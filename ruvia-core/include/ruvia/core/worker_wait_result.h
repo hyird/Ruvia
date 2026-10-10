@@ -25,6 +25,8 @@ namespace ruvia {
 enum class worker_wait_status : std::uint8_t {
     value,
     closed,
+    // The bound worker is shutting down: its stopping notification arrived, or
+    // a timed wait found (or was pending when) the worker's timer queue stopped.
     worker_stopping,
     timed_out,
     cancelled,

@@ -10,6 +10,8 @@
 #include "ruvia/core/async.h"
 #include "ruvia/http/http1_interim_response_writer.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_request.h"
 
 #include "context/http_interim_response_output.h"
 
@@ -17,8 +19,11 @@ namespace ruvia::detail {
 template <typename stream_type>
 class http1_interim_response_sink final {
 public:
-    http1_interim_response_sink(stream_type& stream, std::pmr::memory_resource* resource)
+    // `request` is the session's reused parse target; it is borrowed for every
+    // dispatch that can reach output().
+    http1_interim_response_sink(stream_type& stream, const http_request& request, std::pmr::memory_resource* resource)
         : stream_(stream),
+          request_(request),
           resource_(resource),
           output_(resource, this, write) {}
     [[nodiscard]] http_interim_response_output& output() noexcept {
@@ -37,6 +42,12 @@ private:
         if (prepared->connection_disposition() != http1_interim_connection_disposition::unchanged) {
             throw std::invalid_argument("application interim response cannot close the exchange");
         }
+        if (self.request_.protocol_version() == http_protocol_version::http10) {
+            // RFC 9110 §15.2: a server MUST NOT send a 1xx response to an
+            // HTTP/1.0 client, which would take it as the final response.
+            // Interim heads are advisory, so the exchange simply omits it.
+            co_return;
+        }
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
             asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
         });
@@ -45,6 +56,7 @@ private:
         }
     }
     stream_type& stream_;
+    const http_request& request_;
     std::pmr::memory_resource* resource_;
     http_interim_response_output output_;
 };

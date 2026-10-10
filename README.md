@@ -68,8 +68,20 @@ of whether the route declaration includes that slash.
 Interior repeated slashes remain distinct path segments; parameters cannot match
 an empty segment. `url_for` preserves these segments and declared trailing
 slashes so generated URLs match their declared routes.
+Exact static routes win over dynamic ones; dynamic routes try a literal segment
+before a `:param` and a `:param` before a final `*`, backtracking when a branch
+fails. Overlapping patterns such as `/a/*` and `/:x/:y` therefore coexist; startup
+fails only when two routes of one method differ just in parameter names or a
+trailing slash (`/u/:id` and `/u/:name/`).
+`use_at` and prefix-scoped `on_error`/`on_not_found` match request paths on whole,
+percent-decoded segments: with `use_at<auth>({.prefix_ = "/admin"})`, a route
+`/:section/panel` runs `auth` for `/admin/panel` and `/%61dmin/panel` but not for
+`/other/panel`.
+
 Incremental HTTP content encoding accepts empty flushes without ending the stream;
-subsequent writes and `finish()` remain valid.
+subsequent writes and `finish()` remain valid. Decoding treats an empty
+content- or transfer-coded body (for example `Content-Encoding: gzip` with no
+bytes) as empty content.
 
 `Content-Type` validation, multipart boundary extraction, and `Accept` media matching allow empty
 semicolon-delimited parameter slots as specified by
@@ -93,6 +105,16 @@ fragment separator; subsequent `#` bytes are encoded as `%23`.
 File responses require a matching strong ETag to honor `If-Range`; a
 `Last-Modified` date cannot authorize a partial file response.
 
+Context body builders (`body`, `text`, `html`) copy strings and character
+buffers into the response; a character array ends at its first NUL byte. Wrap
+static bytes in `ruvia::static_text` to send them without copying; it accepts
+only constants with static storage, as in [basic_http.cpp](examples/web/basic_http.cpp).
+
+`context::dispatch` subrequests inherit the parent's HTTP/3 early-data
+provenance. Under 0-RTT they receive `425 Too Early` unless they are content-free
+GET/HEAD requests to a replay-safe route
+([RFC 8470](https://www.rfc-editor.org/rfc/rfc8470.html#section-5.1)).
+
 Response cookie updates preserve partitioned and unpartitioned cookies as
 distinct storage keys, even when their names and Domain/Path scopes match.
 
@@ -103,6 +125,11 @@ protocol error 1002.
 
 QUIC close error codes are limited to `2^62 - 1`; an out-of-range first close
 throws `quic_error` with `invalid_configuration` without changing the connection state.
+After its CONNECTION_CLOSE is written, or a peer's is received, a `quic_connection`
+keeps the [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000.html#section-10.2)
+closing or draining period: `next_expiry()` reports its end, when `handle_expiry()`
+retires the connection. The HTTP/3 client sends CONNECTION_CLOSE whenever it ends a
+connection, including on shutdown.
 
 Enable `RUVIA_BUILD_EXAMPLES=ON`, then build with
 `cmake --build build --config Release --target ruvia_examples_web "-j$(nproc)"`.

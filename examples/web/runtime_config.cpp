@@ -80,8 +80,9 @@ int main() {
     app.load_dotenv();
     const example::environment env_value(&app.env());
     app.use<global_header_middleware>();
-    // Prefix selection is compiled into the route plan. Constructor arguments
-    // are owned by the registration and materialized separately on each worker.
+    // Runs on requests whose path is under /runtime; scope membership is
+    // compiled into the route plan. Constructor arguments are owned by the
+    // registration and materialized separately on each worker.
     app.use_at<scoped_header_middleware>({.prefix_ = "/runtime"}, "configured");
 
     const auto http_port = app.env()

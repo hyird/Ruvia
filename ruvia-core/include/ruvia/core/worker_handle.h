@@ -29,10 +29,14 @@ public:
 
     // Worker-affine timer registration. This stable handle must outlive the
     // borrowed registration; destruction unregisters without a late callback.
-    void schedule_timer(worker_timer_registration& registration,
+    // Returns worker_stopping without storing the completion once this worker's
+    // timer queue has stopped; callers that resume work from the completion
+    // must handle it. Rescheduling a still-pending registration throws
+    // std::logic_error.
+    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration,
         std::chrono::steady_clock::time_point deadline,
         move_only_function<void(worker_timer_outcome)> completion) const&;
-    void schedule_timer(worker_timer_registration&,
+    worker_timer_schedule_status schedule_timer(worker_timer_registration&,
         std::chrono::steady_clock::time_point,
         move_only_function<void(worker_timer_outcome)>) const&& = delete;
 

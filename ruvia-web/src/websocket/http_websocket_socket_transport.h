@@ -11,6 +11,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 
+#include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_connection.h"
 
 namespace ruvia::detail {
@@ -37,13 +38,16 @@ public:
         });
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();
+        // An orderly peer close (TCP FIN or TLS close_notify) and a TLS peer
+        // that dropped TCP without close_notify both end the byte stream; the
+        // websocket core maps a missing Close frame to an abnormal closure.
+        if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
+            buffer.resize(old_size);
+            co_return http_stream_read_result::make_end();
+        }
         if (ec) {
             buffer.resize(old_size);
             co_return http_stream_read_result::make_failure(ec);
-        }
-        if (bytes_read == 0) {
-            buffer.resize(old_size);
-            co_return http_stream_read_result::make_end();
         }
         buffer.resize(old_size + bytes_read);
         co_return http_stream_read_result::make_data();

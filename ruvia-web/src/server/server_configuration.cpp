@@ -10,7 +10,12 @@ validated_http_server_configuration::validated_http_server_configuration(
       options_(std::move(options)) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
-        listeners_.push_back(listener.clone(listeners_.get_allocator().resource()));
+        auto& validated = listeners_.emplace_back(listener.clone(listeners_.get_allocator().resource()));
+        // One ticket key set per TLS listener for this configuration, so TLS
+        // resumption does not depend on which worker accepts the connection.
+        if (auto* tls = std::get_if<http_server_listener_definition::tls_type>(&validated.transport_)) {
+            tls->session_ticket_keys_ = tls_session_ticket_keys::generate();
+        }
     }
 }
 
@@ -82,8 +87,7 @@ void validate_server_limits(const http_server_options& options) {
         options.write_timeout_);
     ruvia::ensure_positive_duration(options.scan_interval_, "connection scan interval must be greater than 0");
     validate_worker_queue_capacity(options.worker_queue_capacity_);
-    ruvia::ensure_positive_size(options.memory_config_.request_initial_buffer_bytes_,
-        "memory pool config values must be greater than 0");
+    ruvia::validate_memory_pool_config(options.memory_config_);
     ruvia::ensure_positive_size(options.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
     ruvia::ensure_positive_optional_size(
         options.max_stream_body_bytes_, "configured stream body limit must be greater than zero");

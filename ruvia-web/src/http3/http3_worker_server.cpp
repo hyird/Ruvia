@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -255,10 +256,17 @@ bool http3_worker_server::pump_states() noexcept {
         }
         if (state_value.admission() == http3_connection_state::admission_phase::bound && !target.connection_) {
             const auto binding = state_value.binding();
-            if (stopping_ || !binding || !construct_connection(target, *binding)) {
-                (void)state_value.reject(target.identity_, stopping_
-                                                               ? http3_connection_state::reject_reason::stopping
-                                                               : http3_connection_state::reject_reason::construction_failed);
+            std::optional<http3_connection_state::reject_reason> rejection;
+            if (stopping_) {
+                rejection = http3_connection_state::reject_reason::stopping;
+            } else if (options_.max_connections_ &&
+                       active_connections_.load(std::memory_order_relaxed) >= *options_.max_connections_) {
+                rejection = http3_connection_state::reject_reason::capacity;
+            } else if (!binding || !construct_connection(target, *binding)) {
+                rejection = http3_connection_state::reject_reason::construction_failed;
+            }
+            if (rejection) {
+                (void)state_value.reject(target.identity_, *rejection);
                 refused_connections_.fetch_add(1, std::memory_order_relaxed);
             }
             progress_value = true;
@@ -438,8 +446,7 @@ bool http3_worker_server::construct_connection(slot& target,
     const http3_connection_state::binding_snapshot& binding) noexcept {
     if (target.connection_ || binding.identity_ != target.identity_ ||
         binding.metadata_.remote_address_.empty() || binding.metadata_.remote_port_ == 0 ||
-        !options_.max_connections_ ||
-        active_connections_.load(std::memory_order_relaxed) >= *options_.max_connections_) {
+        !options_.max_connections_) {
         return false;
     }
     try {

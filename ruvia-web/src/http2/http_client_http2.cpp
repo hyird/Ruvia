@@ -803,7 +803,13 @@ task<void> http_client_pool::execute_http2(connection_type& connection,
                 continue;
             }
             if (error == http2_request_head_submit_error::connection_unavailable) {
+                // GOAWAY may have been consumed during the preface, or local
+                // stream IDs may be exhausted (no GOAWAY at all). Either way this
+                // session admits no new streams: drain it so the retry opens a
+                // new connection (RFC 9113 §5.1.1, §6.8).
                 pending.retryable_ = true;
+                runtime.draining_ = true;
+                runtime.state_signal_.notify();
             } else {
                 pending.error_ = http_client_error::code_type::invalid_request;
             }

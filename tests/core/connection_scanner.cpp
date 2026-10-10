@@ -78,6 +78,21 @@ struct scanner_restart final {
     }
 };
 
+struct scanner_destruction final {
+    std::unique_ptr<scanner_type>* scanner_;
+    int calls_{0};
+
+    static void tick(void* target, std::int64_t) noexcept {
+        auto& self = *static_cast<scanner_destruction*>(target);
+        ++self.calls_;
+        self.scanner_->reset();
+    }
+
+    static void check(void* target) noexcept {
+        tick(target, 0);
+    }
+};
+
 void check_entry_retirement(ruvia::testing::test_context& ruvia_ctx, retirement_kind kind, bool retire_current) {
     asio::io_context context;
     ruvia::worker_runtime_context runtime(context, 8);
@@ -144,6 +159,42 @@ void check_scanner_restart(ruvia::testing::test_context& ruvia_ctx, bool worker_
     RUVIA_CHECK_EQ(restart.calls_, 2);
 }
 
+void check_scanner_destruction(ruvia::testing::test_context& ruvia_ctx, bool worker_maintenance) {
+    asio::io_context context;
+    ruvia::worker_runtime_context runtime(context, 8);
+    auto scanner = std::make_unique<scanner_type>(
+        runtime.handle(), ruvia::connection_scanner_options{.scan_interval_ = std::chrono::milliseconds(1)});
+    scanner_type::entry_type later;
+    scanner_type::entry_type destroying;
+    scanner_type::periodic_check_registration_type later_check;
+    scanner_type::periodic_check_registration_type destroying_check;
+    scanner_type::worker_maintenance_registration_type maintenance;
+    scanner_destruction destruction{&scanner};
+    scan_observation later_observation{nullptr};
+    // Entries are scanned newest first, so `later` follows the destroying node.
+    scanner->register_entry(later);
+    scanner->register_entry(destroying);
+    later.register_periodic_check(later_check, &later_observation, &scan_observation::tick);
+    if (worker_maintenance) {
+        scanner->register_worker_maintenance(maintenance, &destruction, &scanner_destruction::check);
+    } else {
+        destroying.register_periodic_check(destroying_check, &destruction, &scanner_destruction::tick);
+    }
+    RUVIA_CHECK(runtime.handle().post([&scanner] { scanner->start(); }).accepted());
+    RUVIA_CHECK(!ruvia::testing::throws_on([&context] {
+        context.run_for(std::chrono::milliseconds(50));
+    }));
+    RUVIA_CHECK(scanner == nullptr);
+    RUVIA_CHECK_EQ(destruction.calls_, 1);
+    RUVIA_CHECK_EQ(later_observation.calls_, 0);
+    // Teardown detached every node; their own resets stay harmless.
+    later.touch();
+    destroying.set_phase(scanner_type::phase_type::idle);
+    later_check.reset();
+    destroying_check.reset();
+    maintenance.reset();
+}
+
 }  // namespace
 
 RUVIA_TEST(connection_scanner_periodic_check_can_unregister_next_entry) {
@@ -176,4 +227,12 @@ RUVIA_TEST(connection_scanner_periodic_check_can_restart_scanner) {
 
 RUVIA_TEST(connection_scanner_maintenance_can_restart_scanner) {
     check_scanner_restart(ruvia_ctx, true);
+}
+
+RUVIA_TEST(connection_scanner_periodic_check_can_destroy_scanner) {
+    check_scanner_destruction(ruvia_ctx, false);
+}
+
+RUVIA_TEST(connection_scanner_maintenance_can_destroy_scanner) {
+    check_scanner_destruction(ruvia_ctx, true);
 }

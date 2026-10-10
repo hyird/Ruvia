@@ -117,7 +117,7 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
         ruvia::http_status::content_too_large);
 }
 
-RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_budgets) {
+RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_limits) {
     http1_chunked_body_decoder tiny_body({.body_limit_ = protocol_byte_limit::limited(1)});
     constexpr std::string_view tiny_wire = "1\r\nx\r\n0\r\n\r\n";
     const auto body = tiny_body.decode(tiny_wire);
@@ -128,22 +128,66 @@ RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_budgets) {
         RUVIA_CHECK(terminal.complete() != nullptr);
     }
 
-    http1_chunked_body_decoder framing_flood({.body_limit_ = protocol_byte_limit::unlimited()});
+    // Each size line has its own bound; maximal lines do not share a budget.
     std::string size_line = "1;x=";
-    size_line.append(ruvia::max_http_header_bytes / 2 - size_line.size() - 2, 'a');
+    size_line.append(ruvia::max_http_header_bytes - size_line.size() - 2, 'a');
     size_line.append("\r\n");
-    const std::string flood_wire = size_line + "x\r\n" + size_line + "y\r\n0\r\n\r\n";
-
-    const auto first = framing_flood.decode(flood_wire);
-    RUVIA_CHECK(first.body_chunk() != nullptr);
-    if (const auto* chunk = first.body_chunk()) {
-        const auto excessive =
-            framing_flood.decode(std::string_view(flood_wire).substr(chunk->consumed_bytes()));
-        RUVIA_CHECK(excessive.failure() != nullptr);
-        if (const auto* failure = excessive.failure()) {
-            RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
-        }
+    std::string wire;
+    for (const char payload : std::string_view("xyz")) {
+        wire.append(size_line);
+        wire.push_back(payload);
+        wire.append("\r\n");
     }
+    wire.append("0\r\n\r\nNEXT");
+
+    http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(3)});
+    std::string decoded;
+    std::string_view remaining = wire;
+    for (std::size_t step = 0; step < 8; ++step) {
+        const auto result_value = decoder.decode(remaining);
+        remaining.remove_prefix(result_value.consumed_bytes());
+        if (const auto* chunk = result_value.body_chunk()) {
+            decoded.append(chunk->bytes());
+            continue;
+        }
+        RUVIA_CHECK(result_value.complete() != nullptr);
+        break;
+    }
+    RUVIA_CHECK_EQ(decoded, "xyz");
+    RUVIA_CHECK_EQ(remaining, "NEXT");
+}
+
+RUVIA_TEST(chunked_body_decoder_accepts_unbounded_chunk_count) {
+    constexpr std::size_t chunk_count = 20000;
+    std::string wire;
+    wire.reserve(chunk_count * 6 + 9);
+    for (std::size_t index = 0; index < chunk_count; ++index) {
+        wire.append("1\r\n");
+        wire.push_back(static_cast<char>('a' + index % 26));
+        wire.append("\r\n");
+    }
+    wire.append("0\r\n\r\nNEXT");
+
+    http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(chunk_count)});
+    std::size_t decoded_bytes = 0;
+    bool ordered = true;
+    std::string_view remaining = wire;
+    for (;;) {
+        const auto result_value = decoder.decode(remaining);
+        remaining.remove_prefix(result_value.consumed_bytes());
+        if (const auto* chunk = result_value.body_chunk()) {
+            for (const char byte : chunk->bytes()) {
+                ordered = ordered && byte == static_cast<char>('a' + decoded_bytes % 26);
+                ++decoded_bytes;
+            }
+            continue;
+        }
+        RUVIA_CHECK(result_value.complete() != nullptr);
+        break;
+    }
+    RUVIA_CHECK(ordered);
+    RUVIA_CHECK_EQ(decoded_bytes, chunk_count);
+    RUVIA_CHECK_EQ(remaining, "NEXT");
 }
 
 RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
@@ -373,21 +417,23 @@ RUVIA_TEST(chunked_body_decoder_decodes_without_pmr_allocation) {
     RUVIA_CHECK_EQ(resource.allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(chunked_body_decoder_enforces_cumulative_framing_at_exact_boundary) {
+RUVIA_TEST(chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
         std::string wire = "1;x=";
-        wire.append(ruvia::max_http_header_bytes - 7 + excess - wire.size() - 2, 'a');
+        // The size line including its CRLF is exactly max_http_header_bytes.
+        wire.append(ruvia::max_http_header_bytes + excess - wire.size() - 2, 'a');
         wire.append("\r\nx\r\n0\r\n\r\nNEXT");
-        http1_chunked_body_decoder decoder;
+        http1_chunked_body_decoder decoder(
+            {.body_limit_ = protocol_byte_limit::limited(ruvia::default_max_buffered_body_bytes)});
         const auto body = decoder.decode(wire, 1);
-        RUVIA_CHECK(body.body_chunk() != nullptr);
-        if (!body.body_chunk()) {
-            continue;
-        }
-        RUVIA_CHECK_EQ(body.body_chunk()->bytes(), "x");
-        auto suffix = std::string_view(wire).substr(body.consumed_bytes());
-        const auto terminal = decoder.decode(suffix, 1);
         if (excess == 0) {
+            RUVIA_CHECK(body.body_chunk() != nullptr);
+            if (!body.body_chunk()) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(body.body_chunk()->bytes(), "x");
+            auto suffix = std::string_view(wire).substr(body.consumed_bytes());
+            const auto terminal = decoder.decode(suffix, 1);
             RUVIA_CHECK(terminal.complete() != nullptr);
             suffix.remove_prefix(terminal.consumed_bytes());
             RUVIA_CHECK_EQ(suffix, "NEXT");
@@ -395,11 +441,12 @@ RUVIA_TEST(chunked_body_decoder_enforces_cumulative_framing_at_exact_boundary) {
             RUVIA_CHECK(replay.complete() != nullptr);
             RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
         } else {
-            RUVIA_CHECK(terminal.failure() != nullptr);
-            if (const auto* failure = terminal.failure()) {
+            RUVIA_CHECK(body.failure() != nullptr);
+            RUVIA_CHECK_EQ(body.consumed_bytes(), std::size_t{0});
+            if (const auto* failure = body.failure()) {
                 RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
             }
-            const auto replay = decoder.decode(suffix);
+            const auto replay = decoder.decode(wire);
             RUVIA_CHECK(replay.failure() != nullptr);
             RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
             if (const auto* failure = replay.failure()) {
@@ -407,33 +454,14 @@ RUVIA_TEST(chunked_body_decoder_enforces_cumulative_framing_at_exact_boundary) {
             }
         }
     }
-}
 
-RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
-    http1_chunked_body_decoder decoder(
-        {.body_limit_ = protocol_byte_limit::limited(ruvia::default_max_buffered_body_bytes)});
+    http1_chunked_body_decoder unterminated;
     std::string oversized = "1;x=";
     oversized.append(ruvia::max_http_header_bytes, 'a');
-    oversized.append("\r\n");
-
-    const auto result_value = decoder.decode(oversized);
+    const auto result_value = unterminated.decode(oversized);
     RUVIA_CHECK(result_value.failure() != nullptr);
     if (const auto* failure = result_value.failure()) {
         RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
-    }
-
-    http1_chunked_body_decoder boundary(
-        {.body_limit_ = protocol_byte_limit::limited(ruvia::default_max_buffered_body_bytes)});
-    std::string accepted = "1;x=";
-    // Reserve two bytes for the data delimiter and five for the terminal chunk.
-    accepted.append(ruvia::max_http_header_bytes - 7 - accepted.size() - 2, 'a');
-    accepted.append("\r\nx\r\n0\r\n\r\n");
-    const auto boundary_result = boundary.decode(accepted);
-    RUVIA_CHECK(boundary_result.body_chunk() != nullptr);
-    if (const auto* body = boundary_result.body_chunk()) {
-        const auto terminal =
-            boundary.decode(std::string_view(accepted).substr(body->consumed_bytes()));
-        RUVIA_CHECK(terminal.complete() != nullptr);
     }
 }
 

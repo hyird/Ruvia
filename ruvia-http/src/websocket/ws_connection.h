@@ -53,6 +53,9 @@ public:
     void notify_transport_eof() noexcept;
     [[nodiscard]] websocket_abort_disposition abort() noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
+    // Drop already-parsed input bytes so they no longer count against an owner's
+    // input bound. Invalidates event payload views into the input buffer.
+    void release_consumed_input() noexcept;
 
     // Submit one complete logical message/control payload. Role-correct masking,
     // outbound text UTF-8 validation, optional data-message compression and

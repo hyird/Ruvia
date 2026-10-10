@@ -372,21 +372,23 @@ void web_worker_runtime::stop_http3() noexcept {
 task<void> web_worker_runtime::run_worker() {
     if (!http_server_worker_running(worker_state_)) {
         stop_http3();
-        (void)worker_completion_.mark_startup_failed(
-            std::make_exception_ptr(std::runtime_error("web worker startup cancelled")));
+        worker_completion_.mark_startup_aborted();
         worker_completion_.mark_serving_aborted();
         co_return;
     }
     try {
-        connections_.prepare();
-        co_await capabilities_.connect();
+        // A stop applied before this task first runs has already stopped the
+        // worker timers; starting the scanner or capability I/O would fail.
+        if (!stop_token_.stop_requested()) {
+            connections_.prepare();
+            co_await capabilities_.connect();
+        }
         if (http3_ != nullptr && !stop_token_.stop_requested()) {
             http3_->start();
         }
         if (stop_token_.stop_requested()) {
             stop_http3();
-            (void)worker_completion_.mark_startup_failed(
-                std::make_exception_ptr(std::runtime_error("web worker startup cancelled")));
+            worker_completion_.mark_startup_aborted();
             worker_completion_.mark_serving_aborted();
         } else {
             (void)worker_completion_.mark_startup_ready();

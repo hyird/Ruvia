@@ -143,7 +143,10 @@ public:
         failed_ = true;
         return request_->take_request_after_retirement();
     }
-    [[nodiscard]] bool replay_after_rejected_early_stream(
+    // Restarts the complete request on a new stream after its previous stream
+    // can no longer deliver input (0-RTT rejection or a closed connection
+    // attempt). The caller must first retire that stream's parser state.
+    [[nodiscard]] bool replay_on_new_stream(
         std::string_view scheme, std::string_view authority,
         std::pmr::memory_resource* resource) {
         auto original = request_->take_request_after_retirement();

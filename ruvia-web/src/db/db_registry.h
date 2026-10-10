@@ -190,6 +190,7 @@ public:
         std::span<const db_value> params, std::pmr::memory_resource* resource,
         const ruvia::operation_timeout& operation_timeout);
     task<st_mysql_res*> store_mysql_result(connection_slot_type& slot, const ruvia::operation_timeout& deadline);
+    task<void> finish_mysql_results(connection_slot_type& slot, const ruvia::operation_timeout& deadline);
     task<db_rows> query_on_slot(connection_slot_type& slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource,
         const ruvia::operation_timeout& operation_timeout);
@@ -339,7 +340,11 @@ public:
     void close_slot(connection_slot_type& slot) noexcept;
     task<db_resolved_addresses_type> resolve_host(connection_slot_type& slot, const ruvia::operation_timeout& deadline);
     task<void> connect_unlocked(connection_slot_type& slot, const ruvia::operation_timeout& operation_timeout);
-    task<void> wait_for_postgresql(connection_slot_type& slot, bool read, const ruvia::operation_timeout& deadline);
+    enum class postgresql_wait_type : std::uint8_t { read,
+        write,
+        read_or_write };
+    task<void> wait_for_postgresql(
+        connection_slot_type& slot, postgresql_wait_type wait, const ruvia::operation_timeout& deadline);
     task<void> flush_output(connection_slot_type& slot, const ruvia::operation_timeout& deadline);
     task<void> wait_until_result_ready(connection_slot_type& slot, const ruvia::operation_timeout& deadline);
     task<void> send_query(connection_slot_type& slot, const std::pmr::string& sql,

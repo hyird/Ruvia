@@ -553,6 +553,137 @@ private:
     std::optional<ruvia::http_priority> priority_observed_{};
 };
 
+// The first connection sends SETTINGS and GOAWAY(last-stream-id 0) in one write
+// before reading anything, so the client consumes the GOAWAY while it waits for
+// peer SETTINGS. The second connection serves one request normally.
+class http2_preface_goaway_peer final {
+public:
+    http2_preface_goaway_peer(asio::io_context& io, const ruvia::worker_handle& worker_value)
+        : io_(io),
+          acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          done_(worker_value) {}
+
+    void start() {
+        asio::co_spawn(io_, serve(), [this](std::exception_ptr failure) {
+            failure_ = failure;
+            complete_ = true;
+            done_.notify();
+        });
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    void stop() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+    }
+
+    [[nodiscard]] ruvia::task<void> wait() {
+        while (!complete_) {
+            co_await done_.wait();
+        }
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+    unsigned connections_{0};
+
+private:
+    asio::awaitable<void> send_pending(asio::ip::tcp::socket& socket,
+        ruvia::http2_connection& connection) {
+        const auto output = connection.pending_output();
+        if (!output.empty()) {
+            co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            (void)connection.consume_output(output.size());
+        }
+    }
+
+    asio::awaitable<void> serve() {
+        auto draining = co_await acceptor_.async_accept(asio::use_awaitable);
+        ++connections_;
+        {
+            auto connection = ruvia::http2_connection::server();
+            std::string preface(connection.pending_output());
+            constexpr std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            preface.append(goaway.data(), goaway.size());
+            co_await asio::async_write(draining, asio::buffer(preface), asio::use_awaitable);
+        }
+
+        auto socket = co_await acceptor_.async_accept(asio::use_awaitable);
+        ++connections_;
+        auto connection = ruvia::http2_connection::server();
+        co_await send_pending(socket, connection);
+        std::array<char, ruvia::http2_client_preface.size()> preface{};
+        co_await asio::async_read(socket, asio::buffer(preface), asio::use_awaitable);
+        if (connection.feed(std::string_view(preface.data(), preface.size())) !=
+            ruvia::http2_feed_result::accepted) {
+            throw std::runtime_error("HTTP/2 peer rejected the client preface");
+        }
+        std::uint32_t request_stream = 0;
+        std::optional<ruvia::http2_request_head_event> request_lease;
+        std::string request_frame;
+        while (request_stream == 0) {
+            std::array<char, ruvia::http2_frame_header_bytes> header_value{};
+            co_await asio::async_read(socket, asio::buffer(header_value), asio::use_awaitable);
+            const auto frame_header = ruvia::parse_http2_frame_header(std::span<const char>(header_value));
+            if (!frame_header.has_value()) {
+                throw std::runtime_error("HTTP/2 peer received an incomplete frame header");
+            }
+            request_frame.assign(header_value.data(), header_value.size());
+            request_frame.resize(header_value.size() + frame_header->length_);
+            if (frame_header->length_ != 0) {
+                co_await asio::async_read(socket,
+                    asio::buffer(request_frame.data() + header_value.size(), frame_header->length_),
+                    asio::use_awaitable);
+            }
+            if (connection.feed(request_frame) == ruvia::http2_feed_result::protocol_failure) {
+                throw std::runtime_error("HTTP/2 peer rejected client frames");
+            }
+            while (auto event = connection.next_event()) {
+                if (auto* request = event->request_head()) {
+                    request_stream = request->stream_id();
+                    request_lease.emplace(std::move(*request));
+                }
+            }
+            co_await send_pending(socket, connection);
+        }
+        ruvia::http_response response;
+        response.status(ruvia::http_status::ok);
+        if (connection.submit_streaming_response_head(request_stream, std::move(response)) !=
+                ruvia::http2_submit_status::accepted ||
+            connection.submit_data(request_stream, "fresh", ruvia::http2_end_stream::end_stream) !=
+                ruvia::http2_data_submit_status::accepted) {
+            throw std::runtime_error("HTTP/2 peer could not submit its response");
+        }
+        co_await send_pending(socket, connection);
+
+        std::array<char, 1024> input{};
+        std::error_code error;
+        while (const auto received = co_await socket.async_read_some(asio::buffer(input),
+                   asio::redirect_error(asio::use_awaitable, error))) {
+            if (connection.feed(std::string_view(input.data(), received)) == ruvia::http2_feed_result::protocol_failure) {
+                throw std::runtime_error("HTTP/2 peer rejected late control input");
+            }
+            while (connection.next_event()) {
+            }
+            co_await send_pending(socket, connection);
+        }
+        if (!request_lease.has_value() || connection.release(std::move(*request_lease)) !=
+                                              ruvia::http2_server_request_release_status::released) {
+            throw std::runtime_error("HTTP/2 peer could not release its request lease");
+        }
+    }
+
+    asio::io_context& io_;
+    asio::ip::tcp::acceptor acceptor_;
+    ruvia::worker_signal done_;
+    std::exception_ptr failure_;
+    bool complete_{false};
+};
+
 class http1_chunked_response_peer final {
 public:
     enum class end_mode_type : unsigned char { terminal_gate,
@@ -1205,6 +1336,36 @@ RUVIA_TEST(http2_client_observes_alternative_service_frame_as_independently_owne
         if (retained && retained->alternative_service()) {
             RUVIA_CHECK(retained->alternative_service()->field_value_ == "h3=\":443\"; ma=60");
         }
+    };
+    run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http2_client_reconnects_after_goaway_received_with_peer_settings) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    http2_preface_goaway_peer peer(io, worker.handle_);
+    peer.start();
+    auto config = local_http_client_config(peer.port());
+    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.request_timeout_ = std::chrono::seconds(3);
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(worker.attachment_.loop(), config);
+        std::exception_ptr failure;
+        try {
+            auto response = co_await client.send({.target_ = "/after-goaway"});
+            RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{200});
+            auto bytes_value = co_await response.body().read_all(16);
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "fresh");
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        if (failure) {
+            peer.stop();
+            std::rethrow_exception(failure);
+        }
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(peer.connections_, 2U);
     };
     run_operation(worker, io, operation);
 }

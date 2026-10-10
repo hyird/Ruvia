@@ -13,6 +13,8 @@
 // or encode a whole buffer through the caller's memory resource, bounded by an
 // explicit output ceiling, reporting failure as a value. Which coding a field
 // asks for is decided elsewhere; this is only the machinery each one runs on.
+// decode_http_content maps an empty representation to empty content before
+// any decoder below runs.
 
 namespace ruvia::detail {
 

@@ -64,7 +64,8 @@ private:
               path_(resource),
               tunnel_protocol_(resource),
               websocket_subprotocols_(resource),
-              middleware_invokes_(resource) {}
+              middleware_invokes_(resource),
+              middleware_scopes_(resource) {}
 
         http_known_method method_{http_known_method::unknown};
         std::pmr::string method_token_;
@@ -90,6 +91,10 @@ private:
         std::size_t max_request_body_bytes_{0};
         std::int64_t deadline_ms_{0};
         std::pmr::vector<route_middleware_type::invoke_type> middleware_invokes_;
+        // Parallel to middleware_invokes_: the dispatch-time scope of a
+        // conditional frame, empty for an unconditional one. Borrows the
+        // registration-owned prefix text, which outlives every route plan.
+        std::pmr::vector<std::string_view> middleware_scopes_;
     };
 
     struct static_route_slot final {

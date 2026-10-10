@@ -619,3 +619,24 @@ RUVIA_TEST(ws_owned_input_backpressure_does_not_copy_rejected_bytes) {
     RUVIA_CHECK(connection.feed(ping) == websocket_feed_status::accepted);
     RUVIA_CHECK(connection.next_event()->ping() != nullptr);
 }
+
+RUVIA_TEST(ws_owned_input_bound_excludes_parsed_prefix) {
+    websocket_connection connection({.max_buffered_input_bytes_ = 32});
+    const std::string ping("\x89\x81\x00\x00\x00\x00p", 7);
+    std::string binary("\x82\x94\x00\x00\x00\x00", 6);
+    binary.append(20, 'b');
+    const auto first_chunk = ping + binary.substr(0, 10);
+    RUVIA_CHECK(connection.feed(first_chunk) == websocket_feed_status::accepted);
+    const auto ping_event = connection.next_event();
+    RUVIA_CHECK(ping_event && ping_event->ping());
+    (void)connection.consume_output(connection.output_plan().bytes().size());
+    RUVIA_CHECK(!connection.next_event());
+    // 16 pending + 10 buffered frame bytes fit the 32-byte bound once the
+    // already-delivered Ping no longer occupies the buffer.
+    RUVIA_CHECK(connection.feed(std::string_view(binary).substr(10)) == websocket_feed_status::accepted);
+    const auto message_event = connection.next_event();
+    RUVIA_CHECK(message_event && message_event->message());
+    if (message_event && message_event->message()) {
+        RUVIA_CHECK_EQ(message_event->message()->payload(), std::string(20, 'b'));
+    }
+}

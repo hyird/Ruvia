@@ -33,7 +33,7 @@ task<void> websocket_connection<transport_type>::close_owned(::ruvia::websocket_
     {
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
-        co_await wait_for_heartbeat_write();
+        co_await wait_for_write_idle();
         const auto reason = options.reason_.view();
         bool flush_output = false;
         bool await_peer_close = false;
@@ -106,13 +106,6 @@ task<void> websocket_connection<transport_type>::detach_and_drain_writes() {
 }
 
 template <typename transport_type>
-task<void> websocket_connection<transport_type>::wait_for_heartbeat_write() {
-    while (write_phase_ == write_phase_type::heartbeat) {
-        co_await background_write_signal_.wait();
-    }
-}
-
-template <typename transport_type>
 task<void> websocket_connection<transport_type>::wait_for_write_idle() {
     while (write_phase_ != write_phase_type::idle) {
         co_await background_write_signal_.wait();
@@ -126,7 +119,7 @@ void websocket_connection<transport_type>::notify_write_idle() noexcept {
 
 template <typename transport_type>
 task<void> websocket_connection<transport_type>::write_exclusive(websocket_opcode opcode, std::string_view payload_value, bool compress) {
-    co_await wait_for_heartbeat_write();
+    co_await wait_for_write_idle();
     write_guard_type write_guard(*this, write_phase_type::application);
     co_await write_frame_now(opcode, payload_value, compress);
 }

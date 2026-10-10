@@ -121,6 +121,9 @@ public:
         } guard_value{waiter_state->queue_, waiter};
 
         ::ruvia::worker_timer_registration deadline_timer;
+        // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
+        // pending deadline: the waiter keeps its deadline for scan_deadlines()
+        // and still completes on release, close(), or its stop token.
         if (timeout.has_value() && worker_value != nullptr && worker_value->valid()) {
             (*worker_value).schedule_timer(deadline_timer, deadline_value, [waiter_state, waiter_id](::ruvia::worker_timer_outcome outcome) noexcept {
                 if (outcome == ::ruvia::worker_timer_outcome::expired) {

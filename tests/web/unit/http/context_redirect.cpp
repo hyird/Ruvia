@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <exception>
 #include <iterator>
 #include <span>
@@ -182,15 +183,44 @@ RUVIA_TEST(context_dynamic_body_owns_input_and_preserves_lvalue) {
     });
 }
 
-RUVIA_TEST(context_literal_builders_keep_static_storage) {
+RUVIA_TEST(context_static_text_builders_borrow_static_storage) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        const auto body_response = context.body("body");
-        const auto text_response = context.text("text");
-        const auto html_response = context.html("<b>html</b>");
+        static constexpr std::string_view page = "<b>html</b>";
+        constexpr ruvia::static_text body_text("bo\0dy");
+        const auto body_response = context.body(body_text);
+        const auto text_response = context.text(ruvia::static_text("text"));
+        const auto html_response = context.html(ruvia::static_text(page));
 
-        RUVIA_CHECK(body_response.body_bytes() == std::string_view("body"));
+        RUVIA_CHECK(body_response.body_bytes() == std::string_view("bo\0dy", 5));
+        RUVIA_CHECK(body_response.body_bytes().data() == body_text.view().data());
         RUVIA_CHECK(text_response.body_bytes() == std::string_view("text"));
-        RUVIA_CHECK(html_response.body_bytes() == std::string_view("<b>html</b>"));
+        RUVIA_CHECK_EQ(text_response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
+        RUVIA_CHECK(html_response.body_bytes() == page);
+        RUVIA_CHECK(html_response.body_bytes().data() == page.data());
+        RUVIA_CHECK_EQ(html_response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
+        co_return;
+    });
+}
+
+RUVIA_TEST(context_character_array_builders_copy_until_terminator) {
+    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+        char buffer[64] = {};
+        const auto written = std::snprintf(buffer, sizeof(buffer), "count=%d", 7);
+        RUVIA_CHECK(written > 0);
+        const auto text_response = context.text(buffer);
+        const auto html_response = context.html(buffer);
+        const char unterminated[3] = {'a', 'b', 'c'};
+        const auto body_response = context.body(unterminated);
+        buffer[0] = 'X';
+
+        RUVIA_CHECK_EQ(text_response.body_bytes(), std::string_view("count=7"));
+        RUVIA_CHECK(text_response.body_bytes().data() != buffer);
+        RUVIA_CHECK_EQ(html_response.body_bytes(), std::string_view("count=7"));
+        RUVIA_CHECK_EQ(body_response.body_bytes(), std::string_view("abc"));
+        RUVIA_CHECK(body_response.body_bytes().data() != unterminated);
+
+        const auto literal_response = context.text("literal");
+        RUVIA_CHECK_EQ(literal_response.body_bytes(), std::string_view("literal"));
         co_return;
     });
 }

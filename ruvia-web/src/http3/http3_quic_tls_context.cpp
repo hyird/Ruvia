@@ -11,6 +11,16 @@
 
 namespace ruvia::detail {
 namespace {
+// OpenSSL skips ALPN selection when the extension is absent. RFC 9001 Section 8.1
+// requires closing immediately with no_application_protocol, before the server flight.
+int require_alpn_offer(SSL* ssl, int* alert, void*) noexcept {
+    if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation,
+            nullptr, nullptr) == 1) {
+        return SSL_CLIENT_HELLO_SUCCESS;
+    }
+    *alert = SSL_AD_NO_APPLICATION_PROTOCOL;
+    return SSL_CLIENT_HELLO_ERROR;
+}
 
 void configure_quic_tls_context(SSL_CTX* context_value,
     const http_server_listener_definition::tls_identity_type& identity,
@@ -27,6 +37,7 @@ void configure_quic_tls_context(SSL_CTX* context_value,
     }
     SSL_CTX_set_options(context_value, SSL_OP_NO_COMPRESSION);
     SSL_CTX_set_alpn_select_cb(context_value, alpn_callback, nullptr);
+    SSL_CTX_set_client_hello_cb(context_value, &require_alpn_offer, nullptr);
     configure_http_server_tls_identity(context_value, identity, client_certificates);
     // Password callback data belongs to the input configuration; credentials are now loaded.
     SSL_CTX_set_default_passwd_cb(context_value, nullptr);
@@ -74,6 +85,9 @@ http3_quic_tls_context::http3_quic_tls_context(const http_server_listener_defini
     context_owner default_context(SSL_CTX_new(method));
     configure_quic_tls_context(default_context.get(), tls.identity_, tls.client_certificates_,
         &select_alpn_protocol);
+    // The listener's process-wide ticket keys: a QUIC resumption ticket issued
+    // by one worker is accepted by every other worker of this listener.
+    install_tls_session_ticket_keys(*default_context.get(), tls);
     default_context_ = default_context.get();
     early_data_enabled_ = tls.http3_early_data_;
     if (SSL_CTX_set_max_early_data(default_context_,

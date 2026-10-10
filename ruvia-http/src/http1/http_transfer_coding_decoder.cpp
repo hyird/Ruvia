@@ -54,6 +54,8 @@ private:
     std::pmr::memory_resource* resource_;
     protocol_byte_limit body_limit_;
     std::size_t decoded_bytes_{0};
+    // An empty coded body carries no content and completes at framing EOF.
+    bool received_input_{false};
     http_transfer_coding coding_;
 };
 
@@ -121,6 +123,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
 
         const auto step = inflate_step(input.substr(consumed), output_buffer.subspan(produced));
         consumed += step.consumed_;
+        received_input_ = received_input_ || step.consumed_ != 0;
         if (body_limit_.addition_exceeds(decoded_bytes_, step.produced_)) {
             return fail(consumed, http_transfer_coding_decode_error::decoded_size_exceeded);
         }
@@ -171,7 +174,8 @@ http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexc
         return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
     }
     if (std::holds_alternative<completed>(state_) ||
-        std::holds_alternative<gzip_member_boundary>(state_)) {
+        std::holds_alternative<gzip_member_boundary>(state_) ||
+        (std::holds_alternative<active>(state_) && !received_input_)) {
         state_.emplace<completed>();
         return complete(0);
     }

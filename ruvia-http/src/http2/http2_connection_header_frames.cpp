@@ -151,11 +151,19 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
                 }
             }
             streams_.for_each([&](const auto& item) {
-                if (!http2_stream_is_closed(item) && item.push_reservation() == http2_push_reservation::none) {
+                // The advertised limit bounds streams the peer initiated (RFC 9113
+                // 5.1.2); active server pushes count against the client's limit.
+                if ((item.id() & 1U) != 0 && !http2_stream_is_closed(item) &&
+                    item.push_reservation() == http2_push_reservation::none) {
                     ++active;
                 }
             });
-            if (prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams) {
+            // A HEADERS frame that itself exceeds the advertised limit is a stream
+            // error (RFC 9113 5.1.2): refuse it below. Only idle-stream priorities
+            // that crowd out an otherwise admissible stream end the connection.
+            const bool concurrency_exceeded = active >= http2_local_settings::max_concurrent_streams;
+            if (!concurrency_exceeded &&
+                prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams) {
                 append_goaway(http2_error_code::protocol_error, "idle priorities and active streams exceed concurrency");
                 return false;
             }
@@ -163,7 +171,7 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
             const auto* graceful_drain = local_connection_state_.graceful_drain();
             const bool drain_refused =
                 graceful_drain != nullptr && header_value.stream_id_ > graceful_drain->last_stream_id();
-            stream = drain_refused ? nullptr : create_stream(header_value.stream_id_);
+            stream = drain_refused || concurrency_exceeded ? nullptr : create_stream(header_value.stream_id_);
             created_peer_stream = stream != nullptr;
             if (stream == nullptr) {
                 discarded_action = discarded_header_action_type::refuse_stream;

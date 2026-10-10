@@ -67,6 +67,16 @@ struct parsed_request_header_block {
 
 [[nodiscard]] std::size_t find_http_header_end(
     std::string_view buffer, std::size_t search_offset) noexcept;
+// RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
+// before the request-line. Leading CRLF or bare LF lines are skipped; they count
+// toward max_http_header_bytes, which bounds how many are ignored.
+[[nodiscard]] std::size_t http_request_leading_empty_line_bytes(std::string_view buffer) noexcept;
+// find_http_header_end for a request head: the returned end is measured from
+// the start of buffer and includes any ignored leading empty lines.
+[[nodiscard]] std::size_t find_http_request_head_end(
+    std::string_view buffer, std::size_t search_offset) noexcept;
+// header_bytes is the find_http_request_head_end result; the request-line is
+// parsed after the ignored leading empty lines.
 [[nodiscard]] std::optional<http_parse_error> parse_http_header_block(
     std::string_view buffer, std::size_t header_bytes, parsed_request_header_block& block);
 

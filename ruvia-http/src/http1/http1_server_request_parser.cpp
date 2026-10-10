@@ -12,7 +12,7 @@
 namespace ruvia {
 namespace {
 
-using ruvia::detail::find_http_header_end;
+using ruvia::detail::find_http_request_head_end;
 using ruvia::detail::http_chunk_scan_error;
 using ruvia::detail::http_request_access;
 using ruvia::detail::parse_http_header_block;
@@ -48,7 +48,7 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
         state_value.connection_plan_ = connection_plan;
     };
 
-    const auto header_bytes = find_http_header_end(buffer, header_search_offset);
+    const auto header_bytes = find_http_request_head_end(buffer, header_search_offset);
     if (header_bytes == std::string_view::npos) {
         if (buffer.size() >= max_http_header_bytes) {
             return fail(http_parse_error::header_too_large);
@@ -262,10 +262,16 @@ void http1_server_request_parser::parse_message_body(
     const auto* known_length_body = body_plan.known_length();
     std::size_t message_bytes = 0;
     if (chunked_body != nullptr) {
-        const auto chunked = scan_http_chunked_body(buffer.substr(header_bytes));
+        // Chunk framing has no cumulative budget, so the whole buffered message
+        // limit bounds the scanned wire bytes.
+        const auto body_budget = max_http_request_bytes - header_bytes;
+        const auto chunked = scan_http_chunked_body(buffer.substr(header_bytes, body_budget));
         if (const auto* complete = chunked.complete()) {
             message_bytes = header_bytes + complete->consumed_bytes();
         } else if (chunked.need_more() != nullptr) {
+            if (buffer.size() - header_bytes >= body_budget) {
+                return fail(http_parse_error::body_too_large);
+            }
             return need_more();
         } else {
             switch (chunked.failure()->error()) {

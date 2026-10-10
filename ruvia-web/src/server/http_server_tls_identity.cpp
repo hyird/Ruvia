@@ -90,6 +90,14 @@ void configure_http_server_tls_identity(SSL_CTX* context_value,
         1) {
         throw_tls_identity_error("load_verify_file");
     }
+    // A server that verifies peers without a session ID context turns every
+    // resumption attempt into a fatal handshake error (SSL_CTX_set_session_id_context(3)).
+    static constexpr unsigned char session_id_context[] = {'r', 'u', 'v', 'i', 'a'};
+    ::ERR_clear_error();
+    if (::SSL_CTX_set_session_id_context(
+            context_value, session_id_context, sizeof(session_id_context)) != 1) {
+        throw_tls_identity_error("set_session_id_context");
+    }
     SSL_CTX_set_verify(context_value,
         static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
 }

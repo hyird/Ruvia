@@ -1,25 +1,37 @@
 #pragma once
 
+#include <cstddef>
+#include <string_view>
+
 #include "ruvia/web/detail/http/context/request_bindings.h"
+
+namespace ruvia::detail {
+
+// A character array may be a partly filled buffer: its bytes end at the first
+// NUL, or at the array bound when it holds none.
+template <std::size_t n>
+[[nodiscard]] constexpr std::string_view char_array_bytes(const char (&value)[n]) noexcept {
+    const std::string_view bytes(value, n);
+    return bytes.substr(0, bytes.find('\0'));
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia {
 
 template <std::size_t n>
 inline http_response context::body(const char (&value)[n]) const {
-    const auto size = n > 0 && value[n - 1] == '\0' ? n - 1 : n;
-    return body_static_view(std::string_view(value, size));
+    return body(detail::char_array_bytes(value));
 }
 
 template <std::size_t n>
 inline http_response context::text(const char (&body)[n]) const {
-    const auto size = n > 0 && body[n - 1] == '\0' ? n - 1 : n;
-    return text_static_view(std::string_view(body, size));
+    return text(detail::char_array_bytes(body));
 }
 
 template <std::size_t n>
 inline http_response context::html(const char (&body)[n]) const {
-    const auto size = n > 0 && body[n - 1] == '\0' ? n - 1 : n;
-    return html_static_view(std::string_view(body, size));
+    return html(detail::char_array_bytes(body));
 }
 
 template <typename t_type>

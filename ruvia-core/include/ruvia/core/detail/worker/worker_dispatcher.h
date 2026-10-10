@@ -40,7 +40,7 @@ public:
     // no batch is active. The active bit is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
     void when_idle(move_only_function<void()> callback);
-    void schedule_timer(worker_timer_registration& registration,
+    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration,
         std::chrono::steady_clock::time_point deadline,
         move_only_function<void(worker_timer_outcome)> completion);
     void request_timer_cancellation(std::size_t slot, std::uint64_t generation, bool notify) noexcept;
@@ -94,6 +94,9 @@ private:
     void arm_timer();
     void fire_timers();
     [[nodiscard]] bool has_timer(std::size_t slot, std::uint64_t generation) const noexcept;
+    // Deactivates an active slot, returns it to the free list, and hands back
+    // its completion for the caller to invoke or destroy.
+    [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;
 
     struct impl_type;
     std::unique_ptr<impl_type> impl_;

@@ -74,7 +74,13 @@ public:
                 co_return http_stream_read_result::make_failure(
                     std::make_error_code(std::errc::connection_reset));
             }
-            if (const auto chunk = body_queue_.pop(); !chunk.empty()) {
+            const auto chunk = body_queue_.pop();
+            // pop() returns the previous chunk's receive-window credit; flush
+            // the WINDOW_UPDATE even if this reader suspends below.
+            if (connection_.wants_write()) {
+                wake_writer();
+            }
+            if (!chunk.empty()) {
                 buffer.append(chunk.data(), chunk.size());
                 co_return http_stream_read_result::make_data();
             }

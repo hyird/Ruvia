@@ -141,6 +141,10 @@ private:
         std::uint64_t stream_id_{};
         std::uint64_t push_id_{};
     };
+    struct close_code final {
+        ruvia::quic_close_kind kind_{ruvia::quic_close_kind::application};
+        std::uint64_t value_{};
+    };
     [[nodiscard]] bool has_generation() const noexcept {
         return identity_.epoch_ != 0;
     }
@@ -170,6 +174,9 @@ private:
     [[nodiscard]] bool seal_admission() noexcept;
     [[nodiscard]] bool reject_request_stream(std::uint64_t stream_id);
     void close_connection(http3_connection_error_code reason) noexcept;
+    // Refuses an admitted connection before any HTTP/3 state exists.
+    void refuse_connection() noexcept;
+    void start_close(close_code code) noexcept;
 
     std::pmr::memory_resource* resource_;
     http3_connection_state* state_;
@@ -204,7 +211,7 @@ private:
     bool goaway_bytes_accepted_{};
     bool graceful_close_started_{};
     bool graceful_close_abandoned_{};
-    std::optional<http3_connection_error_code> close_error_code_;
+    std::optional<close_code> close_code_;
     // close_started_ denotes the rapid, no-flush forced path only.
     bool close_started_{};
 

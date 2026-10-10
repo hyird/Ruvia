@@ -45,7 +45,12 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
         return websocket_feed_status::inactive;
     }
     if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_.size()) {
-        return websocket_feed_status::backpressured;
+        // The bound covers bytes awaiting next_event(), not the parsed prefix the
+        // reader compacts lazily; otherwise a frame that fits could never arrive.
+        impl_->connection_.release_consumed_input();
+        if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_.size()) {
+            return websocket_feed_status::backpressured;
+        }
     }
     impl_->input_.append(input);
     return websocket_feed_status::accepted;

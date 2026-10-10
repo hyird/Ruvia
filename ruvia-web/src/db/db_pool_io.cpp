@@ -204,6 +204,28 @@ task<st_mysql_res*> detail::mariadb_pool::store_mysql_result(
     co_return result_value;
 }
 
+// A CALL that returns rows ends with a separate status result, and the
+// connection refuses every later command until that result has been read.
+// Only status results may follow; a further result set cannot be returned.
+task<void> detail::mariadb_pool::finish_mysql_results(
+    connection_slot_type& slot, const ruvia::operation_timeout& deadline_value) {
+    auto& connection = *slot.connection_;
+    while (mysql_more_results(&connection) != 0) {
+        int next_result = 0;
+        int status = mysql_next_result_start(&next_result, &connection);
+        while (status != 0) {
+            status = mysql_next_result_cont(
+                &next_result, &connection, co_await wait_for_mysql(slot, status, deadline_value));
+        }
+        if (next_result != 0) {
+            throw mysql_error(connection, "mysql_next_result", db_error::code_type::statement_failed);
+        }
+        if (mysql_field_count(&connection) != 0) {
+            throw std::invalid_argument("SQL must not return more than one result set");
+        }
+    }
+}
+
 task<int> detail::mariadb_pool::wait_for_mysql(
     connection_slot_type& slot, int status, const ruvia::operation_timeout& deadline_value) {
     throw_if_cancelled(slot);

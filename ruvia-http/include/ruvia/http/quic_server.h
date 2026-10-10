@@ -49,8 +49,17 @@ public:
     quic_server_route route_datagram(const quic_datagram_view& datagram);
     quic_packet_result write_version_negotiation(quic_version_negotiation_plan& plan,
         std::span<std::byte> output);
+    // A stale or forged offer, or an incomplete TLS driver, throws
+    // std::invalid_argument and changes nothing. would_block (connection capacity,
+    // or no collision-free server CID this attempt) keeps the offer pending for a
+    // retry. accepted consumes it; any other exception also consumes it, because
+    // the same Initial would fail again, and leaves no connection or published CID.
     quic_server_admit_result admit_initial(const quic_initial_offer& offer,
         quic_tls_driver_view connection_tls_driver, quic_timestamp now);
+    // Drops the pending Initial of an offer the caller will not admit, for example
+    // when it cannot create the connection's TLS driver. Returns false for a stale
+    // or forged offer, which leaves pending state unchanged.
+    bool discard_initial(const quic_initial_offer& offer) noexcept;
     quic_connection& connection(quic_connection_token token);
     const quic_connection& connection(quic_connection_token token) const;
     quic_operation_status receive(quic_connection_token token,

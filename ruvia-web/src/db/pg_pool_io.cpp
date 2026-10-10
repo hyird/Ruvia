@@ -72,7 +72,9 @@ task<void> postgresql_pool::connect_unlocked(
                 status = PQconnectPoll(slot.connection_);
                 continue;
             }
-            co_await wait_for_postgresql(slot, status == PGRES_POLLING_READING, deadline_value);
+            co_await wait_for_postgresql(slot,
+                status == PGRES_POLLING_READING ? postgresql_wait_type::read : postgresql_wait_type::write,
+                deadline_value);
             status = PQconnectPoll(slot.connection_);
         }
         if (status != PGRES_POLLING_OK || PQstatus(slot.connection_) != CONNECTION_OK) {
@@ -94,7 +96,7 @@ task<void> postgresql_pool::connect_unlocked(
 }
 
 task<void> postgresql_pool::wait_for_postgresql(
-    connection_slot_type& slot, bool read, const ruvia::operation_timeout& deadline_value) {
+    connection_slot_type& slot, postgresql_wait_type wait, const ruvia::operation_timeout& deadline_value) {
     throw_if_cancelled(slot);
     const auto remaining = deadline_value.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
@@ -118,42 +120,82 @@ task<void> postgresql_pool::wait_for_postgresql(
     } else {
         clear_db_slot_deadline(slot);
     }
+    // read_or_write arms both readiness waits; the first completion cancels
+    // the other, and the coroutine resumes once both handlers have run so no
+    // outstanding operation still borrows the awaiter.
     struct socket_wait_awaiter final {
         connection_slot_type& slot_;
         db_slot_socket& socket_;
-        bool read_;
+        postgresql_wait_type wait_;
         std::coroutine_handle<> continuation_{};
         std::error_code error_;
         std::exception_ptr initiation_failure_;
+        std::uint8_t pending_{0};
+        bool completed_{false};
+
+#if defined(_WIN32)
+        using waitable_type = asio::ip::tcp::socket;
+        [[nodiscard]] waitable_type& waitable() noexcept {
+            return socket_.socket_;
+        }
+#else
+        using waitable_type = asio::posix::stream_descriptor;
+        [[nodiscard]] waitable_type& waitable() noexcept {
+            return socket_.descriptor_;
+        }
+#endif
 
         [[nodiscard]] bool await_ready() const noexcept {
             return false;
         }
 
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            continuation_ = handle;
-#if defined(_WIN32)
-            auto& waitable = socket_.socket_;
-            const auto wait_type =
-                read_ ? asio::ip::tcp::socket::wait_read : asio::ip::tcp::socket::wait_write;
-#else
-            auto& waitable = socket_.descriptor_;
-            const auto wait_type = read_ ? asio::posix::stream_descriptor::wait_read
-                                         : asio::posix::stream_descriptor::wait_write;
-#endif
+        void on_wait(std::error_code wait_error) noexcept {
+            if (!completed_) {
+                completed_ = true;
+                error_ = wait_error;
+                if (pending_ > 1) {
+                    std::error_code ignored;
+                    waitable().cancel(ignored);
+                }
+            }
+            if (--pending_ == 0) {
+                // Asio has released every wait operation before this user
+                // handler runs, so resuming cannot destroy an outstanding
+                // operation that still borrows the awaiter.
+                continuation_.resume();
+            }
+        }
+
+        bool start_wait(waitable_type::wait_type wait_type) noexcept {
             try {
-                waitable.async_wait(wait_type, [this](std::error_code wait_error) noexcept {
-                    error_ = wait_error;
-                    // Asio has released the wait operation before this user
-                    // handler runs, so resuming cannot destroy an outstanding
-                    // operation that still borrows the awaiter.
-                    continuation_.resume();
-                });
+                waitable().async_wait(
+                    wait_type, [this](std::error_code wait_error) noexcept { on_wait(wait_error); });
+                ++pending_;
                 return true;
             } catch (...) {
                 initiation_failure_ = std::current_exception();
                 return false;
             }
+        }
+
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+            continuation_ = handle;
+            const bool want_read = wait_ != postgresql_wait_type::write;
+            const bool want_write = wait_ != postgresql_wait_type::read;
+            if (want_read && !start_wait(waitable_type::wait_read)) {
+                return false;
+            }
+            if (want_write && !start_wait(waitable_type::wait_write)) {
+                if (pending_ == 0) {
+                    return false;
+                }
+                // The read wait is already armed; cancel it and resume from
+                // its handler so the awaiter outlives the operation.
+                completed_ = true;
+                std::error_code ignored;
+                waitable().cancel(ignored);
+            }
+            return true;
         }
 
         void await_resume() const {
@@ -176,7 +218,7 @@ task<void> postgresql_pool::wait_for_postgresql(
     {
         db_slot_active_wait_guard active_wait(slot);
         try {
-            co_await socket_wait_awaiter{slot, *slot.wait_socket_, read, {}, {}, {}};
+            co_await socket_wait_awaiter{slot, *slot.wait_socket_, wait, {}, {}, {}};
         } catch (...) {
             wait_failure = std::current_exception();
         }
@@ -213,6 +255,10 @@ task<void> postgresql_pool::wait_for_postgresql(
     }
 }
 
+// libpq's non-blocking send protocol: while PQflush() reports pending output,
+// wait for read OR write readiness and drain input when readable. A server
+// blocked sending results/notices would otherwise never read our query and
+// both sides deadlock on full socket buffers.
 task<void> postgresql_pool::flush_output(connection_slot_type& slot, const ruvia::operation_timeout& deadline_value) {
     while (true) {
         const auto status = PQflush(slot.connection_);
@@ -222,14 +268,19 @@ task<void> postgresql_pool::flush_output(connection_slot_type& slot, const ruvia
         if (status < 0) {
             throw postgresql_error(*slot.connection_, "PQflush", db_error::code_type::io_error);
         }
-        co_await wait_for_postgresql(slot, false, deadline_value);
+        co_await wait_for_postgresql(slot, postgresql_wait_type::read_or_write, deadline_value);
+        // PQconsumeInput() never blocks; with no input available it is a
+        // no-op, so calling it after a write-readiness wake is harmless.
+        if (PQconsumeInput(slot.connection_) == 0) {
+            throw postgresql_error(*slot.connection_, "PQconsumeInput", db_error::code_type::io_error);
+        }
     }
 }
 
 task<void> postgresql_pool::wait_until_result_ready(
     connection_slot_type& slot, const ruvia::operation_timeout& deadline_value) {
     while (PQisBusy(slot.connection_) != 0) {
-        co_await wait_for_postgresql(slot, true, deadline_value);
+        co_await wait_for_postgresql(slot, postgresql_wait_type::read, deadline_value);
         if (PQconsumeInput(slot.connection_) == 0) {
             throw postgresql_error(*slot.connection_, "PQconsumeInput", db_error::code_type::io_error);
         }

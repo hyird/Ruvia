@@ -17,11 +17,32 @@ namespace ruvia::detail {
 namespace {
 constexpr auto server_shutdown_code = http3_connection_error_code::no_error;
 constexpr auto protocol_failure_code = http3_connection_error_code::internal_error;
+// RFC 9000 Section 20.1: the server refused to accept a new connection.
+constexpr std::uint64_t quic_connection_refused = 0x02;
 constexpr std::size_t input_stream_pump_budget = 64;
 bool phase_timeout_expired(std::optional<std::chrono::milliseconds> timeout,
     std::chrono::steady_clock::time_point last_activity,
     std::chrono::steady_clock::time_point now) noexcept {
     return timeout && now >= last_activity && now - last_activity >= *timeout;
+}
+std::chrono::steady_clock::time_point deadline_after(std::chrono::steady_clock::time_point now,
+    std::chrono::milliseconds timeout) noexcept {
+    using clock_duration = std::chrono::steady_clock::duration;
+    constexpr auto representable = std::chrono::duration_cast<std::chrono::milliseconds>(clock_duration::max());
+    if (timeout >= representable) {
+        return std::chrono::steady_clock::time_point::max();
+    }
+    const auto duration = std::chrono::duration_cast<clock_duration>(timeout);
+    return duration > std::chrono::steady_clock::time_point::max() - now
+               ? std::chrono::steady_clock::time_point::max()
+               : now + duration;
+}
+// QUIC accepts DATAGRAM payloads up to its validated 65527-byte limit, while
+// HTTP Datagrams here are bounded by the connection state. read_datagram keeps
+// an oversized head queued; RFC 9297 permits dropping it, which must remove it.
+bool discard_oversized_datagram(ruvia::quic_connection& quic) noexcept {
+    std::array<std::byte, ruvia::quic_limits{}.max_datagram_size_> scratch;
+    return quic.read_datagram(scratch).status_ == ruvia::quic_datagram_status::received;
 }
 }  // namespace
 
@@ -92,7 +113,7 @@ void http3_connection_driver::release_generation() noexcept {
     critical_.reset();
     admission_planner_.reset();
     drain_deadline_.reset();
-    close_error_code_.reset();
+    close_code_.reset();
     next_input_stream_index_ = 0;
     next_tunnel_handshake_stream_index_ = 0;
     tunnel_handshake_scan_remaining_ = 0;
@@ -138,7 +159,15 @@ bool http3_connection_driver::pump_admission(std::pmr::vector<ruvia::quic_initia
         if (state_->admission() == http3_connection_state::admission_phase::handler_attached) {
             progress_value = prepare_protocol() || progress_value;
         } else if (state_->admission() == http3_connection_state::admission_phase::rejected) {
-            close_connection(protocol_failure_code);
+            // Capacity and shutdown refuse the connection before HTTP/3 starts;
+            // only a local construction failure is an internal error.
+            const auto rejection = state_->rejection();
+            if (rejection == http3_connection_state::reject_reason::capacity ||
+                rejection == http3_connection_state::reject_reason::stopping) {
+                refuse_connection();
+            } else {
+                close_connection(protocol_failure_code);
+            }
             progress_value = true;
         }
     }
@@ -282,8 +311,17 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
             }
             streams_.reserve(ruvia::quic_limits{}.max_streams_);
             push_streams_.reserve(http3_server_push_allowance);
-            const auto admitted = transport->admit_initial(
-                offers.front(), std::chrono::steady_clock::now());
+            ruvia::quic_server_admit_result admitted;
+            try {
+                admitted = transport->admit_initial(offers.front(), std::chrono::steady_clock::now());
+            } catch (...) {
+                // A failed admission consumes its offer, and the transport has
+                // already released the pending Initial. Retrying the same Initial
+                // (for example a rejected ClientHello) fails again and would block
+                // every later offer on this worker; would_block stays retryable.
+                offers.erase(offers.begin());
+                throw;
+            }
             if (admitted.status_ == ruvia::quic_operation_status::would_block ||
                 admitted.status_ == ruvia::quic_operation_status::need_input) {
                 return false;
@@ -294,8 +332,7 @@ bool http3_connection_driver::admit(std::pmr::vector<ruvia::quic_initial_offer>&
             }
             transport_id_ = admitted.connection_;
 
-            handshake_deadline_ =
-                std::chrono::steady_clock::now() + config_.handshake_timeout_;
+            handshake_deadline_ = deadline_after(std::chrono::steady_clock::now(), config_.handshake_timeout_);
             progress_value = true;
         }
 
@@ -892,12 +929,7 @@ bool http3_connection_driver::announce_goaway() noexcept {
         close_connection(protocol_failure_code);
         return false;
     }
-    const auto now = std::chrono::steady_clock::now();
-    const auto timeout = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-        config_.drain_timeout_);
-    drain_deadline_ = timeout > std::chrono::steady_clock::time_point::max() - now
-                          ? std::chrono::steady_clock::time_point::max()
-                          : now + timeout;
+    drain_deadline_ = deadline_after(std::chrono::steady_clock::now(), config_.drain_timeout_);
     goaway_queued_ = true;
 
     return true;
@@ -965,6 +997,12 @@ bool http3_connection_driver::pump_datagrams() {
             break;
         }
         progress_value = true;
+        if (result_value.status_ == ruvia::quic_datagram_status::too_large) {
+            if (!discard_oversized_datagram(quic)) {
+                break;
+            }
+            continue;
+        }
         if (result_value.status_ != ruvia::quic_datagram_status::received) {
             continue;
         }
@@ -1124,11 +1162,13 @@ bool http3_connection_driver::retire(bool response_drained) {
         static constexpr std::string_view graceful_reason = "HTTP/3 drain complete";
         static constexpr std::string_view close_reason = "HTTP/3 connection closed";
         const auto reason = graceful_close_started_ ? graceful_reason : close_reason;
+        const auto code = close_code_.value_or(close_code{
+            .kind_ = ruvia::quic_close_kind::application,
+            .value_ = static_cast<std::uint64_t>(server_shutdown_code)});
         try {
             const auto close = quic.close({
-                .kind_ = ruvia::quic_close_kind::application,
-                .code_ = static_cast<std::uint64_t>(
-                    close_error_code_.value_or(server_shutdown_code)),
+                .kind_ = code.kind_,
+                .code_ = code.value_,
                 .reason_ = {reason.data(), reason.size()},
             });
             if (close == ruvia::quic_operation_status::would_block ||
@@ -1175,7 +1215,16 @@ bool http3_connection_driver::retire(bool response_drained) {
 
     return true;
 }
+
 void http3_connection_driver::close_connection(http3_connection_error_code reason) noexcept {
+    start_close({.kind_ = ruvia::quic_close_kind::application, .value_ = static_cast<std::uint64_t>(reason)});
+}
+
+void http3_connection_driver::refuse_connection() noexcept {
+    start_close({.kind_ = ruvia::quic_close_kind::transport, .value_ = quic_connection_refused});
+}
+
+void http3_connection_driver::start_close(close_code code) noexcept {
     if (!transport_id_ || close_started_) {
         return;
     }
@@ -1184,16 +1233,16 @@ void http3_connection_driver::close_connection(http3_connection_error_code reaso
         return;
     }
     close_started_ = true;
-    close_error_code_ = reason;
+    close_code_ = code;
     if (!drain_deadline_) {
-        drain_deadline_ = std::chrono::steady_clock::now() + config_.drain_timeout_;
+        drain_deadline_ = deadline_after(std::chrono::steady_clock::now(), config_.drain_timeout_);
     }
     if (auto* transport = wire_->transport(); transport != nullptr) {
         static constexpr std::string_view close_reason = "HTTP/3 connection closing";
         try {
             (void)transport->server().connection(*transport_id_).close({
-                .kind_ = ruvia::quic_close_kind::application,
-                .code_ = static_cast<std::uint64_t>(reason),
+                .kind_ = code.kind_,
+                .code_ = code.value_,
                 .reason_ = {close_reason.data(), close_reason.size()},
             });
         } catch (...) {

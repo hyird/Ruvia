@@ -18,7 +18,7 @@ void append_prefix_handler(handlers_type& handlers, std::string_view prefix, han
     }
     const auto normalized = normalize_fallback_prefix(prefix);
     for (const auto& existing : handlers) {
-        if (std::string_view(existing.first) == normalized) {
+        if (fallback_prefixes_equivalent(existing.first, normalized)) {
             throw std::invalid_argument("duplicate fallback prefix");
         }
     }

@@ -70,26 +70,19 @@ private:
     enum class write_phase_type : std::uint8_t { idle,
         application,
         heartbeat };
-    enum class write_claim_type : std::uint8_t { acquire,
-        adopt };
 
     class write_guard_type final {
     public:
-        write_guard_type(
-            websocket_client_state& state_value, write_phase_type phase, write_claim_type claim = write_claim_type::acquire)
+        write_guard_type(websocket_client_state& state_value, write_phase_type phase)
             : state_(state_value),
               phase_(phase) {
             if (phase_ == write_phase_type::idle) {
                 std::terminate();
             }
-            if (claim == write_claim_type::acquire) {
-                if (state_.write_phase_ != write_phase_type::idle) {
-                    throw std::logic_error("concurrent WebSocket client writes are not supported");
-                }
-                state_.write_phase_ = phase_;
-            } else if (state_.write_phase_ != phase_) {
-                std::terminate();
+            if (state_.write_phase_ != write_phase_type::idle) {
+                throw std::logic_error("concurrent WebSocket client writes are not supported");
             }
+            state_.write_phase_ = phase_;
         }
 
         ~write_guard_type() {
@@ -155,6 +148,7 @@ private:
     [[nodiscard]] static task<void> heartbeat_owned(std::shared_ptr<websocket_client_state> state);
     void finish_heartbeat() noexcept;
     void heartbeat_timer_fired() noexcept;
+    [[nodiscard]] bool heartbeat_ping_due() noexcept;
     void arm_heartbeat_timer(std::chrono::milliseconds delay);
     void touch_activity() noexcept;
     [[nodiscard]] std::chrono::milliseconds heartbeat_delay(std::int64_t now) const noexcept;
@@ -163,6 +157,7 @@ private:
         std::shared_ptr<websocket_client_state> state, std::string_view message);
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
+    void feed_input(std::string_view bytes);
     [[nodiscard]] task<void> write_transport(std::string_view bytes,
         std::optional<std::chrono::milliseconds> configured_timeout);
     [[nodiscard]] task<void> perform_handshake();

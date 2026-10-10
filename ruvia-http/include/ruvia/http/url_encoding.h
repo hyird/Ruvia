@@ -147,6 +147,34 @@ template <typename visitor_type>
     return out == decoded.size();
 }
 
+// Compare two percent-encoded components by their decoded bytes without
+// allocating, so differently escaped spellings of one value compare equal.
+// Percent mode treats '+' literally; form mode converts it to a space.
+// Malformed percent escapes never compare equal.
+[[nodiscard]] inline bool url_components_equivalent(
+    std::string_view left, std::string_view right, url_decode_mode mode) noexcept {
+    const auto next_byte = [mode](std::string_view input, std::size_t& i) noexcept -> int {
+        const char c = input[i];
+        if (mode == url_decode_mode::form && c == '+') {
+            return ' ';
+        }
+        if (c == '%') {
+            return detail::decode_percent_byte(input, i);
+        }
+        return static_cast<unsigned char>(c);
+    };
+    std::size_t left_index = 0;
+    std::size_t right_index = 0;
+    for (; left_index < left.size() && right_index < right.size(); ++left_index, ++right_index) {
+        const auto left_byte = next_byte(left, left_index);
+        const auto right_byte = next_byte(right, right_index);
+        if (left_byte < 0 || right_byte < 0 || left_byte != right_byte) {
+            return false;
+        }
+    }
+    return left_index == left.size() && right_index == right.size();
+}
+
 // Visit raw, borrowed name/value views for each non-empty pair. A bool-returning
 // visitor returning false stops iteration and makes this return false; a void
 // visitor always traverses all pairs. Pair traversal does not validate percent
