@@ -26,20 +26,7 @@ public:
         : transport_(std::move(transport)),
           resource_(resource),
           pending_(pending, &resource),
-          facade_(http_tunnel_access::make(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk)) {
-        if constexpr (requires(transport_type& transport) { transport.read_datagram_input(); transport.datagram_config(); transport.send_datagram(std::span<const std::byte>{}); }) {
-            http_tunnel_access::bind_datagrams(facade_, [](void* raw) -> task<std::optional<http_datagram_input>> {
-                    auto& owner_value=*static_cast<http_tunnel_session*>(raw);
-                    auto input=co_await owner_value.transport_.read_datagram_input();
-                    if(!input){ owner_value.receive_ended_=true;
-}
-                    co_return input; }, [](void* raw, std::span<const std::byte> bytes_value) {
-                    auto& owner_value=*static_cast<http_tunnel_session*>(raw);
-                    if(owner_value.ended_){ throw std::logic_error("HTTP Datagram send direction has ended");
-}
-                    owner_value.transport_.send_datagram(bytes_value); }, [](void* raw) { return static_cast<http_tunnel_session*>(raw)->transport_.datagram_config(); });
-        }
-    }
+          facade_(http_tunnel_access::make(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk)) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }

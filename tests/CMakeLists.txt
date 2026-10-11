@@ -104,8 +104,6 @@ if(RUVIA_BUILD_HTTP)
     ruvia_collect_test_sources(_ruvia_http_unit_sources
         http/unit/*.cpp
         http/http1/*.cpp
-        http/http2/*.cpp
-        http/http3/*.cpp
         http/websocket/*.cpp)
     list(APPEND _ruvia_http_unit_sources support/test_main.cpp)
     list(SORT _ruvia_http_unit_sources)
@@ -125,29 +123,14 @@ if(RUVIA_BUILD_WEB)
     # A conflicting route pair makes every application in its executable fail
     # startup, so it cannot share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
-    ruvia_add_web_standalone_test(ruvia_http3_client_tests 60
-        web/http3/client_connection_control.cpp
-        web/http3/client_connection_tunnel.cpp
-        web/http3/client_connection_worker.cpp)
-    # Its process-wide peer listens on [::1] instead of 127.0.0.1.
-    ruvia_add_web_standalone_test(ruvia_http3_client_ipv6_tests 60
-        web/http3/client_connection_ipv6.cpp)
-    ruvia_add_web_standalone_test(ruvia_http3_client_early_data_push_tests 60
-        web/http3/client_early_data_push.cpp)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         web/http1/connect.cpp
         web/http1/websocket.cpp
-        web/http2/client_tunnel.cpp
-        web/http2/connect.cpp
-        web/http2/push.cpp
         web/http/udp_tunnel.cpp)
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_server_admission_tests 60
         web/http/server_admission.cpp)
-    # Its HTTP/3 counterpart, with its own application and HTTP/3 listener.
-    ruvia_add_web_standalone_test(ruvia_http3_server_pipeline_tests 60
-        web/http3/server_pipeline.cpp)
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)

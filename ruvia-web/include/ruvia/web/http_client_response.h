@@ -8,7 +8,6 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/web/http_client_informational_response.h"
 #include "ruvia/web/http_client_response_bytes.h"
 
@@ -90,12 +89,6 @@ public:
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
-    // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 or HTTP/3 response; a
-    // response the peer has already completed is left unchanged. Throws
-    // http_client_error(closing) once the response transport is retired.
-    // Worker-affine; the connection driver owns writing the queued frame.
-    void reprioritize(http_priority priority) &;
-    void reprioritize(http_priority) && = delete;
     [[nodiscard]] std::span<const http_header> headers() const& noexcept;
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
     [[nodiscard]] std::span<const http_header> trailers() const& noexcept;
@@ -117,7 +110,6 @@ private:
     friend class http_capsule_stream;
     friend class http_datagram_stream;
     friend class detail::http_capsule_stream_state;
-    friend class http_client_push;
     friend class http_client_request_body_writer;
 
     explicit http_client_response(detail::http_client_pool& pool);

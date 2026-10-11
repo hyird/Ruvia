@@ -113,10 +113,8 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
-    // The parent request already passed the application rate limit. Work it
-    // dispatches is still replayable when the parent arrived as early data and
-    // must meet the same policy (RFC 8470 §5.1); the operation timeout is the
-    // subrequest's deployment deadline, which a route may only tighten.
+    // The parent request already passed the application rate limit. The
+    // operation timeout bounds this subrequest; a route may only tighten it.
     const detail::http_request_admission_policy policy{
         .handler_deadline_ = options.timeout_,
         .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
@@ -129,9 +127,8 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .resolution_ = resolution,
             .coding_ = http_response_coding_selection_for(request),
             .resource_ = memory.resource(),
-            .received_early_data_ = early_data_info_.received_from_early_data(),
         },
-        policy, services().for_subrequest(conn_info_, early_data_info_, services().dispatch_depth() + 1, stop), deadline);
+        policy, services().for_subrequest(conn_info_, services().dispatch_depth() + 1, stop), deadline);
     const auto* rejection = admission.rejection();
     auto response = rejection != nullptr
                         ? co_await detail::respond_http_request_rejection(

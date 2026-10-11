@@ -49,9 +49,8 @@ ruvia-web  -> ruvia-core + ruvia-http
 - core 是独立运行时底座。不含 HTTP/Web 语义。
 - core 不公开依赖 TLS、压缩或数据后端。
 - HTTP 是独立 sans-I/O 协议层。不依赖 core、Asio、socket 或 OpenSSL。
-- HTTP 拥有消息、分帧、连接及 QUIC 协议语义。
+- HTTP 拥有 HTTP/1.0、HTTP/1.1 消息、分帧、连接和 WebSocket 协议语义。
 - Web 拥有应用策略、路由、TLS/crypto 和网络驱动。
-- ngtcp2 只归 HTTP。Web 仅经公开协议 API 驱动 QUIC。
 - 不复制协议判断。不将 Web 能力下沉。
 
 ## 性能与内存
@@ -76,13 +75,11 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 每个业务 worker 独占一个 standalone Asio 事件循环。
 - n 个业务 worker 另配一个网络接入线程。
 - 阻塞池和信号线程另计。
-- 网络接入线程只由 acceptor 承载：接受 TCP、一次性交接连接，并按目标 CID 分流 QUIC UDP 数据报。
+- 网络接入线程只由 acceptor 承载：接受 TCP 并一次性交接连接。
 - TCP 连接只交接一次，后续 I/O 由所属业务 worker 驱动。
-- 每条 TCP 或 QUIC 连接固定绑定一个业务 worker。
+- 每条 TCP 连接固定绑定一个业务 worker。
 - 同一连接的全部请求交给同一 worker。绑定关系保持至连接结束。
-- TCP I/O 与 TLS、QUIC/TLS、HTTP/3 状态、协议定时器及连接生命周期由所属 worker 管理。
-- 初始 CID 选定 worker 分区；服务端初始及轮换 CID 保持同一分区。容量不足不得改绑 worker。
-- acceptor 与 worker 通过有界数据报 channel 交互；停机等待 worker 最终 ACK 及 UDP 输出借用归还后才能销毁 channel。
+- TCP I/O、TLS、协议定时器及连接生命周期由所属 worker 管理。
 - 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一承载 owner。
 - event_loop_pool 与 Web 组合复用同一承载。Web 不另建线程、事件循环或通用启停主链。

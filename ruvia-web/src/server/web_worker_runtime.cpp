@@ -12,8 +12,6 @@
 #include "ruvia/core/asio_task.h"
 
 #include "app/web_worker_dispatch.h"
-#include "http3/http3_datagram_channel.h"
-#include "http3/http3_worker.h"
 #include "router/route_table.h"
 #include "server/http_server_options_validation.h"
 
@@ -52,22 +50,9 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .precompressed_static_files_ = options_.compression_.has_value(),
           }),
       connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners),
-      http3_(nullptr, pmr_object_deleter<http3_worker>{memory_.resource()}),
       web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
           runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_buffer_pool_ = &inbound_buffers_;
-    for (std::size_t index = 0; index < listeners.size(); ++index) {
-        if (listeners[index].http3_) {
-            http3_ = make_pmr_object<http3_worker>(memory_.resource(), worker_runtime_, memory_,
-                routes_, capabilities_, connections_.scanner(), options_, stop_token_,
-                *connections_.listener(index).tls(), *listeners[index].http3_,
-                connections_.active_counter(), connections_.refused_counter(),
-                http3_worker::failure_notification{this,
-                    [](void* object, std::exception_ptr failure) noexcept {
-                        (void)static_cast<web_worker_runtime*>(object)->runtime_.fail(failure);
-                    }});
-        }
-    }
     runtime_.configure({
         .startup_ = [this] {
             worker_state_ = http_server_worker_state::running;
@@ -81,12 +66,6 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
         .serve_ = [this] { serve_on_context(); },
         .stop_admission_ = [this] { stop_admission_on_context(); },
         .finalize_ = [this] { finalize_on_context(); },
-        // Releases a datagram channel the acceptor staged into a worker that
-        // never launched, so ingress retirement does not wait for its owner.
-        .abandon_ = [this] {
-            if (http3_ != nullptr) {
-                http3_->abandon_before_launch();
-            } },
         .failure_ = [this](std::exception_ptr failure) noexcept {
             worker_failures_.fetch_add(1, std::memory_order_relaxed);
             options_.failure_.notify(failure); },
@@ -123,17 +102,6 @@ web_worker_handle web_worker_runtime::web_worker() const {
     return web_worker_dispatch::handle(web_worker_dispatch_);
 }
 
-void web_worker_runtime::stage_quic(http3_datagram_channel& channel,
-    asio::ip::udp::endpoint endpoint, ruvia::quic_cid_partition partition) {
-    if (!http3_ || runtime_.started()) {
-        throw std::logic_error("worker QUIC channel cannot be staged in this state");
-    }
-    http3_->stage(channel, std::move(endpoint), partition);
-    if (runtime_.state() != runtime_lifecycle::state_type::ready) {
-        http3_->abandon_before_launch();
-    }
-}
-
 void web_worker_runtime::serve_on_context() {
     if (options_.document_root_.refresh_options() != nullptr) {
         background_tasks_.spawn(static_roots_.refresh());
@@ -144,7 +112,6 @@ void web_worker_runtime::serve_on_context() {
 void web_worker_runtime::stop_admission_on_context() noexcept {
     connections_.close_admission();
     stop_source_.request_stop();
-    stop_http3();
     connections_.stop();
 }
 
@@ -154,12 +121,6 @@ void web_worker_runtime::finalize_on_context() noexcept {
     finalize_signal_.notify();
 }
 
-void web_worker_runtime::stop_http3() noexcept {
-    if (http3_) {
-        http3_->stop();
-    }
-}
-
 task<void> web_worker_runtime::run_worker() {
     try {
         // A stop applied before this task first runs has already stopped the
@@ -167,14 +128,10 @@ task<void> web_worker_runtime::run_worker() {
         if (!stop_token_.stop_requested()) {
             connections_.prepare();
             co_await capabilities_.start();
-            if (http3_ != nullptr && !stop_token_.stop_requested()) {
-                http3_->start();
-            }
             // Ignored once stopping: core has already aborted the barrier.
             runtime_.mark_ready();
         }
     } catch (...) {
-        stop_http3();
         (void)runtime_.fail(std::current_exception());
     }
     // Retain worker-local state until the lifecycle caller has joined ingress
@@ -184,13 +141,6 @@ task<void> web_worker_runtime::run_worker() {
         co_await background_tasks_.join();
     } catch (...) {
         (void)runtime_.fail(std::current_exception());
-    }
-    if (http3_) {
-        try {
-            co_await http3_->join();
-        } catch (...) {
-            (void)runtime_.fail(std::current_exception());
-        }
     }
     try {
         co_await capabilities_.stop();

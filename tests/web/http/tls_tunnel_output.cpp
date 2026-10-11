@@ -100,7 +100,7 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
             co_await serve_client_connect(socket, mode, received);
         };
         tasks.spawn(serve());
-        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384});
         try {
             auto result_value = co_await client.open_tunnel({.authority_ = "target.test:443"});
             if (mode == 2) {

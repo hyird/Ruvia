@@ -704,9 +704,11 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
 }
 
 RUVIA_TEST(http1_parse_unsupported_version_rejected) {
-    http1_server_request_parser parser;
-    const auto result_value = parser.parse_message("GET / HTTP/2.0\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(is_failure(result_value, http_parse_error::unsupported_http_version));
+    for (const auto wire : {"GET / HTTP/2.0\r\nHost: x\r\n\r\n", "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"}) {
+        http1_server_request_parser parser;
+        const auto result_value = parser.parse_message(wire);
+        RUVIA_CHECK(is_failure(result_value, http_parse_error::unsupported_http_version));
+    }
 }
 
 RUVIA_TEST(http1_parse_extension_method_preserves_case_sensitive_token) {

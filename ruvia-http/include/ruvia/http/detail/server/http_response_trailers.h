@@ -24,7 +24,7 @@ namespace ruvia::detail {
 
 // Fields that must never appear in a trailer section because they govern message
 // framing, routing, authentication, response controls, or content format
-// (RFC 9110 §6.5.1, RFC 9113 §8.1).
+// (RFC 9110 §6.5.1).
 [[nodiscard]] inline bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
     // The response header classifier is the authoritative set of standardized
     // fields Ruvia manages. RFC 9110 explicitly permits only ETag (section
@@ -87,9 +87,7 @@ namespace ruvia::detail {
     return !is_forbidden_response_trailer_name(name) && is_valid_http_field_value(value);
 }
 
-// True if (name, value) is an acceptable response trailer field. Shared by the
-// HTTP/1.1 chunked-trailer and HTTP/2 trailing-HEADERS sinks so both transports
-// enforce the same rules.
+// True if (name, value) is an acceptable HTTP/1.1 chunked response trailer.
 [[nodiscard]] inline bool response_trailer_field_valid(
     std::string_view name, std::string_view value) noexcept {
     return is_valid_http_field_name(name) && response_trailer_content_valid(name, value);

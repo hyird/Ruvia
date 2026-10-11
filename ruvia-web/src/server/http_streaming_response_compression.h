@@ -18,7 +18,7 @@
 
 namespace ruvia::detail {
 
-// Owns the response-coding lifecycle shared by HTTP/1 and HTTP/2 stream sinks.
+// Owns the response-coding lifecycle used by HTTP/1 stream sinks.
 // The transport only submits output(); it never reconstructs whether a coding
 // was selected, whether the body is suppressed, or whether an encoder exists.
 class http_streaming_response_compression final {

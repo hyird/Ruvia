@@ -89,10 +89,6 @@ public:
         return uses_route_rate_limit_;
     }
 
-    [[nodiscard]] bool replay_safe() const noexcept {
-        return replay_safe_;
-    }
-
 private:
     template <typename middleware_t_type, typename... args_type>
     friend controller_middleware_descriptor make_middleware_descriptor(args_type&&... args);
@@ -101,7 +97,7 @@ private:
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
         const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,
         bool runs_on_unmatched_requests = false, std::size_t request_body_limit = 0,
-        std::int64_t deadline_ms = 0, bool replay_safe = false) noexcept
+        std::int64_t deadline_ms = 0) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
@@ -110,8 +106,7 @@ private:
           uses_route_rate_limit_(uses_route_rate_limit),
           request_body_limit_(request_body_limit),
           deadline_ms_(deadline_ms),
-          runs_on_unmatched_requests_(runs_on_unmatched_requests),
-          replay_safe_(replay_safe) {}
+          runs_on_unmatched_requests_(runs_on_unmatched_requests) {}
 
     invoke_type invoke_{nullptr};
     create_type create_{nullptr};
@@ -123,7 +118,6 @@ private:
     std::size_t request_body_limit_{0};
     std::int64_t deadline_ms_{0};
     bool runs_on_unmatched_requests_{false};
-    bool replay_safe_{false};
 };
 
 }  // namespace detail

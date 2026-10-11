@@ -78,19 +78,13 @@ task<std::size_t> websocket_client_state::read_transport(
     arm(read_timer_, configured_timeout, client_abort_reason::timeout);
     try {
         std::size_t count = 0;
-        if (http3_) {
-            count = co_await http3_->read(output);
-        } else if (http2_) {
-            count = co_await http2_->read(output);
-        } else {
-            const operation_timeout unbounded(std::nullopt);
-            const auto result_value = co_await transport_.read_some(output, unbounded);
-            if (result_value.status_ != client_transport_status::eof) {
-                if (!result_value.ok()) {
-                    throw_transport_failure(result_value);
-                }
-                count = result_value.bytes_;
+        const operation_timeout unbounded(std::nullopt);
+        const auto result_value = co_await transport_.read_some(output, unbounded);
+        if (result_value.status_ != client_transport_status::eof) {
+            if (!result_value.ok()) {
+                throw_transport_failure(result_value);
             }
+            count = result_value.bytes_;
         }
         disarm(read_timer_);
         throw_if_aborted();

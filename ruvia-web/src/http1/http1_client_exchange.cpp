@@ -79,7 +79,6 @@ task<std::size_t> http1_client_exchange::read_some(
 
 task<void> http1_client_exchange::exchange(
     const http_client_request_storage& request, const operation_timeout& timeout, http_client_response_state& state_value) {
-    state_value.transport_ = http_client_response_transport::http1;
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());
     auto source_value = http_client_request_storage_access::view(request, headers);
@@ -90,7 +89,7 @@ task<void> http1_client_exchange::exchange(
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.resize(max_http_header_bytes + 1024);
     auto origin = pool_.origin();
-    const bool connect_udp = request.is_tunnel() && request.tunnel_protocol() == "connect-udp";
+    const bool connect_udp = request.is_tunnel() && request.udp_tunnel();
     if (connect_udp) {
         const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));
         if (!authority) {
@@ -100,10 +99,7 @@ task<void> http1_client_exchange::exchange(
         origin = pool_.config().scheme_ == http_scheme::https ? http_origin_view::https(options)
                                                               : http_origin_view::http(options);
     }
-    if (request.is_tunnel() && !request.tunnel_protocol().empty() && !connect_udp) {
-        throw http_client_error(
-            http_client_error::code_type::protocol_unavailable, "Extended CONNECT requires HTTP/2 or HTTP/3");
-    }
+
     http1_client_request_writer writer({.resource_ = response_resource});
     const auto buffer = std::span<char>(write_buffer);
     auto prepared_result =
@@ -221,9 +217,9 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         }
         read_buffer.erase(0, consumed_head);
         if (request.is_tunnel() && (parsed_value->plan().connect_tunnel() != nullptr ||
-                                       (request.tunnel_protocol() == "connect-udp" &&
+                                       (request.udp_tunnel() &&
                                            parsed_value->plan().protocol_upgrade() != nullptr))) {
-            if (request.tunnel_protocol() == "connect-udp") {
+            if (request.udp_tunnel()) {
                 std::pmr::vector<http_header_view> fields(response_resource);
                 fields.reserve(state_value.headers_.size());
                 for (const auto& field : state_value.headers_) {

@@ -58,7 +58,7 @@ task<void> invoke_websocket_handler(websocket_connection<transport_type>& connec
     co_await handler(context_value);
 }
 
-// HTTP/1 and HTTP/2 retain the connection until the complete route middleware
+// The session retains the connection until the complete route middleware
 // chain finishes, then converge here. close() is idempotent through the protocol
 // core's typed close phase, so a handler that already closed itself is safe.
 //

@@ -49,13 +49,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
 
     d.scanner_entry_.set_phase(connection_scanner::phase_type::writing);
     auto result_value = co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
-        resolved, d.request_memory_, d.base_route_services_,
-        /*peer_aborted=*/[]() noexcept { return false; });
+        resolved, d.request_memory_, d.base_route_services_);
 
-    if (result_value.peer_aborted_before_commit() != nullptr) {
-        throw std::logic_error(
-            "HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
-    }
     if (auto* recovered = result_value.recovered_failure()) {
         d.response_ = std::move(*recovered).take_response();
         d.scanner_entry_.touch();
@@ -74,7 +69,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
 
     const auto committed_status = result_value.committed_status();
     if (!committed_status.has_value()) {
-        throw std::logic_error("d.response d.stream dispatch returned no H1 terminal alternative");
+        throw std::logic_error("response stream dispatch returned no committed terminal alternative");
     }
 
     connection_plan = response_sink.connection_plan();

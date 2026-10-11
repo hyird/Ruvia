@@ -24,7 +24,7 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 
 // Incremental form of the version-neutral interim-field contract. Senders use
 // it while validating a complete http_interim_response_head; receivers use the
-// same state while HPACK progressively yields fields. Keeping the seen-known-
+// same state while their parsers progressively yield fields. Keeping the seen-known-
 // field set here prevents protocol drivers from reimplementing the forbidden
 // field and singleton rules with subtly different wire acceptance. The framing
 // statuses are reported separately so a recipient can apply its transport's
@@ -76,8 +76,7 @@ private:
 // Version-neutral interim-message validation. RFC 9110 section 8.6 and RFC
 // 9112 section 6 forbid Content-Length and Transfer-Encoding on every 1xx;
 // an interim response also cannot have the trailer section advertised by
-// Trailer. Version-specific connection fields are checked by the HTTP/1 and
-// HTTP/2 writers after this common pass.
+// Trailer. Connection fields are checked by the HTTP/1 writer after this pass.
 [[nodiscard]] inline http_interim_response_header_validation_status validate_http_interim_response_headers(
     const http_interim_response_head& response) noexcept {
     http_interim_response_header_validator validator(http_field_list_role::sender);

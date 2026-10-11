@@ -1,7 +1,7 @@
 #pragma once
 
 // Stable, non-detail entry points for HTTP response serialization plans. The
-// plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
+// plan implementations remain shared with the HTTP/1 protocol code.
 #include <memory_resource>
 #include <span>
 #include <string>

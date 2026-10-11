@@ -14,7 +14,6 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/ip/udp.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 
@@ -402,7 +401,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto tls_endpoint = tls_reservation.local_endpoint();
         reservation.close();
         tls_reservation.close();
-        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key, .client_certificates_ = {.verify_file_ = identity.ca_file_}}, .http3_ = {.mode_ = ruvia::http3_mode::enabled, .datagram_input_capacity_ = 5, .datagram_output_capacity_ = 2}});
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key, .client_certificates_ = {.verify_file_ = identity.ca_file_}}});
         app_run run(app, *state_value);
         const auto owner_thread = run.id();
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
@@ -434,27 +433,10 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         constexpr std::string_view request = "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
         asio::write(socket, asio::buffer(request));
         socket.non_blocking(true);
-        asio::ip::udp::socket udp(io, {asio::ip::address_v4::loopback(), 0});
-        udp.non_blocking(true);
-        std::array<std::byte, 1200> unsupported_version{};
-        unsupported_version[0] = std::byte{0xc0};
-        unsupported_version[4] = std::byte{2};
-        unsupported_version[5] = std::byte{8};
-        unsupported_version[14] = std::byte{8};
-        for (std::size_t i = 0; i < 8; ++i) {
-            unsupported_version[6 + i] = static_cast<std::byte>(0x10 + i);
-            unsupported_version[15 + i] = static_cast<std::byte>(0x20 + i);
-        }
-        const asio::ip::udp::endpoint quic_endpoint(tls_endpoint.address(), tls_endpoint.port());
-        udp.send_to(asio::buffer(unsupported_version), quic_endpoint);
         std::this_thread::sleep_for(25ms);
         std::array<char, 256> premature;
         asio::error_code error;
         RUVIA_CHECK_EQ(socket.read_some(asio::buffer(premature), error), std::size_t{0});
-        RUVIA_CHECK(error == asio::error::would_block || error == asio::error::try_again);
-        asio::ip::udp::endpoint source;
-        std::array<std::byte, 1200> quic_response;
-        RUVIA_CHECK_EQ(udp.receive_from(asio::buffer(quic_response), source, 0, error), std::size_t{0});
         RUVIA_CHECK(error == asio::error::would_block || error == asio::error::try_again);
         RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
         RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
@@ -466,22 +448,6 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         }
         if (outcome == startup_outcome::serve) {
             RUVIA_CHECK(read_response(socket).find("initialized") != std::string::npos);
-            const auto deadline_value = std::chrono::steady_clock::now() + 3s;
-            std::size_t size{};
-            do {
-                size = udp.receive_from(asio::buffer(quic_response), source, 0, error);
-                if (error != asio::error::would_block && error != asio::error::try_again) {
-                    break;
-                }
-                std::this_thread::sleep_for(1ms);
-            } while (std::chrono::steady_clock::now() < deadline_value);
-            RUVIA_CHECK(!error);
-            RUVIA_CHECK(size > 5);
-            RUVIA_CHECK(source == quic_endpoint);
-            if (size > 5) {
-                RUVIA_CHECK(quic_response[1] == std::byte{} && quic_response[2] == std::byte{} &&
-                            quic_response[3] == std::byte{} && quic_response[4] == std::byte{});
-            }
             // Optional client-certificate verification must not turn session
             // resumption into a fatal handshake error, and every resumption
             // succeeds whichever of the two workers accepts it.

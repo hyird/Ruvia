@@ -68,10 +68,6 @@ public:
     http_datagram_stream datagrams(http_datagram_config = {}) & = delete;
     [[nodiscard]] http_udp_tunnel udp(http_datagram_config config = {}) &&;
     http_udp_tunnel udp(http_datagram_config = {}) & = delete;
-    void reprioritize(http_priority priority) & {
-        response_.reprioritize(priority);
-    }
-    void reprioritize(http_priority) && = delete;
 
 private:
     friend class detail::http_client_pool;

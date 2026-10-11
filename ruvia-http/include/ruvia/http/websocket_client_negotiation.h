@@ -9,14 +9,10 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http3_client_request_head.h"
-#include "ruvia/http/http3_message_head.h"
-#include "ruvia/http/http_client_response_head.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
-class http3_connection;
 struct websocket_client_deflate_offer final {
     bool enabled_{false};
     bool server_no_context_takeover_{true};
@@ -31,11 +27,8 @@ struct websocket_client_negotiation_config_view final {
     websocket_client_deflate_offer deflate_{};
 };
 enum class websocket_client_negotiation_error : std::uint8_t {
-    response_status,
-    stream_closed,
     subprotocol,
     extensions,
-    forbidden_field,
 };
 struct websocket_client_negotiation_result_view final {
     // Borrows the supplied response headers.
@@ -43,11 +36,9 @@ struct websocket_client_negotiation_result_view final {
     websocket_compression compression_{};
 };
 
-// HTTP-version-independent RFC 6455/7692 client negotiation owner. Configuration
-// is copied into resource once. It supplies request fields to HTTP/1 Upgrade or
-// RFC 8441/9220 Extended CONNECT, and validates the server's exact selection.
-// The resource must outlive this object. HTTP/3 request heads own storage from
-// the supplied connection's resource, which must outlive their destruction.
+// RFC 6455/7692 client negotiation owner. Configuration is copied into resource
+// once. It supplies request fields to HTTP/1 Upgrade and validates the server's
+// exact selection. The resource must outlive this object.
 // All offer views expire with this owner; response views expire with the head.
 class websocket_client_negotiation final {
 public:
@@ -64,15 +55,6 @@ public:
     std::span<const http_header> request_fields() const&& = delete;
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>
     validate_fields(std::span<const http_header> fields) const;
-    [[nodiscard]] http2_request_head_submit_result submit_http2_request(http2_connection& connection,
-        std::string_view scheme, std::string_view authority, std::string_view target) const;
-    [[nodiscard]] std::variant<http3_client_request_head, http3_client_request_head_failure> encode_http3_request(
-        http3_connection& connection, std::uint64_t stream_id, std::string_view scheme,
-        std::string_view authority, std::string_view target, http3_field_section_limits limits = {}) const;
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>
-    validate_response(const http_client_response_head& head, bool stream_open) const;
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>
-    validate_response(const http3_message_head& head, bool stream_open) const;
 
 private:
     std::pmr::memory_resource* resource_;

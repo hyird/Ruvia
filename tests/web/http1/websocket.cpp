@@ -18,7 +18,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
-#include "http2_server_fixture.h"
+#include "http_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -64,7 +64,7 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
     websocket_eof_observed->first_message_ = false;
     websocket_eof_observed->eof_ = false;
     websocket_eof_observed->failed_ = false;
-    ruvia::test::http2_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
     std::exception_ptr failure;

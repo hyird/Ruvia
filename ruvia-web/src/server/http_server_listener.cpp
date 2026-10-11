@@ -32,8 +32,6 @@ http_server_listener_definition::tls_type clone_tls(
         sni.host_ = configured.host_;
         sni.identity_ = clone_tls_identity(configured.identity_, resource);
     }
-    result_value.alt_svc_ = source_value.alt_svc_;
-    result_value.http3_early_data_ = source_value.http3_early_data_;
     result_value.session_ticket_keys_ = source_value.session_ticket_keys_;
     return result_value;
 }
@@ -55,7 +53,7 @@ http_server_listener_definition::transport_type clone_transport(
 }  // namespace
 
 http_server_listener_definition http_server_listener_definition::clone(std::pmr::memory_resource* resource) const {
-    return http_server_listener_definition(endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)), http3_);
+    return http_server_listener_definition(endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)));
 }
 
 http_server_session_config::http_server_session_config(

@@ -12,7 +12,6 @@
 
 #include "context/context_services.h"
 #include "http/http_protocol_error_info.h"
-#include "http2/cleartext_upgrade.h"
 #include "server/http1_interim_response_sink.h"
 #include "server/http1_request_sequence.h"
 #include "server/http_buffered_response.h"
@@ -166,28 +165,6 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         std::size_t header_search_offset = 0;
         const auto request_start = std::chrono::steady_clock::now();
         for (;;) {
-            if constexpr (plain_tcp) {
-                if (used_bytes > 0) {
-                    const auto h2_result = co_await dispatch_cleartext_http2_preface(
-                        http2_server_session_setup<stream_type>{
-                            .stream_ = stream,
-                            .socket_ = socket,
-                            .memory_ = memory_,
-                            .routes_ = routes_,
-                            .options_ = options_,
-                            .scanner_entry_ = scanner_entry,
-                            .services_ = base_route_services,
-                            .worker_state_ = state_,
-                        },
-                        read_buffer, used_bytes, listener_value.redirect() != nullptr || served_keepalive_request);
-                    if (h2_result == cleartext_http2_dispatch_result::session_finished) {
-                        co_return http_connection_close::abort;
-                    }
-                    if (h2_result == cleartext_http2_dispatch_result::continue_read_loop) {
-                        continue;
-                    }
-                }
-            }
             const auto buffer_view = std::string_view(read_buffer.data(), used_bytes);
             parser.parse_head(buffer_view, parsed_value, header_search_offset, request_memory_value.resource());
             if (const auto* request_head = parsed_value.head_ready()) {

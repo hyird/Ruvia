@@ -20,7 +20,6 @@
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
-#include "ruvia/web/http3_qpack_config.h"
 #include "ruvia/web/websocket.h"
 
 namespace ruvia {
@@ -30,13 +29,8 @@ enum class websocket_scheme : std::uint8_t {
     wss,
 };
 
-enum class websocket_client_protocol : std::uint8_t { http1,
-    http2,
-    http3 };
-
 struct websocket_client_config final {
     websocket_scheme scheme_{websocket_scheme::wss};
-    websocket_client_protocol protocol_{websocket_client_protocol::http1};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host_{};
     std::optional<std::uint16_t> port_{};
@@ -45,7 +39,6 @@ struct websocket_client_config final {
     std::vector<std::string> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
     int compression_level_{6};
-    http3_qpack_config qpack_{};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};
     std::chrono::milliseconds connect_timeout_{5000};
     std::optional<std::chrono::milliseconds> read_timeout_{};

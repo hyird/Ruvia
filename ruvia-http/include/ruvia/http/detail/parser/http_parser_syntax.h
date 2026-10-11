@@ -129,8 +129,7 @@ inline constexpr std::array<bool, 256> http_field_value_char_table = [] {
 [[nodiscard]] bool is_valid_long_http_field_value_bytes(
     const char* data, std::size_t size) noexcept;
 
-// Byte repertoire only. Protocol boundaries separately decide whether leading
-// or trailing OWS is permitted (HTTP/3 currently accepts it, HTTP/2 does not).
+// Byte repertoire only. Field parsing separately handles leading/trailing OWS.
 [[nodiscard]] inline bool is_valid_http_field_value_bytes(std::string_view value) noexcept {
     if (value.size() > 32) {
         return is_valid_long_http_field_value_bytes(value.data(), value.size());

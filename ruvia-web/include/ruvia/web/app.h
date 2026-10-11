@@ -169,7 +169,7 @@ public:
     // are reported to stderr; they are never silently dropped.
     application& on_connection_failure(connection_failure_callback_type callback);
     // Runs on the run() caller after worker capabilities are ready, before
-    // TCP/QUIC admission. All hooks must succeed before serving; failure or a
+    // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
     application& on_start(app_hook_type hook);
     // Runs on the run() caller after admission closes, before runtime join.

@@ -16,11 +16,11 @@
 
 namespace ruvia::test {
 
-class http2_server_fixture final {
+class http_server_fixture final {
 public:
     // The application is shared by every case in the executable, so the first
     // fixture constructed fixes its server_config.
-    explicit http2_server_fixture(asio::io_context& io,
+    explicit http_server_fixture(asio::io_context& io,
         server_config config = {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5)})
         : runtime_(&shared_runtime(io, config)) {}
 

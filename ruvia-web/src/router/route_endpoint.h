@@ -41,22 +41,16 @@ public:
         return request_body_mode_;
     }
 
-    [[nodiscard]] bool replay_safe() const noexcept {
-        return replay_safe_;
-    }
-
 private:
     friend class route_endpoint;
 
     buffered_route_endpoint(route_handler_type::invoke_type invoke,
-        detail::request_body_mode request_body_mode_value, bool replay_safe) noexcept
+        detail::request_body_mode request_body_mode_value) noexcept
         : invoke_(invoke),
-          request_body_mode_(request_body_mode_value),
-          replay_safe_(replay_safe) {}
+          request_body_mode_(request_body_mode_value) {}
 
     route_handler_type::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
-    bool replay_safe_{};
 };
 
 class response_stream_route_endpoint final {
@@ -161,7 +155,7 @@ public:
     route_endpoint& operator=(route_endpoint&&) = delete;
 
     [[nodiscard]] static route_endpoint buffered(route_handler_type::invoke_type invoke,
-        request_body_mode request_body_mode_value, bool replay_safe = false) {
+        request_body_mode request_body_mode_value) {
         if (invoke == nullptr) {
             throw std::invalid_argument("route handler must not be empty");
         }
@@ -169,7 +163,7 @@ public:
             request_body_mode_value != request_body_mode::stream) {
             throw std::invalid_argument("invalid route request-body mode");
         }
-        return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value, replay_safe));
+        return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value));
     }
 
     [[nodiscard]] static route_endpoint response_stream(
@@ -192,10 +186,6 @@ public:
             options.lifecycle_.close_handshake_timeout_->count() <= 0) {
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
-        }
-        if (options.lifecycle_.peer_transport_fin_timeout_.count() <= 0) {
-            throw std::invalid_argument(
-                "websocket peer transport FIN timeout must be greater than zero");
         }
         if (options.deflate_.compression_level_ < 0 || options.deflate_.compression_level_ > 9) {
             throw std::invalid_argument("WebSocket compression level must be between 0 and 9");

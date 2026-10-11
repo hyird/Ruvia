@@ -98,20 +98,20 @@ RUVIA_TEST(response_body_plan_classifies_protocol_response_states) {
     RUVIA_CHECK(!failed_connect.body_suppressed());
 }
 
-RUVIA_TEST(response_stream_plan_restricts_trailers_by_status_not_method) {
+RUVIA_TEST(response_stream_plan_restricts_trailers_by_status_and_method) {
     for (const auto status : {ruvia::http_status_code::from_value(199),
              ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
         const auto plan = ruvia::plan_http_response_stream_commit(
-            ruvia::http_response_stream_framing::http2_frames, ruvia::http_known_method::get,
+            ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::get,
             status, ruvia::http_response_trailer_intent::present);
         RUVIA_CHECK(!plan.trailer_intent_allowed());
     }
 
     const auto head_plan = ruvia::plan_http_response_stream_commit(
-        ruvia::http_response_stream_framing::http2_frames, ruvia::http_known_method::head,
+        ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::head,
         ruvia::http_status::ok, ruvia::http_response_trailer_intent::present);
-    RUVIA_CHECK(head_plan.trailer_intent_allowed());
-    RUVIA_CHECK(head_plan.head_disposition() == ruvia::http_response_stream_head_disposition::trailers_only);
+    RUVIA_CHECK(!head_plan.trailer_intent_allowed());
+    RUVIA_CHECK(head_plan.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
 }
 
 RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {

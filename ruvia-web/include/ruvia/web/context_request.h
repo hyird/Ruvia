@@ -96,8 +96,7 @@ public:
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
     [[nodiscard]] http_request_target_form target_form() const noexcept;
     [[nodiscard]] std::string_view route_path() const noexcept;
-    // Initial Priority fields, replaced by the latest RFC 9218 update when a
-    // live HTTP/2 or HTTP/3 peer reprioritizes this request.
+    // Initial RFC 9218 Priority fields.
     [[nodiscard]] http_priority priority() const noexcept;
 
     // Accept uses media ranges; language uses RFC 4647 basic filtering;
@@ -127,7 +126,7 @@ public:
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
 
     // Materialized once in request order, preserving duplicates. Header names
-    // retain their semantic spelling (HTTP/2 is lowercase); header get/count
+    // retain their semantic spelling; header get/count
     // and header_model binding compare names ASCII case-insensitively.
     [[nodiscard]] const request_name_value_list& header_fields() const;
     [[nodiscard]] const request_name_value_list& query_fields() const;

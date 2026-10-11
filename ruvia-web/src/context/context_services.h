@@ -15,7 +15,6 @@
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/conn_info.h"
 #include "ruvia/web/error_handlers.h"
-#include "ruvia/web/http3_early_data_info.h"
 
 #include "context/context_capabilities.h"
 #include "integration/worker_client_registry_view.h"
@@ -39,8 +38,6 @@ template <typename clock_type>
 class rate_limiter;
 using rate_limiter_type = rate_limiter<steady_rate_limiter_clock>;
 class http_interim_response_output;
-class http_connection_advertisement_output;
-class http_push_output;
 class route_table;
 class worker_state_registry;
 
@@ -60,9 +57,7 @@ struct context_worker_services final {
 };
 
 struct context_connection_services final {
-    std::string_view automatic_alt_svc_{};
     conn_info info_;
-    http3_early_data_info early_data_{};
 };
 
 // The per-request protocol channels a driver binds once, before admission. A
@@ -70,9 +65,6 @@ struct context_connection_services final {
 // Each borrowed object outlives every context created for the request.
 struct context_request_channels final {
     http_interim_response_output* interim_output_{};
-    http_connection_advertisement_output* connection_advertisements_{};
-    http_push_output* push_output_{};
-    const std::optional<http_priority>* priority_update_{};
 };
 
 struct context_request_services final {
@@ -189,18 +181,6 @@ public:
         return request_services_.channels_.interim_output_;
     }
 
-    [[nodiscard]] http_connection_advertisement_output* connection_advertisements() const noexcept {
-        return request_services_.channels_.connection_advertisements_;
-    }
-
-    [[nodiscard]] http_push_output* push_output() const noexcept {
-        return request_services_.channels_.push_output_;
-    }
-
-    [[nodiscard]] const std::optional<http_priority>* request_priority_update() const noexcept {
-        return request_services_.channels_.priority_update_;
-    }
-
     [[nodiscard]] context_services with_request_channels(const context_request_channels& channels) const noexcept {
         auto services = *this;
         services.request_services_.channels_ = channels;
@@ -233,14 +213,11 @@ public:
         return request_services_.dispatch_depth_;
     }
 
-    // Subrequests inherit the parent's connection identity and early-data
-    // snapshot: a request replayed from 0-RTT stays replayable when it
-    // re-enters the router (RFC 8470 §5.1).
+    // Subrequests inherit the parent connection identity.
     [[nodiscard]] context_services for_subrequest(const conn_info& connection,
-        http3_early_data_info early_data, std::size_t depth, const stop_token& stop_token_value) const {
+        std::size_t depth, const stop_token& stop_token_value) const {
         context_services services(worker_services_, stop_token_value);
         services.connection_services_.info_ = connection;
-        services.connection_services_.early_data_ = early_data;
         services.request_services_.dispatch_depth_ = depth;
         return services;
     }
@@ -260,41 +237,14 @@ public:
         return worker_services_.states_;
     }
 
-    [[nodiscard]] constexpr std::string_view automatic_alt_svc() const noexcept {
-        return connection_services_.automatic_alt_svc_;
-    }
-
-    // The listener owns this value until every request context has retired.
-    // An application header with the same name replaces this default.
-    [[nodiscard]] context_services with_automatic_alt_svc(std::string_view value) const noexcept {
-        auto services = *this;
-        services.connection_services_.automatic_alt_svc_ = value;
-        return services;
-    }
-
-    template <typename traits_type, typename allocator_type>
-    context_services with_automatic_alt_svc(
-        std::basic_string<char, traits_type, allocator_type>&&) const = delete;
-
     [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {
         return connection_services_.info_;
-    }
-
-    [[nodiscard]] constexpr http3_early_data_info early_data_info() const noexcept {
-        return connection_services_.early_data_;
-    }
-
-    [[nodiscard]] context_services with_early_data_info(
-        http3_early_data_info value) const noexcept {
-        auto services = *this;
-        services.connection_services_.early_data_ = value;
-        return services;
     }
 
     // The connection metadata one request sees. Identical to get_conn_info() unless
     // the peer is a configured trusted proxy, in which case its forwarding
     // headers name the client. Resolved per request rather than per connection:
-    // one HTTP/2 connection carries many requests, each with its own headers.
+    // each keep-alive request may carry different forwarding headers.
     [[nodiscard]] conn_info resolve_conn_info(const http_request& request) const noexcept;
 
     // Views borrow connection-owned storage and remain valid for every context

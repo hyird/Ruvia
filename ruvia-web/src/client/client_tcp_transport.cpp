@@ -103,7 +103,7 @@ client_transport_result client_tcp_transport::finish(lane_deadline& lane, const 
     return {.bytes_ = bytes};
 }
 
-task<client_transport_result> client_tcp_transport::connect(client_alpn_mode alpn, const operation_timeout& timeout) {
+task<client_transport_result> client_tcp_transport::connect(const operation_timeout& timeout) {
     if (tls_started_) {
         // Closing a socket leaves Asio's encrypted input cursor and BIO pair
         // alive. Swap through a fresh stream so the retired SSL engine is
@@ -140,7 +140,7 @@ task<client_transport_result> client_tcp_transport::connect(client_alpn_mode alp
     }
     tls_started_ = true;
     if (const auto prepared = prepare_client_tls_stream(
-            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, alpn);
+            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,

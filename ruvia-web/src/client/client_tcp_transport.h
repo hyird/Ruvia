@@ -68,7 +68,7 @@ struct client_tcp_endpoint final {
     client_tcp_config tcp_;
 };
 
-// The one outbound TCP/TLS byte transport shared by the HTTP/1, HTTP/2 and
+// The one outbound TCP/TLS byte transport shared by the HTTP/1 and
 // WebSocket clients. Protocol-neutral: callers map results onto their error
 // types. One worker owns the socket; the read lane (resolve, connect, TLS
 // handshake, reads) and the write lane have independent deadlines so a
@@ -87,9 +87,9 @@ public:
         return endpoint_.tls_ != nullptr;
     }
     // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
-    // peer identity and `alpn` before the handshake. Every operation borrowing
+    // peer identity and HTTP/1.1 ALPN before the handshake. Every operation borrowing
     // a previous connection must have finished.
-    [[nodiscard]] task<client_transport_result> connect(client_alpn_mode alpn, const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
     [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_timeout& timeout);

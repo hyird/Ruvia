@@ -114,7 +114,6 @@ int main() {
                     .host_ = std::string(env.get("RUVIA_UPSTREAM_HOST").value_or("localhost")),
                     .port_ = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
                     .connection_count_ = 4,
-                    .protocol_ = ruvia::http_client_protocol::negotiate,
                     .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
                     .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
                 },

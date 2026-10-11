@@ -6,7 +6,6 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
@@ -94,14 +93,13 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
 
     return result_value;
 }
-template <class fields, class name_type, class value_type>
-std::variant<websocket_client_negotiation_result_view, error_type> validate(const fields& fields_value, name_type name, value_type value,
-    const std::pmr::vector<std::pmr::string>& protocols, websocket_client_deflate_offer offer, bool extended) {
+std::variant<websocket_client_negotiation_result_view, error_type> validate(std::span<const http_header> fields_value,
+    const std::pmr::vector<std::pmr::string>& protocols, websocket_client_deflate_offer offer) {
     websocket_client_negotiation_result_view result;
     std::size_t selected = 0, extensions = 0;
     for (const auto& field : fields_value) {
-        auto n = name(field);
-        auto v = value(field);
+        auto n = field.name();
+        auto v = field.value();
         const auto kind = detail::classify_request_header(n);
         if (kind == detail::request_header_kind::sec_websocket_protocol) {
             ++selected;
@@ -123,10 +121,6 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
                 return error_type::extensions;
             }
             result.compression_ = *negotiation;
-        } else if (extended && (detail::http_field_name_in(n, detail::http_websocket_key_exchange_fields) ||
-                                   kind == detail::request_header_kind::upgrade ||
-                                   kind == detail::request_header_kind::connection)) {
-            return error_type::forbidden_field;
         }
     }
     return result;
@@ -229,41 +223,6 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
                 std::move(normalized_name), std::move(materialized))); });
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
-    return validate(fields_value, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);
-}
-http2_request_head_submit_result websocket_client_negotiation::submit_http2_request(http2_connection& connection, std::string_view scheme, std::string_view authority, std::string_view target) const {
-    std::pmr::vector<http_header_view> headers(resource_);
-    for (const auto& f : fields_) {
-        headers.emplace_back(f.name(), f.value());
-    }
-    return connection.submit_request_head(http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = scheme, .authority_ = authority, .target_ = target, .headers_ = headers});
-}
-std::variant<http3_client_request_head, http3_client_request_head_failure> websocket_client_negotiation::encode_http3_request(http3_connection& connection, std::uint64_t stream_id, std::string_view scheme, std::string_view authority, std::string_view target, http3_field_section_limits limits) const {
-    if (scheme != "https" && scheme != "http") {
-        return http3_client_request_head_failure{http3_client_request_head_error::invalid_target};
-    }
-    std::pmr::vector<http3_field_section_field_view> fields(resource_);
-    for (const auto& field : fields_) {
-        fields.push_back({field.name(), field.value()});
-    }
-    return connection.encode_client_request_head(stream_id, {.method_ = "CONNECT", .scheme_ = scheme, .authority_ = authority, .path_ = target, .fields_ = fields, .protocol_ = "websocket"}, limits);
-}
-std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_response(const http_client_response_head& head, bool stream_open) const {
-    if (head.status().value() < 200 || head.status().value() >= 300) {
-        return error_type::response_status;
-    }
-    if (!stream_open) {
-        return error_type::stream_closed;
-    }
-    return validate(head.headers(), [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, true);
-}
-std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_response(const http3_message_head& head, bool stream_open) const {
-    if (head.status_ < 200 || head.status_ >= 300) {
-        return error_type::response_status;
-    }
-    if (!stream_open) {
-        return error_type::stream_closed;
-    }
-    return validate(head.headers_, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, true);
+    return validate(fields_value, protocols_, deflate_);
 }
 }  // namespace ruvia

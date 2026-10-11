@@ -10,7 +10,6 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
-#include "http3/http3_client_connection.h"
 
 namespace ruvia {
 namespace {
@@ -103,11 +102,7 @@ void http_client_tunnel::abort() & noexcept {
         }
         state->tunnel_->output_.stop();
         if (!state->complete_ && !state->abandoned_) {
-            if (state->http3_connection_) {
-                state->http3_connection_->abandon_response(state->http3_request_id_);
-            } else if (state->pool_) {
-                state->pool_->abandon_response(*state);
-            }
+            state->pool_->abandon_response(*state);
         }
     }
 }

@@ -15,12 +15,6 @@ namespace ruvia {
 namespace detail {
 void apply_server_config(app_state& state_value, const server_config& config) {
     auto options = normalize_server_options(config, state_value.options_);
-    for (const auto& listener : state_value.listeners_) {
-        if (listener.http3_) {
-            validate_http3_server_limits(config.max_connections_per_worker_,
-                *listener.http3_, config.max_requests_per_connection_, config.worker_count_);
-        }
-    }
     state_value.worker_count_ = config.worker_count_;
     state_value.process_signal_handlers_ = config.process_signal_handlers_;
     state_value.options_ = std::move(options);
@@ -58,34 +52,8 @@ application& application::listen(listen_config config) {
                     "automatic HTTPS redirect requires both HTTP and HTTPS ports");
             }
 
-            std::optional<http3_listen_config> effective_http3;
-            switch (config.http3_.mode_) {
-                case http3_mode::automatic:
-                    if (config.https_.has_value()) {
-                        effective_http3 = config.http3_;
-                        effective_http3->mode_ = http3_mode::enabled;
-                    }
-                    break;
-                case http3_mode::enabled:
-                    if (!config.https_.has_value()) {
-                        throw std::invalid_argument("HTTP/3 requires an HTTPS listen port");
-                    }
-                    effective_http3 = config.http3_;
-                    break;
-                case http3_mode::disabled:
-                    break;
-                default:
-                    throw std::invalid_argument("HTTP/3 mode is invalid");
-            }
-
             if (!config.https_.has_value() && detail::has_tls_configuration(config.tls_)) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
-            }
-            if (effective_http3.has_value()) {
-                detail::validate_http3_listen_config(*effective_http3);
-                detail::validate_http3_server_limits(state_value.options_.max_connections_,
-                    *effective_http3, state_value.options_.max_requests_per_connection_,
-                    state_value.worker_count_);
             }
 
             auto* const resource = detail::app_resource();
@@ -102,10 +70,8 @@ application& application::listen(listen_config config) {
             }
             if (config.https_.has_value()) {
                 auto tls = detail::normalize_tls_options(config.tls_, resource);
-                tls.alt_svc_ = detail::normalize_alt_svc_advertisement(config.alt_svc_,
-                    effective_http3.has_value() ? config.https_ : std::nullopt, resource);
                 replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https_),
-                    std::move(tls), effective_http3);
+                    std::move(tls));
             }
             state_value.listeners_ = std::move(replacement);
         });

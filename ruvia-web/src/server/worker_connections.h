@@ -70,8 +70,6 @@ private:
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
     template <typename stream_type>
     task<http_connection_close> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
-    template <typename stream_type>
-    task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial = {});
     asio::io_context& io_;
     const worker_handle& worker_;
     worker_memory& memory_;

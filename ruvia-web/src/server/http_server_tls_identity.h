@@ -21,7 +21,7 @@ void validate_http_server_tls_client_certificate_policy(
 void load_http_server_tls_credentials(http_server_listener_definition::tls_type& tls);
 
 // Installs the identity (and client-certificate verification) that
-// load_http_server_tls_credentials preloaded into a worker's TCP or QUIC
+// load_http_server_tls_credentials preloaded into a worker's TLS
 // context. Never touches the file system.
 void configure_http_server_tls_identity(SSL_CTX* context_value,
     const http_server_listener_definition::tls_identity_type& identity,

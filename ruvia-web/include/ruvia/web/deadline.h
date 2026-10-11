@@ -40,11 +40,9 @@ namespace ruvia {
 //
 // That is not equivalent to an unbounded connection. A handler that is
 // suspended still lets the worker run, so the connection scanner eventually
-// closes the socket through the active protocol phase: HTTP/1 dispatch after a
-// complete head uses idle_timeout; HTTP/2 active stream runtimes use the
-// payload phase and therefore request_body_timeout. The consequences differ, which
-// is the whole reason to prefer a deadline: the scanner drops the connection
-// with no response, while a deadline lets the handler unwind and answer.
+// closes the socket through the active protocol phase. Dispatch after a
+// complete head uses idle_timeout. The scanner drops the connection with no
+// response, while a deadline lets the handler unwind and answer.
 //
 // A handler that never suspends at all -- pure computation -- is not caught by
 // either. The scanner runs on the same single-threaded worker, so a handler

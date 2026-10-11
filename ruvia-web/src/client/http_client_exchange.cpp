@@ -160,9 +160,6 @@ task<http_client_response> http_client_exchange::receive_owned(http_client_respo
         throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP request failed before response head");
     }
     if (state_value.body_decode_required_) {
-        if (state_value.http2_data_credit_) {
-            state_value.pool_->release_response_data(state_value);
-        }
         state_value.notify_producer_space();
         while (!state_value.complete_) {
             co_await state_value.data_signal_.wait();

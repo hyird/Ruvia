@@ -115,19 +115,6 @@ template <typename middleware_t_type>
 }
 
 template <typename middleware_t_type>
-[[nodiscard]] constexpr bool middleware_replay_safe() noexcept {
-    if constexpr (requires { middleware_t_type::ruvia_replay_safe; }) {
-        return middleware_t_type::ruvia_replay_safe;
-    } else {
-        return false;
-    }
-}
-
-// A handler deadline this middleware declares for the routes it is on, in
-// milliseconds, or 0 for none. Read by the server before dispatch, for the same
-// reason the body limit is: by the time a middleware's handle() runs, the clock
-// it wants to start has already been running.
-template <typename middleware_t_type>
 [[nodiscard]] constexpr std::int64_t middleware_deadline_ms() noexcept {
     if constexpr (requires { middleware_t_type::ruvia_deadline_ms; }) {
         return middleware_t_type::ruvia_deadline_ms;
@@ -158,7 +145,7 @@ template <typename middleware_t_type, typename... args_type>
         &create_middleware<middleware_t_type, args_t_type>, &destroy_middleware<middleware_t_type>, stored,
         middleware_validated_model_type_key<middleware_t_type>(), middleware_uses_route_rate_limit<middleware_t_type>(),
         middleware_runs_on_unmatched_requests<middleware_t_type>(), middleware_request_body_limit<middleware_t_type>(),
-        middleware_deadline_ms<middleware_t_type>(), middleware_replay_safe<middleware_t_type>());
+        middleware_deadline_ms<middleware_t_type>());
 }
 
 }  // namespace ruvia::detail

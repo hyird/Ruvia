@@ -1,10 +1,7 @@
-// HTTP/1, HTTP/2, and HTTP/3 server features through the Web API.
-// Run ruvia_example_http_features, then run ruvia_example_http_client_advanced.
-// Plain HTTP listens on 127.0.0.1:8093 and accepts HTTP/2 prior knowledge too.
-// Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS and QUIC on port 8444.
-// The certificate must cover localhost; clients use RUVIA_TLS_CA to trust it.
-// Optional RUVIA_EARLY_DATA=true enables explicitly declared replay-safe routes.
-// Try curl -i http://127.0.0.1:8093/features/info or /features/redirect.
+// HTTP/1 server features through the Web API.
+// Run ruvia_example_http_features, then ruvia_example_http_client_advanced.
+// Plain HTTP listens on 127.0.0.1:8093. Set RUVIA_TLS_CERT and RUVIA_TLS_KEY
+// to enable HTTPS on port 8444; clients trust the local CA through RUVIA_TLS_CA.
 
 #include <array>
 #include <chrono>
@@ -20,23 +17,13 @@
 
 namespace {
 
-class replay_safe final : public ruvia::middleware {
-public:
-    // This asserts that the ENTIRE route chain can safely run again. Restrict
-    // it to read-only handlers; a GET name alone does not guarantee safety.
-    static constexpr bool ruvia_replay_safe = true;
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
-        co_await next_value();
-    }
-};
-
 class feature_controller final : public ruvia::controller<feature_controller> {
 public:
     RUVIA_CONTROLLER_GROUP("/features")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/info", info);
     RUVIA_GET("/asset", asset);
-    RUVIA_GET("/safe", safe, replay_safe);
+    RUVIA_GET("/safe", safe);
     RUVIA_GET("/redirect", redirect);
     RUVIA_GET_STREAM("/download", download);
     RUVIA_POST_STREAM("/upload", upload, ruvia::body_limit<1024 * 1024>);
@@ -45,35 +32,13 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> info(ruvia::context& c) {
-        const auto connection = c.conn();
         const std::array<ruvia::http_header_view, 1> hints{{
             {"link", "</features/asset>; rel=preload; as=style"},
         }};
         // An interim head is separate from the final response. The Web API
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
-        c.priority({.urgency_ = 2, .incremental_ = true});
-        if (connection.tls() && c.req().protocol_version() == ruvia::http_protocol_version::http2) {
-            // ORIGIN and ALTSVC frames are HTTP/2 connection advertisements.
-            // Observing an advertisement never changes a client's trusted origin.
-            const std::array<std::string_view, 1> origins{"https://localhost:8444"};
-            co_await c.advertise_origins(origins);
-            if (connection.tls()) {
-                co_await c.advertise_alternative_service("h3=\":8444\"; ma=60");
-            }
-        }
-        if (c.req().protocol_version() == ruvia::http_protocol_version::http2 ||
-            c.req().protocol_version() == ruvia::http_protocol_version::http3) {
-            // Push can be declined by peer settings or capacity. Ordinary asset
-            // requests remain available regardless of whether the promise wins.
-            const bool pushed = co_await c.push({
-                .scheme_ = connection.tls() ? "https" : "http",
-                .authority_ = c.req().header("host").value_or("localhost:8444"),
-                .path_ = "/features/asset",
-            });
-            c.header("X-Push-Accepted", pushed ? "yes" : "no");
-        }
-        co_return c.text("interim responses, priorities, advertisements, and push\n");
+        co_return c.text("interim responses\n");
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
@@ -82,11 +47,6 @@ private:
     }
 
     ruvia::task<ruvia::http_response> safe(ruvia::context& c) {
-        const auto provenance = c.early_data_info();
-        // The local transport flag is authoritative. Early-Data from an
-        // upstream proxy is separately recorded and cannot forge that flag.
-        c.header("X-Local-Early-Data", provenance.received_from_early_data() ? "1" : "0");
-        c.header("X-Upstream-Early-Data", provenance.upstream_declared_early_data() ? "1" : "0");
         co_return c.text("read-only resource\n");
     }
 
@@ -148,12 +108,6 @@ int main() {
         listener_value.https_ = 8444;
         listener_value.tls_.certificate_chain_file_ = std::string(*certificate);
         listener_value.tls_.private_key_file_ = std::string(*key);
-        listener_value.tls_.http3_early_data_ = env_value.get<bool>("RUVIA_EARLY_DATA").value_or(false);
-        // Client path migration is enabled by default. Changing a client's
-        // address or UDP port keeps the connection on its original worker.
-        listener_value.http3_ = {.mode_ = ruvia::http3_mode::enabled,
-            .qpack_ = {.max_table_capacity_ = 4096, .max_blocked_streams_ = 16}};
-        listener_value.alt_svc_.max_age_ = std::chrono::seconds(60);
     }
     app.server({.worker_count_ = 2,
                    .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

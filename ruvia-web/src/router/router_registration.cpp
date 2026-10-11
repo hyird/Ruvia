@@ -12,22 +12,6 @@ using namespace detail;
 
 namespace {
 
-// A route is replay-safe only when it declares middleware and every one of
-// them opted in.
-[[nodiscard]] bool declared_replay_safe(
-    std::span<const detail::controller_middleware_descriptor> controller_middlewares,
-    std::span<const detail::controller_middleware_descriptor> route_middlewares) noexcept {
-    if (controller_middlewares.empty() && route_middlewares.empty()) {
-        return false;
-    }
-    const auto all_declared = [](std::span<const detail::controller_middleware_descriptor> values) noexcept {
-        return std::ranges::all_of(values, [](const auto& value) {
-            return value.replay_safe();
-        });
-    };
-    return all_declared(controller_middlewares) && all_declared(route_middlewares);
-}
-
 // The tightest ceiling any of the route's middlewares declared. Several may:
 // a controller-wide one and a route-specific one, and the stricter must win
 // rather than the last registered.
@@ -67,19 +51,6 @@ namespace {
     consider(controller_middlewares);
     consider(route_middlewares);
     return deadline_value;
-}
-
-// Re-tags a buffered endpoint with the route's replay policy, which depends on
-// the middlewares and so is only known here.
-[[nodiscard]] route_endpoint with_replay_policy(route_endpoint endpoint,
-    std::span<const detail::controller_middleware_descriptor> controller_middlewares,
-    std::span<const detail::controller_middleware_descriptor> route_middlewares) {
-    const auto* buffered = endpoint.buffered();
-    if (buffered == nullptr) {
-        return endpoint;
-    }
-    return route_endpoint::buffered(buffered->invoke(), buffered->request_body_mode(),
-        declared_replay_safe(controller_middlewares, route_middlewares));
 }
 
 }  // namespace
@@ -159,7 +130,7 @@ void detail::router_impl::register_endpoint(http_known_method method, std::strin
             .method_ = method,
             .method_token_ = method_token,
             .path_ = path,
-            .endpoint_ = with_replay_policy(std::move(endpoint), controller_middlewares, route_middlewares),
+            .endpoint_ = std::move(endpoint),
             .dynamic_ = dynamic,
             .max_request_body_bytes_ = declared_request_body_limit(controller_middlewares, route_middlewares),
             .deadline_ms_ = declared_deadline_ms(controller_middlewares, route_middlewares)});

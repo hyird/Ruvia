@@ -19,7 +19,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_tunnel.h"
 
-#include "http2_server_fixture.h"
+#include "http_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -79,7 +79,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     observed->finish_first_ = finish_first;
     observed->ended_ = false;
     observed->retained_stable_ = true;
-    ruvia::test::http2_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
     const std::string initial_value(5007, 't');
@@ -168,7 +168,7 @@ class http1_interim_routes final : public ruvia::controller<http1_interim_routes
 std::string exchange_closing_request(std::string_view request) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::test::http2_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
     std::string received;
@@ -227,20 +227,4 @@ RUVIA_TEST(http1_interim_responses_reach_http11_clients_but_never_http10_clients
     RUVIA_CHECK(http10.find(" 103 ") == std::string::npos);
     RUVIA_CHECK(http10.substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
     RUVIA_CHECK(http10.ends_with("final"));
-}
-
-RUVIA_TEST(http1_connection_does_not_switch_to_http2_after_an_http1_exchange) {
-    // RFC 9113 3.4: the prior-knowledge preface is the first bytes of a
-    // connection. After a completed HTTP/1 exchange the same bytes are an
-    // HTTP/1 request line that the server answers and then closes on.
-    std::string request = "GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    request += "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-    request.append("\0\0\0\x04\0\0\0\0\0", 9);
-    const auto received = exchange_closing_request(request);
-    const auto first_end = received.find("final");
-    RUVIA_CHECK(received.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
-    RUVIA_CHECK(first_end != std::string::npos);
-    if (first_end != std::string::npos) {
-        RUVIA_CHECK(received.substr(first_end + 5).starts_with("HTTP/1."));
-    }
 }

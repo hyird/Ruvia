@@ -4,11 +4,8 @@
 #include <span>
 #include <vector>
 
-#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "http3/http3_capacity.h"
-#include "http3/http3_qpack_config_validation.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 #include "server/http_server_tls_identity.h"
@@ -28,22 +25,6 @@ void validate_server_limits(const http_server_options& options);
 void validate_http_server_options(const http_server_options& options);
 
 void validate_http_server_tls_options(const http_server_listener_definition::tls_type& tls);
-
-inline constexpr std::size_t http3_peer_unidirectional_stream_allowance = 64;
-inline constexpr std::size_t http3_post_goaway_request_allowance = 64;
-inline constexpr std::size_t http3_server_push_allowance = http3_connection_config{}.max_remembered_pushes_;
-
-[[nodiscard]] std::size_t http3_worker_tracked_stream_capacity(
-    std::size_t max_requests_per_connection);
-
-[[nodiscard]] std::size_t http3_transport_lifetime_stream_capacity(
-    std::size_t max_requests_per_connection);
-
-void validate_http3_server_limits(
-    std::optional<std::size_t> max_connections, const http3_listen_config& config,
-    std::optional<std::size_t> max_requests_per_connection, std::size_t worker_count);
-
-void validate_http3_listen_config(const http3_listen_config& config);
 
 void validate_http_server_listener(const http_server_listener_definition& listener_value);
 

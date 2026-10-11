@@ -19,12 +19,6 @@
 
 namespace ruvia::detail {
 
-enum class client_alpn_mode : std::uint8_t {
-    http11,
-    http2,
-    negotiate,
-};
-
 enum class client_tls_setup_error : std::uint8_t {
     none,
     reset_failed,
@@ -45,13 +39,10 @@ void validate_client_origin_host(
 [[nodiscard]] std::string_view format_client_port(
     std::uint16_t port, client_port_text_buffer_type& buffer) noexcept;
 [[nodiscard]] std::string_view selected_client_alpn(SSL* ssl) noexcept;
-enum class client_tls_protocol : std::uint8_t { stream,
-    quic };
 // Startup-only. Trust and client identity loading have one implementation;
-// protocol-specific ALPN and QUIC callbacks are installed by the transport.
+// HTTP/1.1 ALPN is installed by the TCP transport.
 // The storage must come from a validated client_tls_config with TLS enabled.
-void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config,
-    client_tls_protocol protocol = client_tls_protocol::stream);
+void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config);
 [[nodiscard]] bool configure_client_tls_peer_identity(
     SSL& connection, const char* host, bool ip_address) noexcept;
 // Per-connection SNI (DNS names only, one trailing dot removed) and, when the
@@ -61,7 +52,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     SSL& ssl, std::string_view host, client_tls_mode mode) noexcept;
 // Resets a reusable stream, prepares its session and installs HTTP ALPN.
 [[nodiscard]] client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
-    std::string_view host, client_tls_mode mode, client_alpn_mode alpn_mode);
+    std::string_view host, client_tls_mode mode);
 [[nodiscard]] std::string_view client_tls_setup_error_message(client_tls_setup_error error) noexcept;
 // Carries a setup failure through transport results; message() names it.
 [[nodiscard]] std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept;

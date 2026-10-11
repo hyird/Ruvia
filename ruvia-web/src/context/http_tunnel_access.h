@@ -9,12 +9,6 @@ struct http_tunnel_access final {
         http_tunnel::write_type write, http_tunnel::finish_type finish_value, http_tunnel::abort_type abort) noexcept {
         return http_tunnel(resource, worker_value, target, read, write, finish_value, abort);
     }
-    static void bind_datagrams(http_tunnel& tunnel, http_tunnel::read_datagram_input_type read,
-        http_tunnel::send_datagram_type send, http_tunnel::datagram_config_type config) noexcept {
-        tunnel.read_datagram_input_ = read;
-        tunnel.send_datagram_ = send;
-        tunnel.datagram_config_ = config;
-    }
     [[nodiscard]] static bool has_running_operations(const http_tunnel& tunnel) noexcept {
         return tunnel.running_operations_ != 0;
     }

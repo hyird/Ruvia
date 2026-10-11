@@ -220,18 +220,9 @@ void http_client_response_state::detach_transport_bindings() noexcept {
         upload_->output_.wake_target_ = nullptr;
         upload_->output_.stop();
     }
-    if (http2_data_credit_) {
-        http2_data_credit_.reset();
-    }
-    http3_body_budget_.reset();
-    http3_connection_ = nullptr;
-    http3_request_id_ = 0;
     connection_index_ = 0;
-    request_id_ = 0;
     cancellation_id_ = 0;
-    stream_id_ = 0;
     pool_ = nullptr;
-    transport_ = http_client_response_transport::unassigned;
     if (!complete_) {
         error_code_ = static_cast<std::uint8_t>(http_client_error::code_type::closing);
         complete_ = true;

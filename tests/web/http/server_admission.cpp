@@ -22,14 +22,13 @@
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
 
-#include "http2_server_fixture.h"
+#include "http_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
-// Every server protocol runs one request admission: the same request must get
-// the same 406 and the same application rate-limit answer over HTTP/1.1 and
-// HTTP/2. This executable owns its application, so the app-wide rate limit
-// and the short request-phase timeouts below cannot leak into other suites.
+// Multiple client connections share one application rate-limit budget.
+// This executable owns its application, so its rate limit and short request
+// phase timeouts cannot leak into other suites.
 
 namespace {
 
@@ -106,20 +105,18 @@ std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoi
 
 }  // namespace
 
-RUVIA_TEST(http1_and_http2_answer_406_and_rate_limit_through_one_admission) {
+RUVIA_TEST(http1_clients_share_406_admission_and_rate_limit_budget) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::test::http2_server_fixture server(io, admission_server_config());
+    ruvia::test::http_server_fixture server(io, admission_server_config());
     auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client http1(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
+        ruvia::http_client first(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
                                                         .host_ = "127.0.0.1",
-                                                        .port_ = server.endpoint().port(),
-                                                        .protocol_ = ruvia::http_client_protocol::http1_only});
-        ruvia::http_client http2(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
-                                                        .host_ = "127.0.0.1",
-                                                        .port_ = server.endpoint().port(),
-                                                        .protocol_ = ruvia::http_client_protocol::http2_only});
-        const std::array<ruvia::http_client*, 2> clients{&http1, &http2};
+                                                        .port_ = server.endpoint().port()});
+        ruvia::http_client second(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
+                                                         .host_ = "127.0.0.1",
+                                                         .port_ = server.endpoint().port()});
+        const std::array<ruvia::http_client*, 2> clients{&first, &second};
         const std::array<ruvia::http_header_view, 1> refuse_every_coding{{{"Accept-Encoding", "identity;q=0, *;q=0"}}};
         std::exception_ptr failure;
         try {
@@ -135,7 +132,7 @@ RUVIA_TEST(http1_and_http2_answer_406_and_rate_limit_through_one_admission) {
                 RUVIA_CHECK(response.status() == ruvia::http_status::ok);
                 RUVIA_CHECK((co_await collect_text(response)) == "plain");
             }
-            // Both protocols drew on the same per-client budget; it is spent.
+            // Both connections drew on the same client-address budget; it is spent.
             for (auto* client : clients) {
                 auto response = co_await client->send({.target_ = "/plain"});
                 RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
@@ -145,8 +142,8 @@ RUVIA_TEST(http1_and_http2_answer_406_and_rate_limit_through_one_admission) {
         } catch (...) {
             failure = std::current_exception();
         }
-        co_await http1.shutdown();
-        co_await http2.shutdown();
+        co_await first.shutdown();
+        co_await second.shutdown();
         server.finish();
         attachment.stop();
         if (failure) {
@@ -160,7 +157,7 @@ RUVIA_TEST(http1_and_http2_answer_406_and_rate_limit_through_one_admission) {
 
 RUVIA_TEST(http1_server_closes_connections_stalled_past_request_phase_timeouts) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http2_server_fixture server(io, admission_server_config());
+    ruvia::test::http_server_fixture server(io, admission_server_config());
     const auto loopback = asio::ip::address_v4::loopback();
     // Idle: a connection that never sends a request.
     const auto idle = stalled_connection_output(server.endpoint(), loopback, "");

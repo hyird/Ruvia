@@ -6,7 +6,7 @@ namespace ruvia::detail {
 
 // A server certificate, its chain and private key, parsed from PEM once when
 // the server configuration is validated and installed into every worker's
-// TCP and QUIC SSL_CTX. Copies share the immutable OpenSSL objects through
+// TLS SSL_CTX. Copies share the immutable OpenSSL objects through
 // their own reference counts, so workers never re-read or re-parse the files
 // (and cannot observe different files if they rotate during startup).
 class http_server_tls_certificate final {
@@ -23,7 +23,7 @@ private:
     void release() noexcept;
 
     X509* certificate_{};
-    STACK_OF(X509) * chain_{};
+    STACK_OF(X509) * chain_ {};
     EVP_PKEY* private_key_{};
 };
 

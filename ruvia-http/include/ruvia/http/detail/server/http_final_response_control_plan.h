@@ -17,32 +17,12 @@ enum class http1_final_response_control_plan_error : std::uint8_t {
     te_field_forbidden,
 };
 
-enum class http2_final_response_control_plan_error : std::uint8_t {
-    invalid_status,
-    upgrade_unavailable,
-    connection_specific_field_forbidden
-};
-
 class http1_final_response_control;
-class http2_final_response_control;
 class http1_final_response_commit_failure;
 class http1_final_response_control_plan_failure;
-class http2_final_response_control_plan_failure;
 
-template <typename control_type, typename failure_type>
-class http_final_response_control_plan_result;
-
-using http1_final_response_control_plan_result_type =
-    http_final_response_control_plan_result<http1_final_response_control,
-        http1_final_response_control_plan_failure>;
-using http2_final_response_control_plan_result_type =
-    http_final_response_control_plan_result<http2_final_response_control,
-        http2_final_response_control_plan_failure>;
-
+class http1_final_response_control_plan_result_type;
 [[nodiscard]] http1_final_response_control_plan_result_type http1_final_response_control_plan(
-    const http_response& response) noexcept;
-
-[[nodiscard]] http2_final_response_control_plan_result_type http2_final_response_control_plan(
     const http_response& response) noexcept;
 
 class http1_final_response_control final {
@@ -68,14 +48,6 @@ private:
     http_upgrade_protocols upgrade_protocols_;
 };
 
-class http2_final_response_control final {
-private:
-    friend http2_final_response_control_plan_result_type http2_final_response_control_plan(
-        const http_response&) noexcept;
-
-    constexpr http2_final_response_control() noexcept = default;
-};
-
 class http1_final_response_control_plan_failure final {
 public:
     [[nodiscard]] constexpr http1_final_response_control_plan_error error() const noexcept {
@@ -84,8 +56,7 @@ public:
 
 private:
     friend class http1_final_response_commit_failure;
-    template <typename control_type, typename failure_type>
-    friend class http_final_response_control_plan_result;
+    friend class http1_final_response_control_plan_result_type;
     friend http1_final_response_control_plan_result_type http1_final_response_control_plan(
         const http_response&) noexcept;
 
@@ -96,62 +67,38 @@ private:
     http1_final_response_control_plan_error error_;
 };
 
-class http2_final_response_control_plan_failure final {
+// A validated HTTP/1 control token or one typed failure.
+class http1_final_response_control_plan_result_type final {
 public:
-    [[nodiscard]] constexpr http2_final_response_control_plan_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    template <typename control_type, typename failure_type>
-    friend class http_final_response_control_plan_result;
-    friend http2_final_response_control_plan_result_type http2_final_response_control_plan(
-        const http_response&) noexcept;
-
-    explicit constexpr http2_final_response_control_plan_failure(
-        http2_final_response_control_plan_error error) noexcept
-        : error_(error) {}
-
-    http2_final_response_control_plan_error error_;
-};
-
-// Each protocol-specific entry point returns only its validated control token or
-// one typed failure. The caller already owns the protocol, so the result does not
-// repeat that discriminator or admit the other protocol's impossible branch.
-template <typename control_type, typename failure_type>
-class http_final_response_control_plan_result final {
-public:
-    [[nodiscard]] const control_type* control() const& noexcept {
+    [[nodiscard]] const http1_final_response_control* control() const& noexcept {
         return has_control_ ? &value_.control_ : nullptr;
     }
-    [[nodiscard]] const control_type* control() const&& = delete;
+    [[nodiscard]] const http1_final_response_control* control() const&& = delete;
 
-    [[nodiscard]] const failure_type* failure() const& noexcept {
+    [[nodiscard]] const http1_final_response_control_plan_failure* failure() const& noexcept {
         return has_control_ ? nullptr : &value_.failure_;
     }
-    [[nodiscard]] const failure_type* failure() const&& = delete;
+    [[nodiscard]] const http1_final_response_control_plan_failure* failure() const&& = delete;
 
 private:
     friend http1_final_response_control_plan_result_type http1_final_response_control_plan(
         const http_response&) noexcept;
-    friend http2_final_response_control_plan_result_type http2_final_response_control_plan(
-        const http_response&) noexcept;
 
     union value {
-        constexpr explicit value(control_type value) noexcept
+        explicit value(http1_final_response_control value) noexcept
             : control_(value) {}
-        constexpr explicit value(failure_type value) noexcept
+        constexpr explicit value(http1_final_response_control_plan_failure value) noexcept
             : failure_(value) {}
 
-        control_type control_;
-        failure_type failure_;
+        http1_final_response_control control_;
+        http1_final_response_control_plan_failure failure_;
     };
 
-    explicit constexpr http_final_response_control_plan_result(control_type control) noexcept
+    explicit http1_final_response_control_plan_result_type(http1_final_response_control control) noexcept
         : value_(control),
           has_control_(true) {}
 
-    explicit constexpr http_final_response_control_plan_result(failure_type failure) noexcept
+    explicit constexpr http1_final_response_control_plan_result_type(http1_final_response_control_plan_failure failure) noexcept
         : value_(failure),
           has_control_(false) {}
 
@@ -161,8 +108,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<http1_final_response_control_plan_result_type>);
 static_assert(sizeof(http1_final_response_control_plan_result_type) <= 8);
-static_assert(std::is_trivially_copyable_v<http2_final_response_control_plan_result_type>);
-static_assert(sizeof(http2_final_response_control_plan_result_type) <= 2);
 
 // Validate HTTP/1 control fields before the response mutates Connection state.
 // Success owns the parsed repeated Connection and Upgrade fields.
@@ -207,29 +152,6 @@ static_assert(sizeof(http2_final_response_control_plan_result_type) <= 2);
     }
     return http1_final_response_control_plan_result_type(
         http1_final_response_control(connection_options, upgrade_protocols));
-}
-
-// Validate HTTP/2 control semantics before HPACK or stream state is mutated.
-// The success token proves that no connection-specific field exists; RFC 9113
-// section 8.2.2 requires rejection rather than silent filtering.
-[[nodiscard]] inline http2_final_response_control_plan_result_type http2_final_response_control_plan(
-    const http_response& response) noexcept {
-    const auto status_code = response.status();
-    if (!http_final_status_code_valid(status_code)) {
-        return http2_final_response_control_plan_result_type(http2_final_response_control_plan_failure(
-            http2_final_response_control_plan_error::invalid_status));
-    }
-    if (status_code == http_status::upgrade_required) {
-        return http2_final_response_control_plan_result_type(http2_final_response_control_plan_failure(
-            http2_final_response_control_plan_error::upgrade_unavailable));
-    }
-    for (const auto& header : response.headers()) {
-        if (is_forbidden_http_binary_response_field(header.name())) {
-            return http2_final_response_control_plan_result_type(http2_final_response_control_plan_failure(
-                http2_final_response_control_plan_error::connection_specific_field_forbidden));
-        }
-    }
-    return http2_final_response_control_plan_result_type(http2_final_response_control{});
 }
 
 }  // namespace ruvia::detail

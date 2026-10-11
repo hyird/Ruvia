@@ -228,7 +228,7 @@ void append_response_head(
 
     // Measure the exact emitted head before touching reusable output storage.
     // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
-    // field-section ceiling used by request and HTTP/2 paths.
+    // field-section ceiling used by request parsing.
     std::size_t head_bytes = 9;
     add_response_head_bytes(head_bytes, http_status_code_token_size);
     add_response_head_bytes(head_bytes, 1);

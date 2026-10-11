@@ -34,74 +34,6 @@ bool throws_invalid(fn_type&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(app_http3_mode_normalizes_against_https_and_validates_effective_config) {
-    auto& app = ruvia::app();
-    app.server({});
-    app.listen({.address_ = "127.0.0.1", .http_ = 8080});
-    app.server({.max_connections_per_worker_ = std::nullopt});
-
-    // Automatic mode remains off for HTTP-only listeners, even without an H3
-    // connection cap.
-    RUVIA_CHECK(!throws_invalid([&] {
-        app.listen({.address_ = "127.0.0.1", .http_ = 8081});
-    }));
-
-    const auto https_config = [](ruvia::http3_listen_config http3 = {}) {
-        return ruvia::listen_config{
-            .address_ = "127.0.0.1",
-            .https_ = 8443,
-            .tls_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-            .http3_ = http3,
-        };
-    };
-
-    // Automatic mode enables H3 on HTTPS, so the existing finite-capacity
-    // requirement still applies.
-    RUVIA_CHECK(throws_invalid([&] { app.listen(https_config()); }));
-    RUVIA_CHECK(throws_invalid([&] {
-        app.listen({.address_ = "127.0.0.1",
-            .http_ = 8082,
-            .http3_ = {.mode_ = ruvia::http3_mode::enabled}});
-    }));
-
-    // Disabled mode suppresses H3 even on HTTPS and does not validate unused
-    // H3 timeout values.
-    RUVIA_CHECK(!throws_invalid([&] {
-        app.listen(https_config({.mode_ = ruvia::http3_mode::disabled,
-            .handshake_timeout_ = std::chrono::milliseconds::zero(),
-            .drain_timeout_ = std::chrono::milliseconds::zero()}));
-    }));
-    RUVIA_CHECK(throws_invalid([&] {
-        app.listen(https_config({.mode_ = ruvia::http3_mode::enabled}));
-    }));
-
-    app.server({});
-    RUVIA_CHECK(!throws_invalid([&] {
-        app.listen(https_config({.handshake_timeout_ = std::chrono::milliseconds{25},
-            .drain_timeout_ = std::chrono::milliseconds{50}}));
-    }));
-    RUVIA_CHECK(!throws_invalid([&] {
-        app.listen(https_config({.mode_ = ruvia::http3_mode::enabled,
-            .handshake_timeout_ = std::chrono::milliseconds{25},
-            .drain_timeout_ = std::chrono::milliseconds{50}}));
-    }));
-    RUVIA_CHECK(throws_invalid([&] {
-        app.listen(https_config({.handshake_timeout_ = std::chrono::milliseconds::zero()}));
-    }));
-    RUVIA_CHECK(throws_invalid([&] {
-        app.listen(https_config({.drain_timeout_ = std::chrono::milliseconds::zero()}));
-    }));
-
-    RUVIA_CHECK(throws_invalid([&] {
-        app.listen({.address_ = "127.0.0.1",
-            .http_ = 8083,
-            .http3_ = {.mode_ = static_cast<ruvia::http3_mode>(0xFF)}});
-    }));
-
-    app.server({});
-    app.listen({.address_ = "127.0.0.1", .http_ = 8080});
-}
-
 RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
     const auto register_client = [](ruvia::http_client_config config) {
         return caught_message([&config] {
@@ -116,7 +48,9 @@ RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
 
     RUVIA_CHECK_EQ(register_client(with_host("")), std::string("http client host must not be empty"));
     for (const std::string_view host : {std::string_view("has space"), std::string_view("a/b"),
-             std::string_view("a\\b"), std::string_view("a\rb", 3), std::string_view("a\x7f" "b", 3),
+             std::string_view("a\\b"), std::string_view("a\rb", 3), std::string_view("a\x7f"
+                                                                                     "b",
+                                                                        3),
              std::string_view("[::1]"), std::string_view("host:80")}) {
         RUVIA_CHECK_EQ(register_client(with_host(std::string(host))), std::string("http client host is invalid"));
     }

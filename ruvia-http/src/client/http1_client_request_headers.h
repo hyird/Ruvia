@@ -23,7 +23,7 @@ inline constexpr std::string_view crlf = "\r\n";
 
 struct request_header_facts final {
     std::size_t wire_bytes_{0};
-    detail::request_field_state fields_{detail::request_field_framing::http1};
+    detail::request_field_state fields_{};
     detail::http_connection_options connection_options_;
     detail::http_upgrade_protocols upgrade_protocols_;
     bool has_te_{false};

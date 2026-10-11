@@ -22,7 +22,6 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "context/context_services.h"
-#include "http3/http3_client_connection.h"
 
 namespace ruvia {
 namespace {
@@ -85,14 +84,7 @@ void http_client_response::release() noexcept {
     if (consumer_) {
         state_value->body_operation_scope_.close();
     }
-    if (consumer_ && state_value->http3_connection_ != nullptr) {
-        auto* connection = state_value->http3_connection_;
-        const auto request_id = state_value->http3_request_id_;
-        if (!state_value->complete_ && !state_value->abandoned_) {
-            connection->abandon_response(request_id);
-        }
-        connection->consumer_released(request_id);
-    } else if (consumer_ && !state_value->complete_ && !state_value->abandoned_ && state_value->pool_ != nullptr) {
+    if (consumer_ && !state_value->complete_ && !state_value->abandoned_ && state_value->pool_ != nullptr) {
         state_value->pool_->abandon_response(*state_value);
     }
     state_value->release_reference();
@@ -128,23 +120,7 @@ http_status_code http_client_response::status() const noexcept {
 http_protocol_version http_client_response::protocol_version() const noexcept {
     return state_->protocol_version_;
 }
-void http_client_response::reprioritize(http_priority priority) & {
-    if (state_ == nullptr) {
-        throw std::logic_error("response owner has moved");
-    }
-    check_response_operation_affinity(state_);
-    if (priority.urgency_ > 7) {
-        throw std::invalid_argument("HTTP priority urgency must be between 0 and 7");
-    }
-    if (state_->complete_) {
-        // The peer already finished the stream; there is nothing left to schedule.
-        return;
-    }
-    if (state_->abandoned_ || state_->pool_ == nullptr) {
-        throw http_client_error(http_client_error::code_type::closing, "response transport is retired");
-    }
-    state_->pool_->reprioritize(*state_, priority);
-}
+
 std::span<const http_header> http_client_response::headers() const& noexcept {
     return state_->headers_;
 }
@@ -175,60 +151,7 @@ void detail::http_client_response_state::release_reference() noexcept {
 }
 
 void detail::http_client_response_state::notify_producer_space() noexcept {
-    // A changed read policy (for example collect_all_) can unblock the QUIC
-    // driver even when no body storage has been released yet.
-    http3_body_budget_.notify_producer();
     space_signal_.notify();
-}
-
-bool detail::http_client_response_state::bind_http3_body_budget(
-    detail::http3_body_budget& budget) noexcept {
-    return http3_body_budget_.attach(budget, producer_body_bytes());
-}
-
-void detail::http_client_response_state::release_http3_body_budget() noexcept {
-    if (http3_body_budget_.retained_bytes() != 0) {
-        std::terminate();
-    }
-    http3_body_budget_.reset();
-}
-
-bool detail::http_client_response_state::has_http3_body_budget() const noexcept {
-    return http3_body_budget_.attached();
-}
-
-std::size_t detail::http_client_response_state::producer_body_bytes() const noexcept {
-    if (pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_.size()) {
-        std::terminate();
-    }
-    return buffered_.size() + pending_.size();
-}
-
-std::size_t detail::http_client_response_state::producer_body_budget_available() const noexcept {
-    return http3_body_budget_.available();
-}
-
-bool detail::http_client_response_state::retain_producer_body_bytes(std::size_t bytes_value) noexcept {
-    return !http3_body_budget_.attached() || http3_body_budget_.try_retain(bytes_value);
-}
-
-void detail::http_client_response_state::release_producer_body_bytes(std::size_t bytes_value) noexcept {
-    if (http3_body_budget_.attached()) {
-        http3_body_budget_.release(bytes_value);
-    }
-}
-
-void detail::http_client_response_state::reconcile_producer_body_bytes() noexcept {
-    if (!http3_body_budget_.attached()) {
-        return;
-    }
-    if (!http3_body_budget_.try_replace(producer_body_bytes())) {
-        std::terminate();
-    }
-}
-
-bool detail::http_client_response_state::replace_producer_body_bytes(std::size_t bytes_value) noexcept {
-    return !http3_body_budget_.attached() || http3_body_budget_.try_replace(bytes_value);
 }
 
 void detail::http_client_response_state::discard_pending_body() noexcept {
@@ -236,7 +159,6 @@ void detail::http_client_response_state::discard_pending_body() noexcept {
         std::pmr::string empty(resource_);
         pending_.swap(empty);
     }
-    reconcile_producer_body_bytes();
     notify_producer_space();
 }
 
@@ -248,7 +170,6 @@ void detail::http_client_response_state::discard_response_body() noexcept {
         pending_.swap(empty_pending);
     }
     offset_ = 0;
-    reconcile_producer_body_bytes();
     notify_producer_space();
 }
 
@@ -268,7 +189,6 @@ void detail::http_client_response_state::release_consumed_body_prefix() {
         buffered_.erase(0, offset_);
     }
     offset_ = 0;
-    reconcile_producer_body_bytes();
     notify_producer_space();
 }
 
@@ -276,9 +196,6 @@ void detail::http_client_response_state::promote_pending_data() {
     auto& state_value = *this;
     if (state_value.offset_ != state_value.buffered_.size() || state_value.pending_.empty()) {
         return;
-    }
-    if (state_value.http2_data_credit_ && state_value.pool_ != nullptr) {
-        state_value.pool_->release_response_data(state_value);
     }
     std::pmr::string empty(state_value.resource_);
     state_value.buffered_.swap(empty);
@@ -371,9 +288,6 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     auto& state_value = *this;
     state_value.release_consumed_body_prefix();
     state_value.collect_all_ = true;
-    if (state_value.http2_data_credit_ && state_value.pool_ != nullptr) {
-        state_value.pool_->release_response_data(state_value);
-    }
     state_value.notify_producer_space();
     while (!state_value.receive_complete()) {
         co_await state_value.data_signal_.wait();
@@ -502,70 +416,39 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
-    auto* resource = pmr_resource_or_default(resource_);
-    std::pmr::vector<http_header_view> fields(resource);
-    fields.reserve(head.headers_.size() + 1);
+    if (!is_valid_http_origin_form_target(head.target_) || config.max_chunk_bytes_ == 0 ||
+        config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
+        throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
+    }
+    detail::http_client_request_storage request("GET", head.target_, pmr_resource_or_default(resource_));
+    request.set_tunnel(pool_->config().authority_, detail::http_client_request_storage::tunnel_kind::udp);
     for (const auto& field : head.headers_) {
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
         }
-        fields.push_back(field);
+        request.append_header(field.name(), field.value());
     }
-    fields.emplace_back("Capsule-Protocol", "?1");
-    // open_tunnel owns all fields before this temporary preparation storage dies.
-    return open_tunnel({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
+    request.append_header("Capsule-Protocol", "?1");
+    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
-    if ((config.datagrams_ && head.protocol_.empty()) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
-        (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
+    if (config.datagrams_ || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
+        !is_valid_http_connect_authority(head.authority_)) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    detail::http_client_request_storage request("CONNECT", head.target_, pmr_resource_or_default(resource_));
-    if (head.protocol_ == "connect-udp" && (validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
-                                                                                  .scheme_ = scheme() == http_scheme::https ? "https" : "http",
-                                                                                  .authority_ = head.authority_,
-                                                                                  .path_ = head.target_,
-                                                                                  .headers_ = head.headers_})
-                                                   .index() != 0)) {
-        throw std::invalid_argument("invalid CONNECT-UDP request head");
-    }
-    request.set_tunnel(head.authority_, head.protocol_);
+    detail::http_client_request_storage request("CONNECT", "", pmr_resource_or_default(resource_));
+    request.set_tunnel(head.authority_, detail::http_client_request_storage::tunnel_kind::connect);
     for (const auto& field : head.headers_) {
         request.append_header(field.name(), field.value());
     }
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 
-quic_path_migration http_client_handle::start_quic_path_migration(const quic_address& local_address) const {
-    registration_.require_active();
-    return pool_->start_quic_path_migration(local_address);
-}
-
-std::optional<quic_path_migration> http_client_handle::path_migration(
-    std::uint64_t id) const {
-    registration_.require_active();
-    return pool_->path_migration(id);
-}
-
-quic_operation_status http_client_handle::cancel_quic_path_migration(std::uint64_t id) const {
-    registration_.require_active();
-    return pool_->cancel_quic_path_migration(id);
-}
-
 http_client_stats http_client_handle::stats() const {
     registration_.require_active();
     return pool_->stats();
-}
-std::optional<http_client_push> http_client_handle::next_push() const {
-    registration_.require_active();
-    return pool_->next_push();
-}
-
-std::optional<http_client_advertisement> http_client_handle::next_advertisement() const {
-    registration_.require_active();
-    return pool_->next_advertisement();
 }
 
 std::string_view http_client_handle::host() const& {

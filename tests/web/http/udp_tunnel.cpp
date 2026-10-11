@@ -20,7 +20,7 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/http_udp_tunnel.h"
 
-#include "http2_server_fixture.h"
+#include "http_server_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -65,36 +65,27 @@ class udp_tunnel_routes final : public ruvia::controller<udp_tunnel_routes> {
 };
 }  // namespace
 
-RUVIA_TEST(http2_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
+RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     std::exception_ptr failure;
     const auto& observation = udp_observation;
     observation->eof_ = false;
-    ruvia::test::http2_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         try {
             ruvia::http_client client(
                 attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
                                        .host_ = "127.0.0.1",
                                        .port_ = server.endpoint().port(),
-                                       .connection_count_ = 1,
-                                       .request_timeout_ = std::chrono::seconds(5),
-                                       .protocol_ = ruvia::http_client_protocol::http2_only});
+                                       .connection_count_ = 2,
+                                       .request_timeout_ = std::chrono::seconds(5)});
             auto result = co_await client.open_udp_tunnel(
                 {.target_ = "/.well-known/masque/udp/target.test/53/"});
             RUVIA_CHECK(result.response() == nullptr && result.tunnel() != nullptr);
-            RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::ok);
+            RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::switching_protocols);
             RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
             RUVIA_CHECK(!result.tunnel()->header("content-length"));
-            bool rejected_policy = false;
-            try {
-                (void)std::move(*result.tunnel()).udp({.send_policy_ = static_cast<ruvia::http_datagram_send_policy>(0xff)});
-            } catch (const std::invalid_argument&) {
-                rejected_policy = true;
-            }
-            // The rejected policy must not consume the accepted tunnel.
-            RUVIA_CHECK(rejected_policy);
             auto tunnel = std::move(*result.tunnel()).udp();
             bool oversized = false;
             try {

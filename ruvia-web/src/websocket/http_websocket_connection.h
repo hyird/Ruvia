@@ -27,7 +27,7 @@ namespace ruvia::detail {
 
 // Transport-agnostic websocket connection (RFC 6455). All protocol behavior,
 // including frame reassembly, write serialization, heartbeats, and close,
-// lives here; the HTTP/1.1 and HTTP/2 transports differ only in the Transport
+// lives here; the transport is supplied by the session
 // policy, which supplies four transport-specific operations:
 //   asio-executor executor() const;
 //   task<http_stream_read_result> read_more(std::pmr::string& buffer);

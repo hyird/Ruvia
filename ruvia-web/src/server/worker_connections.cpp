@@ -14,10 +14,7 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "context/context_services.h"
-#include "http2/cleartext_upgrade.h"
-#include "http2/http2_sans_io_session.h"
 #include "integration/worker_capabilities.h"
-#include "server/http_server_alpn.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
@@ -28,11 +25,8 @@ namespace {
 
 int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void*) noexcept {
-    // This is the TCP TLS context, so it offers only h2 and http/1.1. HTTP/3
-    // negotiates "h3" on this worker's separate QUIC/TLS context and is never
-    // advertised through this TCP callback.
     static constexpr unsigned char protocols[] = {
-        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+        8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
             static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
@@ -209,16 +203,9 @@ task<void> worker_connections::run_session(
             }
             std::pmr::string client_certificate(memory_.allocator<char>());
             extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
-            const auto tls_services = base_services
-                                          .with_tls_transport(
-                                              remote_address, client_certificate, remote_port)
-                                          .with_automatic_alt_svc(listener_value.tls()->alt_svc_);
-            auto close_mode = http_connection_close::abort;
-            if (is_http2_alpn_selected(tls_stream)) {
-                close_mode = co_await run_http2(tls_stream, socket, tls_services);
-            } else {
-                close_mode = co_await run_stream(listener_value, tls_stream, socket, tls_services);
-            }
+            const auto tls_services = base_services.with_tls_transport(
+                remote_address, client_certificate, remote_port);
+            const auto close_mode = co_await run_stream(listener_value, tls_stream, socket, tls_services);
             // Worker stop keeps the immediate close; scanner close_all reaches a
             // graceful close that is already running.
             if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
@@ -246,26 +233,6 @@ task<void> worker_connections::run_session(
         ruvia::close_socket(socket);
         options_.connection_failure_.invoke(remote_address, failure);
     }
-}
-
-template <typename stream_type>
-task<http_connection_close> worker_connections::run_http2(
-    stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial_bytes) {
-    connection_scanner::entry_type scanner_entry;
-    connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
-
-    co_return co_await run_http2_server_session(
-        http2_server_session_setup<stream_type>{
-            .stream_ = stream,
-            .socket_ = socket,
-            .memory_ = memory_,
-            .routes_ = routes_,
-            .options_ = options_,
-            .scanner_entry_ = scanner_entry,
-            .services_ = services,
-            .worker_state_ = state_,
-        },
-        initial_bytes);
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
