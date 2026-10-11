@@ -44,10 +44,10 @@ public:
 
     /// Reads the next chunk of the streamed request body.
     /// @warning The returned view borrows the connection read buffer and is only valid
-    /// until the NEXT read() call; copy it out if you need to retain it past then. An
-    /// empty optional signals end-of-body. Only one read operation may be outstanding;
-    /// creating another before it completes or is discarded throws because concurrent
-    /// consumers cannot safely share the borrowed buffer.
+    /// until the next read operation starts; copy it out if you need to retain it past then.
+    /// An empty optional signals end-of-body. Only one read operation may run at a time;
+    /// starting another before it completes throws because concurrent consumers cannot
+    /// safely share the borrowed buffer. Unstarted operations may coexist.
     [[nodiscard]] scoped_operation<std::optional<std::span<const std::byte>>> read() &;
     scoped_operation<std::optional<std::span<const std::byte>>> read() && = delete;
 
@@ -59,6 +59,7 @@ public:
 
 private:
     read_type read_;
+    bool read_active_{false};
     ::ruvia::operation_scope operation_scope_;
 };
 
@@ -68,8 +69,8 @@ public:
     response_stream_writer& operator=(const response_stream_writer&) = delete;
 
     /// Writes one body chunk. write(), writeln(), and end() share one linear output lane.
-    /// Each returned output operation reserves the lane immediately; creating another
-    /// before it completes or is discarded throws std::logic_error. The string_view overload
+    /// An operation occupies the lane when started; starting another before it completes
+    /// throws std::logic_error. Unstarted operations may coexist. The string_view overload
     /// copies the chunk into owner-worker PMR storage before returning.
     scoped_operation<void> write(std::span<const std::byte> chunk) &;
     scoped_operation<void> write(std::span<const std::byte>) && = delete;
@@ -110,7 +111,7 @@ public:
     }
 
     /// Atomically terminates the stream with an optional trailer section.
-    /// The header views only need to remain valid until the returned task completes.
+    /// Header views are copied into owner storage before this function returns.
     /// A non-empty section is never silently dropped when the selected HTTP
     /// version/method/status cannot represent trailers. If the stream is still
     /// uncommitted, that rejection occurs before the response head is emitted.

@@ -1,8 +1,130 @@
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string_view>
+#include <utility>
 
+#include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: reading a response head off the wire.
+
+namespace {
+
+constexpr std::string_view retained_head = "HTTP/1.1 200 OK\r\nX-Test: kept\r\nContent-Length: 0";
+constexpr std::string_view replacement_head = "HTTP/1.1 200 OK\r\nX-Test: replacement\r\nContent-Length: 0";
+
+void check_response_head(ruvia::testing::test_context& ruvia_ctx,
+    const http_client_response_head& head, std::string_view value) {
+    RUVIA_CHECK(head.status() == ruvia::http_status::ok);
+    RUVIA_CHECK(head.protocol_version() == ruvia::http_protocol_version::http11);
+    const auto fields = head.headers();
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{2});
+    if (fields.size() == 2) {
+        RUVIA_CHECK_EQ(fields[0].name(), std::string_view("X-Test"));
+        RUVIA_CHECK_EQ(fields[0].value(), value);
+        RUVIA_CHECK_EQ(fields[1].name(), std::string_view("Content-Length"));
+        RUVIA_CHECK_EQ(fields[1].value(), std::string_view("0"));
+    }
+}
+
+void check_empty_response_head(ruvia::testing::test_context& ruvia_ctx,
+    http_client_response_head& head, std::pmr::memory_resource* resource) {
+    RUVIA_CHECK(head.headers().empty());
+    RUVIA_CHECK(head.status() == ruvia::http_status::ok);
+    RUVIA_CHECK(head.protocol_version() == ruvia::http_protocol_version::http11);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto fields = std::move(head).take_headers();
+        RUVIA_CHECK(fields.empty());
+        RUVIA_CHECK(fields.get_allocator().resource() == resource);
+        RUVIA_CHECK(head.headers().empty());
+    }
+}
+
+}  // namespace
+
+RUVIA_TEST(http_client_take_head_leaves_empty_parsed_fields_and_retains_owned_headers) {
+    failing_memory_resource memory;
+    {
+        auto result = parse_result("GET", retained_head, ruvia::http1_close_policy::allow_reuse, {}, &memory);
+        auto* parsed = result.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            return;
+        }
+        memory.fail_after(0);
+        auto head = std::move(*parsed).take_head();
+        memory.allow_allocations();
+        check_response_head(ruvia_ctx, head, "kept");
+        RUVIA_CHECK(parsed->head().headers().empty());
+        RUVIA_CHECK(parsed->head().status() == ruvia::http_status::ok);
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            auto empty_head = std::move(*parsed).take_head();
+            check_empty_response_head(ruvia_ctx, empty_head, &memory);
+            RUVIA_CHECK(parsed->head().headers().empty());
+        }
+        auto fields = std::move(head).take_headers();
+        RUVIA_CHECK_EQ(fields.size(), std::size_t{2});
+        RUVIA_CHECK(fields.get_allocator().resource() == &memory);
+        check_empty_response_head(ruvia_ctx, head, &memory);
+        if (fields.size() == 2) {
+            RUVIA_CHECK_EQ(fields[0].value(), std::string_view("kept"));
+        }
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_response_result_move_preserves_fields_and_supports_source_replacement) {
+    failing_memory_resource memory;
+    {
+        std::optional<http1_client_response_parse_result> source(
+            parse_result("GET", retained_head, ruvia::http1_close_policy::allow_reuse, {}, &memory));
+        memory.fail_after(0);
+        auto retained = std::move(*source);
+        memory.allow_allocations();
+        RUVIA_CHECK(retained.parsed() != nullptr);
+        RUVIA_CHECK(source->parsed() != nullptr);
+        if (retained.parsed() == nullptr || source->parsed() == nullptr) {
+            return;
+        }
+        check_response_head(ruvia_ctx, retained.parsed()->head(), "kept");
+        RUVIA_CHECK(source->parsed()->head().headers().empty());
+        auto empty_head = std::move(*source->parsed()).take_head();
+        check_empty_response_head(ruvia_ctx, empty_head, &memory);
+        source.emplace(parse_result("GET", replacement_head, ruvia::http1_close_policy::allow_reuse, {}, &memory));
+        RUVIA_CHECK(source->parsed() != nullptr);
+        if (source->parsed()) {
+            check_response_head(ruvia_ctx, source->parsed()->head(), "replacement");
+        }
+        check_response_head(ruvia_ctx, retained.parsed()->head(), "kept");
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_response_head_move_preserves_fields_and_supports_source_replacement) {
+    failing_memory_resource memory;
+    {
+        auto result = parse_result("GET", retained_head, ruvia::http1_close_policy::allow_reuse, {}, &memory);
+        RUVIA_CHECK(result.parsed() != nullptr);
+        if (result.parsed() == nullptr) {
+            return;
+        }
+        std::optional<http_client_response_head> source(std::move(*result.parsed()).take_head());
+        memory.fail_after(0);
+        auto retained = std::move(*source);
+        memory.allow_allocations();
+        check_response_head(ruvia_ctx, retained, "kept");
+        check_empty_response_head(ruvia_ctx, *source, &memory);
+        auto replacement = parse_result("GET", replacement_head, ruvia::http1_close_policy::allow_reuse, {}, &memory);
+        RUVIA_CHECK(replacement.parsed() != nullptr);
+        if (replacement.parsed()) {
+            source.emplace(std::move(*replacement.parsed()).take_head());
+            check_response_head(ruvia_ctx, *source, "replacement");
+        }
+        check_response_head(ruvia_ctx, retained, "kept");
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+}
 
 RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state_value = 0x4854'5450'5245'5350ULL;

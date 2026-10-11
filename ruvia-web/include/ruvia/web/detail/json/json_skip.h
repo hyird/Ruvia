@@ -14,13 +14,21 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool skip_json_value(std::string_view& input) noexcept;
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept;
 
-[[nodiscard]] inline bool skip_json_array(std::string_view& input, std::size_t depth) noexcept {
-    return consume_json_array_elements(input, depth, [depth](std::string_view& element) noexcept {
-        return skip_json_value(element, depth + 1);
+template <typename element_budget_type>
+[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth,
+    element_budget_type& consume_element) noexcept;
+
+template <typename element_budget_type>
+[[nodiscard]] bool skip_json_array(std::string_view& input, std::size_t depth,
+    element_budget_type& consume_element) noexcept {
+    return consume_json_array_elements(input, depth, [depth, &consume_element](std::string_view& element) noexcept {
+        return consume_element() && skip_json_value(element, depth + 1, consume_element);
     });
 }
 
-[[nodiscard]] inline bool skip_json_object(std::string_view& input, std::size_t depth) noexcept {
+template <typename element_budget_type>
+[[nodiscard]] bool skip_json_object(std::string_view& input, std::size_t depth,
+    element_budget_type& consume_element) noexcept {
     if (depth > max_json_depth) {
         return false;
     }
@@ -34,7 +42,7 @@ namespace ruvia::detail {
     }
 
     while (parse_json_string(input).has_value()) {
-        if (!consume_json_char(input, ':') || !skip_json_value(input, depth + 1)) {
+        if (!consume_json_char(input, ':') || !skip_json_value(input, depth + 1, consume_element)) {
             return false;
         }
         skip_json_whitespace(input);
@@ -51,10 +59,13 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline bool skip_json_object(std::string_view& input) noexcept {
-    return skip_json_object(input, 0);
+    auto consume_element = []() noexcept { return true; };
+    return skip_json_object(input, 0, consume_element);
 }
 
-[[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept {
+template <typename element_budget_type>
+[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth,
+    element_budget_type& consume_element) noexcept {
     if (depth > max_json_depth) {
         return false;
     }
@@ -69,9 +80,9 @@ namespace ruvia::detail {
         case '{':
             // skip_json_object/skip_json_array already add depth+1 for their child values; passing
             // depth+1 here too would double-count and enforce half the documented max_json_depth.
-            return skip_json_object(input, depth);
+            return skip_json_object(input, depth, consume_element);
         case '[':
-            return skip_json_array(input, depth);
+            return skip_json_array(input, depth, consume_element);
         case 't':
             return consume_json_literal(input, "true");
         case 'f':
@@ -81,6 +92,11 @@ namespace ruvia::detail {
         default:
             return skip_json_number_token(input);
     }
+}
+
+[[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept {
+    auto consume_element = []() noexcept { return true; };
+    return skip_json_value(input, depth, consume_element);
 }
 
 [[nodiscard]] inline bool skip_json_value(std::string_view& input) noexcept {

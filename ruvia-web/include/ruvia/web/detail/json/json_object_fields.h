@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/json/json_lex.h"
@@ -35,9 +36,10 @@ enum class json_object_visit_result : unsigned char { complete,
 // value from the same cursor. RUVIA_MODEL uses this On-Demand-style traversal
 // so a known value is parsed into its typed field without first scanning it to
 // discover a raw slice and then parsing that slice again.
-template <typename visitor_type>
+template <typename visitor_type, typename key_allocation_type>
 [[nodiscard]] bool consume_json_object_fields(resolved_pmr_resource_tag, std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, visitor_type&& visitor) {
+    std::pmr::memory_resource* resource, std::size_t depth, visitor_type&& visitor,
+    key_allocation_type&& consume_key_allocation) {
     if (depth > max_json_depth) {
         return false;
     }
@@ -62,6 +64,9 @@ template <typename visitor_type>
 
         bool consumed = false;
         if (key->encoding() == json_string_encoding::escaped) {
+            if (!consume_key_allocation(key->raw().size())) {
+                return false;
+            }
             auto decoded_key = decode_json_string(key->raw(), resource);
             if (!decoded_key.has_value()) {
                 return false;
@@ -84,6 +89,13 @@ template <typename visitor_type>
             return false;
         }
     }
+}
+
+template <typename visitor_type>
+[[nodiscard]] bool consume_json_object_fields(resolved_pmr_resource_tag, std::string_view& input,
+    std::pmr::memory_resource* resource, std::size_t depth, visitor_type&& visitor) {
+    return consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource, depth,
+        std::forward<visitor_type>(visitor), [](std::size_t) noexcept { return true; });
 }
 
 // Visits every field of one complete JSON object body as a raw value slice

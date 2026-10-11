@@ -34,10 +34,9 @@
 
 namespace ruvia::test {
 
-// Only connection startup is implemented, plus an optional transport failure
-// in the middle of the first statement's result. Tests exercise public
-// operations after authentication, never an injected backend object or
-// private storage.
+// Connection startup, scripted single-column PostgreSQL results and an
+// optional transport failure are enough to exercise public backend operations
+// without injecting a backend object or private storage.
 class backend_startup_peer final {
 public:
     enum class protocol { postgresql,
@@ -51,11 +50,22 @@ public:
         // and one row, then drops the connection before the result ends.
         drop_mid_result,
     };
+
+    struct postgres_reply final {
+        std::string column_{"v"};
+        std::uint32_t type_{25};
+        std::vector<std::string> rows_;
+        std::string command_{"SELECT 1"};
+        char status_{'I'};
+        bool deferred_{false};
+    };
+
     explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
-        after_startup behavior = after_startup::idle)
+        after_startup behavior = after_startup::idle, std::vector<postgres_reply> replies = {})
         : gate_(io_),
           defer_authentication_(defer_authentication),
           after_startup_(behavior),
+          postgres_replies_(std::move(replies)),
           startup_ready_(startup_.get_future()),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
@@ -89,6 +99,13 @@ public:
 
     void authenticate() {
         asio::post(io_, [this] { gate_.cancel(); });
+    }
+
+    void release_replies() {
+        asio::post(io_, [this] {
+            replies_released_ = true;
+            gate_.cancel();
+        });
     }
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -182,10 +199,7 @@ private:
         co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
     }
 
-    // The extended query protocol ends a statement with Sync. ParseComplete,
-    // BindComplete, RowDescription (one text column) and one DataRow follow;
-    // CommandComplete and ReadyForQuery never do.
-    asio::awaitable<void> postgres_drop_mid_result() {
+    asio::awaitable<bool> postgres_statement() {
         for (;;) {
             std::array<unsigned char, 5> header{};
             co_await asio::async_read(socket_, asio::buffer(header), asio::use_awaitable);
@@ -195,29 +209,73 @@ private:
             }
             std::vector<unsigned char> body(size - 4);
             co_await asio::async_read(socket_, asio::buffer(body), asio::use_awaitable);
+            if (header[0] == 'X') {
+                co_return false;
+            }
             if (header[0] == 'S') {
-                break;
+                co_return true;
             }
         }
-        std::string response;
+    }
+
+    static void postgres_result(std::string& response, const postgres_reply& reply) {
         message(response, '1', {});
         message(response, '2', {});
+        if (reply.column_.empty()) {
+            message(response, 'n', {});
+            return;
+        }
         std::string description;
         append_short(description, 1);
-        description.append("v", 2);
+        description.append(reply.column_);
+        description.push_back('\0');
         append_integer(description, 0);
         append_short(description, 0);
-        append_integer(description, 25);
+        append_integer(description, reply.type_);
         append_short(description, 0xffff);
         append_integer(description, 0xffffffff);
         append_short(description, 0);
         message(response, 'T', description);
-        std::string row;
-        append_short(row, 1);
-        append_integer(row, 1);
-        row.push_back('x');
-        message(response, 'D', row);
+        for (const auto& value : reply.rows_) {
+            std::string row;
+            append_short(row, 1);
+            append_integer(row, static_cast<std::uint32_t>(value.size()));
+            row.append(value);
+            message(response, 'D', row);
+        }
+    }
+
+    // CommandComplete and ReadyForQuery never follow the partial row set.
+    asio::awaitable<void> postgres_drop_mid_result() {
+        if (!(co_await postgres_statement())) {
+            co_return;
+        }
+        std::string response;
+        postgres_result(response, {.rows_ = {"x"}});
         co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
+    }
+
+    asio::awaitable<void> postgres_script() {
+        for (const auto& reply : postgres_replies_) {
+            if (!(co_await postgres_statement())) {
+                co_return;
+            }
+            if (reply.deferred_ && !replies_released_) {
+                gate_.expires_at(asio::steady_timer::time_point::max());
+                std::error_code ignored;
+                co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
+                if (closing_) {
+                    co_return;
+                }
+            }
+            std::string response;
+            postgres_result(response, reply);
+            std::string command(reply.command_);
+            command.push_back('\0');
+            message(response, 'C', command);
+            message(response, 'Z', std::string_view(&reply.status_, 1));
+            co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
+        }
     }
 
     asio::awaitable<void> maria_packet(std::string_view payload, unsigned char sequence) {
@@ -301,6 +359,9 @@ private:
                 socket_.close();
                 co_return;
             }
+            if (selected == protocol::postgresql && !postgres_replies_.empty()) {
+                co_await postgres_script();
+            }
             std::array<char, 64> buffer{};
             for (;;) {
                 co_await socket_.async_read_some(asio::buffer(buffer), asio::use_awaitable);
@@ -321,6 +382,8 @@ private:
     asio::steady_timer gate_;
     bool defer_authentication_;
     after_startup after_startup_;
+    std::vector<postgres_reply> postgres_replies_;
+    bool replies_released_{false};
     bool closing_{false};
     std::promise<void> startup_;
     std::future<void> startup_ready_;

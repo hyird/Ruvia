@@ -14,6 +14,9 @@ namespace ruvia::detail {
 
 template <typename visitor_type>
 [[nodiscard]] bool visit_raw_form_fields(std::string_view body, visitor_type&& visitor) {
+    if (!validate_form_encoding(body)) {
+        return false;
+    }
     return ruvia::visit_url_encoded_pairs(body, std::forward<visitor_type>(visitor));
 }
 

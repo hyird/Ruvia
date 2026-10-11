@@ -72,22 +72,17 @@ scoped_operation<void> websocket_client_state::close(
     websocket_close_options options, const operation_options& operation_options_value) {
     require_current();
     std::pmr::string reason(options.reason_.view(), memory_.resource());
-    auto read_activity = claim_activity(read_active_, "WebSocket client close cannot overlap read");
-    auto write_activity = claim_activity(write_active_, "WebSocket client close cannot overlap write");
-    auto close_activity = claim_activity(close_active_, "WebSocket client close is already in progress");
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_close(options, std::move(reason), operation_options_value, std::move(read_activity),
-            std::move(write_activity), std::move(close_activity)),
+        run_close(options, std::move(reason), operation_options_value),
         &websocket_client_state::check_operation_affinity, &worker_);
 }
 
 task<void> websocket_client_state::run_close(websocket_close_options options, std::pmr::string reason,
-    operation_options operation_options_value, operation_lane_lease read_activity,
-    operation_lane_lease write_activity, operation_lane_lease close_activity) {
-    static_cast<void>(read_activity);
-    static_cast<void>(write_activity);
-    static_cast<void>(close_activity);
+    operation_options operation_options_value) {
     lifecycle_.require_ready();
+    auto read_activity = claim_activity(read_active_, "WebSocket client close cannot overlap read");
+    auto write_activity = claim_activity(write_active_, "WebSocket client close cannot overlap write");
+    auto close_activity = claim_activity(close_active_, "WebSocket client close is already in progress");
     operation_guard_type operation(*this, operation_options_value);
     {
         co_await wait_for_write_idle();

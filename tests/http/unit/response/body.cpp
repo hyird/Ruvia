@@ -3,14 +3,17 @@
 #include <filesystem>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_file.h"
 
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 namespace {
@@ -43,6 +46,55 @@ template <typename function_type>
         return false;
     } catch (const std::invalid_argument&) {
         return true;
+    }
+}
+
+template <typename prepare_type, typename inspect_type>
+void check_response_body_moves(ruvia::testing::test_context& ruvia_ctx,
+    prepare_type&& prepare, inspect_type&& inspect) {
+    for (const bool assign : {false, true}) {
+        failing_memory_resource source_resource;
+        failing_memory_resource target_resource;
+        {
+            http_response source({.resource_ = &source_resource});
+            prepare(source);
+            source.header("X-Source", "retained");
+            std::optional<http_response> target;
+            if (assign) {
+                target.emplace(http_response::options_type{.resource_ = &target_resource});
+                target->body(std::string(256, 't'));
+            }
+            source_resource.fail_after(0);
+            target_resource.fail_after(0);
+            if (assign) {
+                *target = std::move(source);
+            } else {
+                target.emplace(std::move(source));
+            }
+            source_resource.allow_allocations();
+            target_resource.allow_allocations();
+            RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+            RUVIA_CHECK(target->memory_resource() == &source_resource);
+            RUVIA_CHECK_EQ(target->header("X-Source").value_or("missing"), std::string_view("retained"));
+            inspect(*target);
+            RUVIA_CHECK(source.headers().empty());
+            RUVIA_CHECK(source.body_bytes().empty());
+            RUVIA_CHECK(!source.file_body().has_value());
+            RUVIA_CHECK(!source.has_multipart_file_body());
+            RUVIA_CHECK_EQ(source.body_segment_count(), std::size_t{0});
+            RUVIA_CHECK_EQ(ruvia::plan_buffered_http_response_write(
+                               ruvia::http_known_method::get, source)
+                               .content_length(),
+                std::uint64_t{0});
+            source.body("source reused");
+            source.header("X-Source", "replacement");
+            RUVIA_CHECK_EQ(source.body_bytes(), std::string_view("source reused"));
+            RUVIA_CHECK_EQ(source.header("X-Source").value_or("missing"), std::string_view("replacement"));
+            RUVIA_CHECK_EQ(target->header("X-Source").value_or("missing"), std::string_view("retained"));
+            inspect(*target);
+        }
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
     }
 }
 
@@ -169,4 +221,81 @@ RUVIA_TEST(response_body_move_preserves_content) {
     RUVIA_CHECK(!target.header("missing").has_value());
     RUVIA_CHECK(target.headers().size() == 0);
     RUVIA_CHECK_EQ(target.body_bytes(), std::string_view("move-owned"));
+}
+
+RUVIA_TEST(response_byte_body_moves_leave_sources_empty_and_reusable) {
+    enum class body_kind { copied,
+        owned,
+        static_value,
+        empty };
+    for (const auto kind : {body_kind::copied, body_kind::owned, body_kind::static_value, body_kind::empty}) {
+        constexpr std::string_view payload = "moved response payload";
+        const auto expected = kind == body_kind::empty ? std::string_view{} : payload;
+        check_response_body_moves(ruvia_ctx, [kind, payload](http_response& source) {
+            switch (kind) {
+                case body_kind::copied:
+                    source.body(payload);
+                    break;
+                case body_kind::owned:
+                    source.owned_body(std::pmr::string(payload, source.memory_resource()));
+                    break;
+                case body_kind::static_value:
+                    source.static_body(payload);
+                    break;
+                case body_kind::empty:
+                    break;
+            } }, [&](const http_response& target) {
+            RUVIA_CHECK_EQ(target.body_bytes(), expected);
+            RUVIA_CHECK(!target.file_body().has_value());
+            RUVIA_CHECK_EQ(target.body_segment_count(), expected.empty() ? std::size_t{0} : std::size_t{1}); });
+    }
+}
+
+RUVIA_TEST(response_file_body_moves_leave_sources_empty_and_reusable) {
+    const std::filesystem::path path("retained-response-file.bin");
+    const auto identity = ruvia::http_response_file_identity::checked({11, 22, 33, 44});
+    check_response_body_moves(ruvia_ctx, [&](http_response& source) { source.file_body(path, 23, 4, 9, identity); }, [&](const http_response& target) {
+        const auto file = target.file_body();
+        RUVIA_CHECK(file.has_value());
+        if (file) {
+            RUVIA_CHECK(file->to_path() == path);
+            RUVIA_CHECK_EQ(file->size(), std::uint64_t{23});
+            RUVIA_CHECK_EQ(file->offset(), std::uint64_t{4});
+            RUVIA_CHECK_EQ(file->length(), std::uint64_t{9});
+            RUVIA_CHECK(file->identity() == identity);
+        }
+        RUVIA_CHECK(target.body_bytes().empty());
+        RUVIA_CHECK_EQ(target.body_segment_count(), std::size_t{1}); });
+}
+
+RUVIA_TEST(response_multipart_body_moves_leave_sources_empty_and_reusable) {
+    const std::filesystem::path path("retained-multipart-response.bin");
+    const auto identity = ruvia::http_response_file_identity::checked({55, 66, 77, 88});
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
+    constexpr std::string_view expected =
+        "--moved_ranges\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-1/10\r\n\r\n01\r\n"
+        "--moved_ranges\r\nContent-Type: text/plain\r\nContent-Range: bytes 8-9/10\r\n\r\n89\r\n"
+        "--moved_ranges--\r\n";
+    check_response_body_moves(ruvia_ctx, [&](http_response& source) {
+        auto plan = ruvia::make_http_multipart_byte_range_plan(
+            ranges, 10, "text/plain", "moved_ranges", {}, source.memory_resource());
+        source.multipart_file_body(path, 10, identity, std::move(plan)); }, [&](const http_response& target) {
+        RUVIA_CHECK(target.has_multipart_file_body());
+        std::string materialized;
+        constexpr std::string_view file_bytes = "0123456789";
+        for (std::size_t index = 0; index < target.body_segment_count(); ++index) {
+            const auto segment = target.body_segment(index);
+            if (segment.file_) {
+                RUVIA_CHECK(segment.file_->to_path() == path);
+                RUVIA_CHECK(segment.file_->identity() == identity);
+                materialized.append(file_bytes.substr(static_cast<std::size_t>(segment.file_->offset()),
+                    static_cast<std::size_t>(segment.file_->length())));
+            } else {
+                materialized.append(segment.bytes_);
+            }
+        }
+        RUVIA_CHECK_EQ(materialized, expected);
+        RUVIA_CHECK_EQ(ruvia::plan_buffered_http_response_write(
+                           ruvia::http_known_method::get, target).content_length(),
+            static_cast<std::uint64_t>(expected.size())); });
 }

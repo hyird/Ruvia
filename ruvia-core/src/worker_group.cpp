@@ -1,5 +1,6 @@
 #include "ruvia/core/worker_group.h"
 
+#include <exception>
 #include <stdexcept>
 #include <string>
 
@@ -24,51 +25,104 @@ template <typename members_type>
 worker_group::worker_group(std::pmr::memory_resource* resource)
     : members_(pmr_resource_or_default(resource)) {}
 
+worker_group::~worker_group() {
+    for (const auto& member : members_) {
+        member.runtime_->unbind_group(*this);
+    }
+}
+
 void worker_group::add(worker_runtime& member, std::size_t tier) {
-    if (!members_.empty() && tier != members_.back().tier_ && tier != members_.back().tier_ + 1) {
+    const std::lock_guard lock(mutex_);
+    if (sealed_ || stopping_) {
+        throw std::logic_error("worker group members must be added before start or stop");
+    }
+    if (!members_.empty() &&
+        (tier < members_.back().tier_ || tier - members_.back().tier_ > 1)) {
         throw std::invalid_argument("worker group tiers must be added in order");
     }
     members_.push_back({.runtime_ = &member, .tier_ = tier});
+    try {
+        member.bind_group(*this);
+    } catch (...) {
+        members_.pop_back();
+        throw;
+    }
 }
 
 bool worker_group::start() {
-    for (std::size_t begin = 0; begin < members_.size();) {
-        const auto end = tier_end(members_, begin);
-        for (auto index = begin; index != end; ++index) {
-            if (!launch(*members_[index].runtime_)) {
-                return false;
-            }
+    {
+        const std::lock_guard lock(mutex_);
+        if (sealed_ && !stopping_) {
+            throw std::logic_error("worker group can only be started once");
         }
-        for (auto index = begin; index != end; ++index) {
-            if (!settle(members_[index].runtime_->wait_until_ready(), "ready")) {
-                return false;
-            }
-        }
-        begin = end;
+        sealed_ = true;
     }
-    return !stop_requested();
+    try {
+        for (std::size_t begin = 0; begin < members_.size();) {
+            const auto end = tier_end(members_, begin);
+            for (auto index = begin; index != end; ++index) {
+                if (!launch(*members_[index].runtime_)) {
+                    return settle(false, "ready");
+                }
+            }
+            for (auto index = begin; index != end; ++index) {
+                if (!settle(members_[index].runtime_->wait_until_ready(), "ready")) {
+                    return false;
+                }
+            }
+            begin = end;
+        }
+        return settle(true, "ready");
+    } catch (...) {
+        rethrow_phase_failure(std::current_exception());
+    }
 }
 
 bool worker_group::serve() {
-    for (auto end = members_.size(); end != 0;) {
-        auto begin = end - 1;
-        while (begin != 0 && members_[begin - 1].tier_ == members_[end - 1].tier_) {
-            --begin;
-        }
-        for (auto index = begin; index != end; ++index) {
-            if (stop_requested()) {
-                return false;
+    try {
+        for (auto end = members_.size(); end != 0;) {
+            auto begin = end - 1;
+            while (begin != 0 && members_[begin - 1].tier_ == members_[end - 1].tier_) {
+                --begin;
             }
-            members_[index].runtime_->request_serve();
-        }
-        for (auto index = begin; index != end; ++index) {
-            if (!settle(members_[index].runtime_->wait_until_serving(), "serving")) {
-                return false;
+            for (auto index = begin; index != end; ++index) {
+                if (stop_requested()) {
+                    return settle(false, "serving");
+                }
+                members_[index].runtime_->request_serve();
             }
+            for (auto index = begin; index != end; ++index) {
+                if (!settle(members_[index].runtime_->wait_until_serving(), "serving")) {
+                    return false;
+                }
+            }
+            end = begin;
         }
-        end = begin;
+        return settle(true, "serving");
+    } catch (...) {
+        rethrow_phase_failure(std::current_exception());
     }
-    return !stop_requested();
+}
+
+void worker_group::member_failed(worker_runtime& member, std::exception_ptr failure) noexcept {
+    {
+        const std::lock_guard lock(mutex_);
+        if (!failure_) {
+            failure_ = std::move(failure);
+            failed_member_ = &member;
+        }
+    }
+    request_stop();
+}
+
+void worker_group::member_stopping() noexcept {
+    {
+        const std::lock_guard lock(mutex_);
+        if (!stopping_) {
+            member_stopped_ = true;
+        }
+    }
+    request_stop();
 }
 
 void worker_group::request_stop() noexcept {
@@ -97,11 +151,11 @@ bool worker_group::stop_requested() const noexcept {
 }
 
 std::exception_ptr worker_group::join() noexcept {
-    request_stop();
-    {
-        std::unique_lock lock(mutex_);
-        stop_changed_.wait(lock, [this] { return !stop_dispatching_; });
+    if (joined_) {
+        return join_failure_;
     }
+    request_stop();
+    wait_for_stop_dispatch();
     for (std::size_t begin = 0; begin < members_.size();) {
         const auto end = tier_end(members_, begin);
         if (begin != 0) {
@@ -121,19 +175,19 @@ std::exception_ptr worker_group::join() noexcept {
         }
         begin = end;
     }
-    std::exception_ptr first;
     for (const auto& member : members_) {
         auto failure = member.runtime_->failure();
         if (failure == nullptr) {
             continue;
         }
-        if (first == nullptr) {
-            first = std::move(failure);
+        if (join_failure_ == nullptr) {
+            join_failure_ = std::move(failure);
         } else {
             report_unhandled_failure("additional worker failure", std::move(failure));
         }
     }
-    return first;
+    joined_ = true;
+    return join_failure_;
 }
 
 bool worker_group::launch(worker_runtime& member) {
@@ -155,14 +209,58 @@ bool worker_group::launch(worker_runtime& member) {
     return true;
 }
 
-bool worker_group::settle(bool reached, const char* phase) const {
-    if (reached) {
-        return true;
+void worker_group::wait_for_stop_dispatch() noexcept {
+    std::unique_lock lock(mutex_);
+    stop_changed_.wait(lock, [this] { return !stop_dispatching_; });
+}
+
+void worker_group::rethrow_phase_failure(std::exception_ptr fallback) {
+    request_stop();
+    wait_for_stop_dispatch();
+    auto failure = observe_phase_failure();
+    std::rethrow_exception(failure ? failure : std::move(fallback));
+}
+
+std::exception_ptr worker_group::observe_phase_failure() noexcept {
+    std::exception_ptr failure;
+    worker_runtime* member = nullptr;
+    {
+        const std::lock_guard lock(mutex_);
+        failure = failure_;
+        member = failed_member_;
     }
-    if (stop_requested()) {
-        return false;
+    if (member != nullptr) {
+        // A phase waiter may be on a different, healthy member. Observe only
+        // the exception actually delivered, preserving other failure reports.
+        static_cast<void>(member->failure());
     }
-    throw std::runtime_error(std::string("worker stopped before the group was ") + phase);
+    return failure;
+}
+
+bool worker_group::settle(bool reached, const char* phase) {
+    bool was_stopping = false;
+    {
+        const std::lock_guard lock(mutex_);
+        was_stopping = stopping_;
+        if (reached && !stopping_ && !failure_) {
+            return true;
+        }
+    }
+    request_stop();
+    wait_for_stop_dispatch();
+    auto failure = observe_phase_failure();
+    bool member_stopped = false;
+    {
+        const std::lock_guard lock(mutex_);
+        member_stopped = member_stopped_;
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (member_stopped || (!reached && !was_stopping)) {
+        throw std::runtime_error(std::string("worker stopped before the group was ") + phase);
+    }
+    return false;
 }
 
 }  // namespace ruvia

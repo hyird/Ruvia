@@ -3,12 +3,100 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <utility>
 
 #include "test_harness.h"
+
+namespace stop_token_test {
+
+struct callback_retirement_state final {
+    ruvia::stop_registration* registration_;
+    const void* marked_source_{nullptr};
+    bool mark_next_move_{false};
+    bool reset_requested_{false};
+    bool payload_valid_{false};
+    int calls_{0};
+    int source_destructions_{0};
+    int payload_destructions_{0};
+};
+
+struct callback_payload final {
+    explicit callback_payload(callback_retirement_state& state) noexcept
+        : state_(state) {}
+    ~callback_payload() {
+        ++state_.payload_destructions_;
+    }
+
+    callback_retirement_state& state_;
+    int value_{42};
+};
+
+class reset_registration_when_source_retires final {
+public:
+    explicit reset_registration_when_source_retires(callback_retirement_state& state)
+        : state_(&state),
+          payload_(std::make_unique<callback_payload>(state)) {}
+    reset_registration_when_source_retires(const reset_registration_when_source_retires&) = delete;
+    reset_registration_when_source_retires& operator=(const reset_registration_when_source_retires&) = delete;
+    reset_registration_when_source_retires(reset_registration_when_source_retires&& other) noexcept
+        : state_(other.state_),
+          payload_(std::move(other.payload_)) {
+        if (std::exchange(state_->mark_next_move_, false)) {
+            state_->marked_source_ = std::addressof(other);
+        }
+    }
+    ~reset_registration_when_source_retires() {
+        auto* const state = state_;
+        if (state->marked_source_ == this) {
+            ++state->source_destructions_;
+            request_reset(*state);
+        }
+    }
+
+    void operator()() const noexcept {
+        ++state_->calls_;
+        state_->payload_valid_ = payload_ != nullptr && payload_->value_ == 42;
+        // A wrapper may transfer an allocated callable without moving its
+        // target; self-reset remains exercised for that ownership strategy.
+        request_reset(*state_);
+    }
+
+private:
+    static void request_reset(callback_retirement_state& state) noexcept {
+        if (!std::exchange(state.reset_requested_, true)) {
+            state.registration_->reset();
+        }
+    }
+
+    callback_retirement_state* state_;
+    std::unique_ptr<callback_payload> payload_;
+};
+
+}  // namespace stop_token_test
+
+RUVIA_TEST(stop_registration_self_reset_retires_each_callback_target_once) {
+    ruvia::stop_source source;
+    ruvia::stop_registration registration;
+    stop_token_test::callback_retirement_state state{&registration};
+    source.token().register_callback(registration,
+        stop_token_test::reset_registration_when_source_retires(state));
+    state.mark_next_move_ = true;
+    source.request_stop();
+    const bool unregistered = !registration.registered();
+    registration.reset();
+
+    RUVIA_CHECK(unregistered);
+    RUVIA_CHECK(state.reset_requested_);
+    RUVIA_CHECK_EQ(state.calls_, 1);
+    RUVIA_CHECK(state.payload_valid_);
+    RUVIA_CHECK_EQ(state.source_destructions_, state.marked_source_ == nullptr ? 0 : 1);
+    RUVIA_CHECK_EQ(state.payload_destructions_, 1);
+}
 
 namespace {
 

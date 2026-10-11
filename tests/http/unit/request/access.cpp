@@ -170,6 +170,19 @@ RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
     RUVIA_CHECK_EQ(*second, std::string_view("2"));
 }
 
+RUVIA_TEST(request_access_cookie_lookup_preserves_distinct_fields_with_shared_storage) {
+    constexpr std::string_view shared = "sid=old; sid=new; token=present";
+    const http_header_view headers[]{{"Cookie", shared}, {"Cookie", shared.substr(0, 7)}};
+    auto [request, error] = ruvia::make_parsed_http_request(
+        "GET", "/", headers, {}, std::pmr::get_default_resource());
+    RUVIA_CHECK(!error.has_value());
+    RUVIA_CHECK_EQ(request.headers().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(request.header("Cookie").value_or("missing"), std::string_view("sid=old"));
+    RUVIA_CHECK_EQ(request.cookie("sid").value_or("missing"), std::string_view("old"));
+    RUVIA_CHECK_EQ(request.cookie("token").value_or("missing"), std::string_view("present"));
+    RUVIA_CHECK(!request.cookie("absent").has_value());
+}
+
 RUVIA_TEST(owned_header_copies_stay_in_the_source_resource) {
     header_memory memory;
     {

@@ -6,6 +6,7 @@
 
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia {
 scoped_operation<void> context::inform(const http_interim_response_head& response) {
@@ -21,9 +22,6 @@ scoped_operation<void> http_interim_response_output::inform(const http_interim_r
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
-    if (scope_.has_pending_operations()) {
-        throw std::logic_error("interim response output is already active");
-    }
     std::pmr::vector<http_header> owned(resource_);
     owned.reserve(response.headers().size());
     for (const auto& field : response.headers()) {
@@ -32,6 +30,7 @@ scoped_operation<void> http_interim_response_output::inform(const http_interim_r
     return ::ruvia::make_scoped_operation(scope_, write_owned(response.status(), std::move(owned)));
 }
 task<void> http_interim_response_output::write_owned(http_status_code status, std::pmr::vector<http_header> fields_value) {
+    auto lease = claim_operation_lane(output_active_, "interim response output is already active");
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }

@@ -1,4 +1,5 @@
 #include <memory_resource>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -24,7 +25,8 @@ RUVIA_MODEL(request_binding_out, RUVIA_REQUIRED_FIELD(id, ruvia::string),
 
 RUVIA_MODEL(dynamic_binding_body,
     RUVIA_OPTIONAL_FIELD(payload, ruvia::json_value),
-    RUVIA_OPTIONAL_FIELD(object, ruvia::json_object));
+    RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
+    RUVIA_OPTIONAL_FIELD(numbers, ruvia::array<ruvia::uint32>));
 
 namespace {
 
@@ -46,6 +48,7 @@ public:
     RUVIA_PATCH("/request-binding-patch", patch, ruvia::json_body<patch_binding_body>);
     RUVIA_POST("/request-binding-echo", echo, ruvia::json_body<request_binding_body>);
     RUVIA_POST("/request-binding-dynamic", dynamic, ruvia::json_body<dynamic_binding_body>);
+    RUVIA_POST("/request-binding-form", echo, ruvia::form_body<request_binding_body>);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> dynamic(ruvia::context& c) {
@@ -109,6 +112,24 @@ RUVIA_TEST(request_binding_serializes_the_validated_model_without_copying_fields
     }
 }
 
+RUVIA_TEST(request_binding_form_rejects_malformed_encoding_in_unknown_fields) {
+    ruvia::test_app app;
+    for (const auto invalid : {"%", "%G0", "%0G"}) {
+        for (const auto& body : {
+                 std::string("name=Al&unknown=") + invalid,
+                 std::string("unknown=") + invalid + "&name=Al"}) {
+            const auto response = app.request(
+                ruvia::test_request::post("/request-binding-form").form(body));
+            RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
+            RUVIA_CHECK(response.body().find("invalid form body") != std::string_view::npos);
+        }
+    }
+    const auto valid = app.request(ruvia::test_request::post("/request-binding-form")
+            .form("name=A%6C&unknown=%00%26%3D%FF"));
+    RUVIA_CHECK(valid.status() == ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(valid.body(), std::string_view(R"({"name":"Al"})"));
+}
+
 RUVIA_TEST(request_binding_validates_inputs_and_serializes_service_model) {
     ruvia::test_app app;
     const auto ok = app.request(
@@ -138,5 +159,25 @@ RUVIA_TEST(request_binding_dynamic_json_distinguishes_syntax_from_field_type_err
         RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
         RUVIA_CHECK(response.body().find("invalid json body") != std::string_view::npos);
         RUVIA_CHECK(response.body().find("validation_failed") == std::string_view::npos);
+    }
+}
+
+RUVIA_TEST(request_binding_large_wrong_type_arrays_report_field_validation) {
+    std::string elements;
+    for (std::size_t index = 0; index < 40000; ++index) {
+        if (index != 0) {
+            elements.push_back(',');
+        }
+        elements.push_back('0');
+    }
+    ruvia::test_app app;
+    for (const auto& body : {
+             "{\"object\":[" + elements + "]}",
+             "{\"numbers\":[" + elements + ",\"wrong type\"]}"}) {
+        const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
+        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
+        RUVIA_CHECK(response.body().find("validation_failed") != std::string_view::npos);
+        RUVIA_CHECK(response.body().find("invalid_type") != std::string_view::npos);
+        RUVIA_CHECK(response.body().find("invalid json body") == std::string_view::npos);
     }
 }

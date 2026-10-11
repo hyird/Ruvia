@@ -307,8 +307,18 @@ private:
     double score_{0};
 };
 
+// Composite results retain their destination resource during move assignment.
+// Allocator-extended moves and move assignment own every nested value in the
+// target resource, even when a different source resource compares equal. Such
+// rebinding may allocate; failure leaves both values unchanged. Moves within
+// the same resource transfer storage without allocation.
 class redis_scan_result final {
 public:
+    redis_scan_result(const redis_scan_result&) = default;
+    redis_scan_result& operator=(const redis_scan_result&) = default;
+    redis_scan_result(redis_scan_result&&) noexcept = default;
+    redis_scan_result& operator=(redis_scan_result&& other);
+
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
     }
@@ -334,6 +344,11 @@ private:
 
 class redis_hash_scan_result final {
 public:
+    redis_hash_scan_result(const redis_hash_scan_result&) = default;
+    redis_hash_scan_result& operator=(const redis_hash_scan_result&) = default;
+    redis_hash_scan_result(redis_hash_scan_result&&) noexcept = default;
+    redis_hash_scan_result& operator=(redis_hash_scan_result&& other);
+
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
     }
@@ -359,6 +374,11 @@ private:
 
 class redis_z_scan_result final {
 public:
+    redis_z_scan_result(const redis_z_scan_result&) = default;
+    redis_z_scan_result& operator=(const redis_z_scan_result&) = default;
+    redis_z_scan_result(redis_z_scan_result&&) noexcept = default;
+    redis_z_scan_result& operator=(redis_z_scan_result&& other);
+
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
     }
@@ -392,7 +412,7 @@ public:
     redis_stream_entry(redis_stream_entry&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_stream_entry& operator=(redis_stream_entry&&) = default;
+    redis_stream_entry& operator=(redis_stream_entry&& other);
 
     [[nodiscard]] std::string_view id() const& noexcept {
         return id_;
@@ -426,7 +446,7 @@ public:
     redis_stream_read_result(redis_stream_read_result&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_stream_read_result& operator=(redis_stream_read_result&&) = default;
+    redis_stream_read_result& operator=(redis_stream_read_result&& other);
 
     [[nodiscard]] std::string_view stream() const& noexcept {
         return stream_;
@@ -454,7 +474,7 @@ public:
     redis_x_read_group_result(const redis_x_read_group_result&) = default;
     redis_x_read_group_result& operator=(const redis_x_read_group_result&) = default;
     redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
-    redis_x_read_group_result& operator=(redis_x_read_group_result&&) = default;
+    redis_x_read_group_result& operator=(redis_x_read_group_result&& other);
 
     [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept {
         return streams_;
@@ -518,7 +538,7 @@ public:
     redis_value(redis_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_value& operator=(redis_value&&) = default;
+    redis_value& operator=(redis_value&& other);
 
     [[nodiscard]] kind_type kind() const noexcept;
     [[nodiscard]] bool null() const noexcept;

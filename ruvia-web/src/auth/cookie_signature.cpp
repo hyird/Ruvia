@@ -24,7 +24,8 @@ static_assert(cookie_signature_size == http_base64_encoded_size(hmac_sha256_size
 }  // namespace
 
 void write_cookie_signature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value) {
+    char* output, std::string_view secret, std::string_view name, std::string_view value,
+    std::pmr::memory_resource* resource) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
     }
@@ -47,14 +48,14 @@ void write_cookie_signature(
     };
     // Assemble lenPrefix||name||value for the one-shot HMAC. A stack arena keeps
     // signing a typical cookie allocation-free; an oversized name/value spills to
-    // the default upstream resource transparently.
+    // the request's recyclable pool.
     if (name.size() > std::numeric_limits<std::size_t>::max() - name_len_bytes.size() ||
         value.size() >
             std::numeric_limits<std::size_t>::max() - name_len_bytes.size() - name.size()) {
         throw std::length_error("signed cookie message is too large");
     }
     std::array<std::byte, 512> message_buffer;
-    std::pmr::monotonic_buffer_resource message_arena(message_buffer.data(), message_buffer.size());
+    std::pmr::monotonic_buffer_resource message_arena(message_buffer.data(), message_buffer.size(), resource);
     std::pmr::string message(&message_arena);
     const auto message_size = name_len_bytes.size() + name.size() + value.size();
     if (message_size > max_hmac_parameter_bytes) {

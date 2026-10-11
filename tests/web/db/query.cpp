@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/web/db/db_predicate.h"
@@ -589,14 +590,56 @@ RUVIA_TEST(db_predicate_public_overloads_cover_comparisons_membership_nulls_and_
     db_predicate owned = tagged_type::column<"id">() == 1;
     RUVIA_CHECK(!owned.empty());
     db_predicate moved = std::move(owned);
+    RUVIA_CHECK(owned.empty());
+    RUVIA_CHECK(owned.expression(query).empty());
     db_predicate reassigned;
     reassigned = std::move(moved);
+    RUVIA_CHECK(moved.empty());
+    RUVIA_CHECK(moved.expression(query).empty());
     RUVIA_CHECK(!reassigned.empty());
     db_predicate empty_and;
     db_predicate empty_or;
     RUVIA_CHECK(testing::throws_on([&] { (void)(std::move(empty_and) && (tagged_type::column<"id">() == 1)); }));
     RUVIA_CHECK(testing::throws_on([&] { (void)(std::move(empty_or) || (tagged_type::column<"id">() == 1)); }));
     RUVIA_CHECK(testing::throws_on([&] { (void)!std::move(empty); }));
+}
+
+RUVIA_TEST(db_predicate_moves_keep_expression_with_its_owner) {
+    test::counting_memory_resource resource;
+    struct default_resource_guard final {
+        std::pmr::memory_resource* previous_;
+        ~default_resource_guard() {
+            std::pmr::set_default_resource(previous_);
+        }
+    } guard{std::pmr::set_default_resource(&resource)};
+    {
+        auto source = entity_type::column<"name">() == std::string(200, 'x');
+        auto destination = entity_type::column<"id">() == 9;
+        {
+            db_predicate moved(std::move(source));
+            destination = std::move(moved);
+            RUVIA_CHECK(moved.empty());
+        }
+        {
+            db_query query;
+            query.from("device").where(destination.expression(query));
+            const auto statement = query.compile(db_driver::postgresql, &resource);
+            RUVIA_CHECK_EQ(statement.sql(), "SELECT * FROM \"device\" WHERE (\"device\".\"name\" = $1)");
+            RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+        }
+        destination = db_predicate{};
+        db_query query;
+        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK(source.expression(query).empty());
+        RUVIA_CHECK(testing::throws_on([&] { (void)!std::move(source); }));
+        source = entity_type::column<"id">() == 1;
+        query.from("device").where(source.expression(query));
+        const auto statement = query.compile(db_driver::postgresql, &resource);
+        RUVIA_CHECK_EQ(statement.sql(),
+            "SELECT * FROM \"device\" WHERE (\"device\".\"id\" = $1)");
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 RUVIA_TEST(db_query_clause_source_and_join_methods_cover_state_and_dialect_rules) {

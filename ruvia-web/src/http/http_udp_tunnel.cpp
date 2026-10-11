@@ -9,7 +9,7 @@ scoped_operation<std::optional<http_udp_datagram>> http_udp_tunnel::read() & {
     if (!state_value) {
         throw std::logic_error("UDP tunnel is empty");
     }
-    state_value->require(false);
+    state_value->require();
     return ::ruvia::make_scoped_operation(state_value->read_scope_, read_owned(detail::capsule_state_pin(*state_value)));
 }
 task<std::optional<http_udp_datagram>> http_udp_tunnel::read_owned(detail::capsule_state_pin pin) {

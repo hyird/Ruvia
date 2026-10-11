@@ -271,7 +271,6 @@ task<void> http_client_pool::execute_request_into(
         state_value->connection_index_ = tcp_connection->index();
         co_await execute_tcp(*tcp_connection, request, timeout, options.stop_token_, *state_value,
             discard_connection);
-        policy_.retain_response_cookies(request, state_value->headers_);
         --requests_in_flight_;
         ++completed_requests_;
     } catch (...) {

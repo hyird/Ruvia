@@ -10,6 +10,7 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/worker_group.h"
 
 #include "first_failure.h"
 #include "worker_stop_chain.h"
@@ -33,12 +34,59 @@ public:
     [[nodiscard]] bool record_failure(std::exception_ptr failure, bool observed) noexcept {
         {
             const std::lock_guard lock(mutex_);
-            if (!failure_.record(std::move(failure), observed)) {
+            if (!failure_.record(failure, observed)) {
                 return false;
             }
         }
+        // Publish the cause before stopping another member wakes a group phase
+        // waiter. The user's failure hook remains a separate notification.
+        notify_group(std::move(failure));
         phase_changed_.notify_all();
         return true;
+    }
+
+    void bind_group(worker_group& group, worker_runtime& member) {
+        const std::lock_guard lock(mutex_);
+        if (group_ != nullptr || group_notifications_ != 0 || failure_.failed() ||
+            lifecycle_.state() != runtime_lifecycle::state_type::ready) {
+            throw std::logic_error("worker group member must be cold and belong to one group");
+        }
+        group_ = &group;
+        group_member_ = &member;
+    }
+
+    void unbind_group(worker_group& group) noexcept {
+        std::unique_lock lock(mutex_);
+        if (group_ != &group) {
+            std::terminate();
+        }
+        group_ = nullptr;
+        group_member_ = nullptr;
+        condition_.wait(lock, [this] { return group_notifications_ == 0; });
+    }
+
+    void notify_group(std::exception_ptr failure = {}) noexcept {
+        worker_group* group = nullptr;
+        worker_runtime* member = nullptr;
+        {
+            const std::lock_guard lock(mutex_);
+            group = group_;
+            if (group == nullptr) {
+                return;
+            }
+            member = group_member_;
+            ++group_notifications_;
+        }
+        // Group stop may reenter this runtime or notify other members. Keep no
+        // runtime lock across it, and retire the observation before user hooks.
+        if (failure) {
+            group->member_failed(*member, std::move(failure));
+        } else {
+            group->member_stopping();
+        }
+        const std::lock_guard lock(mutex_);
+        --group_notifications_;
+        condition_.notify_all();
     }
 
     bool fail(std::exception_ptr failure) noexcept {
@@ -153,12 +201,9 @@ public:
         phase_changed_.notify_all();
     }
 
-    // Returns whether the owner thread had launched when phases closed.
-    bool abort_phases() noexcept {
-        bool launched = false;
+    void abort_phases() noexcept {
         {
             const std::lock_guard lock(mutex_);
-            launched = started_;
             if (ready_ == phase_type::pending) {
                 ready_ = phase_type::aborted;
             }
@@ -167,14 +212,34 @@ public:
             }
         }
         phase_changed_.notify_all();
-        return launched;
     }
 
     void request_stop() noexcept {
-        if (!lifecycle_.request_stop()) {
+        bool dispatch = false;
+        bool launched = false;
+        {
+            const std::lock_guard lock(mutex_);
+            dispatch = lifecycle_.request_stop();
+            if (dispatch) {
+                stop_dispatching_ = true;
+                stop_dispatch_thread_ = std::this_thread::get_id();
+                launched = started_;
+            }
+        }
+        if (dispatch) {
+            // Publish independent stop before shutdown listeners or abandon
+            // can reenter group stop. Its self-stop recursion closes admission
+            // through the same nonwaiting path as every other repeat caller.
+            notify_group();
+        }
+        // Losing the lifecycle transition does not imply its winner has
+        // closed admission yet: it may still be notifying a group or running
+        // a cold abandon hook. Every caller establishes the closed gate.
+        context_.close();
+        if (!dispatch) {
             return;
         }
-        if (!abort_phases() && hooks_.abandon_) {
+        if (!launched && hooks_.abandon_) {
             try {
                 hooks_.abandon_();
             } catch (...) {
@@ -182,6 +247,11 @@ public:
             }
         }
         stop_.request_stop();
+        abort_phases();
+        const std::lock_guard lock(mutex_);
+        stop_dispatching_ = false;
+        stop_dispatch_thread_ = {};
+        condition_.notify_all();
     }
 
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
@@ -217,7 +287,7 @@ public:
         // post factories own their stable endpoint, not this execution context.
         context_.detach();
         (void)lifecycle_.request_stop();
-        (void)abort_phases();
+        abort_phases();
         lifecycle_.complete_stop();
     }
 
@@ -233,7 +303,13 @@ public:
             if (thread_.joinable() && thread_.get_id() == std::this_thread::get_id()) {
                 throw std::logic_error("cannot join a worker runtime from its owner");
             }
-            condition_.wait(lock, [this] { return !joining_; });
+            if (stop_dispatching_ && stop_dispatch_thread_ == std::this_thread::get_id()) {
+                throw std::logic_error("cannot join a worker runtime while dispatching its stop hooks");
+            }
+            // A separate stop caller can still be releasing staged cold state.
+            // Do not establish an owner and drain its work until that dispatch
+            // has finished, even when our request_stop() lost its transition.
+            condition_.wait(lock, [this] { return !joining_ && !stop_dispatching_; });
             if (joined_) {
                 return;
             }
@@ -280,8 +356,13 @@ public:
     bool serve_requested_{};
     bool configured_{};
     bool started_{};
+    bool stop_dispatching_{};
+    std::thread::id stop_dispatch_thread_{};
     bool joining_{};
     bool joined_{};
+    worker_group* group_{nullptr};
+    worker_runtime* group_member_{nullptr};
+    std::size_t group_notifications_{0};
 };
 
 void worker_runtime::impl_deleter::operator()(impl* value) const noexcept {
@@ -306,6 +387,14 @@ worker_runtime::~worker_runtime() {
 
 void worker_runtime::configure(worker_runtime_hooks hooks) {
     impl_->configure(std::move(hooks));
+}
+
+void worker_runtime::bind_group(worker_group& group) {
+    impl_->bind_group(group, *this);
+}
+
+void worker_runtime::unbind_group(worker_group& group) noexcept {
+    impl_->unbind_group(group);
 }
 
 void worker_runtime::start() {

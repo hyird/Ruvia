@@ -7,9 +7,13 @@
 #include <future>
 #include <memory>
 #include <memory_resource>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
@@ -27,6 +31,7 @@
 #include <openssl/x509.h>
 
 #include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_handshake.h"
@@ -35,6 +40,34 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 #include "test_tls_crypto.h"
+
+namespace websocket_client_test {
+
+template <typename value_type>
+ruvia::task<bool> rejects_running_operation(ruvia::scoped_operation<value_type>&& operation,
+    std::string_view message) {
+    try {
+        static_cast<void>(co_await std::move(operation));
+    } catch (const ruvia::websocket_client_error& error) {
+        co_return error.code() == ruvia::websocket_client_error::code_type::invalid_state&& std::string_view(error.what()) == message;
+    }
+    co_return false;
+}
+
+ruvia::task<void> await_output(ruvia::scoped_operation<void>&& operation) {
+    co_await std::move(operation);
+}
+
+ruvia::task<void> receive_payload(ruvia::scoped_operation<std::optional<ruvia::websocket_message>>&& operation,
+    std::string& payload) {
+    const auto message = co_await std::move(operation);
+    if (!message) {
+        throw std::runtime_error("WebSocket client message expected");
+    }
+    payload.assign(message->payload());
+}
+
+}  // namespace websocket_client_test
 
 namespace {
 
@@ -121,7 +154,21 @@ void check_peer_exchange(ruvia::testing::test_context& ruvia_ctx, bool reply_clo
                 if (greeting) {
                     RUVIA_CHECK_EQ(greeting->payload(), std::string_view("hello"));
                 }
-                co_await client.handle().close({});
+                if (reply_close) {
+                    auto close_operation = client.handle().close({});
+                    ruvia::task_scope closing(client.worker());
+                    closing.spawn(websocket_client_test::await_output(std::move(close_operation)));
+                    const bool read_rejected = co_await websocket_client_test::rejects_running_operation(
+                        client.handle().read(), "concurrent WebSocket client reads are not supported");
+                    const bool write_rejected = co_await websocket_client_test::rejects_running_operation(
+                        client.handle().text("overlap"), "concurrent WebSocket client writes are not supported");
+                    const bool close_rejected = co_await websocket_client_test::rejects_running_operation(
+                        client.handle().close({}), "WebSocket client close cannot overlap read");
+                    co_await closing.join();
+                    RUVIA_CHECK(read_rejected && write_rejected && close_rejected);
+                } else {
+                    co_await client.handle().close({});
+                }
                 succeeded = true;
             }
         } catch (const ruvia::websocket_client_error& error) {
@@ -209,48 +256,63 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
             auto cold = client.connect();
         }
         co_await client.connect();
-        const auto rejects_claim = [&](auto&& make_operation, std::string_view message) {
-            bool rejected = false;
-            try {
-                auto overlap = make_operation();
-            } catch (const ruvia::websocket_client_error& error) {
-                rejected = error.code() == ruvia::websocket_client_error::code_type::invalid_state &&
-                           std::string_view(error.what()) == message;
-            }
-            RUVIA_CHECK(rejected);
-        };
+        auto handle = client.handle();
         {
-            auto writing = client.handle().text("discarded");
-            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
-            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap write");
-            // A failed close must release its earlier read claim without releasing the live write.
-            auto independent_read = client.handle().read();
-            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            auto first_write = handle.text("discarded");
+            auto second_write = handle.binary("discarded");
+            auto first_read = handle.read();
+            auto second_read = handle.read();
+            auto first_close = handle.close({});
+            auto second_close = handle.close({});
+            auto ping = handle.ping("discarded");
+            auto pong = handle.pong("discarded");
         }
+
+        std::string mutable_payload = payload_value;
+        auto first = handle.text(mutable_payload);
+        auto second = handle.text(std::string(payload_value), {.compress_ = false});
+        mutable_payload.assign("changed before starting the write");
+        auto first_read = handle.read();
+        auto second_read = handle.read();
+        std::string first_payload;
         {
-            auto reading = client.handle().read();
-            rejects_claim([&] { return client.handle().read(); }, "concurrent WebSocket client reads are not supported");
-            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap read");
-            auto independent_write = client.handle().text("discarded");
+            ruvia::task_scope writing(client.worker());
+            writing.spawn(websocket_client_test::await_output(std::move(first)));
+            const bool write_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.text("overlap"), "concurrent WebSocket client writes are not supported");
+            const bool close_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.close({}), "WebSocket client close cannot overlap write");
+            // A failed close releases its read claim and leaves the running write claimed.
+            const bool write_still_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.text("overlap"), "concurrent WebSocket client writes are not supported");
+            ruvia::task_scope reading(client.worker());
+            reading.spawn(websocket_client_test::receive_payload(std::move(first_read), first_payload));
+            const bool read_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.read(), "concurrent WebSocket client reads are not supported");
+            const bool close_during_read_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.close({}), "WebSocket client close cannot overlap read");
+            co_await writing.join();
+            co_await reading.join();
+            RUVIA_CHECK(write_rejected && close_rejected && write_still_rejected && read_rejected &&
+                        close_during_read_rejected);
         }
-        {
-            auto closing = client.handle().close({});
-            rejects_claim([&] { return client.handle().read(); }, "concurrent WebSocket client reads are not supported");
-            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
-            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap read");
+        RUVIA_CHECK_EQ(first_payload, payload_value);
+        co_await std::move(second);
+        const auto second_message = co_await std::move(second_read);
+        RUVIA_CHECK(second_message.has_value());
+        if (second_message) {
+            RUVIA_CHECK_EQ(second_message->payload(), payload_value);
         }
-        {
-            auto reclaimed = client.handle().close({});
-        }
-        for (unsigned i = 0; i < 4; ++i) {
-            {
-                auto cold = client.handle().text("discarded");
-            }
-            // The payload is borrowed until the cold operation completes.
-            const std::string source_value = payload_value;
-            auto operation = client.handle().text(source_value, {.compress_ = i != 1});
+        for (unsigned i = 2; i < 4; ++i) {
+            auto operation = [&] {
+                const std::string source = payload_value;
+                if (i == 2) {
+                    return handle.text(source);
+                }
+                return handle.binary(source);
+            }();
             co_await std::move(operation);
-            const auto message = co_await client.handle().read();
+            const auto message = co_await handle.read();
             RUVIA_CHECK(message.has_value());
             if (message) {
                 RUVIA_CHECK_EQ(message->payload(), payload_value);

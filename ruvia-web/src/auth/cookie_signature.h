@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory_resource>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -13,8 +14,9 @@ inline constexpr std::size_t cookie_signature_size = 44;
 // for one cookie is not a valid signature for another under the same secret.
 // Throws std::invalid_argument on an empty secret and std::length_error when
 // the secret or length-framed message cannot be represented by OpenSSL's HMAC
-// length parameters.
+// length parameters. Temporary message storage uses the caller's resource.
 void write_cookie_signature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value);
+    char* output, std::string_view secret, std::string_view name, std::string_view value,
+    std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

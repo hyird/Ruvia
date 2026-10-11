@@ -22,6 +22,21 @@ RUVIA_TEST(http_connect_udp_default_template_roundtrip_and_target_rejection) {
     RUVIA_CHECK((ruvia::parse_http_connect_udp_path("/.well-known/masque/udp/2001:db8::42/443/").index() != 0));
     RUVIA_CHECK((ruvia::parse_http_connect_udp_path("/.well-known/masque/udp/host/65536/").index() != 0));
 }
+RUVIA_TEST(http_connect_udp_default_template_requires_target_segments) {
+    constexpr std::string_view prefix = "/.well-known/masque/udp/";
+    for (std::size_t size = 0; size <= prefix.size(); ++size) {
+        const auto parsed_value = ruvia::parse_http_connect_udp_path(prefix.substr(0, size));
+        RUVIA_CHECK(std::get_if<ruvia::http_connect_udp_error>(&parsed_value) != nullptr);
+        if (const auto* error = std::get_if<ruvia::http_connect_udp_error>(&parsed_value)) {
+            RUVIA_CHECK(*error == ruvia::http_connect_udp_error::invalid_path);
+        }
+    }
+    for (const auto path : {"/.well-known/masque/udp//", "/.well-known/masque/udp/host/",
+             "/.well-known/masque/udp/host/443", "/.well-known/masque/udp/host/443/extra/"}) {
+        const auto parsed_value = ruvia::parse_http_connect_udp_path(path);
+        RUVIA_CHECK(std::get_if<ruvia::http_connect_udp_error>(&parsed_value) != nullptr);
+    }
+}
 RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const std::array fields{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"},
         ruvia::http_header_view{"Upgrade", "connect-udp"}, ruvia::http_header_view{"Capsule-Protocol", "?1;version=1"}};

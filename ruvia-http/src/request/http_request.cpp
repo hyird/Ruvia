@@ -51,6 +51,8 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     }
     const auto last_cookie =
         detail::request_known_header(*this, detail::request_header_kind::cookie);
+    const auto last_cookie_index =
+        cached_headers_[detail::request_header_kind_known_slot(detail::request_header_kind::cookie)];
     if (auto value = detail::http_find_semicolon_parameter(last_cookie, name)) {
         return value;
     }
@@ -59,7 +61,7 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
         const auto header_value = headers_[index];
         if (headers_.kind_at(index) !=
                 static_cast<std::uint8_t>(detail::request_header_kind::cookie) ||
-            header_value.value().data() == last_cookie.data()) {
+            i == last_cookie_index) {
             continue;
         }
         if (auto value = detail::http_find_semicolon_parameter(header_value.value(), name)) {

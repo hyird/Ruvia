@@ -240,7 +240,10 @@ public:
 
     http_response_body(const http_response_body&) = delete;
     http_response_body& operator=(const http_response_body&) = delete;
-    http_response_body(http_response_body&&) = default;
+    http_response_body(http_response_body&& other) noexcept
+        : value_(std::move(other.value_)) {
+        other.set_empty();
+    }
     http_response_body& operator=(http_response_body&&) = delete;
 
     [[nodiscard]] const http_empty_response_body* empty() const& noexcept {
@@ -327,6 +330,7 @@ private:
         std::variant<http_empty_response_body, http_borrowed_response_bytes, http_static_response_bytes,
             http_owned_response_bytes, http_owned_response_file, http_borrowed_response_file,
             http_multipart_response_body>;
+    static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
     void set_empty() noexcept {
         value_.emplace<http_empty_response_body>(http_empty_response_body{});

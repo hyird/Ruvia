@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string_view>
 
+#include "ruvia/web/detail/model/pattern/pattern_class.h"
 #include "ruvia/web/detail/model/pattern/pattern_compiler.h"
 
 namespace ruvia::detail::model {
@@ -12,16 +14,20 @@ namespace ruvia::detail::model {
 // while matching a character class. Exhaustion fails the match closed.
 inline constexpr std::size_t max_pattern_match_steps = 1'000'000;
 
-[[nodiscard]] constexpr bool match_pattern_escape(char escape, char value) noexcept {
-    switch (escape) {
-        case 'd':
+[[nodiscard]] constexpr bool match_pattern_class_member(const pattern_class_member& member, char value) noexcept {
+    switch (member.kind_) {
+        case pattern_atom_kind::literal: {
+            const auto byte = static_cast<unsigned char>(value);
+            return byte >= member.first_ && byte <= member.last_;
+        }
+        case pattern_atom_kind::digit:
             return is_pattern_digit(value);
-        case 'w':
+        case pattern_atom_kind::word:
             return is_pattern_word(value);
-        case 's':
+        case pattern_atom_kind::space:
             return is_pattern_space(value);
         default:
-            return value == escape;
+            return false;
     }
 }
 
@@ -30,52 +36,23 @@ inline constexpr std::size_t max_pattern_match_steps = 1'000'000;
 // negate_class_ flag (applied once in match_pattern_atom). Treating a leading '^' as
 // negation here as well would double-negate a class whose first literal member is
 // itself a caret (e.g. "[^^]"), so any '^' in the body is an ordinary member.
-[[nodiscard]] constexpr bool match_pattern_class(std::string_view pattern, std::size_t begin,
+// A failed decode or exhausted budget is distinct from a nonmatching class and
+// must never become a successful match when the class is negated.
+[[nodiscard]] constexpr std::optional<bool> match_pattern_class(std::string_view pattern, std::size_t begin,
     std::size_t end, char value, std::size_t& budget) noexcept {
     bool matched = false;
-    for (std::size_t i = begin; i < end;) {
-        if (budget == 0) {
-            return false;
+    for (std::size_t cursor = begin; cursor < end;) {
+        const auto start = cursor;
+        pattern_class_member member;
+        if (!consume_pattern_class_member(pattern, end, cursor, member) || cursor - start > budget) {
+            budget = 0;
+            return std::nullopt;
         }
-        --budget;
-        char first = pattern[i++];
-        if (first == '\\') {
-            if (i >= end || budget == 0) {
-                return false;
-            }
-            --budget;
-            // The class-member escape shares the atom escape semantics
-            // (\d, \w, \s, or a literal) -- one owner, match_pattern_escape.
-            matched = matched || match_pattern_escape(pattern[i++], value);
-            continue;
-        }
-
-        if (i + 1 < end && pattern[i] == '-') {
-            if (budget < 2) {
-                return false;
-            }
-            budget -= 2;
-            char last = pattern[i + 1];
-            if (last == '\\' || first > last) {
-                return false;
-            }
-            matched = matched || (value >= first && value <= last);
-            i += 2;
-            continue;
-        }
-
-        matched = matched || value == first;
+        budget -= cursor - start;
+        matched = matched || match_pattern_class_member(member, value);
     }
 
     return matched;
-}
-
-// Keep the helper's direct test/use form; the matcher itself always supplies its
-// shared budget through the overload above.
-[[nodiscard]] constexpr bool match_pattern_class(
-    std::string_view pattern, std::size_t begin, std::size_t end, char value) noexcept {
-    std::size_t budget = max_pattern_match_steps;
-    return match_pattern_class(pattern, begin, end, value, budget);
 }
 
 [[nodiscard]] constexpr bool match_pattern_atom(std::string_view pattern,
@@ -92,9 +69,12 @@ inline constexpr std::size_t max_pattern_match_steps = 1'000'000;
         case pattern_atom_kind::space:
             return is_pattern_space(value);
         case pattern_atom_kind::class_value: {
-            const bool matched = match_pattern_class(
+            const auto matched = match_pattern_class(
                 pattern, atom.class_begin_, atom.class_end_, value, budget);
-            return atom.negate_class_ ? !matched : matched;
+            if (!matched) {
+                return false;
+            }
+            return atom.negate_class_ ? !*matched : *matched;
         }
     }
     return false;

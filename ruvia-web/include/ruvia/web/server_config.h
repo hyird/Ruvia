@@ -77,6 +77,8 @@ struct server_config final {
 };
 
 struct trusted_proxy_config final {
+    // CIDR lengths count bits in the literal's address family. For example,
+    // 127.0.0.0/8 and ::ffff:127.0.0.0/104 describe the same mapped network.
     std::vector<std::string> cidrs_{};
     // Enable only when every trusted proxy sanitizes and appends matching
     // X-Forwarded-For / X-Forwarded-Proto elements.

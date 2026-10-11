@@ -11,6 +11,7 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 struct http_client_upload_end_input final {
@@ -26,9 +27,6 @@ void require_writable(detail::http_client_response_state& state_value) {
     }
     if (!state_value.upload_ || state_value.upload_->output_.stopped_ || state_value.upload_->output_.ended_ || state_value.upload_->output_.end_requested_) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP request upload is no longer writable");
-    }
-    if (state_value.upload_->output_.output_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP request upload operation is already active");
     }
 }
 struct upload_output_policy final {
@@ -143,13 +141,14 @@ scoped_operation<http_client_response> http_client_exchange::response() & {
     if (auto* domain = state_value->memory_domain(); domain != nullptr && !domain->worker().is_current()) {
         throw std::logic_error("HTTP exchange must run on its owner worker");
     }
-    if (state_value->upload_->response_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP exchange response operation is already active");
-    }
     return ::ruvia::make_scoped_operation(state_value->upload_->response_scope_, receive_owned(http_client_response(state_value, true)));
 }
 task<http_client_response> http_client_exchange::receive_owned(http_client_response pin) {
     auto& state_value = *pin.state_;
+    auto activity = detail::claim_operation_lane(state_value.upload_->response_active_, "HTTP exchange response operation is already active");
+    if (state_value.upload_->response_taken_) {
+        throw std::logic_error("HTTP exchange response has already been transferred");
+    }
     while (!state_value.head_ready_ && !state_value.failure_ && !state_value.error_code_) {
         co_await state_value.head_signal_.wait();
     }

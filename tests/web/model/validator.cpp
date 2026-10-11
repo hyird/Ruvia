@@ -52,6 +52,44 @@ RUVIA_MODEL(precise_numeric_bounds,
     RUVIA_OPTIONAL_FIELD(exact_minimum, ruvia::double_value,
         RUVIA_MIN(9007199254740993LL, "too small")));
 
+RUVIA_MODEL(character_class_rules,
+    RUVIA_OPTIONAL_FIELD(pattern_lower, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[\--0]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_lower, ruvia::string, RUVIA_REGEX("invalid class", R"(^[\--0]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_not_lower, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[^\--0]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_not_lower, ruvia::string, RUVIA_REGEX("invalid class", R"(^[^\--0]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[a-\z]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[a-\z]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_not_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[^a-\z]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_not_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[^a-\z]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_digits, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[\d]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_digits, ruvia::string, RUVIA_REGEX("invalid class", R"(^[\d]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_tail, ruvia::string, RUVIA_PATTERN("invalid class", "^[a-]$")),
+    RUVIA_OPTIONAL_FIELD(regex_tail, ruvia::string, RUVIA_REGEX("invalid class", "^[a-]$")),
+    RUVIA_OPTIONAL_FIELD(pattern_escaped_dash, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[a\-z]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_escaped_dash, ruvia::string, RUVIA_REGEX("invalid class", R"(^[a\-z]$)")));
+
+inline constexpr auto budget_class_pattern = ruvia::fixed_string{"^[^aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]*$"};
+
+RUVIA_MODEL(bounded_character_class_rules,
+    RUVIA_REQUIRED_FIELD(value, ruvia::string,
+        RUVIA_PATTERN("pattern match limit exceeded", budget_class_pattern),
+        RUVIA_REGEX("regex match limit exceeded", budget_class_pattern)));
+
+template <ruvia::fixed_string field_name>
+void check_character_class_rule(ruvia::testing::test_context& ruvia_ctx, std::string_view value, bool matches, std::string_view code) {
+    character_class_rules model;
+    model.set<field_name>(value);
+    validator result;
+    ruvia::json_body<character_class_rules> rules;
+    rules.validate(model, result);
+    RUVIA_CHECK_EQ(result.ok(), matches);
+    RUVIA_CHECK_EQ(result.issues().size(), matches ? std::size_t{0} : std::size_t{1});
+    if (!result.issues().empty()) {
+        RUVIA_CHECK_EQ(result.issues()[0].field(), field_name.view());
+        RUVIA_CHECK_EQ(result.issues()[0].code(), code);
+    }
+}
+
 [[nodiscard]] std::exception_ptr capture_validation_exception(std::pmr::memory_resource* resource) {
     validator validator_value({.resource_ = resource});
     validator_value.add(std::string(128, 'f'), "required", std::string(256, 'm'));
@@ -302,6 +340,73 @@ RUVIA_TEST(model_numeric_rules_compare_float_fields_and_integer_bounds_exactly) 
         }
         RUVIA_CHECK_EQ(result.issues()[0].code(), std::string_view(code));
     }
+}
+
+RUVIA_TEST(model_pattern_rules_match_escaped_character_ranges) {
+    for (const auto& [value, matches] : {
+             std::pair{"-", true}, std::pair{".", true}, std::pair{"/", true}, std::pair{"0", true},
+             std::pair{",", false}, std::pair{"1", false}, std::pair{"a", false}}) {
+        check_character_class_rule<"pattern_lower">(ruvia_ctx, value, matches, "pattern");
+        check_character_class_rule<"regex_lower">(ruvia_ctx, value, matches, "regex");
+        check_character_class_rule<"pattern_not_lower">(ruvia_ctx, value, !matches, "pattern");
+        check_character_class_rule<"regex_not_lower">(ruvia_ctx, value, !matches, "regex");
+    }
+    for (const auto& [value, matches] : {
+             std::pair{"a", true}, std::pair{"b", true}, std::pair{"m", true}, std::pair{"z", true},
+             std::pair{"`", false}, std::pair{"{", false}, std::pair{"0", false}}) {
+        check_character_class_rule<"pattern_upper">(ruvia_ctx, value, matches, "pattern");
+        check_character_class_rule<"regex_upper">(ruvia_ctx, value, matches, "regex");
+        check_character_class_rule<"pattern_not_upper">(ruvia_ctx, value, !matches, "pattern");
+        check_character_class_rule<"regex_not_upper">(ruvia_ctx, value, !matches, "regex");
+    }
+}
+
+RUVIA_TEST(model_pattern_rules_preserve_class_escapes_and_literal_hyphens) {
+    for (const auto& [value, matches] : {
+             std::pair{"0", true}, std::pair{"9", true}, std::pair{"d", false}, std::pair{"a", false},
+             std::pair{"-", false}, std::pair{"00", false}}) {
+        check_character_class_rule<"pattern_digits">(ruvia_ctx, value, matches, "pattern");
+        check_character_class_rule<"regex_digits">(ruvia_ctx, value, matches, "regex");
+    }
+    for (const auto& [value, matches] : {
+             std::pair{"a", true}, std::pair{"-", true}, std::pair{"b", false}, std::pair{"z", false}}) {
+        check_character_class_rule<"pattern_tail">(ruvia_ctx, value, matches, "pattern");
+        check_character_class_rule<"regex_tail">(ruvia_ctx, value, matches, "regex");
+    }
+    for (const auto& [value, matches] : {
+             std::pair{"a", true}, std::pair{"-", true}, std::pair{"z", true}, std::pair{"m", false}}) {
+        check_character_class_rule<"pattern_escaped_dash">(ruvia_ctx, value, matches, "pattern");
+        check_character_class_rule<"regex_escaped_dash">(ruvia_ctx, value, matches, "regex");
+    }
+}
+
+RUVIA_TEST(model_pattern_rules_bound_negated_class_matching_work) {
+    bounded_character_class_rules model;
+    ruvia::json_body<bounded_character_class_rules> rules;
+    model.set<"value">("bbbb");
+    validator short_result;
+    rules.validate(model, short_result);
+    RUVIA_CHECK(short_result.ok());
+
+    // This input is within RUVIA_REGEX's byte limit, but inspecting all 250
+    // repeated members per byte exceeds the shared matching work limit.
+    model.set<"value">(std::string(4096, 'b'));
+    validator long_result;
+    rules.validate(model, long_result);
+    RUVIA_CHECK_EQ(long_result.issues().size(), std::size_t{2});
+    if (long_result.issues().size() == 2) {
+        RUVIA_CHECK_EQ(long_result.issues()[0].field(), std::string_view("value"));
+        RUVIA_CHECK_EQ(long_result.issues()[0].code(), std::string_view("pattern"));
+        RUVIA_CHECK_EQ(long_result.issues()[0].message(), std::string_view("pattern match limit exceeded"));
+        RUVIA_CHECK_EQ(long_result.issues()[1].field(), std::string_view("value"));
+        RUVIA_CHECK_EQ(long_result.issues()[1].code(), std::string_view("regex"));
+        RUVIA_CHECK_EQ(long_result.issues()[1].message(), std::string_view("regex match limit exceeded"));
+    }
+
+    model.set<"value">("b");
+    validator repeated_result;
+    rules.validate(model, repeated_result);
+    RUVIA_CHECK(repeated_result.ok());
 }
 
 RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {

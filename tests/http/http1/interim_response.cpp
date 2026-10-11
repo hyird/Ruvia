@@ -104,6 +104,29 @@ RUVIA_TEST(http1_interim_response_writer_buffer_too_small_is_transactional) {
     RUVIA_CHECK(std::ranges::all_of(buffer, [](char value) { return value == '#'; }));
 }
 
+RUVIA_TEST(http1_interim_response_writer_preserves_fields_borrowed_from_output) {
+    constexpr std::string_view expected = "HTTP/1.1 103 Early Hints\r\nX-Hint: warm\r\nX-Next: ready\r\n\r\n";
+    for (const std::size_t offset : {std::size_t{0}, std::size_t{24}, std::size_t{32}}) {
+        std::array<char, 128> buffer;
+        buffer.fill('#');
+        constexpr std::string_view borrowed = "X-HintwarmX-Nextready";
+        std::ranges::copy(borrowed, buffer.begin() + offset);
+        const auto input = std::string_view(buffer.data() + offset, borrowed.size());
+        const std::array fields_value{
+            http_header_view(input.substr(0, 6), input.substr(6, 4)),
+            http_header_view(input.substr(10, 6), input.substr(16, 5)),
+        };
+        const auto result_value = http1_interim_response_writer().prepare(
+            http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
+        RUVIA_CHECK(result_value.prepared() != nullptr);
+        if (const auto* prepared = result_value.prepared()) {
+            RUVIA_CHECK_EQ(prepared->head(), expected);
+            RUVIA_CHECK_EQ(prepared->head().data(), buffer.data());
+            RUVIA_CHECK_EQ(buffer[expected.size()], '#');
+        }
+    }
+}
+
 RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally) {
     const auto rejects = [&](std::span<const http_header_view> fields_value,
                              http1_interim_response_prepare_error expected) {

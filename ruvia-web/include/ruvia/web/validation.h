@@ -248,6 +248,13 @@ private:
 #define RUVIA_ONE_OF(message, ...) \
     ::ruvia::detail::model::one_of<::ruvia::fixed_string{message}, __VA_ARGS__>
 #define RUVIA_EMAIL(message) ::ruvia::detail::model::email<::ruvia::fixed_string{message}>
+// Both pattern rules use anchored (^...$) byte patterns: literals, '.', positive
+// or negative character classes, literal ranges, \d/\w/\s, and '*', '+', '?'.
+// Escaped literals may be range endpoints; descending ranges and range endpoints
+// such as \d are rejected at compile time. A trailing class '-' is a literal.
+// Patterns are limited to 256 bytes and bounded matching work; RUVIA_REGEX also
+// limits input to 4096 bytes. Exceeding a match limit fails validation. Use
+// RUVIA_CUSTOM for matching syntax outside this dialect.
 #define RUVIA_PATTERN(message, pattern) \
     ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
 #define RUVIA_REGEX(message, pattern) \

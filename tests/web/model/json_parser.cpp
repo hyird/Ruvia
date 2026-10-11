@@ -36,6 +36,23 @@ RUVIA_TEST(model_public_parsers_own_string_fields) {
     RUVIA_CHECK_EQ(form->get<"message">()->view(), std::string_view("form-owned"));
 }
 
+RUVIA_TEST(model_form_parser_validates_encoding_in_unknown_fields) {
+    for (const auto invalid : {"%", "%G0", "%0G"}) {
+        for (const auto& body : {
+                 std::string("message=ready&unknown=") + invalid,
+                 std::string("unknown=") + invalid + "&message=ready",
+                 std::string("message=ready&") + invalid + "=ignored"}) {
+            RUVIA_CHECK(!ruvia::from_form<accessor_surface_request>(body).has_value());
+        }
+    }
+    const auto valid = ruvia::from_form<accessor_surface_request>(
+        "message=hello+world&unknown=%00%26%3D%FF&%75nknown=value");
+    RUVIA_CHECK(valid.has_value());
+    if (valid && valid->get<"message">()) {
+        RUVIA_CHECK_EQ(valid->get<"message">()->view(), std::string_view("hello world"));
+    }
+}
+
 RUVIA_TEST(model_json_parser_rejects_invalid_field_types) {
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(!ruvia::from_json<nested_model_item>(

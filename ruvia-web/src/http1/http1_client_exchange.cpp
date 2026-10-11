@@ -215,6 +215,9 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         for (const auto& header : parsed_value->head().headers()) {
             state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), response_resource));
         }
+        // A received final head changes the jar before consumers can issue
+        // another request, regardless of body completion or abandonment.
+        pool_.policy().retain_response_cookies(request, state_value.headers_);
         read_buffer.erase(0, consumed_head);
         if (request.is_tunnel() && (parsed_value->plan().connect_tunnel() != nullptr ||
                                        (request.udp_tunnel() &&

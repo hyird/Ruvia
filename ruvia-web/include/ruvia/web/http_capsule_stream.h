@@ -55,6 +55,8 @@ private:
 // tunnel; client streams take tunnel ownership. Use this adapter exclusively:
 // do not interleave raw tunnel operations with capsule operations. Abort wakes
 // pending I/O; join started operations before destroying their scope owner.
+// Operations occupy their read or write/finish lane when started; unstarted
+// operations may coexist. One read and one output operation may run concurrently.
 class http_capsule_stream final {
 public:
     http_capsule_stream(const http_capsule_stream&) = delete;
@@ -64,9 +66,8 @@ public:
     ~http_capsule_stream();
     [[nodiscard]] scoped_operation<std::optional<http_capsule>> read() &;
     scoped_operation<std::optional<http_capsule>> read() && = delete;
-    // Owns input before returning its cold operation. One write/finish and one
-    // read may coexist. Unknown capsule types are delivered to the protocol
-    // consumer, which must ignore types it does not understand.
+    // Owns input before returning its cold operation. Unknown capsule types are
+    // delivered to the protocol consumer, which must ignore types it does not understand.
     [[nodiscard]] scoped_operation<void> write(std::uint64_t type, std::string_view payload) &;
     scoped_operation<void> write(std::uint64_t, std::string_view) && = delete;
     [[nodiscard]] scoped_operation<void> write(std::uint64_t type, std::span<const std::byte> payload) &;

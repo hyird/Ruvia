@@ -68,8 +68,8 @@ public:
         }
     }
 
-    /// Only one read operation may be outstanding. Creating another before
-    /// the current operation completes or is discarded throws std::logic_error.
+    /// Only one read operation may run at a time. Starting another before the
+    /// current operation completes throws std::logic_error. Unstarted operations may coexist.
     [[nodiscard]] scoped_operation<std::optional<websocket_message>> read() &;
     scoped_operation<std::optional<websocket_message>> read() && = delete;
 
@@ -148,7 +148,7 @@ public:
     scoped_operation<void> ping(std::pmr::string&& payload) &;
     scoped_operation<void> ping(std::pmr::string&&) && = delete;
 
-    /// Close cannot overlap a read, another close, or an output operation.
+    /// Started close cannot overlap a running read, close, or output operation.
     scoped_operation<void> close(websocket_close_options options = {}) &;
     scoped_operation<void> close(websocket_close_options = {}) && = delete;
     void abort() noexcept;

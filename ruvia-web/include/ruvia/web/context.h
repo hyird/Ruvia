@@ -142,6 +142,8 @@ public:
 
     // Sends a bodyless 1xx head before the final response. Fields are copied
     // before return; the operation and its storage retire on the owning worker.
+    // Output is linear when started. Unstarted operations may coexist and do not
+    // block the final response; starting one after the final head commits throws.
     [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
 
     ~context();

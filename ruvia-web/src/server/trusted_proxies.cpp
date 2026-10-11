@@ -35,7 +35,7 @@ struct mapped_address final {
         return mapped_address{mapped, true};
     }
     const auto bytes_value = address.to_v6().to_bytes();
-    return mapped_address{bytes_value, address.to_v6().is_v4_mapped()};
+    return mapped_address{bytes_value, false};
 }
 
 [[nodiscard]] bool contains_mapped_address(
@@ -66,8 +66,8 @@ std::variant<trusted_proxy_block, trusted_proxy_parse_error> parse_trusted_proxy
         return trusted_proxy_parse_error::invalid_address;
     }
 
-    // A prefix written for an IPv4 address counts IPv4 bits; shift it past the
-    // 96-bit mapping prefix so /8 means the same thing in both notations.
+    // Only an IPv4 literal counts IPv4 bits. IPv6 literals, including mapped
+    // addresses, count from the start of the full 128-bit address.
     const unsigned max_bits = std::get<0>(address).was_v4_ ? 32 : 128;
     unsigned bits = max_bits;
     if (slash != std::string_view::npos) {

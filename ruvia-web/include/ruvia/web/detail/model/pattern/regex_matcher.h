@@ -25,7 +25,7 @@ struct compiled_regex_plan final {
     static constexpr auto value = compile_pattern_plan<capacity>(pattern.view());
     static_assert(value.valid_,
         "RUVIA_REGEX supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
-        "General std::regex syntax is unsupported; use RUVIA_CUSTOM for other matching logic.");
+        "Ranges require ordered single-character endpoints. General std::regex syntax is unsupported; use RUVIA_CUSTOM for other matching logic.");
 };
 
 template <fixed_string pattern>

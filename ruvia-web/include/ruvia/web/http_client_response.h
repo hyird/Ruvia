@@ -33,7 +33,7 @@ public:
     http_client_response_body(http_client_response_body&&) = delete;
     http_client_response_body& operator=(http_client_response_body&&) = delete;
 
-    // The returned view remains valid until the next body operation. A null
+    // The returned view remains valid until the next body operation starts. A null
     // optional is the only end-of-body signal; an empty data chunk is never
     // returned. Reads are linear and concurrent operations are rejected.
     [[nodiscard]] scoped_operation<std::optional<std::span<const std::byte>>> read() &;
@@ -74,7 +74,7 @@ private:
 // Owns worker-affine response storage independently of its client transport.
 // May survive client shutdown/destruction on that worker, but must be destroyed
 // before the bound event_loop retires. Metadata views borrow this response;
-// body chunks remain valid until the next body operation.
+// body chunks remain valid until the next body operation starts.
 class http_client_response final {
 public:
     http_client_response(const http_client_response&) = delete;

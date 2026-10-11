@@ -50,6 +50,7 @@ public:
     bool completion_pending_{};
     bool ended_{};
     bool stopped_{};
+    bool operation_active_{};
     void* wake_target_{};
     void (*wake_)(void*) noexcept {};
     ::ruvia::operation_scope output_scope_;

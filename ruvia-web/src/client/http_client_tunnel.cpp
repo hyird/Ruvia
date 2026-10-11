@@ -28,13 +28,7 @@ void require_output(detail::http_client_response_state* state_value, bool finish
         state_value->abandoned_ || state_value->failure_ || state_value->error_code_) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel is closed");
     }
-    if (finishing && state_value->tunnel_->output_.ended_ && !state_value->tunnel_->output_.output_scope_.has_pending_operations()) {
-        return;
-    }
     auto& output = state_value->tunnel_->output_;
-    if (output.output_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP client tunnel output operation is already active");
-    }
     if (!finishing && (output.ended_ || output.end_requested_)) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel sending direction is closed");
     }

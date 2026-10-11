@@ -10,6 +10,8 @@
 
 namespace ruvia {
 
+class worker_group;
+
 enum class worker_io_policy { synchronized_value,
     single_owner };
 
@@ -69,6 +71,9 @@ public:
     [[nodiscard]] bool wait_until_ready();
     void request_serve();
     [[nodiscard]] bool wait_until_serving();
+    // Every call closes dispatcher admission before returning. The winning
+    // caller dispatches cold abandon once; repeated/reentrant calls do not wait
+    // for those hooks to finish.
     void request_stop() noexcept;
     // Records the first failure, wakes phase waiters, and requests stop. Only
     // the winning failure reaches the failure_ hook. Returns true for it.
@@ -84,6 +89,9 @@ public:
     // Establishes the thread barrier, including owner-affine draining when
     // stopped before start. Concurrent joins wait for the same barrier. This
     // does not rethrow run failures: inspect/rethrow them after all owners join.
+    // Waits for any external stop dispatch before draining a cold owner. Joining
+    // from its owner or from a thread currently dispatching its stop hooks
+    // throws logic_error instead of waiting on itself.
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
     void rethrow_failure() const;
@@ -93,6 +101,10 @@ public:
     worker_runtime_context& context() && = delete;
 
 private:
+    friend class worker_group;
+    void bind_group(worker_group& group);
+    void unbind_group(worker_group& group) noexcept;
+
     class impl;
     struct impl_deleter final {
         void operator()(impl* value) const noexcept;

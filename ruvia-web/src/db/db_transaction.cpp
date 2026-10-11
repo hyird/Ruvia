@@ -103,12 +103,12 @@ void db_transaction::expire_capability(void* target) noexcept {
 
 db_driver db_transaction::query_driver() const {
     registration_.require_active();
-    return detail::db_pool_driver(state_->operation_.active_payload().client_);
+    return detail::db_pool_driver(state_->operation_.preparation_payload().client_);
 }
 
 std::pmr::memory_resource* db_transaction::query_resource() const {
     registration_.require_active();
-    return state_->operation_.active_payload().resource_;
+    return state_->operation_.preparation_payload().resource_;
 }
 
 detail::db_query_backend db_transaction::query_backend(const lease_type& lease) const {
@@ -122,7 +122,7 @@ detail::db_query_backend db_transaction::query_backend(const lease_type& lease) 
 task<db_rows> db_transaction::query_task(const db_query& query) {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    const auto backend = query_backend(operation.lease());
+    const auto backend = query_backend(state_->operation_.preparation_payload());
     auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
     return query_plan_prepared<false>(std::move(plan), backend, std::move(operation));
 }
@@ -130,7 +130,7 @@ task<db_rows> db_transaction::query_task(const db_query& query) {
 task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_query& query, const db_query& count) {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    const auto backend = query_backend(operation.lease());
+    const auto backend = query_backend(state_->operation_.preparation_payload());
     auto plan = detail::db_query_plan::prepare(query, &count, backend);
     return query_plan_prepared<true>(std::move(plan), backend, std::move(operation));
 }
@@ -166,7 +166,7 @@ scoped_operation<db_rows> db_transaction::query(const db_query& query) & {
 scoped_operation<db_exec_result> db_transaction::execute(const db_query& query) & {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    const auto& lease_value = operation.lease();
+    const auto& lease_value = state_->operation_.preparation_payload();
     auto statement = query.compile(detail::db_pool_driver(lease_value.client_), lease_value.resource_);
     if (statement.returns_rows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
@@ -179,7 +179,7 @@ scoped_operation<db_rows> db_transaction::query(
     std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    auto statement = prepare_db_statement(sql, params, operation.lease().resource_);
+    auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     return ::ruvia::make_scoped_operation(registration_.scope(),
         query_prepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
 }
@@ -188,7 +188,7 @@ scoped_operation<db_exec_result> db_transaction::execute(
     std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    auto statement = prepare_db_statement(sql, params, operation.lease().resource_);
+    auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), execute_prepared(std::move(statement.sql_), std::move(statement.params_),
                                    std::move(operation)));

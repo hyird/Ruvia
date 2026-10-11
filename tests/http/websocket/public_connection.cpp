@@ -4,6 +4,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/http/websocket_connection.h"
@@ -32,10 +33,11 @@ public:
     std::size_t allocations_{0};
     std::size_t deallocations_{0};
     bool reject_{false};
+    std::size_t reject_min_bytes_{0};
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (reject_) {
+        if (reject_ && bytes_value >= reject_min_bytes_) {
             throw std::bad_alloc();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -200,6 +202,46 @@ RUVIA_TEST(ws_public_compression_rejects_incomplete_empty_block_headers) {
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
         RUVIA_CHECK(receiver.submit_frame(websocket_opcode::text, "after-error") == websocket_frame_submit_status::not_open);
+    }
+}
+
+RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connection) {
+    constexpr std::string_view wire("\xc1\x87\x00\x00\x00\x00\xf2\x48\xcd\xc9\xc9\x07\x00", 13);
+    for (const bool reject_window : {false, true}) {
+        counting_resource memory;
+        {
+            websocket_connection connection({.resource_ = &memory,
+                .compression_ = websocket_compression{.enabled_ = true}});
+            RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+            // zlib defers its raw-inflate window until the first message.
+            // Small protocol buffers remain available, so a queued Close cannot
+            // hide a window-allocation failure behind another allocation.
+            memory.reject_min_bytes_ = 32768;
+            memory.reject_ = reject_window;
+            bool allocation_failed = false;
+            try {
+                const auto event = connection.next_event();
+                RUVIA_CHECK(!reject_window);
+                RUVIA_CHECK(event && event->message());
+                if (event && event->message()) {
+                    RUVIA_CHECK_EQ(event->message()->payload(), "Hello");
+                }
+            } catch (const std::bad_alloc&) {
+                allocation_failed = true;
+            }
+            memory.reject_ = false;
+            RUVIA_CHECK_EQ(allocation_failed, reject_window);
+            if (reject_window) {
+                RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::inactive);
+                RUVIA_CHECK(connection.output_plan().bytes().empty());
+                RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::inactive);
+                RUVIA_CHECK(connection.submit_frame(websocket_opcode::text, "after-failure") == websocket_frame_submit_status::not_open);
+                const auto terminal = connection.next_event();
+                RUVIA_CHECK(terminal && terminal->kind() == websocket_event_kind::transport_end);
+            }
+        }
+        RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
+        RUVIA_CHECK_EQ(memory.allocations_, memory.deallocations_);
     }
 }
 

@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <mutex>
 #include <utility>
 
 #include <asio/post.hpp>
+
+#include "ruvia/core/failure_report.h"
 
 #include "worker_dispatcher_impl.h"
 
@@ -254,7 +257,6 @@ void worker_dispatcher::arm_timer() {
     }
     impl_->armed_deadline_ = impl_->timers_.front().deadline_;
     impl_->timer_->expires_at(impl_->armed_deadline_);
-    impl_->timer_armed_ = true;
     impl_->timer_->async_wait([self = shared_from_this(), generation](const std::error_code& error) {
         if (error || generation != self->impl_->timer_generation_) {
             return;
@@ -262,28 +264,47 @@ void worker_dispatcher::arm_timer() {
         self->impl_->timer_armed_ = false;
         self->fire_timers();
     });
+    // Initiation may allocate and throw; only a successful wait is armed.
+    impl_->timer_armed_ = true;
 }
 
 void worker_dispatcher::fire_timers() {
+    std::exception_ptr failure;
     impl_->dispatching_timers_ = true;
-    while (!impl_->timers_.empty() &&
-           impl_->timers_.front().deadline_ <= std::chrono::steady_clock::now()) {
-        std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
-        auto entry_value = std::move(impl_->timers_.back());
-        impl_->timers_.pop_back();
-        if (!has_timer(entry_value.slot_, entry_value.generation_)) {
-            if (impl_->stale_timer_count_ != 0) {
-                --impl_->stale_timer_count_;
+    try {
+        while (!impl_->timers_.empty() &&
+               impl_->timers_.front().deadline_ <= std::chrono::steady_clock::now()) {
+            std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
+            auto entry_value = std::move(impl_->timers_.back());
+            impl_->timers_.pop_back();
+            if (!has_timer(entry_value.slot_, entry_value.generation_)) {
+                if (impl_->stale_timer_count_ != 0) {
+                    --impl_->stale_timer_count_;
+                }
+                continue;
             }
-            continue;
+            auto completion = release_timer_slot(entry_value.slot_);
+            if (completion) {
+                completion(worker_timer_outcome::expired);
+            }
         }
-        auto completion = release_timer_slot(entry_value.slot_);
-        if (completion) {
-            completion(worker_timer_outcome::expired);
-        }
+    } catch (...) {
+        failure = std::current_exception();
     }
+    // Restore the queue before propagating a user callback failure. An external
+    // io_context owner may catch it and continue running the remaining timers.
     impl_->dispatching_timers_ = false;
-    arm_timer();
+    try {
+        arm_timer();
+    } catch (...) {
+        if (!failure) {
+            throw;
+        }
+        report_unhandled_failure("worker timer re-arm", std::current_exception());
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
 
 bool worker_dispatcher::has_timer(std::size_t slot, std::uint64_t generation) const noexcept {

@@ -30,8 +30,8 @@ public:
     multipart_reader& operator=(multipart_reader&&) = delete;
 
     /// Returns one typed chunk of the current multipart part. All returned views
-    /// remain valid only until the next read() call, parent body-reader expiry, or
-    /// this reader's destruction.
+    /// remain valid only until the next read operation starts, parent body-reader
+    /// expiry, or this reader's destruction. Unstarted read operations may coexist.
     [[nodiscard]] scoped_operation<std::optional<multipart_stream_part>> read() &;
     scoped_operation<std::optional<multipart_stream_part>> read() && = delete;
 
@@ -73,6 +73,7 @@ private:
 
     body_reader* body_reader_;
     state_type state_;
+    bool read_active_{false};
     ::ruvia::operation_scope operation_scope_;
     scoped_capability_registration registration_;
 

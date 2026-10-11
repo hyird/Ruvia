@@ -1,8 +1,11 @@
 #include <chrono>
+#include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "context_request_fixture.h"
+#include "memory_resource_fixture.h"
 
 // Setting response cookies, including prefixes and signatures.
 
@@ -47,6 +50,50 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
         RUVIA_CHECK_EQ(secure_response.header("Set-Cookie"),
             std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
                              "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
+        co_return;
+    });
+}
+
+RUVIA_TEST(context_signed_cookie_handles_large_values_in_request_storage) {
+    const std::string value(2048, 'v');
+    std::string cookie;
+    const auto request = ruvia::test_request::get("/");
+    (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
+        ruvia::test::rejecting_memory_resource unrelated;
+        unrelated.reject_allocations();
+        bool signed_value = false;
+        try {
+            const ruvia::test::default_resource_guard guard(unrelated);
+            context.set_signed_cookie({.name_ = "session", .value_ = value, .secret_ = "secret"});
+            signed_value = true;
+        } catch (const std::bad_alloc&) {
+        }
+        RUVIA_CHECK(signed_value);
+        if (signed_value) {
+            const auto response = context.text("ok");
+            const auto header = response.header("Set-Cookie").value_or("");
+            cookie.assign(header.substr(0, header.find(';')));
+        }
+        co_return;
+    });
+    RUVIA_CHECK(!cookie.empty());
+    if (cookie.empty()) {
+        return;
+    }
+    const auto read = ruvia::test_request::get("/").header("Cookie", cookie);
+    (void)context_request_test::with_context(read, [&](ruvia::context& context) -> ruvia::task<void> {
+        ruvia::test::rejecting_memory_resource unrelated;
+        unrelated.reject_allocations();
+        std::optional<std::string_view> verified;
+        try {
+            const ruvia::test::default_resource_guard guard(unrelated);
+            verified = context.req().signed_cookie({.name_ = "session", .secret_ = "secret"});
+        } catch (const std::bad_alloc&) {
+        }
+        RUVIA_CHECK(verified.has_value());
+        if (verified) {
+            RUVIA_CHECK_EQ(*verified, std::string_view(value));
+        }
         co_return;
     });
 }

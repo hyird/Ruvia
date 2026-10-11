@@ -20,6 +20,7 @@ public:
     std::pmr::vector<http_header> trailers_;
     bool content_released_{};
     bool response_taken_{};
+    bool response_active_{};
     ::ruvia::operation_scope response_scope_;
 };
 }  // namespace ruvia::detail

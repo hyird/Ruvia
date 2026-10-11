@@ -24,9 +24,12 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 
-namespace {
+namespace udp_tunnel_test {
 struct udp_tunnel_observation {
     std::atomic<bool> eof_{};
+    std::atomic<bool> read_overlap_rejected_{};
+    std::atomic<bool> write_overlap_rejected_{};
+    std::atomic<bool> failed_{};
 };
 
 const auto udp_observation = std::make_shared<udp_tunnel_observation>();
@@ -46,11 +49,51 @@ class udp_tunnel_routes final : public ruvia::controller<udp_tunnel_routes> {
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
         ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
-        while (auto datagram = co_await tunnel.read()) {
-            co_await tunnel.send(datagram->payload());
+        try {
+            auto first_read = tunnel.read();
+            auto last_read = tunnel.read();
+            auto first_write = tunnel.send("ready");
+            auto last_write = tunnel.send("second-ready");
+            auto finish = tunnel.finish();
+            {
+                auto discarded = tunnel.send("discarded");
+                static_cast<void>(discarded);
+            }
+            std::optional<ruvia::http_udp_datagram> datagram;
+            ruvia::task_scope reads(c.worker());
+            const auto receive = [&]() -> ruvia::task<void> {
+                datagram = co_await std::move(first_read);
+            };
+            reads.spawn(receive());
+            try {
+                auto overlap = tunnel.read();
+                static_cast<void>(co_await std::move(overlap));
+            } catch (const std::logic_error&) {
+                observation.read_overlap_rejected_ = true;
+            }
+            ruvia::task_scope writes(c.worker());
+            const auto send = [&]() -> ruvia::task<void> {
+                co_await std::move(first_write);
+            };
+            writes.spawn(send());
+            try {
+                auto overlap = tunnel.send("overlap");
+                co_await std::move(overlap);
+            } catch (const std::logic_error&) {
+                observation.write_overlap_rejected_ = true;
+            }
+            co_await writes.join();
+            co_await std::move(last_write);
+            co_await reads.join();
+            observation.eof_ = !(co_await std::move(last_read));
+            if (datagram) {
+                co_await tunnel.send(datagram->payload());
+            }
+            co_await std::move(finish);
+        } catch (...) {
+            observation.failed_ = true;
+            throw;
         }
-        observation.eof_ = true;
-        co_await tunnel.finish();
     }
 
     ruvia::task<void> delayed(ruvia::context& c) {
@@ -63,7 +106,9 @@ class udp_tunnel_routes final : public ruvia::controller<udp_tunnel_routes> {
         co_return c.text("sibling");
     }
 };
-}  // namespace
+}  // namespace udp_tunnel_test
+
+using udp_tunnel_test::udp_observation;
 
 RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
     auto& io = ruvia::test::new_test_io_context();
@@ -71,6 +116,9 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
     std::exception_ptr failure;
     const auto& observation = udp_observation;
     observation->eof_ = false;
+    observation->read_overlap_rejected_ = false;
+    observation->write_overlap_rejected_ = false;
+    observation->failed_ = false;
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         try {
@@ -94,6 +142,13 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
                 oversized = true;
             }
             RUVIA_CHECK(oversized);
+            for (const auto expected : {std::string_view("ready"), std::string_view("second-ready")}) {
+                auto ready = co_await tunnel.read();
+                RUVIA_CHECK(ready.has_value());
+                if (ready) {
+                    RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(ready->payload().data()), ready->payload().size()), expected);
+                }
+            }
             std::optional<ruvia::http_udp_datagram> retained;
             const auto worker = attachment.loop().handle();
             ruvia::task_scope reader(worker);
@@ -111,9 +166,20 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             auto sibling_body = co_await sibling.body().read_all();
             RUVIA_CHECK(std::string_view(
                             reinterpret_cast<const char*>(sibling_body.bytes().data()), sibling_body.size()) == "sibling");
+            auto late_write = tunnel.send("too-late");
             co_await tunnel.finish();
+            bool ended_write_rejected = false;
+            try {
+                co_await std::move(late_write);
+            } catch (const std::logic_error&) {
+                ended_write_rejected = true;
+            }
+            RUVIA_CHECK(ended_write_rejected);
             co_await reader.join();
             RUVIA_CHECK(observation->eof_);
+            RUVIA_CHECK(observation->read_overlap_rejected_);
+            RUVIA_CHECK(observation->write_overlap_rejected_);
+            RUVIA_CHECK(!observation->failed_);
             RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
             auto next_sibling = co_await client.handle().send({.target_ = "/udp-tunnel-sibling"});
             auto next_sibling_body = co_await next_sibling.body().read_all();

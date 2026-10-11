@@ -8,16 +8,19 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -155,12 +158,51 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
 class http1_interim_routes final : public ruvia::controller<http1_interim_routes> {
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/http1-early-hints", hints);
+    RUVIA_GET_STREAM("/http1-cold-hints", cold_hints);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hints(ruvia::context& context_value) {
-        const std::array<ruvia::http_header_view, 1> links{{{"link", "</asset>; rel=preload"}}};
-        co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, links));
+        std::string link_value = "</asset>; rel=preload";
+        const std::array<ruvia::http_header_view, 1> links{{{"link", link_value}}};
+        auto first = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, links));
+        auto second = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::processing));
+        link_value.assign("changed before starting the operation");
+        if (context_value.req().protocol_version() == ruvia::http_protocol_version::http11) {
+            ruvia::task_scope output(context_value.worker());
+            const auto send_first = [&]() -> ruvia::task<void> { co_await std::move(first); };
+            output.spawn(send_first());
+            unsigned rejected = 0;
+            for (unsigned attempt = 0; attempt < 2; ++attempt) {
+                try {
+                    co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::processing));
+                } catch (const std::logic_error&) {
+                    ++rejected;
+                }
+            }
+            co_await output.join();
+            if (rejected != 2) {
+                throw std::logic_error("interim response output accepted concurrent operations");
+            }
+        } else {
+            co_await std::move(first);
+        }
+        co_await std::move(second);
         co_return context_value.text("final");
+    }
+
+    ruvia::task<void> cold_hints(ruvia::context& context_value) {
+        auto cold = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        auto another = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::processing));
+        co_await context_value.stream().write("cold-final");
+        bool rejected_after_final = false;
+        try {
+            co_await std::move(cold);
+        } catch (const std::logic_error&) {
+            rejected_after_final = true;
+        }
+        if (!rejected_after_final) {
+            throw std::logic_error("interim response started after final response commit");
+        }
     }
 };
 
@@ -218,6 +260,8 @@ RUVIA_TEST(http1_connect_routes_transfer_buffered_bytes_and_keep_receive_directi
 RUVIA_TEST(http1_interim_responses_reach_http11_clients_but_never_http10_clients) {
     const auto http11 = exchange_closing_request("GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     RUVIA_CHECK(http11.starts_with("HTTP/1.1 103 "));
+    RUVIA_CHECK(http11.find("link: </asset>; rel=preload\r\n") != std::string::npos);
+    RUVIA_CHECK(http11.find("\r\n\r\nHTTP/1.1 102 ") != std::string::npos);
     RUVIA_CHECK(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
     RUVIA_CHECK(http11.ends_with("final"));
 
@@ -225,6 +269,15 @@ RUVIA_TEST(http1_interim_responses_reach_http11_clients_but_never_http10_clients
     // response, so the server omits it and sends only the final response.
     const auto http10 = exchange_closing_request("GET /http1-early-hints HTTP/1.0\r\nHost: localhost\r\n\r\n");
     RUVIA_CHECK(http10.find(" 103 ") == std::string::npos);
+    RUVIA_CHECK(http10.find(" 102 ") == std::string::npos);
     RUVIA_CHECK(http10.substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
     RUVIA_CHECK(http10.ends_with("final"));
+}
+
+RUVIA_TEST(http1_unstarted_interim_responses_do_not_block_the_final_response) {
+    const auto response = exchange_closing_request("GET /http1-cold-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(response.find(" 103 ") == std::string::npos);
+    RUVIA_CHECK(response.find(" 102 ") == std::string::npos);
+    RUVIA_CHECK(response.find("cold-final") != std::string::npos);
 }

@@ -4,12 +4,14 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -38,6 +40,14 @@ struct jwt_claim_options final {
 
 class jwt_claim final {
 public:
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    jwt_claim(const jwt_claim& other, allocator_type allocator);
+    jwt_claim(jwt_claim&& other, allocator_type allocator);
+    jwt_claim(const jwt_claim&) = default;
+    jwt_claim& operator=(const jwt_claim&) = default;
+    jwt_claim(jwt_claim&&) noexcept = default;
+    jwt_claim& operator=(jwt_claim&&) = default;
+
     explicit jwt_claim(jwt_claim_options options)
         : name_(std::in_place_type<std::string>, options.name_.view()),
           value_(std::in_place_type<std::string>, options.value_.view()) {}
@@ -111,6 +121,13 @@ struct jwt_payload_options final {
 
 class jwt_payload final {
 public:
+    jwt_payload(const jwt_payload& other);
+    jwt_payload& operator=(const jwt_payload& other);
+    jwt_payload(jwt_payload&&) noexcept = default;
+    // Assignment keeps the destination resource, including all nested claims.
+    // Rebinding may allocate; failure leaves both payloads unchanged.
+    jwt_payload& operator=(jwt_payload&& other);
+
     [[nodiscard]] std::string_view issuer() const& noexcept;
     [[nodiscard]] std::string_view issuer() const&& = delete;
     [[nodiscard]] std::string_view subject() const& noexcept;
@@ -136,6 +153,9 @@ private:
     friend jwt_payload jwt_verify(const jwt_verify_options&);
 
     explicit jwt_payload(jwt_payload_options options = {});
+    jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource);
+    jwt_payload(jwt_payload&& other, std::pmr::memory_resource* resource);
+    void swap_values(jwt_payload& other) noexcept;
 
     std::pmr::string issuer_;
     std::pmr::string subject_;

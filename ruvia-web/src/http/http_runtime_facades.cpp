@@ -18,8 +18,8 @@ namespace {
 
 ruvia::task<void> write_transferred_chunk(void* target,
     ruvia::task<void> (*write)(void*, std::string_view), std::pmr::string chunk,
-    ruvia::detail::operation_lane_lease guard_value) {
-    static_cast<void>(guard_value);
+    bool& output_active) {
+    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
     co_await write(target, chunk);
 }
 
@@ -53,8 +53,8 @@ struct owned_trailers final {
 
 ruvia::task<void> end_owned(void* target,
     ruvia::task<void> (*end)(void*, std::span<const ruvia::http_header_view>), owned_trailers trailers,
-    ruvia::detail::operation_lane_lease guard_value) {
-    static_cast<void>(guard_value);
+    bool& output_active) {
+    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
     co_await end(target, trailers.views_);
 }
 
@@ -66,26 +66,25 @@ void require_websocket_worker(void* target) noexcept {
 
 ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target,
     ruvia::task<std::optional<ruvia::websocket_message>> (*read)(void*),
-    ruvia::detail::operation_lane_lease activity) {
-    static_cast<void>(activity);
+    bool& read_active) {
+    auto lease = ruvia::detail::claim_operation_lane(read_active, "concurrent websocket reads are not supported");
     co_return co_await read(target);
 }
 
 ruvia::task<void> write_websocket_payload(void* target,
     ruvia::task<void> (*write)(void*, ruvia::websocket_opcode, std::string_view, bool),
-    ruvia::websocket_opcode opcode, std::pmr::string payload_value, ruvia::detail::operation_lane_lease activity, bool compress) {
-    static_cast<void>(activity);
+    ruvia::websocket_opcode opcode, std::pmr::string payload_value, bool& write_active, bool compress) {
+    auto lease = ruvia::detail::claim_operation_lane(write_active, "concurrent websocket output operations are not supported");
     co_await write(target, opcode, payload_value, compress);
 }
 
 ruvia::task<void> close_websocket_with_reason(void* target,
     ruvia::task<void> (*close)(void*, ruvia::websocket_close_options),
     ruvia::websocket_close_options options, std::pmr::string reason,
-    ruvia::detail::operation_lane_lease read_activity, ruvia::detail::operation_lane_lease write_activity,
-    ruvia::detail::operation_lane_lease close_activity) {
-    static_cast<void>(read_activity);
-    static_cast<void>(write_activity);
-    static_cast<void>(close_activity);
+    bool& read_active, bool& write_active, bool& close_active) {
+    auto read_lease = ruvia::detail::claim_operation_lane(read_active, "websocket close cannot overlap a read");
+    auto write_lease = ruvia::detail::claim_operation_lane(write_active, "websocket close cannot overlap an output operation");
+    auto close_lease = ruvia::detail::claim_operation_lane(close_active, "websocket close is already in progress");
     options.reason_ = reason;
     co_await close(target, options);
 }
@@ -155,7 +154,8 @@ namespace {
 
 template <typename view_type>
 task<std::optional<view_type>> read_body(
-    detail::callback_ref_type<task<std::optional<std::span<const std::byte>>>()> read) {
+    detail::callback_ref_type<task<std::optional<std::span<const std::byte>>>()> read, bool& read_active) {
+    auto lease = detail::claim_operation_lane(read_active, "request body read is already in progress");
     const auto chunk = co_await read();
     if (!chunk) {
         co_return std::nullopt;
@@ -170,17 +170,11 @@ task<std::optional<view_type>> read_body(
 }  // namespace
 
 scoped_operation<std::optional<std::span<const std::byte>>> body_reader::read() & {
-    if (operation_scope_.has_pending_operations()) {
-        throw std::logic_error("request body read is already in progress");
-    }
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_));
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_));
 }
 
 scoped_operation<std::optional<std::string_view>> body_reader::text() & {
-    if (operation_scope_.has_pending_operations()) {
-        throw std::logic_error("request body read is already in progress");
-    }
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_));
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_));
 }
 
 scoped_operation<void> response_stream_writer::write(std::span<const std::byte> chunk) & {
@@ -195,10 +189,9 @@ scoped_operation<void> response_stream_writer::write(std::string_view chunk) & {
 
 scoped_operation<void> response_stream_writer::write(std::pmr::string&& chunk) & {
     require_active();
-    auto guard_value = ruvia::detail::claim_operation_lane(output_active_, "response stream output operation is already in progress");
     std::pmr::string owned(std::move(chunk), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_transferred_chunk(target_, write_, std::move(owned), std::move(guard_value)));
+        write_transferred_chunk(target_, write_, std::move(owned), output_active_));
 }
 
 scoped_operation<void> response_stream_writer::writeln(std::string_view chunk) & {
@@ -217,9 +210,8 @@ scoped_operation<timer_sleep_result> response_stream_writer::sleep(
 scoped_operation<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
     require_active();
     auto owned_trailers_value = owned_trailers(trailers, resource_);
-    auto guard_value = ruvia::detail::claim_operation_lane(output_active_, "response stream output operation is already in progress");
     return ::ruvia::make_scoped_operation(
-        operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), std::move(guard_value)));
+        operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), output_active_));
 }
 
 scoped_operation<timer_sleep_result> sse_writer::sleep(std::chrono::milliseconds duration) {
@@ -232,9 +224,8 @@ scoped_operation<void> sse_writer::end(std::span<const http_header_view> trailer
 
 scoped_operation<std::optional<websocket_message>> websocket::read() & {
     require_active();
-    auto activity = ruvia::detail::claim_operation_lane(read_active_, "concurrent websocket reads are not supported");
     return ::ruvia::make_scoped_operation(operation_scope_,
-        read_websocket(target_, read_, std::move(activity)), &require_websocket_worker,
+        read_websocket(target_, read_, read_active_), &require_websocket_worker,
         const_cast<worker_handle*>(worker_));
 }
 
@@ -273,13 +264,9 @@ scoped_operation<void> websocket::ping(std::pmr::string&& payload_value) & {
 scoped_operation<void> websocket::close(websocket_close_options options) & {
     require_active();
     std::pmr::string owned(options.reason_.view(), resource_);
-    auto read_activity = ruvia::detail::claim_operation_lane(read_active_, "websocket close cannot overlap a read");
-    auto write_activity = ruvia::detail::claim_operation_lane(
-        write_active_, "websocket close cannot overlap an output operation");
-    auto close_activity = ruvia::detail::claim_operation_lane(close_active_, "websocket close is already in progress");
     return ::ruvia::make_scoped_operation(operation_scope_,
         close_websocket_with_reason(target_, close_, options, std::move(owned),
-            std::move(read_activity), std::move(write_activity), std::move(close_activity)),
+            read_active_, write_active_, close_active_),
         &require_websocket_worker, const_cast<worker_handle*>(worker_));
 }
 
@@ -301,11 +288,9 @@ scoped_operation<void> websocket::write(websocket_opcode opcode, std::string_vie
 
 scoped_operation<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress) {
     require_active();
-    auto activity = ruvia::detail::claim_operation_lane(
-        write_active_, "concurrent websocket output operations are not supported");
     std::pmr::string owned(std::move(payload_value), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_websocket_payload(target_, write_, opcode, std::move(owned), std::move(activity), compress),
+        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress),
         &require_websocket_worker, const_cast<worker_handle*>(worker_));
 }
 

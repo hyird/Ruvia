@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -23,6 +24,47 @@
 #include "ruvia/web/detail/db/db_value_access.h"
 
 namespace ruvia::detail {
+
+[[noreturn]] inline void throw_invalid_postgresql_array() {
+    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "malformed one-dimensional PostgreSQL array");
+}
+
+struct postgresql_array_text final {
+    std::string_view contents_;
+    std::optional<std::size_t> elements_;
+};
+
+// PostgreSQL emits a dimension prefix only when the lower bound differs from
+// one. A vector keeps the element sequence rather than the database subscripts.
+[[nodiscard]] inline postgresql_array_text parse_postgresql_array_text(std::string_view source) {
+    std::optional<std::size_t> elements;
+    if (source.starts_with('[')) {
+        std::int32_t lower{};
+        std::int32_t upper{};
+        const auto* const last = source.data() + source.size();
+        const auto [lower_end, lower_error] = std::from_chars(source.data() + 1, last, lower);
+        if (lower_error != std::errc{} || lower_end == last || *lower_end != ':') {
+            throw_invalid_postgresql_array();
+        }
+        const auto [upper_end, upper_error] = std::from_chars(lower_end + 1, last, upper);
+        if (upper_error != std::errc{} || upper_end == last || *upper_end != ']') {
+            throw_invalid_postgresql_array();
+        }
+        // The server requires upper + 1 and the dimension length to fit int32.
+        const auto length = std::int64_t{upper} - lower + 1;
+        if (length <= 0 || length > (std::numeric_limits<std::int32_t>::max)() ||
+            upper == (std::numeric_limits<std::int32_t>::max)() ||
+            upper_end + 1 == last || upper_end[1] != '=') {
+            throw_invalid_postgresql_array();
+        }
+        elements = static_cast<std::size_t>(length);
+        source.remove_prefix(static_cast<std::size_t>(upper_end + 2 - source.data()));
+    }
+    if (source.size() < 2 || source.front() != '{' || source.back() != '}') {
+        throw_invalid_postgresql_array();
+    }
+    return {source, elements};
+}
 
 template <typename t_type>
 void decode_array_element(std::string_view text, t_type& value, std::pmr::memory_resource* resource) {
@@ -67,19 +109,20 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
     } else if constexpr (is_pmr_vector<u_type>::value) {
         using v_type = typename is_pmr_vector<u_type>::value_type;
         const auto source_value = field.value();
-        if (!source_value || source_value->size() < 2 || source_value->front() != '{' || source_value->back() != '}') {
-            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid PostgreSQL array");
+        if (!source_value) {
+            throw_invalid_postgresql_array();
         }
+        const auto array = parse_postgresql_array_text(*source_value);
+        const auto contents = array.contents_;
         out.clear();
         std::pmr::string token(resource);
         bool quoted = false;
         bool quoted_token = false;
         bool quote_closed = false;
         bool escaped = false;
-        const auto invalid_array = [] { throw db_conversion_error(db_conversion_error::code_type::invalid_format, "malformed one-dimensional PostgreSQL array"); };
         auto append = [&] {
-            if (quoted || escaped || (token.empty() && !quoted_token)) {
-                invalid_array();
+            if (quoted || escaped || (token.empty() && !quoted_token) || (array.elements_ && out.size() >= *array.elements_)) {
+                throw_invalid_postgresql_array();
             }
             if (token == "NULL" && !quoted_token) {
                 if constexpr (is_optional<v_type>::value) {
@@ -97,14 +140,14 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
             quoted_token = false;
             quote_closed = false;
         };
-        for (std::size_t i = 1; i + 1 < source_value->size(); ++i) {
-            const char ch = (*source_value)[i];
+        for (std::size_t i = 1; i + 1 < contents.size(); ++i) {
+            const char ch = contents[i];
             if (escaped) {
                 token.push_back(ch);
                 escaped = false;
             } else if (ch == '\\') {
                 if (quote_closed) {
-                    invalid_array();
+                    throw_invalid_postgresql_array();
                 }
                 escaped = true;
                 quoted_token = true;
@@ -114,7 +157,7 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
                     quote_closed = true;
                 } else {
                     if (!token.empty() || quote_closed) {
-                        invalid_array();
+                        throw_invalid_postgresql_array();
                     }
                     quoted = true;
                     quoted_token = true;
@@ -123,13 +166,16 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
                 append();
             } else {
                 if (quote_closed || (!quoted && (ch == '{' || ch == '}'))) {
-                    invalid_array();
+                    throw_invalid_postgresql_array();
                 }
                 token.push_back(ch);
             }
         }
-        if (source_value->size() > 2) {
+        if (contents.size() > 2) {
             append();
+        }
+        if (array.elements_ && out.size() != *array.elements_) {
+            throw_invalid_postgresql_array();
         }
     } else if constexpr (std::is_same_v<u_type, std::pmr::string>) {
         if (auto value = field.as<std::string_view>()) {

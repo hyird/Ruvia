@@ -1,5 +1,6 @@
 #include "ruvia/http/http1_interim_response_writer.h"
 
+#include <array>
 #include <cstring>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
@@ -9,6 +10,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "field/http_interim_response_validation.h"
+#include "util/http_text_overlap.h"
 
 namespace ruvia::detail {
 
@@ -118,6 +120,36 @@ void append_view(char*& cursor_value, std::string_view value) noexcept {
     }
 }
 
+void write_interim_response_head(char* output, const http_interim_response_head& response,
+    std::string_view status_token, std::string_view reason_phrase) noexcept {
+    append_view(output, http11_status_prefix);
+    append_view(output, status_token);
+    *output++ = ' ';
+    append_view(output, reason_phrase);
+    append_view(output, crlf);
+    for (const auto& header : response.headers()) {
+        append_view(output, header.name());
+        append_view(output, ": ");
+        append_view(output, header.value());
+        append_view(output, crlf);
+    }
+    append_view(output, crlf);
+}
+
+// Keep the bounded snapshot off the ordinary non-overlapping call path.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+void write_overlapping_interim_response_head(std::span<char> output,
+    const http_interim_response_head& response, std::string_view status_token,
+    std::string_view reason_phrase) noexcept {
+    std::array<char, max_http_header_bytes> scratch;
+    write_interim_response_head(scratch.data(), response, status_token, reason_phrase);
+    std::memcpy(output.data(), scratch.data(), output.size());
+}
+
 }  // namespace
 
 std::string_view http1_interim_response_prepare_error_message(
@@ -178,19 +210,23 @@ http1_interim_response_prepare_result http1_interim_response_writer::prepare(
         return detail::http1_interim_response_prepare_result_access::buffer_too_small(facts.wire_bytes_);
     }
 
-    char* cursor_value = head_buffer.data();
-    append_view(cursor_value, http11_status_prefix);
-    append_view(cursor_value, detail::http_status_code_token_view(status_token));
-    *cursor_value++ = ' ';
-    append_view(cursor_value, reason_phrase);
-    append_view(cursor_value, crlf);
+    const auto output = head_buffer.first(facts.wire_bytes_);
+    const auto output_view = std::string_view(output.data(), output.size());
+    bool overlaps = false;
     for (const auto& header : response.headers()) {
-        append_view(cursor_value, header.name());
-        append_view(cursor_value, ": ");
-        append_view(cursor_value, header.value());
-        append_view(cursor_value, crlf);
+        if (detail::http_text_overlaps(header.name(), output_view) ||
+            detail::http_text_overlaps(header.value(), output_view)) {
+            overlaps = true;
+            break;
+        }
     }
-    append_view(cursor_value, crlf);
+    if (overlaps) {
+        write_overlapping_interim_response_head(
+            output, response, detail::http_status_code_token_view(status_token), reason_phrase);
+    } else {
+        write_interim_response_head(
+            output.data(), response, detail::http_status_code_token_view(status_token), reason_phrase);
+    }
 
     return detail::http1_interim_response_prepare_result_access::prepared(
         std::string_view(head_buffer.data(), facts.wire_bytes_),

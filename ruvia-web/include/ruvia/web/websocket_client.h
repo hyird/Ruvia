@@ -89,8 +89,9 @@ class websocket_client_state;
 // Worker-affine capability over one connected websocket_client. Handles and
 // their operations borrow the client; its lifecycle expires every handle and
 // joins every operation before retirement. Write payloads (text, binary, ping,
-// pong) are borrowed, not copied: the bytes must stay valid and unchanged until
-// the returned operation completes or is destroyed unstarted.
+// pong) are copied into the client PMR before returning. Cold operations may
+// coexist; each read/write/close claims its lane when awaited and rejects
+// another running operation on that lane.
 class websocket_client_handle final {
 public:
     websocket_client_handle(const websocket_client_handle& other) noexcept;

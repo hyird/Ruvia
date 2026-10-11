@@ -8,9 +8,25 @@
 
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] std::pmr::string move_claim_text(
+    std::variant<std::string, std::pmr::string>& source,
+    const std::variant<std::string, std::pmr::string>& peer,
+    std::pmr::memory_resource* resource) {
+    auto* owned = std::get_if<std::pmr::string>(&source);
+    const auto* owned_peer = std::get_if<std::pmr::string>(&peer);
+    if (owned != nullptr && owned_peer != nullptr) {
+        return detail::rebind_owned_storage(*owned, resource, *owned_peer);
+    }
+    return std::visit([resource](const auto& text) {
+        return std::pmr::string(std::string_view(text), resource);
+    },
+        source);
+}
 
 void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
     for (std::size_t i = 0; i < claims.size(); ++i) {
@@ -28,12 +44,82 @@ void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
 
 }  // namespace
 
+jwt_claim::jwt_claim(const jwt_claim& other, allocator_type allocator)
+    : jwt_claim(owned_tag_type{}, std::pmr::string(other.name(), allocator.resource()),
+          std::pmr::string(other.value(), allocator.resource())) {}
+
+jwt_claim::jwt_claim(jwt_claim&& other, allocator_type allocator)
+    : jwt_claim(owned_tag_type{}, move_claim_text(other.name_, other.value_, allocator.resource()),
+          move_claim_text(other.value_, other.name_, allocator.resource())) {
+    std::visit([](auto& text) { text.clear(); }, other.name_);
+    std::visit([](auto& text) { text.clear(); }, other.value_);
+}
+
 jwt_payload::jwt_payload(jwt_payload_options options)
     : issuer_(pmr_resource_or_default(options.resource_)),
       subject_(issuer_.get_allocator().resource()),
       audiences_(issuer_.get_allocator().resource()),
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
+
+jwt_payload::jwt_payload(const jwt_payload& other)
+    : jwt_payload(other, std::pmr::get_default_resource()) {}
+
+jwt_payload::jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource)
+    : issuer_(other.issuer_, resource),
+      subject_(other.subject_, resource),
+      audiences_(other.audiences_, resource),
+      id_(other.id_, resource),
+      expires_at_(other.expires_at_),
+      not_before_(other.not_before_),
+      issued_at_(other.issued_at_),
+      claims_(other.claims_, resource) {}
+
+jwt_payload::jwt_payload(jwt_payload&& other, std::pmr::memory_resource* resource)
+    : issuer_(detail::rebind_owned_storage(other.issuer_, resource, other.subject_, other.audiences_, other.id_, other.claims_)),
+      subject_(detail::rebind_owned_storage(other.subject_, resource, other.issuer_, other.audiences_, other.id_, other.claims_)),
+      audiences_(detail::rebind_owned_storage(other.audiences_, resource, other.issuer_, other.subject_, other.id_, other.claims_)),
+      id_(detail::rebind_owned_storage(other.id_, resource, other.issuer_, other.subject_, other.audiences_, other.claims_)),
+      expires_at_(other.expires_at_),
+      not_before_(other.not_before_),
+      issued_at_(other.issued_at_),
+      claims_(detail::rebind_owned_storage(other.claims_, resource, other.issuer_, other.subject_, other.audiences_, other.id_)) {
+    other.issuer_.clear();
+    other.subject_.clear();
+    other.audiences_.clear();
+    other.id_.clear();
+    other.expires_at_.reset();
+    other.not_before_.reset();
+    other.issued_at_.reset();
+    other.claims_.clear();
+}
+
+void jwt_payload::swap_values(jwt_payload& other) noexcept {
+    issuer_.swap(other.issuer_);
+    subject_.swap(other.subject_);
+    audiences_.swap(other.audiences_);
+    id_.swap(other.id_);
+    expires_at_.swap(other.expires_at_);
+    not_before_.swap(other.not_before_);
+    issued_at_.swap(other.issued_at_);
+    claims_.swap(other.claims_);
+}
+
+jwt_payload& jwt_payload::operator=(const jwt_payload& other) {
+    if (this != &other) {
+        jwt_payload owned(other, issuer_.get_allocator().resource());
+        swap_values(owned);
+    }
+    return *this;
+}
+
+jwt_payload& jwt_payload::operator=(jwt_payload&& other) {
+    if (this != &other) {
+        jwt_payload owned(std::move(other), issuer_.get_allocator().resource());
+        swap_values(owned);
+    }
+    return *this;
+}
 
 std::string_view jwt_payload::issuer() const& noexcept {
     return issuer_;

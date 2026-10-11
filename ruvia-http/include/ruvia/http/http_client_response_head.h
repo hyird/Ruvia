@@ -32,6 +32,8 @@ class http_client_response_head final {
 public:
     http_client_response_head(const http_client_response_head&) = delete;
     http_client_response_head& operator=(const http_client_response_head&) = delete;
+    // Moving transfers fields without allocation. The source retains its
+    // status and version and exposes empty fields.
     http_client_response_head(http_client_response_head&&) noexcept = default;
     http_client_response_head& operator=(http_client_response_head&&) = delete;
 
@@ -44,13 +46,21 @@ public:
     }
 
     [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
+        if (headers_ == nullptr) {
+            return {};
+        }
         return *headers_;
     }
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
 
     // Transfers the owned parsed fields to a consumer that retains the head's
     // metadata but needs to extend the fields' lifetime independently.
+    // Repeated extraction, including after moving the head, returns an empty
+    // vector in the original PMR resource, which must still be alive.
     [[nodiscard]] std::pmr::vector<http_header> take_headers() && {
+        if (headers_ == nullptr) {
+            return std::pmr::vector<http_header>(headers_.get_deleter().resource_);
+        }
         return std::pmr::vector<http_header>(std::move(*headers_), headers_->get_allocator());
     }
 

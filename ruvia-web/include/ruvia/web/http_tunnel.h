@@ -29,8 +29,8 @@ public:
     http_tunnel(const http_tunnel&) = delete;
     http_tunnel& operator=(const http_tunnel&) = delete;
 
-    // One outstanding read and one outstanding output operation are allowed.
-    // A cold operation also reserves its lane until it is awaited or discarded.
+    // One running read and one running output operation are allowed.
+    // An operation occupies its lane when started; unstarted operations may coexist.
     [[nodiscard]] scoped_operation<std::optional<std::pmr::string>> read() &;
     scoped_operation<std::optional<std::pmr::string>> read() && = delete;
     [[nodiscard]] scoped_operation<void> write(std::string_view bytes) &;

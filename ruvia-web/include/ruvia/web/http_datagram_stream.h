@@ -35,6 +35,8 @@ private:
 };
 // RFC 9297 channel using reliable DATAGRAM capsules over a negotiated tunnel.
 // Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
+// Operations occupy separate read and send/finish lanes when started; unstarted
+// operations may coexist. send() owns its payload before returning.
 class http_datagram_stream final {
 public:
     explicit http_datagram_stream(http_capsule_stream&& stream);

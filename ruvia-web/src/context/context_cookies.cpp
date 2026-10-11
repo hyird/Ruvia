@@ -40,7 +40,7 @@ namespace {
     }
     signed_value.push_back('.');
     char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, name, value);
+    detail::write_cookie_signature(signature, secret, name, value, resource);
     signed_value.append(signature, sizeof(signature));
     return signed_value;
 }

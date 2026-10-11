@@ -295,6 +295,9 @@ using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
 
 }  // namespace detail
 
+// PostgreSQL array columns use std::pmr::vector of scalar or optional elements.
+// Decoding retains one-dimensional element order and discards the lower bound;
+// multidimensional arrays are rejected with db_conversion_error.
 template <fixed_string field_name, typename t_type, db_column_options options_type = db_column_options{}>
 struct db_column final {
     static_assert(!detail::is_optional<t_type>::value, "use nullable column options and set_null for entity fields; optional is only for array elements");

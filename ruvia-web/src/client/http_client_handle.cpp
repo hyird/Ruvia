@@ -22,6 +22,7 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "context/context_services.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia {
 namespace {
@@ -210,18 +211,12 @@ bool http_client_response_body::complete() const noexcept {
 }
 
 scoped_operation<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
-    if (state_->body_operation_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP client response body operation is already active");
-    }
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<std::span<const std::byte>>(), check_response_operation_affinity, state_);
 }
 
 scoped_operation<std::optional<std::string_view>> http_client_response_body::text() & {
-    if (state_->body_operation_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP client response body operation is already active");
-    }
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<std::string_view>(), check_response_operation_affinity, state_);
@@ -230,6 +225,7 @@ scoped_operation<std::optional<std::string_view>> http_client_response_body::tex
 template <typename view>
 task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(response_stream_writer* output) {
     auto& state_value = *this;
+    auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     for (;;) {
         // Reclaim a returned borrow only at the next consumption step. A pipe
         // commits its cursor only after the downstream write succeeds.
@@ -276,9 +272,6 @@ template task<std::optional<std::string_view>> detail::http_client_response_stat
 template task<void> detail::http_client_response_state::consume_body<void>(response_stream_writer*);
 
 scoped_operation<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
-    if (state_->body_operation_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP client response body operation is already active");
-    }
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->read_all(max_bytes), check_response_operation_affinity, state_);
@@ -286,6 +279,7 @@ scoped_operation<http_client_response_bytes> http_client_response_body::read_all
 
 task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes) {
     auto& state_value = *this;
+    auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     state_value.release_consumed_body_prefix();
     state_value.collect_all_ = true;
     state_value.notify_producer_space();
@@ -330,9 +324,6 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
 }
 
 scoped_operation<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
-    if (state_->body_operation_scope_.has_pending_operations()) {
-        throw std::logic_error("HTTP client response body operation is already active");
-    }
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<void>(&output), check_response_operation_affinity, state_);

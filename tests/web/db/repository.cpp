@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -19,7 +20,7 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 
-namespace {
+namespace db_repository_test {
 using namespace ruvia;
 using entity_type = db_entity<"items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"name", std::pmr::string>>;
@@ -585,4 +586,92 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
     }
 }
 
-}  // namespace
+}  // namespace db_repository_test
+
+#ifdef RUVIA_ENABLE_POSTGRESQL
+namespace db_repository_array_test {
+
+using array_entity = ruvia::db_entity<"array_records", ruvia::db_column<"values", std::pmr::vector<int>>>;
+
+struct array_case final {
+    std::string_view text_;
+    std::vector<int> values_;
+};
+
+RUVIA_TEST(db_repository_decodes_postgresql_array_bounds_in_element_order) {
+    using namespace ruvia;
+    const std::array valid{
+        array_case{"{7,8,9}", {7, 8, 9}},
+        array_case{"[0:2]={7,8,9}", {7, 8, 9}},
+        array_case{"[0:0]={7}", {7}},
+        array_case{"[-3:-1]={9,7,8}", {9, 7, 8}},
+        array_case{"[2:4]={8,9,7}", {8, 9, 7}},
+        array_case{"[-2147483648:-2147483647]={7,8}", {7, 8}},
+        array_case{"[2147483645:2147483646]={8,9}", {8, 9}},
+        array_case{"{}", {}},
+    };
+    const std::array invalid{
+        "[0:2]={7,8}",
+        "[-3:-1]={7,8,9,10}",
+        "[2:1]={7}",
+        "[0:1]={}",
+        "[-2147483649:-2147483648]={7,8}",
+        "[2147483647:2147483648]={7,8}",
+        "[2147483647:2147483647]={7}",
+        "[-2147483648:2147483647]={7}",
+        "[-2147483648:-1]={7}",
+        "[:1]={7}",
+        "[0:]={7}",
+        "[0:0]{7}",
+        "[0:0]x={7}",
+        "[0:1][0:1]={{7,8},{9,10}}",
+        "{{7,8},{9,10}}",
+    };
+    std::vector<test::backend_startup_peer::postgres_reply> replies;
+    for (const auto& value : valid) {
+        replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {std::string(value.text_)}});
+    }
+    for (const auto value : invalid) {
+        replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {value}});
+    }
+    replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"{21,22}"}});
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle, std::move(replies));
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().get_repository<array_entity>();
+        for (const auto& value : valid) {
+            bool decoded = false;
+            try {
+                const auto rows = co_await repository.find();
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                if (!rows.empty()) {
+                    RUVIA_CHECK(std::ranges::equal(rows[0].get<"values">(), value.values_));
+                }
+                decoded = true;
+            } catch (const db_conversion_error&) {
+                decoded = false;
+            }
+            RUVIA_CHECK(decoded);
+        }
+        for ([[maybe_unused]] const auto value : invalid) {
+            bool rejected = false;
+            try {
+                (void)co_await repository.find();
+            } catch (const db_conversion_error& error) {
+                rejected = error.code() == db_conversion_error::code_type::invalid_format;
+            }
+            RUVIA_CHECK(rejected);
+        }
+        const auto rows = co_await repository.find();
+        RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+        if (!rows.empty()) {
+            RUVIA_CHECK(std::ranges::equal(rows[0].get<"values">(), std::array{21, 22}));
+        }
+    });
+}
+
+}  // namespace db_repository_array_test
+#endif

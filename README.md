@@ -58,9 +58,16 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
 
 Coroutines return `ruvia::task<T>`. Tasks are lazy: an unstarted task may be
 discarded, but a started task must be awaited or joined, including after
-cancellation. Offloaded work carries owned data and returns through a bounded
+cancellation. Stream and WebSocket operations occupy their read/write lanes when
+started; unstarted operations may coexist and be awaited in sequence. These write
+entry points own their input before returning.
+Offloaded work carries owned data and returns through a bounded
 blocking pool. With GCC 13/14, keep over-aligned coroutine locals in separately
 allocated owned storage because those compilers can misalign coroutine frames.
+
+`ruvia::worker_group` stops every member when one fails and wakes pending startup
+or serving waits with the original exception. Call `join()` explicitly to retire
+its borrowed workers in tier order.
 
 `ruvia::event_loop_pool` owns its worker threads; `ruvia::attach_event_loop`
 binds one worker to a caller-owned `asio::io_context`. Both retire through the
@@ -69,19 +76,33 @@ root tasks, cleanup, and timer cancellation then finish on the loop's thread.
 An attachment holds work on its context until it has retired, so keep running
 the context after `stop()` until `run()` returns; destroying the context while
 Ruvia work is still outstanding is a contract violation that terminates.
+Closing a channel sender permits buffered input to drain; closing or destroying
+its receiver prevents later receives from consuming that input.
 `ruvia::stop_token` values are copyable views over at most four distinct stop
 sources; combining more, for example by merging `ruvia::operation_options`,
 throws `std::length_error`.
 
 The server and outbound client support HTTP/1 over TCP and TLS. TLS certificates,
 private keys, and client CA bundles are loaded during configuration validation.
-Outbound origins and connection pools are configured before serving. WebSocket
-uses HTTP/1.1 Upgrade. CONNECT tunnels support independent send and receive
+Outbound origins and connection pools are configured before serving.
+Clients configured to retain response cookies save them when the final response
+headers arrive, even while the body is still being received.
+WebSocket uses HTTP/1.1 Upgrade. CONNECT tunnels support independent send and receive
 half-closes; CONNECT-UDP uses reliable DATAGRAM capsules. See
 [tunnels.cpp](examples/web/tunnels.cpp).
 
 Controllers and middleware are worker-local. Request views borrow their owner;
 copy data before carrying it beyond that lifetime or into offloaded work.
+JSON parsing applies cumulative array-element and storage limits through
+`model_parse_options`, including arrays in unknown fields and decoded field names.
+JWT payload assignment retains the destination PMR resource, including nested
+audiences and custom claims.
+`RUVIA_PATTERN` and `RUVIA_REGEX` use the same bounded, anchored byte-pattern
+dialect; use `RUVIA_CUSTOM` for matching outside its supported syntax. See
+[models_validation.cpp](examples/web/models_validation.cpp) for model rules.
+ORM array columns retain PostgreSQL one-dimensional element order, including
+nondefault lower bounds, without keeping the subscripts; multidimensional arrays
+are rejected. See [orm.cpp](examples/web/orm.cpp).
 `ruvia/web/controller.h` includes context and request validation; include
 `streaming.h`, `multipart_reader.h`, `websocket.h`, `http_tunnel.h`, `session.h`,
 or `http_client_handle.h` where their capabilities are used.
@@ -89,7 +110,11 @@ or `http_client_handle.h` where their capabilities are used.
 Ordinary buffered GET routes also handle HEAD unless an explicit HEAD route
 matches. Streaming, SSE, and WebSocket routes require an explicit HEAD route.
 Context body builders copy strings; `ruvia::static_text` explicitly borrows
-constant static storage. File responses use native file transfer for plain TCP,
+constant static storage. Moving an `http_response` transfers its headers and body;
+the source keeps its PMR resource and remains reusable with empty headers and body.
+Moving an `http_client_response_head` leaves source metadata readable and fields
+empty; repeated `take_headers()` calls return empty vectors in its original PMR.
+File responses use native file transfer for plain TCP,
 and the blocking pool for TLS reads; disabling the pool makes those reads run
 on the worker. A file changed during transfer aborts the response.
 

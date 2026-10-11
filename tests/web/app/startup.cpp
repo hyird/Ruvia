@@ -28,7 +28,7 @@
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
-namespace {
+namespace startup_test {
 
 using namespace std::chrono_literals;
 
@@ -73,6 +73,7 @@ class startup_controller final : public ruvia::controller<startup_controller> {
 public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/ready", ready);
+    RUVIA_GET("/connection", connection);
     RUVIA_POST("/limited", limited, ruvia::body_limit<16>);
     RUVIA_GET_WS("/socket", read_websocket);
     RUVIA_ROUTES_END
@@ -85,6 +86,14 @@ public:
 
     ruvia::task<ruvia::http_response> limited(ruvia::context& context) {
         co_return context.text(std::string_view("accepted"));
+    }
+
+    ruvia::task<ruvia::http_response> connection(ruvia::context& context) {
+        const auto info = context.conn();
+        std::string result(info.client().address());
+        result += info.via_trusted_proxy() ? ":proxy" : ":direct";
+        result += info.scheme() == ruvia::http_scheme::https ? ":https" : ":http";
+        co_return context.text(std::string_view(result));
     }
 
     ruvia::task<void> read_websocket(ruvia::context& context) {
@@ -150,6 +159,20 @@ std::string read_response(asio::ip::tcp::socket& socket) {
         std::this_thread::sleep_for(1ms);
     }
     return response;
+}
+
+bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view forwarding, std::string_view expected) {
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    const std::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
+                                std::string(forwarding) + "\r\n";
+    asio::write(socket, asio::buffer(request));
+    socket.non_blocking(true);
+    const auto response = read_response(socket);
+    const auto body_start = response.find("\r\n\r\n");
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
+           std::string_view(response).substr(body_start + 4) == expected;
 }
 
 // The listener's ticket keys are shared by every worker, so each resumption
@@ -301,7 +324,32 @@ bool tls_websocket_truncation_ends_read(
            !state_value.websocket_failed_.load();
 }
 
-}  // namespace
+}  // namespace startup_test
+
+using namespace startup_test;
+
+RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
+    auto& app = ruvia::app();
+    for (const auto cidr : {"127.0.0.0/8", "::ffff:127.0.0.0/104", "::ffff:127.0.0.1/128", "::ffff:127.0.0.0/96", "::ffff:127.0.0.0/0", "2001:db8::/32"}) {
+        bool accepted = true;
+        try {
+            app.trusted_proxies({.cidrs_ = {cidr}});
+        } catch (const std::invalid_argument&) {
+            accepted = false;
+        }
+        RUVIA_CHECK(accepted);
+    }
+    for (const auto cidr : {"127.0.0.0/33", "::ffff:127.0.0.0/129", "::ffff:127.0.0.0/", "::ffff:127.0.0.0/-1"}) {
+        bool rejected = false;
+        try {
+            app.trusted_proxies({.cidrs_ = {cidr}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    app.trusted_proxies(nullptr);
+}
 
 // application is a process singleton with sealed controller registration. This functional
 // test runs in its own executable and exercises retries against the same config.
@@ -317,6 +365,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     auto state_value = std::make_shared<startup_state>();
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
+        .trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true})
         .get_blocking_pool(nullptr)
         .use_worker_state<worker_state>([state_value] {
             if (state_value->outcome_ == startup_outcome::stop_during_worker_startup &&
@@ -448,6 +497,13 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         }
         if (outcome == startup_outcome::serve) {
             RUVIA_CHECK(read_response(socket).find("initialized") != std::string::npos);
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
+                "198.51.100.7:proxy:https"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
+                "128.3.4.5:proxy:http"));
             // Optional client-certificate verification must not turn session
             // resumption into a fatal handshake error, and every resumption
             // succeeds whichever of the two workers accepts it.
@@ -480,4 +536,5 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             RUVIA_CHECK(run.failure_ == nullptr);
         }
     }
+    app.trusted_proxies(nullptr);
 }

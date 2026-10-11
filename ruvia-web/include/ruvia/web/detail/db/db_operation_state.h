@@ -54,15 +54,16 @@ public:
         return std::holds_alternative<active_type>(state_);
     }
 
-    [[nodiscard]] const payload& active_payload() const {
-        if (std::holds_alternative<operating_type>(state_)) {
-            throw std::logic_error("database operation is already in progress");
+    // Preparation only borrows immutable connection and resource metadata. It
+    // never grants the operation right, even while another task holds it.
+    [[nodiscard]] const payload& preparation_payload() const {
+        if (const auto* active = std::get_if<active_type>(&state_); active != nullptr) {
+            return active->payload_;
         }
-        const auto* active = std::get_if<active_type>(&state_);
-        if (active == nullptr) {
-            throw std::logic_error("database resource is not active");
+        if (const auto* operating = std::get_if<operating_type>(&state_); operating != nullptr) {
+            return operating->payload_;
         }
-        return active->payload_;
+        throw std::logic_error("database resource is not active");
     }
 
 private:
@@ -94,20 +95,12 @@ private:
         --cold_borrows_;
     }
 
-    [[nodiscard]] payload& operation_payload(bool started) {
-        if (started) {
-            auto* operating = std::get_if<operating_type>(&state_);
-            if (operating == nullptr) {
-                std::terminate();
-            }
-            return operating->payload_;
+    [[nodiscard]] payload& operation_payload() noexcept {
+        auto* operating = std::get_if<operating_type>(&state_);
+        if (operating == nullptr) {
+            std::terminate();
         }
-        if (auto* active = std::get_if<active_type>(&state_); active != nullptr) {
-            return active->payload_;
-        }
-        throw std::logic_error(std::holds_alternative<operating_type>(state_)
-                                   ? "database operation is already in progress"
-                                   : "database resource is not active");
+        return operating->payload_;
     }
 
     void finish_active() noexcept {
@@ -189,8 +182,11 @@ public:
         started_ = true;
     }
 
-    [[nodiscard]] payload& lease() {
-        return state_->operation_payload(started_);
+    [[nodiscard]] payload& lease() noexcept {
+        if (state_ == nullptr || !started_) {
+            std::terminate();
+        }
+        return state_->operation_payload();
     }
 
     void finish_active() noexcept {

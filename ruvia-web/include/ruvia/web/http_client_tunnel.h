@@ -19,8 +19,8 @@ class http_capsule_stream_state;
 }  // namespace detail
 
 // Owns an established CONNECT byte stream on its client worker. Metadata borrows
-// this owner; a read view lasts until the next read. Inputs are copied before a
-// cold write is returned. One read and one write/finish may coexist. Moving the
+// this owner; a read view lasts until the next read starts. Inputs are copied before a
+// cold write is returned. One running read and one running write/finish may coexist; cold operations do not reserve either lane. Moving the
 // owner preserves operations. Destruction aborts both directions; shutdown joins
 // transport drivers. finish() closes only the local sending direction and is
 // idempotent after successful completion, including normal transport retirement.

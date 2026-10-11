@@ -15,6 +15,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -120,6 +121,112 @@ RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
     RUVIA_CHECK_EQ(payload_value.subject(), std::string_view("user-1"));
     const auto role = payload_value.claim("role");
     RUVIA_CHECK(role.has_value() && *role == std::string_view("admin"));
+}
+
+RUVIA_TEST(jwt_payload_move_assignment_rebinds_nested_resource_owners) {
+    const std::string audience(100, 'a');
+    const std::string claim_name(90, 'n');
+    const std::string claim_value(200, 'v');
+    auto options = sign_options(secret);
+    options.audience_ = audience;
+    options.claims_.emplace_back(ruvia::jwt_claim_options{.name_ = claim_name, .value_ = claim_value});
+    const auto token = sign(options);
+    const auto seed = sign(sign_options(secret));
+    ruvia::test::counting_memory_resource upstream;
+    {
+        ruvia::test::equivalent_tracking_resource source(upstream);
+        ruvia::test::equivalent_tracking_resource target(upstream);
+        std::optional<ruvia::jwt_payload> input(ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &source}));
+        std::optional<ruvia::jwt_payload> destination(ruvia::jwt_decode_unverified({.token_ = seed, .resource_ = &target}));
+        const auto expires_at = input->expires_at();
+        const auto issued_at = input->issued_at();
+        *destination = std::move(*input);
+        input.reset();
+        source.retire();
+        RUVIA_CHECK_EQ(destination->issuer(), std::string_view("ruvia"));
+        RUVIA_CHECK_EQ(destination->subject(), std::string_view("user-1"));
+        RUVIA_CHECK(destination->has_audience(audience));
+        RUVIA_CHECK_EQ(destination->claim(claim_name).value_or("missing"), std::string_view(claim_value));
+        RUVIA_CHECK_EQ(destination->expires_at(), expires_at);
+        RUVIA_CHECK_EQ(destination->issued_at(), issued_at);
+        destination.reset();
+        RUVIA_CHECK_EQ(source.callbacks_after_retirement(), std::size_t{0});
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}
+
+RUVIA_TEST(jwt_payload_assignment_preserves_values_when_rebinding_fails) {
+    const std::string audience(100, 'a');
+    const std::string claim_name(90, 'n');
+    const std::string claim_value(200, 'v');
+    auto options = sign_options(secret);
+    options.audience_ = audience;
+    options.claims_.emplace_back(ruvia::jwt_claim_options{.name_ = claim_name, .value_ = claim_value});
+    const auto token = sign(options);
+    auto seed_options = sign_options(secret);
+    seed_options.issuer_ = "seed";
+    const auto seed = sign(seed_options);
+    ruvia::test::counting_memory_resource upstream;
+    for (const bool copy : {false, true}) {
+        for (const auto allowance : {std::size_t{0}, std::size_t{1}, std::size_t{3}}) {
+            {
+                ruvia::test::equivalent_tracking_resource source(upstream);
+                ruvia::test::equivalent_tracking_resource target(upstream);
+                auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &source});
+                auto destination = ruvia::jwt_decode_unverified({.token_ = seed, .resource_ = &target});
+                const auto source_expiration = input.expires_at();
+                const auto target_expiration = destination.expires_at();
+                target.reject_allocations_after(allowance);
+                bool rejected = false;
+                try {
+                    if (copy) {
+                        destination = input;
+                    } else {
+                        destination = std::move(input);
+                    }
+                } catch (const std::bad_alloc&) {
+                    rejected = true;
+                }
+                target.allow_allocations();
+                RUVIA_CHECK(rejected);
+                if (rejected) {
+                    RUVIA_CHECK_EQ(input.issuer(), std::string_view("ruvia"));
+                    RUVIA_CHECK(input.has_audience(audience));
+                    RUVIA_CHECK_EQ(input.claim(claim_name).value_or("missing"), std::string_view(claim_value));
+                    RUVIA_CHECK_EQ(input.expires_at(), source_expiration);
+                    RUVIA_CHECK_EQ(destination.issuer(), std::string_view("seed"));
+                    RUVIA_CHECK(destination.audience().empty());
+                    RUVIA_CHECK(destination.claims().empty());
+                    RUVIA_CHECK_EQ(destination.expires_at(), target_expiration);
+                    destination = std::move(input);
+                    RUVIA_CHECK(destination.has_audience(audience));
+                    RUVIA_CHECK_EQ(destination.claim(claim_name).value_or("missing"), std::string_view(claim_value));
+                }
+            }
+            RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+        }
+    }
+    {
+        ruvia::test::equivalent_tracking_resource resource(upstream);
+        auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &resource});
+        auto destination = ruvia::jwt_decode_unverified({.token_ = seed, .resource_ = &resource});
+        const auto attempts = resource.allocation_attempts();
+        resource.reject_allocations_after(0);
+        bool rejected = false;
+        try {
+            destination = std::move(input);
+        } catch (const std::bad_alloc&) {
+            rejected = true;
+        }
+        resource.allow_allocations();
+        RUVIA_CHECK(!rejected);
+        RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        RUVIA_CHECK(destination.has_audience(audience));
+        RUVIA_CHECK_EQ(destination.claim(claim_name).value_or("missing"), std::string_view(claim_value));
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
 RUVIA_TEST(jwt_sign_rejects_duplicate_custom_claim_names) {

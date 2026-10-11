@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 
 #include <asio/co_spawn.hpp>
@@ -418,12 +419,71 @@ bool expired_registration_reschedules_on_another_worker() {
     return first_expired && second_expired && pending_rejected && cancelled_rescheduled;
 }
 
+bool timer_callback_failure_preserves_remaining_operations() {
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    const auto& worker_value = runtime.handle();
+    ruvia::worker_timer_registration failing_timer;
+    ruvia::worker_timer_registration remaining_timer;
+    ruvia::worker_timer_registration cancelled_timer;
+    bool remaining_expired = false;
+    bool rescheduled_expired = false;
+    bool cancellation_observed = false;
+    std::weak_ptr<int> failed_capture;
+    std::weak_ptr<int> completed_capture;
+    std::weak_ptr<int> cancelled_capture;
+
+    asio::post(io_context, [&] {
+        const auto deadline = std::chrono::steady_clock::now();
+        auto owned = std::make_shared<int>(1);
+        failed_capture = owned;
+        static_cast<void>(worker_value.schedule_timer(failing_timer, deadline,
+            [owned = std::move(owned)](ruvia::worker_timer_outcome) {
+                throw std::runtime_error("timer completion failure");
+            }));
+        owned = std::make_shared<int>(2);
+        completed_capture = owned;
+        static_cast<void>(worker_value.schedule_timer(remaining_timer, deadline,
+            [owned = std::move(owned), &remaining_expired](ruvia::worker_timer_outcome outcome) {
+                remaining_expired = outcome == ruvia::worker_timer_outcome::expired;
+            }));
+        owned = std::make_shared<int>(3);
+        cancelled_capture = owned;
+        static_cast<void>(worker_value.schedule_timer(cancelled_timer, deadline + std::chrono::hours(1),
+            [owned = std::move(owned), &cancellation_observed](ruvia::worker_timer_outcome outcome) {
+                cancellation_observed = outcome == ruvia::worker_timer_outcome::cancelled;
+            }));
+    });
+
+    bool failure_observed = false;
+    try {
+        io_context.run_for(std::chrono::milliseconds(20));
+    } catch (const std::runtime_error& error) {
+        failure_observed = std::string_view(error.what()) == "timer completion failure";
+    }
+    asio::post(io_context, [&] {
+        cancelled_timer.cancel();
+        static_cast<void>(worker_value.schedule_timer(failing_timer, std::chrono::steady_clock::now(),
+            [&rescheduled_expired](ruvia::worker_timer_outcome outcome) {
+                rescheduled_expired = outcome == ruvia::worker_timer_outcome::expired;
+            }));
+    });
+    io_context.run_for(std::chrono::milliseconds(20));
+    const bool success = failure_observed && remaining_expired && rescheduled_expired &&
+                         cancellation_observed && failed_capture.expired() && completed_capture.expired() &&
+                         cancelled_capture.expired();
+    runtime.stop_timers();
+    runtime.detach();
+    return success;
+}
+
 int main() {
     if (!timer_immediate_shutdown_works() ||
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
         !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
         !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||
-        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker()) {
+        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
+        !timer_callback_failure_preserves_remaining_operations()) {
         return 1;
     }
     asio::io_context io_context;

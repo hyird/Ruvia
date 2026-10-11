@@ -101,12 +101,12 @@ scoped_operation<std::optional<http_capsule>> http_capsule_stream::read() & {
     if (!state_) {
         throw std::logic_error("capsule stream is empty");
     }
-    state_->require(false);
+    state_->require();
     return ::ruvia::make_scoped_operation(state_->read_scope_, read_owned(detail::capsule_state_pin(*state_)));
 }
 task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsule_state_pin pin) {
     auto& state_value = pin.state();
-    detail::running_capsule_operation running(state_value);
+    detail::running_capsule_operation running(state_value, false);
     if (state_value.receive_ended_) {
         co_return std::nullopt;
     }
@@ -132,7 +132,7 @@ scoped_operation<void> http_capsule_stream::write(std::uint64_t type, std::strin
     if (!state_) {
         throw std::logic_error("capsule stream is empty");
     }
-    state_->require(true);
+    state_->require();
     if (state_->send_ended_) {
         throw std::logic_error("capsule sending direction is closed");
     }
@@ -146,7 +146,11 @@ scoped_operation<void> http_capsule_stream::write(std::uint64_t type, std::strin
 scoped_operation<void> http_capsule_stream::write_frame(std::string_view prefix, std::string_view payload_value) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
         auto& state_value = input.pin_.state();
-        detail::running_capsule_operation running(state_value);
+        state_value.require();
+        if (state_value.send_ended_) {
+            throw std::logic_error("capsule sending direction is closed");
+        }
+        detail::running_capsule_operation running(state_value, true);
         try {
             co_await state_value.send_bytes(input.bytes_);
         } catch (...) {
@@ -162,10 +166,10 @@ scoped_operation<void> http_capsule_stream::finish() & {
     if (!state_) {
         throw std::logic_error("capsule stream is empty");
     }
-    state_->require(true);
+    state_->require();
     const auto finish_value = +[](detail::capsule_state_pin pin) -> task<void> {
         auto& state_value = pin.state();
-        detail::running_capsule_operation running(state_value);
+        detail::running_capsule_operation running(state_value, true);
         if (!state_value.send_ended_) {
             if (state_value.server_) {
                 co_await state_value.server_->finish();

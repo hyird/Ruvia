@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/web/detail/model/pattern/pattern_class.h"
 #include "ruvia/web/detail/model/pattern/pattern_types.h"
 #include "ruvia/web/model_types.h"
 
@@ -34,6 +35,9 @@ template <std::size_t capacity>
             }
             if (pattern[cursor_value] == ']') {
                 atom.class_end_ = cursor_value++;
+                if (!valid_pattern_class(pattern, atom.class_begin_, atom.class_end_)) {
+                    return false;
+                }
                 plan.atoms_[plan.count_++] = atom;
                 return true;
             }
@@ -46,21 +50,8 @@ template <std::size_t capacity>
             return false;
         }
         const char escaped = pattern[++cursor_value];
-        switch (escaped) {
-            case 'd':
-                atom.kind_ = pattern_atom_kind::digit;
-                break;
-            case 'w':
-                atom.kind_ = pattern_atom_kind::word;
-                break;
-            case 's':
-                atom.kind_ = pattern_atom_kind::space;
-                break;
-            default:
-                atom.kind_ = pattern_atom_kind::literal;
-                atom.literal_ = escaped;
-                break;
-        }
+        atom.kind_ = pattern_escape_kind(escaped);
+        atom.literal_ = escaped;
         ++cursor_value;
         plan.atoms_[plan.count_++] = atom;
         return true;
@@ -125,9 +116,8 @@ struct compiled_pattern_plan final {
         pattern.view().size() < max_pattern_bytes ? pattern.view().size() : max_pattern_bytes;
     static constexpr auto value = compile_pattern_plan<capacity>(pattern.view());
     static_assert(value.valid_,
-        "RUVIA_PATTERN supports only anchored lightweight full-match patterns. "
-        "Use RUVIA_REGEX for full std::regex syntax or RUVIA_CUSTOM for a custom hot-path "
-        "matcher.");
+        "RUVIA_PATTERN supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
+        "Ranges require ordered single-character endpoints. RUVIA_REGEX uses the same syntax; use RUVIA_CUSTOM for other matching logic.");
 };
 
 }  // namespace ruvia::detail::model

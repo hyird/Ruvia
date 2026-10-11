@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 namespace ruvia {
@@ -13,8 +15,13 @@ inline constexpr std::string_view http_base64_alphabet =
 inline constexpr std::string_view http_base64_url_alphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-[[nodiscard]] constexpr std::size_t http_base64_encoded_size(std::size_t input_size) noexcept {
-    return 4 * ((input_size + 2) / 3);
+// Throws std::length_error when the padded output length cannot fit std::size_t.
+[[nodiscard]] constexpr std::size_t http_base64_encoded_size(std::size_t input_size) {
+    const auto groups = input_size / 3 + (input_size % 3 != 0);
+    if (groups > (std::numeric_limits<std::size_t>::max)() / 4) {
+        throw std::length_error("base64 output length is not representable");
+    }
+    return groups * 4;
 }
 
 // Standard-alphabet base64 with '=' padding. `output` must have room for

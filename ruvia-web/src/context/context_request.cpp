@@ -430,7 +430,7 @@ std::optional<std::string_view> context_request::signed_cookie(
     const auto value = stored->substr(0, value_size);
     const auto signature = stored->substr(value_size + 1);
     char expected[detail::cookie_signature_size];
-    detail::write_cookie_signature(expected, secret, name, value);
+    detail::write_cookie_signature(expected, secret, name, value, context_->pool());
     if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
         return std::nullopt;
     }

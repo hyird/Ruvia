@@ -530,12 +530,49 @@ RUVIA_TEST(json_array_limits_apply_across_nested_collections_and_model_fields) {
     RUVIA_CHECK(!ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 2}));
 }
 
+RUVIA_TEST(json_array_limits_include_dynamic_tokens_and_unknown_fields) {
+    constexpr auto nested = R"({"value":[[1,2],[3]],"object":{}})";
+    RUVIA_CHECK(ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 5}));
+    RUVIA_CHECK(!ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 4}));
+
+    constexpr auto dynamic = R"({"value":[1,2],"object":{"nested":[3]}})";
+    RUVIA_CHECK(ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 3}));
+    RUVIA_CHECK(!ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 2}));
+
+    constexpr auto mixed = R"({"dense":[[1,2]],"boxed":[{"nested":[3]}]})";
+    RUVIA_CHECK(ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 5}));
+    RUVIA_CHECK(!ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 4}));
+
+    RUVIA_CHECK(ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 2}));
+    RUVIA_CHECK(!ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 1}));
+}
+
 RUVIA_TEST(json_representation_budget_bounds_scalar_and_owned_string_results) {
     RUVIA_CHECK(!ruvia::from_json<ruvia::int32>("1", {.max_representation_bytes_ = 0}));
 
     const std::string text = "\"" + std::string(4096, 'x') + "\"";
     RUVIA_CHECK(!ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 1024}));
     RUVIA_CHECK(ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 16384}));
+}
+
+RUVIA_TEST(json_representation_budget_includes_decoded_field_names) {
+    const std::string key = R"(\u0075)" + std::string(2048, 'x');
+    const std::string member = "\"" + key + "\":0";
+    const std::string single = "{" + member + "}";
+    const std::string repeated = "{" + member + "," + member + "}";
+    const auto one_key_budget = sizeof(codec_empty) + key.size() + 128;
+    ruvia::test::counting_memory_resource memory;
+    {
+        auto parsed_value = ruvia::from_json<codec_empty>(single,
+            {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
+        RUVIA_CHECK(parsed_value.has_value());
+        RUVIA_CHECK(!ruvia::from_json<codec_empty>(single,
+            {.resource_ = &memory, .max_representation_bytes_ = sizeof(codec_empty) + 1024}));
+        RUVIA_CHECK(!ruvia::from_json<codec_empty>(repeated,
+            {.resource_ = &memory, .max_representation_bytes_ = one_key_budget}));
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 RUVIA_TEST(json_budget_failure_releases_partial_results_and_preserves_retained_values) {

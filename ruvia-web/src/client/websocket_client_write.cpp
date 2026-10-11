@@ -1,7 +1,10 @@
 #include <chrono>
 #include <exception>
+#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/operation_timeout.h"
 
@@ -85,22 +88,20 @@ task<void> websocket_client_state::throw_protocol_error_after_flush(std::string_
 scoped_operation<void> websocket_client_state::write(websocket_opcode opcode, std::string_view payload_value,
     const operation_options& options, websocket_send_options send_options) {
     require_current();
+    std::pmr::string owned(payload_value, memory_.resource());
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_write(opcode, payload_value, options, send_options,
-            claim_activity(write_active_, "concurrent WebSocket client writes are not supported")),
+        run_write(opcode, std::move(owned), options, send_options),
         &websocket_client_state::check_operation_affinity, &worker_);
 }
 
-task<void> websocket_client_state::run_write(websocket_opcode opcode, std::string_view payload_value,
-    operation_options options, websocket_send_options send_options, operation_lane_lease activity) {
-    static_cast<void>(activity);
+task<void> websocket_client_state::run_write(websocket_opcode opcode, std::pmr::string payload_value,
+    operation_options options, websocket_send_options send_options) {
     lifecycle_.require_ready();
+    auto activity = claim_activity(write_active_, "concurrent WebSocket client writes are not supported");
     operation_guard_type operation(*this, options);
     co_await wait_for_write_idle();
     lifecycle_.require_ready();
     write_guard_type write_guard(*this, write_phase_type::application);
-    // The borrowed payload is masked straight into the protocol output: the
-    // frame encoding is the only copy a write makes.
     const auto submitted = require_protocol().submit_frame(opcode, payload_value, send_options.compress_);
     switch (submitted) {
         case websocket_frame_submit_status::accepted:

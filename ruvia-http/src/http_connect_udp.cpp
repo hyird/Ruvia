@@ -80,7 +80,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     return result_value;
 }
 std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path, std::pmr::memory_resource* resource) {
-    if (!path.starts_with(prefix) || !path.ends_with('/')) {
+    if (!path.starts_with(prefix) || path.size() <= prefix.size() || !path.ends_with('/')) {
         return http_connect_udp_error::invalid_path;
     }
     path.remove_prefix(prefix.size());

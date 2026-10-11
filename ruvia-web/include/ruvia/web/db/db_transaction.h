@@ -41,6 +41,10 @@ struct db_query_backend;
 struct db_query_plan;
 }  // namespace detail
 
+// Statement and completion operations are lazy. Inputs are owned before the
+// entry returns, so cold operations may be prepared while a statement runs.
+// Only starting overlapping operations throws std::logic_error; that rejected
+// operation does not abort the statement already holding the transaction.
 class db_transaction final {
 public:
     db_transaction(const db_transaction&) = delete;

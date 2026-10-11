@@ -394,18 +394,14 @@ template <typename view_t_type>
     bool require_object, json_parse_budget& budget) {
     auto remaining = input;
     skip_json_whitespace(remaining);
+    if (require_object && (remaining.empty() || remaining.front() != '{')) {
+        return std::nullopt;
+    }
     const auto start = remaining;
-    if (!skip_json_value(remaining, depth)) {
+    if (!budget.skip_value(remaining, depth)) {
         return std::nullopt;
     }
     const auto token = start.substr(0, start.size() - remaining.size());
-    if (require_object) {
-        auto probe_value = token;
-        skip_json_whitespace(probe_value);
-        if (probe_value.empty() || probe_value.front() != '{') {
-            return std::nullopt;
-        }
-    }
     view_t_type value(model_options{.resource_ = resource});
     if (string_storage == model_string_storage::owned) {
         if (!budget.consume_bytes(token.size()) ||

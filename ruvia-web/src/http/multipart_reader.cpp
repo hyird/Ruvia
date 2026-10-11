@@ -7,13 +7,12 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/task.h"
 
+#include "util/operation_lane_lease.h"
+
 namespace ruvia {
 
 scoped_operation<std::optional<multipart_stream_part>> multipart_reader::read() & {
     registration_.require_active();
-    if (operation_scope_.has_pending_operations()) {
-        throw std::logic_error("multipart body read is already in progress");
-    }
     return ::ruvia::make_scoped_operation(operation_scope_, read_task());
 }
 
@@ -30,6 +29,7 @@ void multipart_reader::expire_capability(void* target) noexcept {
 }
 
 task<std::optional<multipart_stream_part>> multipart_reader::read_task() {
+    auto lease = detail::claim_operation_lane(read_active_, "multipart body read is already in progress");
     if (std::holds_alternative<finished_state_type>(state_)) {
         co_return std::nullopt;
     }

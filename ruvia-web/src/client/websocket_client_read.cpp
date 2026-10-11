@@ -17,14 +17,13 @@ scoped_operation<std::optional<websocket_message>> websocket_client_state::read(
     const operation_options& options) {
     require_current();
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_read(options, claim_activity(read_active_, "concurrent WebSocket client reads are not supported")),
+        run_read(options),
         &websocket_client_state::check_operation_affinity, &worker_);
 }
 
-task<std::optional<websocket_message>> websocket_client_state::run_read(
-    operation_options options, operation_lane_lease activity) {
-    static_cast<void>(activity);
+task<std::optional<websocket_message>> websocket_client_state::run_read(operation_options options) {
     lifecycle_.require_ready();
+    auto activity = claim_activity(read_active_, "concurrent WebSocket client reads are not supported");
     operation_guard_type operation(*this, options);
     std::array<char, websocket_client_transport_buffer_bytes> bytes_value{};
     for (;;) {

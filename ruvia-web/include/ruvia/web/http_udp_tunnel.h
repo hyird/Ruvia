@@ -35,6 +35,8 @@ private:
 // malformed DATAGRAM capsules terminate only this tunnel. Empty UDP packets are
 // data; an empty optional is EOF. Owns its capsule stream and preserves separate
 // read and send/finish lanes when moved.
+// Operations occupy their lane when started; unstarted operations may coexist.
+// send() owns its payload before returning.
 class http_udp_tunnel final {
 public:
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept

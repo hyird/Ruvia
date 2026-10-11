@@ -61,8 +61,8 @@ public:
             }
         }
         if constexpr (detail::move_only_function_fits_inline<stored_type>) {
+            ::new (storage_) stored_type(std::forward<fn_type>(fn));
             object_ = storage_;
-            ::new (object_) stored_type(std::forward<fn_type>(fn));
             operations_ = &inline_operations<stored_type>;
         } else {
             object_ = new stored_type(std::forward<fn_type>(fn));
@@ -156,26 +156,27 @@ private:
     }
 
     void reset() noexcept {
-        if (operations_ != nullptr) {
-            operations_->destroy_(object_);
-            operations_ = nullptr;
-            object_ = nullptr;
+        // User destruction may reset or destroy this wrapper again.
+        const auto* const operations_value = std::exchange(operations_, nullptr);
+        void* const object_value = std::exchange(object_, nullptr);
+        if (operations_value != nullptr) {
+            operations_value->destroy_(object_value);
         }
     }
 
     void move_from(move_only_function& other) noexcept {
-        if (other.operations_ == nullptr) {
+        // Moving or retiring the target may destroy its source wrapper.
+        const bool inline_storage = other.is_inline();
+        const auto* const operations_value = std::exchange(other.operations_, nullptr);
+        void* const object_value = std::exchange(other.object_, nullptr);
+        if (operations_value == nullptr) {
             return;
         }
-        operations_ = other.operations_;
-        if (other.is_inline()) {
-            object_ = storage_;
-            operations_->move_(other.object_, object_);
-        } else {
-            object_ = other.object_;
+        if (inline_storage) {
+            operations_value->move_(object_value, storage_);
         }
-        other.operations_ = nullptr;
-        other.object_ = nullptr;
+        object_ = inline_storage ? storage_ : object_value;
+        operations_ = operations_value;
     }
 
     alignas(detail::move_only_function_inline_alignment)

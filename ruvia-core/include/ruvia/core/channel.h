@@ -118,7 +118,7 @@ struct channel_state final : worker_shutdown_listener {
         }
     }
 
-    // The queue lock also guards the lifecycle and waiter fields, so checking
+    // The queue lock also guards the lifecycle, receiver, and waiter fields, so checking
     // admission and publishing a value stay one critical section.
     [[nodiscard]] typename mpsc_ring_queue<t_type>::locked_access lock_state() {
         return queue_.lock();
@@ -128,10 +128,12 @@ struct channel_state final : worker_shutdown_listener {
     mpsc_ring_queue<t_type> queue_;
     using lifecycle_type = std::variant<channel_open, channel_closed, channel_worker_stopping>;
     lifecycle_type lifecycle_;
+    bool receiver_closed_{false};
     worker_single_wait_awaiter<t_type, channel_state<t_type>>* waiter_{nullptr};
     std::uint64_t waiter_generation_{0};
     std::uint64_t next_waiter_generation_{0};
 
+    void close(bool retire_receiver);
     void worker_stopping() noexcept override;
 };
 
@@ -146,6 +148,12 @@ struct channel_receive_awaiter final {
     [[nodiscard]] bool await_ready() {
         auto& owner_value = wait_.state();
         auto queue = owner_value.lock_state();
+        if (owner_value.receiver_closed_) {
+            (void)wait_.complete_status(std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)
+                                            ? worker_wait_status::worker_stopping
+                                            : worker_wait_status::closed);
+            return true;
+        }
         if (auto* item = queue.front()) {
             (void)wait_.complete_result(
                 worker_wait_result_access::value(std::move(*item)));
@@ -198,6 +206,17 @@ template <typename t_type>
 }
 
 template <typename t_type>
+void channel_state<t_type>::close(bool retire_receiver) {
+    auto lock = lock_state();
+    receiver_closed_ = receiver_closed_ || retire_receiver;
+    if (!std::holds_alternative<channel_open>(lifecycle_)) {
+        return;
+    }
+    lifecycle_.template emplace<channel_closed>();
+    complete_worker_single_wait(*this, worker_wait_status::closed);
+}
+
+template <typename t_type>
 void channel_state<t_type>::worker_stopping() noexcept {
     auto lock = lock_state();
     lifecycle_.template emplace<channel_worker_stopping>();
@@ -215,21 +234,16 @@ public:
         if (!state_) {
             return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
         }
+        std::optional<channel_send_status> rejection;
         {
             auto queue = state_->lock_state();
             if (std::holds_alternative<detail::channel_closed>(state_->lifecycle_)) {
-                return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
-            }
-            if (std::holds_alternative<detail::channel_worker_stopping>(state_->lifecycle_)) {
-                return channel_send_result<t_type>::reject(
-                    channel_send_status::worker_stopping, std::move(value));
-            }
-            assert(std::holds_alternative<detail::channel_open>(state_->lifecycle_));
-            if (!state_->worker_.accepting()) {
-                return channel_send_result<t_type>::reject(
-                    channel_send_status::worker_stopping, std::move(value));
-            }
-            if (auto* waiter = state_->waiter_) {
+                rejection = channel_send_status::closed;
+            } else if (std::holds_alternative<detail::channel_worker_stopping>(state_->lifecycle_)) {
+                rejection = channel_send_status::worker_stopping;
+            } else if (!state_->worker_.accepting()) {
+                rejection = channel_send_status::worker_stopping;
+            } else if (auto* waiter = state_->waiter_) {
                 const bool wake =
                     waiter->complete_result(detail::worker_wait_result_access::value(std::move(value)));
                 state_->waiter_ = nullptr;
@@ -242,24 +256,25 @@ public:
                     waiter->wake();
                 }
             } else {
+                assert(std::holds_alternative<detail::channel_open>(state_->lifecycle_));
                 if (!queue.try_push(std::move(value))) {
-                    return channel_send_result<t_type>::reject(channel_send_status::full, std::move(value));
+                    rejection = channel_send_status::full;
                 }
             }
+        }
+        if (rejection) {
+            // The status is decided; owning the returned payload needs no queue
+            // lock, and its user-defined move may close the channel again.
+            return channel_send_result<t_type>::reject(*rejection, std::move(value));
         }
         return channel_send_result<t_type>::accept();
     }
 
+    // Stop sending while allowing the receiver to drain buffered values.
     void close() const {
-        if (!state_) {
-            return;
+        if (state_) {
+            state_->close(false);
         }
-        auto lock = state_->lock_state();
-        if (!std::holds_alternative<detail::channel_open>(state_->lifecycle_)) {
-            return;
-        }
-        state_->lifecycle_.template emplace<detail::channel_closed>();
-        detail::complete_worker_single_wait(*state_, worker_wait_status::closed);
     }
 
 private:
@@ -267,7 +282,6 @@ private:
         : state_(std::move(state_value)) {}
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
-    friend class channel_receiver<t_type>;
     template <typename u_type>
     friend auto make_channel(worker_handle, channel_options);
 };
@@ -286,9 +300,9 @@ public:
     }
 
     // The task owns the shared state, but this receiver owns the receive side:
-    // destroying it closes every cold or running receive. Require a named
-    // owner so storing a task cannot silently turn a temporary receiver into
-    // an already-closed operation.
+    // destroying it prevents cold receives from consuming buffered values and
+    // closes pending receives. Require a named owner so storing a task cannot
+    // silently turn a temporary receiver into an already-closed operation.
     [[nodiscard]] task<worker_wait_result<t_type>> receive() const& {
         return detail::receive_channel_state<t_type>(state_, std::nullopt, {});
     }
@@ -329,8 +343,13 @@ public:
     }
     const worker_handle& worker() const&& = delete;
 
+    // Retire the receive side so buffered input is no longer returned. Worker shutdown keeps
+    // its worker_stopping outcome. Storage lives until all endpoints and tasks
+    // owning the shared state retire.
     void close() const {
-        channel_sender<t_type>(state_).close();
+        if (state_) {
+            state_->close(true);
+        }
     }
 
 private:

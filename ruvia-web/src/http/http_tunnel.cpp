@@ -29,20 +29,23 @@ void check_tunnel_worker(void* raw) noexcept {
     }
 }
 task<std::optional<std::pmr::string>> read_tunnel(void* target,
-    task<std::optional<std::pmr::string>> (*read)(void*), detail::operation_lane_lease lease_value, unsigned& running) {
-    static_cast<void>(lease_value);
+    task<std::optional<std::pmr::string>> (*read)(void*), bool& read_active, unsigned& running) {
+    auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
     running_tunnel_operation active(running);
     co_return co_await read(target);
 }
 task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_view),
-    std::pmr::string bytes_value, detail::operation_lane_lease lease_value, unsigned& running) {
-    static_cast<void>(lease_value);
+    std::pmr::string bytes_value, bool& write_active, bool& ended, unsigned& running) {
+    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
+    if (ended) {
+        throw std::logic_error("HTTP tunnel send direction has ended");
+    }
     running_tunnel_operation active(running);
     co_await write(target, bytes_value);
 }
 task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*),
-    bool& ended, detail::operation_lane_lease lease_value, unsigned& running) {
-    static_cast<void>(lease_value);
+    bool& ended, bool& write_active, unsigned& running) {
+    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     running_tunnel_operation active(running);
     if (!ended) {
         co_await finish_value(target);
@@ -71,7 +74,7 @@ void http_tunnel::require_active() const {
 }
 scoped_operation<std::optional<std::pmr::string>> http_tunnel::read() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, detail::claim_operation_lane(read_active_, tunnel_lane_in_progress), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<void> http_tunnel::write(std::string_view bytes_value) & {
@@ -87,12 +90,12 @@ scoped_operation<void> http_tunnel::write(std::pmr::string&& bytes_value) & {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     std::pmr::string owned(std::move(bytes_value), &resource_);
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<void> http_tunnel::finish() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 void http_tunnel::abort() noexcept {

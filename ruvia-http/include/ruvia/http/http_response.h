@@ -310,6 +310,8 @@ public:
 
     http_response(const http_response&) = delete;
     http_response& operator=(const http_response&) = delete;
+    // Moving transfers headers and body. The source keeps its resource and
+    // remains reusable with empty headers and body.
     http_response(http_response&& other) noexcept;
     http_response& operator=(http_response&& other) noexcept;
 

@@ -15,14 +15,22 @@ struct db_predicate_access;
 }  // namespace detail
 
 // An owning condition. Literal arguments are copied during construction, so a
-// condition may outlive the strings used to build it.
+// condition may outlive the strings used to build it. Moving leaves the source empty.
 class db_predicate final {
 public:
     db_predicate() = default;
     db_predicate(const db_predicate&) = delete;
     db_predicate& operator=(const db_predicate&) = delete;
-    db_predicate(db_predicate&&) noexcept = default;
-    db_predicate& operator=(db_predicate&&) noexcept = default;
+    db_predicate(db_predicate&& other) noexcept
+        : query_(std::move(other.query_)),
+          expression_(std::exchange(other.expression_, db_expression{})) {}
+    db_predicate& operator=(db_predicate&& other) noexcept {
+        if (this != &other) {
+            query_ = std::move(other.query_);
+            expression_ = std::exchange(other.expression_, db_expression{});
+        }
+        return *this;
+    }
     [[nodiscard]] bool empty() const noexcept {
         return expression_.empty();
     }

@@ -57,6 +57,19 @@ public:
         return exhausted_;
     }
 
+    [[nodiscard]] std::size_t element_checkpoint() const noexcept {
+        return elements_;
+    }
+
+    void restore_elements(std::size_t checkpoint) noexcept {
+        elements_ = checkpoint;
+    }
+
+    [[nodiscard]] bool skip_value(std::string_view& input, std::size_t depth) noexcept {
+        auto consume = [this]() noexcept { return consume_element(); };
+        return skip_json_value(input, depth, consume);
+    }
+
 private:
     std::size_t elements_;
     std::size_t bytes_;
@@ -177,51 +190,61 @@ private:
     static bool materialize_json(model_type& value, std::string_view& input, std::size_t depth,
         model_string_storage string_storage, json_parse_budget& budget) {
         auto* const resource = value.resource();
-        const bool valid = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource, depth,
-            [&value, resource, depth, string_storage, &budget](
-                std::string_view key, std::string_view& value_input) -> bool {
-                const auto key_hash = model::model_field_name_hash(key);
-                bool field_result = true;
-                const bool matched = model::visit_model_field_by_wire_name(value,
-                    model::model_access::schema<model_type>(), key_hash, key, field_result,
-                    [&](auto& slot) -> bool {
-                        if (slot.is_present()) {
-                            slot.mark_duplicate();
-                            return skip_json_value(value_input, depth + 1);
+        const auto visit_field = [&value, resource, depth, string_storage, &budget](
+                                     std::string_view key, std::string_view& value_input) -> bool {
+            const auto key_hash = model::model_field_name_hash(key);
+            bool field_result = true;
+            const bool matched = model::visit_model_field_by_wire_name(value,
+                model::model_access::schema<model_type>(), key_hash, key, field_result,
+                [&](auto& slot) -> bool {
+                    if (slot.is_present()) {
+                        slot.mark_duplicate();
+                        return budget.skip_value(value_input, depth + 1);
+                    }
+                    const auto original_input = value_input;
+                    using slot_type = std::remove_cvref_t<decltype(slot)>;
+                    using value_type = typename slot_type::value_type;
+                    auto null_input = value_input;
+                    if (consume_json_literal(null_input, "null")) {
+                        value_input = null_input;
+                        if constexpr (slot_type::nullable) {
+                            slot.mark_null();
+                        } else {
+                            slot.mark_invalid_type();
                         }
-                        const auto original_input = value_input;
-                        using slot_type = std::remove_cvref_t<decltype(slot)>;
-                        using value_type = typename slot_type::value_type;
-                        auto null_input = value_input;
-                        if (consume_json_literal(null_input, "null")) {
-                            value_input = null_input;
-                            if constexpr (slot_type::nullable) {
-                                slot.mark_null();
-                            } else {
-                                slot.mark_invalid_type();
-                            }
-                            return true;
-                        }
-                        if (auto parsed_value = parse_json_value<value_type>(
-                                value_input, resource, depth + 1, string_storage, budget);
-                            parsed_value) {
-                            model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
-                            return true;
-                        }
-                        if (budget.exhausted()) {
-                            return false;
-                        }
-                        // Wrong-type values need a structural skip only when the
-                        // value parser did not consume a complete JSON token.
-                        if (value_input.data() == original_input.data() &&
-                            !skip_json_value(value_input, depth + 1)) {
-                            return false;
-                        }
-                        slot.mark_invalid_type();
                         return true;
-                    });
-                return matched ? field_result : skip_json_value(value_input, depth + 1);
-            });
+                    }
+                    const auto element_checkpoint = budget.element_checkpoint();
+                    if (auto parsed_value = parse_json_value<value_type>(
+                            value_input, resource, depth + 1, string_storage, budget);
+                        parsed_value) {
+                        model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
+                        return true;
+                    }
+                    if (budget.exhausted()) {
+                        return false;
+                    }
+                    // Wrong-type values need a structural skip only when the
+                    // value parser did not consume a complete JSON token.
+                    if (value_input.data() == original_input.data()) {
+                        // The fallback rescans the entire value. Count its
+                        // elements once, while retaining byte charges for
+                        // allocations that an arena may still own.
+                        budget.restore_elements(element_checkpoint);
+                        if (!budget.skip_value(value_input, depth + 1)) {
+                            return false;
+                        }
+                    }
+                    slot.mark_invalid_type();
+                    return true;
+                });
+            return matched ? field_result : budget.skip_value(value_input, depth + 1);
+        };
+        const auto consume_key_allocation = [&budget](std::size_t bytes_value) noexcept {
+            return budget.consume_bytes(bytes_value) && budget.consume_bytes(sizeof(std::pmr::string));
+        };
+        const bool valid = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource,
+            depth, visit_field, consume_key_allocation);
         if (valid) {
             apply_defaults(value);
         }

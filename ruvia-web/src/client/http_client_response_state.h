@@ -56,7 +56,8 @@ public:
     http_client_response_state(worker_handle&&, std::pmr::memory_resource*) = delete;
 
     // Body algorithms run on the address-stable storage owner. The public
-    // facade wraps them in body_operation_scope_ to enforce the linear lane.
+    // facade tracks cold frames in body_operation_scope_; the algorithms claim
+    // body_operation_active_ only when their lazy task starts.
     template <typename view>
     [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(response_stream_writer* output = nullptr);
     [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes);
@@ -112,6 +113,7 @@ public:
     bool abandoned_{false};
     bool incremental_read_{false};
     bool collect_all_{false};
+    bool body_operation_active_{false};
     bool body_decode_required_{false};
     // Content-Encoding parsed with the final head while decoding is pending.
     std::optional<http_content_coding_field_result> content_coding_{};

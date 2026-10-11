@@ -57,7 +57,7 @@ public:
     }
 
     [[nodiscard]] scoped_operation<std::optional<websocket_message>> read(const operation_options& options);
-    // `payload` is borrowed until the returned operation completes.
+    // Owns payload bytes in the client resource before returning a cold task.
     [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::string_view payload,
         const operation_options& options, websocket_send_options send_options = {});
     [[nodiscard]] scoped_operation<void> close(
@@ -134,13 +134,11 @@ private:
     [[nodiscard]] task<void> establish();
     [[nodiscard]] task<void> perform_handshake();
 
-    [[nodiscard]] task<std::optional<websocket_message>> run_read(
-        operation_options options, operation_lane_lease activity);
-    [[nodiscard]] task<void> run_write(websocket_opcode opcode, std::string_view payload,
-        operation_options options, websocket_send_options send_options, operation_lane_lease activity);
+    [[nodiscard]] task<std::optional<websocket_message>> run_read(operation_options options);
+    [[nodiscard]] task<void> run_write(websocket_opcode opcode, std::pmr::string payload,
+        operation_options options, websocket_send_options send_options);
     [[nodiscard]] task<void> run_close(websocket_close_options options, std::pmr::string reason,
-        operation_options operation_options, operation_lane_lease read_activity,
-        operation_lane_lease write_activity, operation_lane_lease close_activity);
+        operation_options operation_options);
 
     void require_current() const;
     [[nodiscard]] ruvia::websocket_connection& require_protocol() noexcept;

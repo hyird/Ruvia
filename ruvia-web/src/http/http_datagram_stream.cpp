@@ -28,12 +28,12 @@ scoped_operation<std::optional<http_datagram>> http_datagram_stream::read() & {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
-    stream_.state_->require(false);
+    stream_.state_->require();
     return ::ruvia::make_scoped_operation(stream_.state_->read_scope_, read_owned(detail::capsule_state_pin(*stream_.state_), false));
 }
 task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, bool udp) {
     auto& state_value = pin.state();
-    detail::running_capsule_operation running(state_value);
+    detail::running_capsule_operation running(state_value, false);
     for (;;) {
         if (state_value.receive_ended_) {
             co_return std::nullopt;
@@ -91,7 +91,7 @@ scoped_operation<void> http_datagram_stream::send_payload(std::string_view paylo
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     auto& state_value = *stream_.state_;
-    state_value.require(true);
+    state_value.require();
     if (state_value.send_ended_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }

@@ -59,6 +59,7 @@ public:
     bool compress(std::string_view input, std::pmr::string& out) {
         auto& stream = deflate_.native();
         if (!send_takeover_ && deflateReset(&stream) != Z_OK) {
+            deflate_.rethrow_allocation_failure();
             return false;
         }
         // Messages can exceed zlib's 32-bit avail_in, so supply the input in
@@ -80,6 +81,7 @@ public:
             const int status =
                 deflate(&stream, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
             if (status != Z_OK && status != Z_BUF_ERROR) {
+                deflate_.rethrow_allocation_failure();
                 return false;
             }
             out.append(buffer, sizeof(buffer) - stream.avail_out);
@@ -102,6 +104,7 @@ public:
     websocket_inflate_result decompress(
         std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit) {
         if (!receive_takeover_ && inflateReset(&inflate_.native()) != Z_OK) {
+            inflate_.rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
         static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
@@ -124,6 +127,7 @@ public:
     // legal even when the receiver retains its prior dictionary (RFC 7692).
     void discard_compression() {
         if (deflateReset(&deflate_.native()) != Z_OK) {
+            deflate_.rethrow_allocation_failure();
             throw std::runtime_error("failed to reset discarded WebSocket compression");
         }
     }
@@ -159,6 +163,7 @@ private:
             stream.avail_out = sizeof(buffer);
             const int status = inflate(&stream, Z_NO_FLUSH);
             if (status != Z_STREAM_END && status != Z_OK && status != Z_BUF_ERROR) {
+                inflate_.rethrow_allocation_failure();
                 return websocket_inflate_result::error;
             }
             const auto produced = sizeof(buffer) - stream.avail_out;
@@ -170,6 +175,7 @@ private:
             // Preserve the LZ77 window across streams, including takeover
             // history, while discarding the terminated stream's padding bits.
             if (status == Z_STREAM_END && inflateResetKeep(&stream) != Z_OK) {
+                inflate_.rethrow_allocation_failure();
                 return websocket_inflate_result::error;
             }
             if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {

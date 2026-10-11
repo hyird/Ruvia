@@ -1,15 +1,197 @@
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <exception>
+#include <memory>
+#include <memory_resource>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
 
+#include <asio.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/socket.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/multipart_reader.h"
+#include "ruvia/web/streaming.h"
 
 #include "context_body_decoding_fixture.h"
+#include "http_server_fixture.h"
+#include "test_io_context.h"
+
+namespace request_body_limits_test {
+
+struct body_lane_observation final {
+    std::atomic<bool> first_read_{};
+    std::atomic<bool> eof_{};
+    std::atomic<bool> overlap_rejected_{};
+    std::atomic<bool> multipart_eof_{};
+    std::atomic<bool> multipart_overlap_rejected_{};
+};
+
+const auto body_lane_observed = std::make_shared<body_lane_observation>();
+[[maybe_unused]] const bool body_lane_registered = [] {
+    ruvia::app().use_worker_state<std::shared_ptr<body_lane_observation>>([] { return body_lane_observed; });
+    return true;
+}();
+
+class body_lane_routes final : public ruvia::controller<body_lane_routes> {
+    RUVIA_ROUTES_BEGIN
+    RUVIA_POST_STREAM("/server-lazy-body-read", read);
+    RUVIA_POST_STREAM("/server-lazy-multipart-read", read_multipart);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& reader = context_value.req().get_body_reader();
+        {
+            auto discarded = reader.read();
+            static_cast<void>(discarded);
+        }
+        auto first = reader.text();
+        auto last = reader.read();
+        ruvia::task_scope reads(context_value.worker());
+        const auto receive = [&]() -> ruvia::task<void> {
+            const auto chunk = co_await std::move(first);
+            observed.first_read_ = chunk && *chunk == "body";
+        };
+        reads.spawn(receive());
+        try {
+            auto overlap = reader.read();
+            static_cast<void>(co_await std::move(overlap));
+        } catch (const std::logic_error&) {
+            observed.overlap_rejected_ = true;
+        }
+        co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        co_await reads.join();
+        observed.eof_ = !(co_await std::move(last));
+        co_return context_value.text("read-complete");
+    }
+
+    ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        ruvia::multipart_reader reader(context_value.req().get_body_reader(),
+            {.boundary_ = ruvia::multipart_boundary("lazy"), .resource_ = context_value.pool()});
+        auto first = reader.read();
+        auto last = reader.read();
+        std::pmr::string body(context_value.allocator<char>());
+        ruvia::task_scope reads(context_value.worker());
+        const auto receive = [&]() -> ruvia::task<void> {
+            const auto part = co_await std::move(first);
+            if (part) {
+                body.append(part->name());
+                body.push_back(':');
+                body.append(part->body());
+            }
+        };
+        reads.spawn(receive());
+        try {
+            auto overlap = reader.read();
+            static_cast<void>(co_await std::move(overlap));
+        } catch (const std::logic_error&) {
+            observed.multipart_overlap_rejected_ = true;
+        }
+        co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        co_await reads.join();
+        auto part = co_await std::move(last);
+        while (part) {
+            body.append(part->body());
+            part = co_await reader.read();
+        }
+        observed.multipart_eof_ = true;
+        co_return context_value.text(std::move(body));
+    }
+};
+
+void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
+    std::string_view target, std::string_view body, std::string_view expected) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                ruvia::close_socket(client);
+            }
+        });
+        try {
+            const std::string head = "POST " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
+            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(client, asio::buffer(head), std::move(handler));
+            });
+            if (sent.error_code()) {
+                throw std::system_error(sent.error_code());
+            }
+            std::string informational;
+            char byte{};
+            while (!informational.ends_with("\r\n\r\n")) {
+                const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                });
+                if (received.error_code()) {
+                    throw std::system_error(received.error_code());
+                }
+                informational.push_back(byte);
+            }
+            RUVIA_CHECK(informational.starts_with("HTTP/1.1 103 "));
+            const auto body_sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(client, asio::buffer(body), std::move(handler));
+            });
+            if (body_sent.error_code()) {
+                throw std::system_error(body_sent.error_code());
+            }
+            std::string response;
+            std::array<char, 1024> buffer;
+            for (;;) {
+                const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(buffer), std::move(handler));
+                });
+                if (received.error_code() == asio::error::eof) {
+                    break;
+                }
+                if (received.error_code()) {
+                    throw std::system_error(received.error_code());
+                }
+                response.append(buffer.data(), received.result());
+            }
+            RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+            RUVIA_CHECK(response.ends_with(expected));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        static_cast<void>(watchdog.cancel());
+        ruvia::close_socket(client);
+        attachment.stop();
+    };
+    auto done = attachment.loop().start(run());
+    attachment.run();
+    done.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+}  // namespace request_body_limits_test
+
+using request_body_limits_test::body_lane_observed;
+using request_body_limits_test::exercise_lazy_body_reads;
 
 RUVIA_TEST(web_request_decode_accepts_gzip_content) {
     const std::string plain(2048, 'x');
@@ -36,6 +218,25 @@ RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
     io.run();
     future.get();
     RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(streamed_request_cold_reads_share_a_lane_only_when_started) {
+    body_lane_observed->first_read_ = false;
+    body_lane_observed->eof_ = false;
+    body_lane_observed->overlap_rejected_ = false;
+    exercise_lazy_body_reads(ruvia_ctx, "/server-lazy-body-read", "body", "read-complete");
+    RUVIA_CHECK(body_lane_observed->first_read_);
+    RUVIA_CHECK(body_lane_observed->eof_);
+    RUVIA_CHECK(body_lane_observed->overlap_rejected_);
+}
+
+RUVIA_TEST(multipart_request_cold_reads_preserve_parser_state_after_started_overlap) {
+    body_lane_observed->multipart_eof_ = false;
+    body_lane_observed->multipart_overlap_rejected_ = false;
+    constexpr std::string_view body = "--lazy\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--lazy--\r\n";
+    exercise_lazy_body_reads(ruvia_ctx, "/server-lazy-multipart-read", body, "field:value");
+    RUVIA_CHECK(body_lane_observed->multipart_eof_);
+    RUVIA_CHECK(body_lane_observed->multipart_overlap_rejected_);
 }
 
 RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {

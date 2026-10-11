@@ -8,6 +8,7 @@
 #include "ruvia/web/http_client_response.h"
 
 #include "client/http_client_response_state.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 
@@ -21,6 +22,7 @@ struct http_client_output_write_input final {
 template <typename policy>
 [[nodiscard]] task<void> write_client_output(http_client_response_state* state_value, http_client_output_write_input input) {
     auto& output = policy::output(*state_value);
+    auto activity = claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
     policy::require_write(*state_value);
     if (input.bytes_.empty()) {
         co_return;
@@ -42,6 +44,7 @@ template <typename policy>
 template <typename policy, typename input_type>
 [[nodiscard]] task<void> finish_client_output(http_client_response_state* state_value, input_type input) {
     auto& output = policy::output(*state_value);
+    auto activity = claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
     if (!policy::begin_finish(*state_value, input)) {
         co_return;
     }

@@ -21,6 +21,7 @@
 
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 enum class capsule_interest : unsigned char { all,
@@ -44,16 +45,17 @@ public:
           config_(config),
           input_(resource_),
           payload_(resource_) {}
-    void require(bool output) const {
+    void require() const {
         if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
             throw std::logic_error("capsule stream is closed");
         }
         if (!worker_.is_current()) {
             throw std::logic_error("capsule stream requires its owner worker");
         }
-        if ((output ? output_scope_ : read_scope_).has_pending_operations()) {
-            throw std::logic_error("capsule stream operation is already active");
-        }
+    }
+    [[nodiscard]] operation_lane_lease claim_lane(bool output) {
+        require();
+        return claim_operation_lane(output ? output_active_ : read_active_, "capsule stream operation is already active");
     }
     void retain() noexcept {
         ++references_;
@@ -181,6 +183,8 @@ public:
     bool receive_ended_{};
     bool send_ended_{};
     bool closed_{};
+    bool read_active_{};
+    bool output_active_{};
     unsigned running_{};
     std::size_t references_{1};
     ::ruvia::operation_scope read_scope_;
@@ -213,12 +217,10 @@ struct capsule_write_input final {
 };
 class running_capsule_operation final {
 public:
-    explicit running_capsule_operation(http_capsule_stream_state& state_value)
+    running_capsule_operation(http_capsule_stream_state& state_value, bool output)
         : state_(state_value),
-          exceptions_(std::uncaught_exceptions()) {
-        if (state_value.closed_ || !state_value.worker_.is_current()) {
-            throw std::logic_error("capsule stream operation expired");
-        }
+          exceptions_(std::uncaught_exceptions()),
+          lane_(state_value.claim_lane(output)) {
         ++state_.running_;
     }
     ~running_capsule_operation() {
@@ -231,5 +233,6 @@ public:
 private:
     http_capsule_stream_state& state_;
     int exceptions_;
+    operation_lane_lease lane_;
 };
 }  // namespace ruvia::detail

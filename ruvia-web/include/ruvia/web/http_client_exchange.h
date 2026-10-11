@@ -15,7 +15,8 @@ class http_client_response_state;
 
 // One upload lane embedded in its exchange. Each chunk/trailer input is owned
 // before return; completing write() means transport accepted the entire chunk.
-// Only one write/end operation may exist at a time. Chunk size is bounded by
+// Only one write/end operation may run at a time. Cold operations can coexist
+// and claim the output lane when awaited. Chunk size is bounded by
 // max_chunk_bytes_; split larger sources into sequential writes.
 class http_client_request_body_writer final {
 public:
