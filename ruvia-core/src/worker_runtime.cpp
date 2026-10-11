@@ -7,14 +7,12 @@
 #include <thread>
 #include <utility>
 
-#include <asio/executor_work_guard.hpp>
-
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/process_resource.h"
 
 #include "first_failure.h"
+#include "worker_stop_chain.h"
 
 namespace ruvia {
 
@@ -28,8 +26,8 @@ public:
         : io_context_(options.io_policy_ == worker_io_policy::single_owner
                           ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                           : ASIO_CONCURRENCY_HINT_DEFAULT),
-          work_(asio::make_work_guard(io_context_)),
-          context_(io_context_, options.queue_capacity_) {}
+          context_(io_context_, options.queue_capacity_),
+          stop_(context_) {}
 
     // Returns true for the winning failure.
     [[nodiscard]] bool record_failure(std::exception_ptr failure, bool observed) noexcept {
@@ -68,6 +66,10 @@ public:
         if (configured_ || lifecycle_.state() != runtime_lifecycle::state_type::ready) {
             throw std::logic_error("worker runtime hooks must be configured once before launch");
         }
+        stop_.configure({
+            .stop_admission_ = std::move(hooks.stop_admission_),
+            .finalize_ = std::move(hooks.finalize_),
+        });
         hooks_ = std::move(hooks);
         configured_ = true;
     }
@@ -179,76 +181,19 @@ public:
                 std::terminate();
             }
         }
-        context_.close();
-        try {
-            // A racing dispatcher failure may still be notifying listeners.
-            // Keep the guard until all of them have published their cleanup.
-            detail::worker_handle_access::when_shutdown_notifications_complete(context_.handle(),
-                [this] {
-                    const std::lock_guard lock(mutex_);
-                    stop_control_scheduled_ = true;
-                    context_.defer_or_terminate([this] { apply_stop(); });
-                });
-        } catch (...) {
-            std::terminate();
-        }
+        stop_.request_stop();
     }
 
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
-        const std::lock_guard lock(mutex_);
-        if (lifecycle_.state() != runtime_lifecycle::state_type::running || work_released_) {
+        if (lifecycle_.state() != runtime_lifecycle::state_type::running) {
             return false;
         }
-        context_.defer_or_terminate(std::move(control));
-        return true;
+        return stop_.post_control(std::move(control));
     }
 
     void finalize() noexcept {
-        {
-            const std::lock_guard lock(mutex_);
-            if (finalization_requested_) {
-                return;
-            }
-            finalization_requested_ = true;
-        }
         request_stop();
-        const std::lock_guard lock(mutex_);
-        // If request_stop is still notifying listeners, its eventual control
-        // consumes this request. Never release work before that publication.
-        if (stop_control_scheduled_ && !work_released_) {
-            context_.defer_or_terminate([this] { apply_stop(); });
-        }
-    }
-
-    void apply_stop() noexcept {
-        if (!stop_applied_) {
-            stop_applied_ = true;
-            try {
-                if (hooks_.stop_admission_) {
-                    hooks_.stop_admission_();
-                } else {
-                    finalize();
-                }
-            } catch (...) {
-                std::terminate();
-            }
-            context_.stop_timers();
-        }
-        {
-            const std::lock_guard lock(mutex_);
-            if (!finalization_requested_ || work_released_) {
-                return;
-            }
-            work_released_ = true;
-        }
-        try {
-            if (hooks_.finalize_) {
-                hooks_.finalize_();
-            }
-        } catch (...) {
-            std::terminate();
-        }
-        work_.reset();
+        stop_.finalize();
     }
 
     void run(bool launch_startup) noexcept {
@@ -271,7 +216,6 @@ public:
         // Detach before the context or domain owners can disappear. Unfinished
         // post factories own their stable endpoint, not this execution context.
         context_.detach();
-        work_.reset();
         (void)lifecycle_.request_stop();
         (void)abort_phases();
         lifecycle_.complete_stop();
@@ -322,8 +266,8 @@ public:
     }
 
     asio::io_context io_context_;
-    asio::executor_work_guard<asio::io_context::executor_type> work_;
     worker_runtime_context context_;
+    detail::worker_stop_chain stop_;
     runtime_lifecycle lifecycle_;
     worker_runtime_hooks hooks_;
     mutable std::mutex mutex_;
@@ -338,10 +282,6 @@ public:
     bool started_{};
     bool joining_{};
     bool joined_{};
-    bool stop_control_scheduled_{};
-    bool finalization_requested_{};
-    bool work_released_{};
-    bool stop_applied_{};
 };
 
 void worker_runtime::impl_deleter::operator()(impl* value) const noexcept {

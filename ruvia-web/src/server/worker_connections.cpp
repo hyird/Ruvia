@@ -191,8 +191,7 @@ task<void> worker_connections::run_session(
                 // regardless of session activity -- severing long-lived TLS
                 // sessions (websocket, keep-alive, slow uploads, streaming).
                 connection_scanner::entry_type handshake_entry;
-                connection_scanner::guard_type handshake_guard(
-                    &scanner_, handshake_entry, socket);
+                connection_scanner::guard_type handshake_guard(scanner_, handshake_entry, socket);
                 handshake_entry.set_phase(connection_scanner::phase_type::reading_initial);
                 const auto handshake_completion =
                     co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});

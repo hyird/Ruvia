@@ -100,6 +100,9 @@ private:
 
     std::pmr::memory_resource* resource_;
     struct entry_type final {
+        // Defined where db_query_cache_state is complete.
+        explicit entry_type(pool_owner_type pool) noexcept;
+
         pool_owner_type pool_;
 #ifdef RUVIA_ENABLE_REDIS
         std::unique_ptr<db_query_cache_state, pmr_object_deleter<db_query_cache_state>> cache_;

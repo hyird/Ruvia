@@ -55,16 +55,16 @@ public:
         failed,
     };
 
-    [[nodiscard]] static constexpr response_body_chunk data(std::string_view bytes, bool last) noexcept {
-        return response_body_chunk(kind_type::data, bytes, last);
+    [[nodiscard]] static constexpr response_body_chunk data(std::string_view bytes) noexcept {
+        return response_body_chunk(kind_type::data, bytes);
     }
 
     [[nodiscard]] static constexpr response_body_chunk end() noexcept {
-        return response_body_chunk(kind_type::end, {}, true);
+        return response_body_chunk(kind_type::end, {});
     }
 
     [[nodiscard]] static constexpr response_body_chunk failed() noexcept {
-        return response_body_chunk(kind_type::failed, {}, false);
+        return response_body_chunk(kind_type::failed, {});
     }
 
     [[nodiscard]] constexpr kind_type kind() const noexcept {
@@ -76,20 +76,13 @@ public:
         return bytes_;
     }
 
-    // No body bytes follow this chunk.
-    [[nodiscard]] constexpr bool last() const noexcept {
-        return last_;
-    }
-
 private:
-    constexpr response_body_chunk(kind_type kind, std::string_view bytes, bool last) noexcept
+    constexpr response_body_chunk(kind_type kind, std::string_view bytes) noexcept
         : bytes_(bytes),
-          kind_(kind),
-          last_(last) {}
+          kind_(kind) {}
 
     std::string_view bytes_;
     kind_type kind_;
-    bool last_;
 };
 
 class response_file_source final {
@@ -105,8 +98,8 @@ public:
     // Yields the body in order: in-memory segments as borrowed views, file
     // ranges as read-ahead buffers. `failed` means the file could not be
     // opened/read, ended early, changed identity, or the read was abandoned
-    // (pool rejection, stop); a protocol that already committed its head must
-    // abort the response.
+    // (pool rejection, stop); once the head is committed the connection must be
+    // closed.
     [[nodiscard]] task<response_body_chunk> next();
 
 private:
@@ -127,6 +120,9 @@ private:
     };
 
     struct read_state final {
+        explicit read_state(std::pmr::memory_resource* resource)
+            : path_(resource) {}
+
         std::pmr::basic_string<std::filesystem::path::value_type> path_;
         std::uint64_t size_{};
         http_response_file_identity identity_{http_response_file_identity::unchecked()};
@@ -149,9 +145,7 @@ private:
     const std::filesystem::path::value_type* current_path_{};
     std::uint64_t range_remaining_{};
     std::size_t next_segment_{};
-    std::size_t current_segment_{};
     std::size_t segment_count_{};
-    std::size_t last_segment_{};
     bool lost_{false};
 };
 

@@ -14,7 +14,6 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "http/http_socket_tunnel_transport.h"
 #include "http/http_tunnel_session.h"
 #include "http/tls_tunnel_output.h"
 #include "server/http1_route_dispatch.h"
@@ -36,7 +35,7 @@ template <typename stream_type>
             require_http1_final_response_commit(d.response_, d.parsed_.connection_plan_.require_close()));
     }
     const auto& endpoint = *resolved.route().endpoint().tunnel();
-    using session_type = http_tunnel_session<http_socket_tunnel_transport<stream_type>>;
+    using session_type = http_tunnel_session<stream_type>;
     std::optional<tls_tunnel_output> tls_output;
     std::optional<session_type> tunnel;
     auto establish = [&](context& context_value) -> task<void> {
@@ -74,8 +73,8 @@ template <typename stream_type>
             tls_output.emplace(*d.stream_.native_handle(), d.stream_.next_layer(), d.base_route_services_.worker(), *d.memory_.resource());
             tls_output->start();
         }
-        tunnel.emplace(http_socket_tunnel_transport<stream_type>(d.stream_, tls_output ? &*tls_output : nullptr),
-            d.base_route_services_.worker(), *d.memory_.resource(), pending);
+        tunnel.emplace(d.stream_, tls_output ? &*tls_output : nullptr, d.base_route_services_.worker(),
+            *d.memory_.resource(), pending);
         co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, resolved.stream_handler(), context_value);
     };
     auto finish = [&](session_type& session_value, std::exception_ptr failure) {

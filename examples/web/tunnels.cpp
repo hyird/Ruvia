@@ -67,13 +67,14 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
     ruvia::http_client client(loop, config);
     std::exception_ptr failure;
     try {
+        const auto origin = client.handle();
         {
-            auto response = co_await client.send({.target_ = "/health"});
+            auto response = co_await origin.send({.target_ = "/health"});
             auto body = co_await response.body().read_all();
             std::cout << "service: " << characters(body.bytes());
         }
         if (selection == "all" || selection == "bytes") {
-            auto opened = co_await client.open_tunnel({.authority_ = "echo.example:443"});
+            auto opened = co_await origin.open_tunnel({.authority_ = "echo.example:443"});
             if (auto* rejection = opened.response()) {
                 auto body = co_await rejection->body().read_all();
                 throw std::runtime_error("CONNECT rejected: " + std::string(characters(body.bytes())));
@@ -92,7 +93,7 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
             std::cout << "CONNECT: " << echoed << '\n';
         }
         if (selection == "all" || selection == "udp") {
-            auto opened = co_await client.open_udp_tunnel({.target_ = "/udp/echo.example/443"});
+            auto opened = co_await origin.open_udp_tunnel({.target_ = "/udp/echo.example/443"});
             if (!opened.tunnel()) {
                 auto body = co_await opened.response()->body().read_all();
                 throw std::runtime_error("CONNECT-UDP rejected: " + std::string(characters(body.bytes())));

@@ -25,9 +25,9 @@
 #include "server/http_server_options.h"
 #include "server/request_deadline.h"
 
-// Shared admission for HTTP/1 and in-process subrequests. Protocol drivers
-// read and frame messages; admission decides coding, client identity, deadlines,
-// expectations, rate limits, body ceilings and endpoint kind.
+// Shared admission for HTTP/1 and in-process subrequests. The HTTP/1 session
+// reads and frames messages; admission decides coding, client identity,
+// deadlines, expectations, rate limits, body ceilings and endpoint kind.
 
 namespace ruvia::detail {
 
@@ -95,9 +95,9 @@ private:
 [[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
     request_memory& memory, const http_request_rejection& rejection, context_services services);
 
-// The post-response tail shared by every protocol: final representation
-// preparation (CORS, compression, 406/500 recovery through the application
-// error handler) and the access-log record of the committed status.
+// The post-response tail: final representation preparation (CORS,
+// compression, 406/500 recovery through the application error handler) and
+// the access-log record of the committed status.
 class http_response_tail final {
 public:
     http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
@@ -118,12 +118,11 @@ public:
     }
 
     // All arguments borrow the current request owner through completion. Only
-    // an uncommitted response may enter. A disengaged result means the request
-    // was cancelled; protocol drivers retain ownership of reset/close. The
-    // application error handler runs at most once here.
-    [[nodiscard]] task<std::optional<prepared_application_response>> prepare(http_response& response,
+    // an uncommitted response may enter. The application error handler runs at
+    // most once here.
+    [[nodiscard]] task<prepared_application_response> prepare(http_response& response,
         const http_server_options& options, const route_table& routes, request_memory& memory,
-        const context_services& services, application_response_control control = {}) const;
+        const context_services& services) const;
 
     // Records a terminal outcome whose final status was committed. A single
     // null check when no access log is configured.
@@ -168,26 +167,13 @@ public:
         return udp_tunnel_;
     }
 
-    // The negotiated selection for a response stream (never a failed one).
-    [[nodiscard]] const http_response_coding_selection& response_stream_coding() const noexcept {
-        return *tail_.coding_policy().selection();
-    }
-
     [[nodiscard]] http_response_coding_availability coding_availability() const noexcept {
         return coding_availability_;
     }
 
-    [[nodiscard]] std::string_view client_address() const noexcept {
-        return client_address_;
-    }
-
-    // The protocol's request services plus the armed request deadline.
+    // The connection's request services plus the armed request deadline.
     [[nodiscard]] const context_services& services() const noexcept {
         return services_;
-    }
-
-    [[nodiscard]] bool deadline_armed() const noexcept {
-        return deadline_armed_;
     }
 
     [[nodiscard]] protocol_byte_limit body_limit() const noexcept {
@@ -219,20 +205,17 @@ private:
     context_services services_;
     std::optional<http_request_rejection> rejection_;
     const resolved_route* resolved_{};
-    std::string_view client_address_;
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
     http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
     http_request_endpoint endpoint_{http_request_endpoint::buffered};
     bool udp_tunnel_{false};
-    bool deadline_armed_{false};
 };
 
 // Runs the admission policy once for one request. `services` are the
-// protocol's request services (interim output, push, trailers, ...). The
-// handler deadline is armed before any rejection so a custom error handler
-// observes the request stop token: an engaged `deadline` (a protocol that
-// owns a combined stop token) is armed in place; a disengaged one is emplaced
-// on services.get_stop_token() only when a deadline applies.
+// connection's request services (interim output, trailers, ...). The handler
+// deadline is armed before any rejection so a custom error handler observes
+// the request stop token: `deadline` must be disengaged and is emplaced on
+// services.get_stop_token() only when a deadline applies.
 [[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
     const http_request_admission_policy& policy, context_services services, std::optional<request_deadline>& deadline);
 

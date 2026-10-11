@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
@@ -13,6 +14,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_pmr_string.h"
@@ -21,28 +23,24 @@
 
 #include "http/http_stream_read_result.h"
 #include "server/connection_scanner.h"
+#include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {
 
-// Transport-agnostic websocket connection (RFC 6455). All protocol behavior,
-// including frame reassembly, write serialization, heartbeats, and close,
-// lives here; the transport is supplied by the session
-// policy, which supplies four transport-specific operations:
-//   asio-executor executor() const;
-//   task<http_stream_read_result> read_more(std::pmr::string& buffer);
-//   task<std::error_code> write_bytes(std::string_view, websocket_transport_disposition);
-//   void abort() noexcept;  // abort this websocket transport
-template <typename transport_type>
+// HTTP/1.1 websocket connection (RFC 6455) over the upgraded byte stream (plain
+// TCP socket or TLS stream). All protocol behavior, including frame
+// reassembly, write serialization, heartbeats, and close, lives here.
+template <typename stream_type>
 class websocket_connection final {
 public:
-    websocket_connection(transport_type transport, const worker_handle& worker_value,
+    websocket_connection(stream_type& stream, const worker_handle& worker_value,
         connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource,
         std::string_view initial_bytes = {},
         websocket_compression compression = (websocket_compression{}),
         int compression_level = 6)
-        : transport_(std::move(transport)),
+        : stream_(stream),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
@@ -55,7 +53,7 @@ public:
             periodic_check_, this, &websocket_connection::heartbeat_tick_thunk);
     }
 
-    websocket_connection(transport_type, worker_handle&&, connection_scanner::entry_type&,
+    websocket_connection(stream_type&, worker_handle&&, connection_scanner::entry_type&,
         websocket_lifecycle_options, protocol_byte_limit, std::pmr::memory_resource*,
         std::string_view = {}, websocket_compression = (websocket_compression{}), int = 6) = delete;
 
@@ -222,13 +220,16 @@ private:
     task<void> write_frame_now(websocket_opcode opcode, std::string_view payload, bool compress = true);
     task<void> flush_protocol_output_exclusive();
     task<void> flush_protocol_output_now();
+    task<http_stream_read_result> read_more();
+    task<std::error_code> write_bytes(std::string_view bytes_value);
+    void close_stream() noexcept;
     void abort_transport(bool force_transport = false) noexcept;
     void notify_write_idle() noexcept;
     [[nodiscard]] bool has_operations_to_drain() const noexcept {
         return read_phase_ != read_phase_type::idle || write_active_ || write_phase_ != write_phase_type::idle;
     }
 
-    transport_type transport_;
+    stream_type& stream_;
     const worker_handle* worker_;
     connection_scanner::entry_type& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};

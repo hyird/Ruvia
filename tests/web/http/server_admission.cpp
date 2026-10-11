@@ -123,18 +123,18 @@ RUVIA_TEST(http1_clients_share_406_admission_and_rate_limit_budget) {
             // A response stream commits its representation before a status can
             // be inspected, so a client that accepts no coding gets 406 first.
             for (auto* client : clients) {
-                auto response = co_await client->send({.target_ = "/events", .headers_ = refuse_every_coding});
+                auto response = co_await client->handle().send({.target_ = "/events", .headers_ = refuse_every_coding});
                 RUVIA_CHECK(response.status() == ruvia::http_status::not_acceptable);
                 (void)co_await collect_text(response);
             }
             for (auto* client : clients) {
-                auto response = co_await client->send({.target_ = "/plain"});
+                auto response = co_await client->handle().send({.target_ = "/plain"});
                 RUVIA_CHECK(response.status() == ruvia::http_status::ok);
                 RUVIA_CHECK((co_await collect_text(response)) == "plain");
             }
             // Both connections drew on the same client-address budget; it is spent.
             for (auto* client : clients) {
-                auto response = co_await client->send({.target_ = "/plain"});
+                auto response = co_await client->handle().send({.target_ = "/plain"});
                 RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
                 RUVIA_CHECK(response.header("Retry-After").has_value());
                 (void)co_await collect_text(response);

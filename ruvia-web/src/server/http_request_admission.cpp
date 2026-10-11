@@ -77,13 +77,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // a handler too and must observe the request stop token.
     const auto handler_deadline =
         effective_handler_deadline(policy.handler_deadline_, resolved != nullptr ? resolved->route().deadline_ms() : 0);
-    bool deadline_armed = false;
     if (handler_deadline > std::chrono::milliseconds::zero()) {
-        if (!deadline.has_value()) {
-            deadline.emplace(services.get_stop_token());
-        }
-        deadline->arm(services.worker(), handler_deadline);
-        deadline_armed = true;
+        deadline.emplace(services.get_stop_token()).arm(services.worker(), handler_deadline);
     }
     if (deadline.has_value()) {
         services = services.with_request_deadline(*deadline);
@@ -92,9 +87,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     http_request_admission admission(
         http_response_tail(request, coding_policy, client_address, input.start_), std::move(services));
     admission.resolved_ = resolved;
-    admission.client_address_ = client_address;
     admission.coding_availability_ = policy.coding_availability_;
-    admission.deadline_armed_ = deadline_armed;
     const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;
     admission.body_limit_ = http_request_body_limit(input.resolution_,
         endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);

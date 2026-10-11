@@ -30,7 +30,7 @@ class graceful_close_bounds final {
 public:
     graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner,
         const worker_handle& worker_value)
-        : guard_(&scanner, entry_, socket) {
+        : guard_(scanner, entry_, socket) {
         entry_.set_phase(connection_scanner::phase_type::writing);
         armed_ = worker_value.schedule_timer(timer_, worker_timer_deadline_after(graceful_close_time),
                      [target = &socket](worker_timer_outcome outcome) {

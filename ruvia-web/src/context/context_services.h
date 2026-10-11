@@ -12,7 +12,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/web/conn_info.h"
 #include "ruvia/web/error_handlers.h"
 
@@ -60,18 +59,13 @@ struct context_connection_services final {
     conn_info info_;
 };
 
-// The per-request protocol channels a driver binds once, before admission. A
-// null member is a channel this protocol, or this request, does not provide.
-// Each borrowed object outlives every context created for the request.
-struct context_request_channels final {
-    http_interim_response_output* interim_output_{};
-};
-
 struct context_request_services final {
     std::reference_wrapper<const stop_token> stop_token_;
     context_request_body_source body_source_{};
     const http_request_trailers* trailers_{};
-    context_request_channels channels_{};
+    // The driver's 1xx output, bound once before admission; null when this
+    // request has none. It outlives every context created for the request.
+    http_interim_response_output* interim_output_{};
     context_response_output response_output_{};
     const request_deadline* deadline_{};
     std::size_t dispatch_depth_{};
@@ -178,12 +172,12 @@ public:
     context_services with_request_trailers(http_request_trailers&&) const = delete;
 
     [[nodiscard]] http_interim_response_output* interim_output() const noexcept {
-        return request_services_.channels_.interim_output_;
+        return request_services_.interim_output_;
     }
 
-    [[nodiscard]] context_services with_request_channels(const context_request_channels& channels) const noexcept {
+    [[nodiscard]] context_services with_interim_output(http_interim_response_output& output) const noexcept {
         auto services = *this;
-        services.request_services_.channels_ = channels;
+        services.request_services_.interim_output_ = &output;
         return services;
     }
 

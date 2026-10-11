@@ -47,8 +47,8 @@ template <typename connection_type>
 // The terminal handler borrows an established connection, but does not close it:
 // onion middleware post-processing still belongs to the same websocket request
 // and must be able to turn its own failure into the session's 1011 outcome.
-template <typename transport_type>
-task<void> invoke_websocket_handler(websocket_connection<transport_type>& connection,
+template <typename stream_type>
+task<void> invoke_websocket_handler(websocket_connection<stream_type>& connection,
     connection_scanner::entry_type& scanner_entry, const route_stream_handler_type& handler,
     context& context_value) {
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
@@ -69,8 +69,8 @@ task<void> invoke_websocket_handler(websocket_connection<transport_type>& connec
 // either one. close() itself signals a dead peer through error codes, so what
 // it throws is a real fault (an invalid code, or exhaustion), not a routine
 // disconnect.
-template <typename transport_type>
-task<void> finish_websocket_session(websocket_connection<transport_type>& connection,
+template <typename stream_type>
+task<void> finish_websocket_session(websocket_connection<stream_type>& connection,
     std::exception_ptr exception, const connection_failure_sink& connection_failure,
     std::string_view remote_address) {
     connection_failure.invoke(remote_address, exception);

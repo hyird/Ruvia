@@ -1,6 +1,10 @@
 #include "ruvia/core/stop_token.h"
 
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <optional>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 
@@ -183,14 +187,36 @@ RUVIA_TEST(combined_stop_registration_reuses_storage_after_token_dies) {
     RUVIA_CHECK_EQ(calls, 1);
 }
 
-RUVIA_TEST(combined_stop_token_retains_nested_bridge) {
+RUVIA_TEST(combined_stop_token_flattens_nested_sources) {
     ruvia::stop_source first;
     ruvia::stop_source second;
     ruvia::stop_source third;
     auto nested = ruvia::combine_stop_tokens(
         ruvia::combine_stop_tokens(first.token(), second.token()), third.token());
+    int calls = 0;
+    auto registration = nested.register_callback([&calls] { ++calls; });
+    third.request_stop();
     first.request_stop();
     RUVIA_CHECK(nested.stop_requested());
+    RUVIA_CHECK_EQ(calls, 1);
+}
+
+RUVIA_TEST(combined_stop_token_merges_duplicates_and_rejects_overflow) {
+    std::array<ruvia::stop_source, ruvia::max_stop_token_sources + 1> sources;
+    auto combined = sources[0].token();
+    for (std::size_t index = 1; index != ruvia::max_stop_token_sources; ++index) {
+        combined = ruvia::combine_stop_tokens(combined, sources[index].token());
+    }
+    combined = ruvia::combine_stop_tokens(combined, sources[0].token());
+    bool rejected = false;
+    try {
+        static_cast<void>(ruvia::combine_stop_tokens(combined, sources.back().token()));
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    sources[ruvia::max_stop_token_sources - 1].request_stop();
+    RUVIA_CHECK(combined.stop_requested());
 }
 
 RUVIA_TEST(combined_stop_token_handles_single_and_pre_stopped_inputs) {
@@ -204,4 +230,18 @@ RUVIA_TEST(combined_stop_token_handles_single_and_pre_stopped_inputs) {
     stopped.request_stop();
     auto combined = ruvia::combine_stop_tokens(stopped.token(), idle.token());
     RUVIA_CHECK(combined.stop_requested());
+}
+
+RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies) {
+    std::optional<ruvia::stop_source> first(std::in_place);
+    ruvia::stop_source second;
+    const auto combined = ruvia::combine_stop_tokens(first->token(), second.token());
+    first.reset();
+    RUVIA_CHECK(combined.stoppable());
+    int calls = 0;
+    auto registration = combined.register_callback([&calls] { ++calls; });
+    RUVIA_CHECK(registration.registered());
+    second.request_stop();
+    RUVIA_CHECK(combined.stop_requested());
+    RUVIA_CHECK_EQ(calls, 1);
 }

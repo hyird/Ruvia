@@ -37,16 +37,6 @@ private:
     response_stream_writer* writer_;
 };
 
-// Web-side thunk producing the streaming response head from the bound context. It is
-// handed to the http streaming layer (response_stream_writer::bind_context) so the HTTP/1
-// sink can build the head at commit without naming context_access (web).
-[[nodiscard]] task<http_response> streaming_head_thunk(context& context_value) {
-    if (context_value.try_session()) {
-        co_await detail::session_access::commit(context_value);
-    }
-    co_return detail::context_access::streaming_head(context_value);
-}
-
 }  // namespace
 
 task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
@@ -60,7 +50,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
     if (response_stream_output != nullptr) {
         detail::streaming_access::bind_context(
-            response_stream_output->writer(), context_value, context_value.get_stop_token(), &streaming_head_thunk);
+            response_stream_output->writer(), context_value, context_value.get_stop_token());
     }
 
     // Records that next() reached the handler even when it emitted no bytes.
@@ -124,8 +114,8 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     // a local exception above. Once the output is committed -- a started stream or
     // a websocket/tunnel handshake -- that buffered response can no longer be sent,
     // and finalizing the stream with a clean terminator would frame a truncated
-    // body as complete. Rethrow so the driver aborts (connection close /
-    // RST_STREAM), exactly as the no-middleware path does above. Middleware may
+    // body as complete. Rethrow so the driver closes the connection, exactly as
+    // the no-middleware path does above. Middleware may
     // still replace an uncommitted response stream, or a websocket terminal that
     // failed during handshake preparation, with a buffered response after `next()`.
     const bool output_committed = detail::context_access::output_committed(context_value);

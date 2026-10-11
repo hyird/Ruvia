@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
@@ -62,14 +63,13 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
         return http_connect_udp_error::invalid_target;
     }
     std::pmr::string result_value(prefix, resource ? resource : std::pmr::get_default_resource());
-    constexpr char hex[]{"0123456789ABCDEF"};
     for (const unsigned char c : target.host_) {
         if (detail::is_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
         } else {
             result_value.push_back('%');
-            result_value.push_back(hex[c >> 4]);
-            result_value.push_back(hex[c & 15]);
+            result_value.push_back(http_upper_hex_digit(c >> 4));
+            result_value.push_back(http_upper_hex_digit(c));
         }
     }
     std::array<char, 5> port{};

@@ -1,5 +1,6 @@
 #include "db/db_sql.h"
 
+#include <errmsg.h>
 #include <mysql.h>
 
 #include <cstddef>
@@ -94,6 +95,13 @@ db_error mysql_error(
     const auto* message = mysql_error(mutable_connection);
     const auto code = mysql_errno(mutable_connection);
     const auto* state_value = mysql_sqlstate(mutable_connection);
+    // A statement that failed because the transport did is an I/O failure,
+    // not a statement the server rejected.
+    if (error_code == db_error::code_type::statement_failed &&
+        (code == CR_SERVER_GONE_ERROR || code == CR_SERVER_LOST || code == CR_ERR_NET_READ ||
+            code == CR_ERR_NET_WRITE)) {
+        error_code = db_error::code_type::io_error;
+    }
     std::pmr::string error(operation, process_resource());
     error.append(" failed");
     if (code != 0) {

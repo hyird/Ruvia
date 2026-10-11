@@ -18,7 +18,6 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/process_resource.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
@@ -115,26 +114,16 @@ struct postgresql_driver final {
 };
 
 // One pooled connection. The driver owns the native socket; db_slot_socket
-// borrows it only for the duration of a readiness wait.
+// waits on a Ruvia-owned duplicate of it.
 template <typename driver_type>
 struct db_slot final {
-    db_slot(asio::io_context& io_context, std::pmr::memory_resource* resource)
+    explicit db_slot(asio::io_context& io_context)
         : resolver_(io_context),
-          wait_socket_(nullptr, pmr_object_deleter<db_slot_socket>{resource}),
-          socket_quarantine_(make_pmr_object<db_slot_socket_quarantine>(process_resource(), io_context)) {}
+          wait_socket_(io_context) {}
 
     ~db_slot() {
         if (wait_active_) {
             std::terminate();
-        }
-        if (wait_socket_ != nullptr) {
-            socket_quarantine_->retain(std::move(*wait_socket_), connection_);
-            wait_socket_.reset();
-            connection_ = nullptr;
-            // Deliberately abandon the process-backed node: its socket
-            // destructor and the driver's close must not both close the same
-            // native handle.
-            (void)socket_quarantine_.release();
         }
     }
 
@@ -143,8 +132,7 @@ struct db_slot final {
 
     asio::ip::tcp::resolver resolver_;
     typename driver_type::connection_type* connection_{nullptr};
-    std::unique_ptr<db_slot_socket, pmr_object_deleter<db_slot_socket>> wait_socket_;
-    std::unique_ptr<db_slot_socket_quarantine, pmr_object_deleter<db_slot_socket_quarantine>> socket_quarantine_;
+    db_slot_socket wait_socket_;
     // A sleep wait parks here until its deadline or a close resumes it.
     std::coroutine_handle<> deadline_continuation_{};
     bool connected_{false};
@@ -247,7 +235,8 @@ public:
     // One readiness wait on the driver's current socket under an optional
     // per-wait timeout. Cancellation, closing, operation timeout, and wait
     // failures are reported as db_error; slot-deadline expiry and socket
-    // errors are returned for the driver to interpret.
+    // errors are returned for the driver to interpret. Once the slot is
+    // connected, the socket's registration persists across waits.
     task<db_socket_wait_result> wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
         db_socket_readiness wanted, std::optional<std::chrono::milliseconds> wait_timeout,
         const operation_timeout& operation_deadline);

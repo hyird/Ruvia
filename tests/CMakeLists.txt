@@ -77,9 +77,9 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/bytes.cpp
         core/ip_address.cpp
+        core/local_ring_queue.cpp
         core/memory_pool.cpp
         core/scoped_operation.cpp
-        core/spsc_ring_queue.cpp
         core/stop_token.cpp
         core/worker_queue.cpp
         core/worker_runtime.cpp
@@ -95,9 +95,6 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_channel ruvia::core SOURCES core/channel.cpp)
     ruvia_add_test(ruvia_one_shot ruvia::core SOURCES core/one_shot.cpp)
     ruvia_add_test(ruvia_worker_timer ruvia::core SOURCES core/worker_timer.cpp)
-    ruvia_add_test(ruvia_worker_notification ruvia::core TIMEOUT 60 SOURCES
-        core/worker_notification.cpp
-        support/test_main.cpp)
 endif()
 
 if(RUVIA_BUILD_HTTP)
@@ -110,10 +107,6 @@ if(RUVIA_BUILD_HTTP)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
         ${_ruvia_http_unit_sources})
-    if(WIN32)
-        target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
-        target_link_libraries(ruvia_http_unit_tests PRIVATE ws2_32)
-    endif()
     target_link_libraries(ruvia_http_unit_tests PRIVATE ${RUVIA_HTTP_DEPENDENCIES})
 endif()
 

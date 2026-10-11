@@ -5,7 +5,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
@@ -113,8 +112,6 @@ private:
     return std::nullopt;
 }
 
-enum class buffered_response_recovery_mode { negotiated_then_disabled,
-    immediately_disabled };
 enum class buffered_response_recovery_action { ready,
     handle_error,
     prepare_terminal };
@@ -124,15 +121,10 @@ struct buffered_response_recovery_step final {
     std::optional<http_error_info> error_;
 };
 
-// Shared Web policy. A secondary failure preserves the error handler's
-// representation and disables coding instead of invoking it again. The shared
-// application operation owns preparation and suspension; each protocol owns commit.
+// A secondary failure preserves the error handler's representation and
+// disables coding instead of invoking it again.
 class buffered_response_recovery final {
 public:
-    explicit buffered_response_recovery(
-        buffered_response_recovery_mode mode = buffered_response_recovery_mode::negotiated_then_disabled) noexcept
-        : mode_(mode) {}
-
     [[nodiscard]] bool recovered() const noexcept {
         return stage_ != stage::application;
     }
@@ -148,12 +140,7 @@ public:
             return {};
         }
         if (stage_ == stage::application) {
-            if (mode_ == buffered_response_recovery_mode::immediately_disabled) {
-                policy = http_response_coding_policy::disabled();
-                stage_ = stage::terminal;
-            } else {
-                stage_ = stage::negotiated_error;
-            }
+            stage_ = stage::negotiated_error;
             return {buffered_response_recovery_action::handle_error, std::move(error)};
         }
         policy = http_response_coding_policy::disabled();
@@ -165,20 +152,12 @@ private:
     enum class stage { application,
         negotiated_error,
         terminal };
-    buffered_response_recovery_mode mode_;
     stage stage_{stage::application};
 };
 
 struct prepared_application_response final {
     http_buffered_response_write_plan write_plan_;
     bool recovered_;
-};
-
-struct application_response_control final {
-    // Terminal transport cancellation is distinct from an application deadline
-    // whose error response may still be deliverable. The token is borrowed.
-    const stop_token* terminal_stop_{};
-    buffered_response_recovery_mode recovery_mode_{buffered_response_recovery_mode::negotiated_then_disabled};
 };
 
 }  // namespace ruvia::detail

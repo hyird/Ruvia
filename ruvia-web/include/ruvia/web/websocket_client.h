@@ -131,31 +131,22 @@ public:
 
     // Connect tasks, handles, and operations all depend on this client's open
     // lifecycle. A temporary would request shutdown immediately after creating
-    // one, so operation-producing APIs are lvalue-only. Write payloads are
-    // borrowed until the returned operation completes, as for
-    // websocket_client_handle. The client connects once: a completed close
-    // handshake, a transport or protocol failure, a timeout, or cancellation of
-    // any operation retires it.
+    // one, so these APIs are lvalue-only. The client connects once: a completed
+    // close handshake, a transport or protocol failure, a timeout, or
+    // cancellation of any operation retires it.
     [[nodiscard]] task<void> connect() &;
     task<void> connect() && = delete;
     [[nodiscard]] websocket_client_handle with_options(operation_options options) const&;
     websocket_client_handle with_options(operation_options) const&& = delete;
-    [[nodiscard]] scoped_operation<std::optional<websocket_message>> read() const&;
-    scoped_operation<std::optional<websocket_message>> read() const&& = delete;
-    [[nodiscard]] scoped_operation<void> text(std::string_view payload, websocket_send_options options = {}) const&;
-    scoped_operation<void> text(std::string_view, websocket_send_options = {}) const&& = delete;
-    [[nodiscard]] scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) const&;
-    scoped_operation<void> binary(std::string_view, websocket_send_options = {}) const&& = delete;
-    [[nodiscard]] scoped_operation<void> ping(std::string_view payload = {}) const&;
-    scoped_operation<void> ping(std::string_view = {}) const&& = delete;
-    [[nodiscard]] scoped_operation<void> pong(std::string_view payload) const&;
-    scoped_operation<void> pong(std::string_view) const&& = delete;
-    [[nodiscard]] scoped_operation<void> close(websocket_close_options options) const&;
-    scoped_operation<void> close(websocket_close_options) const&& = delete;
+    // Returns the default-options handle. Each call registers one allocation-free
+    // capability with the client operation scope, so keep the returned handle for
+    // a sequence of operations instead of calling handle() per operation.
+    [[nodiscard]] websocket_client_handle handle() const&;
+    websocket_client_handle handle() const&& = delete;
 
     // Idempotent and callable from any thread. This only requests immediate
-    // transport termination. Graceful RFC 6455 close uses the typed overload
-    // above: co_await client.close({...}). Use shutdown() when completion must
+    // transport termination. Graceful RFC 6455 close uses the handle:
+    // co_await client.handle().close({...}). Use shutdown() when completion must
     // be awaited.
     void abort() noexcept;
     // Requests immediate transport shutdown, joins an in-flight connect and

@@ -407,7 +407,7 @@ RUVIA_TEST(client_response_body_collectors_return_public_results) {
     ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(server.port()));
     server.start();
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.send({.target_ = "/collect"});
+        auto response = co_await client.handle().send({.target_ = "/collect"});
         auto collected = co_await response.body().read_all();
         RUVIA_CHECK_EQ(collected.size(), expected.size());
         const std::string_view collected_view(
@@ -535,7 +535,7 @@ RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_opera
             server.on_request([&worker] { worker.attachment_.stop(); });
             bool cancelled = false;
             try {
-                (void)co_await client.send({.target_ = "/event-loop-stop"});
+                (void)co_await client.handle().send({.target_ = "/event-loop-stop"});
             } catch (const ruvia::http_client_error& error) {
                 cancelled = error.code() == ruvia::http_client_error::code_type::closing;
             }
@@ -634,7 +634,7 @@ RUVIA_TEST(http1_full_response_queue_loop_stop_joins_without_reading) {
     server.start();
     bool joined = false;
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.send({.target_ = "/backpressure-stop"});
+        auto response = co_await client.handle().send({.target_ = "/backpressure-stop"});
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
         worker.attachment_.stop();
         // The response remains alive across shutdown; its destructor/read()
@@ -713,7 +713,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
     peer.start();
     bool joined = false;
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.send({.target_ = "/transfer-gzip-stop"});
+        auto response = co_await client.handle().send({.target_ = "/transfer-gzip-stop"});
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
         RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
         for (unsigned turn = 0; turn != 4; ++turn) {
@@ -749,7 +749,7 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
 
     std::size_t decoded_bytes = 0;
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.send({.target_ = "/transfer-gzip"});
+        auto response = co_await client.handle().send({.target_ = "/transfer-gzip"});
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
         RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
 
@@ -803,7 +803,7 @@ RUVIA_TEST(http1_response_storage_remains_worker_owned_after_client_destruction)
         std::string collected;
         {
             ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(peer.port()));
-            response.emplace(co_await client.send({.target_ = "/retained-response"}));
+            response.emplace(co_await client.handle().send({.target_ = "/retained-response"}));
             const auto first = co_await response->body().read();
             RUVIA_CHECK(first.has_value());
             if (first) {
@@ -850,7 +850,7 @@ RUVIA_TEST(client_response_cold_collection_survives_client_and_expires_with_resp
         auto client = std::make_unique<ruvia::http_client>(
             worker.attachment_.loop(), local_http_client_config(server.port()));
         std::optional<ruvia::http_client_response> response;
-        response.emplace(co_await client->send({.target_ = "/cold-body"}));
+        response.emplace(co_await client->handle().send({.target_ = "/cold-body"}));
         auto cold = response->body().read_all();
         co_await client->shutdown();
         client.reset();
@@ -886,7 +886,7 @@ RUVIA_TEST(client_shutdown_keeps_incomplete_response_error_observable) {
         bool running_read_failed = false;
         {
             ruvia::http_client client(worker.attachment_.loop(), config);
-            response.emplace(co_await client.send({.target_ = "/incomplete-after-close"}));
+            response.emplace(co_await client.handle().send({.target_ = "/incomplete-after-close"}));
             asio::steady_timer close_timer(io);
             close_timer.expires_after(std::chrono::milliseconds(50));
             close_timer.async_wait([&client](const std::error_code& error) {
@@ -959,7 +959,7 @@ RUVIA_TEST(client_body_result_uses_pool_budget_after_client_and_worker_teardown)
                         .port_ = acceptor.local_endpoint().port()},
                     {.max_retained_bytes_ = expected.size()});
                 auto operation = [&]() -> ruvia::task<void> {
-                    auto send = client.send({.target_ = "/"});
+                    auto send = client.handle().send({.target_ = "/"});
                     auto response = co_await std::move(send);
                     auto bytes_value = co_await response.body().read_all();
                     retained.emplace(std::move(bytes_value));
@@ -1014,7 +1014,7 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
         auto operation = [&]() -> ruvia::task<void> {
             const bool known = mode == upload_peer::mode_type::known_length;
             const bool expect_continue = mode == upload_peer::mode_type::continue_value || mode == upload_peer::mode_type::continue_timeout;
-            auto exchange_value = co_await client.open_request({.method_ = "POST", .target_ = "/upload"},
+            auto exchange_value = co_await client.handle().open_request({.method_ = "POST", .target_ = "/upload"},
                 {.content_length_ = known ? std::optional<std::uint64_t>{6} : std::nullopt,
                     .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none,
                     .max_chunk_bytes_ = 3,
@@ -1072,7 +1072,7 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
     std::optional<ruvia::http_client> client(std::in_place, worker.attachment_.loop(), local_http_client_config(peer.port()));
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
-        auto exchange_value = co_await client->open_request({.method_ = "POST", .target_ = "/upload"},
+        auto exchange_value = co_await client->handle().open_request({.method_ = "POST", .target_ = "/upload"},
             {.expectation_ = ruvia::http_client_request_expectation::continue_value});
         auto response = co_await exchange_value.response();
         RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
@@ -1168,7 +1168,7 @@ void exercise_tls_response_retirement(ruvia::testing::test_context& ruvia_ctx, b
             RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
         }
         for (const auto body : expected) {
-            auto response = co_await client.send({.target_ = "/next?exact=body"});
+            auto response = co_await client.handle().send({.target_ = "/next?exact=body"});
             RUVIA_CHECK(response.protocol_version() == ruvia::http_protocol_version::http11);
             const auto bytes_value = co_await response.body().read_all();
             RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), body);

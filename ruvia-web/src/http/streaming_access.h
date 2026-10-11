@@ -20,10 +20,6 @@ struct streaming_access final {
     using stream_committed_type = response_stream_writer::committed_type;
     using stream_aborted_type = response_stream_writer::aborted_type;
 
-    static void emplace_body_reader(std::optional<body_reader>& storage, void* target, body_read_type read) {
-        storage.emplace(body_reader::token_type{}, target, read);
-    }
-
     [[nodiscard]] static body_reader make_body_reader(void* target, body_read_type read) noexcept {
         return body_reader(body_reader::token_type{}, target, read);
     }
@@ -38,9 +34,8 @@ struct streaming_access final {
 
     // The token is supplied by the caller rather than read from `context`:
     // context is incomplete here, and this header is deliberately narrow.
-    static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value,
-        response_stream_writer::streaming_head_thunk_type streaming_head) {
-        writer.bind_context(context_value, std::move(stop_token_value), streaming_head);
+    static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value) {
+        writer.bind_context(context_value, std::move(stop_token_value));
     }
 
     static void release_context(response_stream_writer& writer) noexcept {

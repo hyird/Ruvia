@@ -113,7 +113,7 @@ void check_peer_exchange(ruvia::testing::test_context& ruvia_ctx, bool reply_clo
         std::exception_ptr failure;
         try {
             co_await client.connect();
-            const auto greeting = co_await client.read();
+            const auto greeting = co_await client.handle().read();
             if (truncated_frame) {
                 returned_eof = !greeting.has_value();
             } else {
@@ -121,7 +121,7 @@ void check_peer_exchange(ruvia::testing::test_context& ruvia_ctx, bool reply_clo
                 if (greeting) {
                     RUVIA_CHECK_EQ(greeting->payload(), std::string_view("hello"));
                 }
-                co_await client.close({});
+                co_await client.handle().close({});
                 succeeded = true;
             }
         } catch (const ruvia::websocket_client_error& error) {
@@ -220,37 +220,37 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
             RUVIA_CHECK(rejected);
         };
         {
-            auto writing = client.text("discarded");
-            rejects_claim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
-            rejects_claim([&] { return client.close({}); }, "WebSocket client close cannot overlap write");
+            auto writing = client.handle().text("discarded");
+            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap write");
             // A failed close must release its earlier read claim without releasing the live write.
-            auto independent_read = client.read();
-            rejects_claim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            auto independent_read = client.handle().read();
+            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
         }
         {
-            auto reading = client.read();
-            rejects_claim([&] { return client.read(); }, "concurrent WebSocket client reads are not supported");
-            rejects_claim([&] { return client.close({}); }, "WebSocket client close cannot overlap read");
-            auto independent_write = client.text("discarded");
+            auto reading = client.handle().read();
+            rejects_claim([&] { return client.handle().read(); }, "concurrent WebSocket client reads are not supported");
+            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap read");
+            auto independent_write = client.handle().text("discarded");
         }
         {
-            auto closing = client.close({});
-            rejects_claim([&] { return client.read(); }, "concurrent WebSocket client reads are not supported");
-            rejects_claim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
-            rejects_claim([&] { return client.close({}); }, "WebSocket client close cannot overlap read");
+            auto closing = client.handle().close({});
+            rejects_claim([&] { return client.handle().read(); }, "concurrent WebSocket client reads are not supported");
+            rejects_claim([&] { return client.handle().text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            rejects_claim([&] { return client.handle().close({}); }, "WebSocket client close cannot overlap read");
         }
         {
-            auto reclaimed = client.close({});
+            auto reclaimed = client.handle().close({});
         }
         for (unsigned i = 0; i < 4; ++i) {
             {
-                auto cold = client.text("discarded");
+                auto cold = client.handle().text("discarded");
             }
             // The payload is borrowed until the cold operation completes.
             const std::string source_value = payload_value;
-            auto operation = client.text(source_value, {.compress_ = i != 1});
+            auto operation = client.handle().text(source_value, {.compress_ = i != 1});
             co_await std::move(operation);
-            const auto message = co_await client.read();
+            const auto message = co_await client.handle().read();
             RUVIA_CHECK(message.has_value());
             if (message) {
                 RUVIA_CHECK_EQ(message->payload(), payload_value);
@@ -371,7 +371,7 @@ RUVIA_TEST(websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendin
         co_await client.connect();
         connected = client.connected();
         try {
-            (void)co_await client.read();
+            (void)co_await client.handle().read();
         } catch (const ruvia::websocket_client_error&) {
             read_cancelled = true;
         }
@@ -483,10 +483,10 @@ RUVIA_TEST(websocket_client_heartbeat_pings_after_a_blocked_message_write) {
                                                               }});
         co_await client.connect();
         const std::string payload(payload_size, 'x');
-        co_await client.binary(payload);
+        co_await client.handle().binary(payload);
         wrote = true;
         try {
-            (void)co_await client.read();
+            (void)co_await client.handle().read();
         } catch (const ruvia::websocket_client_error&) {
         }
     };
@@ -567,9 +567,9 @@ RUVIA_TEST(websocket_client_reads_frame_above_default_message_limit) {
         std::exception_ptr failure;
         try {
             co_await client.connect();
-            const auto message = co_await client.read();
+            const auto message = co_await client.handle().read();
             matched = message.has_value() && message->payload() == payload_value;
-            co_await client.close({});
+            co_await client.handle().close({});
         } catch (...) {
             failure = std::current_exception();
         }

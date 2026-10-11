@@ -63,7 +63,7 @@ public:
     websocket(const websocket&) = delete;
     websocket& operator=(const websocket&) = delete;
     ~websocket() {
-        if (operation_scope_.has_pending_operations() && worker_ != nullptr && !worker_->is_current()) {
+        if (operation_scope_.has_pending_operations() && !worker_->is_current()) {
             std::terminate();
         }
     }
@@ -161,9 +161,9 @@ private:
     using close_type = task<void> (*)(void*, websocket_close_options);
     using abort_type = void (*)(void*) noexcept;
 
-    websocket(std::pmr::memory_resource& resource, const worker_handle* worker_value, void* target, read_type read, write_type write, close_type close, abort_type abort) noexcept
+    websocket(std::pmr::memory_resource& resource, const worker_handle& worker_value, void* target, read_type read, write_type write, close_type close, abort_type abort) noexcept
         : resource_(&resource),
-          worker_(worker_value),
+          worker_(&worker_value),
           target_(target),
           read_(read),
           write_(write),
@@ -171,7 +171,7 @@ private:
           abort_(abort) {}
 
     void require_active() const {
-        if (worker_ != nullptr && !worker_->is_current()) {
+        if (!worker_->is_current()) {
             std::terminate();
         }
         if (!operation_scope_.active()) {

@@ -101,17 +101,45 @@ void external_context_claim::release(event_loop_state* state_value) noexcept {
     service_->release_state(state_value);
 }
 
+attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity)
+    : claim_(io_context),
+      runtime_(io_context, queue_capacity),
+      stop_(runtime_) {}
+
+void event_loop_state::attach(const std::shared_ptr<event_loop_state>& self) {
+    auto& attached = *std::get_if<attached_context>(&context_ownership_);
+    attached.stop_.configure({
+        // Only stop() requests this chain, so its gate is already sealing.
+        // Joining it keeps the chain from finalizing before the gate drains.
+        .stop_admission_ = [this] { stop(); },
+        // Releasing the claim can destroy this state together with its chain;
+        // the chain then releases its work guard on the still-running context.
+        .finalize_ =
+            [this, &attached] {
+                runtime_.detach();
+                attached.claim_.release(this);
+            },
+    });
+    attached.claim_.retain(self);
+}
+
 void event_loop_state::shutdown_external_context() noexcept {
-    if (!std::holds_alternative<external_context_claim>(context_ownership_)) {
+    auto* attached = std::get_if<attached_context>(&context_ownership_);
+    if (attached == nullptr) {
         return;
     }
     retirement_->close_admission();
     if (retirement_->pending() != 0) {
+        // Their frames and leases are owned by handlers that this shutdown
+        // destroys without running; nothing can retire them safely.
+        report_unhandled_failure("attached event loop",
+            std::make_exception_ptr(std::logic_error(
+                "io_context destroyed while its attached event loop still had root tasks, stop "
+                "callbacks, or cleanup pending; keep running the context until the attachment retires")));
         std::terminate();
     }
     stopping_.store(true, std::memory_order_release);
-    runtime_.stop_timers();
-    work_->reset();
+    attached->stop_.abandon();
     runtime_.detach();
     worker_handle_access::wait_for_reservations(runtime_.handle());
 }
@@ -149,7 +177,7 @@ void event_loop_attachment::run() {
 
 void event_loop_attachment::stop() noexcept {
     if (state_) {
-        state_->stop(true, state_);
+        state_->stop();
     }
 }
 
@@ -167,7 +195,7 @@ event_loop_attachment attach_event_loop(
         }
     };
     state_value->install_lifecycle_listener();
-    state_value->retain_external_context(state_value);
+    state_value->attach(state_value);
     return event_loop_attachment(std::move(state_value));
 }
 

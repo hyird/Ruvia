@@ -6,16 +6,13 @@
 
 namespace ruvia::detail {
 
-task<std::optional<prepared_application_response>> http_response_tail::prepare(http_response& response,
+task<prepared_application_response> http_response_tail::prepare(http_response& response,
     const http_server_options& options, const route_table& routes, request_memory& memory,
-    const context_services& services, application_response_control control) const {
+    const context_services& services) const {
     const auto& request = *request_;
     auto policy = coding_policy_;
-    buffered_response_recovery recovery(control.recovery_mode_);
+    buffered_response_recovery recovery;
     for (;;) {
-        if (control.terminal_stop_ != nullptr && control.terminal_stop_->stop_requested()) {
-            co_return std::nullopt;
-        }
         response.materialize_body();
         if (options.cors_.has_value()) {
             apply_cors_headers(request, response, *options.cors_);
@@ -26,9 +23,6 @@ task<std::optional<prepared_application_response>> http_response_tail::prepare(h
                 compression = co_await apply_response_compression_async(*selection, request.known_method(), response,
                     *options.compression_, options.blocking_pool_, services.worker());
             }
-        }
-        if (control.terminal_stop_ != nullptr && control.terminal_stop_->stop_requested()) {
-            co_return std::nullopt;
         }
         const auto step = recovery.advance(policy, request, response, compression);
         if (step.action_ == buffered_response_recovery_action::ready) {

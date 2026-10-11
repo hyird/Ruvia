@@ -6,10 +6,8 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <optional>
 #include <variant>
 
-#include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
@@ -17,6 +15,8 @@
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
+
+#include "worker_stop_chain.h"
 
 namespace ruvia::detail {
 
@@ -155,12 +155,24 @@ private:
     bool retained_{false};
 };
 
-// One loop's runtime and retirement. A pool loop owns its worker_runtime; an
-// attached loop claims a caller-owned io_context and drives its own retirement
-// on the stopping thread, because that context may never run again.
+// A caller-owned io_context bound to one loop: its claim, the worker endpoint,
+// and the same worker stop chain that a pool loop's worker_runtime owns.
+struct attached_context final {
+    attached_context(asio::io_context& io_context, std::size_t queue_capacity);
+
+    external_context_claim claim_;
+    worker_runtime_context runtime_;
+    worker_stop_chain stop_;
+};
+
+// One loop's runtime and retirement. A pool loop owns a worker_runtime; an
+// attached loop owns the same worker stop chain over a caller-owned context.
+// Both stop through stop(): it seals the retirement gate on the stopping
+// thread and requests the worker stop chain, whose owner-thread stop control
+// re-enters stop(); the drained gate finalizes the chain on the owner.
 struct event_loop_state final : worker_shutdown_listener,
                                 std::enable_shared_from_this<event_loop_state> {
-    using context_ownership_type = std::variant<worker_runtime, external_context_claim>;
+    using context_ownership_type = std::variant<worker_runtime, attached_context>;
 
     explicit event_loop_state(std::size_t queue_capacity);
     event_loop_state(asio::io_context& external_context, std::size_t queue_capacity);
@@ -169,7 +181,10 @@ struct event_loop_state final : worker_shutdown_listener,
         return *std::get_if<worker_runtime>(&context_ownership_);
     }
 
-    void retain_external_context(const std::shared_ptr<event_loop_state>& self) noexcept;
+    // Attached loops only: hooks the stop chain and hands the state to the
+    // context service, which retires it at the latest when the context shuts
+    // down (event_loop_attachment.cpp).
+    void attach(const std::shared_ptr<event_loop_state>& self);
     void install_lifecycle_listener();
 
     void worker_stopping() noexcept override {}
@@ -179,7 +194,7 @@ struct event_loop_state final : worker_shutdown_listener,
     void report_attached_failure(std::exception_ptr failure) noexcept;
     [[noreturn]] void fail_teardown_start(std::exception_ptr failure) noexcept;
 
-    void stop(bool runtime_started, std::shared_ptr<event_loop_state> keep_alive) noexcept;
+    void stop() noexcept;
     void finalize_stop() noexcept;
     // Asio service shutdown of an attached context: retires the worker before
     // the context destroys its scheduler (event_loop_attachment.cpp).
@@ -188,8 +203,6 @@ struct event_loop_state final : worker_shutdown_listener,
     context_ownership_type context_ownership_;
     asio::io_context* const io_context_;
     asio::io_context::executor_type executor_;
-    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> work_;
-    std::optional<worker_runtime_context> attached_runtime_;
     worker_runtime_context& runtime_;
     std::atomic_bool stopping_{false};
     // Bound once before publication to the stable pool owner or weak attachment

@@ -2,9 +2,10 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <exception>
-#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <stop_token>
 #include <utility>
 
@@ -14,9 +15,14 @@ namespace ruvia {
 
 class stop_token;
 class stop_source;
-[[nodiscard]] stop_token combine_stop_tokens(stop_token first, stop_token second);
 
 namespace detail {
+
+// Whether a std::stop_token refers to a stop state at all. Unlike
+// stop_possible(), this stays true after its last source died unstopped.
+[[nodiscard]] inline bool has_stop_state(const std::stop_token& token) noexcept {
+    return token != std::stop_token{};
+}
 
 class stop_callback final {
 public:
@@ -69,6 +75,11 @@ private:
 
 }  // namespace detail
 
+// A stop_token observes at most this many distinct stop sources. Combination
+// flattens its inputs into the token itself, so tokens never own a bridge and
+// combining or registering never allocates.
+inline constexpr std::size_t max_stop_token_sources = 4;
+
 class stop_registration final {
 public:
     stop_registration() noexcept = default;
@@ -119,19 +130,30 @@ private:
         resetting,
     };
 
-    stop_registration(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner_value, move_only_function<void()> callback_value) {
-        register_callbacks(
-            std::move(first), std::move(second), std::move(owner_value), std::move(callback_value));
+    using source_tokens = std::array<std::stop_token, max_stop_token_sources>;
+
+    stop_registration(const source_tokens& tokens, move_only_function<void()> callback_value) {
+        register_callbacks(tokens, std::move(callback_value));
     }
 
-    void register_callbacks(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner_value, move_only_function<void()> callback_value) {
-        if ((!first.stop_possible() && !second.stop_possible()) || !callback_value) {
+    // `tokens` holds its entries with a stop state as a prefix; an entry whose
+    // source died without a stop request stays in place but never fires.
+    void register_callbacks(const source_tokens& tokens, move_only_function<void()> callback_value) {
+        if (!callback_value) {
             return;
         }
-        if (first.stop_requested() || second.stop_requested()) {
-            detail::stop_callback(std::move(callback_value))();
+        bool stop_possible = false;
+        for (const auto& token : tokens) {
+            if (!detail::has_stop_state(token)) {
+                break;
+            }
+            if (token.stop_requested()) {
+                detail::stop_callback(std::move(callback_value))();
+                return;
+            }
+            stop_possible = stop_possible || token.stop_possible();
+        }
+        if (!stop_possible) {
             return;
         }
 
@@ -140,13 +162,11 @@ private:
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::terminate();
         }
-        owner_ = std::move(owner_value);
         callback_state_.emplace(std::move(callback_value));
-        if (first.stop_possible()) {
-            first_callback_.emplace(std::move(first), detail::stop_callback_ref(*callback_state_));
-        }
-        if (second.stop_possible()) {
-            second_callback_.emplace(std::move(second), detail::stop_callback_ref(*callback_state_));
+        for (std::size_t index = 0; index != tokens.size() && detail::has_stop_state(tokens[index]); ++index) {
+            if (tokens[index].stop_possible()) {
+                callbacks_[index].emplace(tokens[index], detail::stop_callback_ref(*callback_state_));
+            }
         }
 
         expected = registration_phase_type::registering;
@@ -161,32 +181,48 @@ private:
         phase_.store(registration_phase_type::idle, std::memory_order_release);
     }
 
+    // Each std::stop_callback destructor synchronizes with a concurrently
+    // running callback, so the shared callback state is released last.
     void clear_registration() noexcept {
-        second_callback_.reset();
-        first_callback_.reset();
+        for (auto callback = callbacks_.rbegin(); callback != callbacks_.rend(); ++callback) {
+            callback->reset();
+        }
         callback_state_.reset();
-        owner_.reset();
     }
 
-    // The bridge owner outlives both callback registrations. Destruction and
-    // reset run in the reverse order explicitly required by that contract.
     std::atomic<registration_phase_type> phase_{registration_phase_type::idle};
-    std::shared_ptr<const void> owner_;
     std::optional<detail::stop_callback_state> callback_state_;
-    std::optional<std::stop_callback<detail::stop_callback_ref>> first_callback_;
-    std::optional<std::stop_callback<detail::stop_callback_ref>> second_callback_;
+    std::array<std::optional<std::stop_callback<detail::stop_callback_ref>>, max_stop_token_sources> callbacks_;
 };
 
+// A copyable view of up to max_stop_token_sources stop sources. It never owns
+// state beyond std::stop_token references, so copies are cheap and independent.
 class stop_token final {
 public:
     stop_token() noexcept = default;
 
     [[nodiscard]] bool stop_requested() const noexcept {
-        return first_token_.stop_requested() || second_token_.stop_requested();
+        for (const auto& token : tokens_) {
+            if (!detail::has_stop_state(token)) {
+                return false;
+            }
+            if (token.stop_requested()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     [[nodiscard]] bool stoppable() const noexcept {
-        return first_token_.stop_possible() || second_token_.stop_possible();
+        for (const auto& token : tokens_) {
+            if (!detail::has_stop_state(token)) {
+                return false;
+            }
+            if (token.stop_possible()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // std::stop_callback embeds its registration node in stop_registration, so
@@ -195,7 +231,7 @@ public:
     // that affect worker-owned state must post only an id/generation to that
     // worker and let the owner validate it there.
     [[nodiscard]] stop_registration register_callback(move_only_function<void()> callback_value) const {
-        return stop_registration(first_token_, second_token_, owner_, std::move(callback_value));
+        return stop_registration(tokens_, std::move(callback_value));
     }
 
     // Reuses caller-owned registration storage. This is for awaiters that can
@@ -204,31 +240,62 @@ public:
     // allocation stop_callback representation.
     void register_callback(stop_registration& registration, move_only_function<void()> callback_value) const {
         registration.reset();
-        registration.register_callbacks(first_token_, second_token_, owner_, std::move(callback_value));
+        registration.register_callbacks(tokens_, std::move(callback_value));
+    }
+
+    // Observes every still-stoppable source of both inputs. Duplicate sources
+    // are merged; more than max_stop_token_sources distinct stoppable sources
+    // throw std::length_error. An input that is already stopped, or the other
+    // one when an input cannot stop, is returned as is.
+    [[nodiscard]] friend stop_token combine_stop_tokens(stop_token first, stop_token second) {
+        if (!first.stoppable() || second.stop_requested()) {
+            return second;
+        }
+        if (!second.stoppable() || first.stop_requested()) {
+            return first;
+        }
+        stop_token combined;
+        combined.append_stoppable(std::move(first));
+        combined.append_stoppable(std::move(second));
+        return combined;
     }
 
 private:
     friend class stop_source;
-    friend stop_token combine_stop_tokens(stop_token first, stop_token second);
 
-    explicit stop_token(std::stop_token token, std::shared_ptr<const void> owner = {}) noexcept
-        : first_token_(std::move(token)),
-          owner_(std::move(owner)) {}
+    explicit stop_token(std::stop_token token) noexcept {
+        tokens_[0] = std::move(token);
+    }
 
-    stop_token(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner = {}) noexcept
-        : first_token_(std::move(first)),
-          second_token_(std::move(second)),
-          owner_(std::move(owner)) {}
+    void append_stoppable(stop_token other) {
+        for (auto& token : other.tokens_) {
+            if (!detail::has_stop_state(token)) {
+                return;
+            }
+            if (token.stop_possible()) {
+                append(std::move(token));
+            }
+        }
+    }
 
-    // Two ordinary sources fit inline, covering ambient + explicit operation
-    // cancellation without allocating a bridge on the request path.
-    std::stop_token first_token_;
-    std::stop_token second_token_;
-    // Non-empty only when a deeper combination overflows the inline pair. It
-    // owns the upstream registrations that feed one of the inline tokens.
-    std::shared_ptr<const void> owner_;
+    void append(std::stop_token token) {
+        for (auto& slot : tokens_) {
+            if (!detail::has_stop_state(slot)) {
+                slot = std::move(token);
+                return;
+            }
+            if (slot == token) {
+                return;
+            }
+        }
+        throw std::length_error("stop_token combines at most max_stop_token_sources distinct sources");
+    }
+
+    // Entries with a stop state form a prefix; the rest are empty.
+    stop_registration::source_tokens tokens_;
 };
+
+[[nodiscard]] stop_token combine_stop_tokens(stop_token first, stop_token second);
 
 class stop_source final {
 public:
@@ -253,80 +320,5 @@ public:
 private:
     std::stop_source source_;
 };
-
-namespace detail {
-
-class combined_stop_state final {
-public:
-    combined_stop_state(stop_token first, stop_token second)
-        : first_token_(std::move(first)),
-          second_token_(std::move(second)),
-          first_registration_(first_token_.register_callback([this] { request_stop(); })),
-          second_registration_(second_token_.register_callback([this] { request_stop(); })) {}
-
-    [[nodiscard]] std::stop_token token() const noexcept {
-        return source_.get_token();
-    }
-
-private:
-    void request_stop() noexcept {
-        (void)source_.request_stop();
-    }
-
-    // Registrations are destroyed before their input tokens and source. A
-    // callback may run concurrently with teardown; std::stop_callback's
-    // destructor synchronizes that callback before source_ is destroyed.
-    std::stop_source source_;
-    stop_token first_token_;
-    stop_token second_token_;
-    stop_registration first_registration_;
-    stop_registration second_registration_;
-};
-
-}  // namespace detail
-
-inline stop_token combine_stop_tokens(stop_token first, stop_token second) {
-    if (!first.stoppable()) {
-        return second;
-    }
-    if (!second.stoppable() || first.stop_requested()) {
-        return first;
-    }
-    if (second.stop_requested()) {
-        return second;
-    }
-    std::array<std::stop_token, 2> inline_tokens;
-    std::size_t inline_count = 0;
-    const auto append = [&inline_tokens, &inline_count](const std::stop_token& token) noexcept {
-        if (!token.stop_possible()) {
-            return true;
-        }
-        for (std::size_t index = 0; index < inline_count; ++index) {
-            if (inline_tokens[index] == token) {
-                return true;
-            }
-        }
-        if (inline_count == inline_tokens.size()) {
-            return false;
-        }
-        inline_tokens[inline_count++] = token;
-        return true;
-    };
-    const bool tokens_fit = append(first.first_token_) && append(first.second_token_) &&
-                            append(second.first_token_) && append(second.second_token_);
-    const bool owners_fit =
-        first.owner_ == nullptr || second.owner_ == nullptr || first.owner_ == second.owner_;
-    if (tokens_fit && owners_fit) {
-        auto owner_value = first.owner_ != nullptr ? std::move(first.owner_) : std::move(second.owner_);
-        if (inline_count == 1) {
-            return stop_token(std::move(inline_tokens[0]), std::move(owner_value));
-        }
-        return stop_token(std::move(inline_tokens[0]), std::move(inline_tokens[1]), std::move(owner_value));
-    }
-
-    auto state_value = std::make_shared<detail::combined_stop_state>(std::move(first), std::move(second));
-    auto token = state_value->token();
-    return stop_token(std::move(token), std::move(state_value));
-}
 
 }  // namespace ruvia

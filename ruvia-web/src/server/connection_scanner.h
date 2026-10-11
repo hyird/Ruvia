@@ -15,7 +15,7 @@
 
 namespace ruvia::detail {
 
-// Worker-owned connection activity tracking options shared by protocol runtimes.
+// Worker-owned HTTP/1 connection activity tracking options.
 struct connection_scanner_options final {
     std::chrono::milliseconds scan_interval_{std::chrono::seconds(1)};
     // Inactivity timeouts measured from the connection's last successful I/O.
@@ -29,18 +29,16 @@ struct connection_scanner_options final {
     std::optional<std::chrono::milliseconds> payload_read_completion_timeout_{};
 };
 
-// Worker-affine connection timeout and maintenance owner. Its implementation
-// is allocated once per scanner; entries and registrations remain caller-owned
-// intrusive nodes, with no per-connection allocation by the scanner.
+// Worker-affine connection timeout owner. Its implementation is allocated once
+// per scanner; entries and checks remain caller-owned intrusive nodes, with no
+// per-connection allocation by the scanner.
 class connection_scanner final {
 private:
     struct impl_type;
 
 public:
-    // Product-owned checks operate on their own transport. A check belonging
-    // to one multiplexed stream must not close its connection's socket.
+    // Product-owned checks run on the worker during each scan.
     using periodic_check_type = void (*)(void*, std::int64_t) noexcept;
-    using worker_maintenance_check_type = void (*)(void*) noexcept;
 
     enum class phase_type : std::uint8_t {
         idle,
@@ -52,29 +50,7 @@ public:
 
     class entry_type;
 
-    // Startup-owned worker maintenance node; the caller keeps it alive while
-    // registered. reset() is safe after its scanner has been destroyed.
-    class worker_maintenance_registration_type final {
-    public:
-        worker_maintenance_registration_type() noexcept = default;
-        ~worker_maintenance_registration_type() noexcept;
-        worker_maintenance_registration_type(const worker_maintenance_registration_type&) = delete;
-        worker_maintenance_registration_type& operator=(const worker_maintenance_registration_type&) = delete;
-        worker_maintenance_registration_type(worker_maintenance_registration_type&&) = delete;
-        worker_maintenance_registration_type& operator=(worker_maintenance_registration_type&&) = delete;
-        void reset() noexcept;
-
-    private:
-        friend class connection_scanner;
-        friend struct impl_type;
-        connection_scanner* scanner_{nullptr};
-        worker_maintenance_registration_type* prev_{nullptr};
-        worker_maintenance_registration_type* next_{nullptr};
-        void* target_{nullptr};
-        worker_maintenance_check_type check_{nullptr};
-    };
-
-    // Per-connection or per-stream node; callback registration is allocation-free.
+    // Per-connection node; callback registration is allocation-free.
     // The entry detaches any remaining nodes when it is destroyed.
     class periodic_check_registration_type final {
     public:
@@ -96,7 +72,7 @@ public:
         periodic_check_type tick_{nullptr};
     };
 
-    // Connection- or stream-owned node. touch()/set_phase() use the scanner's
+    // Connection-owned node. touch()/set_phase() use the scanner's
     // cached coarse time, not a per-request clock read. Destruction detaches the
     // entry and its checks, including during a periodic callback. Destroying the
     // scanner detaches its entries before releasing its timestamp storage.
@@ -134,50 +110,38 @@ public:
     };
 
     // Binds a TCP socket to an entry for the guard lifetime; its destructor
-    // safely detaches even if the scanner was destroyed first.
+    // safely detaches even if the scanner was destroyed first. An entry has one
+    // registration owner: binding an already-bound entry throws
+    // std::logic_error without changing its existing binding or checks.
     class guard_type final {
     public:
-        guard_type(connection_scanner* scanner, entry_type& entry_value, asio::ip::tcp::socket& socket);
+        guard_type(connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket);
         ~guard_type();
         guard_type(const guard_type&) = delete;
         guard_type& operator=(const guard_type&) = delete;
 
     private:
-        entry_type* entry_;
+        entry_type& entry_;
     };
 
     connection_scanner(worker_handle worker_value, connection_scanner_options options);
-    // Detaches every entry and registration. A check or maintenance callback may
-    // destroy its scanner (or stop and restart it): the running scan visits no
-    // further node and releases the remaining scanner state when it returns.
+    // Detaches every entry and check. A periodic check may destroy its scanner
+    // (or stop and restart it): the running scan visits no further node and
+    // releases the remaining scanner state when it returns.
     // Destruction on another thread waits for an in-progress scan to finish.
     ~connection_scanner() noexcept;
     connection_scanner(const connection_scanner&) = delete;
     connection_scanner& operator=(const connection_scanner&) = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
-    const worker_handle& worker() const&& = delete;
     void start();
     void stop() noexcept;
-    void register_worker_maintenance(worker_maintenance_registration_type& registration, void* target,
-        worker_maintenance_check_type check) noexcept;
-    // An entry has one registration owner. Registering an already-bound entry
-    // throws std::logic_error without changing its existing binding or checks.
-    // Unregister it (or release its guard) before registering it again.
-    void register_entry(entry_type& entry, asio::ip::tcp::socket& socket);
-    // Multiplexed stream checks have no socket: scanner timeouts must not
-    // close an unrelated connection on their behalf.
-    void register_entry(entry_type& entry);
-    void unregister_entry(entry_type& entry) noexcept;
     void close_all() noexcept;
 
 private:
     friend class entry_type;
-    friend class worker_maintenance_registration_type;
     friend class guard_type;
     friend struct impl_type;
     static void detach_entry(entry_type& entry) noexcept;
-    void remove_worker_maintenance(worker_maintenance_registration_type& registration) noexcept;
     void periodic_check_added() noexcept;
     void periodic_check_removed() noexcept;
     std::unique_ptr<impl_type> impl_;
@@ -193,15 +157,11 @@ struct connection_scanner::impl_type final {
 
     void start();
     void stop() noexcept;
-    void register_worker_maintenance(worker_maintenance_registration_type& registration, void* target,
-        worker_maintenance_check_type check) noexcept;
-    void register_entry(entry_type& entry, asio::ip::tcp::socket* socket);
+    void register_entry(entry_type& entry, asio::ip::tcp::socket& socket);
     void unregister_entry(entry_type& entry) noexcept;
     void close_all() noexcept;
     void periodic_check_added() noexcept;
     void periodic_check_removed() noexcept;
-    void remove_worker_maintenance(worker_maintenance_registration_type& registration) noexcept;
-    void detach_worker_maintenance() noexcept;
     [[nodiscard]] bool has_scanning_work() const noexcept;
     void schedule();
     void scan() noexcept;
@@ -223,8 +183,6 @@ struct connection_scanner::impl_type final {
     entry_type sentinel_{};
     entry_type* scan_current_{nullptr};
     entry_type* scan_next_{nullptr};
-    worker_maintenance_registration_type* worker_maintenance_{nullptr};
-    worker_maintenance_registration_type* worker_maintenance_scan_next_{nullptr};
     std::size_t periodic_check_count_{0};
     std::atomic_bool running_{false};
     // Worker-local: set only by the timer callback while scan() runs callbacks.

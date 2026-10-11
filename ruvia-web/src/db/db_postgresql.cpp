@@ -15,6 +15,12 @@ namespace ruvia::detail {
 
 db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type error_code, const pg_result* result_value) {
+    // libpq marks the connection bad when the transport fails, and reports
+    // that failure as a fatal result; it is an I/O failure, not a statement
+    // the server rejected.
+    if (error_code == db_error::code_type::statement_failed && PQstatus(&connection) == CONNECTION_BAD) {
+        error_code = db_error::code_type::io_error;
+    }
     std::pmr::string error(operation, process_resource());
     error.append(" failed");
     const char* state_value = result_value == nullptr

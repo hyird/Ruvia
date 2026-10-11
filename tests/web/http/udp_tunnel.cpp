@@ -80,7 +80,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
                                        .port_ = server.endpoint().port(),
                                        .connection_count_ = 2,
                                        .request_timeout_ = std::chrono::seconds(5)});
-            auto result = co_await client.open_udp_tunnel(
+            auto result = co_await client.handle().open_udp_tunnel(
                 {.target_ = "/.well-known/masque/udp/target.test/53/"});
             RUVIA_CHECK(result.response() == nullptr && result.tunnel() != nullptr);
             RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::switching_protocols);
@@ -107,7 +107,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             auto cold_write = tunnel.send(payload);
             payload.assign("mutated");
             co_await std::move(cold_write);
-            auto sibling = co_await client.send({.target_ = "/udp-tunnel-sibling"});
+            auto sibling = co_await client.handle().send({.target_ = "/udp-tunnel-sibling"});
             auto sibling_body = co_await sibling.body().read_all();
             RUVIA_CHECK(std::string_view(
                             reinterpret_cast<const char*>(sibling_body.bytes().data()), sibling_body.size()) == "sibling");
@@ -115,7 +115,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             co_await reader.join();
             RUVIA_CHECK(observation->eof_);
             RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
-            auto next_sibling = co_await client.send({.target_ = "/udp-tunnel-sibling"});
+            auto next_sibling = co_await client.handle().send({.target_ = "/udp-tunnel-sibling"});
             auto next_sibling_body = co_await next_sibling.body().read_all();
             RUVIA_CHECK(std::string_view(
                             reinterpret_cast<const char*>(next_sibling_body.bytes().data()), next_sibling_body.size()) == "sibling");

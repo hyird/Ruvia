@@ -233,6 +233,14 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
         !set_mysql_timeout(initialized, MYSQL_OPT_WRITE_TIMEOUT, config.write_timeout_)) {
         throw mysql_error(initialized, "configuring MariaDB timeouts", db_error::code_type::connect_failed);
     }
+    // The pool keeps one registered duplicate of the connection socket and
+    // tells sockets apart by handle value, so the driver must never silently
+    // replace its socket. A lost connection fails the operation and the pool
+    // reconnects through a fresh connection instead.
+    const my_bool reconnect = 0;
+    if (mysql_optionsv(&initialized, MYSQL_OPT_RECONNECT, &reconnect) != 0) {
+        throw mysql_error(initialized, "disabling MariaDB automatic reconnect", db_error::code_type::connect_failed);
+    }
 
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
     const my_bool enforce_tls = use_tls ? 1 : 0;
@@ -281,16 +289,8 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     if (native == db_slot_socket::invalid_socket) {
         throw mysql_socket_error("MariaDB connection has no waitable socket", {});
     }
-    if (const auto error = slot.wait_socket_->ensure_assigned(native); error) {
-        throw mysql_socket_error("binding MariaDB connection socket", error);
-    }
-    const auto non_blocking_error = slot.wait_socket_->make_non_blocking();
-    const auto release_error = slot.wait_socket_->release();
-    if (non_blocking_error) {
-        throw mysql_socket_error("making MariaDB connection socket non-blocking", non_blocking_error);
-    }
-    if (release_error) {
-        throw mysql_socket_error("detaching MariaDB connection socket", release_error);
+    if (const auto error = set_db_socket_non_blocking(native); error) {
+        throw mysql_socket_error("making MariaDB connection socket non-blocking", error);
     }
 }
 
@@ -306,7 +306,10 @@ task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::str
     auto result_value = db_result_access::make_result(resource);
     auto* raw_result = co_await store_mysql_result(pool, index, deadline_value);
     if (raw_result == nullptr) {
-        if (mysql_field_count(&connection) != 0) {
+        // A lost connection also yields no result, and libmariadb resets the
+        // field count when it drops the connection, so only mysql_errno()
+        // tells a failed transfer from a statement without a row set.
+        if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_store_result", db_error::code_type::statement_failed);
         }
         throw std::invalid_argument("query() requires row-producing SQL");
@@ -354,7 +357,7 @@ task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index,
         free_stored_result(raw_result);
         throw std::invalid_argument("execute() does not accept row-producing SQL");
     }
-    if (mysql_field_count(&connection) != 0) {
+    if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
         throw mysql_error(connection, "mysql_store_result", db_error::code_type::statement_failed);
     }
     co_return db_result_access::make_exec_result(
@@ -367,7 +370,7 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
     auto& connection = *pool.slot(index).connection_;
     auto* raw_result = mysql_use_result(&connection);
     if (raw_result == nullptr) {
-        if (mysql_field_count(&connection) != 0) {
+        if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
         }
         co_return db_stream_start{.result_ = nullptr, .returns_rows_ = false};
@@ -449,6 +452,12 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
             status = mysql_free_result_cont(raw_result, co_await wait_for_mysql(pool, index, status, deadline_value));
         }
         raw_result = nullptr;
+        // Freeing an unbuffered result drains its unread rows, and a lost
+        // connection while draining surfaces only through mysql_errno().
+        auto& connection = *pool.slot(index).connection_;
+        if (mysql_errno(&connection) != 0) {
+            throw mysql_error(connection, "mysql_free_result", db_error::code_type::statement_failed);
+        }
         co_await finish_mysql_results(pool, index, deadline_value);
         cancellation.finish();
         pool.leases().release(index);

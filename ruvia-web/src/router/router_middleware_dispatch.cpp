@@ -160,6 +160,7 @@ detail::middleware_chain detail::route_table::route_chain(const route_entry& rou
         .scopes_ = route.has_conditional_middleware()
                        ? std::span<const std::string_view>(plan_->middleware_scopes_).subspan(offset, count)
                        : std::span<const std::string_view>{},
+        .terminal_ = {},
         .failure_ = &route_table::contain_failure};
 }
 
@@ -202,6 +203,8 @@ task<http_response> detail::route_table::run_unmatched_chain(
         middleware_chain{.table_ = this,
             .frames_ = std::span<const route_middleware_type>(middleware_frames_)
                 .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
+            .scopes_ = {},
+            .terminal_ = {},
             .failure_ = &route_table::contain_failure},
         context_value, terminal);
 }

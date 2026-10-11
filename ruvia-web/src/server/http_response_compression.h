@@ -175,7 +175,7 @@ private:
     http_response& response, compression_config options, blocking_pool* pool,
     const worker_handle& worker_value);
 
-// Shared Web response policy. Fixed representations do not vary by coding;
+// Response compression policy. Fixed representations do not vary by coding;
 // eligible representations are annotated before deciding between identity
 // and an encoder. Encoder availability never changes Accept-Encoding parsing.
 [[nodiscard]] http_response_compression_decision prepare_response_compression(

@@ -265,28 +265,8 @@ websocket_client_handle websocket_client::with_options(operation_options options
     return state_->handle(std::move(options));
 }
 
-scoped_operation<std::optional<websocket_message>> websocket_client::read() const& {
-    return with_options({}).read();
-}
-
-scoped_operation<void> websocket_client::text(std::string_view payload_value, websocket_send_options options) const& {
-    return with_options({}).text(payload_value, options);
-}
-
-scoped_operation<void> websocket_client::binary(std::string_view payload_value, websocket_send_options options) const& {
-    return with_options({}).binary(payload_value, options);
-}
-
-scoped_operation<void> websocket_client::ping(std::string_view payload_value) const& {
-    return with_options({}).ping(payload_value);
-}
-
-scoped_operation<void> websocket_client::pong(std::string_view payload_value) const& {
-    return with_options({}).pong(payload_value);
-}
-
-scoped_operation<void> websocket_client::close(websocket_close_options options) const& {
-    return with_options({}).close(options);
+websocket_client_handle websocket_client::handle() const& {
+    return state_->handle({});
 }
 
 void websocket_client::abort() noexcept {

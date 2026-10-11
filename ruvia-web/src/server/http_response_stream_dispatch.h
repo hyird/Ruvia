@@ -48,9 +48,8 @@ bool response_stream_aborted_thunk(void* target) noexcept {
 }
 
 template <typename sink>
-void response_stream_bind_context_thunk(
-    void* target, context* context_value, task<http_response> (*streaming_head)(context&)) {
-    static_cast<sink*>(target)->bind_context(context_value, streaming_head);
+void response_stream_bind_context_thunk(void* target, context* context_value) {
+    static_cast<sink*>(target)->bind_context(context_value);
 }
 
 template <typename sink>

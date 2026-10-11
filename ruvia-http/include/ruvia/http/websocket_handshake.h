@@ -20,10 +20,6 @@
 
 namespace ruvia {
 
-namespace detail {
-struct websocket_handshake_validation_result_access;
-}  // namespace detail
-
 struct websocket_server_handshake_options final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::span<const std::string_view> supported_subprotocols_{};
@@ -75,7 +71,6 @@ public:
     const websocket_handshake_failure* failure() const&& = delete;
 
 private:
-    friend struct detail::websocket_handshake_validation_result_access;
     friend websocket_handshake_validation_result validate_websocket_handshake(
         const http_request&, const http1_request_body_plan&) noexcept;
 

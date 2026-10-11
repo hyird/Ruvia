@@ -21,7 +21,6 @@
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_handshake.h"
 #include "websocket/http_websocket_session.h"
-#include "websocket/http_websocket_socket_transport.h"
 #include "websocket/websocket_response_headers.h"
 
 namespace ruvia::detail {
@@ -44,7 +43,7 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
         co_return http1_session_request_completion::make_buffered_closing(connection_plan);
     }
     const auto& websocket_endpoint = *resolved.route().endpoint().get_websocket();
-    using connection_type = socket_websocket_connection_type<stream_type>;
+    using connection_type = websocket_connection<stream_type>;
     std::optional<connection_type> websocket_connection;
     auto establish = [&](context& context_value) -> task<void> {
         const auto response_headers_value = websocket_response_headers(context_value);
@@ -57,7 +56,7 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
         if (const auto ec = co_await write_websocket_handshake(d.stream_, handshake); ec) {
             co_return;
         }
-        websocket_connection.emplace(websocket_socket_transport<stream_type>{d.stream_},
+        websocket_connection.emplace(d.stream_,
             d.base_route_services_.worker(), d.scanner_entry_, websocket_endpoint.lifecycle(),
             protocol_byte_limit::limited(d.options_.max_websocket_message_bytes_),
             d.inbound_buffer_pool_ != nullptr ? d.inbound_buffer_pool_ : d.memory_.resource(),

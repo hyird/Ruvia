@@ -9,6 +9,7 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
 
 #include "parser/http_uri_grammar.h"
@@ -43,8 +44,8 @@ struct normalized_host_unit final {
             encoded_reserved = !is_unreserved_byte(byte);
         }
     }
-    if (!encoded_reserved && byte >= 'A' && byte <= 'Z') {
-        byte = static_cast<unsigned char>(byte + ('a' - 'A'));
+    if (!encoded_reserved) {
+        byte = http_ascii_to_lower(byte);
     }
     output = normalized_host_unit{.byte_ = byte, .encoded_reserved_ = encoded_reserved};
     return true;

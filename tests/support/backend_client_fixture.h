@@ -34,16 +34,28 @@
 
 namespace ruvia::test {
 
-// Only connection startup is implemented. Tests exercise cold public operations
-// after authentication, never an injected backend object or private storage.
+// Only connection startup is implemented, plus an optional transport failure
+// in the middle of the first statement's result. Tests exercise public
+// operations after authentication, never an injected backend object or
+// private storage.
 class backend_startup_peer final {
 public:
     enum class protocol { postgresql,
         mariadb,
         redis };
-    explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true)
+    // What a database peer does once the client is authenticated.
+    enum class after_startup {
+        // Reads and discards everything the client sends.
+        idle,
+        // Answers the first statement with the start of a one-column row set
+        // and one row, then drops the connection before the result ends.
+        drop_mid_result,
+    };
+    explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
+        after_startup behavior = after_startup::idle)
         : gate_(io_),
           defer_authentication_(defer_authentication),
+          after_startup_(behavior),
           startup_ready_(startup_.get_future()),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
@@ -100,9 +112,22 @@ private:
         }
     }
 
+    static void append_short(std::string& bytes, std::uint16_t value) {
+        bytes.push_back(static_cast<char>(value >> 8));
+        bytes.push_back(static_cast<char>(value & 255));
+    }
+
     static void message(std::string& bytes, char type, std::string_view payload) {
         bytes.push_back(type);
         append_integer(bytes, static_cast<std::uint32_t>(payload.size() + 4));
+        bytes.append(payload);
+    }
+
+    static void maria_packet(std::string& bytes, std::string_view payload, unsigned char sequence) {
+        bytes.push_back(static_cast<char>(payload.size() & 255));
+        bytes.push_back(static_cast<char>((payload.size() >> 8) & 255));
+        bytes.push_back(static_cast<char>((payload.size() >> 16) & 255));
+        bytes.push_back(static_cast<char>(sequence));
         bytes.append(payload);
     }
 
@@ -157,13 +182,48 @@ private:
         co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
     }
 
+    // The extended query protocol ends a statement with Sync. ParseComplete,
+    // BindComplete, RowDescription (one text column) and one DataRow follow;
+    // CommandComplete and ReadyForQuery never do.
+    asio::awaitable<void> postgres_drop_mid_result() {
+        for (;;) {
+            std::array<unsigned char, 5> header{};
+            co_await asio::async_read(socket_, asio::buffer(header), asio::use_awaitable);
+            const auto size = integer(header.data() + 1);
+            if (size < 4 || size > 65536) {
+                throw std::runtime_error("invalid PostgreSQL message length");
+            }
+            std::vector<unsigned char> body(size - 4);
+            co_await asio::async_read(socket_, asio::buffer(body), asio::use_awaitable);
+            if (header[0] == 'S') {
+                break;
+            }
+        }
+        std::string response;
+        message(response, '1', {});
+        message(response, '2', {});
+        std::string description;
+        append_short(description, 1);
+        description.append("v", 2);
+        append_integer(description, 0);
+        append_short(description, 0);
+        append_integer(description, 25);
+        append_short(description, 0xffff);
+        append_integer(description, 0xffffffff);
+        append_short(description, 0);
+        message(response, 'T', description);
+        std::string row;
+        append_short(row, 1);
+        append_integer(row, 1);
+        row.push_back('x');
+        message(response, 'D', row);
+        co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
+    }
+
     asio::awaitable<void> maria_packet(std::string_view payload, unsigned char sequence) {
-        std::array<unsigned char, 4> header{
-            static_cast<unsigned char>(payload.size()),
-            static_cast<unsigned char>(payload.size() >> 8),
-            static_cast<unsigned char>(payload.size() >> 16), sequence};
-        co_await asio::async_write(socket_, asio::buffer(header), asio::use_awaitable);
-        co_await asio::async_write(socket_, asio::buffer(payload), asio::use_awaitable);
+        std::string bytes;
+        maria_packet(bytes, payload, sequence);
+        co_await asio::async_write(socket_, asio::buffer(bytes), asio::use_awaitable);
     }
 
     asio::awaitable<void> maria_startup() {
@@ -194,6 +254,33 @@ private:
             static_cast<unsigned char>(header[3] + 1));
     }
 
+    // Column count, one VARCHAR column definition and its EOF, and one row
+    // follow COM_QUERY; the closing EOF never does.
+    asio::awaitable<void> maria_drop_mid_result() {
+        std::array<unsigned char, 4> header{};
+        co_await asio::async_read(socket_, asio::buffer(header), asio::use_awaitable);
+        const auto size = std::size_t{header[0]} | (std::size_t{header[1]} << 8) | (std::size_t{header[2]} << 16);
+        if (size > 65536) {
+            throw std::runtime_error("invalid MariaDB command length");
+        }
+        std::vector<unsigned char> command(size);
+        co_await asio::async_read(socket_, asio::buffer(command), asio::use_awaitable);
+        auto sequence = static_cast<unsigned char>(header[3] + 1);
+        std::string response;
+        maria_packet(response, std::string_view("\x01", 1), sequence++);
+        std::string column;
+        for (const std::string_view part : {"def", "", "", "", "v", ""}) {
+            column.push_back(static_cast<char>(part.size()));
+            column.append(part);
+        }
+        // Fixed fields: charset utf8mb4, length 1024, VAR_STRING, no flags.
+        column.append("\x0c\x2d\x00\x00\x04\x00\x00\xfd\x00\x00\x00\x00\x00", 13);
+        maria_packet(response, column, sequence++);
+        maria_packet(response, std::string_view("\xfe\0\0\x02\0", 5), sequence++);
+        maria_packet(response, std::string_view("\x01x", 2), sequence++);
+        co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
+    }
+
     asio::awaitable<void> serve(protocol selected) {
         try {
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
@@ -203,6 +290,15 @@ private:
                 co_await maria_startup();
             }
             if (closing_) {
+                co_return;
+            }
+            if (after_startup_ == after_startup::drop_mid_result) {
+                if (selected == protocol::postgresql) {
+                    co_await postgres_drop_mid_result();
+                } else if (selected == protocol::mariadb) {
+                    co_await maria_drop_mid_result();
+                }
+                socket_.close();
                 co_return;
             }
             std::array<char, 64> buffer{};
@@ -224,6 +320,7 @@ private:
     asio::io_context io_;
     asio::steady_timer gate_;
     bool defer_authentication_;
+    after_startup after_startup_;
     bool closing_{false};
     std::promise<void> startup_;
     std::future<void> startup_ready_;
@@ -302,12 +399,11 @@ void drive_backend_client(
 
 #ifdef RUVIA_ENABLE_DATABASE
 template <typename callback_type>
-void with_connected_db_client(
-    event_loop_attachment& attachment, db_config config, callback_type&& callback) {
-    backend_startup_peer peer(config.driver_ == db_driver::postgresql
-                                  ? backend_startup_peer::protocol::postgresql
-                                  : backend_startup_peer::protocol::mariadb,
-        false);
+void with_connected_db_client(event_loop_attachment& attachment, db_config config,
+    backend_startup_peer::after_startup behavior, callback_type&& callback) {
+    backend_startup_peer peer(config.driver_ == db_driver::postgresql ? backend_startup_peer::protocol::postgresql
+                                                                      : backend_startup_peer::protocol::mariadb,
+        false, behavior);
     config.host_ = "127.0.0.1";
     config.port_ = peer.port();
     config.username_ = "test";
@@ -316,6 +412,12 @@ void with_connected_db_client(
     config.tls_ = {.mode_ = client_tls_mode::disabled};
     db_client client(attachment.loop(), config);
     drive_backend_client(attachment, client, std::forward<callback_type>(callback));
+}
+
+template <typename callback_type>
+void with_connected_db_client(event_loop_attachment& attachment, db_config config, callback_type&& callback) {
+    with_connected_db_client(attachment, std::move(config), backend_startup_peer::after_startup::idle,
+        std::forward<callback_type>(callback));
 }
 #endif
 

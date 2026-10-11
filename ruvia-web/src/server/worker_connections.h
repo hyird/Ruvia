@@ -51,18 +51,6 @@ public:
     [[nodiscard]] bool available() const noexcept;
     void accept(native_accepted_socket_ticket&& ticket) noexcept;
     [[nodiscard]] http_server_stats stats() const noexcept;
-    [[nodiscard]] connection_scanner& scanner() noexcept {
-        return scanner_;
-    }
-    [[nodiscard]] http_server_session_config& listener(std::size_t index) noexcept {
-        return *listeners_[index];
-    }
-    [[nodiscard]] std::atomic<std::size_t>& active_counter() noexcept {
-        return active_;
-    }
-    [[nodiscard]] std::atomic<std::size_t>& refused_counter() noexcept {
-        return refused_;
-    }
 
 private:
     void configure_tls(http_server_session_config& session);

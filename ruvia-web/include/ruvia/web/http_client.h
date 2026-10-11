@@ -33,13 +33,11 @@ public:
     // shutdown, so only lvalue clients may create them.
     [[nodiscard]] http_client_handle with_options(operation_options options) const&;
     http_client_handle with_options(operation_options) const&& = delete;
-    [[nodiscard]] scoped_operation<http_client_response> send(
-        const http_client_request_view& request) const&;
-    scoped_operation<http_client_response> send(const http_client_request_view&) const&& = delete;
-
-    [[nodiscard]] scoped_operation<http_client_exchange> open_request(
-        const http_client_request_view& head, http_client_upload_config upload = {}) const&;
-    scoped_operation<http_client_exchange> open_request(const http_client_request_view&, http_client_upload_config = {}) const&& = delete;
+    // Returns the default-options handle. Each call registers one allocation-free
+    // capability with the client operation scope, so keep the returned handle for
+    // a sequence of requests instead of calling handle() per request.
+    [[nodiscard]] http_client_handle handle() const&;
+    http_client_handle handle() const&& = delete;
 
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.
@@ -51,10 +49,6 @@ public:
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
 
-    [[nodiscard]] scoped_operation<http_client_tunnel_result> open_tunnel(const http_client_tunnel_request_view& request, http_client_tunnel_config config = {}) const&;
-    scoped_operation<http_client_tunnel_result> open_tunnel(const http_client_tunnel_request_view&, http_client_tunnel_config = {}) const&& = delete;
-    [[nodiscard]] scoped_operation<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config = {}) const&;
-    scoped_operation<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view&, http_client_tunnel_config = {}) const&& = delete;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;

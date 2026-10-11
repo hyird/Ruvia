@@ -59,8 +59,7 @@ ruvia::task<void> end_owned(void* target,
 }
 
 void require_websocket_worker(void* target) noexcept {
-    const auto* worker_value = static_cast<const ruvia::worker_handle*>(target);
-    if (worker_value != nullptr && !worker_value->is_current()) {
+    if (!static_cast<const ruvia::worker_handle*>(target)->is_current()) {
         std::terminate();
     }
 }
@@ -285,7 +284,7 @@ scoped_operation<void> websocket::close(websocket_close_options options) & {
 }
 
 void websocket::abort() noexcept {
-    if (worker_ != nullptr && !worker_->is_current()) {
+    if (!worker_->is_current()) {
         std::terminate();
     }
     if (!operation_scope_.active()) {

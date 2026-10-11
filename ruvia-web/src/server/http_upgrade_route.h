@@ -17,7 +17,7 @@
 
 // The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP
 // tunnels and WebSocket upgrades) over HTTP/1: run the
-// application chain with a protocol terminal that commits the upgrade and
+// application chain with a terminal that commits the upgrade and
 // owns the resulting session; once a session exists it is always finished,
 // otherwise a handler failure propagates and an uncommitted response falls
 // back to the ordinary buffered tail.
@@ -36,8 +36,8 @@ public:
     }
 
     // The terminal ran but no session remains (e.g. the upgrade head write
-    // failed): output may be partially committed, so the protocol aborts the
-    // stream or connection instead of answering.
+    // failed): output may be partially committed, so the connection is closed
+    // instead of answering.
     [[nodiscard]] static http_upgrade_route_outcome make_abandoned() noexcept {
         return http_upgrade_route_outcome(false);
     }
@@ -52,7 +52,7 @@ public:
     }
 
     // The application answered without upgrading: a buffered response still
-    // has to go through the protocol's buffered tail.
+    // has to go through the buffered response tail.
     [[nodiscard]] http_response* response() & noexcept {
         return response_ ? &*response_ : nullptr;
     }
@@ -69,7 +69,7 @@ private:
     bool upgraded_{false};
 };
 
-// `establish(context&) -> task<void>` commits the protocol's upgrade head,
+// `establish(context&) -> task<void>` commits the upgrade response head,
 // emplaces `session` and runs the route's stream handler on it.
 // `finish(session_type&, std::exception_ptr) -> task<void>` closes an
 // established session and reports a handler failure; it always runs once a

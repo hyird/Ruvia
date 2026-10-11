@@ -22,11 +22,6 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] bool websocket_header_equals(
-    std::string_view value, std::string_view expected) noexcept {
-    return http_ascii_equals_ignore_case(http_trim_ows(value), expected);
-}
-
 [[nodiscard]] std::optional<std::array<std::uint8_t, 16>> decode_websocket_key(
     std::string_view key) noexcept {
     key = http_trim_ows(key);
@@ -168,7 +163,7 @@ websocket_handshake_validation_result validate_websocket_handshake(
         !detail::decode_websocket_key(key).has_value() || version_count != 1) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
-    if (!detail::websocket_header_equals(version, "13")) {
+    if (!http_ascii_equals_ignore_case(http_trim_ows(version), "13")) {
         return websocket_handshake_validation_result::make_unsupported_version();
     }
     return websocket_handshake_validation_result::make_accepted();

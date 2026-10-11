@@ -8,6 +8,8 @@
 #include <system_error>
 #include <variant>
 
+#include "ruvia/http/http_hex.h"
+
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia::detail {
@@ -20,10 +22,6 @@ namespace {
 
 [[nodiscard]] bool is_lower_alpha_numeric(char value) noexcept {
     return is_lower_alpha(value) || is_decimal_digit(value);
-}
-
-[[nodiscard]] bool is_lower_hex_digit(char value) noexcept {
-    return is_decimal_digit(value) || (value >= 'a' && value <= 'f');
 }
 
 [[nodiscard]] bool is_valid_serialized_origin_scheme(std::string_view scheme) noexcept {
@@ -46,10 +44,8 @@ namespace {
         return true;
     }
     if (value.size() >= 2 && value.front() == '0' && (value[1] == 'x' || value[1] == 'X')) {
-        return std::ranges::all_of(value.substr(2), [](char digit) noexcept {
-            return is_decimal_digit(digit) || (digit >= 'a' && digit <= 'f') ||
-                   (digit >= 'A' && digit <= 'F');
-        });
+        return std::ranges::all_of(
+            value.substr(2), [](char digit) noexcept { return http_decode_hex_nibble(digit) >= 0; });
     }
     if (value.size() >= 2 && value.front() == '0') {
         return std::ranges::all_of(
@@ -111,12 +107,12 @@ namespace {
     }
     std::uint16_t value = 0;
     for (const auto digit : group) {
-        if (!is_lower_hex_digit(digit)) {
+        // The serialized form spells hex digits in lowercase only.
+        const auto nibble = http_decode_hex_nibble(digit);
+        if (nibble < 0 || (digit >= 'A' && digit <= 'F')) {
             return std::nullopt;
         }
-        value = static_cast<std::uint16_t>(
-            value * 16U + (is_decimal_digit(digit) ? static_cast<unsigned>(digit - '0')
-                                                   : static_cast<unsigned>(digit - 'a' + 10)));
+        value = static_cast<std::uint16_t>(value * 16U + static_cast<unsigned>(nibble));
     }
     return value;
 }
@@ -179,7 +175,6 @@ namespace {
 
 [[nodiscard]] bool append_serialized_origin_ipv6_hex(
     std::array<char, 39>& output, std::size_t& size, std::uint16_t value) noexcept {
-    constexpr std::string_view hex = "0123456789abcdef";
     bool emitted = false;
     for (int shift = 12; shift >= 0; shift -= 4) {
         const auto nibble = static_cast<unsigned>((value >> shift) & 0xFU);
@@ -189,7 +184,7 @@ namespace {
         if (size == output.size()) {
             return false;
         }
-        output[size++] = hex[nibble];
+        output[size++] = http_lower_hex_digit(static_cast<int>(nibble));
         emitted = true;
     }
     return true;

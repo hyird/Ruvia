@@ -68,20 +68,8 @@ http_client_handle http_client::with_options(operation_options options) const& {
     return state_->handle(std::move(options));
 }
 
-scoped_operation<http_client_exchange> http_client::open_request(const http_client_request_view& head, http_client_upload_config upload) const& {
-    return with_options({}).open_request(head, upload);
-}
-
-scoped_operation<http_client_response> http_client::send(const http_client_request_view& request) const& {
-    return with_options({}).send(request);
-}
-
-scoped_operation<http_client_tunnel_result> http_client::open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config) const& {
-    return with_options({}).open_udp_tunnel(request, config);
-}
-
-scoped_operation<http_client_tunnel_result> http_client::open_tunnel(const http_client_tunnel_request_view& request, http_client_tunnel_config config) const& {
-    return with_options({}).open_tunnel(request, config);
+http_client_handle http_client::handle() const& {
+    return state_->handle({});
 }
 
 void http_client::close() noexcept {

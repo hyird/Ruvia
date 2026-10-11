@@ -27,17 +27,18 @@
 
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
+#include "server/connection_scanner.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_server_response_state.h"
 #include "server/http_streaming_response_compression.h"
 
 namespace ruvia::detail {
 
-template <typename stream_type, typename scanner_entry_type>
+template <typename stream_type>
 class response_stream_sink final {
 public:
     response_stream_sink(stream_type& stream, worker_memory& memory, http_response_head_buffer& head,
-        scanner_entry_type& scanner_entry, const worker_handle& worker_value, http_response_stream_kind kind,
+        connection_scanner::entry_type& scanner_entry, const worker_handle& worker_value, http_response_stream_kind kind,
         http1_response_stream_plan plan, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability) noexcept
         : stream_(stream),
@@ -50,7 +51,8 @@ public:
           connection_plan_(plan.request_connection_plan().require_close()),
           compression_(memory.resource(), response_coding, response_coding_availability) {}
 
-    response_stream_sink(stream_type&, worker_memory&, http_response_head_buffer&, scanner_entry_type&, worker_handle&&,
+    response_stream_sink(stream_type&, worker_memory&, http_response_head_buffer&, connection_scanner::entry_type&,
+        worker_handle&&,
         http_response_stream_kind, http1_response_stream_plan, http_response_coding_selection,
         http_response_coding_availability) = delete;
 
@@ -79,15 +81,14 @@ public:
     friend task<timer_sleep_result> response_stream_sleep_thunk(
         void*, std::chrono::milliseconds, const stop_token&);
     template <typename sink>
-    friend void response_stream_bind_context_thunk(
-        void*, context*, response_stream_state::streaming_head_thunk_type);
+    friend void response_stream_bind_context_thunk(void*, context*);
     template <typename sink>
     friend void response_stream_release_context_thunk(void*) noexcept;
 
 private:
-    void bind_context(context* context_value, response_stream_state::streaming_head_thunk_type streaming_head) {
+    void bind_context(context* context_value) {
         interim_output_ = context_value != nullptr ? context_access::interim_output(*context_value) : nullptr;
-        state_.bind_context(context_value, streaming_head);
+        state_.bind_context(context_value);
     }
 
     void release_context() noexcept {
@@ -97,13 +98,13 @@ private:
     task<void> commit(http_response_trailer_intent trailer_intent) {
         if (state_.committed()) {
             if (trailer_intent == http_response_trailer_intent::present) {
-                state_.ensure_trailers_allowed(http_response_stream_trailer_framing::http1_chunked);
+                state_.ensure_trailers_allowed();
             }
             co_return;
         }
 
         try {
-            auto response = co_await state_.streaming_head();
+            auto response = co_await context_access::commit_streaming_head(state_.bound_context());
             compression_.prepare(plan_.request_method(), response, kind_);
             auto prepare_result =
                 prepare_http1_response_stream_head(std::move(response), kind_, plan_, trailer_intent);
@@ -281,7 +282,7 @@ private:
     stream_type& stream_;
     http_response_head_buffer& head_;
     std::pmr::string trailers_;
-    scanner_entry_type& scanner_entry_;
+    connection_scanner::entry_type& scanner_entry_;
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
     const worker_handle& worker_;

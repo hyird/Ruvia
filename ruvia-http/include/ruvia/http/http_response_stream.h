@@ -38,11 +38,6 @@ enum class http_response_trailer_intent : std::uint8_t { none,
     return section.empty() ? http_response_trailer_intent::none : http_response_trailer_intent::present;
 }
 
-enum class http_response_stream_trailer_framing : std::uint8_t {
-    unavailable,
-    http1_chunked,
-};
-
 // Authoritative phase immediately after the initial response head is submitted.
 enum class http_response_stream_head_disposition : std::uint8_t { body_open,
     message_ended };
@@ -61,8 +56,9 @@ public:
         return body_plan_;
     }
 
-    [[nodiscard]] http_response_stream_trailer_framing trailer_framing() const noexcept {
-        return trailer_framing_;
+    // Only an HTTP/1.1 chunked body can carry a trailer section (RFC 9112 7.1.2).
+    [[nodiscard]] bool trailers_available() const noexcept {
+        return framing_ == http_response_stream_framing::http1_chunked && !body_plan_.body_suppressed();
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
@@ -71,8 +67,7 @@ public:
 
     [[nodiscard]] bool trailer_intent_allowed() const noexcept {
         return !trailer_intent_present_ ||
-               (trailer_framing_ != http_response_stream_trailer_framing::unavailable &&
-                   !response_status().is_informational() &&
+               (trailers_available() && !response_status().is_informational() &&
                    response_status() != http_status::no_content &&
                    response_status() != http_status::not_modified);
     }
@@ -82,17 +77,14 @@ private:
         http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
 
     http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan,
-        http_response_stream_trailer_framing trailer_framing,
         http_response_stream_head_disposition head_disposition, bool trailer_intent_present) noexcept
         : framing_(framing),
           body_plan_(body_plan),
-          trailer_framing_(trailer_framing),
           head_disposition_(head_disposition),
           trailer_intent_present_(trailer_intent_present) {}
 
     http_response_stream_framing framing_{http_response_stream_framing::http1_known_length};
     http_response_body_plan body_plan_;
-    http_response_stream_trailer_framing trailer_framing_{http_response_stream_trailer_framing::unavailable};
     http_response_stream_head_disposition head_disposition_{http_response_stream_head_disposition::message_ended};
     bool trailer_intent_present_{false};
 };
@@ -102,9 +94,6 @@ private:
     http_response_trailer_intent trailer_intent) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response_status);
     return http_response_stream_commit_plan(framing, body_plan,
-        framing == http_response_stream_framing::http1_chunked && !body_plan.body_suppressed()
-            ? http_response_stream_trailer_framing::http1_chunked
-            : http_response_stream_trailer_framing::unavailable,
         body_plan.body_suppressed() ? http_response_stream_head_disposition::message_ended
                                     : http_response_stream_head_disposition::body_open,
         trailer_intent == http_response_trailer_intent::present);

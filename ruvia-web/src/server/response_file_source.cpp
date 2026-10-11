@@ -38,19 +38,8 @@ char* response_file_source::read_buffer::data() {
 response_file_source::response_file_source(const http_response& response, response_file_io io)
     : response_(response),
       io_(std::move(io)),
-      state_{.path_ = std::pmr::basic_string<std::filesystem::path::value_type>(process_resource())},
-      segment_count_(response.body_segment_count()) {
-    // `last` must be known on the final non-empty segment, before any trailing
-    // empty boundary is skipped.
-    last_segment_ = segment_count_;
-    for (auto index = segment_count_; index-- > 0;) {
-        const auto segment = response_.body_segment(index);
-        if (segment.file_ ? segment.file_->length() != 0 : !segment.bytes_.empty()) {
-            last_segment_ = index;
-            break;
-        }
-    }
-}
+      state_(process_resource()),
+      segment_count_(response.body_segment_count()) {}
 
 void response_file_source::select_file(http_response_file_view file) {
     // Multipart byte ranges name the same file view: keep its open handle
@@ -141,14 +130,12 @@ task<response_body_chunk> response_file_source::next() {
                 co_return response_body_chunk::failed();
             }
             range_remaining_ -= bytes;
-            co_return response_body_chunk::data(
-                std::string_view(state_.buffer_.data(), bytes), current_segment_ == last_segment_ && range_remaining_ == 0);
+            co_return response_body_chunk::data(std::string_view(state_.buffer_.data(), bytes));
         }
         if (next_segment_ >= segment_count_) {
             co_return response_body_chunk::end();
         }
-        current_segment_ = next_segment_++;
-        const auto segment = response_.body_segment(current_segment_);
+        const auto segment = response_.body_segment(next_segment_++);
         if (segment.file_) {
             if (segment.file_->length() != 0) {
                 select_file(*segment.file_);
@@ -157,7 +144,7 @@ task<response_body_chunk> response_file_source::next() {
             continue;
         }
         if (!segment.bytes_.empty()) {
-            co_return response_body_chunk::data(segment.bytes_, current_segment_ == last_segment_);
+            co_return response_body_chunk::data(segment.bytes_);
         }
     }
 }

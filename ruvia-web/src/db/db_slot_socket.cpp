@@ -1,26 +1,32 @@
 #include "db/db_slot_socket.h"
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+
 #include <system_error>
 #include <utility>
 
 namespace ruvia::detail {
 
+#if defined(_WIN32)
 db_slot_socket::db_slot_socket(asio::io_context& io_context)
-#if defined(_WIN32)
-    : socket_(io_context){}
-#else
-    : descriptor_(io_context) {
-}
-#endif
+    : socket_(io_context) {}
 
-      db_slot_socket::db_slot_socket(db_slot_socket && other) noexcept
-#if defined(_WIN32)
+db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
     : socket_(std::move(other.socket_)),
+      source_(std::exchange(other.source_, invalid_socket)) {}
 #else
+db_slot_socket::db_slot_socket(asio::io_context& io_context)
+    : descriptor_(io_context) {}
+
+db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
     : descriptor_(std::move(other.descriptor_)),
+      source_(std::exchange(other.source_, invalid_socket)) {}
 #endif
-      native_(std::exchange(other.native_, invalid_socket)) {
-}
 
 db_slot_socket& db_slot_socket::operator=(db_slot_socket&& other) noexcept {
     if (this == &other) {
@@ -31,7 +37,7 @@ db_slot_socket& db_slot_socket::operator=(db_slot_socket&& other) noexcept {
 #else
     descriptor_ = std::move(other.descriptor_);
 #endif
-    native_ = std::exchange(other.native_, invalid_socket);
+    source_ = std::exchange(other.source_, invalid_socket);
     return *this;
 }
 
@@ -97,102 +103,95 @@ db_socket_wait_result db_slot_socket::readiness_awaiter::await_resume() const {
     return result_;
 }
 
-std::error_code db_slot_socket::ensure_assigned(native_socket_type fd) noexcept {
-    if (fd == invalid_socket) {
+std::error_code db_slot_socket::attach(native_socket_type driver_socket) noexcept {
+    if (driver_socket == invalid_socket) {
         return std::make_error_code(std::errc::bad_file_descriptor);
     }
+    if (source_ == driver_socket) {
+        return {};
+    }
+    close();
     std::error_code ec;
 #if defined(_WIN32)
-    if (socket_.is_open()) {
-        if (native_ == fd) {
-            return {};
-        }
-        if (const auto release_error = release(); release_error) {
-            return release_error;
-        }
-    }
+    // WSADuplicateSocket is the documented way to duplicate a socket
+    // (DuplicateHandle bypasses layered providers). Within one process the
+    // result is a second handle to the same kernel socket object, so the IOCP
+    // association made below covers the driver's handle too. The drivers only
+    // issue synchronous, non-overlapped calls on it, which post no completion
+    // packets.
     WSAPROTOCOL_INFOW protocol_info{};
-    int protocol_info_size = static_cast<int>(sizeof(protocol_info));
-    const auto source_value = static_cast<SOCKET>(fd);
-    if (::getsockopt(source_value, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocol_info),
-            &protocol_info_size) == SOCKET_ERROR) {
-        return std::error_code(WSAGetLastError(), std::system_category());
+    if (::WSADuplicateSocketW(static_cast<SOCKET>(driver_socket), ::GetCurrentProcessId(), &protocol_info) != 0) {
+        return std::error_code(::WSAGetLastError(), std::system_category());
     }
-    if (protocol_info.iAddressFamily == AF_INET) {
-        socket_.assign(asio::ip::tcp::v4(), source_value, ec);
-    } else if (protocol_info.iAddressFamily == AF_INET6) {
-        socket_.assign(asio::ip::tcp::v6(), source_value, ec);
-    } else {
+    if (protocol_info.iSocketType != SOCK_STREAM ||
+        (protocol_info.iAddressFamily != AF_INET && protocol_info.iAddressFamily != AF_INET6)) {
         return std::make_error_code(std::errc::address_family_not_supported);
     }
-#else
-    if (descriptor_.is_open()) {
-        if (native_ == fd) {
-            return {};
-        }
-        if (const auto release_error = release(); release_error) {
-            return release_error;
-        }
+    const SOCKET duplicate = ::WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+        &protocol_info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    if (duplicate == INVALID_SOCKET) {
+        return std::error_code(::WSAGetLastError(), std::system_category());
     }
-    descriptor_.assign(fd, ec);
-#endif
+    socket_.assign(protocol_info.iAddressFamily == AF_INET ? asio::ip::tcp::v4() : asio::ip::tcp::v6(), duplicate, ec);
     if (ec) {
-        native_ = invalid_socket;
+        (void)::closesocket(duplicate);
         return ec;
     }
-    native_ = fd;
-    return {};
-}
-
-std::error_code db_slot_socket::make_non_blocking() noexcept {
-    std::error_code ec;
-#if defined(_WIN32)
-    socket_.native_non_blocking(true, ec);
 #else
-    descriptor_.native_non_blocking(true, ec);
+    const int duplicate = ::fcntl(driver_socket, F_DUPFD_CLOEXEC, 0);
+    if (duplicate < 0) {
+        return std::error_code(errno, std::system_category());
+    }
+    descriptor_.assign(duplicate, ec);
+    if (ec) {
+        (void)::close(duplicate);
+        return ec;
+    }
 #endif
-    return ec;
+    source_ = driver_socket;
+    return {};
 }
 
 void db_slot_socket::cancel() noexcept {
     std::error_code ignored;
-#if defined(_WIN32)
-    socket_.cancel(ignored);
-#else
-    descriptor_.cancel(ignored);
-#endif
+    waitable().cancel(ignored);
 }
 
-std::error_code db_slot_socket::release() noexcept {
+void db_slot_socket::close() noexcept {
+    std::error_code ec;
 #if defined(_WIN32)
+    // The duplicate is a second handle to the driver's socket object, and an
+    // IOCP association belongs to that object rather than to a handle.
+    // Closing only the duplicate would leave the driver's socket associated
+    // with this io_context, and a later duplicate of the same socket could
+    // not register. Dissociate first; if that fails, the plain close below
+    // still runs and such a later registration reports the failure.
     if (socket_.is_open()) {
-        std::error_code ec;
-        (void)socket_.release(ec);
-        if (ec) {
-            return ec;
+        const auto released = socket_.release(ec);
+        if (!ec) {
+            (void)::closesocket(released);
         }
-    }
-#else
-    try {
-        if (descriptor_.is_open()) {
-            (void)descriptor_.release();
-        }
-    } catch (const std::system_error& error) {
-        return error.code();
-    } catch (...) {
-        return std::make_error_code(std::errc::io_error);
     }
 #endif
-    native_ = invalid_socket;
-    return {};
+    // Asio invalidates its handle even when the close reports an error, and
+    // the handle is ours alone, so there is nothing to retry.
+    waitable().close(ec);
+    source_ = invalid_socket;
 }
 
-db_slot_socket_quarantine::db_slot_socket_quarantine(asio::io_context& io_context)
-    : socket_(io_context) {}
-
-void db_slot_socket_quarantine::retain(db_slot_socket&& value, void* driver) noexcept {
-    socket_ = std::move(value);
-    driver_connection_ = driver;
+std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type driver_socket) noexcept {
+#if defined(_WIN32)
+    u_long non_blocking = 1;
+    if (::ioctlsocket(static_cast<SOCKET>(driver_socket), FIONBIO, &non_blocking) != 0) {
+        return std::error_code(::WSAGetLastError(), std::system_category());
+    }
+#else
+    const int flags = ::fcntl(driver_socket, F_GETFL, 0);
+    if (flags < 0 || ((flags & O_NONBLOCK) == 0 && ::fcntl(driver_socket, F_SETFL, flags | O_NONBLOCK) != 0)) {
+        return std::error_code(errno, std::system_category());
+    }
+#endif
+    return {};
 }
 
 }  // namespace ruvia::detail

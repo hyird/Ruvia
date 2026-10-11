@@ -78,9 +78,7 @@ void db_pool<driver_type>::slot_policy::expire_slot(db_pool& pool, std::size_t i
             slot.resolver_.cancel();
             return;
         case db_deadline_kind::socket:
-            if (slot.wait_socket_ != nullptr) {
-                slot.wait_socket_->cancel();
-            }
+            slot.wait_socket_.cancel();
             return;
         case db_deadline_kind::sleep:
             if (auto handle = std::exchange(slot.deadline_continuation_, {})) {
@@ -109,7 +107,7 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
     }
     slots_.reserve(db_connections_per_worker);
     for (std::size_t index = 0; index < db_connections_per_worker; ++index) {
-        slots_.emplace_back(io_context_, resource_);
+        slots_.emplace_back(io_context_);
     }
 }
 
@@ -156,27 +154,20 @@ void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
             if (auto handle = std::exchange(slot.deadline_continuation_, {})) {
                 handle.resume();
             }
-        } else if (slot.wait_socket_ != nullptr) {
+        } else {
             // The wait handlers borrow the wrapper and the driver connection.
-            // Cancellation wakes the waiting coroutine, which releases the
-            // socket before its operation completes the close.
-            slot.wait_socket_->cancel();
+            // Cancellation wakes the waiting coroutine, which completes the
+            // close once its operation unwinds.
+            slot.wait_socket_.cancel();
         }
         return;
     }
 
     (void)leases_.clear_deadline(index);
     slot.deadline_continuation_ = {};
-    if (slot.wait_socket_ != nullptr) {
-        // release() leaves the wrapper attached on failure. Keep both objects
-        // in the slot so a later close attempt can retry without either owner
-        // closing the native socket behind the other.
-        if (slot.wait_socket_->release()) {
-            (void)leases_.close();
-            return;
-        }
-        slot.wait_socket_.reset();
-    }
+    // Closing the duplicate first leaves the driver's handle as the last
+    // reference, so the driver's close still ends the connection.
+    slot.wait_socket_.close();
     if (slot.connection_ != nullptr) {
         driver_type::close_connection(*slot.connection_);
         slot.connection_ = nullptr;
@@ -197,7 +188,6 @@ task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation
     leases_.throw_if_aborted(index);
     const operation_timeout deadline_value = timeout.constrained_by(config_.connect_timeout_);
     try {
-        slot.wait_socket_ = make_pmr_object<db_slot_socket>(resource_, io_context_);
         co_await driver_type::connect(*this, index, deadline_value);
         slot.connected_ = true;
     } catch (...) {
@@ -269,13 +259,9 @@ task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
     std::optional<std::chrono::milliseconds> wait_timeout, const operation_timeout& operation_deadline) {
     leases_.throw_if_aborted(index);
     auto& slot = slots_[index];
-    if (slot.wait_socket_ == nullptr) {
+    if (const auto error = slot.wait_socket_.attach(native); error) {
         throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string(driver_type::name).append(" connection socket is unavailable"));
-    }
-    if (const auto error = slot.wait_socket_->ensure_assigned(native); error) {
-        throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string("binding ").append(driver_type::name).append(" connection socket: ").append(error.message()),
+            std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error.message()),
             error.value());
     }
 
@@ -284,15 +270,20 @@ task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
     if (leases_.arm_deadline(index, wait_timeout, db_deadline_kind::socket)) {
         db_slot_active_wait_guard active_wait(slot);
         try {
-            result_value = co_await slot.wait_socket_->wait(wanted);
+            result_value = co_await slot.wait_socket_.wait(wanted);
         } catch (...) {
             wait_failure = std::current_exception();
         }
     }
-    // The driver may close or replace its socket in its next call. Detach Asio
-    // only after every readiness handler has drained, and before control
-    // returns to the driver.
-    const auto release_error = slot.wait_socket_->release();
+    // While connecting, the driver may close this socket and open its next
+    // attempt's socket under the same handle value, which attach() could not
+    // tell apart, so the duplicate must not outlive the wait. Once connected,
+    // the driver keeps its socket until it drops it on a transport failure --
+    // after which it reports no socket at all -- and never reconnects, so the
+    // duplicate stays registered until the slot closes.
+    if (!slot.connected_) {
+        slot.wait_socket_.close();
+    }
     result_value.expired_ = leases_.poll_deadline(index) ||
                             (wait_timeout.has_value() && wait_timeout->count() <= 0);
     (void)leases_.clear_deadline(index);
@@ -305,11 +296,6 @@ task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
     }
     if (wait_failure != nullptr) {
         throw db_wait_failure(driver_type::driver, std::move(wait_failure));
-    }
-    if (release_error) {
-        throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string("detaching ").append(driver_type::name).append(" connection socket: ").append(release_error.message()),
-            release_error.value());
     }
     co_return result_value;
 }

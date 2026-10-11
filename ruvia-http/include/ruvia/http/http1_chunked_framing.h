@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/http/http_hex.h"
+
 namespace ruvia {
 
 inline constexpr std::string_view http1_chunk_data_terminator = "\r\n";
@@ -15,12 +17,11 @@ inline constexpr std::string_view http1_trailer_section_terminator = "\r\n";
 class http1_chunk_header final {
 public:
     explicit http1_chunk_header(std::size_t chunk_size) noexcept {
-        static constexpr char digits[] = "0123456789abcdef";
         auto* cursor_value = storage_.data() + storage_.size();
         *--cursor_value = '\n';
         *--cursor_value = '\r';
         do {
-            *--cursor_value = digits[chunk_size & 0x0fU];
+            *--cursor_value = http_lower_hex_digit(static_cast<int>(chunk_size & 0x0fU));
             chunk_size >>= 4U;
         } while (chunk_size != 0);
         offset_ = static_cast<std::size_t>(cursor_value - storage_.data());

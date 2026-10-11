@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <variant>
 
-#include "ruvia/core/task.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 
@@ -71,16 +70,14 @@ public:
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
-    using streaming_head_thunk_type = task<http_response> (*)(context&);
-
-    void bind_context(context* context_value, streaming_head_thunk_type streaming_head) {
+    void bind_context(context* context_value) {
         if (!std::holds_alternative<unbound_type>(state_)) {
             throw std::logic_error("response stream context is already bound");
         }
-        if (context_value == nullptr || streaming_head == nullptr) {
+        if (context_value == nullptr) {
             throw std::invalid_argument("response stream context binding is incomplete");
         }
-        state_.emplace<bound_type>(context_value, streaming_head);
+        state_.emplace<bound_type>(context_value);
     }
 
     void release_context() noexcept {
@@ -89,7 +86,7 @@ public:
         }
     }
 
-    [[nodiscard]] task<http_response> streaming_head() const {
+    [[nodiscard]] context& bound_context() const {
         const auto* bound = std::get_if<bound_type>(&state_);
         if (bound == nullptr) {
             if (committed()) {
@@ -97,7 +94,7 @@ public:
             }
             throw std::logic_error("response stream context is not bound");
         }
-        return bound->streaming_head_(*bound->context_);
+        return *bound->context_;
     }
 
     void mark_committed(http_response_stream_commit_plan plan) {
@@ -161,7 +158,7 @@ public:
         }
     }
 
-    void ensure_trailers_allowed(http_response_stream_trailer_framing required_framing) const {
+    void ensure_trailers_allowed() const {
         if (aborted()) {
             throw std::logic_error("response stream is aborted");
         }
@@ -169,7 +166,7 @@ public:
             throw std::logic_error("response stream is already ended");
         }
         const auto* plan = commit_plan();
-        if (plan == nullptr || plan->trailer_framing() != required_framing) {
+        if (plan == nullptr || !plan->trailers_available()) {
             throw std::logic_error("response framing does not support trailers");
         }
     }
@@ -180,12 +177,10 @@ private:
     struct detached_type final {};
 
     struct bound_type final {
-        bound_type(context* bound_context, streaming_head_thunk_type head) noexcept
-            : context_(bound_context),
-              streaming_head_(head) {}
+        explicit bound_type(context* bound_context) noexcept
+            : context_(bound_context) {}
 
         context* context_;
-        streaming_head_thunk_type streaming_head_;
     };
 
     struct body_open_type final {

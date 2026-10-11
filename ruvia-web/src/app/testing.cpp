@@ -4,7 +4,6 @@
 #include <exception>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -220,9 +219,6 @@ test_response test_app::request(const test_request& request) {
                                           detail::http_response_coding_policy::disabled(), {}, request_start);
         const auto prepared =
             co_await tail.prepare(response, options, routes_value, request_memory_value, request_services);
-        if (!prepared) {
-            throw std::runtime_error("test_app request was cancelled");
-        }
         tail.record_access(options.access_log_, response.status());
 
         // Copy everything out while the request arena is still alive.
@@ -235,7 +231,7 @@ test_response test_app::request(const test_request& request) {
         // and content-forbidden statuses, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
         // are framing concerns and stay absent here.
-        if (!prepared->write_plan_.body_suppressed()) {
+        if (!prepared.write_plan_.body_suppressed()) {
             const auto body = response.body_bytes();
             result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
         }

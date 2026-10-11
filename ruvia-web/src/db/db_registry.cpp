@@ -96,6 +96,9 @@ void detail::db_registry::attach_cache(std::size_t index, const worker_handle& w
 
 detail::db_registry::~db_registry() = default;
 
+detail::db_registry::entry_type::entry_type(pool_owner_type pool) noexcept
+    : pool_(std::move(pool)) {}
+
 void detail::db_registry::add(
     asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config) {
     pool_owner_type owner;
@@ -120,7 +123,7 @@ void detail::db_registry::add(
 #endif
     }
 
-    entries_.push_back(entry_type{std::move(owner)});
+    entries_.emplace_back(std::move(owner));
 }
 
 task<void> detail::db_registry::connect() {

@@ -13,19 +13,31 @@ struct event_loop_attachment_options final {
     std::size_t queue_capacity_{1024};
 };
 
-// Binds a worker to an io_context the caller owns. The caller may drive that
-// context directly, or call event_loop_attachment::run() to install Ruvia's worker
-// identity while the context is running. The attachment keeps the worker's
-// endpoint valid for as long as it is alive.
-// stop() and destruction are safe while another thread is inside the external
-// io_context::run(): the external context service retains the worker state
-// until its terminal cleanup handler runs, or until the context itself is
-// destroyed. The attachment never calls io_context::stop() and does not join a
-// context it does not own.
+// Binds a worker to an io_context the caller owns. The caller drives that
+// context on exactly one thread, either directly with io_context::run() or
+// with event_loop_attachment::run(), which also installs Ruvia's worker
+// identity. The attachment never calls io_context::stop() and never restarts
+// or joins a context it does not own.
 //
-// After attachment retirement, event_loop handles become invalid; io_context()
-// and executor() throw std::logic_error. The external io_context remains owned
-// by its caller and is never stopped, restarted, or joined by the attachment.
+// Retirement runs the same stop/finalize sequence as an event_loop_pool loop.
+// stop(), or destroying the attachment, closes admission at once, from any
+// thread, including while another thread is inside run(). Stop callbacks,
+// root tasks, and deferred cleanup then drain, timers are cancelled, and the
+// worker retires on the context's thread. Until then the attachment holds
+// work on the context, so the caller keeps running it: a plain run() returns
+// once retirement and the caller's own work are done. valid() turns false
+// when retirement completes, for callers whose own work keeps run() busy.
+//
+// Destroying the io_context before retirement completes is valid only while
+// no root task, stop callback, or deferred cleanup is outstanding; the
+// context's shutdown then retires the worker synchronously. Destroying it
+// with such work outstanding violates this contract: the shutdown reports a
+// std::logic_error to the unhandled-failure diagnostic and terminates,
+// because that work is owned by handlers that will never run.
+//
+// After retirement, event_loop handles become invalid; io_context() and
+// executor() throw std::logic_error. The external io_context remains owned
+// by its caller.
 class event_loop_attachment final {
 public:
     ~event_loop_attachment();
@@ -52,10 +64,9 @@ private:
     friend event_loop_attachment attach_event_loop(asio::io_context&, event_loop_attachment_options);
 };
 
-// Attach a Ruvia worker to a caller-owned io_context. The caller drives the
-// context with run() on exactly one thread and retains ownership of its
-// unrelated work and stop/restart policy. stop() retires only Ruvia-managed
-// cleanup and never cancels the caller's unrelated operations.
+// Attach a Ruvia worker to a caller-owned io_context. The caller retains
+// ownership of the context's unrelated work and stop/restart policy; stop()
+// retires only Ruvia-managed work and never cancels unrelated operations.
 [[nodiscard]] event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options = {});
 

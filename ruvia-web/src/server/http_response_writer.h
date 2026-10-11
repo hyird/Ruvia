@@ -64,7 +64,7 @@ template <typename const_buffer_sequence_type>
 
 // Writes a committed file or multipart/byteranges body. Plain TCP hands file
 // ranges to the kernel (sendfile/TransmitFile) where the platform has one;
-// every other stream reads through the shared response_file_source.
+// TLS, or TCP without a native path, reads through response_file_source.
 template <typename stream_type>
 task<std::error_code> write_http1_file_body(
     stream_type& stream, const http_response& response, const response_file_io& file_io) {

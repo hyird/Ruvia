@@ -1,33 +1,18 @@
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 
-#include <algorithm>
 #include <array>
 #include <charconv>
 #include <limits>
 #include <stdexcept>
 
+#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_media_type.h"
+#include "ruvia/http/multipart_parser.h"
 
 #include "coding/http_content_coding.h"
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] bool valid_boundary(std::string_view boundary) noexcept {
-    if (boundary.empty() || boundary.size() > 70 || boundary.back() == ' ') {
-        return false;
-    }
-    for (const unsigned char value : boundary) {
-        const bool alpha_numeric = (value >= '0' && value <= '9') ||
-                                   (value >= 'A' && value <= 'Z') ||
-                                   (value >= 'a' && value <= 'z');
-        constexpr std::string_view punctuation{"'()+_,-./:=? "};
-        if (!alpha_numeric && punctuation.find(static_cast<char>(value)) == std::string_view::npos) {
-            return false;
-        }
-    }
-    return true;
-}
 
 void append_number(std::pmr::string& target, std::uint64_t value) {
     std::array<char, 32> buffer{};
@@ -50,7 +35,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         (!content_encoding.empty() &&
             !detail::is_valid_http_content_encoding_field_value(
                 content_encoding, detail::http_field_list_role::sender)) ||
-        !valid_boundary(boundary) || resource == nullptr) {
+        !multipart_boundary::try_create(boundary).has_value() || resource == nullptr) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
@@ -58,12 +43,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     auto& storage = *plan.state_;
     auto& metadata = storage.metadata_;
     storage.content_type_.append("multipart/byteranges; boundary=");
-    const bool boundary_is_token = std::ranges::all_of(boundary, [](const unsigned char value) {
-        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') ||
-               (value >= 'a' && value <= 'z') ||
-               std::string_view("!#$%&'*+-.^_`|~").find(static_cast<char>(value)) !=
-                   std::string_view::npos;
-    });
+    const bool boundary_is_token = detail::http_token_prefix_size(boundary) == boundary.size();
     if (!boundary_is_token) {
         storage.content_type_.push_back('"');
     }

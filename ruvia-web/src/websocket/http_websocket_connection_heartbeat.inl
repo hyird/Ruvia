@@ -2,8 +2,8 @@
 
 namespace ruvia::detail {
 
-template <typename transport_type>
-void websocket_connection<transport_type>::finish_write(write_phase_type phase) noexcept {
+template <typename stream_type>
+void websocket_connection<stream_type>::finish_write(write_phase_type phase) noexcept {
     if (write_phase_ != phase) {
         std::terminate();
     }
@@ -11,14 +11,14 @@ void websocket_connection<transport_type>::finish_write(write_phase_type phase) 
     background_write_signal_.notify();
 }
 
-template <typename transport_type>
-void websocket_connection<transport_type>::heartbeat_tick(std::int64_t now) noexcept {
+template <typename stream_type>
+void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
     switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_,
         write_phase_ != write_phase_type::idle, scanner_entry_.last_active_ms(), now)) {
         case websocket_liveness_decision::idle:
             return;
         case websocket_liveness_decision::abort_transport:
-            // A heartbeat/close timeout belongs to this websocket transport.
+            // A heartbeat or close timeout closes the connection.
             abort_transport();
             return;
         case websocket_liveness_decision::send_ping:
@@ -28,7 +28,7 @@ void websocket_connection<transport_type>::heartbeat_tick(std::int64_t now) noex
     liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);
     write_phase_ = write_phase_type::heartbeat;
     try {
-        asio::co_spawn(transport_.executor(), ruvia::as_awaitable(write_heartbeat_ping()),
+        asio::co_spawn(stream_.get_executor(), ruvia::as_awaitable(write_heartbeat_ping()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finish_write(write_phase_type::heartbeat);
@@ -37,8 +37,8 @@ void websocket_connection<transport_type>::heartbeat_tick(std::int64_t now) noex
     }
 }
 
-template <typename transport_type>
-task<void> websocket_connection<transport_type>::write_heartbeat_ping() {
+template <typename stream_type>
+task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
     write_guard_type write_guard(*this, write_phase_type::heartbeat, write_claim_type::adopt);
     try {
         const auto* sending = std::get_if<websocket_sending_ping>(&liveness_state_);

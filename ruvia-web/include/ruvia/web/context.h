@@ -21,6 +21,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/cookies.h"
@@ -35,7 +36,6 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/request_fields.h"
 #include "ruvia/web/static_text.h"
-#include "ruvia/web/task.h"
 
 namespace ruvia {
 

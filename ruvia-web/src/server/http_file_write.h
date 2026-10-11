@@ -10,8 +10,8 @@
 namespace ruvia::detail {
 
 // Whether plain TCP can hand a file range to the kernel (sendfile on Linux,
-// overlapped TransmitFile on Windows). Elsewhere, and on every non-TCP stream,
-// file bodies go through response_file_source.
+// overlapped TransmitFile on Windows). Other platforms, and TLS connections,
+// read file bodies through response_file_source.
 #if defined(__linux__) || defined(_WIN32)
 inline constexpr bool native_response_file_write_available = true;
 

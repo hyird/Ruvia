@@ -36,14 +36,6 @@ void validate_scanner_timeout(const std::optional<std::chrono::milliseconds>& ti
 
 }  // namespace
 
-connection_scanner::worker_maintenance_registration_type::~worker_maintenance_registration_type() noexcept {
-    reset();
-}
-void connection_scanner::worker_maintenance_registration_type::reset() noexcept {
-    if (scanner_ != nullptr) {
-        scanner_->remove_worker_maintenance(*this);
-    }
-}
 connection_scanner::periodic_check_registration_type::~periodic_check_registration_type() noexcept {
     reset();
 }
@@ -126,16 +118,12 @@ bool connection_scanner::entry_type::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
 }
 connection_scanner::guard_type::guard_type(
-    connection_scanner* scanner, entry_type& entry_value, asio::ip::tcp::socket& socket)
-    : entry_(scanner != nullptr ? &entry_value : nullptr) {
-    if (scanner != nullptr) {
-        scanner->register_entry(*entry_, socket);
-    }
+    connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket)
+    : entry_(entry_value) {
+    scanner.impl_->register_entry(entry_, socket);
 }
 connection_scanner::guard_type::~guard_type() {
-    if (entry_ != nullptr) {
-        connection_scanner::detach_entry(*entry_);
-    }
+    connection_scanner::detach_entry(entry_);
 }
 
 connection_scanner::impl_type::impl_type(
@@ -175,7 +163,6 @@ bool connection_scanner::impl_type::retire() noexcept {
     while (sentinel_.next_ != &sentinel_) {
         unregister_entry(*sentinel_.next_);
     }
-    detach_worker_maintenance();
     return nested_in_scan;
 }
 
@@ -187,27 +174,11 @@ connection_scanner::~connection_scanner() noexcept {
         static_cast<void>(impl_.release());
     }
 }
-const worker_handle& connection_scanner::worker() const& noexcept {
-    return impl_->worker_;
-}
 void connection_scanner::start() {
     impl_->start();
 }
 void connection_scanner::stop() noexcept {
     impl_->stop();
-}
-void connection_scanner::register_worker_maintenance(worker_maintenance_registration_type& registration,
-    void* target, worker_maintenance_check_type check) noexcept {
-    impl_->register_worker_maintenance(registration, target, check);
-}
-void connection_scanner::register_entry(entry_type& entry_value, asio::ip::tcp::socket& socket) {
-    impl_->register_entry(entry_value, &socket);
-}
-void connection_scanner::register_entry(entry_type& entry_value) {
-    impl_->register_entry(entry_value, nullptr);
-}
-void connection_scanner::unregister_entry(entry_type& entry_value) noexcept {
-    impl_->unregister_entry(entry_value);
 }
 void connection_scanner::close_all() noexcept {
     impl_->close_all();
@@ -222,9 +193,6 @@ void connection_scanner::periodic_check_added() noexcept {
 }
 void connection_scanner::periodic_check_removed() noexcept {
     impl_->periodic_check_removed();
-}
-void connection_scanner::remove_worker_maintenance(worker_maintenance_registration_type& registration) noexcept {
-    impl_->remove_worker_maintenance(registration);
 }
 
 void connection_scanner::impl_type::start() {
@@ -243,26 +211,11 @@ void connection_scanner::impl_type::stop() noexcept {
     running_ = false;
     timer_.cancel();
 }
-void connection_scanner::impl_type::register_worker_maintenance(worker_maintenance_registration_type& registration,
-    void* target, worker_maintenance_check_type check) noexcept {
-    registration.reset();
-    if (target == nullptr || check == nullptr) {
-        return;
-    }
-    registration.scanner_ = owner_;
-    registration.target_ = target;
-    registration.check_ = check;
-    registration.next_ = worker_maintenance_;
-    if (worker_maintenance_ != nullptr) {
-        worker_maintenance_->prev_ = &registration;
-    }
-    worker_maintenance_ = &registration;
-}
-void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio::ip::tcp::socket* socket) {
+void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio::ip::tcp::socket& socket) {
     if (entry_value.scanner_ != nullptr) {
         throw std::logic_error("connection scanner entry is already registered");
     }
-    entry_value.socket_ = socket;
+    entry_value.socket_ = &socket;
     entry_value.scanner_ = owner_;
     entry_value.now_ms_ = &cached_now_ms_;
     entry_value.touch();
@@ -297,9 +250,7 @@ void connection_scanner::impl_type::unregister_entry(entry_type& entry_value) no
 }
 void connection_scanner::impl_type::close_all() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
-        if (current->socket_ != nullptr) {
-            close_socket(*current->socket_);
-        }
+        close_socket(*current->socket_);
     }
 }
 void connection_scanner::impl_type::periodic_check_added() noexcept {
@@ -310,44 +261,12 @@ void connection_scanner::impl_type::periodic_check_removed() noexcept {
         --periodic_check_count_;
     }
 }
-void connection_scanner::impl_type::remove_worker_maintenance(
-    worker_maintenance_registration_type& registration) noexcept {
-    if (registration.scanner_ != owner_) {
-        return;
-    }
-    if (registration.prev_ != nullptr) {
-        registration.prev_->next_ = registration.next_;
-    } else {
-        worker_maintenance_ = registration.next_;
-    }
-    if (registration.next_ != nullptr) {
-        registration.next_->prev_ = registration.prev_;
-    }
-    if (worker_maintenance_scan_next_ == &registration) {
-        worker_maintenance_scan_next_ = registration.next_;
-    }
-    registration.scanner_ = nullptr;
-    registration.prev_ = registration.next_ = nullptr;
-    registration.target_ = nullptr;
-    registration.check_ = nullptr;
-}
-void connection_scanner::impl_type::detach_worker_maintenance() noexcept {
-    worker_maintenance_scan_next_ = nullptr;
-    while (worker_maintenance_ != nullptr) {
-        auto* registration = worker_maintenance_;
-        worker_maintenance_ = registration->next_;
-        registration->scanner_ = nullptr;
-        registration->prev_ = registration->next_ = nullptr;
-        registration->target_ = nullptr;
-        registration->check_ = nullptr;
-    }
-}
 bool connection_scanner::impl_type::has_scanning_work() const noexcept {
     return options_.idle_timeout_.has_value() || options_.initial_read_timeout_.has_value() ||
            options_.payload_read_timeout_.has_value() || options_.write_timeout_.has_value() ||
            options_.initial_read_completion_timeout_.has_value() ||
            options_.payload_read_completion_timeout_.has_value() ||
-           worker_maintenance_ != nullptr || periodic_check_count_ != 0;
+           periodic_check_count_ != 0;
 }
 void connection_scanner::impl_type::schedule() {
     if (!running_) {
@@ -386,12 +305,6 @@ void connection_scanner::impl_type::schedule() {
 void connection_scanner::impl_type::scan() noexcept {
     const auto now = steady_now_ms();
     cached_now_ms_ = now;
-    worker_maintenance_scan_next_ = worker_maintenance_;
-    while (worker_maintenance_scan_next_ != nullptr) {
-        auto* registration = worker_maintenance_scan_next_;
-        worker_maintenance_scan_next_ = registration->next_;
-        registration->check_(registration->target_);
-    }
     scan_next_ = sentinel_.next_;
     while (scan_next_ != &sentinel_) {
         scan_current_ = scan_next_;
@@ -404,8 +317,7 @@ void connection_scanner::impl_type::scan() noexcept {
             scan_current_->periodic_scan_next_ = registration->next_;
             registration->tick_(registration->target_, now);
         }
-        if (scan_current_ != nullptr && scan_current_->socket_ != nullptr &&
-            is_timed_out(*scan_current_, now)) {
+        if (scan_current_ != nullptr && is_timed_out(*scan_current_, now)) {
             close_socket(*scan_current_->socket_);
         }
         scan_current_ = nullptr;

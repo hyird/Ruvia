@@ -110,25 +110,17 @@ event_loop_state::event_loop_state(std::size_t queue_capacity)
       runtime_(owned_runtime().context()) {}
 
 event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity)
-    : context_ownership_(std::in_place_type<external_context_claim>, external_context),
+    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity),
       io_context_(std::addressof(external_context)),
       executor_(external_context.get_executor()),
-      work_(asio::make_work_guard(*io_context_)),
-      attached_runtime_(std::in_place, *io_context_, queue_capacity),
-      runtime_(*attached_runtime_) {}
-
-void event_loop_state::retain_external_context(const std::shared_ptr<event_loop_state>& self) noexcept {
-    if (auto* claim = std::get_if<external_context_claim>(&context_ownership_)) {
-        claim->retain(self);
-    }
-}
+      runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
 
 void event_loop_state::install_lifecycle_listener() {
     worker_handle_access::register_shutdown_listener(runtime_.handle(), shared_from_this());
 }
 
 void event_loop_state::worker_stopping_complete() noexcept {
-    stop(true, shared_from_this());
+    stop();
 }
 
 void event_loop_state::report_failure(std::exception_ptr failure) noexcept {
@@ -147,7 +139,7 @@ void event_loop_state::report_attached_failure(std::exception_ptr failure) noexc
         return;
     }
     report_unhandled_failure("attached event loop failure", failure);
-    stop(true, shared_from_this());
+    stop();
 }
 
 void event_loop_state::fail_teardown_start(std::exception_ptr failure) noexcept {
@@ -159,7 +151,7 @@ void event_loop_state::fail_teardown_start(std::exception_ptr failure) noexcept 
     std::terminate();
 }
 
-void event_loop_state::stop(bool runtime_started, std::shared_ptr<event_loop_state> keep_alive) noexcept {
+void event_loop_state::stop() noexcept {
     if (stopping_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
@@ -167,7 +159,7 @@ void event_loop_state::stop(bool runtime_started, std::shared_ptr<event_loop_sta
     if (!retirement_->try_begin()) {
         return;
     }
-    std::weak_ptr<event_loop_state> weak = keep_alive;
+    const std::weak_ptr<event_loop_state> weak = weak_from_this();
     retirement_->set_finalize([weak] {
         auto state_value = weak.lock();
         if (!state_value) {
@@ -193,18 +185,8 @@ void event_loop_state::stop(bool runtime_started, std::shared_ptr<event_loop_sta
             state_value->fail_teardown_start(std::current_exception());
         }
     });
-    if (std::holds_alternative<external_context_claim>(context_ownership_)) {
-        runtime_.close();
-        if (!runtime_started || runtime_.handle().is_current()) {
-            runtime_.stop_timers();
-        } else {
-            try {
-                worker_handle_access::defer(runtime_.handle(),
-                    [keep_alive = std::move(keep_alive)] { keep_alive->runtime_.stop_timers(); });
-            } catch (...) {
-                fail_teardown_start(std::current_exception());
-            }
-        }
+    if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
+        attached->stop_.request_stop();
     } else {
         owned_runtime().request_stop();
     }
@@ -224,10 +206,8 @@ void event_loop_state::stop(bool runtime_started, std::shared_ptr<event_loop_sta
 }
 
 void event_loop_state::finalize_stop() noexcept {
-    if (auto* claim = std::get_if<external_context_claim>(&context_ownership_)) {
-        work_->reset();
-        runtime_.detach();
-        claim->release(this);
+    if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
+        attached->stop_.finalize();
     } else {
         owned_runtime().finalize();
     }

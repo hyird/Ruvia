@@ -72,8 +72,6 @@ public:
     [[nodiscard]] std::pmr::string url_for(std::string_view pattern,
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
-    [[nodiscard]] route_resolution resolve(
-        http_known_method method, std::string_view path) const noexcept;
 
     task<std::optional<http_response>> dispatch_tunnel(const http_request& request,
         const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
@@ -94,11 +92,11 @@ public:
     [[nodiscard]] bool recognizes_method_token(std::string_view method_token) const noexcept;
     task<http_response> dispatch(const http_request& request, const route_resolution& resolution,
         request_memory& memory, context_services services) const;
-    // Canonical buffered-response application dispatch for every server
-    // protocol. An unresolved route first consults the configured document
+    // Canonical buffered-response application dispatch. An unresolved route
+    // first consults the configured document
     // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
     // the routing machinery becomes an error response. Connection persistence
-    // and wire framing remain the protocol driver's responsibility. Pass
+    // and wire framing remain the HTTP/1 driver's responsibility. Pass
     // document_root_binding::none() when no root is configured,
     // document_root_binding::standalone(root) for an immutable root, or
     // document_root_binding::configured(root) for a server-owned refreshing root.
@@ -122,10 +120,12 @@ public:
 private:
     friend class router_impl;
 
+    [[nodiscard]] route_resolution resolve(
+        http_known_method method, std::string_view path) const noexcept;
     [[nodiscard]] route_resolution resolve_connect(std::string_view protocol, std::string_view target) const noexcept;
     // Extension-method routing, kept off every enum-indexed structure. The
     // request's exact token is compared against a small cold list, which costs
-    // a known-method request nothing: both protocol drivers only reach it when
+    // a known-method request nothing: the HTTP/1 driver only reaches it when
     // classify_http_method() returned unknown.
     [[nodiscard]] route_resolution resolve_extension_method(
         std::string_view method_token, std::string_view path) const noexcept;

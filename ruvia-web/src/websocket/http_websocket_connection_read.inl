@@ -6,14 +6,14 @@
 
 namespace ruvia::detail {
 
-template <typename transport_type>
-task<std::optional<websocket_message>> websocket_connection<transport_type>::read() {
+template <typename stream_type>
+task<std::optional<websocket_message>> websocket_connection<stream_type>::read() {
     require_current_worker();
     return read_owned(read_guard_type(*this));
 }
 
-template <typename transport_type>
-task<std::optional<websocket_message>> websocket_connection<transport_type>::read_owned(read_guard_type read_guard_value) {
+template <typename stream_type>
+task<std::optional<websocket_message>> websocket_connection<stream_type>::read_owned(read_guard_type read_guard_value) {
     require_current_worker();
     {
         read_guard_type active_read(std::move(read_guard_value));
@@ -27,16 +27,16 @@ task<std::optional<websocket_message>> websocket_connection<transport_type>::rea
                 co_await wait_for_write_idle();
                 const auto event = protocol_.poll();
                 if (!event.has_value()) {
-                    const auto read_result_value = co_await transport_.read_more(buffer_);
+                    const auto read_result_value = co_await read_more();
                     if (const auto* failure = read_result_value.failure()) {
-                        transport_.abort();
+                        close_stream();
                         (void)protocol_.abort();
                         throw std::system_error(failure->error_code(), "failed to read websocket bytes");
                     }
                     if (read_result_value.end() != nullptr) {
                         // EOF is an abnormal websocket close when no peer Close was
-                        // received. The core discards unsent WS output and asks the
-                        // transport adapter to finish only its own direction/stream.
+                        // received. The core discards unsent WS output and plans the
+                        // transport end.
                         protocol_.notify_transport_eof();
                         co_await flush_protocol_output_exclusive();
                         co_return std::nullopt;
@@ -76,6 +76,30 @@ task<std::optional<websocket_message>> websocket_connection<transport_type>::rea
             throw;
         }
     }
+}
+
+template <typename stream_type>
+task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
+    const auto old_size = buffer_.size();
+    http_resize_pmr_string_for_overwrite(buffer_, old_size + 4096);
+    auto read_completion = co_await ruvia::async_asio<std::size_t>([this, old_size](auto handler) mutable {
+        stream_.async_read_some(asio::buffer(buffer_.data() + old_size, buffer_.size() - old_size), std::move(handler));
+    });
+    const auto ec = read_completion.error_code();
+    const auto bytes_read = read_completion.result();
+    // An orderly peer close (TCP FIN or TLS close_notify) and a TLS peer
+    // that dropped TCP without close_notify both end the byte stream; the
+    // websocket core maps a missing Close frame to an abnormal closure.
+    if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
+        buffer_.resize(old_size);
+        co_return http_stream_read_result::make_end();
+    }
+    if (ec) {
+        buffer_.resize(old_size);
+        co_return http_stream_read_result::make_failure(ec);
+    }
+    buffer_.resize(old_size + bytes_read);
+    co_return http_stream_read_result::make_data();
 }
 
 }  // namespace ruvia::detail

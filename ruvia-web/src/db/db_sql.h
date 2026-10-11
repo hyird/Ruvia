@@ -13,6 +13,8 @@ struct st_mysql_res;
 
 namespace ruvia::detail {
 
+// Builds the error for a failed driver call. A statement_failed whose cause
+// is a lost connection is reported as io_error.
 [[nodiscard]] db_error mysql_error(
     const st_mysql& connection, std::string_view operation, db_error::code_type code);
 

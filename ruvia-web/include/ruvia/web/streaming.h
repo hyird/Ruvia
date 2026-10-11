@@ -22,7 +22,6 @@
 namespace ruvia {
 
 class context;
-class http_response;
 
 namespace detail {
 struct streaming_access;
@@ -124,8 +123,7 @@ private:
     using write_type = task<void> (*)(void*, std::string_view);
     using end_type = task<void> (*)(void*, std::span<const http_header_view>);
     using sleep_type = task<timer_sleep_result> (*)(void*, std::chrono::milliseconds, const stop_token&);
-    using streaming_head_thunk_type = task<http_response> (*)(context&);
-    using bind_context_type = void (*)(void*, context*, streaming_head_thunk_type);
+    using bind_context_type = void (*)(void*, context*);
     using release_context_type = void (*)(void*) noexcept;
     using committed_type = bool (*)(void*) noexcept;
     using aborted_type = bool (*)(void*) noexcept;
@@ -144,9 +142,9 @@ private:
 
     // The request's stop token travels with the binding so sleep() observes it;
     // every framework-provided wait must preserve the request deadline.
-    void bind_context(context& context_value, stop_token stop_token_value, streaming_head_thunk_type streaming_head) {
+    void bind_context(context& context_value, stop_token stop_token_value) {
         stop_token_ = std::move(stop_token_value);
-        bind_context_(target_, &context_value, streaming_head);
+        bind_context_(target_, &context_value);
     }
 
     void release_context() noexcept {

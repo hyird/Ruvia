@@ -48,7 +48,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // pool only while the connection is actively serving and returned the moment
     // it goes idle, so an idle keep-alive connection holds none of it.
     connection_scanner::entry_type scanner_entry;
-    connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
+    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
     const auto& routes_value = routes_;
     const auto remote_address = base_route_services.get_conn_info().remote().address();
     const auto admission_policy = http_request_admission_policy::server(options_);
@@ -153,7 +153,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         std::optional<request_deadline> request_deadline;
         http1_interim_response_sink interim_sink(stream, parsed_value.request_, memory_.resource());
         const auto request_services =
-            base_route_services.with_request_channels({.interim_output_ = &interim_sink.output()});
+            base_route_services.with_interim_output(interim_sink.output());
         std::optional<http_request_admission> admission;
         std::optional<http1_session_request_completion> request_completion;
         // Rejections that close the connection funnel through one co_await
@@ -417,15 +417,12 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             scanner_entry.set_phase(connection_scanner::phase_type::writing);
             const auto preparation = co_await tail.prepare(response, options_, routes_value, request_memory_value,
                 admission ? admission->services() : request_services);
-            if (!preparation) {
-                co_return http_connection_close::abort;
-            }
-            if (preparation->recovered_) {
+            if (preparation.recovered_) {
                 connection_plan = require_http1_final_response_commit(response, connection_plan);
                 request_completion = request_completion->with_buffered_connection_plan(connection_plan);
                 connection_plan = request_completion->connection_plan();
             }
-            const auto write_plan = preparation->write_plan_;
+            const auto write_plan = preparation.write_plan_;
             const auto response_plan = get_http1_buffered_response_plan(write_plan, connection_plan);
             const auto write_result =
                 co_await write_response(stream, response_head, response, response_plan, file_output);

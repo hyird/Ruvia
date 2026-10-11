@@ -63,13 +63,12 @@ public:
     }
 
     void stop() noexcept {
-        const bool runtime_started = lifecycle_.state() != runtime_lifecycle::state_type::ready;
         if (!lifecycle_.request_stop()) {
             return;
         }
         for (const auto& weak_loop : loops_) {
-            if (auto loop = weak_loop.lock()) {
-                loop->stop(runtime_started, std::move(loop));
+            if (const auto loop = weak_loop.lock()) {
+                loop->stop();
             }
         }
     }
@@ -126,8 +125,8 @@ struct event_loop_pool::impl_type {
             auto* const stable_runtime = &loops_.back()->owned_runtime();
             stable_runtime->configure({
                 .stop_admission_ = [weak, stable_runtime] {
-                    if (auto loop = weak.lock()) {
-                        loop->stop(true, std::move(loop));
+                    if (const auto loop = weak.lock()) {
+                        loop->stop();
                     } else {
                         // Construction rollback can destroy an unpublished
                         // state before its core owner drains this control.

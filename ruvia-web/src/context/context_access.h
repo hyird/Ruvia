@@ -90,6 +90,9 @@ struct context_access final {
         return context_value.streaming_head(content_type);
     }
 
+    // Commits the bound session, then builds the head a response stream sends before its first byte.
+    [[nodiscard]] static task<http_response> commit_streaming_head(context& context_value);
+
 private:
     friend class context_websocket_binding;
     friend class context_tunnel_binding;

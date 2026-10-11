@@ -41,18 +41,23 @@ struct db_socket_wait_result final {
     bool expired_{false};
 };
 
-// Transient ASIO wrapper around a database driver's native connection socket.
+// Ruvia-owned duplicate of a database driver's connection socket, registered
+// with ASIO for readiness waits.
 //
-// MariaDB and libpq retain ownership of their native socket. ASIO borrows that
-// socket only while a readiness wait is active. Every handler must drain and
-// release() must detach ASIO before the driver is called again or closes it.
+// MariaDB and libpq own their native socket and close it themselves inside
+// their read/write calls when the transport fails (libmariadb end_server,
+// libpq pqDropConnection). Registering that handle directly would leave ASIO
+// holding a handle the driver may close -- and the OS may reuse -- between two
+// waits. A duplicate refers to the same socket object, so it observes the same
+// readiness, but its handle belongs to Ruvia: the driver closing its own
+// handle can neither invalidate nor be invalidated by it. The duplicate is
+// therefore made and registered once per driver socket and kept until the
+// pool closes the connection.
 //
-// The socket number is stable while a connection is up, but neither driver
-// keeps it open: libmariadb (end_server) and libpq (pqDropConnection) close it
-// inside their read/write calls when the transport fails. A registration kept
-// across driver calls would then be detached from a closed -- and possibly
-// reused -- handle (epoll_ctl DEL / IOCP FileReplaceCompletionInformation), so
-// registration stays scoped to one wait for both drivers.
+// The duplicate keeps the underlying connection open after the driver has
+// closed its handle. The driver only does that on a transport failure, which
+// the pool answers by closing the slot, and closing the slot closes the
+// duplicate first so the driver's own close still ends the connection.
 struct db_slot_socket final {
     explicit db_slot_socket(asio::io_context& io_context);
     db_slot_socket(db_slot_socket&& other) noexcept;
@@ -72,7 +77,8 @@ struct db_slot_socket final {
     asio::posix::stream_descriptor descriptor_;
     static constexpr native_socket_type invalid_socket = -1;
 #endif
-    native_socket_type native_{invalid_socket};
+    // The driver handle the open duplicate was made from.
+    native_socket_type source_{invalid_socket};
 
     // Any-of readiness wait. The first completion cancels the others, and the
     // awaiting coroutine resumes only after every started handler has run, so
@@ -103,35 +109,27 @@ struct db_slot_socket final {
         bool completed_{false};
     };
 
-    [[nodiscard]] std::error_code ensure_assigned(native_socket_type fd) noexcept;
-    // Puts the driver-owned descriptor into non-blocking mode. A driver whose
-    // asynchronous API suspends on EAGAIN cannot suspend at all while its
-    // socket blocks, so it runs the whole operation inside the call that was
-    // supposed to start it.
-    [[nodiscard]] std::error_code make_non_blocking() noexcept;
+    // Duplicates and registers the driver's socket unless the open duplicate
+    // was already made from this handle value. The value is the only identity
+    // checked, so a caller must close() before the driver can replace its
+    // socket with one that reuses the value.
+    [[nodiscard]] std::error_code attach(native_socket_type driver_socket) noexcept;
     [[nodiscard]] readiness_awaiter wait(db_socket_readiness wanted) noexcept {
         return readiness_awaiter(*this, wanted);
     }
     void cancel() noexcept;
-    // Cancels pending waits and returns ownership to the database driver.
-    // A failure leaves the wrapper attached so its caller can defer teardown
-    // instead of risking a second close of the driver's handle.
-    [[nodiscard]] std::error_code release() noexcept;
+    // Cancels pending waits and closes the duplicate, leaving the driver's
+    // socket open and unregistered.
+    void close() noexcept;
 
 private:
     [[nodiscard]] waitable_type& waitable() noexcept;
 };
 
-// Preallocated fallback for an unrecoverable Windows IOCP detach failure. The
-// pool abandons a retained node for process lifetime instead of invoking either
-// the wrapper destructor or driver cleanup while both know the same handle.
-struct db_slot_socket_quarantine final {
-    explicit db_slot_socket_quarantine(asio::io_context& io_context);
-
-    void retain(db_slot_socket&& value, void* driver) noexcept;
-
-    db_slot_socket socket_;
-    void* driver_connection_{nullptr};
-};
+// Puts a driver-owned socket into non-blocking mode. A driver whose
+// asynchronous API suspends on EAGAIN cannot suspend at all while its socket
+// blocks, so it runs the whole operation inside the call that was supposed to
+// start it.
+[[nodiscard]] std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type driver_socket) noexcept;
 
 }  // namespace ruvia::detail

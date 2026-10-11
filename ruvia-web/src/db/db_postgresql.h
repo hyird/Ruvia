@@ -14,6 +14,8 @@ struct pg_result;
 
 namespace ruvia::detail {
 
+// Builds the error for a failed libpq call or result. A statement_failed on a
+// connection libpq has marked bad is reported as io_error.
 [[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type code, const pg_result* result = nullptr);
 

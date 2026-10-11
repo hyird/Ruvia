@@ -62,6 +62,17 @@ cancellation. Offloaded work carries owned data and returns through a bounded
 blocking pool. With GCC 13/14, keep over-aligned coroutine locals in separately
 allocated owned storage because those compilers can misalign coroutine frames.
 
+`ruvia::event_loop_pool` owns its worker threads; `ruvia::attach_event_loop`
+binds one worker to a caller-owned `asio::io_context`. Both retire through the
+same stop sequence: `stop()` closes admission immediately, and stop callbacks,
+root tasks, cleanup, and timer cancellation then finish on the loop's thread.
+An attachment holds work on its context until it has retired, so keep running
+the context after `stop()` until `run()` returns; destroying the context while
+Ruvia work is still outstanding is a contract violation that terminates.
+`ruvia::stop_token` values are copyable views over at most four distinct stop
+sources; combining more, for example by merging `ruvia::operation_options`,
+throws `std::length_error`.
+
 The server and outbound client support HTTP/1 over TCP and TLS. TLS certificates,
 private keys, and client CA bundles are loaded during configuration validation.
 Outbound origins and connection pools are configured before serving. WebSocket

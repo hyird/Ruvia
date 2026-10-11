@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_base64.h"
+
 namespace ruvia::detail {
 struct http_structured_item {
     enum class kind_type { other,
@@ -109,8 +112,7 @@ struct http_structured_parser {
                     if (++padding > 2) {
                         return false;
                     }
-                } else if (padding || !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                                          (ch >= '0' && ch <= '9') || ch == '+' || ch == '/')) {
+                } else if (padding || http_base64_decode_char(ch) < 0) {
                     return false;
                 }
                 ++count;
@@ -157,10 +159,10 @@ struct http_structured_parser {
         if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '*')) {
             return false;
         }
-        constexpr std::string_view extra{"!#$%&'*+-.^_`|~:/"};
+        // sf-token = ( ALPHA / "*" ) *( tchar / ":" / "/" )
         while (!input_.empty()) {
             const auto ch = input_.peek();
-            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || extra.find(ch) != std::string_view::npos)) {
+            if (!is_http_token_char(static_cast<unsigned char>(ch)) && ch != ':' && ch != '/') {
                 break;
             }
             input_.advance();
