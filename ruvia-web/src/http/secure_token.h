@@ -4,7 +4,6 @@
 #include <string_view>
 #include <variant>
 
-
 namespace ruvia::detail {
 
 class secure_token_ready final {

@@ -45,16 +45,6 @@ struct http_prefix_not_found_handler final {
     http_not_found_handler_ref_type handler_{nullptr};
 };
 
-// Normalized borrowed facts, valid only for this lookup. Protocol adapters
-// retain ownership and decide admission/body lifetime independently of routing.
-struct route_request_view final {
-    http_known_method known_method_{http_known_method::unknown};
-    std::string_view method_token_;
-    std::string_view path_;
-    std::string_view authority_;
-    std::string_view extended_protocol_;
-};
-
 // One worker's binding of the process route plan: the worker's controller
 // instance behind every route and the worker's middleware instance behind
 // every frame, indexed exactly like the plan. Everything else -- lookup,
@@ -82,7 +72,6 @@ public:
     [[nodiscard]] std::pmr::string url_for(std::string_view pattern,
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
-    [[nodiscard]] route_resolution resolve(route_request_view request) const noexcept;
     [[nodiscard]] route_resolution resolve(
         http_known_method method, std::string_view path) const noexcept;
 

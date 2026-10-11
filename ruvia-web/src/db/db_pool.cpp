@@ -308,8 +308,7 @@ task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
     }
     if (release_error) {
         throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string("detaching ").append(driver_type::name).append(" connection socket: ")
-                .append(release_error.message()),
+            std::string("detaching ").append(driver_type::name).append(" connection socket: ").append(release_error.message()),
             release_error.value());
     }
     co_return result_value;

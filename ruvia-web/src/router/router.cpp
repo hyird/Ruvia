@@ -141,7 +141,7 @@ void detail::router_impl::validate_route_target(
                 throw std::invalid_argument("CONNECT route requires host:port authority or *");
             }
         } else if ((path.find('?') != std::string_view::npos) || !is_valid_http_origin_form_target(path)) {
-            throw std::invalid_argument("extended CONNECT route requires an origin-form path");
+            throw std::invalid_argument("upgrade-protocol tunnel route requires an origin-form path");
         }
         return;
     }

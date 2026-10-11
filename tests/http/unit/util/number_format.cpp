@@ -1,11 +1,11 @@
-#include "ruvia/http/http_number_format.h"
-
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
+
+#include "ruvia/http/http_number_format.h"
 
 #include "test_harness.h"
 

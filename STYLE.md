@@ -105,7 +105,7 @@ Use lowercase `underscore_style` consistently (NL.8 / NL.10):
   information in names.
 - Standard-library customization points, third-party APIs, and protocol tokens
   retain their required spelling; these are not project-owned identifiers.
-- Files describe the unit, not the directory (`hpack.cpp`, not `unit_hpack.cpp`).
+- Files describe the unit, not the directory (`multipart_parser.cpp`, not `unit_multipart_parser.cpp`).
 
 Apply this style to new identifiers and whenever existing identifiers are
 renamed. Migrate an existing API family together with its definitions, callers,

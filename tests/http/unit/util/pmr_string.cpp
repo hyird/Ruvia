@@ -1,8 +1,8 @@
-#include "ruvia/http/http_pmr_string.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
+
+#include "ruvia/http/http_pmr_string.h"
 
 #include "test_harness.h"
 

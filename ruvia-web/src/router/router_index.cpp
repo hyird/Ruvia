@@ -28,31 +28,22 @@ detail::route_resolution detail::route_table::resolved(const route_entry& route,
 }
 
 detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
-    // HTTP/1 Upgrade detection remains in its adapter; only normalized routing
-    // facts enter the shared classification policy.
+    // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
+    // among the connect-udp tunnel routes; a plain CONNECT routes by its
+    // authority-form target.
     if (is_http_connect_udp_upgrade_request(request)) {
-        return resolve(route_request_view{http_known_method::connect, request.method(),
-            request.path(), request.path(), "connect-udp"});
+        return resolve_connect("connect-udp", request.path());
     }
-    return resolve(route_request_view{request.known_method(), request.method(),
-        request.path(), request.path(), {}});
-}
-
-detail::route_resolution detail::route_table::resolve(route_request_view request) const noexcept {
-    if (request.known_method_ == http_known_method::connect) {
-        if (request.extended_protocol_ == "websocket") {
-            return request.path_.empty() ? route_resolution{} : resolve(http_known_method::get, request.path_);
-        }
-        return resolve_connect(request.extended_protocol_,
-            request.extended_protocol_.empty() ? request.authority_ : request.path_);
+    if (request.known_method() == http_known_method::connect) {
+        return resolve_connect({}, request.path());
     }
-    if (request.path_.empty()) {
+    if (request.path().empty()) {
         return {};
     }
-    if (request.known_method_ == http_known_method::unknown) {
-        return resolve_extension_method(request.method_token_, request.path_);
+    if (request.known_method() == http_known_method::unknown) {
+        return resolve_extension_method(request.method(), request.path());
     }
-    return resolve(request.known_method_, request.path_);
+    return resolve(request.known_method(), request.path());
 }
 
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {

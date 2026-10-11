@@ -19,7 +19,6 @@ void websocket_connection<transport_type>::heartbeat_tick(std::int64_t now) noex
             return;
         case websocket_liveness_decision::abort_transport:
             // A heartbeat/close timeout belongs to this websocket transport.
-            // For RFC 8441 that is one stream, not the multiplexed h2 socket.
             abort_transport();
             return;
         case websocket_liveness_decision::send_ping:

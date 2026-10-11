@@ -12,7 +12,7 @@
 #include "server/http_response_stream_state.h"
 
 // Running a route that streams its response: binding the writer to the context
-// for the handler's lifetime, producing the head the h1/h2 sinks commit, and
+// for the handler's lifetime, producing the head the HTTP/1 sink commits, and
 // unwinding when the handler throws after bytes are already on the wire.
 
 namespace ruvia {
@@ -38,8 +38,8 @@ private:
 };
 
 // Web-side thunk producing the streaming response head from the bound context. It is
-// handed to the http streaming layer (response_stream_writer::bind_context) so the h1/h2
-// sinks can build the head at commit without naming context_access (web).
+// handed to the http streaming layer (response_stream_writer::bind_context) so the HTTP/1
+// sink can build the head at commit without naming context_access (web).
 [[nodiscard]] task<http_response> streaming_head_thunk(context& context_value) {
     if (context_value.try_session()) {
         co_await detail::session_access::commit(context_value);

@@ -201,7 +201,7 @@ task<http_response> detail::route_table::run_unmatched_chain(
     return respond_through_chain(
         middleware_chain{.table_ = this,
             .frames_ = std::span<const route_middleware_type>(middleware_frames_)
-                           .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
+                .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
             .failure_ = &route_table::contain_failure},
         context_value, terminal);
 }

@@ -1,9 +1,9 @@
-#include "ruvia/http/http_base64.h"
-
 #include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
+
+#include "ruvia/http/http_base64.h"
 
 #include "test_harness.h"
 

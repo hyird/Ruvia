@@ -151,7 +151,7 @@ task<void> wait_for_postgresql(postgresql_pool& pool, std::size_t index, db_sock
     }
     const auto& config = pool.config();
     const auto io_timeout = has_db_socket_readiness(wanted, db_socket_readiness::write) ? config.write_timeout_
-                                                                                         : config.read_timeout_;
+                                                                                        : config.read_timeout_;
     const auto native = PQsocket(pool.slot(index).connection_);
     if (native < 0) {
         throw db_error(

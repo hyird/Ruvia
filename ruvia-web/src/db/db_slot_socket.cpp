@@ -7,14 +7,13 @@ namespace ruvia::detail {
 
 db_slot_socket::db_slot_socket(asio::io_context& io_context)
 #if defined(_WIN32)
-    : socket_(io_context) {
-}
+    : socket_(io_context){}
 #else
     : descriptor_(io_context) {
 }
 #endif
 
-db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
+      db_slot_socket::db_slot_socket(db_slot_socket && other) noexcept
 #if defined(_WIN32)
     : socket_(std::move(other.socket_)),
 #else

@@ -65,7 +65,6 @@ public:
 #include "ruvia/core/operation_timeout.h"
 
 #include "integration/slot_pool.h"
-
 #include "redis/redis_client_runtime.h"
 
 struct redisReader;

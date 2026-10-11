@@ -67,11 +67,11 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
     try {
         auto bounded = client.with_options({.timeout_ = std::chrono::seconds(5)});
         {
-            const std::array<ruvia::http_header_view, 2> headers{{
+            const std::array<ruvia::http_header_view, 1> headers{{
                 {"content-type", "application/octet-stream"},
-                {"trailer", "X-Upload-Complete"},
             }};
-            // With no content_length, the upload uses chunked transfer coding.
+            // With no content_length, the upload uses chunked transfer coding,
+            // which carries the trailer section passed to end().
             // A 100-continue expectation lets a peer reject the head first.
             std::cout << "upload\n";
             auto exchange_value = co_await bounded.open_request(

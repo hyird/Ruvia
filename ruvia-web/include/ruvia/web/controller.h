@@ -142,7 +142,8 @@ private:                                                                        
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 // Ordinary CONNECT uses an exact host:port authority or "*". Group prefixes
-// apply only to extended CONNECT paths; controller/group middleware always runs.
+// apply only to upgrade-protocol tunnel paths (connect-udp); controller/group
+// middleware always runs.
 #define RUVIA_CONNECT(authority, handler, ...)                                                     \
     ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, {}, authority,               \
         ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \

@@ -5,7 +5,6 @@
 
 #include <openssl/evp.h>
 
-
 #include "auth/jwt_primitives.h"
 
 namespace ruvia::detail {

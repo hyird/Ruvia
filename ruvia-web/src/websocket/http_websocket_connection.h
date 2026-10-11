@@ -32,7 +32,7 @@ namespace ruvia::detail {
 //   asio-executor executor() const;
 //   task<http_stream_read_result> read_more(std::pmr::string& buffer);
 //   task<std::error_code> write_bytes(std::string_view, websocket_transport_disposition);
-//   void abort() noexcept;  // abort this websocket transport, not an unrelated h2 stream
+//   void abort() noexcept;  // abort this websocket transport
 template <typename transport_type>
 class websocket_connection final {
 public:

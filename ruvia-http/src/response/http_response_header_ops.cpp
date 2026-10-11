@@ -11,13 +11,13 @@
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/response_field_validation.h"
 #include "response/http_response_header_access.h"
 #include "response/http_response_headers_access.h"
 #include "response/response_header_index_cache.h"
-#include "ruvia/http/http_number_format.h"
 
 namespace ruvia {
 namespace {

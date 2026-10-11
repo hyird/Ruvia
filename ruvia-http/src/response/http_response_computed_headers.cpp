@@ -7,10 +7,10 @@
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
 
 #include "response/http_response_header_access.h"
-#include "ruvia/http/http_number_format.h"
 // The two response fields Ruvia formats itself rather than taking as a value:
 // Allow, built from the method mask a route matched, and Content-Range in both
 // its satisfied and unsatisfied forms. Each writes straight into the response's

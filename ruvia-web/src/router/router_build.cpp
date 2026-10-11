@@ -143,9 +143,9 @@ void detail::router_impl::validate_no_dynamic_route_conflict() const {
             if (!right.dynamic() || left.method() != right.method()) {
                 continue;
             }
-            // Extended CONNECT routes share one lookup trie per protocol; every
-            // other dynamic route shares one per method. Routes in different
-            // tries never compete for a request.
+            // Upgrade-protocol tunnel routes (connect-udp) share one lookup trie
+            // per protocol; every other dynamic route shares one per method.
+            // Routes in different tries never compete for a request.
             const auto* right_tunnel = right.endpoint().tunnel();
             if ((left_tunnel == nullptr) != (right_tunnel == nullptr) ||
                 (left_tunnel != nullptr && left_tunnel->protocol() != right_tunnel->protocol())) {
