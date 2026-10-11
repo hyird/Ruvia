@@ -22,7 +22,7 @@ struct task_scope::node_type {
 
 task_scope::task_scope(const worker_handle& worker_value, task_scope_options options)
     : worker_(worker_value),
-      resource_(detail::pmr_resource_or_default(options.resource_)) {
+      resource_(pmr_resource_or_default(options.resource_)) {
     if (!worker_.valid()) {
         throw std::invalid_argument("task scope requires a valid worker");
     }

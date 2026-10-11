@@ -1,16 +1,18 @@
 #include "http3/http3_quic_wire_owner.h"
 
-#include <chrono>
 #include <exception>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include <asio/error.hpp>
 #include <asio/post.hpp>
 
 #include "ruvia/core/memory/process_resource.h"
+
+#include "http3/http3_quic_socket_address.h"
 
 namespace ruvia::detail {
 
@@ -35,11 +37,7 @@ http3_quic_wire_owner::timer_wait_handler_type::~timer_wait_handler_type() {
 void http3_quic_wire_owner::timer_wait_handler_type::operator()(
     const asio::error_code& error) noexcept {
     if (owner_ != nullptr) {
-        try {
-            owner_->on_timer_completion(generation_, error);
-        } catch (...) {
-            owner_->record_current_failure();
-        }
+        owner_->on_timer_completion(generation_, error);
     }
 }
 
@@ -61,31 +59,37 @@ http3_quic_wire_owner::timer_retirement_handler_type::~timer_retirement_handler_
 
 void http3_quic_wire_owner::timer_retirement_handler_type::operator()() noexcept {
     if (owner_ != nullptr) {
-        try {
-            owner_->on_timer_retirement_wake();
-        } catch (...) {
-            owner_->record_current_failure();
-        }
+        owner_->on_timer_retirement_wake();
     }
 }
 
 http3_quic_wire_owner::http3_quic_wire_owner(asio::io_context& worker_io,
     http3_datagram_channel& channel, http3_worker_datagram_endpoint::udp::endpoint local_endpoint,
     http3_quic_tls_context& tls, ruvia::quic_server_config transport_config,
-    std::pmr::memory_resource* timer_handler_resource, protocol_pump_type protocol_pump)
+    std::pmr::memory_resource* timer_handler_resource, wake_type wake)
     : owner_thread_(std::this_thread::get_id()),
       network_io_(worker_io),
-      tls_(tls),
-      transport_config_(transport_config),
+      wake_(wake),
       endpoint_(channel, std::move(local_endpoint),
           http3_worker_datagram_endpoint::notification{this, &endpoint_notification}),
       timer_(network_io_),
       timer_handler_allocator_(timer_handler_resource != nullptr
                                    ? timer_handler_resource
-                                   : ruvia::detail::process_resource()),
-      protocol_pump_(protocol_pump) {
-    if (protocol_pump_.context_ == nullptr || protocol_pump_.drive_ == nullptr) {
-        throw std::invalid_argument("HTTP/3 wire protocol pump must be complete");
+                                   : ruvia::process_resource()) {
+    try {
+        if (wake_.wake_ == nullptr) {
+            throw std::invalid_argument("HTTP/3 QUIC wire requires a wake target");
+        }
+        endpoint_.prepare();
+        transport_.emplace(tls, transport_config, timer_handler_allocator_.resource());
+    } catch (...) {
+        // Cold rollback: nothing was started, so the stop completes in place.
+        request_stop();
+        poll_stop();
+        if (!transport_destroyed_) {
+            std::terminate();
+        }
+        throw;
     }
 }
 
@@ -94,91 +98,196 @@ http3_quic_wire_owner::~http3_quic_wire_owner() {
     if (!stopping_) {
         request_stop();
     }
-    if (!stop_status().complete()) {
+    poll_stop();
+    if (!transport_destroyed_) {
         std::terminate();
     }
 }
 
-void http3_quic_wire_owner::prepare() {
+void http3_quic_wire_owner::start() noexcept {
     require_owner_thread();
-    if (prepared_ || stopping_) {
-        throw std::logic_error("HTTP/3 server network QUIC wire owner cannot prepare in this state");
+    if (started_ || stopping_) {
+        return;
     }
-    try {
-        endpoint_.prepare();
-        transport_.emplace(tls_, transport_config_, timer_handler_allocator_.resource());
-        transport_destroyed_ = false;
-        prepared_ = true;
-    } catch (...) {
-        record_current_failure();
-        throw;
+    started_ = true;
+    const auto receive = endpoint_.start();
+    if (receive == http3_worker_datagram_endpoint::pump_result::error ||
+        receive == http3_worker_datagram_endpoint::pump_result::stopped) {
+        capture_endpoint_error();
+        request_stop();
     }
 }
 
-void http3_quic_wire_owner::start() {
-    require_owner_thread();
-    if (!prepared_ || started_ || stopping_) {
-        throw std::logic_error("HTTP/3 server network QUIC wire owner cannot start in this state");
-    }
-    try {
-        started_ = true;
-        const auto receive = endpoint_.start();
-        if (receive == http3_worker_datagram_endpoint::pump_result::error) {
-            capture_endpoint_error();
-        } else if (receive == http3_worker_datagram_endpoint::pump_result::stopped) {
-            begin_stop();
-        }
-        if (!stopping_) {
-            drive();
-        }
-        if (failure_) {
-            std::rethrow_exception(failure_);
-        }
-    } catch (...) {
-        record_current_failure();
-        throw;
-    }
-}
-
-void http3_quic_wire_owner::request_stop() noexcept {
-    require_owner_thread();
-    capture_endpoint_error();
-    begin_stop();
-}
-
-void http3_quic_wire_owner::request_drive() noexcept {
-    require_owner_thread();
-    if (!stopping_) {
-        drive_requested_ = true;
-        drive();
-    }
-}
-
-void http3_quic_wire_owner::poll_datagrams() noexcept {
+void http3_quic_wire_owner::poll_channel() noexcept {
     require_owner_thread();
     endpoint_.poll_channel();
 }
 
-void http3_quic_wire_owner::defer_transport_retirement() noexcept {
+http3_quic_wire_owner::received_type http3_quic_wire_owner::receive_one(clock_type::time_point now) {
     require_owner_thread();
-    if (started_ || stopping_ || !prepared_) {
-        std::terminate();
+    if (!started_ || stopping_) {
+        return {};
     }
-    transport_retirement_released_ = false;
+    const auto received = endpoint_.receive_slot();
+    if (!received) {
+        return {};
+    }
+    received_type result_value{.kind_ = received_type::kind_type::dropped};
+    const auto local = to_quic_address(received->local_destination_);
+    const auto peer = to_quic_address(received->peer_);
+    if (local.index() == 0 && peer.index() == 0) {
+        const ruvia::quic_datagram_view datagram{received->bytes_, std::get<0>(local), std::get<0>(peer)};
+        auto& server = transport_->server();
+        ruvia::quic_server_route route;
+        try {
+            route = server.route_datagram(datagram);
+        } catch (const ruvia::quic_error& error) {
+            if (error.code() != ruvia::quic_error_code::protocol_failure) {
+                throw;
+            }
+        }
+        switch (route.kind_) {
+            case ruvia::quic_server_route_kind::initial_offer:
+                result_value = {.kind_ = received_type::kind_type::initial_offer, .offer_ = route.offer_};
+                break;
+            case ruvia::quic_server_route_kind::version_negotiation: {
+                const auto packet_buffer = endpoint_.packet_buffer();
+                if (!packet_buffer.empty()) {
+                    struct reservation_guard final {
+                        http3_worker_datagram_endpoint& endpoint_;
+                        ~reservation_guard() {
+                            endpoint_.cancel_packet();
+                        }
+                    } guard_value{endpoint_};
+                    const auto packet = server.write_version_negotiation(route.version_negotiation_, packet_buffer);
+                    if (packet.status_ == ruvia::quic_operation_status::accepted &&
+                        !send_packet(packet_buffer, packet)) {
+                        throw std::runtime_error("QUIC server serialized an invalid Version Negotiation packet");
+                    }
+                }
+                break;
+            }
+            case ruvia::quic_server_route_kind::existing_connection:
+                result_value.connection_ = route.connection_;
+                try {
+                    (void)server.receive(route.connection_, datagram, now);
+                    result_value.kind_ = received_type::kind_type::connection;
+                } catch (const ruvia::quic_error&) {
+                    result_value.kind_ = received_type::kind_type::failed_connection;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    if (endpoint_.consume_receive() == http3_worker_datagram_endpoint::pump_result::error) {
+        throw std::system_error(endpoint_.error(), "consume HTTP/3 UDP receive slot");
+    }
+    return result_value;
 }
 
-void http3_quic_wire_owner::release_transport_retirement() noexcept {
+std::optional<std::size_t> http3_quic_wire_owner::send(ruvia::quic_connection_token token, clock_type::time_point now) {
     require_owner_thread();
-    transport_retirement_released_ = true;
+    std::size_t sent = 0;
+    if (!started_ || stopping_) {
+        return sent;
+    }
+    try {
+        auto& quic = transport_->server().connection(token);
+        for (;;) {
+            const auto packet_buffer = endpoint_.packet_buffer();
+            if (packet_buffer.empty()) {
+                // Production pauses; output_drained wakes the owner again.
+                return sent;
+            }
+            struct reservation_guard final {
+                http3_worker_datagram_endpoint& endpoint_;
+                ~reservation_guard() {
+                    endpoint_.cancel_packet();
+                }
+            } guard_value{endpoint_};
+            const auto packet = quic.write_packet(packet_buffer, now);
+            if (packet.size_ == 0) {
+                return sent;
+            }
+            if (!send_packet(packet_buffer, packet)) {
+                return std::nullopt;
+            }
+            ++sent;
+        }
+    } catch (const ruvia::quic_error&) {
+        return std::nullopt;
+    }
+}
+
+bool http3_quic_wire_owner::send_packet(std::span<std::byte> packet_buffer,
+    const ruvia::quic_packet_result& packet) {
+    const auto source = to_udp_endpoint(packet.local_);
+    const auto peer = to_udp_endpoint(packet.peer_);
+    if (source.index() != 0 || peer.index() != 0 || packet.size_ == 0 || packet.size_ > packet_buffer.size()) {
+        return false;
+    }
+    const auto sent = endpoint_.send_datagram(
+        std::span<const std::byte>(packet_buffer).first(packet.size_), std::get<0>(source), std::get<0>(peer));
+    if (sent == http3_worker_datagram_endpoint::pump_result::error) {
+        throw std::system_error(endpoint_.error(), "send HTTP/3 QUIC packet");
+    }
+    return true;
+}
+
+bool http3_quic_wire_owner::output_available() noexcept {
+    require_owner_thread();
+    return endpoint_.outbound_capacity();
+}
+
+void http3_quic_wire_owner::schedule(std::optional<clock_type::time_point> local_deadline) noexcept {
+    require_owner_thread();
+    if (stopping_ || !transport_) {
+        desired_deadline_.reset();
+    } else {
+        desired_deadline_ = transport_->server().next_expiry();
+        if (local_deadline && (!desired_deadline_ || *local_deadline < *desired_deadline_)) {
+            desired_deadline_ = local_deadline;
+        }
+    }
+    reconcile_timer();
+}
+
+bool http3_quic_wire_owner::take_expiry() noexcept {
+    require_owner_thread();
+    return std::exchange(expired_, false);
+}
+
+std::uint16_t http3_quic_wire_owner::bound_port() const noexcept {
+    require_owner_thread();
+    return endpoint_.bound_port();
+}
+
+void http3_quic_wire_owner::request_stop() noexcept {
+    require_owner_thread();
+    if (!stopping_) {
+        stopping_ = true;
+        desired_deadline_.reset();
+        if (timer_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+            std::terminate();
+        }
+        ++timer_generation_;
+        if (timer_wait_outstanding_ && !timer_cancel_requested_ && !timer_completion_delivered_) {
+            timer_cancel_requested_ = true;
+            timer_.cancel();
+        }
+    }
+    endpoint_.request_stop();
+    capture_endpoint_error();
 }
 
 void http3_quic_wire_owner::poll_stop() noexcept {
     require_owner_thread();
-    if (transport_destroyed_) {
+    if (transport_destroyed_ || !stopping_) {
         return;
     }
-    if (!stopping_ || driving_ || !timer_handlers_retired_ || !endpoint_.endpoint_retired() ||
-        endpoint_.outbound_pending() || !transport_retirement_released_) {
+    endpoint_.poll_channel();
+    if (!timer_handlers_retired_ || !endpoint_.endpoint_retired() || endpoint_.outbound_pending()) {
         return;
     }
     transport_.reset();
@@ -187,47 +296,22 @@ void http3_quic_wire_owner::poll_stop() noexcept {
     transport_destroyed_ = true;
 }
 
-http3_quic_wire_owner::stop_status_type http3_quic_wire_owner::stop_status() const noexcept {
-    require_owner_thread();
-    return stop_status_type{
-        .stopping_ = stopping_,
-        .endpoint_retired_ = endpoint_.endpoint_retired(),
-        .timer_handlers_retired_ = timer_handlers_retired_,
-        .transport_destroyed_ = transport_destroyed_,
-        .outbound_pending_ = endpoint_.outbound_pending(),
-        .failed_ = static_cast<bool>(failure_),
-    };
-}
-
-std::uint16_t http3_quic_wire_owner::bound_port() const noexcept {
-    require_owner_thread();
-    return endpoint_.bound_port();
-}
-
-std::size_t http3_quic_wire_owner::timer_expirations() const noexcept {
-    require_owner_thread();
-    return timer_expirations_;
-}
-
-std::exception_ptr http3_quic_wire_owner::failure() const noexcept {
-    require_owner_thread();
-    return failure_;
-}
-
-void http3_quic_wire_owner::rethrow_failure() const {
-    require_owner_thread();
-    if (failure_) {
-        std::rethrow_exception(failure_);
-    }
-}
-
 void http3_quic_wire_owner::endpoint_notification(void* context_value,
     http3_worker_datagram_endpoint::notification_kind kind) noexcept {
     auto& owner_value = *static_cast<http3_quic_wire_owner*>(context_value);
-    try {
-        owner_value.on_endpoint_notification(kind);
-    } catch (...) {
-        owner_value.record_current_failure();
+    owner_value.require_owner_thread();
+    // The endpoint notifies synchronously from the owner's own poll, receive,
+    // start and stop calls, all made inside a protocol turn that observes the
+    // result. Waking from here would be level-triggered: a retired endpoint or
+    // pending input re-notifies on every poll, so the protocol loop would never
+    // suspend and starve every other task on the worker. Cross-thread channel
+    // events arrive through the worker notification instead.
+    if (kind == http3_worker_datagram_endpoint::notification_kind::stopping) {
+        // The Acceptor closed the channel or the endpoint failed.
+        owner_value.capture_endpoint_error();
+        owner_value.stopping_ = true;
+        owner_value.desired_deadline_.reset();
+        owner_value.reconcile_timer();
     }
 }
 
@@ -237,71 +321,16 @@ void http3_quic_wire_owner::require_owner_thread() const noexcept {
     }
 }
 
-void http3_quic_wire_owner::on_endpoint_notification(
-    http3_worker_datagram_endpoint::notification_kind kind) noexcept {
-    require_owner_thread();
-    if (kind == http3_worker_datagram_endpoint::notification_kind::stopping) {
-        capture_endpoint_error();
-        begin_stop();
-        return;
+void http3_quic_wire_owner::wake() noexcept {
+    if (wake_.wake_ != nullptr) {
+        wake_.wake_(wake_.context_);
     }
-    if (!stopping_) {
-        transport_activity_ = true;
-        drive();
-    }
-}
-
-void http3_quic_wire_owner::drive() noexcept {
-    require_owner_thread();
-    if (driving_) {
-        drive_requested_ = true;
-        return;
-    }
-    if (!started_ || stopping_ || !transport_) {
-        return;
-    }
-    driving_ = true;
-    constexpr unsigned maximum_drives_per_turn = 2;
-    for (unsigned pass = 0; pass < maximum_drives_per_turn; ++pass) {
-        drive_requested_ = false;
-        if (stopping_ || !transport_) {
-            break;
-        }
-        try {
-            const auto result_value = protocol_pump_.drive_(protocol_pump_.context_,
-                *transport_, endpoint_);
-            if (result_value == protocol_pump_result_type::fatal) {
-                record_failure(std::make_exception_ptr(
-                    std::runtime_error("HTTP/3 server network protocol pump failed")));
-                break;
-            }
-            drive_requested_ = drive_requested_ || result_value == protocol_pump_result_type::progress;
-            update_deadline();
-        } catch (...) {
-            record_current_failure();
-            break;
-        }
-        if (!drive_requested_) {
-            break;
-        }
-    }
-    driving_ = false;
-}
-
-void http3_quic_wire_owner::update_deadline() {
-    if (stopping_ || !transport_) {
-        desired_deadline_.reset();
-    } else {
-        desired_deadline_ = transport_->server().next_expiry();
-    }
-    reconcile_timer();
 }
 
 void http3_quic_wire_owner::reconcile_timer() noexcept {
     if (stopping_) {
         desired_deadline_.reset();
     }
-
     if (timer_wait_outstanding_) {
         if (timer_completion_delivered_) {
             return;
@@ -316,22 +345,10 @@ void http3_quic_wire_owner::reconcile_timer() noexcept {
             }
             ++timer_generation_;
             timer_cancel_requested_ = true;
-            asio::error_code error;
             timer_.cancel();
-            if (error) {
-                try {
-                    throw std::system_error(error, "cancel HTTP/3 server network QUIC timer");
-                } catch (...) {
-                    if (!failure_) {
-                        failure_ = std::current_exception();
-                    }
-                    begin_stop();
-                }
-            }
         }
         return;
     }
-
     if (!stopping_ && desired_deadline_) {
         arm_timer(*desired_deadline_);
     } else {
@@ -381,16 +398,19 @@ void http3_quic_wire_owner::on_timer_completion(std::uint64_t generation,
     timer_completion_delivered_ = true;
     if (error) {
         if (error != asio::error::operation_aborted) {
-            record_error(error, "HTTP/3 server network QUIC timer");
+            try {
+                throw std::system_error(error, "HTTP/3 QUIC timer");
+            } catch (...) {
+                record_current_failure();
+            }
         }
         return;
     }
-    ++timer_expirations_;
-    transport_activity_ = true;
     if (generation != timer_generation_ || stopping_) {
         return;
     }
-    drive();
+    expired_ = true;
+    wake();
 }
 
 void http3_quic_wire_owner::on_timer_handler_retired(std::uint64_t generation) noexcept {
@@ -410,6 +430,10 @@ void http3_quic_wire_owner::on_timer_handler_retired(std::uint64_t generation) n
     armed_deadline_.reset();
     if (stopping_ || !desired_deadline_) {
         timer_handlers_retired_ = !timer_wake_outstanding_;
+        if (stopping_) {
+            // poll_stop may now destroy the transport.
+            wake();
+        }
         return;
     }
     if (timer_wake_outstanding_) {
@@ -443,62 +467,28 @@ void http3_quic_wire_owner::on_timer_retirement_handler_retired() noexcept {
     }
     timer_wake_outstanding_ = false;
     timer_handlers_retired_ = !timer_wait_outstanding_;
-}
-
-void http3_quic_wire_owner::begin_stop() noexcept {
-    require_owner_thread();
-    if (!stopping_) {
-        stopping_ = true;
-        desired_deadline_.reset();
-        if (timer_generation_ == std::numeric_limits<std::uint64_t>::max()) {
-            std::terminate();
-        }
-        ++timer_generation_;
-        if (timer_wait_outstanding_ && !timer_cancel_requested_ &&
-            !timer_completion_delivered_) {
-            timer_cancel_requested_ = true;
-            asio::error_code error;
-            timer_.cancel();
-            if (error) {
-                try {
-                    throw std::system_error(error, "cancel HTTP/3 server network QUIC timer");
-                } catch (...) {
-                    if (!failure_) {
-                        failure_ = std::current_exception();
-                    }
-                }
-            }
-        }
+    if (stopping_) {
+        wake();
     }
-    endpoint_.request_stop();
-    capture_endpoint_error();
 }
 
 void http3_quic_wire_owner::record_failure(std::exception_ptr failure) noexcept {
     if (!failure_) {
         failure_ = failure;
     }
-    begin_stop();
+    request_stop();
+    wake();
 }
 
 void http3_quic_wire_owner::record_current_failure() noexcept {
     record_failure(std::current_exception());
 }
 
-void http3_quic_wire_owner::record_error(std::error_code error,
-    const char* operation) noexcept {
-    try {
-        throw std::system_error(error, operation);
-    } catch (...) {
-        record_failure(std::current_exception());
-    }
-}
-
 void http3_quic_wire_owner::capture_endpoint_error() noexcept {
     const auto error = endpoint_.error();
     if (error && !failure_) {
         try {
-            throw std::system_error(error, "HTTP/3 server network datagram endpoint");
+            throw std::system_error(error, "HTTP/3 worker datagram endpoint");
         } catch (...) {
             failure_ = std::current_exception();
         }

@@ -23,8 +23,9 @@ struct multipart_part_access;
 struct multipart_stream_part_access;
 }  // namespace detail
 
-// Buffered multipart parsing owns decoded Content-Disposition names while the
-// content type and body remain borrowed views into the caller-owned request body.
+// Buffered multipart parsing owns decoded Content-Disposition names. Content
+// types borrow the request body unless MIME unfolding needs owned storage;
+// part bodies always borrow the caller-owned request body.
 class multipart_part final {
 public:
     [[nodiscard]] std::string_view name() const& noexcept {
@@ -41,9 +42,13 @@ public:
         return filename_present_;
     }
 
-    [[nodiscard]] std::string_view content_type() const noexcept {
-        return content_type_;
+    [[nodiscard]] std::string_view content_type() const& noexcept {
+        if (const auto* borrowed = std::get_if<std::string_view>(&content_type_)) {
+            return *borrowed;
+        }
+        return std::get<std::pmr::string>(content_type_);
     }
+    std::string_view content_type() const&& = delete;
 
     [[nodiscard]] std::string_view body() const noexcept {
         return body_;
@@ -52,17 +57,19 @@ public:
 private:
     friend struct detail::multipart_part_access;
 
-    multipart_part(std::pmr::string name, std::pmr::string filename, std::string_view content_type_value,
+    using content_type_storage_type = std::variant<std::string_view, std::pmr::string>;
+
+    multipart_part(std::pmr::string name, std::pmr::string filename, content_type_storage_type content_type_value,
         std::string_view body, bool filename_present) noexcept
         : name_(std::move(name)),
           filename_(std::move(filename)),
-          content_type_(content_type_value),
+          content_type_(std::move(content_type_value)),
           body_(body),
           filename_present_(filename_present) {}
 
     std::pmr::string name_;
     std::pmr::string filename_;
-    std::string_view content_type_;
+    content_type_storage_type content_type_;
     std::string_view body_;
     bool filename_present_{false};
 };
@@ -504,9 +511,10 @@ public:
     multipart_parser(multipart_parser&&) = delete;
     multipart_parser& operator=(multipart_parser&&) = delete;
 
-    // Copies input into parser-owned PMR storage. finish_input() is required when
-    // the enclosing HTTP body ends so a close delimiter ending exactly at EOF
-    // can be distinguished from a delimiter line split across input chunks.
+    // Copies input into parser-owned PMR storage, including chunks borrowed from
+    // the latest part body. Overlapping input is saved before storage compaction.
+    // finish_input() marks the enclosing HTTP body's end so a close delimiter
+    // ending exactly at EOF can be distinguished from a line split across chunks.
     // A protocol failure is terminal: later poll() calls repeat the exact error
     // and feed() rejects further bytes.
     void feed(std::string_view chunk);
@@ -552,6 +560,7 @@ private:
     detail::multipart_input_lifecycle input_;
     std::pmr::string current_name_;
     std::pmr::string current_filename_;
+    std::pmr::string current_headers_;
     std::pmr::string current_content_type_;
     std::string_view current_content_type_view_;
     state_type state_{progress_state_type::boundary};
@@ -564,10 +573,12 @@ private:
     bool next_chunk_is_first_{false};
     bool first_boundary_{true};
     bool current_filename_present_{false};
+    bool current_content_type_owned_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
-// and content types borrow `body`; decoded name/filename values own PMR storage.
+// borrow `body`. Names, filenames, and Content-Type values from unfolded header
+// blocks own PMR storage; unmodified header blocks keep borrowing `body`.
 [[nodiscard]] multipart_body_parse_result parse_multipart_body(
     std::string_view body, multipart_parse_options options);
 

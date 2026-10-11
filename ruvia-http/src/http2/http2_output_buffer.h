@@ -18,11 +18,6 @@
 
 namespace ruvia::detail {
 
-using ruvia::http2_data_output_observer_type;
-using ruvia::http2_output_batch_result;
-using ruvia::http2_output_batch_status;
-using ruvia::http2_output_consume_status;
-
 // Sole owner of HTTP/2 outbound bytes and their consumed prefix. Connection logic
 // selects protocol actions; this component owns contiguous frame serialization and
 // buffer lifetime so frame handlers cannot manipulate storage cursors directly.
@@ -143,8 +138,8 @@ public:
 
     void append_frame(http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id,
         std::string_view first, std::string_view second = {}) {
-        if (first.size() > http2_max_frame_size_limit ||
-            second.size() > http2_max_frame_size_limit - first.size()) {
+        if (first.size() > http2_max_frame_size ||
+            second.size() > http2_max_frame_size - first.size()) {
             std::terminate();
         }
 

@@ -7,7 +7,7 @@
 // Internal startup-time middleware descriptor.
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 
 namespace ruvia {
 
@@ -22,11 +22,11 @@ template <typename middleware_t_type, typename... args_type>
 
 class controller_middleware_descriptor final {
 public:
-    using invoke_type = task<void> (*)(void*, context&, next&);
+    using invoke_type = route_middleware_type::invoke_type;
     // `args` points at the registration-owned argument tuple captured by
     // use<T>(args...) -- empty when the middleware is default constructed. It
     // lives on the process registration resource, so it outlives every instance
-    // the router materializes from this descriptor.
+    // a worker's route table materializes from this descriptor.
     using create_type = void* (*)(const void* args);
     using destroy_type = void (*)(void*) noexcept;
 
@@ -50,24 +50,15 @@ public:
         return destroy_;
     }
 
-    // Two registrations of the same middleware type differ when they carry
-    // different arguments, so identity spans the argument pointer as well.
-    [[nodiscard]] friend bool operator==(const controller_middleware_descriptor& left,
-        const controller_middleware_descriptor& right) noexcept {
-        return left.invoke_ == right.invoke_ && left.create_ == right.create_ &&
-               left.destroy_ == right.destroy_ && left.args_ == right.args_ &&
-               left.prefix_ == right.prefix_;
-    }
-
     [[nodiscard]] const void* validated_model_type_key() const noexcept {
         return validated_model_type_key_;
     }
 
     // Empty means app-wide. Otherwise the middleware runs exactly on requests
-    // whose path is under this prefix. The router decides that per route when
-    // the table is built and only checks the request path at dispatch for a
-    // route serving paths on both sides of the scope. The text is
-    // registration-owned and outlives the table.
+    // whose path is under this prefix. The compiled route plan decides that per
+    // route and only checks the request path at dispatch for a route serving
+    // paths on both sides of the scope. The text is registration-owned and
+    // outlives the plan.
     [[nodiscard]] std::string_view prefix() const noexcept {
         return prefix_;
     }

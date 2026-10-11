@@ -4,7 +4,10 @@
 #include <chrono>
 #include <stdexcept>
 
+#include "ruvia/web/detail/json/json_escape.h"
+
 #include "auth/jwt_primitives.h"
+#include "util/constant_time.h"
 
 namespace ruvia {
 namespace {
@@ -26,7 +29,7 @@ void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
 }  // namespace
 
 jwt_payload::jwt_payload(jwt_payload_options options)
-    : issuer_(detail::pmr_resource_or_default(options.resource_)),
+    : issuer_(pmr_resource_or_default(options.resource_)),
       subject_(issuer_.get_allocator().resource()),
       audiences_(issuer_.get_allocator().resource()),
       id_(issuer_.get_allocator().resource()),
@@ -77,11 +80,11 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
         (options.not_before_delay_.has_value() && options.not_before_delay_->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
-    auto* resolved = detail::pmr_resource_or_default(options.resource_);
+    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto now = std::chrono::system_clock::now();
     std::pmr::string header(resolved);
     header.append("{\"alg\":");
-    detail::jwt_append_json_escaped(header, detail::jwt_algorithm_name(options.algorithm_));
+    detail::append_json_string<detail::json_hex_case::lower>(header, detail::jwt_algorithm_name(options.algorithm_));
     header.append(",\"typ\":\"JWT\"}");
 
     std::pmr::string payload(resolved);
@@ -138,12 +141,12 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
         options.expiration_claim_ != jwt_expiration_claim_policy::allow_missing) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
-    auto* resolved = detail::pmr_resource_or_default(options.resource_);
+    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
     const auto expected =
         detail::jwt_hmac_sign(options.algorithm_, options.secret_, parts.signing_input_, resolved);
-    if (!detail::jwt_constant_time_equals(expected, parts.signature_)) {
+    if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
         throw std::runtime_error("JWT signature verification failed");
     }
     const auto header_value = detail::jwt_base64_url_decode(parts.header_, resolved);
@@ -177,7 +180,7 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
 }
 
 jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
-    auto* resolved = detail::pmr_resource_or_default(options.resource_);
+    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
     const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);

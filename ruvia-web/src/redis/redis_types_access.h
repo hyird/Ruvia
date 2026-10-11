@@ -129,9 +129,17 @@ struct redis_types_access final {
         return redis_value::integer_value(value, resource);
     }
 
-    [[nodiscard]] static redis_value array_value(
-        std::pmr::vector<redis_value> values, std::pmr::memory_resource* resource) {
-        return redis_value::array_value(std::move(values), resource);
+    [[nodiscard]] static redis_value array_value(std::size_t capacity, std::pmr::memory_resource* resource) {
+        return redis_value::array_value(capacity, resource);
+    }
+
+    [[nodiscard]] static std::pmr::vector<redis_value>& elements(redis_value& value) noexcept {
+        return value.array_;
+    }
+
+    // The resource every allocation of `value` comes from.
+    [[nodiscard]] static std::pmr::memory_resource* resource(const redis_value& value) noexcept {
+        return value.array_.get_allocator().resource();
     }
 };
 

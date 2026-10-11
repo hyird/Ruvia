@@ -3,7 +3,7 @@
 #include <cstring>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
@@ -76,7 +76,7 @@ struct http1_interim_header_facts final {
     http1_interim_header_facts& facts, http1_interim_response_prepare_error& error) noexcept {
     for (const auto& header : response.headers()) {
         const auto name = header.name();
-        if (detail::http_ascii_equals_ignore_case(name, "Connection")) {
+        if (http_ascii_equals_ignore_case(name, "Connection")) {
             if (facts.connection_options_.parse_field(header.value(),
                     detail::http_field_list_role::sender, [](std::string_view option) noexcept {
                         return !detail::http_connection_option_conflicts_with_managed_field(option);
@@ -84,7 +84,7 @@ struct http1_interim_header_facts final {
                 error = http1_interim_response_prepare_error::invalid_connection;
                 return false;
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "Upgrade")) {
+        } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
             if (facts.upgrade_protocols_.parse_field(header.value(),
                     detail::http_field_list_role::sender,
                     [](const detail::http_upgrade_protocol&) noexcept { return true; }) !=
@@ -92,7 +92,7 @@ struct http1_interim_header_facts final {
                 error = http1_interim_response_prepare_error::invalid_upgrade;
                 return false;
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "TE")) {
+        } else if (http_ascii_equals_ignore_case(name, "TE")) {
             error = http1_interim_response_prepare_error::te_field_forbidden;
             return false;
         }

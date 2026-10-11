@@ -7,7 +7,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
@@ -17,6 +16,7 @@
 #include "body/http_request_body_facade.h"
 #include "http/request_body_loader.h"
 #include "router/route_table.h"
+#include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
 #include "server/http_server_options.h"
@@ -31,7 +31,7 @@ struct http_lazy_buffered_body_route_state final {
     void emplace(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
         std::pmr::memory_resource* request_resource, std::string_view body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        ruvia::connection_scanner::entry_type& scanner_entry) {
+        connection_scanner::entry_type& scanner_entry) {
         body_.emplace(stream, worker_allocator, request_resource, body_and_pipeline, body_plan, body_limit_value,
             scanner_entry);
     }
@@ -65,12 +65,12 @@ inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_
 }
 
 inline task<http1_session_request_completion> complete_failed_http_body_route(
-    ruvia::connection_scanner::entry_type& scanner_entry, std::exception_ptr exception,
+    connection_scanner::entry_type& scanner_entry, std::exception_ptr exception,
     const http1_server_request_parse_state& parsed_value, const route_table& routes_value,
     request_memory& request_memory_value, context_services exception_services, http_response& response) {
     response = co_await routes_value.handle_exception(
         parsed_value.request_, request_memory_value, exception, exception_services);
-    materialize_response_body(response);
+    response.materialize_body();
     scanner_entry.touch();
     const auto connection_plan =
         require_http1_final_response_commit(response, parsed_value.connection_plan_.require_close());
@@ -83,7 +83,7 @@ inline task<http1_session_request_completion> complete_failed_http_body_route(
 // and the access log not recorded yet, and both still read views that borrow it.
 template <typename take_pipeline_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
-    ruvia::connection_scanner::entry_type& scanner_entry, http_response& response,
+    connection_scanner::entry_type& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
     http1_request_body_consumption body_consumption, std::pmr::string& pipeline_stash,
     take_pipeline_type take_pipeline) {

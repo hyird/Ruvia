@@ -8,15 +8,10 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 
 namespace ruvia::detail {
-
-enum class http_request_target_form : std::uint8_t {
-    origin,
-    absolute,
-    authority,
-    asterisk,
-};
 
 struct request_target_view {
     std::string_view scheme_;
@@ -25,50 +20,6 @@ struct request_target_view {
     std::string_view authority_;
     std::uint16_t default_port_{0};
     http_request_target_form form_{http_request_target_form::origin};
-};
-
-enum class http_authority_port_kind : std::uint8_t {
-    absent,
-    empty,
-    value,
-};
-
-struct http_authority_view_access;
-
-// A validated RFC 3986 authority without userinfo. Keeping an explicit empty
-// port distinct from an absent port is required for syntax-preserving parsing;
-// both map to the scheme default when an HTTP origin is compared.
-class http_authority_view final {
-public:
-    [[nodiscard]] constexpr std::string_view host() const noexcept {
-        return host_;
-    }
-
-    [[nodiscard]] constexpr http_authority_port_kind port_kind() const noexcept {
-        return port_kind_;
-    }
-
-    [[nodiscard]] constexpr std::optional<std::uint16_t> port() const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? std::optional<std::uint16_t>(port_)
-                                                             : std::nullopt;
-    }
-
-    [[nodiscard]] constexpr std::uint16_t effective_port(std::uint16_t default_port) const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? port_ : default_port;
-    }
-
-private:
-    friend struct http_authority_view_access;
-
-    constexpr http_authority_view(
-        std::string_view host, http_authority_port_kind port_kind, std::uint16_t port) noexcept
-        : host_(host),
-          port_(port),
-          port_kind_(port_kind) {}
-
-    std::string_view host_;
-    std::uint16_t port_{0};
-    http_authority_port_kind port_kind_{http_authority_port_kind::absent};
 };
 
 // Validates the byte repertoire shared by the four HTTP request-target forms.
@@ -102,9 +53,6 @@ private:
 // standard bracketed form; IPv6 zone identifiers are not URI syntax (RFC 9844
 // reverted RFC 6874), while IPvFuture remains valid.
 [[nodiscard]] bool is_valid_http_host(std::string_view value) noexcept;
-[[nodiscard]] std::optional<http_authority_view> parse_http_authority(std::string_view value) noexcept;
-template <http_temporary_owning_char_string value_type>
-std::optional<http_authority_view> parse_http_authority(value_type&&) = delete;
 [[nodiscard]] bool http_uri_host_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] bool parse_request_target(
     http_known_method method, std::string_view target, request_target_view& output) noexcept;

@@ -3,7 +3,7 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
-#include "db/db_registry.h"
+#include "db/db_pool.h"
 
 // A streaming query result: the rows arrive one at a time from a pooled
 // connection the result holds for as long as it is active, and every exit --
@@ -37,7 +37,7 @@ db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::s
     : client_(client),
       slot_(slot),
       result_(result_value),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       options_(std::move(options)) {}
 
 class db_stream_result::state_type final {
@@ -56,7 +56,7 @@ public:
 
 db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
     std::pmr::memory_resource* resource, operation_options options)
-    : state_(detail::make_pmr_object<state_type>(
+    : state_(make_pmr_object<state_type>(
           resource, client, slot, result_value, resource, std::move(options))) {}
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept

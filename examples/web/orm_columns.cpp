@@ -14,6 +14,7 @@
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
 
 #include "backend_tls.h"
@@ -43,7 +44,8 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db, db_client& concurrent) {
-    auto items = db.get_repository<line_item>();
+    auto handle = db.handle();
+    auto items = handle.get_repository<line_item>();
     line_item input;
     input.set<"id">(1);
     input.set<"quantity">(3);
@@ -66,12 +68,12 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 
-    auto snapshot = co_await db.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
+    auto snapshot = co_await handle.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
         .access_mode_ = db_transaction_access_mode::read_only});
     auto snapshot_items = snapshot.get_repository<line_item>();
     const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     changes.set<"quantity">(6);
-    co_await concurrent.get_repository<line_item>().update(line_item::column<"id">() == 1, changes);
+    co_await concurrent.handle().get_repository<line_item>().update(line_item::column<"id">() == 1, changes);
     const auto after = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35,
         "repeatable-read snapshot changed after another connection committed");
@@ -85,7 +87,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     require(rejected, "read-only transaction accepted a write");
     // Failed transactions are retired by the backend. A new transaction must
     // retain the server defaults, without inheriting read-only access.
-    auto writable = co_await db.begin_transaction();
+    auto writable = co_await handle.begin_transaction();
     co_await writable.get_repository<line_item>().update(line_item::column<"id">() == 1, changes);
     co_await writable.commit();
     const auto current = co_await items.find_one({.where_ = line_item::column<"id">() == 1});

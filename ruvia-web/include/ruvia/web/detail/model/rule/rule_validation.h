@@ -9,6 +9,7 @@
 
 #include "ruvia/web/detail/model/pattern/pattern_matcher.h"
 #include "ruvia/web/detail/model/pattern/regex_matcher.h"
+#include "ruvia/web/detail/model/rule/numeric_comparison.h"
 #include "ruvia/web/detail/model/rule/rule_support.h"
 
 namespace ruvia::detail::model {
@@ -27,16 +28,14 @@ template <auto bound_type, typename value_t_type>
     if constexpr (model_has_size_rule<value_t_type>()) {
         static_assert(valid_model_size_bound<bound_type>(),
             "size rules require a nonnegative integral bound representable as size_t");
-        return model_size(value) < static_cast<std::size_t>(bound_type);
+        return detail::validation_less(model_size(value), bound_type);
     } else if constexpr (model_has_number_rule<value_t_type>()) {
         using number_t_type = detail::model_scalar_value_t_type<value_t_type>;
         if constexpr (std::is_integral_v<number_t_type>) {
             static_assert(std::is_integral_v<decltype(bound_type)>,
                 "integer fields require an integral bound");
-            return std::cmp_less(value.value_, bound_type);
-        } else {
-            return static_cast<long double>(value.value_) < static_cast<long double>(bound_type);
         }
+        return detail::validation_less(value, bound_type);
     } else {
         static_assert(detail::always_false<value_t_type>,
             "RUVIA_MIN/MAX require a numeric, string, bytes, or array field");
@@ -48,16 +47,14 @@ template <auto bound_type, typename value_t_type>
     if constexpr (model_has_size_rule<value_t_type>()) {
         static_assert(valid_model_size_bound<bound_type>(),
             "size rules require a nonnegative integral bound representable as size_t");
-        return model_size(value) > static_cast<std::size_t>(bound_type);
+        return detail::validation_greater(model_size(value), bound_type);
     } else if constexpr (model_has_number_rule<value_t_type>()) {
         using number_t_type = detail::model_scalar_value_t_type<value_t_type>;
         if constexpr (std::is_integral_v<number_t_type>) {
             static_assert(std::is_integral_v<decltype(bound_type)>,
                 "integer fields require an integral bound");
-            return std::cmp_greater(value.value_, bound_type);
-        } else {
-            return static_cast<long double>(value.value_) > static_cast<long double>(bound_type);
         }
+        return detail::validation_greater(value, bound_type);
     } else {
         static_assert(detail::always_false<value_t_type>,
             "RUVIA_MIN/MAX require a numeric, string, bytes, or array field");

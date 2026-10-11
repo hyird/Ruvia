@@ -16,13 +16,13 @@ bool http2_connection::process_advertisement(const http2_frame_header& header_va
         auto advertisement = decode_http_origin_advertisement({payload_value.data(), payload_value.size()}, resource_);
         if ((advertisement.index() == 0)) {
             reserve_event_slots(1);
-            events_.push_back(http2_event::origin_advertisement(std::move(std::get<0>(advertisement))));
+            events_.push_back(http2_event(std::move(std::get<0>(advertisement))));
         }
     } else {
         auto advertisement = decode_http2_alternative_service(header_value.stream_id_, {payload_value.data(), payload_value.size()}, resource_);
         if ((advertisement.index() == 0)) {
             reserve_event_slots(1);
-            events_.push_back(http2_event::alternative_service_advertisement(std::move(std::get<0>(advertisement))));
+            events_.push_back(http2_event(std::move(std::get<0>(advertisement))));
         }
     }
     return true;

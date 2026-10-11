@@ -31,10 +31,6 @@ public:
                phase_ == http2_sans_io_session_phase::stopping_after_write_failure;
     }
 
-    [[nodiscard]] bool writer_done() const noexcept {
-        return writer_ == writer_state::completed;
-    }
-
     [[nodiscard]] bool writer_join_pending() const noexcept {
         return writer_ == writer_state::submitted;
     }

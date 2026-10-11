@@ -10,14 +10,14 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/quic_types.h"
+#include "ruvia/web/client_tcp_config.h"
+#include "ruvia/web/client_tls_config.h"
 #include "ruvia/web/http3_qpack_config.h"
 #include "ruvia/web/http_client_advertisement_config.h"
 #include "ruvia/web/http_client_push_config.h"
-#include "ruvia/web/tls_peer_verification.h"
 
 namespace ruvia {
 
@@ -69,16 +69,10 @@ struct http_client_config final {
     http3_qpack_config qpack_{};
     http_client_advertisement_config advertisements_{};
     http_client_push_config push_{};
-    tls_peer_verification_policy tls_peer_verification_{tls_peer_verification_policy::verify};
-    tcp_no_delay_policy tcp_no_delay_{tcp_no_delay_policy::enable};
-    tcp_keep_alive_policy tcp_keep_alive_{tcp_keep_alive_policy::enable};
+    // Used for https; client_tls_mode::disabled is rejected (select http instead).
+    client_tls_config tls_{};
+    client_tcp_config tcp_{};
     http_client_received_cookie_policy received_cookies_{http_client_received_cookie_policy::ignore};
-    // TLS file paths must not contain NUL bytes.
-    std::string ca_file_{};
-    std::string certificate_chain_file_{};
-    std::string private_key_file_{};
-    // Binary password bytes, including embedded NUL, are preserved.
-    std::string private_key_password_{};
     std::string user_agent_{"Ruvia"};
     std::vector<std::pair<std::string, std::string>> cookies_{};
 };

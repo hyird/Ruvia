@@ -30,7 +30,7 @@ static_assert(http2_local_settings::enable_push <= 1);
 static_assert(http2_local_settings::enable_connect_protocol <= 1);
 static_assert(http2_local_settings::initial_window_size <= 0x7fffffffU);
 static_assert(http2_local_settings::max_frame_size >= http2_default_max_frame_size);
-static_assert(http2_local_settings::max_frame_size <= http2_max_frame_size_limit);
+static_assert(http2_local_settings::max_frame_size <= http2_max_frame_size);
 
 inline char* http2_write_local_settings_frame(char* out, bool enable_push = false) noexcept {
     out = http2_write_frame_header(

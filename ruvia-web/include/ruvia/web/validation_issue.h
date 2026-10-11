@@ -61,16 +61,11 @@ private:
     friend struct detail::validation_issue_access;
 
     explicit validation_issue(validation_issue_options options)
-        : validation_issue(detail::resolved_pmr_resource_tag{}, options.field_.view(),
+        : validation_issue(resolved_pmr_resource_tag{}, options.field_.view(),
               options.code_.view(), options.message_.view(),
-              detail::pmr_resource_or_default(options.resource_)) {}
+              pmr_resource_or_default(options.resource_)) {}
 
-    validation_issue(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : field_(resource),
-          code_(resource),
-          message_(resource) {}
-
-    validation_issue(detail::resolved_pmr_resource_tag, std::string_view field_name,
+    validation_issue(resolved_pmr_resource_tag, std::string_view field_name,
         std::string_view code_value, std::string_view message_value,
         std::pmr::memory_resource* resource)
         : field_(detail::bounded_validation_text(field_name), resource),

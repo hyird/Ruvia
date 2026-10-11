@@ -56,6 +56,8 @@ public:
     // Records a local candidate-path I/O failure without closing the active path.
     [[nodiscard]] quic_operation_status fail_path_migration(std::uint64_t id) noexcept;
     quic_operation_status receive(const quic_datagram_view& datagram, quic_timestamp now);
+    // If allocating retained CONNECTION_CLOSE storage fails, output is untouched
+    // and the closing connection can retry after allocation recovers.
     quic_packet_result write_packet(std::span<std::byte> output, quic_timestamp now);
     std::optional<quic_timestamp> next_expiry() const noexcept;
     quic_operation_status handle_expiry(quic_timestamp now);

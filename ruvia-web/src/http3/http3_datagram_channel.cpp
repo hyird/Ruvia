@@ -19,14 +19,32 @@ std::size_t checked_credit_capacity(const buffer_pool& pool, std::size_t input_c
     }
     return capacity;
 }
+
+std::size_t checked_acceptor_index(const http3_channel_ready_set& ready, std::size_t index) {
+    if (index >= ready.size()) {
+        throw std::invalid_argument("HTTP/3 channel index is outside its ready set");
+    }
+    return index;
+}
 }  // namespace
 
+http3_channel_ready_set::http3_channel_ready_set(ruvia::worker_notification& notification,
+    std::size_t count, std::pmr::memory_resource* resource)
+    : notification_(notification),
+      flags_(count, resource),
+      words_((count + word_bits - 1) / word_bits, resource) {
+    if (count == 0) {
+        throw std::invalid_argument("HTTP/3 channel ready set requires at least one channel");
+    }
+}
+
 http3_datagram_channel::http3_datagram_channel(buffer_pool& pool,
-    ruvia::worker_notification& acceptor_notification, std::pmr::memory_resource* resource,
-    std::size_t input_capacity, std::size_t output_window)
+    http3_channel_ready_set& acceptor_ready, std::size_t acceptor_index,
+    std::pmr::memory_resource* resource, std::size_t input_capacity, std::size_t output_window)
     : acceptor_owner_(std::this_thread::get_id()),
       pool_(pool),
-      acceptor_notification_(acceptor_notification),
+      acceptor_ready_(acceptor_ready),
+      acceptor_index_(checked_acceptor_index(acceptor_ready, acceptor_index)),
       credit_capacity_(checked_credit_capacity(pool, input_capacity, output_window)),
       input_(input_capacity, resource),
       output_(output_window, resource),
@@ -123,7 +141,7 @@ void http3_datagram_channel::acceptor_poll() noexcept {
         notify_worker();
     }
     if (!credits_.empty()) {
-        (void)acceptor_notification_.notify();
+        signal_acceptor();
     }
     if (input_lifecycle_.stop_requested() && !input_lifecycle_.producer_closed()) {
         acceptor_close();
@@ -238,7 +256,7 @@ bool http3_datagram_channel::worker_send(std::span<const std::byte> bytes_value,
     ++submitted_output_;
     output_.commit_push();
     output_admission_.reset();
-    (void)acceptor_notification_.notify();
+    signal_acceptor();
     return true;
 }
 
@@ -300,7 +318,7 @@ void http3_datagram_channel::worker_stop() noexcept {
         lease.reset();
     }
     if (first_stop) {
-        (void)acceptor_notification_.notify();
+        signal_acceptor();
     }
 }
 
@@ -318,7 +336,7 @@ void http3_datagram_channel::worker_close() noexcept {
     } catch (...) {
         std::terminate();
     }
-    (void)acceptor_notification_.notify();
+    signal_acceptor();
     // Final access. The cold Acceptor check covers notification-before-ACK.
     input_lifecycle_.finalize();
 }
@@ -332,7 +350,7 @@ void http3_datagram_channel::abandon_worker() noexcept {
     }
     input_lifecycle_.request_stop();
     output_lifecycle_.close();
-    (void)acceptor_notification_.notify();
+    signal_acceptor();
 }
 
 bool http3_datagram_channel::acceptor_closed() const noexcept {
@@ -360,7 +378,7 @@ void http3_datagram_channel::return_worker_credit(buffer_credit credit, bool out
     if (!credits_.try_push(returned_credit{std::move(credit), output})) {
         std::terminate();
     }
-    (void)acceptor_notification_.notify();
+    signal_acceptor();
 }
 
 void http3_datagram_channel::acceptor_output_return(void* context_value, buffer_credit credit) noexcept {
@@ -373,7 +391,7 @@ void http3_datagram_channel::acceptor_output_return(void* context_value, buffer_
     --self.issued_output_;
     self.completed_output_.fetch_add(1, std::memory_order_release);
     self.notify_worker();
-    (void)self.acceptor_notification_.notify();
+    self.signal_acceptor();
 }
 
 void http3_datagram_channel::acceptor_pool_return(void* context_value, buffer_credit credit) noexcept {
@@ -423,6 +441,10 @@ void http3_datagram_channel::notify_worker() noexcept {
     if (worker_notification_ && !worker_closed()) {
         (void)worker_notification_->notify();
     }
+}
+
+void http3_datagram_channel::signal_acceptor() noexcept {
+    acceptor_ready_.signal(acceptor_index_);
 }
 
 }  // namespace ruvia::detail

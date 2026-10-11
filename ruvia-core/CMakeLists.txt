@@ -10,7 +10,6 @@ ruvia_collect_cpp_sources(ruvia_core_sources src)
 add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
-ruvia_configure_runtime_library(ruvia-core)
 
 target_include_directories(ruvia-core
     PUBLIC

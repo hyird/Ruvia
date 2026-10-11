@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -113,16 +112,20 @@ struct channel_state final : worker_shutdown_listener {
     channel_state(
         worker_handle target, std::size_t requested_capacity, std::pmr::memory_resource* resource)
         : worker_(std::move(target)),
-          queue_(requested_capacity, resource),
-          mutex_(queue_.synchronization_mutex()) {
+          queue_(requested_capacity, resource) {
         if (!worker_.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
         }
     }
 
+    // The queue lock also guards the lifecycle and waiter fields, so checking
+    // admission and publishing a value stay one critical section.
+    [[nodiscard]] typename mpsc_ring_queue<t_type>::locked_access lock_state() {
+        return queue_.lock();
+    }
+
     worker_handle worker_;
     mpsc_ring_queue<t_type> queue_;
-    std::mutex& mutex_;
     using lifecycle_type = std::variant<channel_open, channel_closed, channel_worker_stopping>;
     lifecycle_type lifecycle_;
     worker_single_wait_awaiter<t_type, channel_state<t_type>>* waiter_{nullptr};
@@ -142,7 +145,7 @@ struct channel_receive_awaiter final {
 
     [[nodiscard]] bool await_ready() {
         auto& owner_value = wait_.state();
-        auto queue = owner_value.queue_.lock();
+        auto queue = owner_value.lock_state();
         if (auto* item = queue.front()) {
             (void)wait_.complete_result(
                 worker_wait_result_access::value(std::move(*item)));
@@ -196,7 +199,7 @@ template <typename t_type>
 
 template <typename t_type>
 void channel_state<t_type>::worker_stopping() noexcept {
-    std::lock_guard lock(mutex_);
+    auto lock = lock_state();
     lifecycle_.template emplace<channel_worker_stopping>();
     complete_worker_single_wait(*this, worker_wait_status::worker_stopping);
 }
@@ -213,7 +216,7 @@ public:
             return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
         }
         {
-            auto queue = state_->queue_.lock();
+            auto queue = state_->lock_state();
             if (std::holds_alternative<detail::channel_closed>(state_->lifecycle_)) {
                 return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
             }
@@ -251,7 +254,7 @@ public:
         if (!state_) {
             return;
         }
-        std::lock_guard lock(state_->mutex_);
+        auto lock = state_->lock_state();
         if (!std::holds_alternative<detail::channel_open>(state_->lifecycle_)) {
             return;
         }
@@ -344,7 +347,7 @@ template <typename t_type>
 // transferring the stable dispatcher endpoint into the channel state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_channel(worker_handle worker_value, channel_options options) {
-    auto* resolved = detail::pmr_resource_or_default(options.resource_);
+    auto* resolved = pmr_resource_or_default(options.resource_);
     std::pmr::polymorphic_allocator<detail::channel_state<t_type>> allocator(resolved);
     auto state_value = std::allocate_shared<detail::channel_state<t_type>>(
         allocator, std::move(worker_value), options.capacity_, resolved);

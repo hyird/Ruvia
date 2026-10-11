@@ -10,7 +10,7 @@
 namespace ruvia {
 
 db_field::db_field(std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       storage_(std::monostate{}) {}
 
 db_field::db_field(const db_field& other, std::pmr::memory_resource* resource)
@@ -26,11 +26,11 @@ db_field::db_field(std::nullptr_t, std::pmr::memory_resource* resource)
     : db_field(resource) {}
 
 db_field::db_field(std::string_view value, std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       storage_(std::in_place_type<std::pmr::string>, value, resource_) {}
 
 db_field::db_field(borrowed_tag_type, std::string_view value, std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       storage_(std::in_place_type<borrowed_text>, value) {}
 
 db_field db_field::borrowed(std::string_view value, std::pmr::memory_resource* resource) {
@@ -75,13 +75,13 @@ std::optional<std::string_view> db_field::value() const& noexcept {
 }
 
 db_row::db_row(std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       storage_(std::in_place_type<owned_fields_type>, resource_),
       column_names_(std::in_place_type<owned_column_names_type>, resource_) {}
 
 db_row::db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
     std::size_t column_count, std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       storage_(std::in_place_type<borrowed_fields_type>, fields_value, size),
       column_names_(std::in_place_type<borrowed_column_names_type>, column_names, column_count) {}
 
@@ -199,9 +199,9 @@ std::span<const std::pmr::string> db_row::column_names() const noexcept {
 }
 
 db_rows::db_rows(std::pmr::memory_resource* resource)
-    : db_rows(detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(resource)) {}
+    : db_rows(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
 
-db_rows::db_rows(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+db_rows::db_rows(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
     : rows_(resource),
       fields_(resource),
       column_names_(resource) {}
@@ -246,10 +246,10 @@ const db_row& db_rows::front() const& noexcept {
 }
 
 db_migration_report::db_migration_report(std::pmr::memory_resource* resource)
-    : db_migration_report(detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(resource)) {}
+    : db_migration_report(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
 
 db_migration_report::db_migration_report(
-    detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+    resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
     : applied_(resource),
       skipped_(resource) {}
 

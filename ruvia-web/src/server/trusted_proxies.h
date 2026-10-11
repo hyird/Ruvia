@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
@@ -21,8 +20,7 @@
 //
 // Addresses are stored here as raw bytes rather than asio types on purpose:
 // this header reaches context_services, which is included nearly everywhere, and
-// must not pull asio in behind it. Parsing and matching live in the .cpp for the
-// same reason rate_limit_key.h keeps its asio dependency out of rate_limiter_type.h.
+// must not pull asio in behind it. Parsing and matching therefore live in the .cpp.
 
 namespace ruvia::detail {
 
@@ -42,9 +40,6 @@ enum class trusted_proxy_parse_error : std::uint8_t { invalid_address,
 // prefix). Returns an error for anything malformed, so a typo in deployment config
 // fails startup instead of silently trusting nothing.
 [[nodiscard]] std::variant<trusted_proxy_block, trusted_proxy_parse_error> parse_trusted_proxy_block(std::string_view cidr) noexcept;
-
-[[nodiscard]] bool trusted_proxy_block_contains(
-    const trusted_proxy_block& block, std::string_view peer_address) noexcept;
 
 // The startup-owned trusted set. Empty means "trust nothing", the default.
 class trusted_proxy_set final {

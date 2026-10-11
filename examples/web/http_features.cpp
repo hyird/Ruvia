@@ -14,6 +14,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
 
 #include "environment.h"
 

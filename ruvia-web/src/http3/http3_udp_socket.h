@@ -13,11 +13,19 @@
 namespace ruvia::detail {
 
 // Owner-affine UDP operations. The socket owns metadata and callback storage,
-// never packet bytes. Both payload borrows last through the completion callback,
-// including cancellation and Windows overlapped retirement.
+// never packet bytes. Every accepted operation's payload borrow lasts through
+// its completion callback, including cancellation and Windows overlapped
+// retirement. Each direction admits a bounded number of concurrent operations
+// whose metadata is reserved at construction; completions arrive in any order.
+// POSIX drains readiness in batches (recvmmsg/sendmmsg on Linux) and posts at
+// most one deferred send flush per batch; Windows keeps one overlapped
+// operation per admitted slot.
 class http3_udp_socket final {
 public:
-    static constexpr std::size_t datagram_buffer_size = 65536;
+    struct operation_limits final {
+        std::size_t receive_{};
+        std::size_t send_{};
+    };
 
     struct receive_view final {
         std::span<const std::byte> bytes_;
@@ -33,7 +41,9 @@ public:
     };
     using send_completion = void (*)(void*, std::error_code, std::size_t) noexcept;
 
-    http3_udp_socket(asio::io_context& network_io, asio::ip::udp::endpoint bind_endpoint);
+    // Both limits must be positive and representable as 32-bit slot indices.
+    http3_udp_socket(asio::io_context& network_io, asio::ip::udp::endpoint bind_endpoint,
+        operation_limits limits);
     ~http3_udp_socket();
     http3_udp_socket(const http3_udp_socket&) = delete;
     http3_udp_socket& operator=(const http3_udp_socket&) = delete;
@@ -42,8 +52,10 @@ public:
 
     void prepare();
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
-    // false accepts no operation and promises no callback. The caller retains
-    // writable storage until the accepted operation's callback retires.
+    // false accepts no operation and promises no callback; that includes every
+    // slot of the direction being busy. The caller retains writable storage
+    // until the accepted operation's callback retires. Callbacks never run
+    // inside these calls.
     [[nodiscard]] bool async_receive(std::span<std::byte> bytes, void* context,
         receive_completion completion) noexcept;
     [[nodiscard]] bool async_send(send_view view, void* context,

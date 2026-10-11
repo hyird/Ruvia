@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ruvia/http/attributes.h"
+#include "ruvia/http/http3_message_body.h"
 #include "ruvia/http/http3_message_head.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_known_method.h"
@@ -15,13 +16,13 @@
 namespace ruvia {
 
 // Owns a decoded HTTP/3 request head and body for the lifetime of its borrowed
-// http_request view. request_resource and body_pool must outlive this owner.
+// http_request view. The head's resource and body_pool must outlive this owner.
 class http3_server_request final {
 public:
-    // Copies all head data before returning. The body is accumulated separately
-    // and is not published through request() until finish_body().
-    http3_server_request(const http3_message_head& callback_head,
-        std::pmr::memory_resource* request_resource, std::pmr::memory_resource* body_pool);
+    // Takes the decoded head (and its Expect state) without copying; request
+    // views borrow its storage. The body is accumulated separately and is not
+    // published through request() until finish_body().
+    http3_server_request(http3_message_head&& head, std::pmr::memory_resource* body_pool);
 
     http3_server_request(const http3_server_request&) = delete;
     http3_server_request& operator=(const http3_server_request&) = delete;
@@ -38,11 +39,7 @@ public:
     }
     std::string_view extended_connect_protocol() const&& = delete;
 
-    [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy policy) const noexcept {
-        const bool content_remaining = !body_complete_ && !body_aborted_ && request_.known_method() != http_known_method::connect &&
-                                       (!head_.content_length_ || *head_.content_length_ > body_.size());
-        return expectations_.server_plan(content_remaining ? http_request_content_indication::will_follow : http_request_content_indication::no_content, policy);
-    }
+    [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy policy) const noexcept;
 
     [[nodiscard]] bool body_complete() const noexcept {
         return body_complete_;
@@ -50,7 +47,13 @@ public:
     [[nodiscard]] std::size_t body_bytes() const noexcept {
         return body_.size();
     }
+    // Rejects forbidden content or bytes beyond Content-Length with
+    // invalid_argument. Allocation failure leaves the append retryable.
     void append_body(std::span<const std::byte> bytes);
+    // Ordinary request bodies must satisfy their declared length. Premature or
+    // repeated completion throws logic_error without publishing a partial body.
+    // CONNECT has no HTTP body: its tunnel_data events use a separate path and
+    // are not constrained by Content-Length metadata retained in its head.
     void finish_body();
     void abort_body() noexcept;
 
@@ -61,8 +64,8 @@ private:
     http3_message_head head_;
     std::pmr::string cookies_;
     std::pmr::vector<std::byte> body_;
+    http3_message_body body_state_;
     http_request request_;
-    http_request_expectations expectations_{};
     bool body_complete_{false};
     bool body_aborted_{false};
 };

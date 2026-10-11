@@ -12,24 +12,32 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_known_method.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/web/detail/middleware/middleware_descriptor.h"
+#include "ruvia/web/error_handlers.h"
 
-#include "router/route_endpoint.h"
+#include "router/route_entry.h"
 
 namespace ruvia::detail {
 
 class route_table;
 class router_impl;
 
-// Process-level immutable lookup metadata. Route handlers and middleware
-// instances remain in each worker's route_table; this plan stores only stable
-// route indices and owned path structure, so every worker can share it safely.
+// The one immutable route plan of a process run, compiled once at startup and
+// shared by every worker: every route with its endpoint metadata, limits and
+// parameter names, the middleware frame layout, the lookup indices, and the
+// error/not-found fallbacks. Workers bind only their own handler targets and
+// middleware instances to it (route_table), by route and frame index.
 class compiled_route_plan final {
 public:
     explicit compiled_route_plan(std::pmr::memory_resource* resource)
         : resource_(pmr_resource_or_default(resource)),
-          identities_(resource_),
+          routes_(resource_),
+          middleware_instances_(resource_),
+          middleware_frame_instances_(resource_),
+          middleware_scopes_(resource_),
+          param_names_(resource_),
           extension_route_indices_(resource_),
+          server_extension_method_tokens_(resource_),
           connect_route_indices_(resource_),
           connect_protocols_(resource_),
           static_slots_(resource_),
@@ -37,7 +45,9 @@ public:
               dynamic_node_type(resource_), dynamic_node_type(resource_), dynamic_node_type(resource_),
               dynamic_node_type(resource_)},
           dynamic_node_arena_(resource_),
-          unmatched_middleware_invokes_(resource_) {}
+          url_patterns_(resource_),
+          prefix_error_handlers_(resource_),
+          prefix_not_found_handlers_(resource_) {}
 
     compiled_route_plan(const compiled_route_plan&) = delete;
     compiled_route_plan& operator=(const compiled_route_plan&) = delete;
@@ -50,52 +60,6 @@ private:
 
     static constexpr std::size_t routable_method_count = 7;
     static constexpr std::size_t no_route_index = std::numeric_limits<std::size_t>::max();
-
-    enum class endpoint_kind_type : std::uint8_t {
-        buffered,
-        response_stream,
-        websocket,
-        tunnel,
-    };
-
-    struct route_identity_type final {
-        explicit route_identity_type(std::pmr::memory_resource* resource)
-            : method_token_(resource),
-              path_(resource),
-              tunnel_protocol_(resource),
-              websocket_subprotocols_(resource),
-              middleware_invokes_(resource),
-              middleware_scopes_(resource) {}
-
-        http_known_method method_{http_known_method::unknown};
-        std::pmr::string method_token_;
-        std::pmr::string path_;
-        std::pmr::string tunnel_protocol_;
-        std::int64_t tunnel_peer_transport_fin_timeout_ms_{5000};
-        bool tunnel_datagrams_{};
-        bool dynamic_{false};
-        endpoint_kind_type endpoint_kind_{endpoint_kind_type::buffered};
-        request_body_mode request_body_mode_{request_body_mode::buffered};
-        bool replay_safe_{};
-        http_response_stream_kind response_stream_kind_{http_response_stream_kind::generic};
-        route_handler_type::invoke_type buffered_invoke_{nullptr};
-        route_stream_handler_type::invoke_type stream_invoke_{nullptr};
-        std::pmr::vector<std::pmr::string> websocket_subprotocols_;
-        std::int64_t websocket_ping_interval_ms_{-1};
-        std::int64_t websocket_pong_timeout_ms_{-1};
-        std::int64_t websocket_close_timeout_ms_{-1};
-        std::int64_t websocket_peer_transport_fin_timeout_ms_{5000};
-        bool websocket_deflate_enabled_{true};
-        int websocket_compression_level_{6};
-        bool websocket_context_takeover_{false};
-        std::size_t max_request_body_bytes_{0};
-        std::int64_t deadline_ms_{0};
-        std::pmr::vector<route_middleware_type::invoke_type> middleware_invokes_;
-        // Parallel to middleware_invokes_: the dispatch-time scope of a
-        // conditional frame, empty for an unconditional one. Borrows the
-        // registration-owned prefix text, which outlives every route plan.
-        std::pmr::vector<std::string_view> middleware_scopes_;
-    };
 
     struct static_route_slot final {
         std::uint64_t hash_{};
@@ -126,15 +90,53 @@ private:
         std::pmr::string protocol_;
         dynamic_node_type root_;
     };
+
+    // Normalized prefix, deepest first: selection is a first-match scan.
+    template <typename handler_type>
+    struct prefix_handler_type final {
+        prefix_handler_type(std::pmr::memory_resource* resource, std::string_view prefix_value,
+            handler_type handler_value)
+            : prefix_(prefix_value, resource),
+              handler_(handler_value) {}
+
+        std::pmr::string prefix_;
+        handler_type handler_{nullptr};
+    };
+
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<route_identity_type> identities_;
+    std::pmr::vector<route_entry> routes_;
+    // Workers construct one controller instance per registrar, in order;
+    // route_entry::controller() indexes them.
+    std::size_t controller_count_{0};
+    // One descriptor per middleware instance a worker materializes. Frames
+    // name their instance by index, so an app-wide middleware is one instance
+    // shared by every route of a worker.
+    std::pmr::vector<controller_middleware_descriptor> middleware_instances_;
+    std::pmr::vector<std::size_t> middleware_frame_instances_;
+    // Parallel to middleware_frame_instances_: the path scope a conditional
+    // frame checks at dispatch, or empty for an unconditional frame. Only
+    // routes flagged has_conditional_middleware() read it. Views borrow the
+    // registration-owned use_at prefixes, which outlive every plan.
+    std::pmr::vector<std::string_view> middleware_scopes_;
+    // A contiguous block at the end of the frames: the app-wide middlewares
+    // that declared they also run when no route matched.
+    std::size_t unmatched_middleware_offset_{0};
+    std::size_t unmatched_middleware_count_{0};
+    std::pmr::vector<std::string_view> param_names_;
     std::pmr::vector<std::size_t> extension_route_indices_;
+    std::pmr::vector<std::string_view> server_extension_method_tokens_;
     std::pmr::vector<std::size_t> connect_route_indices_;
     std::pmr::vector<connect_protocol_index_type> connect_protocols_;
     std::pmr::vector<static_route_slot> static_slots_;
     std::array<dynamic_node_type, routable_method_count> dynamic_roots_;
     std::pmr::vector<dynamic_node_type> dynamic_node_arena_;
-    std::pmr::vector<route_middleware_type::invoke_type> unmatched_middleware_invokes_;
+    // Distinct registered route patterns, sorted, so url_for finds its pattern
+    // by binary search.
+    std::pmr::vector<std::string_view> url_patterns_;
+    http_error_handler_ref_type error_handler_{nullptr};
+    http_not_found_handler_ref_type not_found_handler_{nullptr};
+    std::pmr::vector<prefix_handler_type<http_error_handler_ref_type>> prefix_error_handlers_;
+    std::pmr::vector<prefix_handler_type<http_not_found_handler_ref_type>> prefix_not_found_handlers_;
     std::uint32_t static_method_mask_{0};
     std::uint32_t dynamic_method_mask_{0};
     std::uint32_t allowed_method_mask_{0};

@@ -69,32 +69,40 @@ include(CMakePackageConfigHelpers)
 
 include(cmake/ruvia_targets.cmake)
 
-# Third-party packages. Subdirectories link these lists; ruviaConfig.cmake
-# repeats the matching find_dependency calls for installed consumers.
+# Third-party packages. Each ruvia_find_package call both finds the package for
+# this build and records the identical find_dependency call that
+# ruviaConfig.cmake replays for installed consumers, so the two cannot drift.
+macro(ruvia_find_package component package)
+    find_package(${package} ${ARGN} REQUIRED)
+    string(JOIN " " _ruvia_find_arguments ${package} ${ARGN})
+    string(APPEND RUVIA_${component}_FIND_DEPENDENCIES
+        "        find_dependency(${_ruvia_find_arguments})\n")
+endmacro()
+
 if(RUVIA_BUILD_CORE)
-    find_package(asio CONFIG REQUIRED)
-    find_package(Threads REQUIRED)
+    ruvia_find_package(CORE asio CONFIG)
+    ruvia_find_package(CORE Threads)
     set(RUVIA_CORE_DEPENDENCIES asio::asio Threads::Threads)
 endif()
 if(RUVIA_BUILD_HTTP)
-    find_package(ZLIB REQUIRED)
-    find_package(unofficial-brotli CONFIG REQUIRED)
-    find_package(zstd CONFIG REQUIRED)
-    find_package(ngtcp2 1.25.0 CONFIG REQUIRED)
+    ruvia_find_package(HTTP ZLIB)
+    ruvia_find_package(HTTP unofficial-brotli CONFIG)
+    ruvia_find_package(HTTP zstd CONFIG)
+    ruvia_find_package(HTTP ngtcp2 1.25.0 CONFIG)
     set(RUVIA_HTTP_DEPENDENCIES ZLIB::ZLIB unofficial::brotli::brotlienc
         unofficial::brotli::brotlidec zstd::libzstd ngtcp2::ngtcp2_static)
 endif()
 if(RUVIA_BUILD_WEB)
     # OpenSSL 3.5 introduced the external QUIC TLS callbacks used by HTTP/3.
-    find_package(OpenSSL 3.5 REQUIRED COMPONENTS SSL Crypto)
+    ruvia_find_package(WEB OpenSSL 3.5 COMPONENTS SSL Crypto)
     set(RUVIA_WEB_DEPENDENCIES OpenSSL::SSL OpenSSL::Crypto)
     set(RUVIA_OPENSSL_DEFINITIONS OPENSSL_API_COMPAT=30000 OPENSSL_NO_DEPRECATED)
     if(RUVIA_ENABLE_MARIADB)
-        find_package(unofficial-libmariadb CONFIG REQUIRED)
+        ruvia_find_package(WEB unofficial-libmariadb CONFIG)
         list(APPEND RUVIA_WEB_DEPENDENCIES unofficial::libmariadb)
     endif()
     if(RUVIA_ENABLE_POSTGRESQL)
-        find_package(PostgreSQL REQUIRED)
+        ruvia_find_package(WEB PostgreSQL)
         list(APPEND RUVIA_WEB_DEPENDENCIES PostgreSQL::PostgreSQL)
         # vcpkg's static libpq splits frontend symbols between the cyclic
         # pgcommon/pgport pair, which GNU linkers must rescan.
@@ -104,7 +112,7 @@ if(RUVIA_BUILD_WEB)
         endif()
     endif()
     if(RUVIA_ENABLE_REDIS)
-        find_package(hiredis CONFIG REQUIRED)
+        ruvia_find_package(WEB hiredis CONFIG)
         list(APPEND RUVIA_WEB_DEPENDENCIES hiredis::hiredis)
     endif()
 endif()

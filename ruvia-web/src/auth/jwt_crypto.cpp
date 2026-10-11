@@ -5,7 +5,6 @@
 
 #include <openssl/evp.h>
 
-#include "ruvia/core/constant_time.h"
 
 #include "auth/jwt_primitives.h"
 
@@ -74,10 +73,6 @@ std::pmr::string jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
     }
     return jwt_base64_url_encode(
         std::string_view(reinterpret_cast<const char*>(digest.data()), length), resource);
-}
-
-bool jwt_constant_time_equals(std::string_view left, std::string_view right) noexcept {
-    return ruvia::constant_time_bytes_equal(left, right);
 }
 
 }  // namespace ruvia::detail

@@ -17,68 +17,67 @@ namespace ruvia::detail {
 
 void configure_http_client_response_decoding(http_client_response_state& state_value) {
     state_value.body_decode_required_ = false;
+    state_value.content_coding_.reset();
     const auto* plan = state_value.response_body_plan_ ? &*state_value.response_body_plan_ : nullptr;
     if (plan == nullptr || plan->body_suppressed() || !plan->status_allows_body() ||
-        plan->content_semantics() != http_response_content_semantics_type::with_content) {
+        plan->content_semantics() != http_response_content_semantics::with_content) {
         return;
     }
-    const auto parsed_coding = parse_http_content_coding_headers(state_value.headers_, state_value.resource_);
-    const auto codings = parsed_coding.codings();
-    const bool transforms_body =
-        std::ranges::any_of(codings, [](http_content_coding coding) {
-            return coding != http_content_coding::identity;
-        });
-    state_value.body_decode_required_ = parsed_coding.invalid() != nullptr ||
-                                        parsed_coding.unsupported() != nullptr || transforms_body;
+    // Parsed once with the final head; decoding reuses this result at FIN.
+    auto& parsed_coding = state_value.content_coding_.emplace(
+        parse_http_content_coding_headers(state_value.headers_, state_value.resource_));
+    const bool transforms_body = std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
+        return coding != http_content_coding::identity;
+    });
+    state_value.body_decode_required_ =
+        parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr || transforms_body;
     if (state_value.body_decode_required_) {
         state_value.collect_all_ = true;
+    } else {
+        state_value.content_coding_.reset();
     }
 }
 
-void decode_http_client_response_content_encoding(http_client_response_state& state_value,
+void decode_http_client_response_body(http_client_response_state& state_value,
     bool content_semantics_present, std::size_t max_decoded_bytes) {
-    auto* const resource = state_value.resource_;
     if (!content_semantics_present || !state_value.body_decode_required_) {
         return;
     }
-    const auto* plan = state_value.response_body_plan_ ? &*state_value.response_body_plan_ : nullptr;
-    if (plan == nullptr || plan->body_suppressed() || !plan->status_allows_body() ||
-        plan->content_semantics() != http_response_content_semantics_type::with_content) {
-        return;
-    }
-    if (resource == nullptr || state_value.offset_ > state_value.buffered_.size()) {
-        throw std::invalid_argument("HTTP response decoder requires valid worker-owned storage");
+    auto* const resource = state_value.resource_;
+    if (resource == nullptr || state_value.offset_ > state_value.buffered_.size() ||
+        !state_value.content_coding_.has_value()) {
+        throw std::invalid_argument("HTTP response decoder requires a configured worker-owned response");
     }
 
     try {
-        const auto parsed_coding = parse_http_content_coding_headers(state_value.headers_, resource);
-        const auto codings = parsed_coding.codings();
+        const auto& parsed_coding = *state_value.content_coding_;
         if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
             throw http_client_error(http_client_error::code_type::protocol_error,
                 "unsupported HTTP response Content-Encoding");
         }
-        const bool transforms_body =
-            std::ranges::any_of(codings, [](http_content_coding coding) {
-                return coding != http_content_coding::identity;
-            });
-        if (!transforms_body) {
-            state_value.body_decode_required_ = false;
-            return;
-        }
-
+        // Encoded bytes are never exposed, so the unread part of buffered_ and
+        // pending_ together are the whole body. Decode in place when one holds it.
         const auto buffered_bytes = state_value.buffered_.size() - state_value.offset_;
-        if (state_value.pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_bytes) {
-            throw http_client_error(http_client_error::code_type::response_too_large,
-                "HTTP response exceeds configured byte limit");
+        std::pmr::string joined(resource);
+        std::string_view encoded;
+        if (state_value.pending_.empty()) {
+            encoded = std::string_view(state_value.buffered_).substr(state_value.offset_);
+        } else if (buffered_bytes == 0) {
+            encoded = state_value.pending_;
+        } else {
+            if (state_value.pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_bytes) {
+                throw http_client_error(http_client_error::code_type::response_too_large,
+                    "HTTP response exceeds configured byte limit");
+            }
+            joined.reserve(buffered_bytes + state_value.pending_.size());
+            joined.append(state_value.buffered_.data() + state_value.offset_, buffered_bytes);
+            joined.append(state_value.pending_);
+            encoded = joined;
         }
-        std::pmr::string encoded(resource);
-        encoded.reserve(buffered_bytes + state_value.pending_.size());
-        encoded.append(state_value.buffered_.data() + state_value.offset_, buffered_bytes);
-        encoded.append(state_value.pending_);
 
         const auto decoded_limit = std::min(max_decoded_bytes, state_value.buffered_limit_);
         auto decoded = decode_http_content(
-            codings, encoded, {.max_decoded_bytes_ = decoded_limit, .resource_ = resource});
+            parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit, .resource_ = resource});
         if (auto* content = decoded.decoded()) {
             auto decoded_body = std::move(*content).take_bytes();
             if (!state_value.replace_producer_body_bytes(decoded_body.size())) {
@@ -92,6 +91,7 @@ void decode_http_client_response_content_encoding(http_client_response_state& st
             state_value.buffered_.swap(decoded_body);
             state_value.offset_ = 0;
             state_value.body_decode_required_ = false;
+            state_value.content_coding_.reset();
             state_value.notify_producer_space();
             return;
         }
@@ -109,6 +109,7 @@ void decode_http_client_response_content_encoding(http_client_response_state& st
     } catch (...) {
         // Encoded bytes were never exposed: the head selected collection before
         // waking any consumer. Release that retained input on every decode error.
+        state_value.content_coding_.reset();
         state_value.discard_response_body();
         throw;
     }

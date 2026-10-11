@@ -23,6 +23,20 @@ namespace ruvia::detail {
     throw std::runtime_error("transfer-coding decoder failure");
 }
 
+// Classifies a decode result that produced no output: returns when the decoder
+// completed or needs more input, throws for every failure.
+inline void require_transfer_coding_progress(const http_transfer_coding_decode_result& result_value) {
+    if (const auto* failure = result_value.failure()) {
+        throw_transfer_coding_protocol_failure(*failure);
+    }
+    if (result_value.decoder_failure() != nullptr) {
+        throw_http_transfer_coding_decoder_failure();
+    }
+    if (result_value.complete() == nullptr && result_value.need_input() == nullptr) {
+        throw std::logic_error("unexpected transfer-coding decode result");
+    }
+}
+
 inline void require_complete_transfer_coding(http_transfer_coding_stack_decoder& decoder) {
     const auto finish_result = decoder.finish_input();
     if (finish_result.complete() != nullptr) {

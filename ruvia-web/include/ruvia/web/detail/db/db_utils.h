@@ -10,18 +10,18 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/number_format.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
 namespace ruvia::detail {
 
 inline void append_db_number(std::pmr::string& output, std::int64_t value) {
-    append_formatted_number(output, value, "failed to format signed database value");
+    http_append_formatted_number(output, value, "failed to format signed database value");
 }
 
 inline void append_db_number(std::pmr::string& output, std::uint64_t value) {
-    append_formatted_number(output, value, "failed to format unsigned database value");
+    http_append_formatted_number(output, value, "failed to format unsigned database value");
 }
 
 inline void append_db_number(std::pmr::string& output, double value) {
@@ -29,7 +29,7 @@ inline void append_db_number(std::pmr::string& output, double value) {
     // not valid SQL numeric literals and would be spliced unquoted into the
     // statement. Reject them up front with a clear error instead of letting the
     // server fail on malformed SQL.
-    append_formatted_finite_number(output, value, "database double value must be finite",
+    http_append_formatted_finite_number(output, value, "database double value must be finite",
         "database double value cannot be formatted");
 }
 
@@ -72,12 +72,12 @@ inline void append_db_number(std::pmr::string& output, double value) {
 
 [[nodiscard]] inline db_driver db_pool_driver([[maybe_unused]] const db_pool_ref_type& pool) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<mariadb_pool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool); client != nullptr && *client != nullptr) {
         return db_driver::mariadb;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<postgresql_pool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool); client != nullptr && *client != nullptr) {
         return db_driver::postgresql;
     }
 #endif
@@ -90,13 +90,13 @@ inline void append_db_number(std::pmr::string& output, double value) {
 template <typename visitor_type>
 decltype(auto) visit_db_pool([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<mariadb_pool*>(&pool);
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
         client != nullptr && *client != nullptr) {
         return std::forward<visitor_type>(visitor)(**client);
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<postgresql_pool*>(&pool);
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
         client != nullptr && *client != nullptr) {
         return std::forward<visitor_type>(visitor)(**client);
     }
@@ -109,14 +109,14 @@ decltype(auto) visit_db_pool([[maybe_unused]] const db_pool_ref_type& pool, [[ma
 template <typename visitor_type>
 void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<mariadb_pool*>(&pool);
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
         client != nullptr && *client != nullptr) {
         std::forward<visitor_type>(visitor)(**client);
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<postgresql_pool*>(&pool);
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
         client != nullptr && *client != nullptr) {
         std::forward<visitor_type>(visitor)(**client);
     }

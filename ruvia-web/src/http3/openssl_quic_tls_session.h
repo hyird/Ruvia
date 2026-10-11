@@ -3,7 +3,6 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
-#include <span>
 #include <string_view>
 
 #include <openssl/ssl.h>
@@ -18,8 +17,10 @@ public:
         void operator()(SSL_SESSION* session) const noexcept;
     };
 
+    // Client sessions offer exactly the h3 ALPN list; servers select it through
+    // their context callback.
     openssl_quic_tls_session(SSL_CTX* context_value, quic_role role,
-        std::span<const unsigned char> alpn, std::string_view peer_host = {},
+        std::string_view peer_host = {},
         std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
         SSL_SESSION* resumption_session = nullptr, bool enable_early_data = false);
     ~openssl_quic_tls_session() noexcept;

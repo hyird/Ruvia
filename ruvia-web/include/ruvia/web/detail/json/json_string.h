@@ -7,8 +7,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/hex.h"
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
 #include "ruvia/web/detail/json/json_lex.h"
 
@@ -23,7 +23,7 @@ namespace ruvia::detail {
     }
     value = 0;
     for (std::size_t i = 0; i < 4; ++i) {
-        const auto hex = ::ruvia::decode_hex_nibble(input[i]);
+        const auto hex = http_decode_hex_nibble(input[i]);
         if (hex < 0) {
             return false;
         }

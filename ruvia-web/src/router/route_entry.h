@@ -1,21 +1,31 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_known_method.h"
 
 #include "router/route_endpoint.h"
 
-// One registered route: its method and path, the endpoint it runs, its captured
-// parameter names, and the slice of the table's middleware it inherits.
+// One registered route of the process route plan: its method and path, the
+// endpoint it runs, its admission limits, its captured parameter names, and the
+// slice of the plan's middleware frames it inherits. Immutable once the plan is
+// compiled and shared by every worker; the worker-bound handler target lives in
+// each worker's route_table at index().
 
 namespace ruvia::detail {
 
 class route_entry final {
 public:
     struct init_type final {
+        std::size_t index_{0};
+        // Registration-order slot of the controller whose instance is the
+        // handler target on every worker.
+        std::size_t controller_{0};
         http_known_method method_;
         // Non-empty only for an extension-method route, where it is the exact,
         // case-sensitive wire token (RFC 9110 9.1) and `method` is unknown.
@@ -29,16 +39,21 @@ public:
         std::size_t max_request_body_bytes_{0};
         // 0 = no route-declared deadline; the app-wide one applies.
         std::int64_t deadline_ms_{0};
-        std::size_t middleware_offset_{0};
-        std::size_t middleware_count_{0};
     };
 
     route_entry(std::pmr::memory_resource* resource, init_type init);
-    route_entry(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource, init_type init);
     route_entry(const route_entry&) = delete;
     route_entry& operator=(const route_entry&) = delete;
     route_entry(route_entry&&) noexcept = default;
     route_entry& operator=(route_entry&&) = delete;
+
+    [[nodiscard]] std::size_t index() const noexcept {
+        return index_;
+    }
+
+    [[nodiscard]] std::size_t controller() const noexcept {
+        return controller_;
+    }
 
     [[nodiscard]] http_known_method method() const noexcept {
         return method_;
@@ -96,17 +111,11 @@ public:
         return conditional_middleware_;
     }
 
-    void set_middleware_range(std::size_t offset, std::size_t count, bool conditional) noexcept {
-        middleware_offset_ = offset;
-        middleware_count_ = count;
-        conditional_middleware_ = conditional;
-    }
-
-    void set_param_names(std::span<const std::string_view> names) noexcept {
-        param_names_ = names;
-    }
-
 private:
+    friend class router_impl;
+
+    std::size_t index_;
+    std::size_t controller_;
     http_known_method method_;
     std::pmr::string method_token_;
     std::pmr::string path_;

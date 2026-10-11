@@ -4,6 +4,7 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "util/http_text_overlap.h"
 #include "websocket/http_websocket_close_payload.h"
 #include "websocket/http_websocket_frame_reader.h"
 
@@ -40,7 +41,7 @@ ws_connection::ws_connection(std::pmr::string& input, protocol_byte_limit messag
         const bool receive_takeover = !(server ? compression.client_no_context_takeover_ : compression.server_no_context_takeover_);
         const int send_window = (server ? compression.server_max_window_bits_ : compression.client_max_window_bits_).value_or(15);
         const int receive_window = (server ? compression.client_max_window_bits_ : compression.server_max_window_bits_).value_or(15);
-        deflate_.emplace(compression_level, send_takeover, receive_takeover, send_window, receive_window);
+        deflate_.emplace(input.get_allocator().resource(), compression_level, send_takeover, receive_takeover, send_window, receive_window);
     }
 }
 
@@ -137,15 +138,11 @@ void ws_connection::release_consumed_input() noexcept {
 
 void ws_connection::append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1) {
     std::pmr::string owned_payload(out_buffer_.get_allocator().resource());
-    if (!payload_value.empty() && !out_buffer_.empty()) {
-        const auto payload_address = reinterpret_cast<std::uintptr_t>(payload_value.data());
-        const auto buffer_address = reinterpret_cast<std::uintptr_t>(out_buffer_.data());
-        if (payload_address >= buffer_address && payload_address - buffer_address < out_buffer_.size()) {
-            // output_plan() exposes a borrowed view. Copy only for this aliasing
-            // case so reserve() below cannot invalidate its own append source.
-            owned_payload.assign(payload_value);
-            payload_value = owned_payload;
-        }
+    if (http_text_overlaps(payload_value, {out_buffer_.data(), out_buffer_.size() + 1})) {
+        // output_plan() exposes a borrowed view. Copy only for this aliasing
+        // case so reserve() below cannot invalidate its own append source.
+        owned_payload.assign(payload_value);
+        payload_value = owned_payload;
     }
     websocket_frame_header_type header;
     const bool masked = role_ == websocket_connection_role::client;
@@ -222,18 +219,34 @@ websocket_frame_submit_status ws_connection::submit_frame(websocket_opcode opcod
     if (control_frame && payload_value.size() > 125) {
         return websocket_frame_submit_status::control_frame_too_large;
     }
-    bool rsv1 = false;
-    if (data_frame && compress && deflate_.has_value()) {
-        outbound_deflated_.clear();
-        if (deflate_->compress(payload_value, outbound_deflated_) &&
-            outbound_deflated_.size() < payload_value.size()) {
-            payload_value = outbound_deflated_;
-            rsv1 = true;
-        } else {
-            deflate_->discard_compression();
+    const bool compression_attempted = data_frame && compress && deflate_.has_value();
+    try {
+        bool rsv1 = false;
+        if (compression_attempted) {
+            outbound_deflated_.clear();
+            if (deflate_->compress(payload_value, outbound_deflated_) &&
+                outbound_deflated_.size() < payload_value.size()) {
+                payload_value = outbound_deflated_;
+                rsv1 = true;
+            } else {
+                deflate_->discard_compression();
+            }
         }
+        append_frame(opcode, payload_value, rsv1);
+    } catch (...) {
+        if (compression_attempted) {
+            // The peer never received this trial. Do not let a later message
+            // refer to its dictionary, including after output allocation or
+            // mask generation fails. A reset failure makes reuse unsafe.
+            try {
+                deflate_->discard_compression();
+            } catch (...) {
+                close_phase_ = close_phase_type::closed;
+                throw;
+            }
+        }
+        throw;
     }
-    append_frame(opcode, payload_value, rsv1);
     return websocket_frame_submit_status::accepted;
 }
 

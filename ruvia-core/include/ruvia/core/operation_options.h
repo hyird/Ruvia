@@ -17,8 +17,6 @@ struct operation_options final {
     stop_token stop_token_{};
 };
 
-namespace detail {
-
 inline void validate_operation_options(const operation_options& options) {
     if (options.timeout_.has_value() && options.timeout_->count() <= 0) {
         throw std::invalid_argument("operation timeout must be greater than zero");
@@ -35,7 +33,5 @@ inline void validate_operation_options(const operation_options& options) {
     merged.stop_token_ = combine_stop_tokens(base.stop_token_, std::move(overrides.stop_token_));
     return merged;
 }
-
-}  // namespace detail
 
 }  // namespace ruvia

@@ -5,12 +5,33 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
+#include <variant>
+
+#include "ruvia/http/http3_var_int.h"
 
 #include "http3/quic_connection_state.h"
 #include "http3/quic_crypto_bridge.h"
 
 namespace ruvia {
 namespace {
+
+std::uint64_t peer_idle_timeout_ms(std::span<const std::byte> validated_parameters) {
+    constexpr std::uint64_t idle_timeout_parameter = 0x01;
+    auto remaining = std::span<const char>(
+        reinterpret_cast<const char*>(validated_parameters.data()), validated_parameters.size());
+    std::uint64_t idle_timeout{};
+    while (!remaining.empty()) {
+        const auto identifier = std::get<http3_var_int>(decode_http3_var_int(remaining));
+        remaining = remaining.subspan(identifier.encoded_bytes_);
+        const auto length = std::get<http3_var_int>(decode_http3_var_int(remaining));
+        remaining = remaining.subspan(length.encoded_bytes_);
+        if (identifier.value_ == idle_timeout_parameter) {
+            idle_timeout = std::get<http3_var_int>(decode_http3_var_int(remaining)).value_;
+        }
+        remaining = remaining.subspan(static_cast<std::size_t>(length.value_));
+    }
+    return idle_timeout;
+}
 
 ngtcp2_encryption_level to_ngtcp2_level(quic_encryption_level level) {
     switch (level) {
@@ -71,6 +92,19 @@ void quic_tls_handshake::submit_peer_transport_parameters(
         state_->connection_, reinterpret_cast<const uint8_t*>(encoded_parameters.data()),
         encoded_parameters.size());
     if (result_value == 0) {
+        if (state_->peer_transport_parameters_set_) {
+            return;
+        }
+        auto idle_timeout = state_->config_.local_transport_parameters_.idle_timeout_ms_;
+        // ngtcp2 has validated the complete block. Read the advertised milliseconds
+        // directly because its native nanosecond duration cannot represent every wire value.
+        const auto peer_idle_timeout = peer_idle_timeout_ms(encoded_parameters);
+        // RFC 9000 section 10.1: zero disables only that endpoint's limit.
+        if (idle_timeout == 0 || (peer_idle_timeout != 0 && peer_idle_timeout < idle_timeout)) {
+            idle_timeout = peer_idle_timeout;
+        }
+        state_->negotiated_idle_timeout_ms_ = idle_timeout;
+        state_->peer_transport_parameters_set_ = true;
         return;
     }
 

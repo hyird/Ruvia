@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/detail/server/http_response_write_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"

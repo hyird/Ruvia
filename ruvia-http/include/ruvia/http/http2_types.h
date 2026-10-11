@@ -15,6 +15,18 @@ enum class http2_finish_request_status : std::uint8_t {
     invalid_trailer,
 };
 
+enum class http2_finish_response_status : std::uint8_t {
+    accepted,
+    queued,
+    // The stream disappeared or was reset while its owner was finishing it.
+    closed,
+    // The stream is not in an open response body/trailers phase, or a
+    // trailers-only response has no submitted terminal section.
+    invalid_state,
+    // The response remains body-open so the caller can submit the missing bytes.
+    content_length_incomplete,
+};
+
 enum class http2_role : std::uint8_t {
     server,
     client,

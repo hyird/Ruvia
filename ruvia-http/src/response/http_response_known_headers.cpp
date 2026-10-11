@@ -2,21 +2,15 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
+#include "ruvia/http/http_ascii.h"
 
 namespace ruvia::detail {
-namespace {
-
-[[nodiscard]] unsigned char lower_ascii(unsigned char c) noexcept {
-    return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
-}
-
-}  // namespace
 
 std::uint32_t classify_response_header_name(std::string_view name) noexcept {
     if (name.empty()) {
         return 0;
     }
-    const auto first = lower_ascii(static_cast<unsigned char>(name.front()));
+    const auto first = http_ascii_to_lower(static_cast<unsigned char>(name.front()));
     switch (name.size()) {
         case 4:
             switch (first) {

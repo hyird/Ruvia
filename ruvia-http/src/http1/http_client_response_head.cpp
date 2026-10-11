@@ -10,9 +10,8 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 
 #include "client/http_client_response_head.h"
-#include "coding/http_content_coding.h"
 #include "field/http_interim_response_validation.h"
-#include "field/http_media_type.h"
+#include "field/response_field_validation.h"
 
 namespace ruvia::detail {
 
@@ -95,17 +94,18 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);
     http_interim_response_header_validator interim_headers(http_field_list_role::recipient);
-    const bool framing_fields_apply = content_semantics == http_response_content_semantics_type::with_content;
+    response_field_state response_fields;
+    const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
     const bool reset_content_requires_empty =
         output.status_code_ == http_status::reset_content &&
-        content_semantics != http_response_content_semantics_type::connect_tunnel;
+        content_semantics != http_response_content_semantics::connect_tunnel;
     // RFC 9112 section 6.3 rule 1 ends 1xx, 204, 304 and HEAD responses at the
     // header section whatever framing fields they carry, so a recipient ignores
     // them rather than rejecting a message it can still delimit exactly. HEAD
     // and 304 Content-Length still describes the selected representation.
     const bool content_length_describes_representation =
         framing_fields_apply || reset_content_requires_empty ||
-        (content_semantics == http_response_content_semantics_type::without_content &&
+        (content_semantics == http_response_content_semantics::without_content &&
             output.status_code_ != http_status::no_content);
 
     auto remaining = first_line_end == std::string_view::npos ? std::string_view{}
@@ -121,7 +121,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
         const auto name = line.substr(0, colon);
         const auto value = http_trim_ows(line.substr(colon + 1));
-        const bool fields_valid = content_semantics == http_response_content_semantics_type::informational
+        const bool fields_valid = content_semantics == http_response_content_semantics::informational
                                       ? interim_field_acceptable(interim_headers.validate(name, value))
                                       : is_valid_http_header_name(name) && is_valid_http_header_value(value);
         if (!fields_valid) {
@@ -129,6 +129,11 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         }
         if (output.header_count_ == max_http_header_fields) {
             return http1_client_response_parse_error::too_many_headers;
+        }
+        if (content_semantics != http_response_content_semantics::informational &&
+            validate_response_field(classify_request_header(name), value, http_field_list_role::recipient,
+                response_fields) != response_field_status::ok) {
+            return http1_client_response_parse_error::invalid_header;
         }
         output.headers_[output.header_count_++] = http_header_view{name, value};
 
@@ -146,19 +151,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                         return http1_client_response_parse_error::conflicting_content_length;
                 }
             }
-        } else if (http_ascii_equals_ignore_case(name, "Content-Type")) {
-            if (output.content_type_field_present_ || !is_valid_http_content_type_field_value(value)) {
-                return http1_client_response_parse_error::invalid_header;
-            }
-            output.content_type_field_present_ = true;
-        } else if (http_ascii_equals_ignore_case(name, "Content-Encoding")) {
-            if (!is_valid_http_content_encoding_field_value(value, http_field_list_role::recipient)) {
-                return http1_client_response_parse_error::invalid_header;
-            }
         } else if (http_ascii_equals_ignore_case(name, "Trailer")) {
-            if (!is_valid_http_response_trailer_field_value(value, http_field_list_role::recipient)) {
-                return http1_client_response_parse_error::invalid_header;
-            }
             if (!http_find_header_token(value, [](std::string_view) noexcept {
                     return true;
                 }).empty()) {
@@ -210,7 +203,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     if (output.upgrade_protocols_.has_field() && !output.connection_options_.upgrade()) {
         return http1_client_response_parse_error::invalid_connection;
     }
-    if (output.non_empty_trailer_header_present_) {
+    if (framing_fields_apply && output.non_empty_trailer_header_present_) {
         const auto& transfer_encoding = output.transfer_encoding_.value();
         if (!transfer_encoding.has_value() || transfer_encoding->final_chunked() == nullptr) {
             return http1_client_response_parse_error::invalid_header;

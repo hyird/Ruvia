@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/native_path.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/web/static_files.h"
 
@@ -57,7 +57,7 @@ struct static_root_entry final {
           memory_variants_(resource) {}
 
     std::pmr::string relative_path_;
-    ruvia::native_path_string_type file_path_;
+    http_native_path_string_type file_path_;
     std::pmr::string content_type_;
     std::uint64_t size_{0};
     http_response_file_identity identity_{http_response_file_identity::unchecked()};
@@ -70,7 +70,7 @@ struct static_root_entry final {
 };
 
 struct static_root_state final {
-    ruvia::native_path_string_type root_;
+    http_native_path_string_type root_;
     static_root_config_storage config_;
     std::pmr::vector<static_root_entry> entries_;
     std::pmr::vector<std::pmr::string> directories_;
@@ -142,7 +142,7 @@ private:
 
 class static_root_entry_view final {
 public:
-    [[nodiscard]] const ruvia::native_path_char_type* file_path() const noexcept {
+    [[nodiscard]] const http_native_path_char_type* file_path() const noexcept {
         return file_path_;
     }
 
@@ -204,7 +204,7 @@ public:
 private:
     friend class static_root_access;
 
-    static_root_entry_view(const ruvia::native_path_char_type* file_path, std::string_view content_type_value,
+    static_root_entry_view(const http_native_path_char_type* file_path, std::string_view content_type_value,
         std::string_view cache_control_value, std::string_view etag, std::string_view last_modified,
         std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token,
         std::time_t modified_seconds, static_range_request_policy range_requests,
@@ -224,7 +224,7 @@ private:
           directly_servable_(directly_servable),
           memory_variants_(memory_variants) {}
 
-    const ruvia::native_path_char_type* file_path_;
+    const http_native_path_char_type* file_path_;
     std::string_view content_type_;
     std::string_view cache_control_;
     std::string_view etag_;

@@ -1,6 +1,5 @@
 #include "server/http_response_compression.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>

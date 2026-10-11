@@ -43,8 +43,8 @@ public:
     }
 
     [[nodiscard]] static file_response_path copying_native(
-        const ruvia::native_path_char_type* path, http_response_file_identity identity) {
-        if (path == nullptr || *path == ruvia::native_path_char_type{}) {
+        const http_native_path_char_type* path, http_response_file_identity identity) {
+        if (path == nullptr || *path == http_native_path_char_type{}) {
             throw std::logic_error("static file entry has no native path");
         }
         return copying(std::filesystem::path(path), identity);

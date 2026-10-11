@@ -1,14 +1,13 @@
-#include <memory_resource>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/config_validation.h"
-#include "ruvia/core/native_path.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/web/server_config.h"
 
 #include "app/app_config_mutation.h"
 #include "http/static_file_types.h"
 #include "http/static_root_options_validation.h"
+#include "util/config_validation.h"
 
 namespace ruvia {
 
@@ -16,7 +15,7 @@ namespace {
 
 [[nodiscard]] detail::static_root_precompression_options make_static_root_precompression_options(
     const document_root_config& config) {
-    ruvia::ensure_positive_size(config.precompress_min_bytes_,
+    detail::ensure_positive_size(config.precompress_min_bytes_,
         "document root precompression minimum size must be greater than zero");
     if (config.precompress_max_bytes_ < config.precompress_min_bytes_) {
         throw std::invalid_argument(
@@ -37,7 +36,7 @@ application& application::compression(compression_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change compression config while app is running",
         [config = std::move(config)](detail::app_state& state_value) mutable {
-            ruvia::ensure_positive_size(
+            detail::ensure_positive_size(
                 config.min_bytes_, "compression minimum size must be greater than zero");
             if (config.sync_bytes_ < config.min_bytes_) {
                 throw std::invalid_argument(
@@ -76,7 +75,7 @@ application& application::document_root(document_root_config config) {
             if (config.root_.empty()) {
                 throw std::invalid_argument("document root must not be empty");
             }
-            ruvia::ensure_positive_duration(config.runtime_.refresh_interval_,
+            detail::ensure_positive_duration(config.runtime_.refresh_interval_,
                 "document root refresh interval must be greater than zero");
             if (config.static_options_.index_file_.empty()) {
                 config.static_options_.index_file_ = "index.html";
@@ -87,7 +86,7 @@ application& application::document_root(document_root_config config) {
             detail::app_document_root_config replacement(
                 detail::app_resource(), detail::store_validated_static_root_config(
                                             config.static_options_, detail::app_resource()));
-            ruvia::assign_native_path(replacement.root_, config.root_);
+            http_assign_native_path(replacement.root_, config.root_);
             replacement.runtime_ = config.runtime_;
             replacement.precompression_ = precompression;
 

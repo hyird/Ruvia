@@ -22,13 +22,9 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_scheme.h"
 
 namespace ruvia {
-
-enum class http_scheme : std::uint8_t {
-    http,
-    https,
-};
 
 // Transport-independent sender policy for RFC 9110's only standardized
 // request expectation. HTTP/1 and HTTP/2 writers both own generation of the

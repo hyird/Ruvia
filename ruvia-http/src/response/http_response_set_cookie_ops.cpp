@@ -2,7 +2,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_set_cookie.h"
@@ -41,7 +41,7 @@ namespace {
            parsed_value->has(http_set_cookie_attribute::path) == has_path &&
            parsed_value->has(http_set_cookie_attribute::partitioned) == partitioned &&
            (!has_path || parsed_value->path() == path) &&
-           detail::http_ascii_equals_ignore_case(parsed_value->domain(), domain);
+           http_ascii_equals_ignore_case(parsed_value->domain(), domain);
 }
 
 }  // namespace

@@ -68,11 +68,6 @@ public:
         return context_request_body_source(context_streaming_request_body_source(reader_value));
     }
 
-    [[nodiscard]] constexpr const context_buffered_request_body_source* buffered() const& noexcept {
-        return std::get_if<context_buffered_request_body_source>(&value_);
-    }
-    [[nodiscard]] constexpr const context_buffered_request_body_source* buffered() const&& = delete;
-
     [[nodiscard]] constexpr const context_lazy_request_body_source* lazy() const& noexcept {
         return std::get_if<context_lazy_request_body_source>(&value_);
     }
@@ -96,7 +91,9 @@ private:
 
 // A context likewise has exactly one response output. The buffered alternative
 // uses the ordinary http_response return path; long-lived outputs borrow one
-// non-null runtime facade and cannot coexist in the same context.
+// non-null runtime facade and cannot coexist in the same context. Every
+// alternative but buffered and an uncommitted response stream means the
+// response head is on the wire and no HTTP response can follow.
 class context_buffered_response_output final {
 private:
     friend class context_response_output;
@@ -146,6 +143,16 @@ private:
     http_tunnel* tunnel_;
 };
 
+// The upgrade or CONNECT handshake head was handed to the transport. Holds
+// while no websocket/tunnel facade is bound -- before the session binds one and
+// after it restores this output -- so a buffered error built by middleware can
+// never be mistaken for a sendable response.
+class context_upgraded_response_output final {
+private:
+    friend class context_response_output;
+    constexpr context_upgraded_response_output() noexcept = default;
+};
+
 class context_response_output final {
 public:
     constexpr context_response_output() noexcept
@@ -163,6 +170,14 @@ public:
     [[nodiscard]] static constexpr context_response_output tunnel(http_tunnel& tunnel) noexcept {
         return context_response_output(context_tunnel_output(tunnel));
     }
+
+    [[nodiscard]] static constexpr context_response_output upgraded() noexcept {
+        return context_response_output(context_upgraded_response_output{});
+    }
+
+    // Whether the response head already reached the transport.
+    [[nodiscard]] bool committed() const noexcept;
+
     [[nodiscard]] constexpr const context_tunnel_output* tunnel() const& noexcept {
         return std::get_if<context_tunnel_output>(&value_);
     }
@@ -184,7 +199,7 @@ public:
 
 private:
     using value_type = std::variant<context_buffered_response_output, context_response_stream_output,
-        context_websocket_output, context_tunnel_output>;
+        context_websocket_output, context_tunnel_output, context_upgraded_response_output>;
 
     template <typename output_type>
     explicit constexpr context_response_output(output_type output) noexcept

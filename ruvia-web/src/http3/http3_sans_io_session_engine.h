@@ -16,7 +16,7 @@
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_stream.h"
 
-#include "http3/http3_server_body_budget.h"
+#include "http3/http3_body_budget.h"
 #include "router/route_resolution.h"
 #include "server/inbound_buffer_resource.h"
 
@@ -43,11 +43,11 @@ struct http3_sans_io_session_limits final {
     std::size_t max_inbound_buffer_bytes_{64 * 1024 * 1024};
 };
 
-// Worker-affine receive-side slice of an HTTP/3 Web session. It synchronously
-// copies request heads and buffered body bytes while http3_connection's event
-// views are valid, and resolves routes at HEADERS. Completed requests remain
-// owned until release(). Handler scheduling and response writing are purposely
-// not part of this first slice.
+// Worker-affine receive-side slice of an HTTP/3 Web session. Request heads are
+// decoded directly into the owning stream's arena and adopted without a copy;
+// buffered body bytes are copied while http3_connection's event views are
+// valid, and routes resolve at HEADERS. Completed requests remain owned until
+// release(). Handler scheduling and response writing are not part of this slice.
 class http3_sans_io_session_engine final {
     struct stream_type;
 
@@ -107,7 +107,7 @@ public:
     // issued. It accounts bodies across sessions; per-connection limits remain
     // independently enforced by http3_sans_io_session_limits.
     http3_sans_io_session_engine(const route_table& routes_value, worker_memory& worker_value,
-        http3_server_body_budget& body_budget, http3_sans_io_session_limits limits = {});
+        http3_body_budget& body_budget, http3_sans_io_session_limits limits = {});
     ~http3_sans_io_session_engine();
     http3_sans_io_session_engine(const http3_sans_io_session_engine&) = delete;
     http3_sans_io_session_engine& operator=(const http3_sans_io_session_engine&) = delete;
@@ -132,7 +132,7 @@ public:
     }
     // Copies validated promise metadata into an ordinary request lease on the
     // actual server UNI stream. Prefix publication remains the driver's job.
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> admit_push_stream(
+    [[nodiscard]] std::variant<http3_push_stream_prefix, http3_connection_error_code> admit_push_stream(
         std::uint64_t stream_id, std::uint64_t push_id);
     void observe_push_cancellation(void* context, void (*cancel)(void*, std::uint64_t) noexcept);
     [[nodiscard]] const http3_server_request* request(std::uint64_t stream_id) const noexcept;
@@ -140,16 +140,23 @@ public:
     [[nodiscard]] stream_state_type stream_state(std::uint64_t stream_id) const noexcept;
     [[nodiscard]] rejection_type rejection(std::uint64_t stream_id) const noexcept;
     [[nodiscard]] bool streaming_request(std::uint64_t stream_id) const noexcept;
-    [[nodiscard]] bool can_accept_input(std::uint64_t stream_id, std::size_t wire_bytes) const noexcept;
+    // Wire bytes this stream may accept now: SIZE_MAX when the stream is not
+    // paced by a streaming body or tunnel backlog, 0 when it is over a limit.
+    [[nodiscard]] std::size_t input_capacity(std::uint64_t stream_id) const noexcept;
     [[nodiscard]] rejection_type streaming_body_failure(std::uint64_t stream_id) const noexcept;
     [[nodiscard]] const http_request_trailers* request_trailers(std::uint64_t stream_id) const noexcept;
     [[nodiscard]] const std::optional<http_priority>* request_priority_update(std::uint64_t stream_id) const noexcept;
     void bind_control_output_wake(void* context, void (*wake)(void*) noexcept);
     [[nodiscard]] bool queue_origin_advertisement(std::span<const std::string_view> origins);
-    [[nodiscard]] std::span<const char> pending_control_output() const noexcept {
-        return control_output_;
+    // Local critical-stream bytes after each stream prefix (control frames,
+    // QPACK encoder/decoder instructions). Write straight from the span, then
+    // consume exactly the bytes QUIC accepted.
+    [[nodiscard]] std::span<const char> pending_critical_output(http3_critical_stream_output::stream_kind kind) const noexcept {
+        return connection_.pending_critical_output(kind);
     }
-    [[nodiscard]] bool consume_control_output(std::size_t bytes) noexcept;
+    [[nodiscard]] bool consume_critical_output(http3_critical_stream_output::stream_kind kind, std::size_t bytes) noexcept {
+        return connection_.consume_critical_output(kind, bytes);
+    }
     // Worker-PMR bounded tunnel queue. Output is copied synchronously; no
     // borrowed buffer or parser view escapes the feed callback.
     [[nodiscard]] tunnel_read_result_type read_tunnel_data(
@@ -174,20 +181,8 @@ public:
     [[nodiscard]] std::variant<http3_response_head, http3_response_head_failure> encode_interim_response_head(std::uint64_t stream_id, const http_interim_response_head& response) {
         return connection_.encode_interim_response_head(stream_id, response);
     }
-    [[nodiscard]] std::variant<http3_response_field_section, http3_response_head_failure> encode_response_trailers(std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields_value) {
+    [[nodiscard]] std::variant<http3_headers_frame, http3_response_head_failure> encode_response_trailers(std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields_value) {
         return connection_.encode_response_trailers(stream_id, fields_value);
-    }
-    [[nodiscard]] std::span<const char> pending_qpack_encoder_output() const noexcept {
-        return connection_.pending_qpack_encoder_output();
-    }
-    [[nodiscard]] std::span<const char> pending_qpack_decoder_output() const noexcept {
-        return connection_.pending_qpack_decoder_output();
-    }
-    [[nodiscard]] bool consume_qpack_encoder_output(std::size_t size) noexcept {
-        return connection_.consume_qpack_encoder_output(size);
-    }
-    [[nodiscard]] bool consume_qpack_decoder_output(std::size_t size) noexcept {
-        return connection_.consume_qpack_decoder_output(size);
     }
     [[nodiscard]] std::size_t active_stream_count() const noexcept;
     [[nodiscard]] bool terminated() const noexcept;
@@ -213,6 +208,7 @@ private:
     using stream_ptr_type = std::unique_ptr<stream_type, stream_deleter_type>;
     static void on_connection_event(void* context, const http3_connection_event& event);
     void handle_event(const http3_connection_event& event);
+    [[nodiscard]] stream_ptr_type make_stream(std::uint64_t stream_id);
     void release_stream(std::uint64_t stream_id) noexcept;
     void release_lease(stream_type& stream) noexcept;
     void reject_body(stream_type& stream, rejection_type reason) noexcept;
@@ -222,17 +218,19 @@ private:
     worker_memory& worker_;
     const http3_sans_io_session_limits limits_;
     inbound_buffer_resource inbound_buffers_;
-    http3_server_body_budget* body_budget_{nullptr};
+    http3_body_budget* body_budget_{nullptr};
     std::size_t buffered_bytes_in_flight_{0};
     std::size_t tunnel_bytes_in_flight_{0};
     std::size_t active_leases_{0};
     http3_connection connection_;
-    std::pmr::string control_output_;
     void* control_wake_context_{};
     void (*control_wake_)(void*) noexcept {};
     void* push_cancellation_context_{};
     void (*push_cancellation_)(void*, std::uint64_t) noexcept {};
     std::pmr::unordered_map<std::uint64_t, stream_ptr_type> streams_;
+    // Stream created for the feed() call in progress, so a head completed by
+    // that call is decoded into its arena; adopted by the request_head event.
+    stream_ptr_type pending_stream_;
     http3_connection_result failure_{http3_connection_status::connection_error,
         http3_connection_error_scope::connection, http3_connection_error_code::internal_error};
     bool terminated_{false};

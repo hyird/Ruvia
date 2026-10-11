@@ -127,9 +127,9 @@ void validate_worker_state_definitions(const definitions_type& definitions) {
     }
 }
 
-// The per-worker instances. web_worker_runtime explicitly initializes and
-// destroys the registry inside its active worker identity window; a throwing
-// factory fails startup before the worker dispatches callbacks or requests.
+// The per-worker instances. worker_capabilities::start()/stop() initialize and
+// destroy the registry on its worker; a throwing factory fails startup before
+// the worker dispatches callbacks or requests.
 // Registration order remains the lifetime order (destruction is reversed),
 // while a separate immutable type index gives request-time lookup one
 // allocation-free binary search.

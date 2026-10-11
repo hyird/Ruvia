@@ -5,8 +5,6 @@
 #include <optional>
 #include <string_view>
 
-#include <asio/ip/udp.hpp>
-
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http_client.h"
@@ -46,8 +44,7 @@ public:
     // and HTTP/1 Upgrade fields are driver-owned. Use accepted.tunnel()->udp().
     [[nodiscard]] scoped_operation<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
     [[nodiscard]] http_client_stats stats() const;
-    [[nodiscard]] quic_path_migration start_quic_path_migration(
-        const asio::ip::udp::endpoint& local_endpoint) const;
+    [[nodiscard]] quic_path_migration start_quic_path_migration(const quic_address& local_address) const;
     [[nodiscard]] std::optional<quic_path_migration> path_migration(
         std::uint64_t id) const;
     [[nodiscard]] quic_operation_status cancel_quic_path_migration(std::uint64_t id) const;

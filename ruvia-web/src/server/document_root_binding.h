@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstddef>
-#include <exception>
 #include <utility>
 
 #include "http/static_root_index.h"

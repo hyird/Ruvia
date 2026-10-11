@@ -1,6 +1,5 @@
 #include "http3/http3_quic_client_tls_context.h"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <stdexcept>
@@ -10,7 +9,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/core/dns_host.h"
+#include "util/dns_host.h"
 
 namespace ruvia::detail {
 namespace {
@@ -42,7 +41,7 @@ bool expired(const SSL_SESSION* session_value) noexcept {
 
 }  // namespace
 
-http3_quic_client_tls_context::http3_quic_client_tls_context(client_transport_config_view config,
+http3_quic_client_tls_context::http3_quic_client_tls_context(const client_tls_config_storage& config,
     std::pmr::memory_resource* resource)
     : resource_(resource ? resource : std::pmr::get_default_resource()),
       identity_generation_(next_identity_generation.fetch_add(1, std::memory_order_relaxed)) {
@@ -103,32 +102,6 @@ void http3_quic_client_tls_context::remember_ticket(SSL_SESSION* session_value,
         transport_parameters.end(), resource_);
     ticket_.emplace(std::move(owned_session), std::move(owned_host), identity_generation_, version,
         std::move(owned_parameters), std::move(settings));
-}
-
-void http3_quic_client_tls_context::prepare(SSL* ssl, std::string_view host) const {
-    if (ssl == nullptr || SSL_get_SSL_CTX(ssl) != context_.get()) {
-        throw std::invalid_argument("SSL connection does not use this QUIC client TLS context");
-    }
-    validate_client_origin_host(host, "client TLS host is empty", "client TLS host is invalid");
-
-    const bool ip_address = is_client_ip_address(host);
-    std::pmr::string normalized(host, resource_);
-    if (!ip_address && normalized.ends_with('.')) {
-        normalized.pop_back();
-    }
-    if (!ip_address && SSL_set_tlsext_host_name(ssl, normalized.c_str()) != 1) {
-        throw std::runtime_error("failed to set client TLS SNI host");
-    }
-
-    if (SSL_set_alpn_protos(ssl, std::array<unsigned char, 3>{2, 'h', '3'}.data(), 3) != 0) {
-        throw std::runtime_error("failed to configure h3 ALPN");
-    }
-
-    if (SSL_CTX_get_verify_mode(context_.get()) == SSL_VERIFY_PEER) {
-        if (!configure_client_tls_peer_identity(*ssl, normalized.c_str(), ip_address)) {
-            throw std::runtime_error("failed to configure client TLS peer host verification");
-        }
-    }
 }
 
 void http3_quic_client_tls_context::context_deleter::operator()(SSL_CTX* context_value) const noexcept {

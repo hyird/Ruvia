@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/core/operation_deadline.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/detail/redis/redis_owned_command.h"
 #include "ruvia/web/redis/redis_handle.h"
@@ -65,7 +63,8 @@ public:
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
-#include "ruvia/core/pool_lease_scheduler.h"
+
+#include "integration/slot_pool.h"
 
 #include "redis/redis_client_runtime.h"
 
@@ -80,14 +79,7 @@ struct redis_reader_deleter {
     void operator()(redisReader* reader) const noexcept;
 };
 
-struct redis_reader_budget;
-struct redis_reader_budget_deleter final {
-    std::pmr::memory_resource* resource_{nullptr};
-    void operator()(redis_reader_budget* budget) const noexcept;
-};
-
-class redis_pool;
-using redis_cancellation_target = worker_cancellation_target<redis_pool>;
+class redis_reply_builder;
 
 struct redis_command_args_view final {
     std::span<const std::pmr::string> args_;
@@ -97,18 +89,20 @@ inline constexpr std::size_t redis_read_buffer_bytes = 8192;
 
 class redis_pool final {
 public:
-    redis_pool(asio::io_context& io_context, const redis_config_storage& config,
+    // `tls_context` is borrowed from the owning runtime and shared by every
+    // pool of the alias; nullptr selects plaintext.
+    redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context* tls_context,
         std::optional<std::chrono::milliseconds> command_timeout, std::size_t pool_size,
         const worker_handle& worker_value, std::pmr::memory_resource* resource = nullptr);
-    redis_pool(asio::io_context&, redis_config_storage&&, std::optional<std::chrono::milliseconds>,
+    redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context*, std::optional<std::chrono::milliseconds>,
         std::size_t, const worker_handle&, std::pmr::memory_resource* = nullptr) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&&,
+    redis_pool(asio::io_context&, const redis_config_storage&&, asio::ssl::context*,
         std::optional<std::chrono::milliseconds>, std::size_t, const worker_handle&,
         std::pmr::memory_resource* = nullptr) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&,
+    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context*,
         std::optional<std::chrono::milliseconds>, std::size_t, worker_handle&&,
         std::pmr::memory_resource* = nullptr) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&,
+    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context*,
         std::optional<std::chrono::milliseconds>, std::size_t, const worker_handle&&,
         std::pmr::memory_resource* = nullptr) = delete;
     ~redis_pool();
@@ -129,7 +123,19 @@ public:
 
 private:
     friend class ::ruvia::redis_handle;
-    friend class worker_cancellation_target<redis_pool>;
+
+    struct slot_policy final {
+        using owner_type = redis_pool;
+        enum class deadline_kind_type : std::uint8_t { resolve,
+            socket };
+
+        [[noreturn]] static void throw_acquire_failure(const redis_pool& pool, const pool_waiter_result& result);
+        [[noreturn]] static void throw_aborted(const redis_pool& pool, pool_slot_abort_reason reason);
+        static void expire_slot(redis_pool& pool, std::size_t slot, deadline_kind_type kind) noexcept;
+        static void cancel_slot(redis_pool& pool, std::size_t slot) noexcept;
+    };
+    using slot_pool_type = slot_pool<slot_policy>;
+    using deadline_kind_type = slot_policy::deadline_kind_type;
 
     struct connection_type final {
         explicit connection_type(asio::io_context& io_context, std::pmr::memory_resource* resource);
@@ -149,50 +155,20 @@ private:
         asio::ip::tcp::resolver resolver_;
         std::pmr::string write_buffer_;
         std::array<char, redis_read_buffer_bytes> read_buffer_;
-        std::unique_ptr<redis_reader_budget, redis_reader_budget_deleter> reader_budget_;
+        // The reader's object functions address the builder, so it lives
+        // apart from the movable connection and outlives every reader.
+        std::unique_ptr<redis_reply_builder, pmr_object_deleter<redis_reply_builder>> reply_builder_;
         std::unique_ptr<redisReader, redis_reader_deleter> reader_;
         std::size_t reply_bytes_{0};
         bool connected_{false};
-        enum class abort_reason_type : std::uint8_t { none,
-            cancelled,
-            closing };
-        abort_reason_type abort_reason_{abort_reason_type::none};
-        std::uint64_t cancellation_id_{0};
-        enum class deadline_kind_type : std::uint8_t { resolve,
-            socket };
-        operation_deadline<deadline_kind_type> deadline_;
-        std::unique_ptr<worker_timer_registration, pmr_object_deleter<worker_timer_registration>>
-            deadline_timer_;
     };
 
-    class connection_guard_type final {
-    public:
-        connection_guard_type(redis_pool& pool, std::size_t index, const stop_token& stop_token_value);
-        connection_guard_type(const connection_guard_type&) = delete;
-        connection_guard_type& operator=(const connection_guard_type&) = delete;
-        ~connection_guard_type();
-
-        [[nodiscard]] connection_type& connection() noexcept;
-        void discard() noexcept;
-
-    private:
-        redis_pool& pool_;
-        std::size_t index_{0};
-        worker_cancellation_registration<redis_cancellation_target> cancellation_;
-        bool discard_{false};
-    };
-
-    task<std::size_t> acquire(const ruvia::operation_timeout& timeout, stop_token stop_token);
-    void release(std::size_t index) noexcept;
-    void close(connection_type& connection) noexcept;
+    void close(std::size_t slot) noexcept;
     void configure_socket(connection_type& connection) noexcept;
     void ensure_reader(connection_type& connection);
-    [[nodiscard]] bool arm_deadline(
-        connection_type& connection, const ruvia::operation_timeout& timeout, connection_type::deadline_kind_type kind);
-    [[nodiscard]] bool clear_deadline(connection_type& connection) noexcept;
-    task<void> connect(connection_type& connection, const ruvia::operation_timeout* operation_timeout = nullptr);
-    task<void> authenticate(connection_type& connection, const ruvia::operation_timeout& connect_timeout);
-    task<redis_value> read_reply(connection_type& connection, const ruvia::operation_timeout& timeout,
+    task<void> connect(std::size_t slot, const ruvia::operation_timeout* operation_timeout = nullptr);
+    task<void> authenticate(std::size_t slot, const ruvia::operation_timeout& connect_timeout);
+    task<redis_value> read_reply(std::size_t slot, const ruvia::operation_timeout& timeout,
         std::pmr::memory_resource* resource);
     template <typename arg_source_type>
     task<redis_value> execute_with_timeout_impl(
@@ -200,20 +176,17 @@ private:
     template <typename command_source_type>
     task<std::pmr::vector<redis_value>> execute_pipeline_impl(
         command_source_type commands, operation_options options, std::pmr::memory_resource* resource);
-    task<void> async_socket_write(connection_type& connection, const ruvia::operation_timeout& timeout);
+    task<void> async_socket_write(std::size_t slot, const ruvia::operation_timeout& timeout);
     task<asio_completion<std::size_t>> async_socket_read_some(
-        connection_type& connection, std::span<char> buffer, const ruvia::operation_timeout& timeout);
-    void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept;
-    void throw_if_aborted(const connection_type& connection) const;
+        std::size_t slot, std::span<char> buffer, const ruvia::operation_timeout& timeout);
+
     asio::io_context& io_context_;
-    const worker_handle& worker_;
     const redis_config_storage& config_;
+    asio::ssl::context* tls_context_;
     std::optional<std::chrono::milliseconds> command_timeout_;
     std::pmr::memory_resource* resource_;
-    std::optional<asio::ssl::context> tls_context_;
     std::pmr::vector<connection_type> connections_;
-    pool_lease_scheduler scheduler_;
-    std::shared_ptr<redis_cancellation_target> cancellation_target_;
+    slot_pool_type slots_;
 };
 
 struct redis_command_executor final {

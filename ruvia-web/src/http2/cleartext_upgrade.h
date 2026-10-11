@@ -66,7 +66,7 @@ task<cleartext_http2_dispatch_result> dispatch_cleartext_http2_preface(
             (void)co_await run_http2_server_session(setup, current);
             co_return cleartext_http2_dispatch_result::session_finished;
         case http2_cleartext_preface_probe::need_more_preface: {
-            setup.scanner_entry_.set_phase(ruvia::connection_scanner::phase_type::reading_initial);
+            setup.scanner_entry_.set_phase(connection_scanner::phase_type::reading_initial);
             auto read_completion = co_await ruvia::async_asio<std::size_t>(
                 [&setup, &read_buffer, used_bytes](auto handler) mutable {
                     setup.stream_.async_read_some(

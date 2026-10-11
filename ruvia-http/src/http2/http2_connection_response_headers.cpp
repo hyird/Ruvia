@@ -12,6 +12,7 @@
 #include "client/http_client_access.h"
 #include "coding/http_content_length.h"
 #include "field/http_interim_response_validation.h"
+#include "field/response_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_block.h"
 #include "http2/http2_header_rules.h"
@@ -33,15 +34,14 @@ namespace {
 constexpr std::uint8_t max_http2_interim_responses = 8;
 
 struct http2_response_decode_context final {
-    explicit http2_response_decode_context(http2_stream_state& stream,
-        http2_stream_header_decode_transaction* transaction,
-        std::pmr::memory_resource* resource) noexcept
-        : base_(stream, transaction),
+    http2_response_decode_context(http2_stream_state& stream, std::pmr::memory_resource* resource) noexcept
+        : base_(stream),
           interim_headers_(http_field_list_role::recipient),
           informational_fields_(resource) {}
 
     http2_header_decode_context base_;
     http_interim_response_header_validator interim_headers_;
+    response_field_state fields_;
     std::pmr::vector<http_header> informational_fields_;
     std::optional<http_status_code> status_;
     bool saw_regular_{false};
@@ -98,24 +98,14 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     const auto response_content_semantics =
         classify_http_response_content_semantics(stream.request_known_method(), *context_value->status_);
     const bool successful_connect =
-        response_content_semantics == http_response_content_semantics_type::connect_tunnel;
+        response_content_semantics == http_response_content_semantics::connect_tunnel;
     if (response_known_bit == response_header_content_length && successful_connect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
-    if (response_known_bit == response_header_content_type) {
-        if (!is_valid_http_content_type_field_value(value) ||
-            !stream.mark_singleton_response_header(response_known_bit)) {
-            return false;
-        }
-    }
-    if (response_known_bit == response_header_content_encoding &&
-        !is_valid_http_content_encoding_field_value(value, http_field_list_role::recipient)) {
-        return false;
-    }
-    if (name == "trailer" &&
-        !is_valid_http_response_trailer_field_value(value, http_field_list_role::recipient)) {
+    if (validate_response_field(kind, value, http_field_list_role::recipient, context_value->fields_) !=
+        response_field_status::ok) {
         return false;
     }
     if (response_known_bit == response_header_content_length) {
@@ -149,9 +139,8 @@ bool http2_on_decoded_response_trailer(void* target, std::string_view name, std:
 }
 
 header_decode_status http2_connection::decode_response_header_block(http2_stream_state& stream,
-    http2_stream_header_decode_transaction& stream_transaction,
     hpack_decoder::decode_transaction_type& hpack_transaction) {
-    http2_response_decode_context context_value{stream, &stream_transaction, resource_};
+    http2_response_decode_context context_value{stream, resource_};
     const auto result_value = decoder_.decode(
         stream.remote_header_block(), &context_value,
         [](void* target, std::string_view name, std::string_view value) {
@@ -187,7 +176,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
         if (*context_value.status_ == http_status::continue_value && stream.release_request_continue()) {
             signal = http_client_request_content_signal::continue_value;
         }
-        events_.push_back(http2_event::informational_head(stream.id(), std::move(head), signal));
+        events_.push_back(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
         return header_decode_status::ok;
     }
     (void)stream.cancel_pending_request_continue();
@@ -203,16 +192,16 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
     // successful CONNECT takes precedence because its following bytes are a
     // tunnel, not response content.
     if (*context_value.status_ == http_status::reset_content &&
-        content_semantics != http_response_content_semantics_type::connect_tunnel &&
+        content_semantics != http_response_content_semantics::connect_tunnel &&
         !stream.declare_remote_content_length(0)) {
         return header_decode_status::protocol_error;
     }
-    if (content_semantics == http_response_content_semantics_type::without_content &&
+    if (content_semantics == http_response_content_semantics::without_content &&
         !stream.select_remote_content_metadata_only()) {
         return header_decode_status::protocol_error;
     }
     if (stream.tunnel().pending() != nullptr) {
-        if (content_semantics == http_response_content_semantics_type::connect_tunnel) {
+        if (content_semantics == http_response_content_semantics::connect_tunnel) {
             if (!stream.accept_connect()) {
                 return header_decode_status::protocol_error;
             }

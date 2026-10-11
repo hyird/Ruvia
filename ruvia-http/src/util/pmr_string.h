@@ -7,8 +7,6 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t retained_pmr_string_bytes = 4096;
-
 // Drop the consumed [0, offset) prefix of a buffer whose size() is the live
 // content length and whose `offset` tracks how much has already been consumed.
 // A fully consumed buffer is cleared outright; otherwise the unconsumed tail is
@@ -32,21 +30,6 @@ inline void compact_consumed_prefix(
     std::memmove(buffer.data(), buffer.data() + offset, remaining);
     buffer.resize(remaining);
     offset = 0;
-}
-
-inline void resize_pmr_string_for_overwrite(std::pmr::string& target, std::size_t size) {
-    target.resize(size);
-}
-
-inline void clear_pmr_string_retaining_small(
-    std::pmr::string& target, std::size_t retained_bytes = retained_pmr_string_bytes) {
-    target.clear();
-    if (target.capacity() <= retained_bytes) {
-        return;
-    }
-
-    std::pmr::string empty(target.get_allocator());
-    target.swap(empty);
 }
 
 }  // namespace ruvia::detail

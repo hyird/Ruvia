@@ -272,12 +272,17 @@ private:
     template <typename entity_type>
     friend class redis_repository;
 
-    [[nodiscard]] task<redis_value> command_owned(std::span<const std::string_view> args) const;
+    // ORM commands are compiled by the framework straight into owned storage
+    // and are never stateful or blocking. The storage is moved into the
+    // command when it already lives in the handle's resource and copied into
+    // that resource otherwise.
+    [[nodiscard]] task<redis_value> command_owned(std::pmr::vector<std::pmr::string>&& args) const;
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] scoped_operation<result_type> command_mapped(std::span<const std::string_view> args, mapper_type mapper) const {
+    [[nodiscard]] scoped_operation<result_type> command_mapped(
+        std::pmr::vector<std::pmr::string>&& args, mapper_type mapper) const {
         registration_.require_active();
-        return scoped(detail::map_redis_command<result_type>(command_owned(args), resource_, std::move(mapper)));
+        return scoped(detail::map_redis_command<result_type>(command_owned(std::move(args)), resource_, std::move(mapper)));
     }
 
     redis_handle(detail::redis_pool& general_pool, detail::redis_pool& blocking_pool_value,

@@ -4,10 +4,10 @@
 
 #include <asio/ip/address.hpp>
 
-#include "ruvia/core/config_validation.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "client/client_tls_config_storage.h"
+#include "util/config_validation.h"
 
 namespace ruvia::detail {
 
@@ -43,11 +43,19 @@ private:
 
 inline void validate_db_config(const db_config& config) {
     validate_client_tls_config(config.tls_);
+    // Database TLS is always authenticated, and both drivers are configured
+    // with key files only; refuse settings they would silently ignore.
+    if (config.tls_.mode_ == client_tls_mode::skip_verification) {
+        throw std::invalid_argument("database TLS requires peer verification");
+    }
+    if (!config.tls_.private_key_password_.empty()) {
+        throw std::invalid_argument("database TLS does not support encrypted private keys");
+    }
     const auto driver = config.driver_;
     if (driver == db_driver::mariadb && config.tls_.mode_ == client_tls_mode::verify_identity) {
         std::error_code error;
         (void)asio::ip::make_address(config.host_, error);
-        if (error || !config.tls_.server_name_.empty()) {
+        if (error || config.tls_.server_name_.has_value()) {
             throw std::invalid_argument("MariaDB authenticated TLS requires a numeric host with an IP certificate; server_name is unsupported");
         }
     }
@@ -65,10 +73,10 @@ inline void validate_db_config(const db_config& config) {
     }
 #endif
 
-    ruvia::ensure_config_host(config.host_, "database host must not be empty", "database host is invalid",
-        ruvia::separated_port_host_rules);
-    ruvia::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
-    ruvia::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
+    detail::ensure_config_host(config.host_, "database host must not be empty", "database host is invalid",
+        detail::separated_port_host_rules);
+    detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
+    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
         config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_,
         config.acquire_timeout_);
 }

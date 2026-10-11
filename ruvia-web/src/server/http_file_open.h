@@ -1,6 +1,6 @@
 #pragma once
 
-// Owning, identity-validating file input for buffered web-layer drivers. The
+// Owning, identity-validating file input behind response_file_source. The
 // identity is checked on the same native handle that supplies response bytes,
 // closing the stat/open replacement window.
 
@@ -141,9 +141,5 @@ private:
     std::ifstream input_;
 };
 #endif
-
-[[nodiscard]] inline response_file_input open_response_file_input(http_response_file_view file) {
-    return response_file_input(file);
-}
 
 }  // namespace ruvia::detail

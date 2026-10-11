@@ -7,15 +7,13 @@
 // Content-Length/Range; opening the file is a runtime driver concern.
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
-#include <filesystem>
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/native_path.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
 
 #if defined(__unix__)
@@ -130,7 +128,7 @@ private:
 }
 
 [[nodiscard]] inline response_file_snapshot snapshot_response_file(
-    const ruvia::native_path_char_type* path, std::error_code& ec) noexcept {
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_handle input(::open(path, O_RDONLY | O_CLOEXEC));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -240,7 +238,7 @@ private:
 }
 
 [[nodiscard]] inline response_file_snapshot snapshot_response_file(
-    const ruvia::native_path_char_type* path, std::error_code& ec) noexcept {
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_handle input(
         ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
@@ -283,7 +281,7 @@ private:
 }
 #else
 [[nodiscard]] inline response_file_snapshot snapshot_response_file(
-    const ruvia::native_path_char_type* path, std::error_code& ec) noexcept {
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
     static_cast<void>(path);
     ec = std::make_error_code(std::errc::not_supported);
     return {};

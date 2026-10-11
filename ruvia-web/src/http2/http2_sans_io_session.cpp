@@ -16,7 +16,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/pmr_string.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_sans_io_session_engine.h"
 #include "server/http_response_writer.h"
@@ -58,7 +58,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             }
             engine.touch_activity();
             engine.output_write_completed();
-            ::ruvia::clear_pmr_string_retaining_small(write_scratch, 16 * 1024);
+            http_clear_pmr_string_retaining_small(write_scratch, 16 * 1024);
         }
         if (engine.writer_should_exit()) {
             co_return;

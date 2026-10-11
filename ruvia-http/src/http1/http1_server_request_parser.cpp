@@ -1,6 +1,5 @@
 #include "ruvia/http/http1_server_request_parser.h"
 
-#include "ruvia/http/http1_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
@@ -21,7 +20,6 @@ using ruvia::detail::parsed_request_header_block;
 using ruvia::detail::request_header_kind;
 using ruvia::detail::request_target_view;
 using ruvia::detail::scan_http_chunked_body;
-using ruvia::detail::singleton_request_header_bit;
 
 }  // namespace
 
@@ -112,24 +110,7 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
     http_request_access::set_query_string(state_value.request_, target_view.query_);
     http_request_access::set_scheme(state_value.request_, target_view.scheme_);
     http_request_access::set_authority(state_value.request_, target_view.authority_);
-    switch (target_view.form_) {
-        case detail::http_request_target_form::origin:
-            http_request_access::set_target_form(
-                state_value.request_, ::ruvia::http_request_target_form::origin);
-            break;
-        case detail::http_request_target_form::absolute:
-            http_request_access::set_target_form(
-                state_value.request_, ::ruvia::http_request_target_form::absolute);
-            break;
-        case detail::http_request_target_form::authority:
-            http_request_access::set_target_form(
-                state_value.request_, ::ruvia::http_request_target_form::authority);
-            break;
-        case detail::http_request_target_form::asterisk:
-            http_request_access::set_target_form(
-                state_value.request_, ::ruvia::http_request_target_form::asterisk);
-            break;
-    }
+    http_request_access::set_target_form(state_value.request_, target_view.form_);
 
     if (protocol_version == http_protocol_version::http11 && block.host_header_index_ < 0) {
         return fail(http_parse_error::missing_host);
@@ -177,7 +158,7 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
 
     if (http_request_content_semantics(method) == http_request_content_semantics::content_type_required &&
         (content_length.has_value() || transfer_encoding.has_value()) &&
-        (block.seen_header_bits_ & singleton_request_header_bit(request_header_kind::content_type)) == 0) {
+        !block.fields_.seen(request_header_kind::content_type)) {
         // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
         // explicitly carries content. A zero Content-Length still declares an
         // empty representation and therefore retains this metadata contract.
@@ -193,8 +174,8 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
         // for absolute-form and authority-form. Rebind both headers() and the
         // known-header cache so application code cannot observe a conflicting
         // Host value as a second routing truth.
-        if ((target_view.form_ == detail::http_request_target_form::absolute ||
-                target_view.form_ == detail::http_request_target_form::authority) &&
+        if ((target_view.form_ == http_request_target_form::absolute ||
+                target_view.form_ == http_request_target_form::authority) &&
             host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
             value = target_view.authority_;
         }
@@ -320,23 +301,19 @@ http1_server_request_parse_state http1_server_request_parser::parse_message(
     return state;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource) {
-    auto request = detail::http_request_access::make();
-    detail::http_request_access::set_resource(request, resource);
-    detail::http_request_access::set_method(request, method);
-    detail::http_request_access::set_target(request, target);
+    auto request = http_request_access::make();
+    http_request_access::set_resource(request, resource);
+    http_request_access::set_method(request, method);
+    http_request_access::set_target(request, target);
 
     std::optional<http_parse_error> error;
-    detail::request_target_view target_view;
+    request_target_view target_view;
     if (!is_valid_http_method_token(method)) {
         error = http_parse_error::invalid_request_line;
-    } else if (!detail::parse_request_target(request.known_method(), target, target_view)) {
+    } else if (!parse_request_target(request.known_method(), target, target_view)) {
         error = http_parse_error::invalid_request_target;
     } else if (headers.size() > max_http_header_fields) {
         error = http_parse_error::too_many_headers;
@@ -362,42 +339,25 @@ std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_reques
         return {std::move(request), error};
     }
 
-    detail::http_request_access::set_path(request, target_view.path_);
-    detail::http_request_access::set_query_string(request, target_view.query_);
-    detail::http_request_access::set_scheme(request, target_view.scheme_);
-    detail::http_request_access::set_authority(request, target_view.authority_);
-    switch (target_view.form_) {
-        case detail::http_request_target_form::origin:
-            detail::http_request_access::set_target_form(request, ::ruvia::http_request_target_form::origin);
-            break;
-        case detail::http_request_target_form::absolute:
-            detail::http_request_access::set_target_form(request, ::ruvia::http_request_target_form::absolute);
-            break;
-        case detail::http_request_target_form::authority:
-            detail::http_request_access::set_target_form(request, ::ruvia::http_request_target_form::authority);
-            break;
-        case detail::http_request_target_form::asterisk:
-            detail::http_request_access::set_target_form(request, ::ruvia::http_request_target_form::asterisk);
-            break;
-    }
-    detail::http_request_access::reserve_headers(request, headers.size());
+    http_request_access::set_path(request, target_view.path_);
+    http_request_access::set_query_string(request, target_view.query_);
+    http_request_access::set_scheme(request, target_view.scheme_);
+    http_request_access::set_authority(request, target_view.authority_);
+    http_request_access::set_target_form(request, target_view.form_);
+    http_request_access::reserve_headers(request, headers.size());
     for (const auto& header : headers) {
-        if (!detail::http_request_access::add_header(request, header)) {
+        if (!http_request_access::add_header(request, header)) {
             error = http_parse_error::too_many_headers;
             break;
         }
     }
-    detail::http_request_access::set_body(request, body);
+    http_request_access::set_body(request, body);
     return {std::move(request), error};
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 bool should_drop_invalid_cleartext_http1_input(
-    std::string_view buffer, http1_request_parse_failure_source source_value) noexcept {
-    if (source_value != http1_request_parse_failure_source::request_line) {
+    std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept {
+    if (source_value != http1_server_request_parse_failure_source::request_line) {
         return false;
     }
 
@@ -416,33 +376,6 @@ bool should_drop_invalid_cleartext_http1_input(
         return false;
     }
     return !line.substr(version_start + 1).starts_with("HTTP/");
-}
-
-http1_request_parse_result http1_request_parser::parse(std::string_view buffer,
-    http1_request_parse_options options) const {
-    http1_server_request_parser parser;
-    auto parsed_value = parser.parse_message(buffer, options.resource_);
-    if (parsed_value.need_request_head() != nullptr) {
-        return detail::http1_request_parse_result_access::need_more();
-    }
-    if (const auto* need_body = parsed_value.need_request_body()) {
-        if (const auto required_total_bytes = need_body->required_total_bytes()) {
-            return detail::http1_request_parse_result_access::need_more(*required_total_bytes);
-        }
-        return detail::http1_request_parse_result_access::need_more();
-    }
-    if (const auto* failure = parsed_value.failure()) {
-        return detail::http1_request_parse_result_access::failure(*failure);
-    }
-    const auto* message = parsed_value.message_ready();
-    if (message == nullptr) {
-        std::terminate();
-    }
-
-    const auto wire_body =
-        buffer.substr(message->header_bytes(), message->message_bytes() - message->header_bytes());
-    return detail::http1_request_parse_result_access::parsed(
-        std::move(parsed_value.request_), std::move(parsed_value.body_plan_), wire_body, message->message_bytes());
 }
 
 }  // namespace ruvia

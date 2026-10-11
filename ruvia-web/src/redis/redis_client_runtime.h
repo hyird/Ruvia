@@ -2,6 +2,9 @@
 
 #include <memory>
 #include <memory_resource>
+#include <optional>
+
+#include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
@@ -18,7 +21,7 @@ class io_context;
 namespace ruvia::detail {
 
 // The single backend owner used by standalone clients and application registrations.
-// Both pools borrow this stable owner's normalized configuration and worker.
+// Both pools borrow this stable owner's normalized configuration, TLS context and worker.
 class redis_client_runtime final {
 public:
     redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
@@ -38,6 +41,9 @@ public:
 private:
     redis_config_storage config_;
     std::pmr::memory_resource* resource_;
+    // One client TLS context per alias, borrowed by both pools; absent for
+    // plaintext.
+    std::optional<asio::ssl::context> tls_context_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> general_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> blocking_;
 };

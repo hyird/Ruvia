@@ -23,9 +23,9 @@ bool http2_connection::complete_decoded_header_block(http2_stream_state& stream)
     auto hpack_transaction = decoder_.begin_transaction();
     header_decode_status status = header_decode_status::protocol_error;
     if constexpr (kind == http2_header_block_kind::initial) {
-        status = decode_initial_header_block(stream, transaction, hpack_transaction);
+        status = decode_initial_header_block(stream, hpack_transaction);
     } else {
-        status = finish_trailer_block(stream, transaction, hpack_transaction);
+        status = finish_trailer_block(stream, hpack_transaction);
     }
     if (status != header_decode_status::ok) {
         transaction.rollback();

@@ -22,11 +22,9 @@
 
 namespace ruvia::detail {
 
-task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, worker_memory& memory,
-    std::pmr::string* reusable_chunk, http_response_file_view file) {
+#if defined(__linux__) || defined(_WIN32)
+task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, http_response_file_view file) {
 #if defined(__linux__)
-    static_cast<void>(memory);
-    static_cast<void>(reusable_chunk);
     std::error_code error;
     auto input = open_native_file_for_read(file, error);
     if (error) {
@@ -62,8 +60,6 @@ task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, wo
     }
     co_return std::error_code{};
 #elif defined(_WIN32)
-    static_cast<void>(memory);
-    static_cast<void>(reusable_chunk);
     std::error_code error;
     auto input = open_native_file_for_read(file, error);
     if (error) {
@@ -104,9 +100,8 @@ task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, wo
         remaining -= sent;
     }
     co_return std::error_code{};
-#else
-    co_return co_await write_file_fallback(socket, memory, reusable_chunk, file);
 #endif
 }
+#endif
 
 }  // namespace ruvia::detail

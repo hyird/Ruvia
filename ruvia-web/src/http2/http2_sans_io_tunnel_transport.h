@@ -14,16 +14,14 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
-#include <span>
 #include <string_view>
 #include <system_error>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "http/http_stream_read_result.h"
 #include "http2/http2_data_output_budget.h"

@@ -6,7 +6,6 @@
 #include <cstring>
 #include <system_error>
 
-#include "ruvia/http/detail/field/http_expectations.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
@@ -17,6 +16,7 @@
 
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
+#include "field/http_expect_token.h"
 #include "parser/http_request_target.h"
 
 namespace ruvia::detail {
@@ -144,7 +144,7 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
     std::span<const http_header_view> headers, std::pmr::memory_resource* resource) {
     std::pmr::string result(resource);
     for (const auto& header : headers) {
-        if (!detail::http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
+        if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
             continue;
         }
         if (!result.empty()) {
@@ -185,7 +185,7 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
                 http1_client_request_prepare_error::content_forbidden_for_method);
         }
         if (content_semantics == http_request_content_semantics::content_type_required &&
-            !header_facts.has_content_type_) {
+            !header_facts.fields_.seen(detail::request_header_kind::content_type)) {
             return detail::http1_client_request_prepare_result_access::failure(
                 http1_client_request_prepare_error::options_content_type_required);
         }
@@ -444,7 +444,7 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_connect
 http1_client_request_prepare_result http1_client_request_writer::prepare_connect(borrowed_text authority,
     std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     detail::request_target_view target;
-    const auto parsed_value = detail::parse_http_authority(authority.view());
+    const auto parsed_value = parse_http_authority(authority.view());
     if (!detail::parse_request_target(http_known_method::connect, authority.view(), target) || !parsed_value || !parsed_value->port() || *parsed_value->port() == 0) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
     }

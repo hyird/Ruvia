@@ -11,7 +11,7 @@
 
 namespace ruvia::detail {
 
-// Whole-buffer codec calls pass this stack-owned context through the C allocator
+// Codec stream types own this context and pass it through the C allocator
 // callback. Allocation exceptions are retained at the ABI boundary and rethrown
 // as soon as the codec returns to C++.
 class pmr_codec_allocation_context final {
@@ -31,7 +31,6 @@ private:
 };
 
 [[nodiscard]] void* pmr_codec_allocate(void* opaque, std::size_t bytes_value) noexcept;
-[[nodiscard]] void* pmr_codec_allocate_with_exception(void* opaque, std::size_t bytes_value) noexcept;
 void pmr_codec_free(void* opaque, void* address) noexcept;
 
 }  // namespace ruvia::detail

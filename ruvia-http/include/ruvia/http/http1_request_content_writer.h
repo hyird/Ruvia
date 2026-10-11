@@ -46,6 +46,7 @@ public:
     [[nodiscard]] std::variant<std::monostate, http1_request_content_write_error> commit_chunk(std::size_t payload_bytes) noexcept;
     // Returns a view into buffer. Transmit it, then commit_finish(). Known-length
     // bodies return an empty view and still require a successful commit_finish().
+    // Trailer names and values may borrow buffer. Failure leaves buffer unchanged.
     [[nodiscard]] std::variant<std::string_view, http1_request_content_write_error> plan_finish(
         std::span<char> buffer, std::span<const http_header_view> trailers = {}) noexcept;
     [[nodiscard]] std::variant<std::monostate, http1_request_content_write_error> commit_finish() noexcept;

@@ -8,8 +8,8 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/core/decimal_number.h"
 #include "ruvia/web/detail/json/json_lex.h"
+#include "ruvia/web/detail/util/decimal_number.h"
 
 namespace ruvia::detail {
 
@@ -79,7 +79,7 @@ template <typename number_t_type>
 
     const auto number = input.substr(0, length);
     if constexpr (std::is_floating_point_v<number_t_type>) {
-        const auto parsed_value = ruvia::parse_decimal_number<number_t_type>(number);
+        const auto parsed_value = detail::parse_decimal_number<number_t_type>(number);
         if ((parsed_value.index() != 0) || !std::isfinite(std::get<0>(parsed_value))) {
             return false;
         }

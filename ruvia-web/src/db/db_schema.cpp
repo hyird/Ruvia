@@ -43,7 +43,7 @@ std::string_view method(db_index_method m) {
 
 db_schema::db_schema(db_schema_options options)
     : driver_(options.driver_),
-      resource_(detail::pmr_resource_or_default(options.resource_)),
+      resource_(pmr_resource_or_default(options.resource_)),
       statements_(resource_) {
     detail::require_db_dialect(driver_);
 }

@@ -11,7 +11,7 @@
 namespace ruvia::detail {
 
 struct streaming_access final {
-    using body_read_type = callable_ref<std::optional<std::span<const std::byte>>>::invoke_type;
+    using body_read_type = body_reader::read_type::invoke_type;
     using stream_write_type = response_stream_writer::write_type;
     using stream_end_type = response_stream_writer::end_type;
     using stream_sleep_type = response_stream_writer::sleep_type;
@@ -34,10 +34,6 @@ struct streaming_access final {
         stream_aborted_type aborted) noexcept {
         return response_stream_writer(
             resource, target, write, end, sleep, bind_context, release_context, committed, aborted);
-    }
-
-    [[nodiscard]] static sse_writer make_sse_writer(response_stream_writer& writer) noexcept {
-        return sse_writer(writer);
     }
 
     // The token is supplied by the caller rather than read from `context`:

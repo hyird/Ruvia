@@ -11,11 +11,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/decimal_number.h"
-#include "ruvia/core/integer.h"
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/detail/util/decimal_number.h"
+#include "ruvia/web/integer.h"
 
 // Internal URL-encoded form parser for RUVIA_MODEL.
 
@@ -49,7 +49,7 @@ template <typename number_t_type>
     }
     number_t_type parsed_value{};
     if constexpr (std::is_floating_point_v<number_t_type>) {
-        const auto value = ruvia::parse_decimal_number<number_t_type>(decoded);
+        const auto value = detail::parse_decimal_number<number_t_type>(decoded);
         if ((value.index() != 0)) {
             return std::nullopt;
         }

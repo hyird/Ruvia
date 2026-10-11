@@ -22,18 +22,6 @@ struct context_access final {
     }
 
     [[nodiscard]] static context make(request_memory& memory, const http_request& request,
-        std::uintptr_t route_rate_limit_scope, context_services services) {
-        return context(memory, request, {}, nullptr, nullptr, 0, route_rate_limit_scope, services);
-    }
-
-    [[nodiscard]] static context make(request_memory& memory, const http_request& request,
-        std::string_view route_path, std::uintptr_t route_rate_limit_scope,
-        context_services services) {
-        return context(
-            memory, request, route_path, nullptr, nullptr, 0, route_rate_limit_scope, services);
-    }
-
-    [[nodiscard]] static context make(request_memory& memory, const http_request& request,
         std::string_view route_path, const std::string_view* param_names,
         const std::string_view* param_values, std::size_t param_count,
         std::uintptr_t route_rate_limit_scope, context_services services) {
@@ -62,23 +50,6 @@ struct context_access final {
         return context_value.route_rate_limit_scope_;
     }
 
-    [[nodiscard]] static bool request_cookies_materialized(const context& context_value) noexcept {
-        return context_value.request_storage_->cookies_.has_value();
-    }
-
-    [[nodiscard]] static bool request_query_materialized(const context& context_value) noexcept {
-        return context_value.request_storage_->query_.has_value();
-    }
-
-    [[nodiscard]] static bool route_params_materialized(const context& context_value) noexcept {
-        return context_value.request_storage_->route_params_.has_value();
-    }
-
-    [[nodiscard]] static const context_request_storage* request_storage(
-        const context& context_value) noexcept {
-        return context_value.request_storage_.get();
-    }
-
     static void set_response(context& context_value, http_response&& response) {
         context_value.store_response(std::move(response));
     }
@@ -92,20 +63,16 @@ struct context_access final {
         return context_value.response_state().active_response().header(name).has_value();
     }
 
-    static void mark_websocket_handshake_started(context& context_value) noexcept {
-        context_value.request_storage().websocket_handshake_started_ = true;
+    // Called by a driver right before it hands the upgrade/CONNECT handshake
+    // head to the transport: from here on no HTTP response can follow.
+    static void commit_upgrade(context& context_value) noexcept {
+        context_value.response_output() = context_response_output::upgraded();
     }
 
-    [[nodiscard]] static bool websocket_handshake_started(const context& context_value) noexcept {
-        return context_value.request_storage().websocket_handshake_started_;
+    [[nodiscard]] static bool output_committed(const context& context_value) noexcept {
+        return context_value.response_output().committed();
     }
 
-    static void mark_tunnel_handshake_started(context& context_value) noexcept {
-        context_value.request_storage().tunnel_handshake_started_ = true;
-    }
-    [[nodiscard]] static bool tunnel_handshake_started(const context& context_value) noexcept {
-        return context_value.request_storage().tunnel_handshake_started_;
-    }
     static void set_error(context& context_value, std::exception_ptr exception) noexcept {
         context_value.store_error(std::move(exception));
     }
@@ -121,31 +88,6 @@ struct context_access final {
     [[nodiscard]] static http_response streaming_head(
         const context& context_value, std::string_view content_type = {}) {
         return context_value.streaming_head(content_type);
-    }
-
-    // Sets a pending response header on the context, as a handler would before
-    // streaming. Lets a test seed e.g. a caller-provided Cache-Control that the
-    // stream-head builder must then honor.
-    static void set_response_header(context& context_value, std::string_view name, std::string_view value) {
-        context_value.set_stable_response_header(name, value);
-    }
-
-    // True if a Set-Cookie whose value begins with `value_prefix` (e.g. a cookie
-    // name plus '=') is already queued on the context's pending response headers.
-    // Lets a test observe a cookie set by middleware before any response is built.
-    [[nodiscard]] static bool has_pending_set_cookie(
-        const context& context_value, std::string_view value_prefix) noexcept {
-        return !pending_set_cookie_value(context_value, value_prefix).empty();
-    }
-
-    [[nodiscard]] static std::string_view pending_set_cookie_value(
-        const context& context_value, std::string_view value_prefix) noexcept {
-        for (const auto& header : context_value.response_state().active_response().headers()) {
-            if (header.name() == "Set-Cookie" && header.value().starts_with(value_prefix)) {
-                return header.value();
-            }
-        }
-        return {};
     }
 
 private:

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
@@ -25,20 +24,22 @@ class context;  // only used as context* in a type-erased bind thunk; web suppli
 
 namespace ruvia::detail {
 
+// Plain forwarding functions, not coroutines: each returns the sink's own task,
+// so a streamed chunk costs exactly the sink's frame and no wrapper frame.
 template <typename sink>
 task<void> response_stream_write_thunk(void* target, std::string_view chunk) {
-    co_await static_cast<sink*>(target)->write(chunk);
+    return static_cast<sink*>(target)->write(chunk);
 }
 
 template <typename sink>
 task<void> response_stream_end_thunk(void* target, std::span<const http_header_view> trailers) {
-    co_await static_cast<sink*>(target)->end(trailers);
+    return static_cast<sink*>(target)->end(trailers);
 }
 
 template <typename sink>
 task<timer_sleep_result> response_stream_sleep_thunk(
     void* target, std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-    co_return co_await static_cast<sink*>(target)->sleep(duration, stop_token_value);
+    return static_cast<sink*>(target)->sleep(duration, stop_token_value);
 }
 
 template <typename sink>

@@ -4,18 +4,13 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
 
 namespace ruvia::detail {
 
 enum class json_hex_case : std::uint8_t { upper,
     lower };
-
-template <json_hex_case case_value = json_hex_case::upper>
-[[nodiscard]] inline char json_hex_digit(std::uint8_t value) noexcept {
-    constexpr char first_letter = case_value == json_hex_case::upper ? 'A' : 'a';
-    return static_cast<char>(value < 10 ? ('0' + value) : (first_letter + value - 10));
-}
 
 [[nodiscard]] inline bool json_needs_escape(unsigned char value) noexcept {
     return value == '"' || value == '\\' || value < 0x20;
@@ -85,8 +80,13 @@ inline void append_json_string(string_t_type& output, std::string_view value) {
                 break;
             default:
                 output.append("\\u00");
-                output.push_back(json_hex_digit<case_value>(static_cast<std::uint8_t>(c >> 4)));
-                output.push_back(json_hex_digit<case_value>(static_cast<std::uint8_t>(c & 0x0F)));
+                if constexpr (case_value == json_hex_case::upper) {
+                    output.push_back(http_upper_hex_digit(c >> 4));
+                    output.push_back(http_upper_hex_digit(c));
+                } else {
+                    output.push_back(http_lower_hex_digit(c >> 4));
+                    output.push_back(http_lower_hex_digit(c));
+                }
                 break;
         }
         chunk_begin = i + 1;

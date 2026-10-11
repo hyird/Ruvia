@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -147,14 +146,12 @@ public:
     // can no longer deliver input (0-RTT rejection or a closed connection
     // attempt). The caller must first retire that stream's parser state.
     [[nodiscard]] bool replay_on_new_stream(
-        std::string_view scheme, std::string_view authority,
-        std::pmr::memory_resource* resource) {
+        std::string_view authority, std::pmr::memory_resource* resource) {
         auto original = request_->take_request_after_retirement();
         if (!original) {
             return false;
         }
-        auto replay = http3_client_request_write::create(
-            std::move(*original), scheme, authority, resource);
+        auto replay = http3_client_request_write::create(std::move(*original), authority, resource);
         if ((replay.index() != 0)) {
             return false;
         }

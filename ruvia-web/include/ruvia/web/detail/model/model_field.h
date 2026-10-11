@@ -77,7 +77,7 @@ public:
     [[nodiscard]] value_t_type& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {
             value_.emplace(
-                detail::make_request_value<value_t_type>(detail::resolved_pmr_resource_tag{}, resource));
+                detail::make_request_value<value_t_type>(resolved_pmr_resource_tag{}, resource));
         }
         state_ = detail::model_field_state::parsed;
         return *value_;

@@ -6,13 +6,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/http1/http1_server_request_parser.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_response.h"

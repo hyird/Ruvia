@@ -52,15 +52,6 @@ return redis.call('DEL', KEYS[1])
 
 }  // namespace
 
-std::pmr::vector<std::string_view> redis_orm_argument_views(const redis_orm_arguments_type& args) {
-    std::pmr::vector<std::string_view> views(args.get_allocator().resource());
-    views.reserve(args.size());
-    for (const auto& arg : args) {
-        views.emplace_back(arg);
-    }
-    return views;
-}
-
 redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::string_view mode,
     redis_write_options options, std::pmr::memory_resource* resource) {
     if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
@@ -108,10 +99,6 @@ redis_write_result redis_orm_delete_result(redis_value&& reply, std::pmr::memory
     }
     throw redis_error(redis_error::code_type::protocol_error,
         "invalid entity delete affected-row reply");
-}
-
-bool redis_orm_boolean_result(redis_value&& reply, std::pmr::memory_resource*) {
-    return redis_value_integer_bool(reply);
 }
 
 void redis_orm_status_result(redis_value&& reply, std::pmr::memory_resource*) {

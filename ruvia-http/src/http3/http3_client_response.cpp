@@ -10,6 +10,7 @@
 #include "ruvia/http/http3_stream_frames.h"
 #include "ruvia/http/http3_var_int.h"
 
+#include "http3/http3_message_head_error.h"
 #include "http3/http3_trailer_collector.h"
 
 namespace ruvia {
@@ -100,8 +101,8 @@ struct http3_client_response::impl_type final {
             }
             if ((head.index() != 0) || (std::get<0>(head).method_ != "GET" && std::get<0>(head).method_ != "HEAD") ||
                 (std::get<0>(head).content_length_ && *std::get<0>(head).content_length_ != 0)) {
-                self.result_ = connection_error((head.index() != 0) && std::get<1>(head) == http3_message_head_error::qpack_decompression_failed
-                                                    ? http3_connection_error_code::qpack_decompression_failed
+                self.result_ = connection_error(head.index() != 0
+                                                    ? detail::http3_message_head_error_code(std::get<1>(head))
                                                     : http3_connection_error_code::message_error);
                 return;
             }
@@ -153,9 +154,9 @@ struct http3_client_response::impl_type final {
                 self.result_ = stream_error(http3_connection_error_code::message_error);
                 return;
             }
-            trailer_collector collector_value(self.memory_);
             const http3_field_section_limits field_limits{self.limits_.max_encoded_field_section_bytes_,
                 self.limits_.max_field_section_size_, self.limits_.max_fields_};
+            trailer_collector collector_value(self.memory_, field_limits);
             if (self.decoder_) {
                 const auto decoded = self.decoder_->decode(self.stream_id_, frame.payload_, trailer_collector::collect, &collector_value);
                 if ((decoded.index() == 0) && std::get<0>(decoded).status_ == http3_qpack_decode_status::blocked) {
@@ -166,17 +167,20 @@ struct http3_client_response::impl_type final {
                     self.result_ = (decoded.index() != 0) ? connection_error(std::get<1>(decoded) == http3_qpack_connection_error::limit
                                                                                  ? http3_connection_error_code::excessive_load
                                                                                  : http3_connection_error_code::qpack_decompression_failed)
-                                                          : stream_error(http3_connection_error_code::message_error);
+                                   : collector_value.limit_exceeded_
+                                       ? connection_error(http3_connection_error_code::excessive_load)
+                                       : stream_error(http3_connection_error_code::message_error);
                     return;
                 }
             } else {
                 const auto decoded = decode_http3_field_section(frame.payload_, trailer_collector::collect, &collector_value, field_limits, self.memory_);
                 if ((decoded.index() != 0) || !collector_value.valid_) {
-                    self.result_ = collector_value.valid_ ? connection_error(std::get<1>(decoded) == http3_field_section_error::field_list_too_large ||
-                                                                                     std::get<1>(decoded) == http3_field_section_error::field_section_too_large || std::get<1>(decoded) == http3_field_section_error::too_many_fields
-                                                                                 ? http3_connection_error_code::excessive_load
-                                                                                 : http3_connection_error_code::qpack_decompression_failed)
-                                                          : stream_error(http3_connection_error_code::message_error);
+                    self.result_ = collector_value.limit_exceeded_ ? connection_error(http3_connection_error_code::excessive_load)
+                                   : collector_value.valid_        ? connection_error(std::get<1>(decoded) == http3_field_section_error::field_list_too_large ||
+                                                                                              std::get<1>(decoded) == http3_field_section_error::field_section_too_large || std::get<1>(decoded) == http3_field_section_error::too_many_fields
+                                                                                          ? http3_connection_error_code::excessive_load
+                                                                                          : http3_connection_error_code::qpack_decompression_failed)
+                                                                   : stream_error(http3_connection_error_code::message_error);
                     return;
                 }
             }
@@ -211,11 +215,10 @@ struct http3_client_response::impl_type final {
             return;
         }
         if ((decoded.index() != 0)) {
-            self.result_ = std::get<1>(decoded) == http3_message_head_error::qpack_decompression_failed
-                               ? connection_error(http3_connection_error_code::qpack_decompression_failed)
-                           : std::get<1>(decoded) == http3_message_head_error::field_section_too_large
-                               ? connection_error(http3_connection_error_code::excessive_load)
-                               : stream_error(http3_connection_error_code::message_error);
+            const auto code = detail::http3_message_head_error_code(std::get<1>(decoded));
+            self.result_ = code == http3_connection_error_code::message_error
+                               ? stream_error(code)
+                               : connection_error(code);
             return;
         }
         if (std::get<0>(decoded).status_ < 200) {

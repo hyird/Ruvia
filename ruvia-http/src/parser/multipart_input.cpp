@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/multipart_parser.h"
 
+#include "util/http_text_overlap.h"
 #include "util/pmr_string.h"
 
 // How a multipart parser's input is held: either a whole borrowed buffer the
@@ -68,6 +69,18 @@ void multipart_input_lifecycle::feed(std::string_view chunk) {
     auto* open = std::get_if<multipart_streaming_input_open>(&value_);
     if (open == nullptr) {
         throw std::logic_error("multipart input is not open for feed");
+    }
+    std::pmr::string owned_chunk(open->bytes_.get_allocator().resource());
+    if (offset_ >= compact_consumed_prefix_bytes && http_text_overlaps(chunk, open->bytes_)) {
+        owned_chunk.assign(chunk);
+        chunk = owned_chunk;
+        const auto remaining = open->bytes_.size() - offset_;
+        if (chunk.size() > open->bytes_.max_size() - remaining) {
+            throw std::length_error("multipart input exceeds string capacity");
+        }
+        // Complete the only remaining allocation before compaction changes
+        // borrowed input, so either failure leaves that input retryable.
+        open->bytes_.reserve(remaining + chunk.size());
     }
     compact_consumed_prefix(compact_consumed_prefix_bytes);
     open = std::get_if<multipart_streaming_input_open>(&value_);

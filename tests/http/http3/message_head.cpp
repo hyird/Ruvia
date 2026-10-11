@@ -1,4 +1,5 @@
 #include <array>
+#include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -7,6 +8,8 @@
 #include <vector>
 
 #include "ruvia/http/http3_message_head.h"
+#include "ruvia/http/http3_qpack.h"
+#include "ruvia/http/http3_qpack_connection.h"
 
 #include "test_harness.h"
 
@@ -48,6 +51,42 @@ private:
 
 }  // namespace
 
+RUVIA_TEST(http3_message_head_accepts_nonzero_base_without_dynamic_references) {
+    for (const auto kind : {ruvia::http3_message_head_kind::request, ruvia::http3_message_head_kind::response}) {
+        const std::vector<ruvia::http3_field_section_field_view> fields = kind == ruvia::http3_message_head_kind::request
+                                                                              ? std::vector<ruvia::http3_field_section_field_view>{{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}}
+                                                                              : std::vector<ruvia::http3_field_section_field_view>{{":status", "200"}};
+        const auto original = ruvia::encode_http3_field_section(fields, std::pmr::get_default_resource());
+        RUVIA_CHECK(original.index() == 0);
+        if (original.index() != 0) {
+            continue;
+        }
+        for (const auto base : {std::uint64_t{1}, std::uint64_t{127}, std::uint64_t{128}}) {
+            std::array<char, 11> prefix{};
+            const auto encoded = ruvia::encode_http3_qpack_integer(prefix, 7, 0, base);
+            RUVIA_CHECK(encoded.index() == 0);
+            if (encoded.index() != 0) {
+                continue;
+            }
+            std::vector<char> wire{0};
+            wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(encoded));
+            wire.insert(wire.end(), std::get<0>(original).begin() + 2, std::get<0>(original).end());
+            const auto decoded = ruvia::decode_http3_message_head(wire, kind);
+            RUVIA_CHECK(decoded.index() == 0);
+            ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 0});
+            const auto shared = ruvia::decode_http3_message_head(decoder, 0, wire, kind);
+            RUVIA_CHECK(shared.index() == 0 && std::holds_alternative<ruvia::http3_message_head>(std::get<0>(shared)));
+            if (decoded.index() == 0 && shared.index() == 0 && std::holds_alternative<ruvia::http3_message_head>(std::get<0>(shared))) {
+                const auto& shared_head = std::get<ruvia::http3_message_head>(std::get<0>(shared));
+                RUVIA_CHECK(std::get<0>(decoded).method_ == shared_head.method_);
+                RUVIA_CHECK(std::get<0>(decoded).status_ == shared_head.status_);
+                RUVIA_CHECK(std::get<0>(decoded).authority_ == shared_head.authority_);
+                RUVIA_CHECK(std::get<0>(decoded).path_ == shared_head.path_);
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http3_message_head_decodes_get_post_and_response) {
     const auto get = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/a?q=1"},
                                 {":authority", "example.test"}, {"accept", "text/plain"}},
@@ -57,7 +96,7 @@ RUVIA_TEST(http3_message_head_decodes_get_post_and_response) {
         RUVIA_CHECK_EQ(std::get<0>(get).method_, "GET");
         RUVIA_CHECK_EQ(std::get<0>(get).path_, "/a?q=1");
         RUVIA_CHECK_EQ(std::get<0>(get).headers_.size(), 1U);
-        RUVIA_CHECK_EQ(std::get<0>(get).headers_[0].name_, "accept");
+        RUVIA_CHECK_EQ(std::get<0>(get).headers_[0].name(), "accept");
     }
 
     const auto post = decode({{":method", "POST"}, {":scheme", "https"}, {":path", "/"},
@@ -82,7 +121,37 @@ RUVIA_TEST(http3_message_head_decodes_get_post_and_response) {
     RUVIA_CHECK((wide.index() == 0));
     if ((wide.index() == 0)) {
         RUVIA_CHECK(std::get<0>(wide).content_length_ == UINT64_MAX);
-        RUVIA_CHECK_EQ(std::get<0>(wide).headers_.back().value_, " value\t");
+        RUVIA_CHECK_EQ(std::get<0>(wide).headers_.back().value(), " value\t");
+    }
+}
+
+RUVIA_TEST(http3_message_head_rejects_declared_content_without_method_requirements) {
+    for (const std::string_view method : {"TRACE", "OPTIONS"}) {
+        for (const std::string_view length : {"0", "1"}) {
+            for (const bool content_type : {false, true}) {
+                std::vector<ruvia::http3_field_section_field_view> fields_value{
+                    {":method", method}, {":scheme", "https"}, {":authority", "example.test"},
+                    {":path", "/"}, {"content-length", length}};
+                if (content_type) {
+                    fields_value.push_back({"content-type", "text/plain"});
+                }
+                const auto encoded = ruvia::encode_http3_field_section(fields_value, std::pmr::get_default_resource());
+                RUVIA_CHECK((encoded.index() == 0));
+                if (encoded.index() != 0) {
+                    continue;
+                }
+                const auto decoded = ruvia::decode_http3_message_head(std::get<0>(encoded),
+                    ruvia::http3_message_head_kind::request);
+                if (method == "OPTIONS" && content_type) {
+                    RUVIA_CHECK((decoded.index() == 0));
+                } else {
+                    RUVIA_CHECK((decoded.index() != 0));
+                    if (decoded.index() != 0) {
+                        RUVIA_CHECK(std::get<1>(decoded) == ruvia::http3_message_head_error::message_error);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -121,7 +190,7 @@ RUVIA_TEST(http3_message_head_field_names_accept_only_lowercase_token_bytes) {
                 ruvia::http3_message_head_kind::response);
             RUVIA_CHECK_EQ((response.index() == 0), allowed);
             if (response.index() == 0) {
-                RUVIA_CHECK_EQ(std::get<0>(response).headers_.front().name_, std::string_view(name));
+                RUVIA_CHECK_EQ(std::get<0>(response).headers_.front().name(), std::string_view(name));
             } else {
                 RUVIA_CHECK(std::get<1>(response) == ruvia::http3_message_head_error::message_error);
             }
@@ -215,7 +284,7 @@ RUVIA_TEST(http3_message_head_validates_extended_connect_pseudo_fields) {
         RUVIA_CHECK_EQ(std::get<0>(websocket_value).protocol_, "websocket");
         RUVIA_CHECK_EQ(std::get<0>(websocket_value).path_, "/socket?room=one");
         RUVIA_CHECK_EQ(std::get<0>(websocket_value).headers_.size(), 1U);
-        RUVIA_CHECK_EQ(std::get<0>(websocket_value).headers_[0].name_, "x-end-to-end");
+        RUVIA_CHECK_EQ(std::get<0>(websocket_value).headers_[0].name(), "x-end-to-end");
     }
 
     const auto extended_host_mismatch = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
@@ -387,6 +456,36 @@ RUVIA_TEST(http3_message_head_rejects_malformed_expectation) {
     const auto valid = decode({{":method", "POST"}, {":scheme", "https"},
                                   {":authority", "example.test"}, {":path", "/"},
                                   {"expect", "100-continue"}},
+        ruvia::http3_message_head_kind::request);
+    RUVIA_CHECK((valid.index() == 0));
+}
+
+RUVIA_TEST(http3_message_head_te_accepts_only_ows_trimmed_trailers) {
+    for (const std::string_view value : {"trailers", "  trailers ", "Trailers", "trailers, ,trailers"}) {
+        const auto request = decode({{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"},
+                                        {":path", "/"}, {"te", value}},
+            ruvia::http3_message_head_kind::request);
+        RUVIA_CHECK((request.index() == 0));
+    }
+    for (const std::string_view value : {"gzip", "trailers, gzip", "trailers;q=1", ""}) {
+        const auto request = decode({{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"},
+                                        {":path", "/"}, {"te", value}},
+            ruvia::http3_message_head_kind::request);
+        RUVIA_CHECK((request.index() != 0) && std::get<1>(request) == ruvia::http3_message_head_error::message_error);
+    }
+}
+
+RUVIA_TEST(http3_message_head_validates_authority_grammar_at_receipt) {
+    // RFC 3986 authority grammar applies to every scheme, as on HTTP/2: a
+    // stray '@' or a malformed percent-encoding is not a valid authority.
+    for (const std::string_view authority : {"user@host@example.test", "exa%zzmple.test", "example.test:8o"}) {
+        const auto request = decode({{":method", "GET"}, {":scheme", "custom"}, {":authority", authority},
+                                        {":path", "/"}},
+            ruvia::http3_message_head_kind::request);
+        RUVIA_CHECK((request.index() != 0) && std::get<1>(request) == ruvia::http3_message_head_error::message_error);
+    }
+    const auto valid = decode({{":method", "GET"}, {":scheme", "custom"}, {":authority", "user@example.test:8080"},
+                                  {":path", "/"}},
         ruvia::http3_message_head_kind::request);
     RUVIA_CHECK((valid.index() == 0));
 }

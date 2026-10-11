@@ -49,7 +49,8 @@ struct http3_qpack_integer final {
 [[nodiscard]] std::variant<std::size_t, http3_qpack_error> decode_http3_qpack_string(
     std::span<const char> input, std::uint8_t prefix_bits, std::pmr::string& output);
 // Encodes a non-Huffman string literal. QPACK Huffman encoding is intentionally
-// not provided by this primitive.
+// not provided by this primitive. Input may overlap output; an insufficient
+// output span is left unchanged.
 [[nodiscard]] std::variant<std::size_t, http3_qpack_error> encode_http3_qpack_string(
     std::span<char> output, std::string_view value) noexcept;
 

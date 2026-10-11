@@ -2,10 +2,9 @@
 
 #include "router/router_impl.h"
 
-// The route-registration surface a controller sees. Every call forwards to the
-// router_impl it was scoped from, carrying the prefix and the middlewares that
-// scope added; the router's own side of the same registration is in
-// router/router_registration.cpp.
+// The route-registration surface a controller sees. Each call builds the
+// endpoint its route kind runs and hands it, with the scope's prefix and
+// middlewares, to the router's single registration path.
 
 namespace ruvia {
 
@@ -96,52 +95,59 @@ detail::controller_route_builder& detail::controller_route_builder::operator=(
 detail::controller_route_builder::~controller_route_builder() = default;
 
 void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
-    controller_route_handler_type handler, request_body_mode body_mode,
+    route_handler_type handler, request_body_mode body_mode,
     std::span<const controller_middleware_descriptor> middlewares) const {
     router_impl::from(impl_->router())
-        .register_route(method, join_controller_paths(impl_->prefix(), path), handler, body_mode,
+        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
             impl_->middlewares(), middlewares);
 }
 
 void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
-    std::string_view path, controller_route_handler_type handler, request_body_mode body_mode,
+    std::string_view path, route_handler_type handler, request_body_mode body_mode,
     std::span<const controller_middleware_descriptor> middlewares) const {
     router_impl::from(impl_->router())
-        .register_extension_method_route(method_token, join_controller_paths(impl_->prefix(), path),
-            handler, body_mode, impl_->middlewares(), middlewares);
+        .register_endpoint(http_known_method::unknown, method_token, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
+            impl_->middlewares(), middlewares);
 }
 
 void detail::controller_route_builder::register_response_stream_route(http_known_method method,
-    std::string_view path, controller_route_stream_handler_type handler,
+    std::string_view path, route_stream_handler_type handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
     router_impl::from(impl_->router())
-        .register_response_stream_route(method, join_controller_paths(impl_->prefix(), path), handler,
-            impl_->middlewares(), middlewares);
+        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::response_stream(callback_access::invoke(handler), http_response_stream_kind::generic),
+            callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
 void detail::controller_route_builder::register_sse_route(http_known_method method, std::string_view path,
-    controller_route_stream_handler_type handler,
-    std::span<const controller_middleware_descriptor> middlewares) const {
+    route_stream_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const {
     router_impl::from(impl_->router())
-        .register_sse_route(method, join_controller_paths(impl_->prefix(), path), handler,
-            impl_->middlewares(), middlewares);
+        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::response_stream(callback_access::invoke(handler), http_response_stream_kind::sse),
+            callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
 void detail::controller_route_builder::register_tunnel_route(std::string_view protocol,
-    std::string_view target, controller_route_stream_handler_type handler,
+    std::string_view target, route_stream_handler_type handler,
     std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const {
-    auto owned_target = protocol.empty() ? std::pmr::string(target, registration_resource())
-                                         : join_controller_paths(impl_->prefix(), target);
-    router_impl::from(impl_->router()).register_tunnel_route(protocol, std::move(owned_target), handler, impl_->middlewares(), middlewares, config);
+    auto& routes = router_impl::from(impl_->router());
+    const auto owned_target = protocol.empty() ? std::pmr::string(target, registration_resource())
+                                               : join_controller_paths(impl_->prefix(), target);
+    routes.register_endpoint(http_known_method::connect, {}, owned_target,
+        route_endpoint::tunnel(routes.resource(), callback_access::invoke(handler), protocol, config),
+        callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
 void detail::controller_route_builder::register_websocket_route(http_known_method method,
-    std::string_view path, controller_route_stream_handler_type handler,
+    std::string_view path, route_stream_handler_type handler,
     std::span<const controller_middleware_descriptor> middlewares,
     websocket_route_config websocket_config) const {
-    router_impl::from(impl_->router())
-        .register_websocket_route(method, join_controller_paths(impl_->prefix(), path), handler,
-            impl_->middlewares(), middlewares, std::move(websocket_config));
+    auto& routes = router_impl::from(impl_->router());
+    routes.register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
+        route_endpoint::get_websocket(routes.resource(), callback_access::invoke(handler), std::move(websocket_config)),
+        callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
 detail::controller_route_builder detail::controller_route_builder::create_scope(std::string_view prefix,

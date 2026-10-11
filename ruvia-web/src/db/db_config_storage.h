@@ -16,6 +16,7 @@
 
 namespace ruvia::detail {
 
+#ifdef RUVIA_ENABLE_REDIS
 struct db_cache_config_storage final {
     template <typename config_type>
     db_cache_config_storage(const config_type& source_value, std::pmr::memory_resource* resource)
@@ -23,9 +24,6 @@ struct db_cache_config_storage final {
           always_enabled_(source_value.always_enabled_),
           ignore_errors_(source_value.ignore_errors_),
           name_space_(source_value.name_space_, resource) {
-#ifndef RUVIA_ENABLE_REDIS
-        throw std::invalid_argument("database query caching requires Redis support");
-#endif
         if (duration_.count() <= 0 || name_space_.empty()) {
             throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
         }
@@ -35,6 +33,7 @@ struct db_cache_config_storage final {
     bool ignore_errors_;
     std::pmr::string name_space_;
 };
+#endif
 
 // Worker/app-owned copy of the public startup configuration. Public db_config
 // deliberately uses ordinary value types; retained runtime state is rebound to
@@ -97,6 +96,7 @@ private:
     }
 };
 
+#ifdef RUVIA_ENABLE_REDIS
 struct db_query_cache_registration_storage final {
     db_query_cache_registration_storage(const db_query_cache_registration& source_value,
         std::pmr::memory_resource* resource)
@@ -107,12 +107,15 @@ struct db_query_cache_registration_storage final {
     std::pmr::string redis_alias_;
     db_cache_config_storage policy_;
 };
+#endif
 
 struct db_definition final {
     using config_storage_type = db_config_storage;
     std::pmr::string alias_;
     db_config_storage config_;
+#ifdef RUVIA_ENABLE_REDIS
     std::optional<db_query_cache_registration_storage> query_cache_{};
+#endif
 };
 
 }  // namespace ruvia::detail

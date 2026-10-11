@@ -46,7 +46,7 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
       output_(resource),
       streams_(resource),
       priorities_(resource),
-      decoder_({.resource_ = resource}),
+      decoder_(resource),
       peer_settings_(role),
       events_(std::make_move_iterator(static_cast<http2_event*>(nullptr)),
           std::make_move_iterator(static_cast<http2_event*>(nullptr)), resource),
@@ -88,22 +88,12 @@ http2_output_batch_result http2_connection::take_output_batch(std::size_t max_by
 }
 
 void http2_connection::take_output(std::pmr::string& into) {
-    consecutive_pings_ = 0;     // outbound (incl. PING ACKs) is being flushed
-    consecutive_settings_ = 0;  // outbound (incl. SETTINGS ACKs) is being flushed
     output_.take(into);
+    consecutive_pings_ = 0;     // outbound (incl. PING ACKs) has been flushed
+    consecutive_settings_ = 0;  // outbound (incl. SETTINGS ACKs) has been flushed
 }
 
 // --- event queue --------------------------------------------------------------
-
-std::optional<http2_event> http2_connection::next_event() {
-    auto* event = peek_event();
-    if (event == nullptr) {
-        return std::nullopt;
-    }
-    auto result_value = std::optional<http2_event>(std::move(*event));
-    consume_event();
-    return result_value;
-}
 
 http2_event* http2_connection::peek_event() & noexcept {
     if (event_offset_ < events_.size()) {
@@ -368,7 +358,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
         return false;
     }
 
-    const http2_peer_goaway goaway(
+    const http2_goaway_event goaway(
         http2_read31(reinterpret_cast<const unsigned char*>(payload_value.data())),
         static_cast<http2_error_code>(
             http2_read32(reinterpret_cast<const unsigned char*>(payload_value.data() + 4))));
@@ -421,7 +411,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
     // so a throwing resource leaves both lifecycle sides retryable.
     begin_drain();
     peer_goaway_ = goaway;
-    events_.push_back(http2_event::goaway(goaway));
+    events_.push_back(http2_event(goaway));
 
     if (role_ == http2_role::server) {
         for (std::size_t i = 0; i < unprocessed_count; ++i) {
@@ -440,7 +430,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
                 close_notification_type::owner_already_knows)) {
             continue;
         }
-        events_.push_back(http2_event::request_unprocessed(stream_id));
+        events_.push_back(http2_event(http2_request_unprocessed_event(stream_id)));
     }
     return true;
 }
@@ -540,7 +530,7 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
     }
     reserve_event_slots(1);
     priorities_.insert_or_assign(id, std::get<0>(update).fields_);
-    events_.push_back(http2_event::priority_update(std::get<0>(update)));
+    events_.push_back(http2_event(std::get<0>(update)));
     return true;
 }
 
@@ -622,7 +612,7 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
             break;
         }
         const auto header_value = http2_parse_frame_header(buffer.substr(offset, http2_frame_header_bytes));
-        if (header_value.length_ > http2_max_frame_size_limit || header_value.length_ > local_max_frame_size_) {
+        if (header_value.length_ > http2_max_frame_size || header_value.length_ > local_max_frame_size_) {
             append_goaway(http2_error_code::frame_size_error, "frame too large");
             return false;
         }

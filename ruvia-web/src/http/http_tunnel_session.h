@@ -9,13 +9,13 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/connection_scanner.h"
-#include "ruvia/web/detail/util/callable_ref.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
 #include "context/http_tunnel_access.h"
 #include "http/http_stream_read_result.h"
+#include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 namespace ruvia::detail {
 template <typename transport_type>
@@ -120,7 +120,7 @@ private:
 
 template <typename transport_type>
 [[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
-    connection_scanner::entry_type& entry_value, const callable_ref<void, context&>& handler, context& context_value) {
+    connection_scanner::entry_type& entry_value, const route_stream_handler_type& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
     entry_value.set_phase(connection_scanner::phase_type::long_lived);
     co_await handler(context_value);

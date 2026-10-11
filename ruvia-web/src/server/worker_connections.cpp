@@ -60,9 +60,9 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     return SSL_TLSEXT_ERR_OK;
 }
 
-[[nodiscard]] ruvia::connection_scanner_options make_connection_scanner_options(
+[[nodiscard]] connection_scanner_options make_connection_scanner_options(
     const http_server_options& options) noexcept {
-    return ruvia::connection_scanner_options{.scan_interval_ = options.scan_interval_,
+    return connection_scanner_options{.scan_interval_ = options.scan_interval_,
         .idle_timeout_ = options.idle_timeout_,
         .initial_read_timeout_ = options.request_header_timeout_,
         .payload_read_timeout_ = options.request_body_timeout_,
@@ -196,10 +196,10 @@ task<void> worker_connections::run_session(
                 // connection's socket one request_header_timeout after the handshake
                 // regardless of session activity -- severing long-lived TLS
                 // sessions (websocket, keep-alive, slow uploads, streaming).
-                ruvia::connection_scanner::entry_type handshake_entry;
-                ruvia::connection_scanner::guard_type handshake_guard(
+                connection_scanner::entry_type handshake_entry;
+                connection_scanner::guard_type handshake_guard(
                     &scanner_, handshake_entry, socket);
-                handshake_entry.set_phase(ruvia::connection_scanner::phase_type::reading_initial);
+                handshake_entry.set_phase(connection_scanner::phase_type::reading_initial);
                 const auto handshake_completion =
                     co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
                 if (handshake_completion.error_code()) {
@@ -251,8 +251,8 @@ task<void> worker_connections::run_session(
 template <typename stream_type>
 task<http_connection_close> worker_connections::run_http2(
     stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial_bytes) {
-    ruvia::connection_scanner::entry_type scanner_entry;
-    ruvia::connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
+    connection_scanner::entry_type scanner_entry;
+    connection_scanner::guard_type scanner_guard(&scanner_, scanner_entry, socket);
 
     co_return co_await run_http2_server_session(
         http2_server_session_setup<stream_type>{

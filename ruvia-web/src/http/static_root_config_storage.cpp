@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <string_view>
 
-#include "http/static_root_options_validation.h"
+#include "ruvia/http/http_ascii.h"
 
 namespace ruvia::detail {
 
@@ -11,9 +11,7 @@ namespace {
 
 void lowercase_ascii(std::pmr::string& value) noexcept {
     for (char& character : value) {
-        if (character >= 'A' && character <= 'Z') {
-            character = static_cast<char>(character + ('a' - 'A'));
-        }
+        character = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(character)));
     }
 }
 
@@ -40,12 +38,6 @@ static_root_config_storage::static_root_config_storage(
     range_requests_ = source_value.range_requests_;
     response_validators_ = source_value.response_validators_;
     dotfiles_ = source_value.dotfiles_;
-}
-
-static_root_config_storage make_static_root_config_storage(
-    const static_root_options& source_value, std::pmr::memory_resource* resource) {
-    validate_static_root_options(source_value);
-    return store_validated_static_root_config(source_value, resource);
 }
 
 static_root_config_storage store_validated_static_root_config(

@@ -1,26 +1,20 @@
 #pragma once
 
-#include <cstddef>
 #include <exception>
 #include <optional>
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/error.h"
 
-#include "http/http_cors.h"
 #include "server/http_response_compression.h"
-#include "server/http_server_options.h"
 
 namespace ruvia::detail {
-
-class context_services;
-class route_table;
 
 class http_response_coding_policy_disabled final {};
 
@@ -78,49 +72,6 @@ private:
     value_type value_;
     bool negotiation_failed_{false};
 };
-
-// The wire plan alone cannot tell the protocol driver why a selected coding
-// was not installed. Keep the compression outcome beside the finalized plan so
-// a policy miss remains 406 while an encoder failure becomes a server error.
-class http_buffered_response_preparation final {
-public:
-    [[nodiscard]] http_buffered_response_write_plan write_plan() const noexcept {
-        return write_plan_;
-    }
-
-    [[nodiscard]] const http_response_compression_result& compression_result() const& noexcept {
-        return compression_result_;
-    }
-    const http_response_compression_result& compression_result() const&& = delete;
-
-private:
-    friend http_buffered_response_preparation prepare_buffered_http_response(const http_request&,
-        const http_response_coding_policy&, http_response&, const http_server_options&);
-
-    http_buffered_response_preparation(http_buffered_response_write_plan write_plan,
-        http_response_compression_result compression_result) noexcept
-        : write_plan_(write_plan),
-          compression_result_(compression_result) {}
-
-    http_buffered_response_write_plan write_plan_;
-    http_response_compression_result compression_result_;
-};
-
-[[nodiscard]] inline http_response_coding_qualities http_response_coding_qualities_for(
-    const http_request& request) noexcept {
-    http_response_coding_qualities qualities;
-    for (const auto& header : request.headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
-            qualities.update(header.value());
-        }
-    }
-    return qualities;
-}
-
-[[nodiscard]] inline http_response_coding_selection_result http_response_coding_for(
-    const http_request& request) noexcept {
-    return http_response_coding_selection::select(http_response_coding_qualities_for(request));
-}
 
 // A selected non-identity coding is only a promise until the response policy
 // actually installs Content-Encoding. In particular, no-transform,
@@ -218,28 +169,6 @@ private:
     stage stage_{stage::application};
 };
 
-// This returns the one HTTP-owned snapshot both protocol drivers must consume;
-// neither driver may re-plan after Web compression/CORS has finalized the
-// response representation. A disabled policy is reserved for a terminal
-// response that must not be transformed again.
-[[nodiscard]] inline http_buffered_response_preparation prepare_buffered_http_response(
-    const http_request& request, const http_response_coding_policy& policy, http_response& response,
-    const http_server_options& options) {
-    response.materialize_body();
-    if (options.cors_.has_value()) {
-        apply_cors_headers(request, response, *options.cors_);
-    }
-    auto compression_result = http_response_compression_result::make_not_applicable();
-    if (options.compression_.has_value()) {
-        if (const auto* selection = policy.selection()) {
-            compression_result = apply_response_compression(
-                *selection, request.known_method(), response, *options.compression_);
-        }
-    }
-    return http_buffered_response_preparation(
-        plan_buffered_http_response_write(request.known_method(), response), compression_result);
-}
-
 struct prepared_application_response final {
     http_buffered_response_write_plan write_plan_;
     bool recovered_;
@@ -251,15 +180,5 @@ struct application_response_control final {
     const stop_token* terminal_stop_{};
     buffered_response_recovery_mode recovery_mode_{buffered_response_recovery_mode::negotiated_then_disabled};
 };
-
-// All arguments borrow the current request owner through completion. Only an
-// uncommitted response may enter this operation. A disengaged result means the
-// request was cancelled; protocol drivers retain ownership of reset/close.
-// Preparation and recovery share one coroutine frame, including bounded
-// compression offload. The application error handler runs at most once here.
-[[nodiscard]] task<std::optional<prepared_application_response>> prepare_application_response(
-    const http_request& request, http_response_coding_policy policy, http_response& response,
-    const http_server_options& options, const route_table& routes_value, request_memory& memory,
-    const context_services& services, application_response_control control = {});
 
 }  // namespace ruvia::detail

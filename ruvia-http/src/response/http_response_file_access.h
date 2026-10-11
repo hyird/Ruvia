@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <utility>
 
-#include "ruvia/http/detail/util/native_path.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response.h"
 
 namespace ruvia::detail {

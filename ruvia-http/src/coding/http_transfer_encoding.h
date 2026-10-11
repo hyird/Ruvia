@@ -9,10 +9,10 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/coding/http_transfer_coding.h"
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_transfer_coding.h"
 
 namespace ruvia::detail {
 

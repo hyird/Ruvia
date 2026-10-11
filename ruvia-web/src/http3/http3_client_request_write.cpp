@@ -1,7 +1,6 @@
 #include "http3/http3_client_request_write.h"
 
 #include <algorithm>
-#include <limits>
 #include <new>
 #include <stdexcept>
 #include <type_traits>
@@ -9,7 +8,6 @@
 #include <variant>
 
 #include "ruvia/http/http3_client_request_head.h"
-#include "ruvia/http/http3_frames.h"
 #include "ruvia/http/http3_request_writer.h"
 
 #include "client/http_client_tunnel_state.h"
@@ -17,29 +15,69 @@
 #include "http3/http3_client_sans_io_session_engine.h"
 
 namespace ruvia::detail {
+namespace {
+constexpr std::string_view request_scheme = "https";
+
+// The single request-to-head mapping for both the provisional static-QPACK
+// head and the connection-bound re-encoding. Plain CONNECT carries its target
+// as authority; a tunnel carries its own authority; everything else uses the
+// connection's origin authority. HTTP owns Content-Length and Expect
+// generation from the declared body length and expectation.
+http3_client_request_head_view request_head_view(const http_client_request_storage& request,
+    std::string_view origin_authority, std::span<const http3_field_section_field_view> fields) noexcept {
+    const bool connect = request.method() == "CONNECT";
+    const bool plain_connect = connect && !request.is_tunnel();
+    const auto* upload = request.upload();
+    const bool sends_body = http_client_request_storage_access::has_body(request);
+    // Request framing is method-independent (RFC 9110 section 9.3.2). HEAD
+    // suppresses response payload, not explicitly supplied request content. A
+    // bodyless request has a known zero-byte body but acquires no
+    // Content-Length: 0.
+    return {.method_ = request.method(),
+        .scheme_ = connect && request.tunnel_protocol().empty() ? std::string_view{} : request_scheme,
+        .authority_ = plain_connect         ? request.target()
+                      : request.is_tunnel() ? request.tunnel_authority()
+                                            : origin_authority,
+        .path_ = plain_connect ? std::string_view{} : request.target(),
+        .fields_ = fields,
+        .body_length_ = connect             ? std::nullopt
+                        : upload != nullptr ? upload->config_.content_length_
+                        : sends_body        ? std::optional<std::uint64_t>(request.body().size())
+                                            : std::optional<std::uint64_t>(0),
+        .emit_content_length_ = sends_body || (upload != nullptr && upload->config_.content_length_.has_value()),
+        .expectation_ = upload != nullptr ? upload->config_.expectation_ : http_client_request_expectation::none,
+        .protocol_ = request.tunnel_protocol()};
+}
+
+std::pmr::vector<http3_field_section_field_view> request_fields(
+    const http_client_request_storage& request, std::pmr::memory_resource* resource) {
+    const auto& headers = http_client_request_storage_access::headers(request);
+    std::pmr::vector<http3_field_section_field_view> fields(resource);
+    fields.reserve(headers.size());
+    for (const auto& field : headers) {
+        fields.push_back({field.name_, field.value_, false});
+    }
+    return fields;
+}
+}  // namespace
 
 // variant's in-place constructor has no noexcept specification. The commit
 // relies on the selected alternative's constructor, without moving the cursor.
 static_assert(std::is_nothrow_constructible_v<http3_client_request_write,
     http3_client_request_write::prepared_tag_type, std::pmr::memory_resource*, http_client_request_storage&&,
-    std::pmr::string&&, std::pmr::string&&, std::pmr::vector<char>&&, http3_data_write_plan,
-    http3_field_section_limits>);
+    std::string_view, std::optional<http3_headers_frame>&&, http3_data_write_plan, http3_field_section_limits>);
 
 http3_client_request_write::http3_client_request_write(prepared_tag_type,
-    std::pmr::memory_resource* resource, http_client_request_storage&& request,
-    std::pmr::string&& scheme,
-    std::pmr::string&& authority, std::pmr::vector<char>&& headers,
-    http3_data_write_plan data_plan, http3_field_section_limits limits) noexcept
+    std::pmr::memory_resource* resource, http_client_request_storage&& request, std::string_view authority,
+    std::optional<http3_headers_frame>&& headers, http3_data_write_plan data_plan,
+    http3_field_section_limits limits) noexcept
     : worker_pool_(resource != nullptr ? resource : std::pmr::get_default_resource()),
       field_limits_(limits),
       request_(std::move(request)),
-      scheme_(std::move(scheme)),
-      authority_(std::move(authority)),
+      authority_(authority),
       headers_(std::move(headers)),
       data_plan_(std::move(data_plan)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(request_)>);
-    static_assert(std::is_nothrow_move_constructible_v<decltype(scheme_)>);
-    static_assert(std::is_nothrow_move_constructible_v<decltype(authority_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
     static_assert(std::is_nothrow_move_constructible_v<http3_data_write_plan>);
     static_assert(std::is_nothrow_constructible_v<decltype(data_plan_), http3_data_write_plan&&>);
@@ -57,9 +95,10 @@ http3_client_request_write::http3_client_request_write(http3_client_request_writ
     : worker_pool_(require_no_outstanding_segment(other).worker_pool_),
       field_limits_(other.field_limits_),
       request_(std::move(other.request_)),
-      scheme_(std::move(other.scheme_), worker_pool_),
-      authority_(std::move(other.authority_), worker_pool_),
-      headers_(std::move(other.headers_), worker_pool_),
+      authority_(other.authority_),
+      headers_(std::move(other.headers_)),
+      engine_(std::exchange(other.engine_, nullptr)),
+      stream_id_(other.stream_id_),
       data_plan_(std::move(other.data_plan_)),
       chunk_(other.chunk_),
       segment_offset_(other.segment_offset_),
@@ -84,13 +123,17 @@ std::optional<http_client_request_storage> http3_client_request_write::take_requ
     chunk_ = {};
     data_plan_.reset();
     request_taken_ = true;
+    engine_ = nullptr;
     return std::optional<http_client_request_storage>(std::in_place, std::move(request_));
 }
 
+std::pmr::vector<http3_field_section_field_view> http3_client_request_write::request_fields() const {
+    return detail::request_fields(request_, worker_pool_);
+}
+
 std::variant<http3_client_request_write, http3_client_request_write::error_type>
-http3_client_request_write::create(http_client_request_storage&& request, std::string_view scheme,
-    std::string_view authority, std::pmr::memory_resource* worker_pool,
-    http3_field_section_limits limits) noexcept {
+http3_client_request_write::create(http_client_request_storage&& request, std::string_view authority,
+    std::pmr::memory_resource* worker_pool, http3_field_section_limits limits) noexcept {
     auto* resource = worker_pool != nullptr ? worker_pool : std::pmr::get_default_resource();
     try {
         std::optional<http_client_request_storage> normalized_request;
@@ -102,89 +145,38 @@ http3_client_request_write::create(http_client_request_storage&& request, std::s
             prepared_request = &*normalized_request;
         }
 
-        std::pmr::string owned_scheme(scheme, resource);
-        std::pmr::string owned_authority(authority, resource);
-        std::pmr::vector<http3_field_section_field_view> fields(resource);
-        fields.reserve(http_client_request_storage_access::headers(*prepared_request).size());
-        for (const auto& field : http_client_request_storage_access::headers(*prepared_request)) {
-            fields.push_back({field.name_, field.value_, false});
-        }
-        const auto* upload = prepared_request->upload();
-        if (upload != nullptr && upload->config_.expectation_ == http_client_request_expectation::continue_value) {
-            if (std::ranges::any_of(fields, [](const auto& field) { return field.name_ == "expect"; })) {
-                return error_type::invalid_request;
-            }
-            fields.push_back({"expect", "100-continue", false});
-        }
-        const auto target = prepared_request->target();
-        const bool connect = prepared_request->method() == "CONNECT";
-        if (prepared_request->is_tunnel()) {
-            owned_authority.assign(prepared_request->tunnel_authority());
-        }
-        // Request framing is method-independent (RFC 9110 section 9.3.2).
-        // HEAD suppresses response payload, not explicitly supplied request
-        // content. The caller must have established that its origin supports
-        // HEAD content; requests without supplied content remain bodyless.
-        const bool sends_body = http_client_request_storage_access::has_body(*prepared_request);
-        // HTTP owns framing validation and automatic field generation. A
-        // bodyless request still has a known zero-byte body for validating an
-        // explicit Content-Length, but does not acquire Content-Length: 0.
-        const std::optional<std::uint64_t> body_length = connect             ? std::nullopt
-                                                         : upload != nullptr ? upload->config_.content_length_
-                                                         : sends_body        ? std::optional<std::uint64_t>(prepared_request->body().size())
-                                                                             : std::optional<std::uint64_t>(0);
-        const bool emit_content_length = sends_body ||
-                                         (upload != nullptr && upload->config_.content_length_.has_value());
+        const bool plain_connect = prepared_request->method() == "CONNECT" && !prepared_request->is_tunnel();
+        std::optional<http3_headers_frame> headers;
+        http3_client_request_body_plan body_plan{};
         // Extended CONNECT cannot be encoded before received SETTINGS authorize
         // it. Keep an unbounded cursor with no provisional wire head; the sole
         // connection driver encodes and validates it before the first write.
-        auto encoded = [&]() -> std::variant<http3_client_request_head, http3_client_request_head_failure> {
-            if (prepared_request->is_tunnel() && !prepared_request->tunnel_protocol().empty()) {
-                return http3_client_request_head(resource);
+        if (!prepared_request->is_tunnel() || prepared_request->tunnel_protocol().empty()) {
+            const auto fields = detail::request_fields(*prepared_request, resource);
+            auto encoded = encode_http3_client_request_head(
+                request_head_view(*prepared_request, authority, fields), limits, resource);
+            if (encoded.index() != 0) {
+                return error_type::request_encoding;
             }
-            return encode_http3_client_request_head({.method_ = prepared_request->method(),
-                                                        .scheme_ = connect ? std::string_view{} : std::string_view(owned_scheme),
-                                                        .authority_ = connect && !prepared_request->is_tunnel() ? target : std::string_view(owned_authority),
-                                                        .path_ = connect && !prepared_request->is_tunnel() ? std::string_view{} : target,
-                                                        .fields_ = fields,
-                                                        .body_length_ = body_length,
-                                                        .emit_content_length_ = emit_content_length},
-                limits, resource);
-        }();
-        if (encoded.index() != 0) {
-            return error_type::request_encoding;
+            body_plan = std::get<0>(encoded).body_plan_;
+            headers.emplace(std::move(std::get<0>(encoded).headers_));
         }
         // Let HTTP validate the CONNECT authority-form first; this client then
         // reports its independent lack of a plain CONNECT tunnel capability.
-        if (connect && !prepared_request->is_tunnel()) {
+        if (plain_connect) {
             return error_type::unsupported_tunnel;
         }
-        if (std::get<0>(encoded).field_section_.size() > std::numeric_limits<std::size_t>::max() - http3_frame_header_max_bytes) {
-            return error_type::request_encoding;
-        }
-        std::pmr::vector<char> headers(resource);
-        headers.resize(http3_frame_header_max_bytes + std::get<0>(encoded).field_section_.size());
-        auto frame = encode_http3_frame_header(headers,
-            static_cast<std::uint64_t>(http3_frame_type::headers), std::get<0>(encoded).field_section_.size());
-        if ((frame.index() != 0)) {
-            return error_type::request_encoding;
-        }
-        headers.resize(std::get<0>(frame) + std::get<0>(encoded).field_section_.size());
-        std::copy(std::get<0>(encoded).field_section_.begin(), std::get<0>(encoded).field_section_.end(),
-            headers.begin() + static_cast<std::ptrdiff_t>(std::get<0>(frame)));
 
-        http3_data_write_plan data_plan(std::get<0>(encoded).body_plan_);
+        http3_data_write_plan data_plan(body_plan);
         if (normalized_request) {
             // All fallible work is complete. Retire the original request only
             // at this commit point; the cursor owns its normalized copy.
             http_client_request_storage retired(std::move(request));
             return std::variant<http3_client_request_write, error_type>(std::in_place_index<0>, prepared_tag_type{}, resource,
-                std::move(*normalized_request), std::move(owned_scheme), std::move(owned_authority),
-                std::move(headers), std::move(data_plan), limits);
+                std::move(*normalized_request), authority, std::move(headers), std::move(data_plan), limits);
         }
         return std::variant<http3_client_request_write, error_type>(std::in_place_index<0>, prepared_tag_type{}, resource,
-            std::move(request), std::move(owned_scheme), std::move(owned_authority),
-            std::move(headers), std::move(data_plan), limits);
+            std::move(request), authority, std::move(headers), std::move(data_plan), limits);
     } catch (const std::bad_alloc&) {
         return error_type::out_of_memory;
     } catch (...) {
@@ -196,44 +188,21 @@ bool http3_client_request_write::prepare_connection_head(std::uint64_t stream_id
     if (state_ != state_type::headers || offered_ || segment_offset_ != 0) {
         return false;
     }
-    if (engine.peer_settings() && engine.peer_settings()->max_field_section_size_) {
-        field_limits_.max_decoded_bytes_ = static_cast<std::size_t>(std::min<std::uint64_t>(field_limits_.max_decoded_bytes_, *engine.peer_settings()->max_field_section_size_));
-    }
-    if (!request_.is_tunnel() && (!engine.peer_settings() || (engine.peer_settings()->qpack_max_table_capacity_ == 0 && !engine.peer_settings()->max_field_section_size_))) {
+    const auto& peer = engine.effective_peer_settings();
+    if (!request_.is_tunnel() && (!peer || (peer->qpack_max_table_capacity_ == 0 && !peer->max_field_section_size_))) {
+        engine_ = &engine;
+        stream_id_ = stream_id;
         return true;
     }
-    std::pmr::vector<http3_field_section_field_view> fields(worker_pool_);
-    for (const auto& field : http_client_request_storage_access::headers(request_)) {
-        fields.push_back({field.name_, field.value_, false});
-    }
-    if (request_.upload() != nullptr && request_.upload()->config_.expectation_ == http_client_request_expectation::continue_value) {
-        fields.push_back({"expect", "100-continue", false});
-    }
-    const bool connect = request_.method() == "CONNECT";
-    const auto length = connect                                                  ? std::nullopt
-                        : request_.upload() != nullptr                           ? request_.upload()->config_.content_length_
-                        : http_client_request_storage_access::has_body(request_) ? std::optional<std::uint64_t>{request_.body().size()}
-                                                                                 : std::optional<std::uint64_t>{0};
-    const auto encoded = engine.encode_request_head(stream_id, {.method_ = request_.method(),
-                                                                   .scheme_ = connect && request_.tunnel_protocol().empty() ? std::string_view{} : std::string_view(scheme_),
-                                                                   .authority_ = connect && !request_.is_tunnel() ? request_.target() : std::string_view(authority_),
-                                                                   .path_ = connect && !request_.is_tunnel() ? std::string_view{} : request_.target(),
-                                                                   .fields_ = fields,
-                                                                   .body_length_ = length,
-                                                                   .emit_content_length_ = http_client_request_storage_access::has_body(request_) ||
-                                                                                           (request_.upload() != nullptr && request_.upload()->config_.content_length_.has_value()),
-                                                                   .protocol_ = request_.tunnel_protocol(),
-                                                                   .peer_enable_connect_protocol_ = engine.peer_settings() && engine.peer_settings()->enable_connect_protocol_});
-    if ((encoded.index() != 0)) {
+    const auto fields = request_fields();
+    auto view = request_head_view(request_, authority_, fields);
+    auto encoded = engine.encode_request_head(stream_id, view, field_limits_);
+    if (encoded.index() != 0) {
         return false;
     }
-    headers_.resize(http3_frame_header_max_bytes + std::get<0>(encoded).field_section_.size());
-    const auto prefix = encode_http3_frame_header(headers_, static_cast<std::uint64_t>(http3_frame_type::headers), std::get<0>(encoded).field_section_.size());
-    if ((prefix.index() != 0)) {
-        return false;
-    }
-    headers_.resize(std::get<0>(prefix) + std::get<0>(encoded).field_section_.size());
-    std::copy(std::get<0>(encoded).field_section_.begin(), std::get<0>(encoded).field_section_.end(), headers_.begin() + static_cast<std::ptrdiff_t>(std::get<0>(prefix)));
+    headers_.emplace(std::move(std::get<0>(encoded).headers_));
+    engine_ = &engine;
+    stream_id_ = stream_id;
     return true;
 }
 
@@ -262,7 +231,7 @@ http3_client_request_write::segment_type http3_client_request_write::active_segm
     switch (state_) {
         case state_type::headers:
         case state_type::trailers:
-            return segment_type(headers_).subspan(segment_offset_);
+            return headers_ ? headers_->frame().subspan(segment_offset_) : segment_type{};
         case state_type::data_header:
             return segment_type(chunk_.frame_header_.data(), chunk_.frame_header_size_).subspan(segment_offset_);
         case state_type::data_body:
@@ -387,24 +356,19 @@ http3_client_request_write::acknowledge_fin(bool successful) noexcept {
 }
 
 std::variant<std::monostate, http3_client_request_write::error_type> http3_client_request_write::prepare_trailers() noexcept {
+    if (engine_ == nullptr) {
+        return fail_plan();
+    }
     try {
         std::pmr::vector<http3_field_section_field_view> fields(worker_pool_);
         for (const auto& field : request_.upload()->trailers_) {
             fields.push_back({field.name(), field.value(), false});
         }
-        auto encoded = encode_http3_request_trailers(fields, field_limits_, worker_pool_);
+        auto encoded = engine_->encode_request_trailers(stream_id_, fields, field_limits_);
         if ((encoded.index() != 0)) {
             return fail_plan();
         }
-        std::pmr::vector<char> frame(worker_pool_);
-        frame.resize(http3_frame_header_max_bytes + (std::get<0>(encoded)).size());
-        const auto prefix = encode_http3_frame_header(frame, static_cast<std::uint64_t>(http3_frame_type::headers), (std::get<0>(encoded)).size());
-        if ((prefix.index() != 0)) {
-            return fail_plan();
-        }
-        frame.resize(std::get<0>(prefix) + (std::get<0>(encoded)).size());
-        std::copy((std::get<0>(encoded)).begin(), (std::get<0>(encoded)).end(), frame.begin() + static_cast<std::ptrdiff_t>(std::get<0>(prefix)));
-        headers_.swap(frame);
+        headers_.emplace(std::move(std::get<0>(encoded)));
         state_ = state_type::trailers;
         return {};
     } catch (...) {
@@ -422,6 +386,7 @@ void http3_client_request_write::stop_sending() noexcept {
     offered_ = false;
     chunk_pending_ = false;
     data_plan_.reset();
+    engine_ = nullptr;
 }
 
 bool http3_client_request_write::fin_ready() const noexcept {

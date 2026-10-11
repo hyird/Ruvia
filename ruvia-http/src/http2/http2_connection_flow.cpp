@@ -16,23 +16,6 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::size_t http2_data_frame_count(std::size_t data_bytes, std::size_t max_frame_size) {
-    return data_bytes == 0 ? 0 : data_bytes / max_frame_size + (data_bytes % max_frame_size == 0 ? 0 : 1);
-}
-
-[[nodiscard]] std::size_t http2_data_frame_encoded_bytes(
-    std::size_t data_bytes, std::size_t max_frame_size) {
-    if (data_bytes == 0) {
-        return 0;
-    }
-    const auto frame_count = data_bytes / max_frame_size + (data_bytes % max_frame_size == 0 ? 0 : 1);
-    if (frame_count >
-        (std::numeric_limits<std::size_t>::max() - data_bytes) / http2_frame_header_bytes) {
-        throw std::length_error("HTTP/2 DATA output size overflow");
-    }
-    return data_bytes + frame_count * http2_frame_header_bytes;
-}
-
 // The largest HPACK integer encoding for a dynamic-table update is six bytes
 // (the value is a uint32 with a five-bit prefix). The drain preflight uses this
 // upper bound; append_response_header_frames computes the exact prefix afterwards.
@@ -290,23 +273,6 @@ bool http2_connection::release_received_data(std::uint32_t stream_id, std::uint3
     return true;
 }
 
-void http2_connection::release_all_received_data(std::uint32_t stream_id) {
-    auto* stream = find_stream(stream_id);
-    if (stream == nullptr) {
-        return;
-    }
-    const auto debt = stream->take_window_debt();
-    if (debt == 0) {
-        return;
-    }
-    try {
-        queue_consumed_data_credit(stream, debt);
-    } catch (...) {
-        stream->add_window_debt(debt);
-        throw;
-    }
-}
-
 bool http2_connection::has_queued_data(std::uint32_t stream_id) const noexcept {
     return std::ranges::find(pending_sends_, stream_id, &http2_pending_send::stream_id_) != pending_sends_.end();
 }
@@ -326,7 +292,7 @@ std::size_t http2_connection::pending_data_output_bytes(std::uint32_t stream_id)
 std::optional<http2_send_window_state> http2_connection::send_window_state(
     std::uint32_t stream_id) const noexcept {
     const auto* stream = streams_.find(stream_id);
-    if (stream == nullptr) {
+    if (stream == nullptr || http2_stream_is_closed(*stream)) {
         return std::nullopt;
     }
     const auto available = http2_available_send_window(connection_send_window_, *stream);
@@ -343,8 +309,8 @@ bool http2_connection::stream_aborted(std::uint32_t stream_id) const noexcept {
     return stream == nullptr || stream->is_aborted();
 }
 
-void http2_connection::queue_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes_value) {
-    if (bytes_value == 0) {
+void http2_connection::reserve_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes_value) {
+    if (local_connection_state_.fatal_failure() != nullptr || bytes_value == 0) {
         return;
     }
 
@@ -355,9 +321,26 @@ void http2_connection::queue_consumed_data_credit(http2_stream_state* stream, st
     const auto frame_count =
         static_cast<std::size_t>(connection_ready) + static_cast<std::size_t>(stream_ready);
     if (frame_count != 0) {
+        // Both WINDOW_UPDATE frames share one raw output segment. Reserve its
+        // metadata before changing the receive windows or their pending credit.
+        output_.reserve_segments_additional(1);
         output_.reserve_additional(frame_count * http2_window_update_frame_bytes);
     }
+}
 
+void http2_connection::queue_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes_value) {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        // The caller still settles its exact stream debt, but a terminal
+        // connection must not append WINDOW_UPDATE behind the fatal GOAWAY.
+        return;
+    }
+    reserve_consumed_data_credit(stream, bytes_value);
+    if (bytes_value == 0) {
+        return;
+    }
+
+    const bool stream_can_receive =
+        stream != nullptr && !http2_remote_peer_half_closed(*stream) && !stream->is_aborted();
     connection_receive_credit_.add(bytes_value);
     if (stream_can_receive) {
         stream->receive_window_credit().add(bytes_value);

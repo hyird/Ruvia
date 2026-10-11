@@ -13,7 +13,7 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/attributes.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/web/db/db_exec_result.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_backend.h"
@@ -57,7 +57,7 @@ private:
     };
 
     explicit db_rows(std::pmr::memory_resource* resource = nullptr);
-    db_rows(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    db_rows(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<db_row> rows_;
     std::pmr::vector<db_field> fields_;
@@ -83,8 +83,8 @@ public:
 
 private:
     friend class db_handle;
-    friend class detail::mariadb_pool;
-    friend class detail::postgresql_pool;
+    template <typename driver_type>
+    friend class detail::db_pool;
 
     struct lease_type final {
         lease_type(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
@@ -101,7 +101,7 @@ private:
     using operation_guard_type = detail::db_operation_guard<lease_type>;
 
     class state_type;
-    using state_owner_type = std::unique_ptr<state_type, detail::pmr_object_deleter<state_type>>;
+    using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
 
     db_stream_result() noexcept = default;
     db_stream_result(detail::db_pool_ref_type client, std::size_t slot, void* result_value,

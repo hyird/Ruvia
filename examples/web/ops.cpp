@@ -18,6 +18,7 @@
 #include "ruvia/web/health.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/security_headers.h"
+#include "ruvia/web/streaming.h"
 
 #include "environment.h"
 

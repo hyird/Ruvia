@@ -97,10 +97,6 @@ public:
         return accepted_bytes_;
     }
 
-    [[nodiscard]] std::uint64_t committed_bytes() const noexcept {
-        return committed_bytes_;
-    }
-
     // Transactional preflight for one submit_data input. No counters change here.
     // A terminal known-length submission must complete the declared length exactly;
     // callers can retry a rejected input with a corrected terminal flag or size.

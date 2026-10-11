@@ -17,7 +17,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/sse.h"
-#include "ruvia/web/detail/util/callable_ref.h"
+#include "ruvia/web/detail/callback_ref.h"
 
 namespace ruvia {
 
@@ -34,11 +34,11 @@ private:
     friend class multipart_reader;
 
     struct token_type final {};
+    using read_type = detail::callback_ref_type<task<std::optional<std::span<const std::byte>>>()>;
 
 public:
-    body_reader(token_type, void* target,
-        detail::callable_ref<std::optional<std::span<const std::byte>>>::invoke_type read) noexcept
-        : read_(target, read) {}
+    body_reader(token_type, void* target, read_type::invoke_type read) noexcept
+        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>()>(target, read)) {}
 
     body_reader(const body_reader&) = delete;
     body_reader& operator=(const body_reader&) = delete;
@@ -59,7 +59,7 @@ public:
     scoped_operation<std::optional<std::string_view>> text() && = delete;
 
 private:
-    detail::callable_ref<std::optional<std::span<const std::byte>>> read_;
+    read_type read_;
     ::ruvia::operation_scope operation_scope_;
 };
 

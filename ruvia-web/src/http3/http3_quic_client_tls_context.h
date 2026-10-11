@@ -51,8 +51,8 @@ public:
         std::optional<ruvia::http3_settings> settings_;
     };
 
-    // The memory resource must outlive this context; host normalization is temporary.
-    explicit http3_quic_client_tls_context(client_transport_config_view config,
+    // The memory resource must outlive this context.
+    explicit http3_quic_client_tls_context(const client_tls_config_storage& config,
         std::pmr::memory_resource* resource = std::pmr::get_default_resource());
     ~http3_quic_client_tls_context();
 
@@ -67,10 +67,6 @@ public:
     void remember_ticket(SSL_SESSION* session, std::string_view host,
         ruvia::quic_version version, std::span<const std::byte> transport_parameters,
         std::optional<ruvia::http3_settings> settings);
-
-    // Configures a single connection's h3 ALPN and peer identity checks.
-    // The SSL object must have been created from this context.
-    void prepare(SSL* ssl, std::string_view host) const;
 
 private:
     struct context_deleter {

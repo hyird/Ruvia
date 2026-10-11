@@ -177,7 +177,7 @@ std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std:
     if (output.size() < 13 + std::get<0>(length)) {
         return http_priority_error::output_too_small;
     }
-    detail::http2_encode_frame_header(output.data(), static_cast<std::uint32_t>(4 + std::get<0>(length)), static_cast<detail::http2_frame_type>(0x10), 0, 0);
+    detail::http2_encode_frame_header(output.data(), static_cast<std::uint32_t>(4 + std::get<0>(length)), static_cast<http2_frame_type>(0x10), 0, 0);
     detail::http2_write32(output.data() + 9, id);
     std::copy_n(value.begin(), std::get<0>(length), output.begin() + 13);
     return 13 + std::get<0>(length);

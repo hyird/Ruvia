@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/model/model_text_storage.h"
@@ -51,8 +53,8 @@ public:
         null };
 
     explicit json_value(model_options options = {})
-        : json_value(detail::resolved_pmr_resource_tag{}, "null",
-              detail::pmr_resource_or_default(options.resource_)) {}
+        : json_value(resolved_pmr_resource_tag{}, "null",
+              pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static std::optional<json_value> parse(
         std::string_view body, model_parse_options options = {}) noexcept {
@@ -65,7 +67,7 @@ public:
             return std::nullopt;
         }
         return json_value(
-            detail::resolved_pmr_resource_tag{}, body, detail::pmr_resource_or_default(options.resource_));
+            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
     }
 
     template <typename traits_type, typename allocator_type>
@@ -178,12 +180,12 @@ private:
     friend std::optional<view_t_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
-    json_value(detail::resolved_pmr_resource_tag, std::string_view body,
+    json_value(resolved_pmr_resource_tag, std::string_view body,
         std::pmr::memory_resource* resource) noexcept
         : resource_(resource),
           storage_(body) {}
 
-    json_value(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
+    json_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
         detail::model_text_storage&& storage) noexcept
         : resource_(resource),
           storage_(std::move(storage)) {}
@@ -193,11 +195,11 @@ private:
     }
 
     [[nodiscard]] json_value rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return json_value(detail::resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
+        return json_value(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
     }
 
     [[nodiscard]] json_value rebind_for_model(std::pmr::memory_resource* resource) && {
-        return json_value(detail::resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        return json_value(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
     }
 
     std::pmr::memory_resource* resource_;
@@ -210,21 +212,21 @@ private:
 class json_object final {
 public:
     explicit json_object(model_options options = {})
-        : json_object(detail::resolved_pmr_resource_tag{}, "{}",
-              detail::pmr_resource_or_default(options.resource_)) {}
+        : json_object(resolved_pmr_resource_tag{}, "{}",
+              pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static std::optional<json_object> parse(
         std::string_view body, model_parse_options options = {}) noexcept {
-        detail::json_scanner scanner(body);
-        if (!scanner.consume_object()) {
+        auto input = body;
+        if (!detail::skip_json_object(input)) {
             return std::nullopt;
         }
-        scanner.skip_whitespace();
-        if (!scanner.empty()) {
+        detail::skip_json_whitespace(input);
+        if (!input.empty()) {
             return std::nullopt;
         }
         return json_object(
-            detail::resolved_pmr_resource_tag{}, body, detail::pmr_resource_or_default(options.resource_));
+            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
     }
 
     template <typename traits_type, typename allocator_type>
@@ -273,7 +275,7 @@ public:
         auto* const resource = resource_;
         std::optional<t_type> result;
         bool last_match_failed = false;
-        const auto visited = detail::visit_json_object_fields(detail::resolved_pmr_resource_tag{}, view(),
+        const auto visited = detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
             resource, [&](std::string_view key, std::string_view value_view) {
                 if (key != field) {
                     return true;
@@ -306,12 +308,12 @@ private:
     friend std::optional<view_t_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
-    json_object(detail::resolved_pmr_resource_tag, std::string_view body,
+    json_object(resolved_pmr_resource_tag, std::string_view body,
         std::pmr::memory_resource* resource) noexcept
         : resource_(resource),
           storage_(body) {}
 
-    json_object(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
+    json_object(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
         detail::model_text_storage&& storage) noexcept
         : resource_(resource),
           storage_(std::move(storage)) {}
@@ -321,11 +323,11 @@ private:
     }
 
     [[nodiscard]] json_object rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return json_object(detail::resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
+        return json_object(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
     }
 
     [[nodiscard]] json_object rebind_for_model(std::pmr::memory_resource* resource) && {
-        return json_object(detail::resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        return json_object(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
     }
 
     std::pmr::memory_resource* resource_;
@@ -338,7 +340,7 @@ template <typename t_type>
     if (!is_object()) {
         return std::nullopt;
     }
-    return json_object(detail::resolved_pmr_resource_tag{}, view(), resource_).get<t_type>(field);
+    return json_object(resolved_pmr_resource_tag{}, view(), resource_).get<t_type>(field);
 }
 
 template <typename visitor_type>
@@ -347,37 +349,19 @@ template <typename visitor_type>
         return false;
     }
     auto input = view();
-    detail::skip_json_whitespace(input);
-    if (!detail::consume_json_char(input, '[')) {
+    if (!detail::consume_json_array_elements(input, 0, [this, &visitor](std::string_view& element_input) {
+            const auto start = element_input;
+            if (!detail::skip_json_value(element_input, 1)) {
+                return false;
+            }
+            json_value value(resolved_pmr_resource_tag{},
+                start.substr(0, start.size() - element_input.size()), resource_);
+            return static_cast<bool>(visitor(value));
+        })) {
         return false;
     }
     detail::skip_json_whitespace(input);
-    if (!input.empty() && input.front() == ']') {
-        input.remove_prefix(1);
-        detail::skip_json_whitespace(input);
-        return input.empty();
-    }
-    while (true) {
-        detail::skip_json_whitespace(input);
-        const auto start = input;
-        if (!detail::skip_json_value(input)) {
-            return false;
-        }
-        json_value value(detail::resolved_pmr_resource_tag{},
-            start.substr(0, start.size() - input.size()), resource_);
-        if (!static_cast<bool>(visitor(value))) {
-            return false;
-        }
-        detail::skip_json_whitespace(input);
-        if (!input.empty() && input.front() == ']') {
-            input.remove_prefix(1);
-            detail::skip_json_whitespace(input);
-            return input.empty();
-        }
-        if (!detail::consume_json_char(input, ',')) {
-            return false;
-        }
-    }
+    return input.empty();
 }
 
 template <typename visitor_type>
@@ -386,17 +370,17 @@ template <typename visitor_type>
         return false;
     }
 
-    return detail::visit_json_object_fields(detail::resolved_pmr_resource_tag{}, view(),
+    return detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
                resource_, [&](std::string_view key, std::string_view value_view) {
                    detail::skip_json_whitespace(value_view);
-                   json_value value(detail::resolved_pmr_resource_tag{}, value_view, resource_);
+                   json_value value(resolved_pmr_resource_tag{}, value_view, resource_);
                    return static_cast<bool>(visitor(key, value));
                }) == detail::json_object_visit_result::complete;
 }
 
 template <typename visitor_type>
 [[nodiscard]] inline bool json_object::for_each_field(visitor_type&& visitor) const {
-    json_value value(detail::resolved_pmr_resource_tag{}, view(), resource_);
+    json_value value(resolved_pmr_resource_tag{}, view(), resource_);
     return value.for_each_field(std::forward<visitor_type>(visitor));
 }
 
@@ -408,17 +392,17 @@ template <typename view_t_type>
 [[nodiscard]] std::optional<view_t_type> parse_json_view_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
     bool require_object, json_parse_budget& budget) {
-    skip_json_whitespace(input);
-    const auto start = input;
-    if (!skip_json_value(input, depth)) {
+    auto remaining = input;
+    skip_json_whitespace(remaining);
+    const auto start = remaining;
+    if (!skip_json_value(remaining, depth)) {
         return std::nullopt;
     }
-    const auto token = start.substr(0, start.size() - input.size());
+    const auto token = start.substr(0, start.size() - remaining.size());
     if (require_object) {
         auto probe_value = token;
         skip_json_whitespace(probe_value);
         if (probe_value.empty() || probe_value.front() != '{') {
-            input = start;
             return std::nullopt;
         }
     }
@@ -432,6 +416,7 @@ template <typename view_t_type>
     } else {
         value.storage_.assign_borrowed(token);
     }
+    input = remaining;
     return value;
 }
 

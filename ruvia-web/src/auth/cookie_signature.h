@@ -17,7 +17,4 @@ inline constexpr std::size_t cookie_signature_size = 44;
 void write_cookie_signature(
     char* output, std::string_view secret, std::string_view name, std::string_view value);
 
-// Constant-time comparison; signature strings are attacker-controlled.
-[[nodiscard]] bool cookie_signature_equals(std::string_view left, std::string_view right) noexcept;
-
 }  // namespace ruvia::detail

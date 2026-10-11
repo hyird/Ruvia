@@ -8,19 +8,17 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_request_head_submit_result.h"
 #include "ruvia/http/http2_response_head_submit_result.h"
 #include "ruvia/http/http2_types.h"
+#include "ruvia/http/http2_websocket_handshake_submit_result.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_connection_advertisement.h"
-#include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_priority.h"
@@ -31,14 +29,8 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
-
-namespace detail {
-class http2_connection;
-class http2_connection_owner_endpoint;
-}  // namespace detail
 
 enum class http2_server_request_release_status : std::uint8_t { released,
     closed,
@@ -82,511 +74,18 @@ struct http2_extended_connect_request_head_view final {
     std::span<const http_header_view> headers_{};
 };
 
-enum class http2_finish_response_status : std::uint8_t {
-    accepted,
-    queued,
-    closed,
-    invalid_state,
-    content_length_incomplete,
-};
-
-enum class http2_received_data_credit_merge_status : std::uint8_t {
-    merged,
-    invalid_credit,
-    different_stream,
-    overflow,
-};
-
-class http2_received_data_credit final {
-public:
-    // A credit is linear. acknowledge() consumes it explicitly; destroying a
-    // still-valid token returns the same exact byte credit without throwing.
-    ~http2_received_data_credit();
-    http2_received_data_credit(const http2_received_data_credit&) = delete;
-    http2_received_data_credit& operator=(const http2_received_data_credit&) = delete;
-    http2_received_data_credit(http2_received_data_credit&& other) noexcept;
-    http2_received_data_credit& operator=(http2_received_data_credit&&) = delete;
-    // Combine credits from one stream without returning any bytes. Success
-    // consumes other; failure leaves both tokens unchanged.
-    [[nodiscard]] http2_received_data_credit_merge_status merge(
-        http2_received_data_credit&& other) noexcept;
-    [[nodiscard]] bool valid() const noexcept {
-        return endpoint_ != nullptr && stream_id_ != 0 && bytes_ != 0;
-    }
-
-private:
-    friend class http2_connection;
-    friend class http2_message_body_chunk_event;
-    friend class http2_tunnel_data_event;
-    http2_received_data_credit(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        std::uint32_t bytes_value) noexcept;
-    detail::http2_connection_owner_endpoint* endpoint_{nullptr};
-    std::uint32_t stream_id_{0};
-    std::uint32_t bytes_{0};
-};
-
-enum class http2_received_data_acknowledge_status : std::uint8_t {
-    acknowledged,
-    closed,
-    invalid_credit
-};
-
-class http2_informational_head_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept {
-        return head_;
-    }
-    const http_client_response_head& head() const&& = delete;
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal()
-        const noexcept {
-        return signal_;
-    }
-
-private:
-    friend class http2_event;
-    http2_informational_head_event(std::uint32_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal) {}
-    std::uint32_t stream_id_;
-    http_client_response_head head_;
-    std::optional<http_client_request_content_signal> signal_;
-};
-
-// The request-head event is also the stream-storage lease for every view in
-// request(). Once processing finishes, release(std::move(event)) consumes the
-// event and invalidates those views as one operation.
-struct http2_server_request_snapshot final {
-    http_request_content_indication content_{http_request_content_indication::no_content};
-    bool body_open_{false};
-    bool connect_pending_{false};
-};
-
-class http2_request_head_event final {
-public:
-    ~http2_request_head_event();
-    http2_request_head_event(const http2_request_head_event&) = delete;
-    http2_request_head_event& operator=(const http2_request_head_event&) = delete;
-    http2_request_head_event(http2_request_head_event&& other) noexcept;
-    http2_request_head_event& operator=(http2_request_head_event&&) = delete;
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] const http2_server_request_snapshot& snapshot() const& noexcept {
-        return snapshot_;
-    }
-    const http2_server_request_snapshot& snapshot() const&& = delete;
-    [[nodiscard]] const http_request& request() const& noexcept {
-        return request_;
-    }
-    const http_request& request() const&& = delete;
-    [[nodiscard]] http_server_expectation_plan expectation_plan(
-        http_unsupported_expectation_policy policy) const noexcept {
-        return expectations_.server_plan(content_, policy);
-    }
-
-private:
-    friend class http2_connection;
-    friend class http2_event;
-    http2_request_head_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        http_request request, http_request_expectations expectations,
-        http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept;
-    std::uint32_t stream_id_;
-    http_request request_;
-    http2_server_request_snapshot snapshot_;
-    http_request_expectations expectations_;
-    http_request_content_indication content_;
-    detail::http2_connection_owner_endpoint* endpoint_{nullptr};
-};
-
-class http2_response_head_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept {
-        return head_;
-    }
-    const http_client_response_head& head() const&& = delete;
-    [[nodiscard]] http_client_response_head take_head() && noexcept {
-        return std::move(head_);
-    }
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal()
-        const noexcept {
-        return signal_;
-    }
-
-private:
-    friend class http2_event;
-    http2_response_head_event(std::uint32_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal) {}
-    std::uint32_t stream_id_;
-    http_client_response_head head_;
-    std::optional<http_client_request_content_signal> signal_;
-};
-
-class http2_message_body_chunk_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-    [[nodiscard]] http2_received_data_credit take_credit() & noexcept {
-        return std::move(credit_);
-    }
-
-private:
-    friend class http2_event;
-    http2_message_body_chunk_event(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t stream_id, std::string_view bytes_value, std::uint32_t credit) noexcept
-        : stream_id_(stream_id),
-          bytes_(bytes_value),
-          credit_(endpoint, stream_id, credit) {}
-    std::uint32_t stream_id_;
-    std::string_view bytes_;
-    http2_received_data_credit credit_;
-};
-
-enum class http2_message_content_semantics : std::uint8_t {
-    content,
-    metadata_only,
-};
-
-class http2_message_end_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::span<const http_header> trailers() const& noexcept {
-        return trailers_;
-    }
-    std::span<const http_header> trailers() const&& = delete;
-    [[nodiscard]] std::pmr::vector<http_header> take_trailers() && noexcept {
-        return std::move(trailers_);
-    }
-    [[nodiscard]] http2_message_content_semantics content_semantics() const noexcept {
-        return content_semantics_;
-    }
-
-private:
-    friend class http2_event;
-    http2_message_end_event(std::uint32_t stream_id,
-        std::pmr::vector<http_header> trailers,
-        http2_message_content_semantics content_semantics) noexcept
-        : stream_id_(stream_id),
-          trailers_(std::move(trailers)),
-          content_semantics_(content_semantics) {}
-    std::uint32_t stream_id_{0};
-    std::pmr::vector<http_header> trailers_;
-    http2_message_content_semantics content_semantics_{http2_message_content_semantics::content};
-};
-
-class http2_tunnel_data_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-    [[nodiscard]] http2_received_data_credit take_credit() & noexcept {
-        return std::move(credit_);
-    }
-
-private:
-    friend class http2_event;
-    http2_tunnel_data_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        std::string_view bytes_value, std::uint32_t credit) noexcept
-        : stream_id_(stream_id),
-          bytes_(bytes_value),
-          credit_(endpoint, stream_id, credit) {}
-    std::uint32_t stream_id_;
-    std::string_view bytes_;
-    http2_received_data_credit credit_;
-};
-
-class http2_tunnel_end_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-
-private:
-    friend class http2_event;
-    explicit constexpr http2_tunnel_end_event(std::uint32_t stream_id) noexcept
-        : stream_id_(stream_id) {}
-    std::uint32_t stream_id_;
-};
-
-class http2_stream_closed_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] http2_stream_close_source source() const noexcept {
-        return source_;
-    }
-    [[nodiscard]] http2_error_code error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http2_event;
-    constexpr http2_stream_closed_event(
-        std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error) noexcept
-        : stream_id_(stream_id),
-          source_(source_value),
-          error_(error) {}
-    std::uint32_t stream_id_;
-    http2_stream_close_source source_;
-    http2_error_code error_;
-};
-
-class http2_request_unprocessed_event final {
-public:
-    [[nodiscard]] std::uint32_t stream_id() const noexcept {
-        return stream_id_;
-    }
-
-private:
-    friend class http2_event;
-    explicit constexpr http2_request_unprocessed_event(std::uint32_t stream_id) noexcept
-        : stream_id_(stream_id) {}
-    std::uint32_t stream_id_;
-};
-
-class http2_goaway_event final {
-public:
-    [[nodiscard]] std::uint32_t last_stream_id() const noexcept {
-        return last_stream_id_;
-    }
-    [[nodiscard]] http2_error_code error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http2_event;
-    constexpr http2_goaway_event(std::uint32_t last_stream_id, http2_error_code error) noexcept
-        : last_stream_id_(last_stream_id),
-          error_(error) {}
-    std::uint32_t last_stream_id_;
-    http2_error_code error_;
-};
-
-class http2_event final {
-public:
-    http2_event(const http2_event&) = delete;
-    http2_event& operator=(const http2_event&) = delete;
-    http2_event(http2_event&&) noexcept = default;
-    http2_event& operator=(http2_event&&) = delete;
-    [[nodiscard]] const http2_informational_head_event* informational_head() const& noexcept {
-        return std::get_if<http2_informational_head_event>(&value_);
-    }
-    const http2_informational_head_event* informational_head() const&& = delete;
-    [[nodiscard]] http2_request_head_event* request_head() & noexcept {
-        return std::get_if<http2_request_head_event>(&value_);
-    }
-    [[nodiscard]] const http2_request_head_event* request_head() const& noexcept {
-        return std::get_if<http2_request_head_event>(&value_);
-    }
-    const http2_request_head_event* request_head() const&& = delete;
-    [[nodiscard]] const http2_response_head_event* response_head() const& noexcept {
-        return std::get_if<http2_response_head_event>(&value_);
-    }
-    [[nodiscard]] http2_response_head_event* response_head() & noexcept {
-        return std::get_if<http2_response_head_event>(&value_);
-    }
-    const http2_response_head_event* response_head() const&& = delete;
-    [[nodiscard]] http2_message_body_chunk_event* message_body_chunk() & noexcept {
-        return std::get_if<http2_message_body_chunk_event>(&value_);
-    }
-    [[nodiscard]] const http2_message_body_chunk_event* message_body_chunk() const& noexcept {
-        return std::get_if<http2_message_body_chunk_event>(&value_);
-    }
-    const http2_message_body_chunk_event* message_body_chunk() const&& = delete;
-    [[nodiscard]] const http2_message_end_event* message_end() const& noexcept {
-        return std::get_if<http2_message_end_event>(&value_);
-    }
-    [[nodiscard]] http2_message_end_event* message_end() & noexcept {
-        return std::get_if<http2_message_end_event>(&value_);
-    }
-    const http2_message_end_event* message_end() const&& = delete;
-    [[nodiscard]] http2_tunnel_data_event* tunnel_data() & noexcept {
-        return std::get_if<http2_tunnel_data_event>(&value_);
-    }
-    [[nodiscard]] const http2_tunnel_data_event* tunnel_data() const& noexcept {
-        return std::get_if<http2_tunnel_data_event>(&value_);
-    }
-    const http2_tunnel_data_event* tunnel_data() const&& = delete;
-    [[nodiscard]] const http2_tunnel_end_event* tunnel_end() const& noexcept {
-        return std::get_if<http2_tunnel_end_event>(&value_);
-    }
-    const http2_tunnel_end_event* tunnel_end() const&& = delete;
-    [[nodiscard]] const http2_stream_closed_event* stream_closed() const& noexcept {
-        return std::get_if<http2_stream_closed_event>(&value_);
-    }
-    const http2_stream_closed_event* stream_closed() const&& = delete;
-    [[nodiscard]] const http2_request_unprocessed_event* request_unprocessed() const& noexcept {
-        return std::get_if<http2_request_unprocessed_event>(&value_);
-    }
-    const http2_request_unprocessed_event* request_unprocessed() const&& = delete;
-    [[nodiscard]] const http2_goaway_event* goaway() const& noexcept {
-        return std::get_if<http2_goaway_event>(&value_);
-    }
-    const http2_goaway_event* goaway() const&& = delete;
-
-    [[nodiscard]] http_origin_advertisement* origin_advertisement() & noexcept {
-        return std::get_if<http_origin_advertisement>(&value_);
-    }
-    [[nodiscard]] const http_origin_advertisement* origin_advertisement() const& noexcept {
-        return std::get_if<http_origin_advertisement>(&value_);
-    }
-    const http_origin_advertisement* origin_advertisement() const&& = delete;
-    [[nodiscard]] http_alternative_service_advertisement* alternative_service_advertisement() & noexcept {
-        return std::get_if<http_alternative_service_advertisement>(&value_);
-    }
-    [[nodiscard]] const http_alternative_service_advertisement* alternative_service_advertisement() const& noexcept {
-        return std::get_if<http_alternative_service_advertisement>(&value_);
-    }
-    const http_alternative_service_advertisement* alternative_service_advertisement() const&& = delete;
-    [[nodiscard]] const http_priority_update* priority_update() const& noexcept {
-        return std::get_if<http_priority_update>(&value_);
-    }
-    const http_priority_update* priority_update() const&& = delete;
-
-    [[nodiscard]] const http2_push_promise_event* push_promise() const& noexcept {
-        return std::get_if<http2_push_promise_event>(&value_);
-    }
-    const http2_push_promise_event* push_promise() const&& = delete;
-
-private:
-    friend class http2_connection;
-    using value_type = std::variant<http2_informational_head_event, http2_request_head_event,
-        http2_response_head_event, http2_message_body_chunk_event, http2_message_end_event,
-        http2_tunnel_data_event, http2_tunnel_end_event, http2_stream_closed_event,
-        http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update, http_origin_advertisement, http_alternative_service_advertisement>;
-    template <typename event_type>
-    explicit http2_event(event_type event) noexcept
-        : value_(std::move(event)) {}
-    [[nodiscard]] static http2_event informational_head(std::uint32_t id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept {
-        return http2_event(http2_informational_head_event(id, std::move(head), signal));
-    }
-    [[nodiscard]] static http2_event request_head(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, http_request request, http_request_expectations expectations,
-        http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept {
-        return http2_event(http2_request_head_event(
-            endpoint, id, std::move(request), expectations, content, snapshot));
-    }
-    [[nodiscard]] static http2_event response_head(std::uint32_t id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept {
-        return http2_event(http2_response_head_event(id, std::move(head), signal));
-    }
-    [[nodiscard]] static http2_event message_body_chunk(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
-        return http2_event(http2_message_body_chunk_event(endpoint, id, bytes_value, credit));
-    }
-    [[nodiscard]] static http2_event message_end(std::uint32_t id,
-        std::pmr::vector<http_header> trailers,
-        http2_message_content_semantics content_semantics) noexcept {
-        return http2_event(
-            http2_message_end_event(id, std::move(trailers), content_semantics));
-    }
-    [[nodiscard]] static http2_event tunnel_data(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
-        return http2_event(http2_tunnel_data_event(endpoint, id, bytes_value, credit));
-    }
-    [[nodiscard]] static http2_event tunnel_end(std::uint32_t id) noexcept {
-        return http2_event(http2_tunnel_end_event(id));
-    }
-    [[nodiscard]] static http2_event stream_closed(
-        std::uint32_t id, http2_stream_close_source source_value, http2_error_code error) noexcept {
-        return http2_event(http2_stream_closed_event(id, source_value, error));
-    }
-    [[nodiscard]] static http2_event request_unprocessed(std::uint32_t id) noexcept {
-        return http2_event(http2_request_unprocessed_event(id));
-    }
-    [[nodiscard]] static http2_event goaway(
-        std::uint32_t last_stream_id, http2_error_code error) noexcept {
-        return http2_event(http2_goaway_event(last_stream_id, error));
-    }
-    value_type value_;
-};
-
-enum class http2_websocket_handshake_submit_error : std::uint8_t { closed,
-    invalid_state };
-
-class http2_websocket_negotiation final {
-public:
-    [[nodiscard]] std::string_view subprotocol() const& noexcept {
-        return subprotocol_;
-    }
-    std::string_view subprotocol() const&& = delete;
-    [[nodiscard]] websocket_compression compression() const noexcept {
-        return compression_;
-    }
-
-private:
-    friend class http2_websocket_handshake_submit_result;
-    friend class http2_connection;
-    http2_websocket_negotiation(std::string_view subprotocol, websocket_compression compression)
-        : subprotocol_(subprotocol),
-          compression_(compression) {}
-    std::string subprotocol_;
-    websocket_compression compression_;
-};
-
-class http2_websocket_handshake_submit_failure final {
-public:
-    [[nodiscard]] constexpr http2_websocket_handshake_submit_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http2_websocket_handshake_submit_result;
-    friend class http2_connection;
-    explicit constexpr http2_websocket_handshake_submit_failure(
-        http2_websocket_handshake_submit_error error) noexcept
-        : error_(error) {}
-    http2_websocket_handshake_submit_error error_;
-};
-
-class http2_websocket_handshake_submit_result final {
-public:
-    [[nodiscard]] const http2_websocket_negotiation* submitted() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    const http2_websocket_negotiation* submitted() const&& = delete;
-    [[nodiscard]] const http2_websocket_handshake_submit_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const http2_websocket_handshake_submit_failure* failure() const&& = delete;
-
-private:
-    friend class http2_connection;
-    using value_type = std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_failure>;
-    explicit http2_websocket_handshake_submit_result(http2_websocket_negotiation value)
-        : value_(std::move(value)) {}
-    explicit http2_websocket_handshake_submit_result(http2_websocket_handshake_submit_failure failure)
-        : value_(failure) {}
-    value_type value_;
-};
-
 // Stable HTTP/2 sans-I/O driver. Feed transport bytes, drain typed events, and
 // flush pending_output(); the class owns all HPACK, stream and flow-control state.
 // The storage behind an accepted feed() input must remain alive and unchanged
 // until every event produced by that call has been taken and every event-derived
 // byte view has expired. Calling feed() again may invalidate those views; owning
 // string temporaries are rejected at compile time.
+// A fatal connection error rejects new stream output. Request leases and DATA
+// credits remain releasable without generating more frames. Graceful local or
+// peer GOAWAY still permits output on established streams that remain open.
+// A dropped lease or credit whose release fails is retried by the next feed(),
+// next_event(), output drain, submit_data(), finish_request(), or submit_reset();
+// const queries never mutate.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});
@@ -625,6 +124,8 @@ public:
         const http2_connect_request_head_view& request);
     [[nodiscard]] http2_request_head_submit_result submit_request_head(
         const http2_extended_connect_request_head_view& request);
+    // Bytes may borrow pending_output(); such input is copied in the connection
+    // resource before output growth can invalidate that source.
     [[nodiscard]] http2_data_submit_status submit_data(
         std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);
     [[nodiscard]] http2_finish_request_status finish_request(std::uint32_t stream_id,
@@ -640,6 +141,8 @@ public:
         std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] http2_submit_status submit_interim_response_head(
         std::uint32_t stream_id, const http_interim_response_head& response);
+    // Accepts the complete response body, including any flow-control-blocked
+    // suffix. Allocation failure queues no frames and leaves submission retryable.
     [[nodiscard]] http2_submit_status submit_buffered_response(
         std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] http2_submit_status submit_connect_response_head(
@@ -709,8 +212,6 @@ private:
         http2_connection&, std::uint32_t, std::pmr::memory_resource*, std::string_view);
     friend websocket_handshake_validation_result validate_http2_websocket_handshake(
         http2_connection&, std::uint32_t, const http_request&) noexcept;
-    [[nodiscard]] static http2_request_head_submit_result pin_submitted_request(
-        detail::http2_connection& connection, const http2_request_head_submit_result& result);
     explicit http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements);
     class impl_type;
     struct impl_deleter_type final {

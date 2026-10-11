@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http3_headers_frame.h"
+#include "ruvia/http/http_client.h"
 
 namespace ruvia {
 
@@ -19,14 +21,25 @@ struct http3_client_request_head_view final {
     std::string_view scheme_{};
     std::string_view authority_{};
     std::string_view path_{};
+    // Application fields. Content-Length and Expect are generated from
+    // body_length_ and expectation_ only; supplying either raw field is
+    // http3_client_request_head_error::forbidden_field, as on HTTP/1 and HTTP/2.
     std::span<const http3_field_section_field_view> fields_{};
+    // Declared content length; nullopt means content of unknown length follows
+    // (or a CONNECT tunnel), zero means no content.
+    // TRACE requires zero and emits no Content-Length. OPTIONS requires
+    // Content-Type when content follows or Content-Length is emitted.
     std::optional<std::uint64_t> body_length_{};
-    // Suppress automatic Content-Length generation while still validating an
-    // explicitly supplied field against body_length.
+    // Suppress automatic Content-Length generation from body_length_.
     bool emit_content_length_{true};
+    // Generates `expect: 100-continue`. Valid only when content follows
+    // (RFC 9110 section 10.1.1); otherwise, and for unknown values, the head
+    // is rejected with http3_client_request_head_error::invalid_field.
+    http_client_request_expectation expectation_{http_client_request_expectation::none};
     // RFC 9220 Extended CONNECT; only valid with method CONNECT.
     std::string_view protocol_{};
-    // Must come from the received peer SETTINGS, not local configuration.
+    // Must come from received or restored peer SETTINGS (the connection's
+    // effective_peer_settings()), not local configuration.
     bool peer_enable_connect_protocol_{false};
 };
 
@@ -50,12 +63,9 @@ struct http3_client_request_body_plan final {
 };
 
 struct http3_client_request_head final {
-    // Both values are owned by the resource supplied to the encoder.
-    std::pmr::vector<char> field_section_;
+    // The complete HEADERS frame, owned by the resource supplied to the encoder.
+    http3_headers_frame headers_;
     http3_client_request_body_plan body_plan_{};
-
-    explicit http3_client_request_head(std::pmr::memory_resource* resource)
-        : field_section_(resource) {}
 };
 
 struct http3_client_request_head_failure final {
@@ -63,8 +73,8 @@ struct http3_client_request_head_failure final {
     http3_field_section_error field_section_error_{http3_field_section_error::invalid_prefix};
 };
 
-// Produces the QPACK field-section payload (not an HTTP/3 frame). QPACK's
-// dynamic table capacity is zero; body bytes are never copied or concatenated.
+// Produces the complete request HEADERS frame. QPACK's dynamic table capacity
+// is zero; body bytes are never copied or concatenated.
 [[nodiscard]] std::variant<http3_client_request_head, http3_client_request_head_failure>
 encode_http3_client_request_head(http3_client_request_head_view view,
     http3_field_section_limits limits = {},

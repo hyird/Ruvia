@@ -5,10 +5,11 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/detail/json/json_scanner.h"
+#include "ruvia/web/detail/json/json_lex.h"
+#include "ruvia/web/detail/json/json_limits.h"
+#include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/json/json_string.h"
 
 namespace ruvia::detail {
@@ -29,64 +30,6 @@ template <typename visitor_type>
 enum class json_object_visit_result : unsigned char { complete,
     stopped,
     invalid };
-
-template <typename visitor_type>
-[[nodiscard]] json_object_visit_result visit_json_object_fields(resolved_pmr_resource_tag, std::string_view body,
-    std::pmr::memory_resource* resource, visitor_type&& visitor) {
-    auto input = body;
-    if (!consume_json_char(input, '{')) {
-        return json_object_visit_result::invalid;
-    }
-    skip_json_whitespace(input);
-    if (!input.empty() && input.front() == '}') {
-        input.remove_prefix(1);
-        skip_json_whitespace(input);
-        return input.empty() ? json_object_visit_result::complete : json_object_visit_result::invalid;
-    }
-
-    auto& visitor_ref = visitor;
-    while (true) {
-        const auto key = parse_json_string(input);
-        if (!key.has_value() || !consume_json_char(input, ':')) {
-            return json_object_visit_result::invalid;
-        }
-
-        const auto value_start = input;
-        if (!skip_json_value(input)) {
-            return json_object_visit_result::invalid;
-        }
-        const auto consumed = value_start.size() - input.size();
-        const auto value = value_start.substr(0, consumed);
-        if (key->encoding() == json_string_encoding::escaped) {
-            auto decoded_key = decode_json_string(key->raw(), resource);
-            if (!decoded_key.has_value()) {
-                return json_object_visit_result::invalid;
-            }
-            if (!dispatch_json_object_field_visitor(visitor_ref, std::string_view(*decoded_key), value)) {
-                return json_object_visit_result::stopped;
-            }
-        } else if (!dispatch_json_object_field_visitor(visitor_ref, key->raw(), value)) {
-            return json_object_visit_result::stopped;
-        }
-
-        skip_json_whitespace(input);
-        if (!input.empty() && input.front() == '}') {
-            input.remove_prefix(1);
-            skip_json_whitespace(input);
-            return input.empty() ? json_object_visit_result::complete : json_object_visit_result::invalid;
-        }
-        if (!consume_json_char(input, ',')) {
-            return json_object_visit_result::invalid;
-        }
-    }
-}
-
-template <typename visitor_type>
-[[nodiscard]] json_object_visit_result visit_json_object_fields(
-    std::string_view body, std::pmr::memory_resource* resource, visitor_type&& visitor) {
-    return visit_json_object_fields(resolved_pmr_resource_tag{}, body, pmr_resource_or_default(resource),
-        std::forward<visitor_type>(visitor));
-}
 
 // Consumes one object directly from input and lets the visitor consume each
 // value from the same cursor. RUVIA_MODEL uses this On-Demand-style traversal
@@ -141,6 +84,35 @@ template <typename visitor_type>
             return false;
         }
     }
+}
+
+// Visits every field of one complete JSON object body as a raw value slice
+// (which may carry leading whitespace). Values are skipped at depth 1, so the
+// whole body honours max_json_depth.
+template <typename visitor_type>
+[[nodiscard]] json_object_visit_result visit_json_object_fields(resolved_pmr_resource_tag, std::string_view body,
+    std::pmr::memory_resource* resource, visitor_type&& visitor) {
+    auto input = body;
+    auto& visitor_ref = visitor;
+    bool stopped = false;
+    const bool consumed = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource, 0,
+        [&visitor_ref, &stopped](std::string_view key, std::string_view& value_input) {
+            const auto value_start = value_input;
+            if (!skip_json_value(value_input, 1)) {
+                return false;
+            }
+            const auto value = value_start.substr(0, value_start.size() - value_input.size());
+            stopped = !dispatch_json_object_field_visitor(visitor_ref, key, value);
+            return !stopped;
+        });
+    if (stopped) {
+        return json_object_visit_result::stopped;
+    }
+    if (!consumed) {
+        return json_object_visit_result::invalid;
+    }
+    skip_json_whitespace(input);
+    return input.empty() ? json_object_visit_result::complete : json_object_visit_result::invalid;
 }
 
 }  // namespace ruvia::detail

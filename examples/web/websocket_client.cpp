@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
             .port_ = tls ? 8444 : 8093,
             .target_ = "/features/ws",
             .read_timeout_ = std::chrono::seconds(5),
-            .ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or("")),
+            .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
         };
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         loops.start();

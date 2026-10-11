@@ -90,7 +90,9 @@ public:
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
-    // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 or HTTP/3 response.
+    // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 or HTTP/3 response; a
+    // response the peer has already completed is left unchanged. Throws
+    // http_client_error(closing) once the response transport is retired.
     // Worker-affine; the connection driver owns writing the queued frame.
     void reprioritize(http_priority priority) &;
     void reprioritize(http_priority) && = delete;

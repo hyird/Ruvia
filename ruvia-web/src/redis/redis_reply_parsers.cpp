@@ -4,8 +4,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/decimal_number.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
+#include "ruvia/web/detail/util/decimal_number.h"
 
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_types_access.h"
@@ -40,7 +40,7 @@ double parse_redis_double(std::string_view value, std::string_view context_value
     if (value == "nan") {
         return std::numeric_limits<double>::quiet_NaN();
     }
-    const auto output = ruvia::parse_decimal_number(value);
+    const auto output = detail::parse_decimal_number(value);
     if ((output.index() != 0) || !std::isfinite(std::get<0>(output))) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
     }

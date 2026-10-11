@@ -57,7 +57,7 @@ void http_capsule::release() noexcept {
 }
 http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_config config) {
     tunnel.require_active();
-    state_ = detail::make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
+    state_ = make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
 }
 http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
     if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain()->worker().is_current()) {
@@ -66,7 +66,7 @@ http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsu
     // Validate before consuming the caller's owner.
     http_capsule_decoder validation(config);
     auto* resource = tunnel.response_.state_->resource_;
-    state_ = detail::make_pmr_object<detail::http_capsule_stream_state>(resource, std::move(tunnel), config).release();
+    state_ = make_pmr_object<detail::http_capsule_stream_state>(resource, std::move(tunnel), config).release();
 }
 http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept
     : state_(std::exchange(other.state_, nullptr)) {}

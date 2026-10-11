@@ -8,27 +8,17 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 
-#include "coding/http_content_coding.h"
 #include "coding/http_content_length.h"
-#include "field/http_cors_fields.h"
-#include "field/http_media_type.h"
-#include "field/http_origin_fields.h"
+#include "field/http_request_field_validation.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_request_target.h"
+
 namespace ruvia::detail {
 
 struct http2_header_decode_context final {
-    explicit http2_header_decode_context(http2_stream_state& stream_value,
-        http2_stream_header_decode_transaction* transaction_value = nullptr) noexcept
-        : stream_(stream_value),
-          transaction_(transaction_value) {}
-
-    void commit_header_decode() noexcept {
-        if (transaction_ != nullptr) {
-            transaction_->commit();
-        }
-    }
+    explicit http2_header_decode_context(http2_stream_state& stream_value) noexcept
+        : stream_(stream_value) {}
 
     [[nodiscard]] bool accept_regular_field() noexcept {
         if (regular_field_count_ == max_http_header_fields) {
@@ -39,8 +29,8 @@ struct http2_header_decode_context final {
     }
 
     http2_stream_state& stream_;
-    http2_stream_header_decode_transaction* transaction_{nullptr};
     http_header_section_size decoded_header_list_size_;
+    request_field_state request_fields_{request_field_framing::binary};
     std::size_t regular_field_count_{0};
 };
 
@@ -191,61 +181,35 @@ struct http2_header_decode_context final {
     }
     stream.mark_regular_header_seen();
     const auto kind = classify_request_header(name);
-    if ((kind == request_header_kind::origin && !is_valid_http_origin_field_value(value)) ||
-        (kind == request_header_kind::access_control_request_method &&
-            !is_valid_http_cors_request_method(value)) ||
-        (kind == request_header_kind::access_control_request_headers &&
-            !is_valid_http_cors_request_header_names(value))) {
+    if (validate_request_field(kind, value, http_field_list_role::recipient, context_value.request_fields_) !=
+        request_field_status::ok) {
         return false;
     }
-    if (kind == request_header_kind::host) {
-        if (stream.has_host() || !is_valid_host_header(value)) {
-            return false;
+    switch (kind) {
+        case request_header_kind::host:
+            if (stream.has_authority() &&
+                !authority_matches_host(stream.request_authority(), value, stream.scheme_default_port())) {
+                return false;
+            }
+            stream.mark_host();
+            break;
+        case request_header_kind::cookie:
+            return http2_append_cookie_header_value(stream, value);
+        case request_header_kind::expect:
+            // Expect is an extensible semantic list. Preserve unsupported but
+            // syntactically valid members for the Web product's 417 policy.
+            stream.parse_request_expectation_field(value);
+            break;
+        case request_header_kind::content_length: {
+            http_content_length_state<> content_length;
+            if (content_length.parse_field(value) != http_content_length_parse_status::ok ||
+                !stream.declare_remote_content_length(*content_length.value())) {
+                return false;
+            }
+            break;
         }
-        if (stream.has_authority() &&
-            !authority_matches_host(stream.request_authority(), value, stream.scheme_default_port())) {
-            return false;
-        }
-        stream.mark_host();
-    }
-    if (kind == request_header_kind::cookie) {
-        return http2_append_cookie_header_value(stream, value);
-    }
-    if (kind == request_header_kind::expect) {
-        if (!is_valid_received_http_expect_field_value(value)) {
-            return false;
-        }
-        // Expect is an extensible semantic list. Preserve unsupported but
-        // syntactically valid members for the Web product's 417 policy.
-        stream.parse_request_expectation_field(value);
-    }
-    if (kind == request_header_kind::content_type) {
-        if (!is_valid_http_content_type_field_value(value)) {
-            return false;
-        }
-    }
-    if (kind == request_header_kind::content_encoding &&
-        !is_valid_http_content_encoding_field_value(value, http_field_list_role::recipient)) {
-        return false;
-    }
-    if (name == "trailer" &&
-        !is_valid_http_request_trailer_field_value(value, http_field_list_role::recipient)) {
-        return false;
-    }
-    if (const auto singleton_bit = singleton_request_header_bit(kind);
-        singleton_bit != 0 && kind != request_header_kind::content_length) {
-        if (!stream.mark_singleton_request_header(singleton_bit)) {
-            return false;
-        }
-    }
-    if (kind == request_header_kind::content_length) {
-        http_content_length_state<> content_length;
-        if (content_length.parse_field(value) != http_content_length_parse_status::ok) {
-            return false;
-        }
-        if (!stream.declare_remote_content_length(*content_length.value())) {
-            return false;
-        }
+        default:
+            break;
     }
     return stream.append_remote_header(name, value, kind);
 }

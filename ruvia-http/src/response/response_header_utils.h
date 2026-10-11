@@ -53,13 +53,6 @@ inline void set_response_header_if_missing(
     }
 }
 
-inline void set_stable_response_header_if_missing(
-    http_response& response, std::uint32_t bit, std::string_view name, std::string_view value) {
-    if (!response_has_known_header(response, bit)) {
-        response.header_stable_view(name, value);
-    }
-}
-
 inline void add_vary_tokens(
     http_response& response, const std::string_view* tokens, std::size_t token_count) {
     if (tokens == nullptr || token_count == 0) {
@@ -122,7 +115,7 @@ inline void add_vary_tokens(
         }
     }
 
-    std::pmr::string updated(response_resource(response));
+    std::pmr::string updated(response.memory_resource());
     const auto part_count = existing_value_count + added_count;
     updated.reserve(existing_bytes + added_bytes + (part_count == 0 ? 0 : (part_count - 1) * 2));
     if (existing_value_count != 0) {

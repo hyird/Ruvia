@@ -13,13 +13,6 @@
 namespace ruvia::detail {
 namespace {
 
-std::pmr::memory_resource* require_resource(std::pmr::memory_resource* resource) {
-    if (!resource) {
-        throw std::invalid_argument("QUIC connection requires a memory resource");
-    }
-    return resource;
-}
-
 bool same_address(const quic_address& left, const quic_address& right) noexcept {
     return left.family_ == right.family_ && left.port_ == right.port_ &&
            left.scope_id_ == right.scope_id_ && left.bytes_ == right.bytes_;
@@ -33,8 +26,9 @@ std::size_t level_index(quic_encryption_level level) {
     return index;
 }
 
-void validate_config(const quic_connection_config& config,
-    const quic_crypto_provider_view& crypto, std::pmr::memory_resource* resource) {
+// The crypto provider, TLS driver and resource are validated by the connection
+// factory before it allocates this state.
+void validate_config(const quic_connection_config& config) {
     constexpr auto varint_max = (std::uint64_t{1} << 62) - 1;
     constexpr auto stream_count_max = (std::uint64_t{1} << 60) - 1;
     const auto& transport = config.local_transport_parameters_;
@@ -64,7 +58,7 @@ void validate_config(const quic_connection_config& config,
         transport.active_connection_id_limit_ <= varint_max &&
         transport.active_connection_id_limit_ >= 2 &&
         transport.idle_timeout_ms_ <= varint_max;
-    const bool invalid = !resource || !role_valid ||
+    const bool invalid = !role_valid ||
                          (config.version_ != quic_version::v1 && config.version_ != quic_version::v2) ||
                          (config.preferred_version_ != quic_version::v1 && config.preferred_version_ != quic_version::v2) ||
                          config.local_address_.port_ == 0 || config.peer_address_.port_ == 0 || !cid_valid ||
@@ -88,7 +82,6 @@ void validate_config(const quic_connection_config& config,
     if (invalid) {
         throw std::invalid_argument("invalid QUIC connection limits, role, CIDs, or transport parameters");
     }
-    crypto.validate();
 }
 
 }  // namespace
@@ -99,9 +92,10 @@ quic_connection_state::quic_connection_state(quic_connection_config config,
     std::span<const std::byte> early_transport_parameters)
     : config_(std::move(config)),
       negotiated_version_(config_.version_),
+      negotiated_idle_timeout_ms_(config_.local_transport_parameters_.idle_timeout_ms_),
       crypto_(crypto),
       tls_driver_(tls_driver),
-      resource_(require_resource(resource)),
+      resource_(resource),
       last_supplied_time_(now),
       tls_handshake_(this),
       current_local_address_(config_.local_address_),
@@ -117,7 +111,7 @@ quic_connection_state::quic_connection_state(quic_connection_config config,
       send_datagrams_(resource_),
       close_reason_(resource_),
       close_packet_(resource_) {
-    validate_config(config_, crypto_, resource_);
+    validate_config(config_);
     if (!early_transport_parameters.empty()) {
         if (config_.role_ != quic_role::client) {
             throw quic_error(quic_error_code::invalid_state,
@@ -129,7 +123,6 @@ quic_connection_state::quic_connection_state(quic_connection_config config,
     local_transport_parameters_.reserve(64);
     streams_.reserve(config_.limits_.max_streams_);
     rejected_early_streams_.reserve(config_.limits_.max_streams_);
-    tls_driver_.validate();
 }
 
 quic_connection_state::~quic_connection_state() noexcept {
@@ -281,7 +274,7 @@ quic_connection_info quic_connection_state::info() const noexcept {
         .quic_handshake_complete_ = quic_handshake_complete_,
         .confirmed_ = confirmed_,
         .early_data_ = early_data_state_,
-        .negotiated_idle_timeout_ms_ = config_.local_transport_parameters_.idle_timeout_ms_,
+        .negotiated_idle_timeout_ms_ = negotiated_idle_timeout_ms_,
         .close_error_code_ = close_error_code_};
 }
 
@@ -409,6 +402,26 @@ void quic_connection_state::fail_tls(quic_tls_alert alert) noexcept {
 
 bool quic_connection_state::failed() const noexcept {
     return state_ == ruvia::quic_connection_state::failed;
+}
+
+bool quic_connection_state::terminal() const noexcept {
+    return state_ == ruvia::quic_connection_state::failed ||
+           state_ == ruvia::quic_connection_state::closing ||
+           state_ == ruvia::quic_connection_state::draining ||
+           state_ == ruvia::quic_connection_state::retired;
+}
+
+std::size_t quic_connection_state::available_buffer() const noexcept {
+    const auto limit = config_.limits_.max_connection_buffer_size_;
+    std::size_t retained{};
+    for (const auto bytes : {retained_stream_input_bytes_, retained_stream_output_bytes_,
+             received_datagram_bytes_, send_datagram_bytes_}) {
+        if (bytes > limit - retained) {
+            return 0;
+        }
+        retained += bytes;
+    }
+    return limit - retained;
 }
 
 quic_tls_handshake& quic_connection_state::tls_handshake() noexcept {

@@ -9,6 +9,7 @@
 #include <asio/ip/address_v6.hpp>
 
 #include "ruvia/core/ip_address.h"
+#include "ruvia/http/http_hex.h"
 
 namespace ruvia::detail {
 
@@ -26,8 +27,8 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
 // as a distinct key would let one client spend two slots. The /64 prefix is
 // emitted into `buffer` as an allocation-free "v6/<16 hex>" token (distinct from
 // any IPv4 dotted string). Pass-through IPv4 and scoped IPv6 return the input
-// verbatim. Kept out of rate_limiter_type.h so that lightweight, widely-included header
-// does not gain an asio dependency.
+// verbatim. Kept out of rate_limiter.h so that lightweight, widely-included
+// header does not gain an asio dependency.
 [[nodiscard]] inline std::string_view rate_limit_key_for(
     std::string_view remote_address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
     if (!(remote_address.find(':') != std::string_view::npos)) {
@@ -67,13 +68,12 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
         return std::string_view(buffer, static_cast<std::size_t>(cursor_value - buffer));
     }
     const auto bytes_value = address.to_bytes();
-    static constexpr char hex[] = "0123456789abcdef";
     buffer[0] = 'v';
     buffer[1] = '6';
     buffer[2] = '/';
     for (std::size_t i = 0; i < 8; ++i) {  // first 8 bytes = the /64 network prefix
-        buffer[3 + i * 2] = hex[(bytes_value[i] >> 4) & 0x0F];
-        buffer[3 + i * 2 + 1] = hex[bytes_value[i] & 0x0F];
+        buffer[3 + i * 2] = http_lower_hex_digit(bytes_value[i] >> 4);
+        buffer[3 + i * 2 + 1] = http_lower_hex_digit(bytes_value[i]);
     }
     return std::string_view(buffer, rate_limit_key_buffer_bytes);
 }

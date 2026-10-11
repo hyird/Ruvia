@@ -25,8 +25,10 @@ namespace detail {
 class db_query_storage;
 class db_query_compiler;
 class db_relation_plan;
-class db_query_cache_state;
 struct db_query_plan;
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state;
+#endif
 }  // namespace detail
 
 enum class db_parameter_mode : std::uint8_t { bound,
@@ -429,10 +431,11 @@ private:
     friend class detail::db_query_compiler;
     friend class detail::db_relation_plan;
     friend class db_schema;
+#ifdef RUVIA_ENABLE_REDIS
+    // The result cache reads each statement's cache options.
     friend class detail::db_query_cache_state;
-    friend class db_transaction;
-    friend class db_handle;
     friend struct detail::db_query_plan;
+#endif
     template <typename, typename>
     friend class db_query_builder;
     template <typename, typename>

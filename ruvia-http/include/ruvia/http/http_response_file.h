@@ -6,6 +6,8 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/http_native_path.h"
+
 namespace ruvia {
 
 // Opaque runtime-supplied identity of the file whose metadata was used to
@@ -46,9 +48,7 @@ private:
 // valid for the lifetime of the response body from which it was obtained.
 class http_response_file_view final {
 public:
-    using native_path_char_type = std::filesystem::path::value_type;
-
-    constexpr http_response_file_view(const native_path_char_type* native_path, std::uint64_t size,
+    constexpr http_response_file_view(const http_native_path_char_type* native_path, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length, http_response_file_identity identity) noexcept
         : native_path_(native_path),
           size_(size),
@@ -56,7 +56,7 @@ public:
           length_(length),
           identity_(identity) {}
 
-    [[nodiscard]] constexpr const native_path_char_type* native_path_c_str() const noexcept {
+    [[nodiscard]] constexpr const http_native_path_char_type* native_path_c_str() const noexcept {
         return native_path_;
     }
     [[nodiscard]] std::filesystem::path to_path() const {
@@ -76,7 +76,7 @@ public:
     }
 
 private:
-    const native_path_char_type* native_path_;
+    const http_native_path_char_type* native_path_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;

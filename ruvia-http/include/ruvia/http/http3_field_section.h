@@ -42,8 +42,9 @@ struct http3_field_section_limits final {
 
 using http3_field_section_callback_type = bool (*)(void*, http3_field_section_field_view);
 
-// Decodes a QPACK field section with a permanently empty dynamic table. Callback
-// views borrow the input and remain valid only for the duration of the callback.
+// Decodes a QPACK field section with a permanently empty dynamic table. Required
+// Insert Count must be zero; any nonnegative Base up to 2^62 - 1 is accepted.
+// Dynamic references are rejected. Callback views expire when the callback returns.
 [[nodiscard]] std::variant<std::size_t, http3_field_section_error> decode_http3_field_section(
     std::span<const char> input, http3_field_section_callback_type callback_value, void* context_value,
     http3_field_section_limits limits = {},

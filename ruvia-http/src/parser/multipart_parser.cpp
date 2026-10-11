@@ -8,11 +8,11 @@
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
+#include "parser/field_line_folding.h"
 #include "parser/multipart_delimiter.h"
 #include "parser/multipart_part_access.h"
 #include "parser/multipart_part_headers.h"
 #include "parser/multipart_stream_part_access.h"
-#include "util/pmr_string.h"
 
 // The multipart state machine: find the next delimiter, read one part's header
 // block, then hand out that part's body in chunks -- driven entirely by what is
@@ -87,6 +87,7 @@ multipart_parser::multipart_parser(multipart_parse_options options)
       input_(resource_),
       current_name_(resource_),
       current_filename_(resource_),
+      current_headers_(resource_),
       current_content_type_(resource_),
       remaining_parts_(options.max_parts_),
       remaining_metadata_bytes_(options.max_metadata_bytes_) {}
@@ -98,6 +99,7 @@ multipart_parser::multipart_parser(
       input_(detail::multipart_borrowed_input{complete_body}),
       current_name_(resource_),
       current_filename_(resource_),
+      current_headers_(resource_),
       current_content_type_(resource_),
       remaining_parts_(options.max_parts_),
       remaining_metadata_bytes_(options.max_metadata_bytes_) {}
@@ -111,7 +113,8 @@ multipart_body_parse_result parse_multipart_body(std::string_view body, multipar
         auto result_value = parser.poll();
         if (const auto* part = result_value.part()) {
             parts.push_back(detail::multipart_part_access::make_decoded(part->name(), part->filename(),
-                part->content_type(), part->body(), part->has_filename(), resource));
+                part->content_type(), part->body(), part->has_filename(), resource,
+                parser.current_content_type_owned_));
             continue;
         }
         if (result_value.done() != nullptr) {
@@ -305,7 +308,14 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
         if (headers_end + 4 > remaining_metadata_bytes_) {
             return multipart_parse_error::metadata_too_large;
         }
-        const auto headers = buffer.substr(0, headers_end);
+        auto headers = buffer.substr(0, headers_end);
+        const auto first_fold = detail::find_field_line_fold(headers);
+        const bool unfolded = first_fold != std::string_view::npos;
+        if (unfolded) {
+            detail::copy_unfolded_field_lines(
+                headers, first_fold, detail::field_line_folding_policy::mime, current_headers_);
+            headers = current_headers_;
+        }
         const auto parsed_headers = detail::http_parse_multipart_part_headers(headers);
         if (const auto* failure = parsed_headers.failure()) {
             return failure->parse_error();
@@ -321,16 +331,19 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
         current_filename_present_ = part_headers->has_filename();
         current_content_type_.clear();
         current_content_type_view_ = {};
+        current_content_type_owned_ = false;
         if (current_filename_present_) {
             detail::http_append_decoded_quoted_pairs(current_filename_, part_headers->filename());
         }
         if (!part_headers->content_type().empty()) {
-            if (input_.borrowed() != nullptr) {
+            if (input_.borrowed() != nullptr || unfolded) {
                 current_content_type_view_ = part_headers->content_type();
+                current_content_type_owned_ = unfolded;
             } else {
                 current_content_type_.assign(
                     part_headers->content_type().data(), part_headers->content_type().size());
                 current_content_type_view_ = current_content_type_;
+                current_content_type_owned_ = true;
             }
         }
         --remaining_parts_;

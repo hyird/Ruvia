@@ -6,9 +6,12 @@
 #include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_config_validation.h"
+#include "db/db_pool.h"
 #include "db/db_prepared_statement.h"
+#include "db/db_query_execution.h"
+#ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache_state.h"
-#include "db/db_registry.h"
+#endif
 
 // The per-request database handle: it borrows a registry entry for the
 // operation's lifetime and hands each call to the pool.
@@ -53,20 +56,32 @@ task<db_transaction> begin_pool_transaction(
 
 }  // namespace
 
+#ifdef RUVIA_ENABLE_REDIS
 db_handle::db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
     ::ruvia::operation_scope& operation_scope, detail::db_query_cache_state* cache) noexcept
     : cache_(cache),
       client_(client),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       registration_(operation_scope, this, &db_handle::expire_capability) {}
+#else
+db_handle::db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
+    ::ruvia::operation_scope& operation_scope) noexcept
+    : client_(client),
+      resource_(pmr_resource_or_default(resource)),
+      registration_(operation_scope, this, &db_handle::expire_capability) {}
+#endif
 
 db_handle::db_handle(const db_handle& other) noexcept
-    : cache_(other.cache_),
-      client_(other.client_),
+    : client_(other.client_),
       resource_(other.resource_),
       options_(other.options_),
-      registration_(other.registration_, this) {}
+      registration_(other.registration_, this) {
+#ifdef RUVIA_ENABLE_REDIS
+    cache_ = other.cache_;
+#endif
+}
 
+#ifdef RUVIA_ENABLE_REDIS
 db_query_result_cache db_handle::query_result_cache() const {
     registration_.require_active();
     if (!cache_) {
@@ -74,18 +89,21 @@ db_query_result_cache db_handle::query_result_cache() const {
     }
     return db_query_result_cache(*cache_, registration_.scope(), options_);
 }
+#endif
 
 db_handle db_handle::with_options(operation_options options) const {
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     registration_.require_active();
     db_handle copy(*this);
-    copy.options_ = detail::merge_operation_options(options_, std::move(options));
+    copy.options_ = merge_operation_options(options_, std::move(options));
     return copy;
 }
 
 void db_handle::expire_capability(void* target) noexcept {
     auto& handle = *static_cast<db_handle*>(target);
+#ifdef RUVIA_ENABLE_REDIS
     handle.cache_ = nullptr;
+#endif
     handle.client_ = detail::db_pool_ref_type{};
     handle.resource_ = nullptr;
     handle.options_ = {};
@@ -101,18 +119,26 @@ std::pmr::memory_resource* db_handle::query_resource() const {
     return resource_;
 }
 
+detail::db_query_backend db_handle::query_backend() const {
+    detail::db_query_backend backend{client_, std::nullopt, resource_};
+#ifdef RUVIA_ENABLE_REDIS
+    backend.cache_ = cache_;
+#endif
+    return backend;
+}
+
 task<db_rows> db_handle::query_task(const db_query& query) const {
     registration_.require_active();
-    auto plan = detail::db_query_plan::prepare(query, nullptr, query_driver(), resource_, cache_);
-    return detail::execute_db_query_plan<false>(std::move(plan),
-        detail::db_query_backend{client_, std::nullopt, resource_, cache_}, options_);
+    const auto backend = query_backend();
+    auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
+    return detail::execute_db_query_plan<false>(std::move(plan), backend, options_);
 }
 
 task<std::pair<db_rows, db_rows>> db_handle::query_and_count_task(const db_query& query, const db_query& count) const {
     registration_.require_active();
-    auto plan = detail::db_query_plan::prepare(query, &count, query_driver(), resource_, cache_);
-    return detail::execute_db_query_plan<true>(std::move(plan),
-        detail::db_query_backend{client_, std::nullopt, resource_, cache_}, options_);
+    const auto backend = query_backend();
+    auto plan = detail::db_query_plan::prepare(query, &count, backend);
+    return detail::execute_db_query_plan<true>(std::move(plan), backend, options_);
 }
 
 scoped_operation<db_rows> db_handle::query(const db_query& query) const {
@@ -168,18 +194,19 @@ task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type
 
 scoped_operation<db_transaction> db_handle::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), begin_transaction_prepared(
-                                   client_, resource_, registration_.scope(), options_, std::move(options), cache_));
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        begin_transaction_prepared(query_backend(), registration_.scope(), options_, std::move(options)));
 }
 
-task<db_transaction> db_handle::begin_transaction_prepared(detail::db_pool_ref_type client,
-    std::pmr::memory_resource* resource, ::ruvia::operation_scope& operation_scope,
-    operation_options operation_options_value, db_transaction_options transaction_options, detail::db_query_cache_state* cache) {
+task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_backend backend,
+    ::ruvia::operation_scope& operation_scope, operation_options operation_options_value,
+    db_transaction_options transaction_options) {
     auto transaction = co_await begin_pool_transaction(
-        client, resource, std::move(operation_options_value), std::move(transaction_options));
+        backend.pool_, backend.resource_, std::move(operation_options_value), std::move(transaction_options));
     transaction.bind_operation_scope(operation_scope);
-    transaction.cache_ = cache;
+#ifdef RUVIA_ENABLE_REDIS
+    transaction.cache_ = backend.cache_;
+#endif
     co_return transaction;
 }
 

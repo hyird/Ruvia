@@ -10,9 +10,9 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "http/http_stream_read_result.h"
 #include "http/tls_tunnel_output.h"
@@ -34,7 +34,7 @@ public:
     }
     [[nodiscard]] task<http_stream_read_result> read_more(std::pmr::string& bytes_value) {
         const auto old_size = bytes_value.size();
-        resize_pmr_string_for_overwrite(bytes_value, old_size + 4096);
+        http_resize_pmr_string_for_overwrite(bytes_value, old_size + 4096);
         const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
             stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, 4096), std::move(handler));
         });

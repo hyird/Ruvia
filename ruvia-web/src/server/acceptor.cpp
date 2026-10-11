@@ -37,6 +37,7 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
       quic_channels_(process_resource()),
       udp_(nullptr, pmr_object_deleter<http3_acceptor_datagram_endpoint>{process_resource()}),
       quic_notification_(runtime_.context()),
+      quic_visits_(process_resource()),
       quic_retirement_(io_context_),
       failure_target_(failure_target),
       failure_callback_(failure) {
@@ -67,26 +68,32 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
     runtime_.configure({
         .startup_ = [this] {
             prepare_quic();
-            if (runtime_.state() == runtime_lifecycle::state_type::running) {
-                (void)completion_.mark_startup_ready();
-            } else {
-                completion_.mark_startup_aborted();
+            runtime_.mark_ready(); },
+        .serve_ = [this] {
+            if (udp_ && udp_->start() == http3_acceptor_datagram_endpoint::pump_result::error) {
+                throw std::system_error(udp_->error(), "start QUIC acceptor UDP listener");
+            }
+            for (std::size_t i = 0; i < listeners_.size(); ++i) {
+                begin_accept(i);
             } },
         .stop_admission_ = [this] { stop_on_owner(); },
-        .failure_ = [this](std::exception_ptr error) noexcept { fail(std::move(error)); },
+        .failure_ = [this](std::exception_ptr) noexcept {
+            if (failure_callback_ != nullptr) {
+                failure_callback_(failure_target_);
+            } },
         .shutdown_ = [this]() noexcept {
             close_listeners();
             udp_.reset();
             quic_channels_.clear();
-            quic_pool_.reset();
-            completion_.mark_startup_aborted();
-            completion_.mark_serving_aborted(); },
+            quic_ready_.reset();
+            quic_pool_.reset(); },
     });
 }
 
 acceptor::~acceptor() {
-    stop();
-    join();
+    // Ingress has no external producers: it finalizes itself once QUIC retires.
+    runtime_.request_stop();
+    runtime_.join();
 }
 
 void acceptor::prepare_quic() {
@@ -99,6 +106,8 @@ void acceptor::prepare_quic() {
     const auto capacity = *(*configured)->quic_;
     quic_pool_.emplace(capacity.packet_slots_,
         http3_capacity::packet_bytes, process_resource());
+    quic_ready_.emplace(quic_notification_, targets_.size(), process_resource());
+    quic_visits_.reserve(targets_.size());
     udp_ = make_pmr_object<http3_acceptor_datagram_endpoint>(process_resource(), io_context_,
         asio::ip::udp::endpoint(tcp.address(), tcp.port()),
         http3_acceptor_datagram_endpoint::notification{this, &datagram_ready}, *quic_pool_);
@@ -111,7 +120,7 @@ void acceptor::prepare_quic() {
                 [this](std::exception_ptr error) noexcept {
                     quic_running_ = false;
                     if (error) {
-                        fail(std::move(error));
+                        (void)runtime_.fail(std::move(error));
                         // An unrecoverable runner error must not bypass leases.
                         stop_on_owner();
                         if (!quic_retired()) {
@@ -127,7 +136,7 @@ void acceptor::prepare_quic() {
     }
     for (std::size_t worker_value = 0; worker_value < targets_.size(); ++worker_value) {
         auto channel = make_pmr_object<http3_datagram_channel>(process_resource(),
-            *quic_pool_, quic_notification_, process_resource(),
+            *quic_pool_, *quic_ready_, worker_value, process_resource(),
             capacity.input_slots_, capacity.output_credits_);
         // A staging failure must not leave an unowned channel waiting for an ACK.
         try {
@@ -169,7 +178,7 @@ task<void> acceptor::run_quic() {
                     stop_on_owner();
                 }
             } catch (...) {
-                fail(std::current_exception());
+                (void)runtime_.fail(std::current_exception());
                 stop_on_owner();
             }
         }
@@ -203,57 +212,74 @@ void acceptor::pump_quic() noexcept {
         try {
             throw std::system_error(error, "QUIC acceptor UDP I/O");
         } catch (...) {
-            fail(std::current_exception());
+            (void)runtime_.fail(std::current_exception());
         }
         stop_on_owner();
     }
-    // Every wake scans all owners. Each credit lane uses one bounded two-wrap
-    // batch and republishes the aggregate latch when more credits remain.
-    for (auto& channel : quic_channels_) {
-        channel->acceptor_poll();
-    }
     if (quic_stopping_) {
+        // Retirement is cold: every owner is polled. Queued descriptors retire
+        // here; a descriptor already submitted to native UDP remains inside the
+        // endpoint until its callback.
         for (auto& channel : quic_channels_) {
-            // Queued descriptors retire here; a descriptor already submitted to
-            // native UDP remains inside the endpoint until its callback.
-            for (std::size_t count = 0;
-                count < http3_datagram_channel::default_output_window; ++count) {
-                auto packet = channel->acceptor_take_output();
-                if (!packet) {
-                    break;
-                }
+            channel->acceptor_poll();
+            while (channel->acceptor_take_output()) {
             }
         }
         return;
     }
-    if (auto packet = udp_->take_receive()) {
+    // Only channels that signalled since the last wake are polled; each credit
+    // lane uses one bounded two-wrap batch and re-signals when more remain.
+    quic_visits_.clear();
+    quic_ready_->drain([this](std::size_t index) noexcept {
+        // A staging rollback can signal an index that never joined the channels.
+        if (index < quic_channels_.size()) {
+            quic_channels_[index]->acceptor_poll();
+            quic_visits_.push_back(static_cast<std::uint32_t>(index));
+        }
+    });
+    // Route every held packet. The endpoint holds at most its receive slots and
+    // completes none during this loop, which bounds the per-wake batch.
+    while (auto packet = udp_->take_receive()) {
         const auto worker_value = ruvia::quic_datagram_partition(packet->view().bytes_,
             static_cast<std::uint32_t>(targets_.size()));
         if (worker_value) {
             (void)quic_channels_[*worker_value]->acceptor_push(std::move(*packet));
         }
     }
-    // A route/drop above or an independent RX credit return can make storage
-    // available. No second receive pool and no packet copy exist at this edge.
+    // Routing, drops and independent RX credit returns make storage available.
+    // No second receive pool and no packet copy exist at this edge.
     udp_->poll_receive();
-    if (udp_->outbound_pending()) {
-        return;
-    }
-    for (std::size_t offset = 0; offset < quic_channels_.size(); ++offset) {
-        const auto worker_value = (next_output_ + offset) % quic_channels_.size();
-        auto packet = quic_channels_[worker_value]->acceptor_take_output();
-        if (!packet) {
-            continue;
+    // Send one packet per signalled channel per round, starting after the last
+    // channel served, while native send slots remain.
+    const auto first = std::ranges::lower_bound(quic_visits_, next_output_);
+    std::ranges::rotate(quic_visits_, first);
+    while (!quic_visits_.empty() && udp_->outbound_capacity()) {
+        std::size_t kept = 0;
+        for (const auto index : quic_visits_) {
+            if (!udp_->outbound_capacity()) {
+                quic_visits_[kept++] = index;
+                continue;
+            }
+            auto packet = quic_channels_[index]->acceptor_take_output();
+            if (!packet) {
+                continue;
+            }
+            (void)udp_->send_owned_datagram(std::move(*packet));
+            next_output_ = index + 1;
+            quic_visits_[kept++] = index;
         }
-        (void)udp_->send_owned_datagram(std::move(*packet));
-        next_output_ = (worker_value + 1) % quic_channels_.size();
-        break;
+        quic_visits_.resize(kept);
+    }
+    // Send slots ran out first. A native send completion wakes the next pump,
+    // which revisits every channel not yet seen empty.
+    for (const auto index : quic_visits_) {
+        quic_ready_->mark(index);
     }
 }
 
 void acceptor::prepare() {
-    if (prepared_ || runtime_.state() != runtime_lifecycle::state_type::ready) {
-        throw std::logic_error("acceptor can only be prepared once before launch");
+    if (runtime_.state() != runtime_lifecycle::state_type::ready) {
+        throw std::logic_error("acceptor listeners must be prepared before launch");
     }
     for (auto& configured : listeners_) {
         auto& socket = configured->socket_;
@@ -276,68 +302,6 @@ void acceptor::prepare() {
             throw std::system_error(error, "failed to prepare TCP acceptor listener");
         }
     }
-    prepared_ = true;
-}
-
-void acceptor::launch() {
-    if (!prepared_) {
-        throw std::logic_error("acceptor must be prepared before launch");
-    }
-    try {
-        runtime_.start();
-    } catch (...) {
-        if (const auto failure = runtime_.failure()) {
-            (void)completion_.record_failure(failure);
-        } else if (runtime_.state() != runtime_lifecycle::state_type::running) {
-            completion_.mark_startup_aborted();
-            completion_.mark_serving_aborted();
-        }
-        throw;
-    }
-}
-
-void acceptor::wait_until_ready() {
-    completion_.wait_for_startup();
-}
-
-void acceptor::request_serve() {
-    if (runtime_.state() != runtime_lifecycle::state_type::running || serve_requested_.exchange(true)) {
-        return;
-    }
-    const auto posted = runtime_.post_control([this] {
-        if (runtime_.state() != runtime_lifecycle::state_type::running) {
-            completion_.mark_serving_aborted();
-            return;
-        }
-        try {
-            if (udp_ && udp_->start() == http3_acceptor_datagram_endpoint::pump_result::error) {
-                throw std::system_error(udp_->error(), "start QUIC acceptor UDP listener");
-            }
-            for (std::size_t i = 0; i < listeners_.size(); ++i) {
-                begin_accept(i);
-            }
-            if (runtime_.state() == runtime_lifecycle::state_type::running && completion_.failure() == nullptr) {
-                (void)completion_.mark_serving();
-            } else {
-                completion_.mark_serving_aborted();
-            }
-        } catch (...) {
-            fail(std::current_exception());
-        }
-    });
-    if (!posted) {
-        stop();
-    }
-}
-
-bool acceptor::wait_until_serving() {
-    return completion_.wait_for_serving();
-}
-
-void acceptor::stop() noexcept {
-    runtime_.request_stop();
-    completion_.mark_startup_aborted();
-    completion_.mark_serving_aborted();
 }
 
 void acceptor::stop_on_owner() noexcept {
@@ -355,29 +319,6 @@ void acceptor::stop_on_owner() noexcept {
         quic_notification_.close();
         runtime_.finalize();
     }
-    completion_.mark_startup_aborted();
-    completion_.mark_serving_aborted();
-}
-
-void acceptor::join() {
-    runtime_.join();
-    completion_.mark_startup_aborted();
-    completion_.mark_serving_aborted();
-}
-
-asio::ip::tcp::endpoint acceptor::local_endpoint(std::size_t index) const {
-    return listeners_.at(index)->endpoint_;
-}
-
-std::exception_ptr acceptor::failure() const noexcept {
-    return completion_.failure();
-}
-
-void acceptor::rethrow_failure() const {
-    if (const auto error = failure()) {
-        std::rethrow_exception(error);
-    }
-    runtime_.rethrow_failure();
 }
 
 void acceptor::begin_accept(std::size_t index) noexcept {
@@ -393,7 +334,7 @@ void acceptor::begin_accept(std::size_t index) noexcept {
             accepted(index, error, std::move(accepted_socket));
         });
     } catch (...) {
-        fail(std::current_exception());
+        (void)runtime_.fail(std::current_exception());
     }
 }
 
@@ -407,7 +348,7 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
             try {
                 throw std::system_error(error, "fatal TCP accept error");
             } catch (...) {
-                fail(std::current_exception());
+                (void)runtime_.fail(std::current_exception());
             }
             return;
         }
@@ -420,7 +361,7 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         try {
             throw std::system_error(release_error, "failed to detach accepted TCP socket");
         } catch (...) {
-            fail(std::current_exception());
+            (void)runtime_.fail(std::current_exception());
         }
         return;
     }
@@ -438,22 +379,25 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         }
     }
     if (selected == targets_.size()) {
+        // Dropping the ticket closes the connection at ingress.
+        refused_connections_.fetch_add(1, std::memory_order_relaxed);
         schedule_retry(index);
         return;
     }
     const auto target = targets_[selected];
     try {
+        // Selection above is advisory. The worker's accept path holds the one
+        // authoritative capacity check and counts its own refusals.
         auto posted = target.submission_.post([target, ticket = std::move(ticket)]() mutable noexcept {
-            if (target.available_(target.object_)) {
-                target.accept_(target.object_, std::move(ticket));
-            }
+            target.accept_(target.object_, std::move(ticket));
         });
         if (!posted.accepted()) {
+            refused_connections_.fetch_add(1, std::memory_order_relaxed);
             auto rejected = std::move(posted).take_rejected();
             rejected = {};
         }
     } catch (...) {
-        fail(std::current_exception());
+        (void)runtime_.fail(std::current_exception());
         return;
     }
     if (runtime_.state() == runtime_lifecycle::state_type::running) {
@@ -474,15 +418,7 @@ void acceptor::schedule_retry(std::size_t index) noexcept {
             }
         });
     } catch (...) {
-        fail(std::current_exception());
-    }
-}
-
-void acceptor::fail(std::exception_ptr error) noexcept {
-    (void)completion_.record_failure(std::move(error));
-    runtime_.request_stop();
-    if (failure_callback_ != nullptr) {
-        failure_callback_(failure_target_);
+        (void)runtime_.fail(std::current_exception());
     }
 }
 

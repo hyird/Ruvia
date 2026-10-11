@@ -4,6 +4,7 @@
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
 
+#include "util/http_text_overlap.h"
 #include "websocket/ws_connection.h"
 
 namespace ruvia {
@@ -45,12 +46,19 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
         return websocket_feed_status::inactive;
     }
     if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_.size()) {
-        // The bound covers bytes awaiting next_event(), not the parsed prefix the
-        // reader compacts lazily; otherwise a frame that fits could never arrive.
-        impl_->connection_.release_consumed_input();
-        if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_.size()) {
+        if (input.size() > impl_->max_buffered_input_bytes_ - impl_->connection_.pending_input_bytes()) {
             return websocket_feed_status::backpressured;
         }
+        // The bound covers bytes awaiting next_event(), not the parsed prefix the
+        // reader compacts lazily; otherwise a frame that fits could never arrive.
+        std::pmr::string owned_input(impl_->resource_);
+        if (detail::http_text_overlaps(input, {impl_->input_.data(), impl_->input_.size() + 1})) {
+            owned_input.assign(input);
+            input = owned_input;
+        }
+        impl_->connection_.release_consumed_input();
+        impl_->input_.append(input);
+        return websocket_feed_status::accepted;
     }
     impl_->input_.append(input);
     return websocket_feed_status::accepted;

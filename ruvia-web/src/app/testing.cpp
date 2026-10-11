@@ -3,64 +3,33 @@
 #include <chrono>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_parse_error.h"
-#include "ruvia/http/http_request_body_failure.h"
-#include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
-#include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/dotenv.h"
 
 #include "context/context_services.h"
+#include "http/http_protocol_error_info.h"
 #include "integration/worker_capabilities.h"
-#include "router/router.h"
+#include "router/route_table.h"
 #include "router/router_impl.h"
-#include "server/request_deadline.h"
+#include "server/http_request_admission.h"
+#include "server/http_server_options.h"
 
 namespace ruvia {
 
-namespace {
-
-task<void> start_test_worker(
-    ruvia::connection_scanner& scanner, detail::worker_capabilities& capabilities) {
-    try {
-        capabilities.initialize_worker_state();
-        scanner.start();
-        co_await capabilities.connect();
-    } catch (...) {
-        scanner.stop();
-        capabilities.shutdown_worker_state();
-        throw;
-    }
-}
-
-task<void> stop_test_worker(
-    ruvia::connection_scanner& scanner, detail::worker_capabilities& capabilities) {
-    scanner.stop();
-    scanner.close_all();
-    capabilities.close_now();
-    try {
-        co_await capabilities.join();
-    } catch (...) {
-        capabilities.shutdown_worker_state();
-        throw;
-    }
-    capabilities.shutdown_worker_state();
-}
-
-}  // namespace
-
+// test_app drives the production worker bring-up (worker_capabilities
+// start/stop) and the production per-request chain (admission, dispatch, the
+// response tail) on one core event loop. Only the transport is absent.
 struct test_app::impl_type final {
     enum class lifecycle_type { configuring,
         initializing,
@@ -68,16 +37,18 @@ struct test_app::impl_type final {
         failed };
 
     detail::app_configuration configuration_{detail::registration_resource()};
-    detail::router router_;
-    detail::controller_store controllers_;
     worker_memory memory_;
+    detail::controller_store controllers_;
+    detail::compiled_route_plan_ptr_type route_plan_{nullptr, pmr_object_deleter<detail::compiled_route_plan>{}};
+    std::optional<detail::route_table> routes_;
     env env_;
+    // The defaults a server starts from: no listener-specific policy applies.
+    detail::http_server_options options_{};
     event_loop_pool event_loop_pool_{{.loop_count_ = 1}};
     event_loop event_loop_{event_loop_pool_.loop(0)};
     worker_handle worker_{event_loop_.handle()};
     stop_source stop_source_;
     stop_token stop_token_{stop_source_.token()};
-    std::optional<ruvia::connection_scanner> connection_scanner_;
     std::optional<detail::worker_capabilities> capabilities_;
     lifecycle_type lifecycle_{lifecycle_type::configuring};
     std::exception_ptr startup_failure_{};
@@ -86,7 +57,7 @@ struct test_app::impl_type final {
         if (lifecycle_ == lifecycle_type::ready) {
             stop_source_.request_stop();
             try {
-                event_loop_.start(stop_test_worker(*connection_scanner_, *capabilities_)).get();
+                event_loop_.start(capabilities_->stop()).get();
             } catch (...) {
                 std::terminate();
             }
@@ -115,23 +86,25 @@ struct test_app::impl_type final {
 
         try {
             const auto controller_registrars = detail::seal_controller_registrars();
-            detail::register_controllers(router_, controllers_, controller_registrars);
-            auto& routes_value = detail::router_impl::from(router_);
-            configuration_.apply(routes_value, memory_.resource());
-            routes_value.finalize();
+            controllers_ = detail::controller_store(controller_registrars);
+            route_plan_ = detail::compile_route_plan(
+                memory_.resource(), controller_registrars, controllers_, configuration_);
+            routes_.emplace(memory_.resource(), *route_plan_, controllers_);
 
-            connection_scanner_.emplace(worker_, ruvia::connection_scanner_options{});
             capabilities_.emplace(event_loop_.io_context(), worker_, memory_.resource(),
                 detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
                 detail::worker_capability_options{
-                    .route_rate_limits_ = routes_value.route_table().has_route_rate_limit()
+                    .default_rate_limit_ = options_.default_rate_limit_per_worker_,
+                    .route_rate_limits_ = routes_->has_route_rate_limit()
                                               ? detail::route_rate_limit_presence::present
                                               : detail::route_rate_limit_presence::absent,
-                    .rate_limit_capacity_ = 1024,
+                    .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
+                    .max_decoded_body_bytes_ = options_.max_buffered_body_bytes_,
+                    .http_client_result_budget_ = options_.http_client_result_budget_,
                     .env_ = &env_,
                 });
             event_loop_pool_.start();
-            event_loop_.start(start_test_worker(*connection_scanner_, *capabilities_)).get();
+            event_loop_.start(capabilities_->start()).get();
             lifecycle_ = lifecycle_type::ready;
         } catch (...) {
             startup_failure_ = std::current_exception();
@@ -188,6 +161,7 @@ test_response test_app::request(const test_request& request) {
     // Keep the request arena and every arena-backed response on the worker
     // until the response has been copied into its owning facade type.
     auto operation = [this, &request]() -> task<test_response> {
+        const auto request_start = std::chrono::steady_clock::now();
         request_memory request_memory_value(impl_->memory_);
         std::vector<http_header_view> headers;
         headers.reserve(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
@@ -201,46 +175,55 @@ test_response test_app::request(const test_request& request) {
             std::as_bytes(std::span(request.body_.data(), request.body_.size())),
             request_memory_value.resource());
 
-        const auto& routes_value = detail::router_impl::from(impl_->router_).route_table();
+        const auto& options = impl_->options_;
+        const auto& routes_value = *impl_->routes_;
         const auto resolution = routes_value.resolve(parsed_value);
-        const auto* resolved = resolution.resolved();
-
         const auto services = impl_->capabilities_->make_context_services(impl_->stop_token_);
 
-        std::optional<http_protocol_error> body_limit_error;
-        if (!parse_error.has_value() && resolved != nullptr) {
-            const auto route_limit = resolved->route().max_request_body_bytes();
-            if (route_limit != 0 && request.body_.size() > route_limit) {
-                body_limit_error = http_request_body_failure::too_large().protocol_error();
+        // A malformed request is rejected before admission, with no coding
+        // promise, exactly as a server answers a malformed head.
+        std::optional<detail::request_deadline> request_deadline;
+        std::optional<detail::http_request_admission> admission;
+        std::optional<detail::http_request_rejection> rejection;
+        if (parse_error.has_value()) {
+            rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
+                request_memory_value.resource(), http_parse_protocol_error(*parse_error)));
+        } else {
+            admission.emplace(detail::admit_http_request(
+                {
+                    .request_ = parsed_value,
+                    .resolution_ = resolution,
+                    .coding_ = http_response_coding_selection_for(parsed_value),
+                    .resource_ = request_memory_value.resource(),
+                    .start_ = request_start,
+                },
+                detail::http_request_admission_policy::server(options), services, request_deadline));
+            if (const auto* admitted_rejection = admission->rejection()) {
+                rejection = *admitted_rejection;
             }
         }
+        const auto& request_services = admission ? admission->services() : services;
 
-        auto dispatch = [&]() -> task<http_response> {
-            auto request_services = services;
-            std::optional<detail::request_deadline> request_deadline;
-            if (!parse_error.has_value() && !body_limit_error.has_value() && resolved != nullptr &&
-                resolved->route().deadline_ms() != 0) {
-                request_deadline.emplace(request_services.get_stop_token());
-                request_deadline->arm(request_services.worker(),
-                    std::chrono::milliseconds(resolved->route().deadline_ms()));
-                request_services = request_services.with_request_deadline(*request_deadline);
+        auto respond = [&]() -> task<http_response> {
+            if (rejection) {
+                co_return co_await detail::respond_http_request_rejection(
+                    routes_value, parsed_value, request_memory_value, *rejection, request_services);
             }
-            if (parse_error.has_value()) {
-                const auto error = http_parse_protocol_error(*parse_error);
-                co_return co_await routes_value.handle_error(parsed_value, request_memory_value,
-                    http_error_info({.status_ = error.status(), .message_ = error.what()}),
-                    request_services);
-            }
-            if (body_limit_error.has_value()) {
-                co_return co_await routes_value.handle_error(parsed_value, request_memory_value,
-                    http_error_info(
-                        {.status_ = body_limit_error->status(), .message_ = body_limit_error->what()}),
-                    request_services);
-            }
-            co_return co_await routes_value.dispatch_buffered_response(parsed_value, resolution, request_memory_value,
-                detail::document_root_binding::none(), request_services);
+            co_return co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
+                request_memory_value, detail::document_root_binding::none(), request_services,
+                admission->static_file_mode());
         };
-        auto response = co_await dispatch();
+        auto response = co_await respond();
+
+        const auto tail = admission ? admission->tail()
+                                    : detail::http_response_tail(parsed_value,
+                                          detail::http_response_coding_policy::disabled(), {}, request_start);
+        const auto prepared =
+            co_await tail.prepare(response, options, routes_value, request_memory_value, request_services);
+        if (!prepared) {
+            throw std::runtime_error("test_app request was cancelled");
+        }
+        tail.record_access(options.access_log_, response.status());
 
         // Copy everything out while the request arena is still alive.
         test_response result_value(response.status());
@@ -252,8 +235,7 @@ test_response test_app::request(const test_request& request) {
         // and content-forbidden statuses, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
         // are framing concerns and stay absent here.
-        const auto write_plan = plan_buffered_http_response_write(parsed_value.known_method(), response);
-        if (!write_plan.body_suppressed()) {
+        if (!prepared->write_plan_.body_suppressed()) {
             const auto body = response.body_bytes();
             result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
         }

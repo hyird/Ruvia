@@ -9,8 +9,8 @@
 
 namespace ruvia {
 
-http3_buffered_response_cursor::http3_buffered_response_cursor(std::pmr::memory_resource* resource)
-    : headers_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
+http3_buffered_response_cursor::http3_buffered_response_cursor(http3_headers_frame headers) noexcept
+    : headers_(std::move(headers)) {}
 
 http3_buffered_response_cursor& http3_buffered_response_cursor::require_no_outstanding_segment(
     http3_buffered_response_cursor& other) {
@@ -22,7 +22,6 @@ http3_buffered_response_cursor& http3_buffered_response_cursor::require_no_outst
 
 http3_buffered_response_cursor::http3_buffered_response_cursor(http3_buffered_response_cursor&& other)
     : headers_(std::move(require_no_outstanding_segment(other).headers_)),
-      decoded_field_section_size_(std::exchange(other.decoded_field_section_size_, 0)),
       body_(other.body_),
       data_plan_(std::move(other.data_plan_)),
       chunk_(other.chunk_),
@@ -47,7 +46,7 @@ http3_buffered_response_cursor::create(const http_response& response,
         if ((encoded.index() != 0)) {
             return error::response_encoding;
         }
-        return create(response, write_plan, std::move(std::get<0>(encoded)), resource);
+        return create(response, write_plan, std::move(std::get<0>(encoded)));
     } catch (const std::bad_alloc&) {
         return error::out_of_memory;
     } catch (...) {
@@ -57,7 +56,7 @@ http3_buffered_response_cursor::create(const http_response& response,
 
 std::variant<http3_buffered_response_cursor, http3_buffered_response_cursor::error>
 http3_buffered_response_cursor::create(const http_response& response, const http_buffered_response_write_plan& write_plan,
-    http3_response_head encoded_head, std::pmr::memory_resource* resource) noexcept {
+    http3_response_head encoded_head) noexcept {
     if (!write_plan.matches_response(response)) {
         return error::invalid_response_plan;
     }
@@ -65,22 +64,7 @@ http3_buffered_response_cursor::create(const http_response& response, const http
         return error::file_body_unsupported;
     }
     try {
-        http3_buffered_response_cursor cursor(resource);
-        const auto* encoded = &encoded_head.field_section_;
-        cursor.decoded_field_section_size_ = encoded->decoded_field_section_size();
-        if (encoded->field_section_.size() > std::numeric_limits<std::size_t>::max() -
-                                                 http3_frame_header_max_bytes) {
-            return error::response_encoding;
-        }
-        cursor.headers_.resize(http3_frame_header_max_bytes + encoded->field_section_.size());
-        const auto frame_header = encode_http3_frame_header(cursor.headers_,
-            static_cast<std::uint64_t>(http3_frame_type::headers), encoded->field_section_.size());
-        if ((frame_header.index() != 0)) {
-            return error::response_encoding;
-        }
-        cursor.headers_.resize(std::get<0>(frame_header) + encoded->field_section_.size());
-        std::copy(encoded->field_section_.begin(), encoded->field_section_.end(),
-            cursor.headers_.begin() + static_cast<std::ptrdiff_t>(std::get<0>(frame_header)));
+        http3_buffered_response_cursor cursor(std::move(encoded_head.headers_));
 
         const auto body_plan = write_plan.body_plan();
         const bool send_body = write_plan.send_body();
@@ -116,7 +100,7 @@ http3_buffered_response_cursor::next() noexcept {
 http3_buffered_response_cursor::step http3_buffered_response_cursor::next_step() const noexcept {
     switch (state_) {
         case state::headers:
-            return segment_offset_ < headers_.size() ? step::bytes : step::failed;
+            return segment_offset_ < headers_.frame().size() ? step::bytes : step::failed;
         case state::data_header:
             return chunk_pending_ && chunk_.emits_data_ &&
                            segment_offset_ < chunk_.frame_header_size_
@@ -140,7 +124,7 @@ http3_buffered_response_cursor::step http3_buffered_response_cursor::next_step()
 http3_buffered_response_cursor::segment http3_buffered_response_cursor::active_segment() const noexcept {
     switch (state_) {
         case state::headers:
-            return segment(headers_).subspan(segment_offset_);
+            return headers_.frame().subspan(segment_offset_);
         case state::data_header:
             return segment(chunk_.frame_header_.data(), chunk_.frame_header_size_).subspan(segment_offset_);
         case state::data_body:
@@ -193,7 +177,7 @@ http3_buffered_response_cursor::acknowledge(std::size_t count) noexcept {
 
     if (state_ == state::headers) {
         segment_offset_ += count;
-        if (segment_offset_ == headers_.size()) {
+        if (segment_offset_ == headers_.frame().size()) {
             offered_ = false;
             state_ = state::data_header;
             segment_offset_ = 0;

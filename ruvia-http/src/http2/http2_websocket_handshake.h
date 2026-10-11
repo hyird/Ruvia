@@ -8,7 +8,8 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/hpack.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 

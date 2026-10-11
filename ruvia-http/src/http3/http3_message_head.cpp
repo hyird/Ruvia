@@ -5,22 +5,19 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/field/http_expectations.h"
 #include "ruvia/http/detail/field/http_header_section_size.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/detail/util/ascii_case.h"
-#include "ruvia/http/detail/util/http_ows.h"
 #include "ruvia/http/http3_qpack_connection.h"
-#include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "coding/http_content_coding.h"
 #include "coding/http_content_length.h"
 #include "field/binary_field_name.h"
-#include "field/http_cors_fields.h"
-#include "field/http_origin_fields.h"
+#include "field/http_request_field_validation.h"
+#include "field/response_field_validation.h"
+#include "http3/http3_request_content.h"
 #include "parser/http_request_target.h"
 
 namespace ruvia {
@@ -65,10 +62,10 @@ struct decode_state final {
     bool authority_seen_{false};
     bool path_seen_{false};
     bool status_seen_{false};
-    bool host_seen_{false};
+    detail::request_field_state request_fields_{detail::request_field_framing::binary};
     bool callback_rejected_{false};
     std::pmr::string host_;
-    bool content_type_seen_{false};
+    detail::response_field_state response_fields_;
     detail::http_content_length_state<std::uint64_t> content_length_;
 };
 
@@ -116,7 +113,10 @@ bool receive_field(void* opaque, http3_field_section_field_view field) {
                     return fail(state_value);
                 }
             } else if (field.name_ == ":authority") {
-                if (field.value_.empty() || !set_text(state_value.head_.authority_, state_value.authority_seen_)) {
+                // Same receipt grammar as HTTP/2 (RFC 3986 authority); the
+                // scheme-specific requirements follow in finish_head.
+                if (!detail::is_valid_uri_authority(field.value_) ||
+                    !set_text(state_value.head_.authority_, state_value.authority_seen_)) {
                     return fail(state_value);
                 }
             } else if (field.name_ == ":path") {
@@ -141,61 +141,39 @@ bool receive_field(void* opaque, http3_field_section_field_view field) {
     }
 
     state_value.ordinary_seen_ = true;
-    if (!detail::is_valid_binary_field_name(field.name_)) {
+    if (!detail::is_valid_binary_field_name(field.name_) ||
+        detail::is_forbidden_http_binary_connection_field(field.name_)) {
         return fail(state_value);
     }
-    if (detail::is_forbidden_http_binary_connection_field(field.name_)) {
-        return fail(state_value);
-    }
-    if (field.name_ == "te" &&
-        (state_value.kind_ != http3_message_head_kind::request ||
-            !http_ascii_equals_ignore_case(detail::http_trim_ows(field.value_), "trailers"))) {
-        return fail(state_value);
-    }
-    if (field.name_ == "host") {
-        if (state_value.kind_ != http3_message_head_kind::request || field.value_.empty() ||
-            state_value.host_seen_ ||
-            (state_value.authority_seen_ && state_value.head_.authority_ != field.value_)) {
-            return fail(state_value);
-        }
-        state_value.host_.assign(field.value_);
-        state_value.host_seen_ = true;
-    }
+    const auto kind = detail::classify_request_header(field.name_);
     if (state_value.kind_ == http3_message_head_kind::request) {
-        if ((field.name_ == "origin" && !detail::is_valid_http_origin_field_value(field.value_)) ||
-            (field.name_ == "access-control-request-method" &&
-                !detail::is_valid_http_cors_request_method(field.value_)) ||
-            (field.name_ == "access-control-request-headers" &&
-                !detail::is_valid_http_cors_request_header_names(field.value_)) ||
-            (field.name_ == "expect" &&
-                !detail::is_valid_received_http_expect_field_value(field.value_))) {
+        if (detail::validate_request_field(kind, field.value_, detail::http_field_list_role::recipient,
+                state_value.request_fields_) != detail::request_field_status::ok) {
+            return fail(state_value);
+        }
+        if (kind == detail::request_header_kind::host) {
+            if (state_value.authority_seen_ && state_value.head_.authority_ != field.value_) {
+                return fail(state_value);
+            }
+            state_value.host_.assign(field.value_);
+        } else if (kind == detail::request_header_kind::expect) {
+            state_value.head_.expectations_.parse_field(field.value_);
+        }
+    } else {
+        // TE and Host are request-only (RFC 9114 section 4.2, RFC 9110
+        // section 7.2); response representation metadata keeps its grammar.
+        if (kind == detail::request_header_kind::te || kind == detail::request_header_kind::host ||
+            detail::validate_response_field(kind, field.value_, detail::http_field_list_role::recipient,
+                state_value.response_fields_) != detail::response_field_status::ok) {
             return fail(state_value);
         }
     }
-    if (field.name_ == "content-type") {
-        if (state_value.content_type_seen_ || !is_valid_http_content_type_field_value(field.value_)) {
-            return fail(state_value);
-        }
-        state_value.content_type_seen_ = true;
-    } else if (field.name_ == "content-encoding" &&
-               !detail::is_valid_http_content_encoding_field_value(
-                   field.value_, detail::http_field_list_role::recipient)) {
+    if (kind == detail::request_header_kind::content_length &&
+        state_value.content_length_.parse_field(field.value_) != detail::http_content_length_parse_status::ok) {
         return fail(state_value);
     }
-    if (field.name_ == "trailer" &&
-        !(state_value.kind_ == http3_message_head_kind::request
-                ? detail::is_valid_http_request_trailer_field_value(
-                      field.value_, detail::http_field_list_role::recipient)
-                : detail::is_valid_http_response_trailer_field_value(
-                      field.value_, detail::http_field_list_role::recipient))) {
-        return fail(state_value);
-    }
-    if (field.name_ == "content-length") {
-        if (state_value.content_length_.parse_field(field.value_) != detail::http_content_length_parse_status::ok) {
-            return fail(state_value);
-        }
-    }
-    state_value.head_.headers_.emplace_back(field.name_, field.value_, state_value.head_.headers_.get_allocator().resource());
+    state_value.head_.headers_.push_back(
+        http_header::copy_of(field.name_, field.value_, state_value.head_.headers_.get_allocator().resource()));
     return true;
 }
 
@@ -212,9 +190,9 @@ std::optional<http3_message_head_error> finish_head(decode_state& state_value) {
                     return http3_message_head_error::message_error;
                 }
             } else {
-                const auto tunnel = detail::parse_http_authority(head.authority_);
+                const auto tunnel = parse_http_authority(head.authority_);
                 if (state_value.scheme_seen_ || state_value.path_seen_ || !state_value.authority_seen_ || !tunnel ||
-                    tunnel->port_kind() != detail::http_authority_port_kind::value ||
+                    tunnel->port_kind() != http_authority_port_kind::value ||
                     *tunnel->port() == 0) {
                     return http3_message_head_error::message_error;
                 }
@@ -223,19 +201,20 @@ std::optional<http3_message_head_error> finish_head(decode_state& state_value) {
             if (state_value.protocol_seen_ || !state_value.scheme_seen_ || !state_value.path_seen_ || !valid_path(head.path_, head.method_)) {
                 return http3_message_head_error::message_error;
             }
-            if (state_value.authority_seen_ && state_value.host_seen_ && head.authority_ != state_value.host_) {
+            const bool host_seen = state_value.request_fields_.seen(detail::request_header_kind::host);
+            if (state_value.authority_seen_ && host_seen && head.authority_ != state_value.host_) {
                 return http3_message_head_error::message_error;
             }
             const bool authority_required = http_ascii_equals_ignore_case(head.scheme_, "http") ||
                                             http_ascii_equals_ignore_case(head.scheme_, "https");
             if ((state_value.authority_seen_ && !valid_authority(head.authority_, head.scheme_)) ||
-                (state_value.host_seen_ && !valid_authority(state_value.host_, head.scheme_))) {
+                (host_seen && !valid_authority(state_value.host_, head.scheme_))) {
                 return http3_message_head_error::message_error;
             }
-            if (authority_required && !state_value.authority_seen_ && !state_value.host_seen_) {
+            if (authority_required && !state_value.authority_seen_ && !host_seen) {
                 return http3_message_head_error::message_error;
             }
-            if (!state_value.authority_seen_ && state_value.host_seen_) {
+            if (!state_value.authority_seen_ && host_seen) {
                 head.authority_.assign(state_value.host_);
             }
         }
@@ -243,19 +222,13 @@ std::optional<http3_message_head_error> finish_head(decode_state& state_value) {
         return http3_message_head_error::message_error;
     }
     head.content_length_ = state_value.content_length_.value();
+    if (state_value.kind_ == http3_message_head_kind::request && !detail::http3_request_content_metadata_valid(head)) {
+        return http3_message_head_error::message_error;
+    }
     return {};
 }
 
 }  // namespace
-
-http3_message_header::http3_message_header(std::pmr::memory_resource* resource)
-    : name_(resource),
-      value_(resource) {}
-
-http3_message_header::http3_message_header(
-    std::string_view header_name, std::string_view header_value, std::pmr::memory_resource* resource)
-    : name_(header_name, resource),
-      value_(header_value, resource) {}
 
 http3_message_head::http3_message_head(std::pmr::memory_resource* resource)
     : method_(resource),
@@ -264,6 +237,23 @@ http3_message_head::http3_message_head(std::pmr::memory_resource* resource)
       authority_(resource),
       path_(resource),
       headers_(resource) {}
+
+http3_message_head http3_message_head::copy(std::pmr::memory_resource* resource) const {
+    http3_message_head result(resource != nullptr ? resource : std::pmr::get_default_resource());
+    result.method_ = method_;
+    result.protocol_ = protocol_;
+    result.scheme_ = scheme_;
+    result.authority_ = authority_;
+    result.path_ = path_;
+    result.status_ = status_;
+    result.content_length_ = content_length_;
+    result.expectations_ = expectations_;
+    result.headers_.reserve(headers_.size());
+    for (const auto& field : headers_) {
+        result.headers_.push_back(http_header::copy_of(field.name(), field.value(), result.headers_.get_allocator().resource()));
+    }
+    return result;
+}
 
 std::variant<http3_message_head, http3_message_head_error> decode_http3_message_head(
     std::span<const char> field_section, http3_message_head_kind kind, std::pmr::memory_resource* resource,

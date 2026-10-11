@@ -15,6 +15,7 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/server_config.h"
 
+#include "server/http_server_tls_credential.h"
 #include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
@@ -32,6 +33,9 @@ struct http_server_listener_definition final {
         std::pmr::string certificate_chain_file_;
         std::pmr::string private_key_file_;
         std::pmr::string private_key_password_;
+        // Parsed once by server configuration validation; every worker
+        // context installs this instead of re-reading the files.
+        std::optional<http_server_tls_certificate> certificate_;
     };
 
     struct tls_client_certificate_policy_type final {
@@ -48,6 +52,8 @@ struct http_server_listener_definition final {
 
         std::pmr::string verify_file_;
         tls_client_certificate_requirement requirement_{tls_client_certificate_requirement::optional};
+        // Loaded once by server configuration validation.
+        std::optional<http_server_tls_client_ca> client_ca_;
     };
 
     struct tls_type final {

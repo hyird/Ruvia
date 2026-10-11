@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/field/http_expectations.h"
+#include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_known_method.h"
 
 #include "http2/http2_local_content_state.h"
@@ -174,11 +174,6 @@ public:
 
     void begin_local_content_known_length(std::uint64_t length) noexcept {
         local_content_.begin_known_length(length);
-    }
-
-    [[nodiscard]] http2_local_content_check check_local_content_accept(
-        std::size_t bytes_value, bool terminal) const noexcept {
-        return local_content_.check_accept(bytes_value, terminal);
     }
 
     void accept_local_content(std::size_t bytes_value) noexcept {
@@ -432,10 +427,6 @@ public:
         return message_data_.append_cookie_header_value(value, has_existing_cookie);
     }
 
-    [[nodiscard]] bool remote_headers_full() const noexcept {
-        return message_data_.headers_full();
-    }
-
     [[nodiscard]] std::size_t remote_header_count() const noexcept {
         return message_data_.header_count();
     }
@@ -451,9 +442,6 @@ public:
     }
     [[nodiscard]] bool append_remote_trailer(std::string_view name, std::string_view value) {
         return message_data_.append_trailer(name, value);
-    }
-    [[nodiscard]] std::span<const http_header> remote_trailers() const& noexcept {
-        return message_data_.trailers();
     }
     [[nodiscard]] std::pmr::vector<http_header> take_remote_trailers() & noexcept {
         return message_data_.take_trailers();
@@ -535,18 +523,6 @@ public:
 
     void mark_regular_header_seen() noexcept {
         request_state_.mark_regular_header_seen();
-    }
-
-    [[nodiscard]] bool mark_singleton_request_header(std::uint32_t bit) noexcept {
-        return request_state_.mark_singleton_header(bit);
-    }
-
-    [[nodiscard]] bool has_singleton_request_header(std::uint32_t bit) const noexcept {
-        return request_state_.has_singleton_header(bit);
-    }
-
-    [[nodiscard]] bool mark_singleton_response_header(std::uint32_t bit) noexcept {
-        return request_state_.mark_singleton_header(bit);
     }
 
     [[nodiscard]] bool begin_standard_connect() noexcept {

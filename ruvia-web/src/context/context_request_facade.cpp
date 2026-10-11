@@ -4,6 +4,7 @@
 
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/multipart_reader.h"
 
 #include "context/context_services.h"
 #include "http/request_query_values.h"
@@ -163,14 +164,6 @@ multipart_reader context_request::get_multipart_reader() const {
 
 std::optional<std::string_view> context_request::param(std::string_view name) const {
     return context_->route_param(name);
-}
-
-bool context_request::content_type_matches(std::string_view expected) const noexcept {
-    return context_->request_content_type_matches(expected);
-}
-
-std::pmr::memory_resource* context_request::resource() const noexcept {
-    return context_->arena();
 }
 
 const detail::request_bindings& context_request::request_bindings() const noexcept {

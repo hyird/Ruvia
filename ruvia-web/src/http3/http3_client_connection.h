@@ -1,11 +1,9 @@
 #pragma once
-#include <array>
 #include <bitset>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <list>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -31,12 +29,10 @@
 
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_state.h"
-#include "http3/http3_client_body_budget.h"
-#include "http3/http3_client_receive_driver.h"
+#include "http3/http3_body_budget.h"
 #include "http3/http3_client_request_driver.h"
 #include "http3/http3_client_response_delivery.h"
-#include "http3/http3_quic_client_endpoint_resolver.h"
-#include "http3/http3_quic_client_socket_session.h"
+#include "http3/http3_client_session_driver.h"
 
 namespace ruvia::detail {
 
@@ -59,17 +55,19 @@ struct http3_client_push_observer final {
 };
 
 // One address-stable connection backend owned by its HTTP client pool. The
-// pool's task_scope owns its sole DNS/QUIC driver task; request waiters never
-// drive sockets. Incremental response delivery binds an address-stable public
-// response state while this owner retains the corresponding request node.
-// Pool/TLS/worker resources and this object must survive request waiters and
-// the driver's join. All methods, including stop and destruction, are worker-
+// pool's task_scope owns its sole driver task, which runs the shared HTTP/3
+// session driver (DNS, QUIC attempts, critical and peer streams); request
+// waiters never drive sockets. Incremental response delivery binds an
+// address-stable public response state while this owner retains the
+// corresponding request node. Pool/TLS/worker resources, the borrowed host,
+// TLS host and authority, and this object must survive request waiters and the
+// driver's join. All methods, including stop and destruction, are worker-
 // affine; cross-thread cancellation must post through the worker endpoint.
-// The driver ends every QUIC attempt with CONNECTION_CLOSE carrying H3_NO_ERROR,
-// the detected RFC 9114 protocol error, or H3_INTERNAL_ERROR for a local
-// failure, then a closing period bounded by three PTOs and one second.
-// request_stop() still sends the close but ends that wait at once. Admission
-// stops before the final closing period begins.
+// Every QUIC attempt ends with CONNECTION_CLOSE carrying H3_NO_ERROR, the
+// detected RFC 9114 protocol error, or H3_INTERNAL_ERROR for a local failure,
+// then a closing period bounded by three PTOs and one second. request_stop()
+// still sends the close but ends that wait at once. Admission stops before the
+// final closing period begins.
 class http3_client_connection final {
 public:
     using time_point_type = std::chrono::steady_clock::time_point;
@@ -117,23 +115,19 @@ public:
         void (*notify_)(void*) noexcept {};
     };
 
-    // receive_body_budget may borrow a pool-owned worker-affine owner shared by
-    // successive connections. It must outlive this connection and its receive
-    // leases; null selects the connection-local budget, which is detached with
-    // the response before this connection can be destroyed.
+    // host is the unbracketed transport host for DNS; tls_host names the peer
+    // for SNI, verification and session tickets; origin is the fixed HTTPS
+    // origin (bracketed uri-host) and authority its default-port-omitted
+    // authority. receive_body_budget may borrow a pool-owned worker-affine
+    // owner shared by successive connections. It must outlive this connection
+    // and its receive leases; null selects the connection-local budget, which
+    // is detached with the response before this connection can be destroyed.
     http3_client_connection(asio::io_context& io, const worker_handle& worker_value,
-        task_scope& pool_tasks, http3_quic_client_tls_context& tls, http_origin_view origin,
-        std::chrono::milliseconds connect_timeout,
-        std::pmr::memory_resource* resource, std::size_t max_requests = 32,
-        std::size_t max_response_bytes = 16 * 1024 * 1024,
-        std::chrono::milliseconds idle_timeout = std::chrono::seconds(30),
-        http3_client_body_budget* receive_body_budget = nullptr,
-        std::optional<std::chrono::milliseconds> write_timeout = std::chrono::seconds(30));
-    http3_client_connection(asio::io_context& io, const worker_handle& worker_value,
-        task_scope& pool_tasks, http3_quic_client_tls_context& tls, http_origin_view origin,
+        task_scope& pool_tasks, http3_quic_client_tls_context& tls, std::string_view host,
+        std::string_view tls_host, http_origin_view origin, std::string_view authority,
         std::chrono::milliseconds connect_timeout, std::pmr::memory_resource* resource,
         std::size_t max_requests, std::size_t max_response_bytes,
-        std::chrono::milliseconds idle_timeout, http3_client_body_budget* receive_body_budget,
+        std::chrono::milliseconds idle_timeout, http3_body_budget* receive_body_budget,
         std::optional<std::chrono::milliseconds> write_timeout,
         lifecycle_notification_type lifecycle_notification, http3_qpack_config qpack = {},
         http3_client_origin_observer origin_observer = {}, http3_client_push_observer push_observer = {},
@@ -182,13 +176,12 @@ public:
     // Stream retirement already completed before terminal publication. Returned storage keeps
     // its worker allocator, whose owner must outlive it, and preserves even an expired deadline.
     [[nodiscard]] std::optional<rejected_request_type> take_rejected_request(request_id_type id);
-    [[nodiscard]] ruvia::quic_path_migration start_path_migration(
-        const asio::ip::udp::endpoint& local_endpoint);
+    [[nodiscard]] ruvia::quic_path_migration start_path_migration(const ruvia::quic_address& local_address);
     [[nodiscard]] std::optional<ruvia::quic_path_migration> path_migration(
         std::uint64_t id) const noexcept;
     [[nodiscard]] std::optional<ruvia::quic_path_migration> active_path_migration() const noexcept;
     [[nodiscard]] std::uint64_t quic_generation() const noexcept {
-        return quic_generation_;
+        return driver_.generation();
     }
     [[nodiscard]] ruvia::quic_operation_status cancel_path_migration(std::uint64_t id);
     void request_stop() noexcept;
@@ -196,7 +189,7 @@ public:
         return running_;
     }
     [[nodiscard]] bool accepting() const noexcept {
-        return !stopping_ && !draining_ && !terminal_ &&
+        return !driver_.stopping() && !draining_ && !terminal_ &&
                requests_.size() < max_requests_;
     }
     [[nodiscard]] bool terminal() const noexcept {
@@ -204,9 +197,6 @@ public:
     }
     [[nodiscard]] std::size_t retained_requests() const noexcept {
         return requests_.size();
-    }
-    [[nodiscard]] std::size_t retained_result_body_bytes() const noexcept {
-        return retained_result_body_bytes_;
     }
 
 private:
@@ -223,7 +213,7 @@ private:
         request_type(request_id_type value, http3_client_request_write&& write, const worker_handle& worker_value,
             std::pmr::memory_resource* resource, std::optional<time_point_type> absolute_deadline,
             bool replay_safe, http_client_response_state& response_state,
-            http3_client_body_budget& body_budget)
+            http3_body_budget& body_budget)
             : request_type(value, std::move(write), worker_value, resource, absolute_deadline, replay_safe) {
             response_state_ = &response_state;
             delivery_.emplace(response_state, &body_budget);
@@ -264,36 +254,29 @@ private:
     using push_list_type = std::pmr::list<push_type>;
     static constexpr std::size_t max_remembered_pushes = 128;
     using request_list_type = std::pmr::list<request_type>;
-    using session_owner_type = std::unique_ptr<http3_quic_client_socket_session,
-        pmr_object_deleter<http3_quic_client_socket_session>>;
-    // Protocol state of one QUIC connection attempt. Every endpoint attempt
-    // starts from a fresh HTTP/3/QPACK engine, receive buffers, critical-stream
-    // output, peer streams and push-ID space; a retry re-arms its requests
-    // instead of carrying their streams into the next QUIC connection. Request
-    // records, results and push consumers remain connection state.
-    struct attempt_type final {
-        attempt_type(std::pmr::memory_resource* resource, http3_client_body_budget& body_budget,
-            const http3_client_sans_io_response_limits& limits);
-        attempt_type(const attempt_type&) = delete;
-        attempt_type& operator=(const attempt_type&) = delete;
+    using session_outcome_type = http3_client_session_driver::outcome_type;
 
-        http3_client_sans_io_session_engine engine_;
-        http3_client_receive_driver receiver_;
-        std::array<std::pmr::string, 3> critical_output_;
-        std::array<std::size_t, 3> critical_output_offset_{};
-        std::array<std::optional<time_point_type>, 3> critical_write_deadlines_{};
-        std::pmr::vector<std::uint64_t> peer_streams_;
-        std::pmr::vector<peer_push_stream_type> peer_push_streams_;
-        std::bitset<max_remembered_pushes> seen_pushes_{};
-        std::bitset<max_remembered_pushes> settled_pushes_{};
-        std::bitset<max_remembered_pushes> cancelled_pushes_{};
-        std::uint64_t authorized_push_id_{};
-        std::size_t pending_push_credits_{};
-        // Null once this attempt's QUIC transport and socket are closed; the
-        // engine then retires remaining parser state without peer input.
-        session_owner_type session_;
-    };
-    using attempt_owner_type = std::unique_ptr<attempt_type, pmr_object_deleter<attempt_type>>;
+    friend class http3_client_session_driver;
+    // Session-driver hooks. Every endpoint attempt starts from a fresh engine,
+    // peer streams and push-ID space; a retry re-arms its requests instead of
+    // carrying their streams into the next QUIC connection. Request records,
+    // results and push consumers remain connection state.
+    [[nodiscard]] std::optional<time_point_type> next_deadline(
+        std::optional<time_point_type> bound) const noexcept;
+    void expire(time_point_type now);
+    [[nodiscard]] bool active() const noexcept;
+    [[nodiscard]] bool draining() const noexcept {
+        return draining_;
+    }
+    void attempt_started(http3_client_sans_io_session_engine& engine);
+    void attempt_closing() noexcept {
+        cache_path_migration();
+    }
+    void attempt_abandoned();
+    [[nodiscard]] bool early_stream_rejected(std::uint64_t stream_id);
+    [[nodiscard]] bool sweep(bool requests_may_start, bool early_data_only);
+    [[nodiscard]] std::size_t peer_stream_read_budget(std::uint64_t stream_id);
+    [[nodiscard]] bool peer_stream_input(std::uint64_t stream_id, const http3_client_receive_driver::result_type& part);
 
     static void on_push_event(void* context, const http3_connection_event& event);
     static void on_origin_event(void* context, const http3_connection_event& event);
@@ -307,83 +290,59 @@ private:
     static void on_receive_body_budget_released(void* context) noexcept;
     static void on_response_event(void* context, const http3_connection_event& event);
     void wake_receive_driver() noexcept;
-    [[nodiscard]] http3_quic_client_socket_session* live_session() const noexcept {
-        return attempt_ ? attempt_->session_.get() : nullptr;
-    }
-    [[nodiscard]] attempt_type& attempt();
     [[nodiscard]] request_list_type::iterator find(request_id_type id) noexcept;
     [[nodiscard]] request_list_type::const_iterator find(request_id_type id) const noexcept;
     [[nodiscard]] submission_type submit_impl(http_client_request_storage request,
         std::optional<time_point_type> deadline, http_client_response_state* response);
     [[nodiscard]] task<void> drive();
-    [[nodiscard]] task<bool> drive_endpoint(const asio::ip::udp::endpoint& peer, time_point_type connect_deadline);
-    void begin_attempt(const asio::ip::udp::endpoint& peer);
-    [[nodiscard]] task<void> close_attempt(time_point_type latest);
-    void rearm_attempt_requests();
     void rearm_early_request(request_type& request);
-    [[noreturn]] void fail_connection(outcome_type outcome, std::uint64_t close_code, const char* message);
     void cache_path_migration() noexcept;
-    [[nodiscard]] bool sweep(bool requests_may_start, bool early_data_only = false);
-    [[nodiscard]] bool receive_peer_streams();
-    [[nodiscard]] bool replay_rejected_early_streams();
     [[nodiscard]] bool receive_requests();
     [[nodiscard]] bool receive_datagrams();
-    [[nodiscard]] bool drive_request_writers(bool early_data_only = false);
-    [[nodiscard]] bool drive_critical_output();
+    [[nodiscard]] bool drive_request_writers(bool early_data_only);
     void finish_request(request_type& request, outcome_type outcome);
     void maybe_release_response_request(request_type& request) noexcept;
     void reap_released_response_requests() noexcept;
     void finish_all(outcome_type outcome) noexcept;
     [[nodiscard]] bool retire_request(request_type& request, bool graceful = false) noexcept;
-    [[nodiscard]] std::optional<time_point_type> next_deadline(
-        std::optional<time_point_type> connect_deadline) const noexcept;
 
     std::thread::id owner_thread_;
-    asio::io_context& io_;
     const worker_handle& worker_;
     task_scope& pool_tasks_;
-    http3_quic_client_tls_context& tls_;
     std::pmr::memory_resource* resource_;
-    std::pmr::string host_;
-    std::pmr::string authority_;
-    std::uint16_t port_;
-    ruvia::quic_version initial_version_;
-    bool enable_early_data_{};
-    time_point_type::duration connect_timeout_;
-    time_point_type::duration idle_timeout_;
+    std::string_view authority_;
     std::optional<time_point_type::duration> write_timeout_;
     std::size_t max_requests_;
     std::size_t max_response_bytes_;
-    http3_client_sans_io_response_limits response_limits_;
-    http3_quic_client_endpoint_resolver resolver_;
     // The connection-local budget remains for sans-I/O storage and terminal
     // response bodies. Receive-state leases may instead borrow the pool owner.
-    http3_client_body_budget body_budget_;
-    http3_client_body_budget* receive_body_budget_{};
+    http3_body_budget body_budget_;
+    http3_body_budget* receive_body_budget_{};
     lifecycle_notification_type lifecycle_notification_{};
     http3_client_origin_observer origin_observer_{};
     http3_client_push_observer push_observer_{};
-    http3_client_body_budget::wake_registration_type receive_body_budget_wake_;
+    http3_body_budget::wake_registration_type receive_body_budget_wake_;
     request_list_type requests_;
     push_list_type pushes_;
-    // Declared after body_budget_, which its engine's reservations return to.
-    attempt_owner_type attempt_;
+    // Push state of the current endpoint attempt, reset by attempt_started.
+    std::pmr::vector<peer_push_stream_type> peer_push_streams_;
+    std::bitset<max_remembered_pushes> seen_pushes_{};
+    std::bitset<max_remembered_pushes> settled_pushes_{};
+    std::bitset<max_remembered_pushes> cancelled_pushes_{};
+    std::uint64_t authorized_push_id_{};
+    std::size_t pending_push_credits_{};
+    // Declared after body_budget_, which its engines' reservations return to.
+    http3_client_session_driver driver_;
     request_id_type next_request_id_{};
     std::size_t retained_result_body_bytes_{};
     bool running_{};
-    std::uint64_t quic_generation_{};
     std::uint64_t next_path_migration_id_{1};
     std::uint64_t quic_connection_migration_id_{};
     std::uint64_t quic_path_migration_generation_{};
     std::optional<ruvia::quic_path_migration> quic_path_migration_{};
     bool starting_{};
-    bool stopping_{};
     bool draining_{};
     bool terminal_{};
-    outcome_type terminal_failure_{outcome_type::transport_error};
-    // RFC 9114 code for the closing CONNECTION_CLOSE; unset means H3_NO_ERROR
-    // unless the driver failed unexpectedly.
-    std::optional<std::uint64_t> close_error_code_{};
 };
 
 }  // namespace ruvia::detail

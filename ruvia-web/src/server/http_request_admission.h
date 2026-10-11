@@ -1,0 +1,249 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory_resource>
+#include <optional>
+#include <string_view>
+
+#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/task.h"
+#include "ruvia/http/http_accept_encoding.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response.h"
+#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/web/detail/router/route_modes.h"
+#include "ruvia/web/error.h"
+
+#include "context/context_services.h"
+#include "http/static_file_variant.h"
+#include "ratelimit/rate_limiter.h"
+#include "router/route_resolution.h"
+#include "server/http_buffered_response.h"
+#include "server/http_response_compression.h"
+#include "server/http_server_options.h"
+#include "server/request_deadline.h"
+
+// The one Web-side admission decision every server protocol (HTTP/1, HTTP/2,
+// HTTP/3) and the in-process subrequest path run between "request head parsed
+// and route resolved" and "a handler runs". Protocol drivers own only
+// transport work: reading the body with the admitted limit, committing heads,
+// and framing. Every policy fact -- coding negotiation, client address,
+// handler deadline, Expect, RFC 8470 early data, the application rate limit,
+// the body ceiling and the endpoint kind -- is decided here once.
+
+namespace ruvia::detail {
+
+class route_table;
+
+// The deployment limits that shape admission. Servers build it from their
+// options; a subrequest builds it from its parent (no rate limit: the parent
+// request already passed it).
+struct http_request_admission_policy final {
+    std::optional<std::chrono::milliseconds> handler_deadline_{};
+    std::optional<std::size_t> max_stream_body_bytes_{};
+    std::size_t max_buffered_body_bytes_{};
+    http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
+    bool apply_rate_limit_{true};
+
+    [[nodiscard]] static http_request_admission_policy server(const http_server_options& options) noexcept;
+};
+
+struct http_request_admission_input final {
+    const http_request& request_;
+    const route_resolution& resolution_;
+    // HTTP/1 passes the parser's parse-once selection; HTTP/2/3 pass
+    // http_response_coding_selection_for(request).
+    http_response_coding_selection_result coding_;
+    // Request arena for copied rejection diagnostics.
+    std::pmr::memory_resource* resource_;
+    // The protocol's Expect plan, when it defers the rejection to Web.
+    const http_server_expectation_plan* expectation_{};
+    // The request arrived in TLS 1.3 / QUIC 0-RTT data.
+    bool received_early_data_{false};
+    // Start of the request for the access-log duration.
+    std::chrono::steady_clock::time_point start_{std::chrono::steady_clock::now()};
+};
+
+// Byte ceiling for one request body given its effective body mode (HTTP/2
+// selects stream mode for CONNECT/Extended CONNECT before admission runs).
+// A route limit may only tighten the deployment's.
+[[nodiscard]] protocol_byte_limit http_request_body_limit(const route_resolution& resolution,
+    request_body_mode mode, const http_request_admission_policy& policy) noexcept;
+
+// A server-layer rejection decided before any handler ran. The diagnostic is
+// borrowed from static storage or the request arena.
+class http_request_rejection final {
+public:
+    [[nodiscard]] static constexpr http_request_rejection error(http_error_info error) noexcept {
+        return http_request_rejection(error, std::nullopt);
+    }
+
+    [[nodiscard]] static http_request_rejection rate_limited(rate_limit_rejection rejection) noexcept;
+
+    [[nodiscard]] constexpr const http_error_info& error() const noexcept {
+        return error_;
+    }
+
+    [[nodiscard]] constexpr const rate_limit_rejection* rate_limit() const noexcept {
+        return rate_limit_ ? &*rate_limit_ : nullptr;
+    }
+
+private:
+    constexpr http_request_rejection(http_error_info error, std::optional<rate_limit_rejection> rate_limit) noexcept
+        : error_(error),
+          rate_limit_(rate_limit) {}
+
+    http_error_info error_;
+    std::optional<rate_limit_rejection> rate_limit_;
+};
+
+// Answers a rejection through the application's error handler, adding the
+// rate-limit headers when that is why the request was refused.
+[[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
+    request_memory& memory, const http_request_rejection& rejection, context_services services);
+
+// The post-response tail shared by every protocol: final representation
+// preparation (CORS, compression, 406/500 recovery through the application
+// error handler) and the access-log record of the committed status.
+class http_response_tail final {
+public:
+    http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
+        std::string_view client_address, std::chrono::steady_clock::time_point start) noexcept
+        : request_(&request),
+          coding_policy_(coding_policy),
+          client_address_(client_address),
+          start_(start) {}
+
+    [[nodiscard]] const http_response_coding_policy& coding_policy() const noexcept {
+        return coding_policy_;
+    }
+
+    // A generated terminal response must not inherit the negotiated coding
+    // promise (and must not be transformed again).
+    void disable_response_coding() noexcept {
+        coding_policy_ = http_response_coding_policy::disabled();
+    }
+
+    // All arguments borrow the current request owner through completion. Only
+    // an uncommitted response may enter. A disengaged result means the request
+    // was cancelled; protocol drivers retain ownership of reset/close. The
+    // application error handler runs at most once here.
+    [[nodiscard]] task<std::optional<prepared_application_response>> prepare(http_response& response,
+        const http_server_options& options, const route_table& routes, request_memory& memory,
+        const context_services& services, application_response_control control = {}) const;
+
+    // Records a terminal outcome whose final status was committed. A single
+    // null check when no access log is configured.
+    void record_access(const access_log_sink& access_log, http_status_code status) const noexcept;
+
+private:
+    const http_request* request_;
+    http_response_coding_policy coding_policy_;
+    std::string_view client_address_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+enum class http_request_endpoint : std::uint8_t {
+    // Rejections: answer rejection() through respond_http_request_rejection.
+    too_early,
+    rejection,
+    not_acceptable,
+    // Admitted endpoints (resolved() is non-null for all but buffered).
+    websocket,
+    tunnel,
+    response_stream,
+    stream_body,
+    buffered,
+};
+
+class http_request_admission final {
+public:
+    [[nodiscard]] http_request_endpoint endpoint() const noexcept {
+        return endpoint_;
+    }
+
+    [[nodiscard]] const http_request_rejection* rejection() const noexcept {
+        return rejection_ ? &*rejection_ : nullptr;
+    }
+
+    // Null for unresolved requests (404/405/OPTIONS/document root).
+    [[nodiscard]] const resolved_route* resolved() const noexcept {
+        return resolved_;
+    }
+
+    // CONNECT-UDP (RFC 9298) tunnel; meaningful for endpoint() == tunnel.
+    [[nodiscard]] bool udp_tunnel() const noexcept {
+        return udp_tunnel_;
+    }
+
+    // The negotiated selection for a response stream (never a failed one).
+    [[nodiscard]] const http_response_coding_selection& response_stream_coding() const noexcept {
+        return *tail_.coding_policy().selection();
+    }
+
+    [[nodiscard]] http_response_coding_availability coding_availability() const noexcept {
+        return coding_availability_;
+    }
+
+    [[nodiscard]] std::string_view client_address() const noexcept {
+        return client_address_;
+    }
+
+    // The protocol's request services plus the armed request deadline.
+    [[nodiscard]] const context_services& services() const noexcept {
+        return services_;
+    }
+
+    [[nodiscard]] bool deadline_armed() const noexcept {
+        return deadline_armed_;
+    }
+
+    [[nodiscard]] protocol_byte_limit body_limit() const noexcept {
+        return body_limit_;
+    }
+
+    [[nodiscard]] static_file_selection_mode static_file_mode() const noexcept {
+        return services_.precompressed_static_files() ? static_file_selection_mode::precompressed
+                                                      : static_file_selection_mode::identity_only;
+    }
+
+    [[nodiscard]] http_response_tail& tail() noexcept {
+        return tail_;
+    }
+    [[nodiscard]] const http_response_tail& tail() const noexcept {
+        return tail_;
+    }
+
+private:
+    friend http_request_admission admit_http_request(const http_request_admission_input& input,
+        const http_request_admission_policy& policy, context_services services,
+        std::optional<request_deadline>& deadline);
+
+    http_request_admission(http_response_tail tail, context_services services) noexcept
+        : tail_(tail),
+          services_(std::move(services)) {}
+
+    http_response_tail tail_;
+    context_services services_;
+    std::optional<http_request_rejection> rejection_;
+    const resolved_route* resolved_{};
+    std::string_view client_address_;
+    protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
+    http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
+    http_request_endpoint endpoint_{http_request_endpoint::buffered};
+    bool udp_tunnel_{false};
+    bool deadline_armed_{false};
+};
+
+// Runs the admission policy once for one request. `services` are the
+// protocol's request services (interim output, push, trailers, ...). The
+// handler deadline is armed before any rejection so a custom error handler
+// observes the request stop token: an engaged `deadline` (a protocol that
+// owns a combined stop token) is armed in place; a disengaged one is emplaced
+// on services.get_stop_token() only when a deadline applies.
+[[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
+    const http_request_admission_policy& policy, context_services services, std::optional<request_deadline>& deadline);
+
+}  // namespace ruvia::detail

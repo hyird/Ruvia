@@ -546,7 +546,29 @@ http3_qpack_encoder::http3_qpack_encoder(http3_qpack_encoder_config config, std:
 http3_qpack_encoder::~http3_qpack_encoder() {
     std::pmr::polymorphic_allocator<impl_type>(resource_).delete_object(impl_);
 }
+void http3_qpack_encoder::configure_peer_settings(http3_qpack_encoder_config config) {
+    auto& state = *impl_;
+    const auto capacity = config.table_capacity_.value_or(config.max_table_capacity_);
+    std::array<char, 11> instruction{};
+    std::size_t size = 0;
+    if (capacity != 0) {
+        const auto encoded = encode_http3_qpack_integer(instruction, 5, 0x20, capacity);
+        if (encoded.index() != 0) {
+            throw std::logic_error("QPACK capacity instruction cannot be encoded");
+        }
+        size = std::get<0>(encoded);
+        // Reserve before committing the configuration. The connection latches
+        // exceptions, while the original encoder and decoder parser stay owned.
+        state.output_.reserve(state.output_.size() + size);
+    }
+    state.config_ = config;
+    state.table_.capacity_ = capacity;
+    state.output_.insert(state.output_.end(), instruction.begin(), instruction.begin() + size);
+}
 std::variant<std::pmr::vector<char>, error_type> http3_qpack_encoder::encode(std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields_value, http3_field_section_limits limits, std::pmr::memory_resource* result_resource) {
+    return encode_after_prefix(stream_id, fields_value, limits, result_resource, 0);
+}
+std::variant<std::pmr::vector<char>, error_type> http3_qpack_encoder::encode_after_prefix(std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields_value, http3_field_section_limits limits, std::pmr::memory_resource* result_resource, std::size_t reserved_prefix_bytes) {
     auto& s = *impl_;
     if (s.failure_) {
         return *s.failure_;
@@ -626,13 +648,14 @@ std::variant<std::pmr::vector<char>, error_type> http3_qpack_encoder::encode(std
     }
     const auto prefix_size = std::get<0>(insert_count_size) + std::get<0>(base_size);
     std::pmr::vector<char> output(0, output_resource);
-    if (body.size() > output.max_size() - prefix_size) {
+    if (body.size() > output.max_size() - prefix_size - reserved_prefix_bytes) {
         throw std::length_error("QPACK field section exceeds the output size limit");
     }
-    output.reserve(prefix_size + body.size());
+    output.reserve(reserved_prefix_bytes + prefix_size + body.size());
+    output.resize(reserved_prefix_bytes);
     output.insert(output.end(), prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(prefix_size));
     output.insert(output.end(), body.begin(), body.end());
-    if (output.size() > limits.max_encoded_bytes_) {
+    if (output.size() - reserved_prefix_bytes > limits.max_encoded_bytes_) {
         for (auto index : references) {
             --s.table_.at(index)->references_;
         }

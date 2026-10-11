@@ -1,6 +1,6 @@
 #include "ruvia/http/http1_connect.h"
 
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
 
 namespace ruvia {
 std::variant<http1_response_head_plan, http_protocol_error> prepare_http1_connect_response_head(
@@ -10,7 +10,7 @@ std::variant<http1_response_head_plan, http_protocol_error> prepare_http1_connec
         return http_protocol_error(http_status::internal_server_error, "invalid HTTP/1 CONNECT response head");
     }
     for (const auto& header : response.headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "content-length") || http_ascii_equals_ignore_case(header.name(), "transfer-encoding")) {
+        if (detail::http_field_name_in(header.name(), detail::http_message_framing_fields)) {
             return http_protocol_error(http_status::internal_server_error, "CONNECT response cannot contain message framing fields");
         }
     }

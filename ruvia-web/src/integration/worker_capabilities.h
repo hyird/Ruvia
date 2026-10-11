@@ -55,6 +55,8 @@ struct worker_capability_options final {
 // Owns every application capability attached to one worker. Construction,
 // startup, request exposure, and shutdown all follow this single ownership
 // boundary; none of these registries is process-global or shared by workers.
+// start()/stop() are the one worker bring-up and retirement chain, shared by
+// the server worker and test_app. Both run on the owning worker.
 class worker_capabilities final {
 public:
     worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
@@ -66,11 +68,14 @@ public:
     worker_capabilities(const worker_capabilities&) = delete;
     worker_capabilities& operator=(const worker_capabilities&) = delete;
 
-    [[nodiscard]] task<void> connect();
-    [[nodiscard]] task<void> join();
+    // Creates the per-worker state, then connects remote capabilities. A
+    // failure retires everything this call started before rethrowing.
+    [[nodiscard]] task<void> start();
+    // Interrupts capability I/O; idempotent. Retirement completes in stop().
     void close_now() noexcept;
-    void initialize_worker_state();
-    void shutdown_worker_state() noexcept;
+    // Closes capability I/O, joins in-flight client work, then destroys the
+    // per-worker state. Safe after a failed or skipped start().
+    [[nodiscard]] task<void> stop();
 
     [[nodiscard]] context_services make_context_services(const stop_token& stop_token);
     context_services make_context_services(stop_token&&) = delete;

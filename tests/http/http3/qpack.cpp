@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <array>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/http3_qpack.h"
@@ -208,4 +210,47 @@ RUVIA_TEST(http3_qpack_huffman_strings_support_each_prefix_width_and_output_reus
         RUVIA_CHECK((consumed_empty.index() == 0));
         RUVIA_CHECK(decoded.empty());
     }
+}
+
+RUVIA_TEST(http3_qpack_string_encoding_preserves_overlapping_input) {
+    for (const std::size_t size : {std::size_t{0}, std::size_t{5}, std::size_t{127}, std::size_t{256}}) {
+        std::string original(size, 'a');
+        for (std::size_t index = 0; index < size; ++index) {
+            original[index] = static_cast<char>('a' + index % 26);
+        }
+        for (const auto& [source_offset, destination_offset] : {
+                 std::pair{std::size_t{0}, std::size_t{0}},
+                 std::pair{std::size_t{2}, std::size_t{0}},
+                 std::pair{std::size_t{0}, std::size_t{2}}}) {
+            std::array<char, 280> buffer{};
+            std::copy(original.begin(), original.end(), buffer.begin() + source_offset);
+            const std::string_view input(buffer.data() + source_offset, original.size());
+            const auto output = std::span(buffer).subspan(destination_offset);
+            const auto encoded = ruvia::encode_http3_qpack_string(output, input);
+            RUVIA_CHECK(encoded.index() == 0);
+            if (encoded.index() != 0) {
+                continue;
+            }
+            std::pmr::string decoded;
+            const auto consumed = ruvia::decode_http3_qpack_string(
+                std::span<const char>(output).first(std::get<0>(encoded)), decoded);
+            RUVIA_CHECK(consumed.index() == 0);
+            if (consumed.index() == 0) {
+                RUVIA_CHECK_EQ(std::get<0>(consumed), std::get<0>(encoded));
+            }
+            RUVIA_CHECK_EQ(decoded, std::string_view(original));
+        }
+    }
+}
+
+RUVIA_TEST(http3_qpack_string_encoding_leaves_overlapping_input_unchanged_when_output_is_short) {
+    std::array<char, 5> buffer{'h', 'e', 'l', 'l', 'o'};
+    const auto original = buffer;
+    const auto result = ruvia::encode_http3_qpack_string(
+        buffer, std::string_view(buffer.data(), buffer.size()));
+    RUVIA_CHECK(result.index() == 1);
+    if (result.index() == 1) {
+        RUVIA_CHECK(std::get<1>(result) == ruvia::http3_qpack_error::output_too_small);
+    }
+    RUVIA_CHECK(buffer == original);
 }

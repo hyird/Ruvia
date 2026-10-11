@@ -131,10 +131,15 @@ public:
     void complete_tls(quic_tls_info_view info);
     void fail_tls(quic_tls_alert alert) noexcept;
     bool failed() const noexcept;
+    // Failed, closing, draining or retired: no new stream or datagram work.
+    bool terminal() const noexcept;
+    // Connection-wide buffer budget left after retained stream and datagram bytes.
+    std::size_t available_buffer() const noexcept;
     quic_tls_handshake& tls_handshake() noexcept;
 
     quic_connection_config config_;
     quic_version negotiated_version_;
+    std::uint64_t negotiated_idle_timeout_ms_;
     quic_crypto_provider_view crypto_;
     quic_tls_driver_view tls_driver_;
     quic_cid_registry_view server_cid_registry_{};
@@ -190,6 +195,7 @@ public:
     bool tls_handshake_complete_{};
     bool tls_handshake_notified_{};
     bool early_transport_parameters_set_{};
+    bool peer_transport_parameters_set_{};
     bool early_data_key_installed_{};
     bool tls_drive_started_{};
     quic_early_data_state early_data_state_{quic_early_data_state::unavailable};

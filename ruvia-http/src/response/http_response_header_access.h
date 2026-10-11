@@ -7,6 +7,8 @@
 
 #include "ruvia/http/http_response.h"
 
+#include "util/http_text_overlap.h"
+
 namespace ruvia::detail {
 
 // http_response_header stores both lengths in uint32_t and releases the one
@@ -30,14 +32,11 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
 [[nodiscard]] inline bool response_header_storage_overlaps(
     const http_response_header& header_value, std::string_view value) noexcept {
     const auto name = header_value.name();
-    if (value.empty() || name.data() == nullptr) {
+    if (name.data() == nullptr) {
         return false;
     }
-    const auto storage_begin = reinterpret_cast<std::uintptr_t>(name.data());
-    const auto storage_end = storage_begin + name.size() + header_value.value().size();
-    const auto value_begin = reinterpret_cast<std::uintptr_t>(value.data());
-    const auto value_end = value_begin + value.size();
-    return value_begin < storage_end && storage_begin < value_end;
+    return http_text_overlaps(
+        {name.data(), name.size() + header_value.value().size()}, value);
 }
 
 struct http_response_header_access final {

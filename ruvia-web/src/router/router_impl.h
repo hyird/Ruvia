@@ -1,9 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -13,10 +12,13 @@
 
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 
+#include "router/compiled_route_plan.h"
 #include "router/route_table.h"
 #include "router/router.h"
 
 namespace ruvia::detail {
+
+class app_configuration;
 
 class controller_route_builder::impl_type final {
 public:
@@ -45,11 +47,20 @@ private:
     std::pmr::vector<controller_middleware_descriptor> middlewares_;
 };
 
+// Builds the process route plan once per run: every controller instance in
+// `controllers` (one per registrar, registrar order) declares its routes, then
+// `configuration` applies the app-wide fallbacks and middleware. Route
+// conflicts and invalid registrations throw here, before any worker starts.
+[[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(std::pmr::memory_resource* resource,
+    std::span<const controller_registrar_type> registrars, const controller_store& controllers,
+    const app_configuration& configuration);
+
+// The plan under construction. Lives only inside compile_route_plan().
 class router_impl final {
 public:
     router& owner_;
 
-    explicit router_impl(router& router_value);
+    router_impl(router& router_value, std::pmr::memory_resource* plan_resource);
 
     router_impl(const router_impl&) = delete;
     router_impl& operator=(const router_impl&) = delete;
@@ -58,178 +69,68 @@ public:
         return *router_value.impl_;
     }
 
-    [[nodiscard]] static const router_impl& from(const router& router_value) noexcept {
-        return *router_value.impl_;
+    void set_error_handler(http_error_handler_ref_type handler) noexcept;
+    void set_not_found_handler(http_not_found_handler_ref_type handler) noexcept;
+    // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
+    // replacement, normalized and ordered deepest prefix first.
+    void set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers);
+    void set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler> handlers);
+    // Application-wide middleware, prepended to every route's chain. Each
+    // descriptor becomes exactly one instance per worker, serving all routes.
+    void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
+
+    // Owns endpoint text (tunnel protocol, websocket subprotocols).
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return plan_->resource_;
     }
 
-    router& set_error_handler(http_error_handler_ref_type handler) noexcept;
-    router& set_not_found_handler(http_not_found_handler_ref_type handler) noexcept;
-    // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
-    // replacement, owned copies; applied to the table at finalize or, when the
-    // table already exists, immediately (both are idempotent for restarts).
-    router& set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers);
-    router& set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler> handlers);
-    // application-wide middleware, prepended to every route's chain at finalize. Each
-    // descriptor is materialized exactly once per worker route graph; that
-    // worker-local instance serves all routes in the graph.
-    void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
-    void finalize(const compiled_route_plan* compiled_plan = nullptr);
-    [[nodiscard]] const detail::route_table& route_table() const;
-    [[nodiscard]] compiled_route_plan_ptr_type release_compiled_plan();
+    // Runs every registrar against its controller instance, in slot order.
+    void declare_controllers(
+        std::span<const controller_registrar_type> registrars, const controller_store& controllers);
 
-    void register_route(http_known_method method, std::pmr::string path, route_handler_type handler,
-        request_body_mode body_mode,
+    // The single registration path. `handler_target` must be the instance of
+    // the controller currently declaring its routes. `method_token` is non-empty
+    // only for an extension method, with `method` unknown.
+    void register_endpoint(http_known_method method, std::string_view method_token, std::string_view path,
+        route_endpoint endpoint, void* handler_target,
         std::span<const controller_middleware_descriptor> controller_middlewares,
         std::span<const controller_middleware_descriptor> route_middlewares);
-    void register_response_stream_route(http_known_method method, std::pmr::string path,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
-    void register_sse_route(http_known_method method, std::pmr::string path, route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
-    void register_tunnel_route(std::string_view protocol, std::pmr::string target,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares, http_tunnel_route_config config = {});
-    void register_websocket_route(http_known_method method, std::pmr::string path,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares,
-        websocket_route_config websocket_config = {});
 
-    // An extension method is routed by its exact wire token. Kept off the
-    // enum-indexed structures entirely: extension routes are rare, so they get
-    // a separate cold list rather than widening every dense per-method array.
-    void register_extension_method_route(std::string_view method_token, std::pmr::string path,
-        route_handler_type handler, request_body_mode body_mode,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
+    [[nodiscard]] compiled_route_plan_ptr_type compile();
 
 private:
-    void register_endpoint(http_known_method method, std::pmr::string path, route_endpoint endpoint,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
+    // A route's own (controller + route) middleware descriptors, as a slice of
+    // route_middleware_descriptors_. Parallel to the plan's routes.
+    struct route_middleware_range_type final {
+        std::size_t offset_{0};
+        std::size_t count_{0};
+    };
+
+    void validate_route_target(http_known_method method, std::string_view method_token, std::string_view path,
+        const route_endpoint& endpoint) const;
+    void validate_no_dynamic_route_conflict() const;
+    void append_route_middlewares(std::span<const controller_middleware_descriptor> controller_middlewares,
         std::span<const controller_middleware_descriptor> route_middlewares);
-    void register_endpoint_with_token(http_known_method method, std::string_view method_token,
-        std::pmr::string path, route_endpoint endpoint,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
+    void build_middleware_frames();
+    void build_static_index();
+    void build_allowed_method_mask();
+    void build_dynamic_routes();
+    void bind_dynamic_param_names(route_entry& route);
+    void append_dynamic_param_name(route_entry& route, std::string_view name);
+    void insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route);
+    void build_server_extension_method_tokens();
+    void build_url_patterns();
 
-    class pending_route_type final {
-    public:
-        struct init_type final {
-            http_known_method method_;
-            std::pmr::string method_token_;
-            std::pmr::string path_;
-            route_endpoint endpoint_;
-            bool dynamic_{false};
-            std::size_t max_request_body_bytes_{0};
-            std::int64_t deadline_ms_{0};
-            std::pmr::vector<route_middleware_type> middlewares_;
-        };
+    [[nodiscard]] static bool is_dynamic_path(std::string_view path) noexcept;
+    [[nodiscard]] static bool same_dynamic_shape(std::string_view left, std::string_view right) noexcept;
 
-        pending_route_type(std::pmr::memory_resource* resource, init_type init);
-        pending_route_type(const pending_route_type&) = delete;
-        pending_route_type& operator=(const pending_route_type&) = delete;
-        pending_route_type(pending_route_type&&) noexcept = default;
-        pending_route_type& operator=(pending_route_type&&) = delete;
-
-        [[nodiscard]] http_known_method method() const noexcept {
-            return method_;
-        }
-
-        [[nodiscard]] std::string_view method_token() const noexcept {
-            return method_token_;
-        }
-
-        [[nodiscard]] std::string_view path() const noexcept {
-            return path_;
-        }
-
-        [[nodiscard]] const route_endpoint& endpoint() const noexcept {
-            return endpoint_;
-        }
-
-        [[nodiscard]] bool dynamic() const noexcept {
-            return dynamic_;
-        }
-
-        [[nodiscard]] std::span<const route_middleware_type> middlewares() const noexcept {
-            return middlewares_;
-        }
-
-        [[nodiscard]] std::size_t max_request_body_bytes() const noexcept {
-            return max_request_body_bytes_;
-        }
-
-        [[nodiscard]] std::int64_t deadline_ms() const noexcept {
-            return deadline_ms_;
-        }
-
-        void set_dynamic(bool dynamic) noexcept {
-            dynamic_ = dynamic;
-        }
-
-    private:
-        http_known_method method_;
-        std::pmr::string method_token_;
-        std::pmr::string path_;
-        route_endpoint endpoint_;
-        bool dynamic_{false};
-        std::size_t max_request_body_bytes_{0};
-        std::int64_t deadline_ms_{0};
-        std::pmr::vector<route_middleware_type> middlewares_;
-    };
-
-    void append_pending_route(pending_route_type route);
-
-    class middleware_lifetime_type {
-    public:
-        middleware_lifetime_type() noexcept = default;
-        middleware_lifetime_type(void* target, controller_middleware_descriptor::destroy_type destroy) noexcept;
-        middleware_lifetime_type(const middleware_lifetime_type&) = delete;
-        middleware_lifetime_type& operator=(const middleware_lifetime_type&) = delete;
-        middleware_lifetime_type(middleware_lifetime_type&& other) noexcept;
-        middleware_lifetime_type& operator=(middleware_lifetime_type&& other) noexcept;
-        ~middleware_lifetime_type();
-
-    private:
-        void reset() noexcept;
-
-        void* target_{nullptr};
-        controller_middleware_descriptor::destroy_type destroy_{nullptr};
-    };
-
-    static void validate_no_dynamic_route_conflict(std::span<const pending_route_type> routes);
-    void validate_route_target(
-        http_known_method method, std::string_view method_token, std::string_view path, const route_endpoint& endpoint) const;
-    [[nodiscard]] route_middleware_type materialize_middleware(controller_middleware_descriptor middleware);
-    void append_materialized_middlewares(std::pmr::vector<route_middleware_type>& frames,
-        std::span<const controller_middleware_descriptor> descriptors);
-    [[nodiscard]] std::pmr::vector<route_middleware_type> materialize_middlewares(
-        std::span<const controller_middleware_descriptor> first,
-        std::span<const controller_middleware_descriptor> second = {});
-    void build_route_table(detail::route_table& table, const compiled_route_plan* compiled_plan) const;
-
-    struct route_table_deleter_type final {
-        std::pmr::memory_resource* resource_{nullptr};
-        void operator()(detail::route_table* table) const noexcept;
-    };
-
-    std::pmr::memory_resource* resource_{nullptr};
-    std::pmr::vector<pending_route_type> pending_routes_;
-    std::optional<std::pmr::unordered_multimap<std::uint64_t, std::size_t>> pending_route_indices_;
-    std::pmr::vector<middleware_lifetime_type> middleware_lifetimes_;
+    compiled_route_plan_ptr_type plan_;
+    std::pmr::unordered_multimap<std::uint64_t, std::size_t> route_indices_;
+    std::pmr::vector<controller_middleware_descriptor> route_middleware_descriptors_;
+    std::pmr::vector<route_middleware_range_type> route_middleware_ranges_;
     std::pmr::vector<controller_middleware_descriptor> global_middleware_descriptors_;
-    std::pmr::vector<route_middleware_type> global_middleware_frames_;
-    std::unique_ptr<detail::route_table, route_table_deleter_type> route_table_;
-    http_error_handler_ref_type error_handler_{nullptr};
-    http_not_found_handler_ref_type not_found_handler_{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, http_error_handler_ref_type>> prefix_error_handlers_{
-        registration_resource()};
-    std::pmr::vector<std::pair<std::pmr::string, http_not_found_handler_ref_type>> prefix_not_found_handlers_{
-        registration_resource()};
-    bool has_route_rate_limit_{false};
+    std::size_t controller_slot_{0};
+    void* controller_target_{nullptr};
 };
 
 }  // namespace ruvia::detail

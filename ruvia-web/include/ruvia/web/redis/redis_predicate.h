@@ -49,7 +49,7 @@ private:
     static redis_predicate create() {
         redis_predicate result;
         auto* resource = std::pmr::get_default_resource();
-        result.storage_ = detail::make_pmr_object<detail::redis_predicate_storage>(resource, resource);
+        result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource);
         return result;
     }
     static redis_predicate combine(redis_predicate left, detail::redis_binary_operator operation, const redis_predicate& right) {
@@ -71,7 +71,7 @@ private:
         root.operands_ = {left_root, right_root};
         return left;
     }
-    std::unique_ptr<detail::redis_predicate_storage, detail::pmr_object_deleter<detail::redis_predicate_storage>> storage_;
+    std::unique_ptr<detail::redis_predicate_storage, pmr_object_deleter<detail::redis_predicate_storage>> storage_;
 };
 
 namespace detail {

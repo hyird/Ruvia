@@ -45,6 +45,9 @@ namespace ruvia::detail {
         case request_header_kind::x_forwarded_for:
         case request_header_kind::x_forwarded_proto:
         case request_header_kind::sec_websocket_extensions:
+        case request_header_kind::te:
+        case request_header_kind::trailer:
+        case request_header_kind::proxy_authorization:
             return 0;
     }
     return 0;

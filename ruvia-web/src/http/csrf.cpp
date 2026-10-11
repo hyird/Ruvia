@@ -6,11 +6,12 @@
 
 #include <openssl/rand.h>
 
-#include "ruvia/core/hex.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
 #include "http/secure_token.h"
+#include "util/constant_time.h"
 
 namespace ruvia::detail {
 
@@ -24,8 +25,8 @@ secure_token_result generate_secure_token(std::span<char> buffer) noexcept {
         return secure_token_result::make_failure();
     }
     for (std::size_t i = 0; i < random_bytes; ++i) {
-        buffer[i * 2] = ::ruvia::lower_hex_digit(raw[i] >> 4);
-        buffer[i * 2 + 1] = ::ruvia::lower_hex_digit(raw[i]);
+        buffer[i * 2] = http_lower_hex_digit(raw[i] >> 4);
+        buffer[i * 2 + 1] = http_lower_hex_digit(raw[i]);
     }
     return secure_token_result::make_ready(std::string_view(buffer.data(), random_bytes * 2));
 }
@@ -68,7 +69,7 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
     if (!safe) {
         const auto header_value = c.req().header(config_.header_name_);
         if (!cookie || cookie->empty() || !header_value || header_value->empty() ||
-            !detail::csrf_tokens_equal(*cookie, *header_value)) {
+            !detail::constant_time_bytes_equal(*cookie, *header_value)) {
             c.respond(c.error({.status_ = ruvia::http_status::forbidden,
                 .code_ = "csrf_token_mismatch",
                 .message_ = "CSRF token missing or invalid"}));

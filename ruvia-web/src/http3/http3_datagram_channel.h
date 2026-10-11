@@ -1,12 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include <asio/ip/udp.hpp>
 
@@ -22,12 +25,71 @@ namespace ruvia::detail {
 
 #if defined(_MSC_VER)
 #pragma warning(push)
-// Padding deliberately keeps the SPSC counters on separate cache lines.
+// Padding deliberately keeps the SPSC counters and ready flags on separate
+// cache lines.
 #pragma warning(disable : 4324)
 #endif
 
+// Acceptor-owned record of which channels need Acceptor work, so a wake visits
+// only signalled channels instead of every worker. A channel's own padded flag
+// absorbs repeated signals; the shared bit words change only on its 0->1 edge.
+// Notification, flags and words outlive every channel and every signal call.
+class http3_channel_ready_set final {
+public:
+    http3_channel_ready_set(ruvia::worker_notification& notification, std::size_t count,
+        std::pmr::memory_resource* resource);
+    http3_channel_ready_set(const http3_channel_ready_set&) = delete;
+    http3_channel_ready_set& operator=(const http3_channel_ready_set&) = delete;
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return flags_.size();
+    }
+    // Any thread. Work published before the call is visible to the visit.
+    void signal(std::size_t index) noexcept {
+        mark(index);
+        (void)notification_.notify();
+    }
+    // Any thread; the caller guarantees a later wake of the Acceptor.
+    void mark(std::size_t index) noexcept {
+        if (!flags_[index].signalled_.exchange(true, std::memory_order_acq_rel)) {
+            words_[index / word_bits].fetch_or(std::uint64_t{1} << (index % word_bits),
+                std::memory_order_release);
+        }
+    }
+    // Acceptor only. Each signalled index is cleared before its visit, so a
+    // signal racing the visit is seen again by a later drain.
+    template <class visitor_type>
+    void drain(visitor_type&& visit) noexcept {
+        for (std::size_t word_index = 0; word_index < words_.size(); ++word_index) {
+            auto& word = words_[word_index];
+            if (word.load(std::memory_order_relaxed) == 0) {
+                continue;
+            }
+            auto bits = word.exchange(0, std::memory_order_acquire);
+            while (bits != 0) {
+                const auto index = word_index * word_bits +
+                                   static_cast<std::size_t>(std::countr_zero(bits));
+                bits &= bits - 1;
+                (void)flags_[index].signalled_.exchange(false, std::memory_order_acq_rel);
+                visit(index);
+            }
+        }
+    }
+
+private:
+    static constexpr std::size_t word_bits = 64;
+    struct alignas(64) channel_flag final {
+        std::atomic<bool> signalled_{};
+    };
+
+    ruvia::worker_notification& notification_;
+    std::pmr::vector<channel_flag> flags_;
+    std::pmr::vector<std::atomic<std::uint64_t>> words_;
+};
+
 // Only descriptors and linear credits cross owners. The Acceptor's single pool
-// owns all bytes; its aggregate notification is borrowed, never closed here.
+// owns all bytes; its ready set is borrowed and signalled with this channel's
+// index whenever Acceptor work appears.
 // I bounds routed RX including returned credits not yet reclaimed by the owner;
 // O bounds all issued TX, including available, prepared, queued and native sends.
 // Reclaim alone releases either quota. Each issued lease returns at most one
@@ -54,8 +116,8 @@ public:
         }
     };
 
-    http3_datagram_channel(buffer_pool& pool, ruvia::worker_notification& acceptor_notification,
-        std::pmr::memory_resource* resource = nullptr,
+    http3_datagram_channel(buffer_pool& pool, http3_channel_ready_set& acceptor_ready,
+        std::size_t acceptor_index, std::pmr::memory_resource* resource = nullptr,
         std::size_t input_capacity = default_input_capacity,
         std::size_t output_window = default_output_window);
     ~http3_datagram_channel();
@@ -107,11 +169,13 @@ private:
     void require_acceptor() const noexcept;
     void require_worker() const noexcept;
     void notify_worker() noexcept;
+    void signal_acceptor() noexcept;
 
     const std::thread::id acceptor_owner_;
     std::thread::id worker_owner_;
     buffer_pool& pool_;
-    ruvia::worker_notification& acceptor_notification_;
+    http3_channel_ready_set& acceptor_ready_;
+    const std::size_t acceptor_index_;
     std::optional<ruvia::worker_notification> worker_notification_;
     const std::size_t credit_capacity_;
     spsc_ring_queue<datagram> input_;

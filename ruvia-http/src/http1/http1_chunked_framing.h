@@ -8,11 +8,6 @@
 
 namespace ruvia::detail {
 
-using ::ruvia::http1_chunk_data_terminator;
-using ::ruvia::http1_chunk_header;
-using ::ruvia::http1_last_chunk_prefix;
-using ::ruvia::http1_trailer_section_terminator;
-
 inline void append_http1_trailer_section(
     std::pmr::string& output, const http_response_trailer_section& section) {
     for (const auto& trailer : section.fields()) {

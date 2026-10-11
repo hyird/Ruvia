@@ -17,7 +17,6 @@ namespace ruvia::detail {
 
 [[nodiscard]] bool jwt_is_reserved_claim(std::string_view name) noexcept;
 
-void jwt_append_json_escaped(std::pmr::string& out, std::string_view value);
 void jwt_append_json_member(
     std::pmr::string& out, bool& first, std::string_view name, std::string_view value);
 void jwt_append_json_member(
@@ -39,7 +38,6 @@ void jwt_append_json_member(
 // parameters.
 [[nodiscard]] std::pmr::string jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
     std::string_view data, std::pmr::memory_resource* resource);
-[[nodiscard]] bool jwt_constant_time_equals(std::string_view left, std::string_view right) noexcept;
 
 [[nodiscard]] std::int64_t jwt_epoch_seconds(std::chrono::system_clock::time_point value);
 [[nodiscard]] std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value);

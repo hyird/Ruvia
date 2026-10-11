@@ -47,9 +47,9 @@ redis_stream_read_result::redis_stream_read_result(redis_stream_read_result&& ot
       entries_(std::move(other.entries_), allocator.resource()) {}
 
 redis_value::redis_value(std::pmr::memory_resource* resource)
-    : redis_value(detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(resource)) {}
+    : redis_value(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
 
-redis_value::redis_value(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+redis_value::redis_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
     : string_(resource),
       array_(resource) {}
 
@@ -128,11 +128,10 @@ redis_value redis_value::integer_value(std::int64_t input, std::pmr::memory_reso
     return value;
 }
 
-redis_value redis_value::array_value(
-    std::pmr::vector<redis_value> values, std::pmr::memory_resource* resource) {
+redis_value redis_value::array_value(std::size_t capacity, std::pmr::memory_resource* resource) {
     redis_value value(resource);
     value.kind_ = kind_type::array;
-    value.array_ = std::move(values);
+    value.array_.reserve(capacity);
     return value;
 }
 

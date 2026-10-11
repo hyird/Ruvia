@@ -1,6 +1,5 @@
 #include "http3/openssl_quic_crypto_provider.h"
 
-#include <algorithm>
 #include <array>
 #include <climits>
 #include <cstring>

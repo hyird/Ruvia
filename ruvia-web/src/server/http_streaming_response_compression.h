@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
 
 #include "ruvia/core/memory/memory_pool.h"

@@ -264,47 +264,44 @@ void db_schema::create_table(const db_entity_table_options& options) {
     db_query defaults(resource_);
     std::vector<std::string> primary;
     bool conflicting_generation = false;
-    [&]<std::size_t... i>(std::index_sequence<i...>) {
-        const auto add = [&]<typename c_type> {
-            conflicting_generation |= c_type::options.generated_ && c_type::options.generated_type_ != db_generated_type::none;
-            db_schema_column column{.name_ = std::string(c_type::name.view()),
-                .type_ = entity_column_type<c_type>(),
-                .nullable_ = c_type::options.nullable_,
-                .generated_type_ = c_type::options.generated_type_};
-            if constexpr (!c_type::options.enum_name_.view().empty()) {
-                if (driver_ != db_driver::postgresql) {
-                    throw std::invalid_argument("entity enum_name requires PostgreSQL");
+    detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
+        conflicting_generation |= c_type::options.generated_ && c_type::options.generated_type_ != db_generated_type::none;
+        db_schema_column column{.name_ = std::string(c_type::name.view()),
+            .type_ = entity_column_type<c_type>(),
+            .nullable_ = c_type::options.nullable_,
+            .generated_type_ = c_type::options.generated_type_};
+        if constexpr (!c_type::options.enum_name_.view().empty()) {
+            if (driver_ != db_driver::postgresql) {
+                throw std::invalid_argument("entity enum_name requires PostgreSQL");
+            }
+        }
+        if constexpr (!c_type::options.default_expression_.view().empty()) {
+            column.default_value_ = defaults.sql(c_type::options.default_expression_.view());
+        }
+        if constexpr (c_type::options.primary_key_) {
+            primary.push_back(column.name_);
+        }
+        if constexpr (c_type::options.generated_ && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int)) {
+            column.identity_ = db_identity::by_default;
+        }
+        for (const auto& value : options.generated_columns_) {
+            if (value.column_ == column.name_) {
+                if (!column.as_expression_.empty()) {
+                    throw std::invalid_argument("duplicate entity generated column");
                 }
+                column.as_expression_ = value.expression_;
             }
-            if constexpr (!c_type::options.default_expression_.view().empty()) {
-                column.default_value_ = defaults.sql(c_type::options.default_expression_.view());
-            }
-            if constexpr (c_type::options.primary_key_) {
-                primary.push_back(column.name_);
-            }
-            if constexpr (c_type::options.generated_ && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int)) {
-                column.identity_ = db_identity::by_default;
-            }
-            for (const auto& value : options.generated_columns_) {
-                if (value.column_ == column.name_) {
-                    if (!column.as_expression_.empty()) {
-                        throw std::invalid_argument("duplicate entity generated column");
-                    }
-                    column.as_expression_ = value.expression_;
+        }
+        for (const auto& value : options.defaults_) {
+            if (value.column_ == column.name_) {
+                if (!column.default_value_.empty()) {
+                    throw std::invalid_argument("duplicate entity column default");
                 }
+                column.default_value_ = value.value_;
             }
-            for (const auto& value : options.defaults_) {
-                if (value.column_ == column.name_) {
-                    if (!column.default_value_.empty()) {
-                        throw std::invalid_argument("duplicate entity column default");
-                    }
-                    column.default_value_ = value.value_;
-                }
-            }
-            table_value.columns_.push_back(std::move(column));
-        };
-        (add.template operator()<std::tuple_element_t<i, typename entity_type::columns_type>>(), ...);
-    }(std::make_index_sequence<std::tuple_size_v<typename entity_type::columns_type>>{});
+        }
+        table_value.columns_.push_back(std::move(column));
+    });
     if (conflicting_generation) {
         throw std::invalid_argument("computed columns cannot also request generated identity values");
     }
@@ -349,7 +346,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
         const auto local = entity_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
         table_value.constraints_.push_back({.name_ = std::string(local) + "_pkey", .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
     }
-    detail::for_each_db_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
+    detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
         if constexpr (!r_type::is_collection && r_type::is_owning) {
             detail::validate_db_relation<entity_type, r_type>();
             using mapping_type = detail::db_relation_mapping<entity_type, r_type>;
@@ -357,7 +354,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
             const auto local_table = entity_type::table_name().substr(entity_type::table_name().rfind('.') == std::string_view::npos ? 0 : entity_type::table_name().rfind('.') + 1);
             const auto prefix = std::string(local_table) + "_" + std::string(r_type::name.view());
             db_schema_constraint fk{.name_ = prefix + "_fkey", .kind_ = db_constraint_kind::foreign_key, .referenced_table_ = std::string(target_type::table_name())};
-            detail::for_each_db_descriptor<typename mapping_type::join_columns_type>([&]<typename j_type, std::size_t> { fk.columns_.emplace_back(j_type::local.view()); fk.referenced_columns_.emplace_back(j_type::referenced.view()); });
+            detail::for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename j_type, std::size_t> { fk.columns_.emplace_back(j_type::local.view()); fk.referenced_columns_.emplace_back(j_type::referenced.view()); });
             table_value.constraints_.push_back(std::move(fk));
             if constexpr (r_type::kind == db_relation_kind::one_to_one) {
                 table_value.constraints_.push_back({.name_ = prefix + "_key", .kind_ = db_constraint_kind::unique, .columns_ = table_value.constraints_.back().columns_});
@@ -369,7 +366,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
 
 template <typename entity_type>
 void db_schema::create_relation_tables() {
-    detail::for_each_db_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
+    detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
         if constexpr (r_type::kind == db_relation_kind::many_to_many && r_type::is_owning) {
             detail::validate_db_relation<entity_type, r_type>();
             using m_type = detail::db_relation_mapping<entity_type, r_type>;
@@ -381,7 +378,7 @@ void db_schema::create_relation_tables() {
                 db_schema_constraint fk{.name_ = local_table + "_" + std::string(side) + "_fkey",
                     .kind_ = db_constraint_kind::foreign_key,
                     .referenced_table_ = std::string(referenced_entity_type::table_name())};
-                detail::for_each_db_descriptor<columns_type>([&]<typename j_type, std::size_t> {
+                detail::for_each_descriptor<columns_type>([&]<typename j_type, std::size_t> {
                     using c_type = std::tuple_element_t<referenced_entity_type::template column_index<j_type::referenced>(), typename referenced_entity_type::columns_type>;
                     table_value.columns_.push_back({.name_ = std::string(j_type::local.view()), .type_ = entity_column_type<c_type>(), .nullable_ = false});
                     fk.columns_.emplace_back(j_type::local.view());

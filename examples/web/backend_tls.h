@@ -16,15 +16,18 @@ namespace example {
 // the verified name for drivers that support it. Empty CA uses system trust.
 inline ruvia::client_tls_config backend_tls(std::string_view prefix, const environment& env = environment{}) {
     const std::string base(prefix);
-    return {
+    ruvia::client_tls_config config{
         .mode_ = env.get<bool>(base + "_TLS").value_or(true)
                      ? ruvia::client_tls_mode::verify_identity
                      : ruvia::client_tls_mode::disabled,
         .ca_file_ = std::string(env.get(base + "_CA").value_or("")),
-        .certificate_file_ = std::string(env.get(base + "_CERT").value_or("")),
+        .certificate_chain_file_ = std::string(env.get(base + "_CERT").value_or("")),
         .private_key_file_ = std::string(env.get(base + "_KEY").value_or("")),
-        .server_name_ = std::string(env.get(base + "_SERVER_NAME").value_or("")),
     };
+    if (auto name = env.get(base + "_SERVER_NAME"); name && !name->empty()) {
+        config.server_name_ = std::string(*name);
+    }
+    return config;
 }
 
 }  // namespace example

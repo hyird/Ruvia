@@ -40,7 +40,7 @@ redis_mapping normalize_redis_mapping(const redis_repository_config& config, std
     if (result_value.prefix_.empty()) {
         throw std::invalid_argument("Redis entity prefix cannot be empty");
     }
-    for_each_redis_field<entity_type>([]<typename field_type> {
+    for_each_descriptor<typename entity_type::columns_type>([]<typename field_type, std::size_t> {
         if (field_type::name.view().starts_with("__ruvia_")) {
             throw std::invalid_argument("Redis entity column uses reserved __ruvia_ namespace");
         }
@@ -52,7 +52,7 @@ redis_mapping normalize_redis_mapping(const redis_repository_config& config, std
             }
         }
         bool found = false;
-        for_each_redis_field<entity_type>([&]<typename field_type> {
+        for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t> {
             if (field_type::name.view() != index.field_) {
                 return;
             }

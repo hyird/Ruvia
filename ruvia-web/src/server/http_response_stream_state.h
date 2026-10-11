@@ -2,7 +2,6 @@
 
 #include <exception>
 #include <stdexcept>
-#include <utility>
 #include <variant>
 
 #include "ruvia/core/task.h"

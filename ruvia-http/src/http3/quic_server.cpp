@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
@@ -12,6 +11,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "http3/quic_address_codec.h"
 #include "http3/quic_cid_partition.h"
 #include "http3/quic_cid_registry.h"
 
@@ -53,15 +53,6 @@ quic_connection_id from_native_cid(const ngtcp2_cid& cid) {
     }
     return quic_connection_id(std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(cid.data), cid.datalen));
-}
-
-ngtcp2_cid to_native_cid(const quic_connection_id& cid) noexcept {
-    ngtcp2_cid result_value{};
-    result_value.datalen = cid.size();
-    if (cid.size()) {
-        std::memcpy(result_value.data, cid.view().data(), cid.size());
-    }
-    return result_value;
 }
 
 bool valid_varint(std::uint64_t value) noexcept {
@@ -442,8 +433,8 @@ quic_packet_result quic_server::write_version_negotiation(
     if (!impl_) {
         throw std::logic_error("QUIC server is not initialized");
     }
-    const auto dcid = to_native_cid(plan.destination_connection_id_);
-    const auto scid = to_native_cid(plan.source_connection_id_);
+    const auto dcid = detail::encode_quic_connection_id(plan.destination_connection_id_);
+    const auto scid = detail::encode_quic_connection_id(plan.source_connection_id_);
     const auto packet_size = 7 + dcid.datalen + scid.datalen + sizeof(std::uint32_t);
     if (output.size() < packet_size || packet_size > amplification_limit) {
         return {.status_ = quic_operation_status::would_block};

@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/number_format.h"
+#include "ruvia/http/http_number_format.h"
 
 namespace ruvia::detail {
 
@@ -19,11 +19,11 @@ inline void emplace_redis_string(std::pmr::vector<std::pmr::string>& target, std
 }
 
 inline void append_redis_number(std::pmr::string& output, std::uint64_t value) {
-    append_formatted_number(output, value, "failed to format redis number");
+    http_append_formatted_number(output, value, "failed to format redis number");
 }
 
 inline void append_redis_number(std::pmr::string& output, std::int64_t value) {
-    append_formatted_number(output, value, "failed to format redis number");
+    http_append_formatted_number(output, value, "failed to format redis number");
 }
 
 [[nodiscard]] inline std::pmr::string redis_int_string(
@@ -43,7 +43,7 @@ inline void append_redis_number(std::pmr::string& output, std::int64_t value) {
         output.append(value > 0 ? "+inf" : "-inf");
         return output;
     }
-    append_formatted_finite_number(output, value, "redis sorted set score must not be NaN",
+    http_append_formatted_finite_number(output, value, "redis sorted set score must not be NaN",
         "redis sorted set score is invalid");
     return output;
 }

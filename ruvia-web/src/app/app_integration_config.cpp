@@ -17,9 +17,11 @@ application& application::database(db_registration_config config) {
             detail::validate_capability_alias(config.alias_, "database alias must not be empty");
             detail::db_definition replacement{std::pmr::string(config.alias_, resource),
                 detail::db_config_storage(config.config_, resource)};
+#ifdef RUVIA_ENABLE_REDIS
             if (config.query_cache_) {
                 replacement.query_cache_.emplace(*config.query_cache_, resource);
             }
+#endif
             for (auto& definition : state_value.databases_) {
                 if (std::string_view(definition.alias_) == std::string_view(config.alias_)) {
                     definition = std::move(replacement);

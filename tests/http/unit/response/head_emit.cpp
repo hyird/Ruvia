@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -6,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
@@ -164,6 +167,64 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     RUVIA_CHECK_EQ(plan.content_length(), std::uint64_t{3});
 }
 
+RUVIA_TEST(http1_response_head_requires_upgrade_connection_option) {
+    for (const std::string_view connection : {"", "keep-alive", "close"}) {
+        http_response response({.resource_ = std::pmr::new_delete_resource()});
+        response.header("Upgrade", "example/1");
+        if (!connection.empty()) {
+            response.header("Connection", connection);
+        }
+        const auto plan = get_http1_buffered_response_plan(
+            ruvia::plan_buffered_http_response_write(http_known_method::get, response),
+            connection_plan_for(ruvia::http_protocol_version::http11));
+        ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
+        buffer.append("existing output");
+
+        RUVIA_CHECK(throws_invalid([&] {
+            ruvia::append_http1_response_head(response, buffer, plan.head_plan());
+        }));
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view("existing output"));
+    }
+}
+
+RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
+    for (unsigned int combination = 0; combination != 3; ++combination) {
+        http_response response({.resource_ = std::pmr::new_delete_resource()});
+        response.header("uPgRaDe", "example/1");
+        response.body("hello");
+        if (combination == 0) {
+            response.header("cOnNeCtIoN", "keep-alive, UpGrAdE");
+        } else {
+            response.header("Connection", combination == 1 ? "keep-alive" : "UpGrAdE");
+            response.header("cOnNeCtIoN", combination == 1 ? "UpGrAdE" : "keep-alive",
+                http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        }
+        const auto head = emit_buffered_head(response);
+        RUVIA_CHECK(head.find("UpGrAdE") != std::string_view::npos);
+
+        std::array<char, 256> request_buffer;
+        auto request = ruvia::http1_client_request_writer().prepare(
+            ruvia::http_origin_view::http({.host_ = "example.test"}), {}, request_buffer);
+        RUVIA_CHECK(request.prepared() != nullptr);
+        if (request.prepared() == nullptr) {
+            continue;
+        }
+        ruvia::http1_client_response_parser parser(request.prepared()->exchange_state(),
+            {.resource_ = std::pmr::new_delete_resource()});
+        const auto parsed = parser.parse(head);
+        RUVIA_CHECK(parsed.parsed() != nullptr);
+        if (const auto* accepted = parsed.parsed()) {
+            RUVIA_CHECK_EQ(accepted->head().status(), ruvia::http_status::ok);
+            RUVIA_CHECK_EQ(accepted->consumed_bytes(), head.size());
+            RUVIA_CHECK(accepted->plan().known_length() != nullptr);
+            if (const auto* known_length = accepted->plan().known_length()) {
+                RUVIA_CHECK_EQ(known_length->content_length(), std::size_t{5});
+                RUVIA_CHECK_EQ(known_length->persistence(), ruvia::http1_close_policy::allow_reuse);
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     const auto rejects = [&ruvia_ctx](std::string_view value) {
         http_response response({.resource_ = std::pmr::new_delete_resource()});
@@ -183,6 +244,24 @@ RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     http_response empty({.resource_ = std::pmr::new_delete_resource()});
     empty.header("Trailer", "");
     RUVIA_CHECK(!throws_invalid([&] { (void)emit_buffered_head(empty); }));
+}
+
+RUVIA_TEST(http1_response_head_validates_stable_representation_metadata) {
+    for (const auto invalid : {ruvia::http_header_view{"Content-Type", "text plain"},
+             ruvia::http_header_view{"Content-Encoding", "gzip;q=1"},
+             ruvia::http_header_view{"Trailer", "Content-Length"}}) {
+        for (const bool streaming : {false, true}) {
+            http_response response({.resource_ = std::pmr::new_delete_resource()});
+            response.header_stable_view(invalid.name(), invalid.value());
+            RUVIA_CHECK(throws_invalid([&] {
+                if (streaming) {
+                    (void)emit_chunked_stream_head(response);
+                } else {
+                    (void)emit_buffered_head(response);
+                }
+            }));
+        }
+    }
 }
 
 RUVIA_TEST(http1_response_head_rejects_non_empty_trailer_without_chunked_framing) {

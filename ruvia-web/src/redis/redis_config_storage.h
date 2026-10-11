@@ -38,8 +38,7 @@ struct redis_config_storage final {
     std::optional<std::chrono::milliseconds> acquire_timeout_;
     std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
     std::size_t max_array_depth_{64};
-    tcp_no_delay_policy tcp_no_delay_{tcp_no_delay_policy::enable};
-    tcp_keep_alive_policy tcp_keep_alive_{tcp_keep_alive_policy::system_default};
+    client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
 
 private:
     struct validated_config_tag_type final {};
@@ -69,8 +68,7 @@ private:
           acquire_timeout_(source_value.acquire_timeout_),
           max_reply_bytes_(source_value.max_reply_bytes_),
           max_array_depth_(source_value.max_array_depth_),
-          tcp_no_delay_(source_value.tcp_no_delay_),
-          tcp_keep_alive_(source_value.tcp_keep_alive_) {}
+          tcp_(source_value.tcp_) {}
 };
 
 using redis_definition_type = named_capability_definition<redis_config_storage>;

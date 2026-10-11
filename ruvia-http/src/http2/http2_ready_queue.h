@@ -32,10 +32,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool has_ready() const noexcept {
-        return offset_ < size_;
-    }
-
     [[nodiscard]] std::uint32_t pop() noexcept {
         const auto stream_id = stream_ids_[offset_++];
         compact();

@@ -25,9 +25,9 @@ enum class http3_buffered_response_error : std::uint8_t {
     data_plan,
 };
 
-// Sans-I/O cursor over a buffered response. Owns encoded headers in resource
-// (nullptr selects the default resource) and borrows the response body. The
-// resource and unchanged response body must outlive the cursor. Returned spans
+// Sans-I/O cursor over a buffered response. Owns the encoded HEADERS frame (in
+// the resource it was encoded with) and borrows the response body. That
+// resource and the unchanged response body must outlive the cursor. Returned spans
 // remain stable until acknowledged; a zero-byte acknowledgement changes nothing.
 // Destroying the cursor releases its headers without committing pending output.
 // Failures are returned as data for transport callbacks that must not unwind;
@@ -42,15 +42,16 @@ public:
         complete,
         failed };
 
+    // Encodes the head in resource (nullptr selects the default resource).
     [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
         const http_response& response, const http_buffered_response_write_plan& write_plan,
         std::pmr::memory_resource* resource) noexcept;
 
-    // encoded_head must describe the same response and write plan. Its storage
-    // is consumed during creation; the cursor retains no borrow from it.
+    // encoded_head must describe the same response and write plan. The cursor
+    // adopts its HEADERS frame and storage without copying.
     [[nodiscard]] static std::variant<http3_buffered_response_cursor, error> create(
         const http_response& response, const http_buffered_response_write_plan& write_plan,
-        http3_response_head encoded_head, std::pmr::memory_resource* resource) noexcept;
+        http3_response_head encoded_head) noexcept;
 
     http3_buffered_response_cursor(const http3_buffered_response_cursor&) = delete;
     http3_buffered_response_cursor& operator=(const http3_buffered_response_cursor&) = delete;
@@ -75,7 +76,7 @@ public:
     [[nodiscard]] bool failed() const noexcept;
     // RFC 9114 decoded field-list size, including :status and projected fields.
     [[nodiscard]] std::size_t decoded_field_section_size() const noexcept {
-        return decoded_field_section_size_;
+        return headers_.decoded_field_section_size();
     }
 
 private:
@@ -86,15 +87,14 @@ private:
         finished,
         failed };
 
-    explicit http3_buffered_response_cursor(std::pmr::memory_resource* resource);
+    explicit http3_buffered_response_cursor(http3_headers_frame headers) noexcept;
     [[nodiscard]] std::variant<std::monostate, error> prepare_data() noexcept;
     [[nodiscard]] segment active_segment() const noexcept;
     [[nodiscard]] std::variant<std::monostate, error> fail_data_plan() noexcept;
     [[nodiscard]] static http3_buffered_response_cursor& require_no_outstanding_segment(
         http3_buffered_response_cursor& other);
 
-    std::pmr::vector<char> headers_;
-    std::size_t decoded_field_section_size_{0};
+    http3_headers_frame headers_;
     std::string_view body_;
     std::optional<http3_data_write_plan> data_plan_;
     http3_data_write_plan::chunk_type chunk_{};

@@ -154,7 +154,7 @@ private:
 class buffer_pool final {
 public:
     buffer_pool(std::size_t count, std::size_t bytes_value, std::pmr::memory_resource* resource = nullptr)
-        : bytes_(resource ? resource : detail::process_resource()),
+        : bytes_(resource ? resource : process_resource()),
           free_(bytes_.get_allocator().resource()),
           busy_(bytes_.get_allocator().resource()),
           slot_bytes_(bytes_value) {

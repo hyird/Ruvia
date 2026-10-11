@@ -88,8 +88,17 @@ http3_acceptor_datagram_endpoint::http3_acceptor_datagram_endpoint(asio::io_cont
     : bind_endpoint_(checked_bind_endpoint(std::move(bind_endpoint))),
       owner_thread_(std::this_thread::get_id()),
       pool_(pool),
-      socket_(network_io, bind_endpoint_),
-      notification_(checked_notification(callback_value)) {}
+      socket_(network_io, bind_endpoint_, {.receive_ = receive_capacity, .send_ = send_capacity}),
+      notification_(checked_notification(callback_value)) {
+    for (std::uint32_t index = 0; index < receive_capacity; ++index) {
+        receive_operations_[index].owner_ = this;
+        idle_receives_[idle_receive_count_++] = index;
+    }
+    for (std::uint32_t index = 0; index < send_capacity; ++index) {
+        send_operations_[index].owner_ = this;
+        idle_sends_[idle_send_count_++] = index;
+    }
+}
 
 std::uint16_t http3_acceptor_datagram_endpoint::bound_port() const noexcept {
     require_owner_thread();
@@ -177,24 +186,27 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
         return pump_result::error;
     }
     started_ = true;
-    (void)arm_receive();
+    arm_receives();
     return error_ ? pump_result::error : stopping_ ? pump_result::stopped
                                                    : pump_result::pending;
 }
 
 std::optional<http3_acceptor_datagram_endpoint::datagram> http3_acceptor_datagram_endpoint::take_receive() noexcept {
     require_owner_thread();
-    if (stopping_ || !held_receive_) {
+    if (stopping_ || held_count_ == 0) {
         return std::nullopt;
     }
-    auto packet = std::move(held_receive_);
-    held_receive_.reset();
+    auto& held = held_receives_[held_head_];
+    auto packet = std::move(held);
+    held.reset();
+    held_head_ = (held_head_ + 1) % receive_capacity;
+    --held_count_;
     return packet;
 }
 
 void http3_acceptor_datagram_endpoint::poll_receive() noexcept {
     require_owner_thread();
-    (void)arm_receive();
+    arm_receives();
 }
 
 http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::send_owned_datagram(datagram&& packet) noexcept {
@@ -209,13 +221,16 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
     if (!valid_packet(packet.view().bytes_, packet.local_destination_, packet.peer_)) {
         return pump_result::error;
     }
-    if (pending_send_) {
+    if (idle_send_count_ == 0) {
         return pump_result::pending;
     }
-    pending_send_.emplace(std::move(packet));
-    const auto view = pending_send_->view();
-    if (!socket_.async_send({view.local_destination_, view.peer_, view.bytes_}, this, send_completion)) {
-        pending_send_.reset();
+    const auto index = idle_sends_[--idle_send_count_];
+    auto& operation = send_operations_[index];
+    operation.packet_.emplace(std::move(packet));
+    const auto view = operation.packet_->view();
+    if (!socket_.async_send({view.local_destination_, view.peer_, view.bytes_}, &operation, send_completion)) {
+        operation.packet_.reset();
+        idle_sends_[idle_send_count_++] = index;
         fail(io_failure());
         return pump_result::error;
     }
@@ -224,17 +239,17 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
 
 bool http3_acceptor_datagram_endpoint::outbound_capacity() const noexcept {
     require_owner_thread();
-    return !stopping_ && started_ && !pending_send_;
+    return !stopping_ && started_ && idle_send_count_ != 0;
 }
 
 std::size_t http3_acceptor_datagram_endpoint::outbound_count() const noexcept {
     require_owner_thread();
-    return pending_send_.has_value();
+    return send_capacity - idle_send_count_;
 }
 
 bool http3_acceptor_datagram_endpoint::outbound_quiescent() const noexcept {
     require_owner_thread();
-    return !pending_send_;
+    return idle_send_count_ == send_capacity;
 }
 
 void http3_acceptor_datagram_endpoint::request_stop() noexcept {
@@ -243,7 +258,11 @@ void http3_acceptor_datagram_endpoint::request_stop() noexcept {
         return;
     }
     stopping_ = true;
-    held_receive_.reset();
+    for (auto& held : held_receives_) {
+        held.reset();
+    }
+    held_head_ = 0;
+    held_count_ = 0;
     // Armed RX and native TX retain their leases until completion callbacks.
     socket_.request_stop();
     if (!stopping_notified_) {
@@ -259,10 +278,10 @@ bool http3_acceptor_datagram_endpoint::endpoint_retired() const noexcept {
 
 void http3_acceptor_datagram_endpoint::receive_completion(void* context_value, std::error_code error,
     http3_udp_socket::receive_view view) noexcept {
-    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context_value);
+    auto& operation = *static_cast<receive_operation*>(context_value);
+    auto& self = *operation.owner_;
     ++self.callback_depth_;
-    self.receive_armed_ = false;
-    self.handle_receive(error, std::move(view));
+    self.handle_receive(operation, error, std::move(view));
     if (self.stopping_) {
         self.notify(notification_kind::endpoint_retired);
     }
@@ -270,42 +289,51 @@ void http3_acceptor_datagram_endpoint::receive_completion(void* context_value, s
 }
 
 void http3_acceptor_datagram_endpoint::send_completion(void* context_value, std::error_code error, std::size_t size) noexcept {
-    auto& self = *static_cast<http3_acceptor_datagram_endpoint*>(context_value);
+    auto& operation = *static_cast<send_operation*>(context_value);
+    auto& self = *operation.owner_;
     ++self.callback_depth_;
-    self.handle_send(error, size);
+    self.handle_send(operation, error, size);
     if (self.stopping_) {
         self.notify(notification_kind::endpoint_retired);
     }
     --self.callback_depth_;
 }
 
-bool http3_acceptor_datagram_endpoint::arm_receive() noexcept {
-    if (stopping_ || !started_ || receive_armed_ || held_receive_) {
-        return false;
+// Armed plus held receive leases never exceed the receive slots, so routing
+// backlog bounds pool use before any further native receive is armed.
+void http3_acceptor_datagram_endpoint::arm_receives() noexcept {
+    while (!stopping_ && started_ && idle_receive_count_ > held_count_) {
+        auto lease = pool_.try_acquire();
+        if (!lease) {
+            return;
+        }
+        const auto index = idle_receives_[--idle_receive_count_];
+        auto& operation = receive_operations_[index];
+        operation.lease_.emplace(std::move(*lease));
+        if (!socket_.async_receive(operation.lease_->bytes(), &operation, receive_completion)) {
+            operation.lease_.reset();
+            idle_receives_[idle_receive_count_++] = index;
+            fail(io_failure());
+            return;
+        }
     }
-    receive_lease_ = pool_.try_acquire();
-    if (!receive_lease_) {
-        return false;
-    }
-    receive_armed_ = true;
-    if (!socket_.async_receive(receive_lease_->bytes(), this, receive_completion)) {
-        receive_armed_ = false;
-        receive_lease_.reset();
-        fail(io_failure());
-        return false;
-    }
-    return true;
 }
 
-void http3_acceptor_datagram_endpoint::handle_receive(std::error_code error, http3_udp_socket::receive_view view) noexcept {
+void http3_acceptor_datagram_endpoint::handle_receive(receive_operation& operation, std::error_code error,
+    http3_udp_socket::receive_view view) noexcept {
+    if (!operation.lease_) {
+        std::terminate();
+    }
+    auto lease = std::move(*operation.lease_);
+    operation.lease_.reset();
+    idle_receives_[idle_receive_count_++] = static_cast<std::uint32_t>(&operation - receive_operations_.data());
     if (stopping_) {
-        receive_lease_.reset();
         return;
     }
     if (error) {
-        receive_lease_.reset();
+        lease.reset();
         if (error == invalid_datagram() || peer_datagram_error(error)) {
-            (void)arm_receive();
+            arm_receives();
         } else {
             fail(error);
         }
@@ -313,25 +341,27 @@ void http3_acceptor_datagram_endpoint::handle_receive(std::error_code error, htt
     }
     if (view.bytes_.empty() || !is_concrete_unicast(view.peer_.address()) || view.peer_.port() == 0 ||
         !matches_bound_destination(view.local_destination_, bound_endpoint_)) {
-        receive_lease_.reset();
-        (void)arm_receive();
+        lease.reset();
+        arm_receives();
         return;
     }
-    if (held_receive_ || !receive_lease_ || view.bytes_.data() != receive_lease_->bytes().data()) {
+    if (held_count_ == receive_capacity || view.bytes_.data() != lease.bytes().data()) {
         std::terminate();
     }
-    held_receive_.emplace(datagram{std::move(*receive_lease_), view.bytes_.size(),
-        view.local_destination_, view.peer_});
-    receive_lease_.reset();
+    held_receives_[(held_head_ + held_count_) % receive_capacity].emplace(
+        datagram{std::move(lease), view.bytes_.size(), view.local_destination_, view.peer_});
+    ++held_count_;
     notify(notification_kind::input_available);
 }
 
-void http3_acceptor_datagram_endpoint::handle_send(std::error_code error, std::size_t size) noexcept {
-    if (!pending_send_) {
+void http3_acceptor_datagram_endpoint::handle_send(send_operation& operation, std::error_code error,
+    std::size_t size) noexcept {
+    if (!operation.packet_) {
         std::terminate();
     }
-    const auto expected_size = pending_send_->size_;
-    pending_send_.reset();
+    const auto expected_size = operation.packet_->size_;
+    operation.packet_.reset();
+    idle_sends_[idle_send_count_++] = static_cast<std::uint32_t>(&operation - send_operations_.data());
     if (stopping_) {
         return;
     }
@@ -341,7 +371,7 @@ void http3_acceptor_datagram_endpoint::handle_send(std::error_code error, std::s
         fail(io_failure());
     } else {
         notify(notification_kind::output_drained);
-        (void)arm_receive();
+        arm_receives();
     }
 }
 
@@ -542,7 +572,13 @@ void http3_worker_datagram_endpoint::request_stop() noexcept {
         return;
     }
     stopping_ = true;
-    channel_->worker_stop();
+    if (!started_) {
+        // A cold endpoint never borrowed channel input or output; detach it so
+        // the owner can abandon the never-started channel instead.
+        channel_ = nullptr;
+    } else {
+        channel_->worker_stop();
+    }
     if (!stopping_notified_) {
         stopping_notified_ = true;
         notify(notification_kind::stopping);

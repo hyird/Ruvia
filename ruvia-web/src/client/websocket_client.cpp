@@ -14,66 +14,43 @@
 #include "client/websocket_client_state.h"
 
 namespace ruvia::detail {
-namespace {
-
-[[nodiscard]] event_loop require_event_loop(event_loop loop) {
-    if (!loop.valid()) {
-        throw std::invalid_argument("WebSocket client requires a valid event loop");
-    }
-    return loop;
-}
-
-}  // namespace
 
 websocket_client_state::websocket_client_state(event_loop loop, const websocket_client_config& config)
-    : loop_(require_event_loop(std::move(loop))),
+    : loop_(client_lifecycle<websocket_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
       config_(config, memory_.resource()),
       tls_context_([&] {
           asio::ssl::context context(asio::ssl::context::tls_client);
           if (config_.scheme_ == websocket_scheme::wss) {
-              configure_client_tls_context(*context.native_handle(), config_.transport_.view());
+              configure_client_tls_context(*context.native_handle(), config_.tls_);
           }
           return context;
       }()),
-      resolver_(loop_.io_context()),
-      stream_(loop_.io_context(), tls_context_),
+      transport_(loop_.io_context(), tls_context_, worker_,
+          client_tcp_endpoint{.host_ = config_.host_,
+              .port_ = config_.port_,
+              .tls_ = config_.scheme_ == websocket_scheme::wss ? &config_.tls_ : nullptr,
+              .tcp_ = config_.tcp_},
+          wire_counters_),
       write_signal_(worker_),
-      close_state_(loop_, worker_),
-      input_(memory_.allocator<char>()),
-      selected_subprotocol_(memory_.allocator<char>()) {
-    input_.reserve(websocket_client_transport_buffer_bytes);
-}
+      input_([&] {
+          std::pmr::string input(memory_.allocator<char>());
+          input.reserve(websocket_client_transport_buffer_bytes);
+          return input;
+      }()),
+      selected_subprotocol_(memory_.allocator<char>()),
+      heartbeat_tasks_(worker_, {.resource_ = memory_.resource()}),
+      lifecycle_(*this, loop_, worker_) {}
 
-websocket_client_state::~websocket_client_state() {
-    const auto phase = phase_.load(std::memory_order_acquire);
-    if ((phase != phase_type::closed && phase != phase_type::fresh) ||
-        (close_state_.task_started() && !close_state_.complete())) {
-        std::terminate();
-    }
-}
-
-void websocket_client_state::bind_stop() {
-    std::weak_ptr<websocket_client_state> weak = shared_from_this();
-    stop_registration_ = loop_.on_stop([weak = std::move(weak)]() -> task<void> {
-        if (const auto state = weak.lock()) {
-            co_await shutdown_owned(state, client_close_state::observation_mode_type::retirement);
-        }
-    });
+void websocket_client_state::throw_not_ready() {
+    throw websocket_client_error(
+        websocket_client_error::code_type::invalid_state, "WebSocket client is not connected");
 }
 
 void websocket_client_state::require_current() const {
     if (!worker_.is_current()) {
         throw std::logic_error("WebSocket client must be used on its bound event loop");
-    }
-}
-
-void websocket_client_state::require_open() const {
-    require_current();
-    if (phase_.load(std::memory_order_acquire) != phase_type::open) {
-        throw websocket_client_error(
-            websocket_client_error::code_type::invalid_state, "WebSocket client is not connected");
     }
 }
 
@@ -84,8 +61,9 @@ ruvia::websocket_connection& websocket_client_state::require_protocol() noexcept
     return protocol_.value();
 }
 
-std::uint16_t websocket_client_state::port() const noexcept {
-    return config_.port_.value_or(config_.scheme_ == websocket_scheme::wss ? 443 : 80);
+bool websocket_client_state::protocol_open() const noexcept {
+    // close_now() aborts the protocol, so only a live connection stays open.
+    return protocol_.has_value() && protocol_->liveness_mode() == websocket_liveness_mode::open;
 }
 
 bool websocket_client_state::generate_mask(void*, websocket_mask_key_type& key) noexcept {
@@ -101,18 +79,16 @@ void websocket_client_state::check_operation_affinity(void* target) noexcept {
 }
 
 void websocket_client_state::arm(worker_timer_registration& timer,
-    std::optional<std::chrono::milliseconds> timeout, abort_reason_type reason) {
+    std::optional<std::chrono::milliseconds> timeout, client_abort_reason reason) {
     timer.cancel();
     if (!timeout.has_value()) {
         return;
     }
-    std::weak_ptr<websocket_client_state> weak = shared_from_this();
-    (worker_).schedule_timer(timer, worker_timer_deadline_after(*timeout), [weak = std::move(weak), reason](worker_timer_outcome outcome) noexcept {
-        if (outcome != worker_timer_outcome::expired) {
-            return;
-        }
-        if (const auto state = weak.lock()) {
-            state->close_on_worker(reason);
+    // close_now() cancels every state-owned timer and operation timers die
+    // with their frames, all before the lifecycle can retire `this`.
+    (void)worker_.schedule_timer(timer, worker_timer_deadline_after(*timeout), [this, reason](worker_timer_outcome outcome) noexcept {
+        if (outcome == worker_timer_outcome::expired) {
+            retire(reason);
         }
     });
 }
@@ -121,34 +97,72 @@ void websocket_client_state::disarm(worker_timer_registration& timer) noexcept {
     timer.cancel();
 }
 
-void websocket_client_state::throw_abort() const {
-    switch (abort_reason_) {
-        case abort_reason_type::none:
-            return;
-        case abort_reason_type::timeout:
-            throw websocket_client_error(
+websocket_client_error websocket_client_state::abort_error(client_abort_reason reason) {
+    switch (reason) {
+        case client_abort_reason::timeout:
+            return websocket_client_error(
                 websocket_client_error::code_type::timeout, "WebSocket client operation timed out");
-        case abort_reason_type::cancelled:
-            throw websocket_client_error(
+        case client_abort_reason::cancelled:
+            return websocket_client_error(
                 websocket_client_error::code_type::cancelled, "WebSocket client operation was cancelled");
-        case abort_reason_type::closing:
-            throw websocket_client_error(
-                websocket_client_error::code_type::closing, "WebSocket client is closing");
+        case client_abort_reason::none:
+        case client_abort_reason::closing:
+            break;
     }
+    return websocket_client_error(websocket_client_error::code_type::closing, "WebSocket client is closing");
+}
+
+void websocket_client_state::throw_if_aborted() const {
+    if (abort_reason_ != client_abort_reason::none) {
+        throw abort_error(abort_reason_);
+    }
+}
+
+websocket_client_error websocket_client_state::transport_error(const client_transport_result& result) const {
+    const auto code = [&] {
+        switch (result.status_) {
+            case client_transport_status::resolve_failed:
+                return websocket_client_error::code_type::resolve_failed;
+            case client_transport_status::connect_failed:
+                return websocket_client_error::code_type::connect_failed;
+            case client_transport_status::tls_failed:
+                return websocket_client_error::code_type::tls_failed;
+            case client_transport_status::ok:
+            case client_transport_status::eof:
+            case client_transport_status::aborted:
+            case client_transport_status::io_failed:
+                break;
+        }
+        return websocket_client_error::code_type::io_error;
+    }();
+    if (result.status_ == client_transport_status::aborted) {
+        return abort_error(abort_reason_ == client_abort_reason::none ? result.abort_ : abort_reason_);
+    }
+    if (result.status_ == client_transport_status::eof) {
+        return websocket_client_error(code, "WebSocket transport ended");
+    }
+    return websocket_client_error(code, result.error_.message());
+}
+
+void websocket_client_state::throw_transport_failure(const client_transport_result& result) {
+    retire(result.status_ == client_transport_status::aborted ? result.abort_ : client_abort_reason::closing);
+    throw transport_error(result);
 }
 
 websocket_client_state::operation_guard_type::operation_guard_type(
     websocket_client_state& state_value, const operation_options& options)
     : state_(state_value) {
-    state_.arm(timer_, options.timeout_, abort_reason_type::timeout);
-    if (options.stop_token_.stoppable()) {
-        options.stop_token_.register_callback(cancellation_, websocket_client_stop_abort{
-                                                                 state_.weak_from_this()});
-    }
+    state_.arm(timer_, options.timeout_, client_abort_reason::timeout);
     if (options.stop_token_.stop_requested()) {
-        state_.close_on_worker(abort_reason_type::cancelled);
+        state_.retire(client_abort_reason::cancelled);
+    } else if (options.stop_token_.stoppable()) {
+        // The registration is reset before this guard's operation completes,
+        // and the lifecycle joins operations before retiring the state.
+        options.stop_token_.register_callback(cancellation_, [state = &state_]() noexcept {
+            state->request_retire(client_abort_reason::cancelled);
+        });
     }
-    state_.throw_abort();
+    state_.throw_if_aborted();
 }
 
 websocket_client_state::operation_guard_type::~operation_guard_type() {
@@ -157,16 +171,14 @@ websocket_client_state::operation_guard_type::~operation_guard_type() {
 }
 
 websocket_client_handle websocket_client_state::handle(operation_options options) {
-    require_open();
+    lifecycle_.require_ready();
     validate_operation_options(options);
-    options = merge_operation_options(
-        operation_options{.stop_token_ = stop_source_.token()}, std::move(options));
-    return websocket_client_handle(shared_from_this(), operation_scope_, std::move(options));
+    return websocket_client_handle(*this, lifecycle_.operation_scope(), lifecycle_.options(std::move(options)));
 }
 
 bool websocket_client_state::connected() {
     require_current();
-    return phase_.load(std::memory_order_acquire) == phase_type::open;
+    return protocol_open();
 }
 
 std::string_view websocket_client_state::subprotocol() {
@@ -178,9 +190,9 @@ std::string_view websocket_client_state::subprotocol() {
 
 namespace ruvia {
 
-websocket_client_handle::websocket_client_handle(std::shared_ptr<detail::websocket_client_state> state_value,
+websocket_client_handle::websocket_client_handle(detail::websocket_client_state& state_value,
     ::ruvia::operation_scope& scope, operation_options options) noexcept
-    : state_(std::move(state_value)),
+    : state_(&state_value),
       options_(std::move(options)),
       registration_(scope, this, &websocket_client_handle::expire_capability) {}
 
@@ -190,14 +202,14 @@ websocket_client_handle::websocket_client_handle(const websocket_client_handle& 
       registration_(other.registration_, this) {}
 
 void websocket_client_handle::expire_capability(void* target) noexcept {
-    static_cast<websocket_client_handle*>(target)->state_.reset();
+    static_cast<websocket_client_handle*>(target)->state_ = nullptr;
 }
 
 websocket_client_handle websocket_client_handle::with_options(operation_options options) const {
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     registration_.require_active();
     return websocket_client_handle(
-        state_, registration_.scope(), detail::merge_operation_options(options_, std::move(options)));
+        *state_, registration_.scope(), merge_operation_options(options_, std::move(options)));
 }
 
 scoped_operation<std::optional<websocket_message>> websocket_client_handle::read() const {
@@ -231,14 +243,14 @@ scoped_operation<void> websocket_client_handle::close(websocket_close_options op
 }
 
 void websocket_client_handle::abort() noexcept {
-    if (state_) {
+    if (state_ != nullptr) {
         state_->abort();
     }
 }
 
 websocket_client::websocket_client(event_loop loop, const websocket_client_config& config)
     : state_(std::make_shared<detail::websocket_client_state>(std::move(loop), config)) {
-    state_->bind_stop();
+    state_->lifecycle().bind_stop();
 }
 
 websocket_client::~websocket_client() {
@@ -246,7 +258,7 @@ websocket_client::~websocket_client() {
 }
 
 task<void> websocket_client::connect() & {
-    return state_->connect();
+    return state_->lifecycle().connect();
 }
 
 websocket_client_handle websocket_client::with_options(operation_options options) const& {
@@ -282,7 +294,7 @@ void websocket_client::abort() noexcept {
 }
 
 task<void> websocket_client::shutdown() & {
-    return state_->shutdown();
+    return state_->lifecycle().shutdown();
 }
 
 bool websocket_client::connected() const {

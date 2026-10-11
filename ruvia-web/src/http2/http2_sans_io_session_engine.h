@@ -20,6 +20,7 @@
 #include "http2/http2_sans_io_session_lifecycle.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 #include "http2/http2_sans_io_termination.h"
+#include "server/http_request_admission.h"
 #include "server/inbound_buffer_resource.h"
 
 namespace ruvia {
@@ -92,6 +93,7 @@ private:
     worker_signal writer_finished_;
     http2_sans_io_session_lifecycle lifecycle_;
     http2_sans_io_termination termination_;
+    http_request_admission_policy admission_policy_;
     http2_sans_io_stream_runtime_table stream_runtimes_;
     http2_buffered_response_writer buffered_response_writer_;
     std::size_t active_handler_tasks_{0};

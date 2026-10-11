@@ -27,7 +27,8 @@ enum class http3_client_response_event_kind : std::uint8_t {
 struct http3_client_response_event final {
     http3_client_response_event_kind kind_{http3_client_response_event_kind::body};
     std::uint64_t stream_id_{0};
-    const http3_message_head* head_{nullptr};
+    // The callee may move from the decoded head; nothing reads it afterwards.
+    http3_message_head* head_{nullptr};
     http3_field_section_field_view trailer_{};
     std::span<const char> body_{};
     // Final-head and message-end events carry the same value. Informational and
@@ -56,6 +57,8 @@ struct http3_client_response_result final {
 };
 
 struct http3_client_response_limits final {
+    // Each initial, informational, trailer, and PUSH_PROMISE section has its own limits.
+    // These also apply when the borrowed QPACK decoder permits larger sections.
     std::size_t max_field_section_size_{64 * 1024};
     std::size_t max_fields_{256};
     std::size_t max_encoded_field_section_bytes_{64 * 1024};

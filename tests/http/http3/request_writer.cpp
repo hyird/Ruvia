@@ -24,7 +24,7 @@ RUVIA_TEST(http3_request_trailers_normalize_validate_and_use_connection_qpack) {
             std::string& name_;
             std::string& value_;
         } capture_value{name, value};
-        const auto result_value = decoder.decode(0, std::get<0>(bytes_value), [](void* opaque, ruvia::http3_field_section_field_view field) {
+        const auto result_value = decoder.decode(0, std::get<0>(bytes_value).field_section(), [](void* opaque, ruvia::http3_field_section_field_view field) {
             auto& captured_value=*static_cast<fields*>(opaque);captured_value.name_=field.name_;captured_value.value_=field.value_;return true; }, &capture_value);
         RUVIA_CHECK((result_value.index() == 0) && std::get<0>(result_value).status_ == ruvia::http3_qpack_decode_status::decoded);
         RUVIA_CHECK_EQ(name, std::string("x-checksum"));

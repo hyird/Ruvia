@@ -7,7 +7,9 @@
 #include <vector>
 
 #include "ruvia/http/http3_qpack.h"
+#include "ruvia/http/http3_var_int.h"
 
+#include "http3/http3_field_section_encoder.h"
 #include "http3/qpack_static_table.h"
 
 namespace ruvia {
@@ -64,11 +66,18 @@ std::variant<std::size_t, http3_field_section_error> decode_http3_field_section(
     if (static_cast<std::uint8_t>(input[0]) != 0) {
         return http3_field_section_error::nonzero_required_insert_count;
     }
-    if (static_cast<std::uint8_t>(input[1]) != 0) {
+    const auto delta = decode_http3_qpack_integer(input.subspan(1), 7);
+    if (delta.index() != 0) {
+        return map_error(std::get<1>(delta));
+    }
+    // With Required Insert Count zero, a negative delta would underflow Base.
+    // Static fields do not otherwise depend on its value (RFC 9204, 4.5.1.2).
+    if ((static_cast<std::uint8_t>(input[1]) & 0x80U) != 0 ||
+        std::get<0>(delta).value_ > http3_var_int_max) {
         return http3_field_section_error::invalid_base;
     }
 
-    std::size_t offset = 2;
+    std::size_t offset = 1 + std::get<0>(delta).encoded_bytes_;
     std::size_t decoded_bytes = 0;
     std::size_t field_count = 0;
     std::pmr::string name(resource != nullptr ? resource : std::pmr::get_default_resource());
@@ -144,7 +153,7 @@ std::variant<std::size_t, http3_field_section_error> decode_http3_field_section(
             offset += std::get<0>(value_size);
             field = {name, value, never_indexed};
         } else {
-            return http3_field_section_error::invalid_prefix;
+            return http3_field_section_error::dynamic_reference;
         }
         const auto accepted = add_field(field);
         if ((accepted.index() != 0)) {
@@ -156,7 +165,14 @@ std::variant<std::size_t, http3_field_section_error> decode_http3_field_section(
 
 std::variant<std::pmr::vector<char>, http3_field_section_error> encode_http3_field_section(
     std::span<const http3_field_section_field_view> fields_value, std::pmr::memory_resource* resource) {
-    std::pmr::vector<char> output(2, '\0', resource != nullptr ? resource : std::pmr::get_default_resource());
+    return detail::encode_static_http3_field_section(fields_value, resource, 0);
+}
+
+std::variant<std::pmr::vector<char>, http3_field_section_error> detail::encode_static_http3_field_section(
+    std::span<const http3_field_section_field_view> fields_value, std::pmr::memory_resource* resource,
+    std::size_t reserved_prefix_bytes) {
+    // Two zero bytes: Required Insert Count and Delta Base of the empty table.
+    std::pmr::vector<char> output(reserved_prefix_bytes + 2, '\0', resource != nullptr ? resource : std::pmr::get_default_resource());
     for (const auto& field : fields_value) {
         const auto match = detail::qpack_static_fields.find(field.name_,
             field.never_indexed_ ? std::nullopt : std::optional(field.value_));

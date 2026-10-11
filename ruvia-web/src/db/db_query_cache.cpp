@@ -8,13 +8,12 @@
 
 #include <openssl/sha.h>
 
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
 #include "db/db_config_storage.h"
-#include "db/db_query_cache_state.h"
-#include "db/db_registry.h"
 
 namespace ruvia::detail {
 namespace {
@@ -58,81 +57,27 @@ std::pmr::string digest(std::string_view bytes_value, std::pmr::memory_resource*
     if (!SHA256(reinterpret_cast<const unsigned char*>(bytes_value.data()), bytes_value.size(), hash.data())) {
         throw std::runtime_error("database cache key digest failed");
     }
-    constexpr char hex[] = "0123456789abcdef";
     std::pmr::string result(resource);
     result.reserve(hash.size() * 2);
     for (auto byte : hash) {
-        result.push_back(hex[byte >> 4]);
-        result.push_back(hex[byte & 15]);
+        result.push_back(http_lower_hex_digit(byte >> 4));
+        result.push_back(http_lower_hex_digit(byte));
     }
     return result;
 }
 }  // namespace
 
-db_query_plan db_query_plan::prepare(const db_query& query, const db_query* count,
-    db_driver driver, std::pmr::memory_resource* resource, db_query_cache_state* cache) {
-    const auto prepare = [&](const db_query& input) {
-        auto statement = input.compile(driver, resource);
-        if (!statement.returns_rows()) {
-            throw std::invalid_argument(count
-                                            ? "query and count require statements that return rows"
-                                            : "query requires a statement that returns rows");
-        }
-        auto key = cache ? cache->key(input, statement, driver) : std::nullopt;
-        return db_query_step{std::move(statement.sql_), std::move(statement.params_),
-            std::move(key), input.cache_duration()};
-    };
-    db_query_plan plan{prepare(query), std::nullopt};
-    if (count != nullptr) {
-        plan.second_.emplace(prepare(*count));
-    }
-    return plan;
-}
-
-task<db_rows> db_query_backend::operator()(db_query_step step,
-    operation_options options, const operation_timeout& deadline_value) const {
-    db_cache_query database_value(pool_, slot_, std::move(step.sql_), std::move(step.params_),
-        resource_, backend_failed_);
-    if (cache_ != nullptr && step.cache_key_.has_value()) {
-        return cache_->wrap(step.cache_duration_, std::move(step.cache_key_),
-            std::move(database_value), std::move(options), deadline_value);
-    }
-    return std::move(database_value)(std::move(options));
-}
-
 task<db_rows> db_cache_query::operator()(operation_options options) && {
-    return execute_owned(std::move(pool_), std::move(slot_), std::move(sql_), std::move(params_),
-        resource_, backend_failed_, std::move(options));
+    return execute_owned(backend_, std::move(sql_), std::move(params_), std::move(options));
 }
 
-task<db_rows> db_cache_query::execute_owned(db_pool_ref_type pool, std::optional<std::size_t> slot,
-    std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, bool* backend_failed,
-    operation_options options) {
-    if (slot.has_value()) {
-        auto backend = visit_db_pool(pool, [&](auto& client) {
-            return query_on_db_transaction_slot(client, *slot, std::move(sql), std::move(params),
-                resource, options);
-        });
-        try {
-            co_return co_await std::move(backend);
-        } catch (...) {
-            if (backend_failed != nullptr) {
-                *backend_failed = true;
-            }
-            throw;
-        }
-    }
-
-    auto backend = visit_db_pool(pool, [&](auto& client) {
-        return execute_db_query(client, std::move(sql), std::move(params), resource,
-            std::move(options));
-    });
+task<db_rows> db_cache_query::execute_owned(db_query_backend backend, std::pmr::string sql,
+    std::pmr::vector<db_value> params, operation_options options) {
     try {
-        co_return co_await std::move(backend);
+        co_return co_await query_db_backend(backend, std::move(sql), std::move(params), options);
     } catch (...) {
-        if (backend_failed != nullptr) {
-            *backend_failed = true;
+        if (backend.backend_failed_ != nullptr) {
+            *backend.backend_failed_ = true;
         }
         throw;
     }
@@ -212,7 +157,7 @@ std::pmr::string db_cache_scope(std::string_view name_space, std::string_view al
     number(identity, config.port_);
     text(identity, config.database_);
     text(identity, config.username_);
-    text(identity, config.tls_.server_name_);
+    text(identity, config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{});
     return digest(identity, resource);
 }
 std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource) {

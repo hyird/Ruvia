@@ -30,7 +30,6 @@ public:
     worker_submission_view submission() const&& = delete;
 
     void run();
-    void run(move_only_function<void(std::exception_ptr)> failure_handler);
     void run(move_only_function<void()> startup_handler,
         move_only_function<void(std::exception_ptr)> failure_handler,
         move_only_function<void()> shutdown_handler);

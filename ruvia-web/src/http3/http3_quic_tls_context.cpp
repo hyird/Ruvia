@@ -1,10 +1,13 @@
 #include "http3/http3_quic_tls_context.h"
 
+#include <algorithm>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
 #include <openssl/ssl.h>
 
+#include "ruvia/http/http3_settings.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "server/http_server_tls_identity.h"
@@ -39,9 +42,6 @@ void configure_quic_tls_context(SSL_CTX* context_value,
     SSL_CTX_set_alpn_select_cb(context_value, alpn_callback, nullptr);
     SSL_CTX_set_client_hello_cb(context_value, &require_alpn_offer, nullptr);
     configure_http_server_tls_identity(context_value, identity, client_certificates);
-    // Password callback data belongs to the input configuration; credentials are now loaded.
-    SSL_CTX_set_default_passwd_cb(context_value, nullptr);
-    SSL_CTX_set_default_passwd_cb_userdata(context_value, nullptr);
 }
 
 void configure_identity_context(SSL_CTX* context_value,
@@ -50,9 +50,6 @@ void configure_identity_context(SSL_CTX* context_value,
         throw std::runtime_error("failed to create QUIC SNI identity context");
     }
     configure_http_server_tls_identity(context_value, identity, std::nullopt);
-    // Do not retain the configuration's password storage after preloading the key.
-    SSL_CTX_set_default_passwd_cb(context_value, nullptr);
-    SSL_CTX_set_default_passwd_cb_userdata(context_value, nullptr);
 }
 
 }  // namespace
@@ -137,15 +134,15 @@ int http3_quic_tls_context::select_certificate(SSL* ssl, void* argument) noexcep
 int http3_quic_tls_context::select_alpn_protocol(SSL*, const unsigned char** output,
     unsigned char* output_length, const unsigned char* input, unsigned int input_length,
     void*) noexcept {
-    constexpr unsigned char h3[] = {'h', '3'};
+    const auto h3 = std::span(http3_alpn_protocol_list).subspan(1);
     for (unsigned int offset = 0; offset < input_length;) {
         const unsigned int length = input[offset++];
         if (length > input_length - offset) {
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
-        if (length == sizeof(h3) && input[offset] == h3[0] && input[offset + 1] == h3[1]) {
+        if (std::ranges::equal(std::span(input + offset, length), h3)) {
             *output = input + offset;
-            *output_length = static_cast<unsigned char>(sizeof(h3));
+            *output_length = static_cast<unsigned char>(h3.size());
             return SSL_TLSEXT_ERR_OK;
         }
         offset += length;

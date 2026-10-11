@@ -371,7 +371,7 @@ RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
     };
 
     for (const std::string_view valid : {"", "trailers", "gzip", "deflate;q=0.5", "deflate;Q=0.5",
-             "x-gzip ; q=1.000", "gzip;q=0, trailers"}) {
+             "x-gzip ; q=1.000", "gzip;q=0, trailers", "trailers , TRAILERS"}) {
         RUVIA_CHECK(!prepare_with_te(valid).has_value());
     }
 

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/http/http3_data_write_plan.h"
+#include "ruvia/http/http3_headers_frame.h"
 #include "ruvia/http/http_known_method.h"
 
 #include "client/http_client_request_storage.h"
@@ -29,6 +30,8 @@ enum class http3_client_request_write_error : std::uint8_t {
 
 // Owns the completed request in worker-local storage. Offered spans remain
 // stable until acknowledged; acknowledge(0) leaves the same span available.
+// HTTP/3 requests always use the https scheme; authority is the connection's
+// fixed origin authority, borrowed for this cursor's lifetime.
 class http3_client_request_write final {
 public:
     class prepared_tag_type final {
@@ -43,7 +46,7 @@ public:
     // Failure leaves request untouched. Ownership is committed only after all
     // encoding and allocations have succeeded.
     [[nodiscard]] static std::variant<http3_client_request_write, error_type> create(
-        http_client_request_storage&& request, std::string_view scheme, std::string_view authority,
+        http_client_request_storage&& request, std::string_view authority,
         std::pmr::memory_resource* worker_pool, http3_field_section_limits limits = {}) noexcept;
 
     http3_client_request_write(const http3_client_request_write&) = delete;
@@ -72,9 +75,9 @@ public:
     // Only create() can produce prepared_tag_type; this lets variant construct the
     // completed cursor in place without a potentially throwing cursor move.
     explicit http3_client_request_write(prepared_tag_type, std::pmr::memory_resource* resource,
-        http_client_request_storage&& request, std::pmr::string&& scheme,
-        std::pmr::string&& authority, std::pmr::vector<char>&& headers,
-        http3_data_write_plan data_plan, http3_field_section_limits limits = {}) noexcept;
+        http_client_request_storage&& request, std::string_view authority,
+        std::optional<http3_headers_frame>&& headers, http3_data_write_plan data_plan,
+        http3_field_section_limits limits = {}) noexcept;
 
 private:
     enum class state_type : std::uint8_t { headers,
@@ -86,6 +89,7 @@ private:
         failed };
     [[nodiscard]] static http3_client_request_write& require_no_outstanding_segment(
         http3_client_request_write& other);
+    [[nodiscard]] std::pmr::vector<http3_field_section_field_view> request_fields() const;
     [[nodiscard]] segment_type active_segment() const noexcept;
     [[nodiscard]] std::variant<std::monostate, error_type> prepare_data() noexcept;
     [[nodiscard]] std::variant<std::monostate, error_type> prepare_trailers() noexcept;
@@ -94,9 +98,14 @@ private:
     std::pmr::memory_resource* worker_pool_;
     http3_field_section_limits field_limits_{};
     http_client_request_storage request_;
-    std::pmr::string scheme_;
-    std::pmr::string authority_;
-    std::pmr::vector<char> headers_;
+    std::string_view authority_;
+    // The pending HEADERS frame: the request head, later its trailers. Empty
+    // only for an Extended CONNECT head awaiting the peer's SETTINGS.
+    std::optional<http3_headers_frame> headers_;
+    // Borrowed only while this stream's attempt is live. Retirement clears the
+    // binding before the owner destroys the engine or replays on a fresh stream.
+    http3_client_sans_io_session_engine* engine_{};
+    std::uint64_t stream_id_{};
     std::optional<http3_data_write_plan> data_plan_;
     http3_data_write_plan::chunk_type chunk_{};
     std::size_t segment_offset_{};

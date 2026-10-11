@@ -137,10 +137,13 @@ struct http1_chunked_body_decoder_config final {
 // borrow the supplied input and remain valid only until it is modified. The
 // body limit counts chunk payload bytes, which may still be transfer-encoded.
 // There is no chunk-count or cumulative framing budget: each chunk-size line
-// (including extensions) and the trailer section are bounded independently by
-// max_http_header_bytes. An over-long size line or unterminated trailer section
+// (including extensions) and the encoded trailer section (including its final
+// empty line) are bounded independently by max_http_header_bytes.
+// An over-long size line or unterminated trailer section
 // reports framing_limit_exceeded; a complete oversized trailer section is
 // invalid_framing.
+// Request trailers must also fit max_http_header_fields and the normalized
+// section byte limit (name.size() + value.size() + 4 per field).
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});

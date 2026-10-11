@@ -439,7 +439,7 @@ RUVIA_TEST(http3_qpack_dynamic_writer_result_uses_caller_resource) {
         ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 128, .max_blocked_streams_ = 1}, &encoder_resource);
         auto section = ruvia::encode_http3_request_trailers(encoder, 0, fields_value, {}, &result_resource);
         RUVIA_CHECK((section).index() == 0);
-        RUVIA_CHECK(std::get<0>(section).get_allocator().resource() == &result_resource);
+        RUVIA_CHECK(std::get<0>(section).resource() == &result_resource);
         RUVIA_CHECK(result_resource.live_bytes_ > 0);
         RUVIA_CHECK_EQ(encoder.insert_count(), 1u);
     }

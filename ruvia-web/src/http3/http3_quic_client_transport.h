@@ -46,6 +46,9 @@ public:
     [[nodiscard]] bool early_data_enabled() const noexcept {
         return early_data_enabled_;
     }
+    [[nodiscard]] const std::optional<ruvia::http3_settings>& remembered_settings() const noexcept {
+        return remembered_settings_;
+    }
 
     void stop_tls() noexcept;
     void close() noexcept;
@@ -56,6 +59,7 @@ private:
     std::pmr::string host_;
     openssl_quic_crypto_provider crypto_;
     bool early_data_enabled_{};
+    std::optional<ruvia::http3_settings> remembered_settings_{};
     std::optional<openssl_quic_tls_session> tls_session_;
     std::optional<ruvia::quic_connection> connection_;
 };

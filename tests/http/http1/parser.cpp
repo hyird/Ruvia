@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/http/http1_request_connection_plan.h"
-#include "ruvia/http/http1_request_parser.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -113,22 +112,20 @@ RUVIA_TEST(http1_public_request_connection_plan_only_tightens_reuse) {
         http1_close_policy::allow_reuse);
 }
 
-RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
-    const ruvia::http1_request_parser public_parser;
+RUVIA_TEST(http1_parse_message_outcome_exposes_only_its_active_alternative) {
+    const http1_server_request_parser parser;
 
-    const auto need_more = public_parser.parse("GET / HTTP/1.1\r\nHost: example.com\r\n");
-    const auto* need_more_state = need_more.need_more();
-    RUVIA_CHECK(need_more_state != nullptr);
-    if (need_more_state != nullptr) {
-        RUVIA_CHECK(!need_more_state->required_total_bytes().has_value());
-    }
-    RUVIA_CHECK(need_more.parsed() == nullptr);
+    const auto need_more = parser.parse_message("GET / HTTP/1.1\r\nHost: example.com\r\n");
+    RUVIA_CHECK(need_more.need_request_head() != nullptr);
+    RUVIA_CHECK(need_more.need_request_body() == nullptr);
+    RUVIA_CHECK(need_more.message_ready() == nullptr);
     RUVIA_CHECK(need_more.failure() == nullptr);
 
-    const auto failure = public_parser.parse("GET / HTTP/1.1\r\n\r\n");
+    const auto failure = parser.parse_message("GET / HTTP/1.1\r\n\r\n");
     const auto* failure_state = failure.failure();
-    RUVIA_CHECK(failure.need_more() == nullptr);
-    RUVIA_CHECK(failure.parsed() == nullptr);
+    RUVIA_CHECK(failure.need_request_head() == nullptr);
+    RUVIA_CHECK(failure.need_request_body() == nullptr);
+    RUVIA_CHECK(failure.message_ready() == nullptr);
     RUVIA_CHECK(failure_state != nullptr);
     if (failure_state != nullptr) {
         const auto error = failure_state->protocol_error();
@@ -275,15 +272,16 @@ RUVIA_TEST(http1_parse_failure_classifies_only_request_line_failures) {
     }
 }
 
-RUVIA_TEST(http1_public_parse_need_more_separates_required_size_from_consumption) {
-    const ruvia::http1_request_parser public_parser;
+RUVIA_TEST(http1_parse_message_need_body_separates_required_size_from_consumption) {
+    const http1_server_request_parser parser;
     constexpr std::string_view partial =
         "POST / HTTP/1.1\r\nHost: example.com\r\n"
         "Content-Length: 5\r\n\r\nhe";
-    const auto result_value = public_parser.parse(partial);
-    const auto* need_more = result_value.need_more();
+    const auto result_value = parser.parse_message(partial);
+    const auto* need_more = result_value.need_request_body();
     RUVIA_CHECK(need_more != nullptr);
     if (need_more != nullptr) {
+        RUVIA_CHECK_EQ(need_more->header_bytes(), partial.size() - std::size_t{2});
         RUVIA_CHECK(need_more->required_total_bytes().has_value());
         if (need_more->required_total_bytes()) {
             RUVIA_CHECK_EQ(*need_more->required_total_bytes(), partial.size() + std::size_t{3});
@@ -291,22 +289,24 @@ RUVIA_TEST(http1_public_parse_need_more_separates_required_size_from_consumption
     }
 }
 
-RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
-    const ruvia::http1_request_parser public_parser;
+RUVIA_TEST(http1_parse_message_success_frames_the_exact_wire_body) {
+    const http1_server_request_parser parser;
 
     constexpr std::string_view content_length_message =
         "POST /fixed HTTP/1.1\r\nHost: example.com\r\n"
         "Content-Length: 5\r\n\r\nhello";
     const std::string content_length_pipeline =
         std::string(content_length_message) + "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    const auto fixed_result = public_parser.parse(content_length_pipeline);
-    const auto* fixed = fixed_result.parsed();
+    const auto fixed_result = parser.parse_message(content_length_pipeline);
+    const auto* fixed = fixed_result.message_ready();
     RUVIA_CHECK(fixed != nullptr);
     if (fixed != nullptr) {
-        RUVIA_CHECK_EQ(fixed->request().path(), std::string_view("/fixed"));
-        RUVIA_CHECK_EQ(require_known_length(fixed->body_plan()).content_length(), std::size_t{5});
-        RUVIA_CHECK_EQ(fixed->wire_body(), std::string_view("hello"));
-        RUVIA_CHECK_EQ(fixed->consumed_bytes(), content_length_message.size());
+        RUVIA_CHECK_EQ(fixed_result.request_.path(), std::string_view("/fixed"));
+        RUVIA_CHECK_EQ(require_known_length(fixed_result.body_plan_).content_length(), std::size_t{5});
+        RUVIA_CHECK_EQ(std::string_view(content_length_pipeline)
+                           .substr(fixed->header_bytes(), fixed->message_bytes() - fixed->header_bytes()),
+            std::string_view("hello"));
+        RUVIA_CHECK_EQ(fixed->message_bytes(), content_length_message.size());
     }
 
     constexpr std::string_view chunked_message =
@@ -315,44 +315,44 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
         "3\r\nabc\r\n0\r\nX-Checksum: ok\r\n\r\n";
     const std::string chunked_pipeline =
         std::string(chunked_message) + "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    const auto chunked_result = public_parser.parse(chunked_pipeline);
-    const auto* chunked = chunked_result.parsed();
+    const auto chunked_result = parser.parse_message(chunked_pipeline);
+    const auto* chunked = chunked_result.message_ready();
     RUVIA_CHECK(chunked != nullptr);
     if (chunked != nullptr) {
-        RUVIA_CHECK(chunked->body_plan().chunked() != nullptr);
-        RUVIA_CHECK_EQ(
-            chunked->wire_body(), std::string_view("3\r\nabc\r\n0\r\nX-Checksum: ok\r\n\r\n"));
-        RUVIA_CHECK_EQ(chunked->consumed_bytes(), chunked_message.size());
+        RUVIA_CHECK(chunked_result.body_plan_.chunked() != nullptr);
+        RUVIA_CHECK_EQ(std::string_view(chunked_pipeline)
+                           .substr(chunked->header_bytes(), chunked->message_bytes() - chunked->header_bytes()),
+            std::string_view("3\r\nabc\r\n0\r\nX-Checksum: ok\r\n\r\n"));
+        RUVIA_CHECK_EQ(chunked->message_bytes(), chunked_message.size());
     }
 }
 
-RUVIA_TEST(http1_public_parser_preserves_expect_extensions_as_semantics) {
-    const auto result_value = ruvia::http1_request_parser().parse(
+RUVIA_TEST(http1_parse_message_preserves_expect_extensions_as_semantics) {
+    const auto result_value = http1_server_request_parser().parse_message(
         "POST /extensions HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Expect: , 100-Continue, custom-feature,\r\n"
         "Content-Length: 1\r\n\r\nx");
 
-    const auto* parsed_value = result_value.parsed();
-    RUVIA_CHECK(parsed_value != nullptr);
+    RUVIA_CHECK(result_value.message_ready() != nullptr);
     RUVIA_CHECK(result_value.failure() == nullptr);
-    if (parsed_value != nullptr) {
+    if (result_value.message_ready() != nullptr) {
         const auto plan =
-            parsed_value->body_plan().expectation_plan(http_unsupported_expectation_policy::reject);
+            result_value.body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
         RUVIA_CHECK(plan.rejection() != nullptr);
-        RUVIA_CHECK(parsed_value->body_plan().expectations().has_continue());
-        RUVIA_CHECK(parsed_value->body_plan().expectations().has_unsupported());
+        RUVIA_CHECK(result_value.body_plan_.expectations().has_continue());
+        RUVIA_CHECK(result_value.body_plan_.expectations().has_unsupported());
     }
 }
 
 RUVIA_TEST(http1_parse_rejects_malformed_expect_field) {
-    const auto result_value = ruvia::http1_request_parser().parse(
+    const auto result_value = http1_server_request_parser().parse_message(
         "POST /extensions HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Expect: bad value\r\n"
         "Content-Length: 1\r\n\r\nx");
 
-    RUVIA_CHECK(result_value.parsed() == nullptr);
+    RUVIA_CHECK(result_value.message_ready() == nullptr);
     RUVIA_CHECK(result_value.failure() != nullptr);
     if (const auto* failure = result_value.failure()) {
         const auto protocol_error = failure->protocol_error();
@@ -580,6 +580,25 @@ RUVIA_TEST(http1_parse_te_requires_connection_option) {
     }
 }
 
+RUVIA_TEST(http1_parse_te_ignores_empty_received_list_members) {
+    for (const auto value : {",trailers", "trailers,", ", trailers,,", ",,", ",gzip;q=0.5,,trailers,"}) {
+        http1_server_request_parser parser;
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
+        wire.append(value);
+        wire.append("\r\n\r\n");
+        const auto result_value = parser.parse_message(wire);
+        RUVIA_CHECK(result_value.message_ready());
+        RUVIA_CHECK_EQ(result_value.request_.header("TE").value_or("missing"), std::string_view(value));
+    }
+    for (const auto value : {",chunked,", ",trailers;q=0.5,", ",gzip;q=2,"}) {
+        http1_server_request_parser parser;
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
+        wire.append(value);
+        wire.append("\r\n\r\n");
+        RUVIA_CHECK(is_failure(parser.parse_message(wire), http_parse_error::invalid_header));
+    }
+}
+
 RUVIA_TEST(http1_parse_invalid_te_field_rejected) {
     http1_server_request_parser parser;
     const auto result_value = parser.parse_message(
@@ -732,15 +751,12 @@ RUVIA_TEST(http1_request_unknown_transfer_coding_obeys_final_framing_precedence)
     RUVIA_CHECK(framed.connection_plan_.disposition() == http1_close_policy::close_after_response);
 }
 
-RUVIA_TEST(http1_request_parsers_propagate_transfer_plan_allocation_failures) {
+RUVIA_TEST(http1_parse_message_propagates_transfer_plan_allocation_failures) {
     constexpr std::string_view wire =
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Transfer-Encoding: gzip, deflate, chunked\r\n\r\n0\r\n\r\n";
-    const ruvia::http1_request_parser public_parser;
-    verify_parser_allocation_failures(ruvia_ctx, [&public_parser, wire](failing_memory_resource& resource) { return public_parser.parse(wire, {.resource_ = &resource}); }, [](const auto& result_value) { return result_value.parsed() != nullptr; });
-
-    const http1_server_request_parser server_parser;
-    verify_parser_allocation_failures(ruvia_ctx, [&server_parser, wire](failing_memory_resource& resource) { return server_parser.parse_message(wire, &resource); }, [](const auto& result_value) { return result_value.message_ready() != nullptr; });
+    const http1_server_request_parser parser;
+    verify_parser_allocation_failures(ruvia_ctx, [&parser, wire](failing_memory_resource& resource) { return parser.parse_message(wire, &resource); }, [](const auto& result_value) { return result_value.message_ready() != nullptr; });
 }
 
 RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
@@ -1031,12 +1047,12 @@ RUVIA_TEST(http1_parse_methods_without_content_reject_framing_fields) {
         "Host: tunnel.example:443\r\n\r\n";
     std::string early_tunnel_bytes(connect_head);
     early_tunnel_bytes += "opaque";
-    const auto parsed_value = ruvia::http1_request_parser().parse(early_tunnel_bytes);
-    RUVIA_CHECK(parsed_value.parsed() != nullptr);
-    if (const auto* message = parsed_value.parsed()) {
-        RUVIA_CHECK(message->body_plan().without_body() != nullptr);
-        RUVIA_CHECK(message->wire_body().empty());
-        RUVIA_CHECK_EQ(message->consumed_bytes(), connect_head.size());
+    const auto parsed_value = http1_server_request_parser().parse_message(early_tunnel_bytes);
+    RUVIA_CHECK(parsed_value.message_ready() != nullptr);
+    if (const auto* message = parsed_value.message_ready()) {
+        RUVIA_CHECK(parsed_value.body_plan_.without_body() != nullptr);
+        RUVIA_CHECK_EQ(message->header_bytes(), connect_head.size());
+        RUVIA_CHECK_EQ(message->message_bytes(), connect_head.size());
     }
 }
 
@@ -1169,29 +1185,30 @@ RUVIA_TEST(http1_parse_ignores_bounded_empty_lines_before_request_line) {
     RUVIA_CHECK(is_failure(parser.parse_message(flood), http_parse_error::header_too_large));
 }
 
-RUVIA_TEST(http1_public_parse_ignores_empty_line_after_pipelined_body) {
-    const ruvia::http1_request_parser public_parser;
+RUVIA_TEST(http1_parse_message_ignores_empty_line_after_pipelined_body) {
+    const http1_server_request_parser parser;
     constexpr std::string_view first_message =
         "POST /first HTTP/1.1\r\nHost: example.com\r\n"
         "Content-Length: 5\r\n\r\nhello";
     constexpr std::string_view second_message = "\r\nGET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
     const std::string pipeline = std::string(first_message) + std::string(second_message);
 
-    const auto first_result = public_parser.parse(pipeline);
-    const auto* first = first_result.parsed();
+    const auto first_result = parser.parse_message(pipeline);
+    const auto* first = first_result.message_ready();
     RUVIA_CHECK(first != nullptr);
     if (first == nullptr) {
         return;
     }
-    RUVIA_CHECK_EQ(first->wire_body(), std::string_view("hello"));
-    RUVIA_CHECK_EQ(first->consumed_bytes(), first_message.size());
+    RUVIA_CHECK_EQ(std::string_view(pipeline).substr(first->header_bytes(), first->message_bytes() - first->header_bytes()),
+        std::string_view("hello"));
+    RUVIA_CHECK_EQ(first->message_bytes(), first_message.size());
 
-    const auto second_result = public_parser.parse(std::string_view(pipeline).substr(first->consumed_bytes()));
-    const auto* second = second_result.parsed();
+    const auto second_result = parser.parse_message(std::string_view(pipeline).substr(first->message_bytes()));
+    const auto* second = second_result.message_ready();
     RUVIA_CHECK(second != nullptr);
     if (second != nullptr) {
-        RUVIA_CHECK_EQ(second->request().path(), std::string_view("/next"));
-        RUVIA_CHECK_EQ(second->consumed_bytes(), second_message.size());
+        RUVIA_CHECK_EQ(second_result.request_.path(), std::string_view("/next"));
+        RUVIA_CHECK_EQ(second->message_bytes(), second_message.size());
     }
 }
 
@@ -1236,4 +1253,31 @@ RUVIA_TEST(http1_parse_invalid_request_target_rejected) {
     http1_server_request_parser parser;
     const auto result_value = parser.parse_message("GET foobar HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(is_failure(result_value, http_parse_error::invalid_request_target));
+}
+
+RUVIA_TEST(http1_parse_te_trailers_tolerates_ows) {
+    for (const std::string_view value : {"   trailers  ", "trailers , TRAILERS"}) {
+        http1_server_request_parser parser;
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE:";
+        wire.append(value);
+        wire.append("\r\n\r\n");
+        const auto parsed = parser.parse_message(wire);
+        RUVIA_CHECK(parsed.message_ready());
+    }
+}
+
+RUVIA_TEST(http1_parse_rejects_invalid_cors_request_fields) {
+    for (const std::string_view field : {"Origin: https://app.example/path", "Access-Control-Request-Method: POST GET",
+             "Access-Control-Request-Headers: x bad"}) {
+        http1_server_request_parser parser;
+        std::string wire = "OPTIONS / HTTP/1.1\r\nHost: x\r\n";
+        wire.append(field);
+        wire.append("\r\n\r\n");
+        RUVIA_CHECK(is_failure(parser.parse_message(wire), http_parse_error::invalid_header));
+    }
+    http1_server_request_parser parser;
+    const auto parsed = parser.parse_message(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Access-Control-Request-Method: POST\r\n\r\n");
+    RUVIA_CHECK(parsed.message_ready());
 }

@@ -14,9 +14,10 @@
 namespace ruvia {
 
 // Bounded multi-producer storage. Publication and consumption serialize through
-// one mutex and reuse the same ring implementation as local/SPSC queues. The
-// lock may also protect the owner's admission/waiter state, so checking close
-// and publishing a value remain one operation without adding a second lock.
+// one mutex and reuse the same ring implementation as local/SPSC queues. An
+// owner may keep its admission/waiter state under the same lock by holding a
+// locked_access, so checking close and publishing a value remain one operation
+// without adding a second lock.
 // The consumer and every producer must retire before this owner is destroyed.
 template <std::move_constructible value_type>
 class mpsc_ring_queue final {
@@ -97,10 +98,6 @@ public:
     }
     [[nodiscard]] locked_access lock() {
         return locked_access(*this);
-    }
-    // Borrowed by owner lifecycle and wait registration; outlives their access.
-    [[nodiscard]] std::mutex& synchronization_mutex() noexcept {
-        return mutex_;
     }
     [[nodiscard]] bool try_push(value_type&& value) {
         return lock().try_push(std::move(value));

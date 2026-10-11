@@ -6,7 +6,6 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
-#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -35,16 +34,11 @@ public:
     // Per stream, not per connection: one HTTP/2 connection multiplexes many
     // requests and each carries its own deadline. This state is address-stable
     // and non-movable, which is what the timer registration and the token
-    // handed to context_services both require.
-    void arm_deadline(const worker_handle& worker_value, const stop_token& worker_stop,
-        std::chrono::milliseconds deadline_value) {
-        deadline_.emplace(worker_stop);
-        deadline_->arm(worker_value, deadline_value);
+    // handed to context_services both require. Request admission arms it.
+    [[nodiscard]] std::optional<request_deadline>& deadline() & noexcept {
+        return deadline_;
     }
-
-    [[nodiscard]] const request_deadline* deadline() const noexcept {
-        return deadline_ ? &*deadline_ : nullptr;
-    }
+    std::optional<request_deadline>& deadline() && = delete;
 
     [[nodiscard]] http2_request_body_runtime& body() & noexcept {
         return body_;
@@ -209,8 +203,7 @@ private:
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
 // slots; overflow objects are PMR-owned and remain stable when the pointer vector
 // compacts, so request body views and dispatch signal references cannot be invalidated
-// by another stream being admitted or erased. dispatched_count_ is acquired before a
-// handler is scheduled and released only when that same runtime is removed.
+// by another stream being admitted or erased.
 class http2_sans_io_stream_runtime_table final {
 public:
     explicit http2_sans_io_stream_runtime_table(
@@ -283,11 +276,7 @@ public:
         if (runtime == nullptr) {
             return nullptr;
         }
-        auto* signal = runtime->begin_dispatch(worker_value, termination_);
-        if (signal != nullptr) {
-            ++dispatched_count_;
-        }
-        return signal;
+        return runtime->begin_dispatch(worker_value, termination_);
     }
     http2_sans_io_stream_signal* begin_dispatch(std::uint32_t, worker_handle&&) = delete;
 
@@ -329,10 +318,6 @@ public:
         return size_;
     }
 
-    [[nodiscard]] std::size_t dispatched_count() const noexcept {
-        return dispatched_count_;
-    }
-
     [[nodiscard]] std::size_t tunnel_count() const noexcept {
         return tunnel_count_;
     }
@@ -360,9 +345,6 @@ private:
         std::unique_ptr<http2_sans_io_stream_runtime, pmr_object_deleter<http2_sans_io_stream_runtime>>;
 
     void account_removal(const http2_sans_io_stream_runtime& runtime) noexcept {
-        if (runtime.dispatched()) {
-            --dispatched_count_;
-        }
         if (runtime.tunnel()) {
             --tunnel_count_;
         }
@@ -374,7 +356,6 @@ private:
     std::array<std::optional<http2_sans_io_stream_runtime>, inline_capacity> inline_{};
     std::pmr::vector<overflow_runtime_type> overflow_;
     std::size_t size_{0};
-    std::size_t dispatched_count_{0};
     std::size_t tunnel_count_{0};
 };
 

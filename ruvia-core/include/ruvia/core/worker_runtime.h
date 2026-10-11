@@ -19,19 +19,35 @@ struct worker_runtime_options final {
 };
 
 struct worker_runtime_hooks final {
+    // Owner thread, once, at launch. Begins startup; the owner publishes
+    // readiness with mark_ready() once its (possibly asynchronous) startup work
+    // has completed.
     move_only_function<void()> startup_{};
+    // Owner thread, once, after request_serve() follows readiness. Serving is
+    // published when it returns; a throw fails the runtime.
+    move_only_function<void()> serve_{};
     // Runs on the owner after dispatcher admission and shutdown notifications
     // close. A custom policy must eventually call finalize(), after its external
     // producers are quiescent. Without a policy, stopping finalizes immediately.
     move_only_function<void()> stop_admission_{};
+    // Owner thread, once, when finalization releases the work guard. Retires
+    // domain resources; pending I/O and continuations still drain afterwards.
+    move_only_function<void()> finalize_{};
+    // Runs once, on the stopping thread, when the runtime stops before its owner
+    // thread launched. Releases state other runtimes staged into it; it must be
+    // thread-safe. Owner-affine cleanup still drains in shutdown_ during join().
+    move_only_function<void()> abandon_{};
+    // Runs once, for the first failure only, on the thread that reported it:
+    // the owner for escaped failures, the caller for fail().
     move_only_function<void(std::exception_ptr)> failure_{};
     // Terminal owner-thread cleanup, after I/O and completion handlers drain.
     move_only_function<void()> shutdown_{};
 };
 
 // The unique owner of a worker's thread, io_context, dispatcher, and generic
-// startup/stop/drain/join lifecycle. Protocol/application state is composed via
-// hooks; it must remain alive through join(). No hook may throw except startup.
+// startup/serve/stop/drain/join lifecycle, including its first failure.
+// Protocol/application state is composed via hooks; it must remain alive
+// through join(). No hook may throw except startup_ and serve_.
 class worker_runtime final {
 public:
     explicit worker_runtime(worker_runtime_options options = {});
@@ -45,14 +61,26 @@ public:
     // Configure once, before publishing the runtime or starting/stopping it.
     void configure(worker_runtime_hooks hooks);
     void start();
+    // Two-phase startup barrier. Owner-published readiness; a stop first aborts
+    // it. wait_until_ready() returns false once stopped before readiness and
+    // rethrows the first failure. request_serve() requires readiness and runs
+    // serve_ on the owner; wait_until_serving() mirrors wait_until_ready().
+    void mark_ready() noexcept;
+    [[nodiscard]] bool wait_until_ready();
+    void request_serve();
+    [[nodiscard]] bool wait_until_serving();
     void request_stop() noexcept;
+    // Records the first failure, wakes phase waiters, and requests stop. Only
+    // the winning failure reaches the failure_ hook. Returns true for it.
+    bool fail(std::exception_ptr failure) noexcept;
     // Cold-path lifecycle control, serialized with finalization. Returns false
     // once stopping starts; it cannot strand a control after the thread barrier.
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept;
-    // A reliable owner-thread phase-two control. The first call wins. Its
-    // callback retires domain resources before the work guard is released.
-    // Pending I/O/continuations still drain; the io_context is never stopped.
-    void finalize(move_only_function<void()> cleanup = {}) noexcept;
+    // A reliable owner-thread phase-two control; the first call wins. The
+    // finalize_ hook retires domain resources before the work guard is
+    // released. Pending I/O/continuations still drain; the io_context is never
+    // stopped.
+    void finalize() noexcept;
     // Establishes the thread barrier, including owner-affine draining when
     // stopped before start. Concurrent joins wait for the same barrier. This
     // does not rethrow run failures: inspect/rethrow them after all owners join.

@@ -291,4 +291,12 @@ inline http_response_coding_selection_result http_response_coding_selection::sel
         best, identity_score >= 0, qualities.field_present_, acceptable_codings));
 }
 
+class http_request;
+
+// Folds every Accept-Encoding field line of a received request into one
+// quality snapshot and selects among all producible codings. HTTP/1 servers
+// may instead use the parser's incrementally folded response_coding_selection().
+[[nodiscard]] http_response_coding_selection_result http_response_coding_selection_for(
+    const http_request& request) noexcept;
+
 }  // namespace ruvia

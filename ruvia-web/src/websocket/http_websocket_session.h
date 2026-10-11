@@ -3,13 +3,13 @@
 #include <exception>
 #include <memory_resource>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/web/detail/util/callable_ref.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/websocket.h"
 
 #include "context/context_access.h"
+#include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/websocket_access.h"
@@ -49,12 +49,12 @@ template <typename connection_type>
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename transport_type>
 task<void> invoke_websocket_handler(websocket_connection<transport_type>& connection,
-    ruvia::connection_scanner::entry_type& scanner_entry, const callable_ref<void, context&>& handler,
+    connection_scanner::entry_type& scanner_entry, const route_stream_handler_type& handler,
     context& context_value) {
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
     context_websocket_binding websocket_binding(context_value, websocket_value);
 
-    scanner_entry.set_phase(ruvia::connection_scanner::phase_type::long_lived);
+    scanner_entry.set_phase(connection_scanner::phase_type::long_lived);
     co_await handler(context_value);
 }
 

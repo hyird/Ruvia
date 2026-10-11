@@ -81,10 +81,6 @@ private:
     return (raw_opcode >= 0x3 && raw_opcode <= 0x7) || raw_opcode >= 0xB;
 }
 
-[[nodiscard]] inline bool is_websocket_control_opcode(websocket_opcode opcode) noexcept {
-    return static_cast<std::uint8_t>(opcode) >= 0x8;
-}
-
 [[nodiscard]] inline bool is_websocket_control_frame_kind(websocket_frame_kind kind) noexcept {
     return static_cast<std::uint8_t>(kind) >= 0x8;
 }
@@ -145,14 +141,6 @@ private:
     websocket_frame_kind kind, std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
     return !is_websocket_control_frame_kind(kind) &&
            websocket_frame_length_exceeds_limit(payload_size, message_limit);
-}
-
-[[nodiscard]] inline bool websocket_masked_frame_read_size_overflows(
-    std::uint64_t payload_size, std::size_t header_size) noexcept {
-    constexpr std::size_t mask_bytes = 4;
-    constexpr auto max_size = (std::numeric_limits<std::size_t>::max)();
-    return header_size > max_size - mask_bytes ||
-           payload_size > static_cast<std::uint64_t>(max_size - header_size - mask_bytes);
 }
 
 [[nodiscard]] inline std::uint16_t read_websocket_uint16(const char* data) noexcept {

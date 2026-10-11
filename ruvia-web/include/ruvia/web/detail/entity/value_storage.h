@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -92,6 +93,15 @@ consteval bool unique_entity_columns() {
         }
     }
     return true;
+}
+
+// Visits every element of a descriptor tuple (entity columns, relations, join
+// columns) in declaration order as function.template operator()<element, index>().
+template <typename tuple_type, typename function_type>
+constexpr void for_each_descriptor(function_type&& function) {
+    [&]<std::size_t... i>(std::index_sequence<i...>) {
+        (function.template operator()<std::tuple_element_t<i, tuple_type>, i>(), ...);
+    }(std::make_index_sequence<std::tuple_size_v<tuple_type>>{});
 }
 
 template <typename t_type>

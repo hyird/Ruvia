@@ -2,11 +2,6 @@
 
 #include <cstddef>
 #include <limits>
-#include <memory>
-
-#include "ruvia/web/websocket_client.h"
-
-#include "client/websocket_client_state.h"
 
 namespace ruvia::detail {
 
@@ -26,20 +21,5 @@ constexpr std::size_t websocket_client_max_frame_header_bytes = 14;
     constexpr auto max_value = (std::numeric_limits<std::size_t>::max)();
     return max_message_bytes > max_value - margin ? max_value : max_message_bytes + margin;
 }
-
-[[nodiscard]] inline websocket_client_error::code_type websocket_client_transport_error_code(
-    bool secure) noexcept {
-    return secure ? websocket_client_error::code_type::tls_failed : websocket_client_error::code_type::io_error;
-}
-
-struct websocket_client_stop_abort final {
-    std::weak_ptr<websocket_client_state> state_;
-
-    void operator()() noexcept {
-        if (const auto owner = state_.lock()) {
-            owner->request_cancel();
-        }
-    }
-};
 
 }  // namespace ruvia::detail

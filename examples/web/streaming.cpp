@@ -11,8 +11,12 @@
 #include <cstddef>
 #include <system_error>
 
+#include "ruvia/core/timer.h"
+#include "ruvia/http/multipart_parser.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/multipart_reader.h"
+#include "ruvia/web/streaming.h"
 
 class streaming_controller final : public ruvia::controller<streaming_controller> {
 public:

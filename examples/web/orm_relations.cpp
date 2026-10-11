@@ -88,7 +88,7 @@ auto migrations() {
 }
 
 task<void> query_example(db_client& db) {
-    auto employees = db.get_repository<employee>();
+    auto employees = db.handle().get_repository<employee>();
     const db_find_options employee_options{
         .relations_ = {"department", "department.employees"},
         .order_ = {{"id", db_order_direction::asc}},
@@ -122,12 +122,12 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
     std::exception_ptr failure;
     try {
         co_await db.connect();
-        auto departments = db.get_repository<department>();
-        auto employees = db.get_repository<employee>();
-        auto profiles = db.get_repository<profile>();
-        auto users = db.get_repository<user>();
-        auto courses = db.get_repository<course>();
-        auto students = db.get_repository<student>();
+        auto departments = db.handle().get_repository<department>();
+        auto employees = db.handle().get_repository<employee>();
+        auto profiles = db.handle().get_repository<profile>();
+        auto users = db.handle().get_repository<user>();
+        auto courses = db.handle().get_repository<course>();
+        auto students = db.handle().get_repository<student>();
         for (const auto [id, name] : {std::pair{1LL, "North"}, std::pair{2LL, "South"}}) {
             department row;
             row.set<"id">(id);
@@ -160,7 +160,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             student.set<"name">("Learner");
             co_await students.upsert(student, {.conflict_paths_ = {"id"}});
         }
-        auto memberships = db.get_repository<student_course>();
+        auto memberships = db.handle().get_repository<student_course>();
         for (const auto [student_id, course_id] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
             student_course membership;
             membership.set<"student_id">(student_id);

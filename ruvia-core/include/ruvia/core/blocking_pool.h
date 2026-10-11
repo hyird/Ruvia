@@ -102,6 +102,8 @@ public:
 
     // Safe from any thread. A rejected task is destroyed by the caller's thread
     // before submit() returns, so whatever it owns is released either way.
+    // Callable moves and destruction may query stats(), submit(), or stop().
+    // Admission includes submissions whose callable move has not finished.
     [[nodiscard]] blocking_submit_status submit(move_only_function<void()> task);
 
     // Stops accepting, discards tasks that have not started, and wakes the

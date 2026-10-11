@@ -21,7 +21,7 @@ function(ruvia_apply_test_support_includes name lib)
     elseif("${lib}" STREQUAL "ruvia::web")
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/unit/support)
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
     elseif(NOT "${lib}" STREQUAL "ruvia::core")
         message(FATAL_ERROR "unknown Ruvia test library for ${name}: ${lib}")
     endif()
@@ -53,16 +53,31 @@ function(ruvia_collect_test_sources out)
     set(${out} ${_sources} PARENT_SCOPE)
 endfunction()
 
+# Web functional fixtures exercise native TLS/coding/backend behavior. Declare
+# those dependencies here instead of exposing implementation headers and compile
+# options through the installed Web target.
+function(ruvia_add_web_test name timeout)
+    ruvia_add_test(${name} ruvia::web TIMEOUT ${timeout} SOURCES ${ARGN})
+    target_link_libraries(${name} PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_compile_definitions(${name} PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
+    if(WIN32)
+        target_compile_definitions(${name} PRIVATE NOMINMAX)
+    endif()
+endfunction()
+
+# Web suites that need their own process-wide application or peer build into
+# separate executables; their sources are excluded from ruvia_web_unit_tests.
+function(ruvia_add_web_standalone_test name timeout)
+    ruvia_add_web_test(${name} ${timeout} ${ARGN} support/test_main.cpp)
+    set(_ruvia_web_standalone_sources ${_ruvia_web_standalone_sources} ${ARGN}
+        PARENT_SCOPE)
+endfunction()
+
 if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/bytes.cpp
-        core/connection_scanner.cpp
-        core/hex.cpp
-        core/integer.cpp
         core/ip_address.cpp
         core/memory_pool.cpp
-        core/number_format.cpp
-        core/pmr_string.cpp
         core/scoped_operation.cpp
         core/spsc_ring_queue.cpp
         core/stop_token.cpp
@@ -70,8 +85,6 @@ if(RUVIA_BUILD_CORE)
         core/worker_runtime.cpp
         support/test_main.cpp)
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
-    ruvia_add_test(ruvia_connection_scanner_lifetime ruvia::core SOURCES
-        core/connection_scanner_lifetime.cpp)
     ruvia_add_test(ruvia_event_loop_pool ruvia::core SOURCES core/runtime_worker.cpp)
     ruvia_add_test(ruvia_operation_deadline ruvia::core SOURCES core/operation_deadline.cpp)
     ruvia_add_test(ruvia_pool_lease_scheduler ruvia::core TIMEOUT 10 SOURCES
@@ -107,104 +120,57 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
-    ruvia_collect_test_sources(_ruvia_web_unit_sources web/unit/*.cpp)
-    list(REMOVE_ITEM _ruvia_web_unit_sources
-        web/unit/app/route_conflict.cpp
-        web/unit/app/startup.cpp
-        web/unit/auth/jwt.cpp
-        web/unit/http3/client_connection_control.cpp
-        web/unit/http3/client_connection_tunnel.cpp
-        web/unit/http3/client_connection_worker.cpp
-        web/unit/http1/connect.cpp
-        web/unit/http1/websocket.cpp
-        web/unit/http2/client_tunnel.cpp
-        web/unit/http2/connect.cpp
-        web/unit/http2/push.cpp
-        web/unit/http/udp_tunnel.cpp
-        web/unit/db/client.cpp
-        web/unit/db/entity.cpp
-        web/unit/db/event_loop_client.cpp
-        web/unit/db/migration.cpp
-        web/unit/db/query.cpp
-        web/unit/db/repository.cpp
-        web/unit/db/schema.cpp
-        web/unit/db/transaction_options.cpp
-        web/unit/redis/client.cpp
-        web/unit/redis/entity.cpp
-        web/unit/redis/event_loop_client.cpp
-        web/unit/redis/protocol.cpp
-        web/unit/redis/query.cpp
-        web/unit/redis/repository.cpp)
-
-    if(RUVIA_ENABLE_JWT)
-        list(APPEND _ruvia_web_unit_sources web/unit/auth/jwt.cpp)
-    endif()
-    if(RUVIA_ENABLE_REDIS)
-        list(APPEND _ruvia_web_unit_sources
-            web/unit/redis/client.cpp
-            web/unit/redis/entity.cpp
-            web/unit/redis/event_loop_client.cpp
-            web/unit/redis/protocol.cpp
-            web/unit/redis/query.cpp
-            web/unit/redis/repository.cpp)
-    endif()
-    if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-        list(APPEND _ruvia_web_unit_sources
-            web/unit/db/client.cpp
-            web/unit/db/entity.cpp
-            web/unit/db/migration.cpp
-            web/unit/db/query.cpp
-            web/unit/db/repository.cpp
-            web/unit/db/schema.cpp
-            web/unit/db/transaction_options.cpp)
-    endif()
-    if(RUVIA_ENABLE_POSTGRESQL)
-        list(APPEND _ruvia_web_unit_sources web/unit/db/event_loop_client.cpp)
-    endif()
-
-    list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
-    list(SORT _ruvia_web_unit_sources)
     # Process-singleton application fixtures run in separate test executables.
-    ruvia_add_test(ruvia_app_startup ruvia::web TIMEOUT 30 SOURCES
-        web/unit/app/startup.cpp
-        support/test_main.cpp)
-    target_link_libraries(ruvia_app_startup PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
-    target_compile_definitions(ruvia_app_startup PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
+    ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     # A conflicting route pair makes every application in its executable fail
     # startup, so it cannot share the process-wide controller registry.
-    ruvia_add_test(ruvia_route_conflict ruvia::web TIMEOUT 30 SOURCES
-        web/unit/app/route_conflict.cpp
-        support/test_main.cpp)
-    ruvia_add_test(ruvia_http3_client_tests ruvia::web TIMEOUT 60 SOURCES
-        web/unit/http3/client_connection_control.cpp
-        web/unit/http3/client_connection_tunnel.cpp
-        web/unit/http3/client_connection_worker.cpp
-        support/test_main.cpp)
-    target_link_libraries(ruvia_http3_client_tests PRIVATE
-        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
-    target_compile_definitions(ruvia_http3_client_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-    ruvia_add_test(ruvia_tcp_client_tests ruvia::web TIMEOUT 60 SOURCES
-        web/unit/http1/connect.cpp
-        web/unit/http1/websocket.cpp
-        web/unit/http2/client_tunnel.cpp
-        web/unit/http2/connect.cpp
-        web/unit/http2/push.cpp
-        web/unit/http/udp_tunnel.cpp
-        support/test_main.cpp)
-    target_link_libraries(ruvia_tcp_client_tests PRIVATE
-        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
-    target_compile_definitions(ruvia_tcp_client_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-    ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
-        ${_ruvia_web_unit_sources})
-    # These functional fixtures exercise native TLS/coding/backend behavior.
-    # Declare their dependencies here instead of exposing implementation headers
-    # and compile options through the installed Web target.
-    target_link_libraries(ruvia_web_unit_tests PRIVATE
-        ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
-    target_compile_definitions(ruvia_web_unit_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-    if(WIN32)
-        target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
-        target_compile_definitions(ruvia_http3_client_tests PRIVATE NOMINMAX)
-        target_compile_definitions(ruvia_tcp_client_tests PRIVATE NOMINMAX)
+    ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
+    ruvia_add_web_standalone_test(ruvia_http3_client_tests 60
+        web/http3/client_connection_control.cpp
+        web/http3/client_connection_tunnel.cpp
+        web/http3/client_connection_worker.cpp)
+    # Its process-wide peer listens on [::1] instead of 127.0.0.1.
+    ruvia_add_web_standalone_test(ruvia_http3_client_ipv6_tests 60
+        web/http3/client_connection_ipv6.cpp)
+    ruvia_add_web_standalone_test(ruvia_http3_client_early_data_push_tests 60
+        web/http3/client_early_data_push.cpp)
+    ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
+        web/http1/connect.cpp
+        web/http1/websocket.cpp
+        web/http2/client_tunnel.cpp
+        web/http2/connect.cpp
+        web/http2/push.cpp
+        web/http/udp_tunnel.cpp)
+    # Owns an application with an app-wide rate limit, so it cannot share the
+    # process-wide application of the other server suites.
+    ruvia_add_web_standalone_test(ruvia_server_admission_tests 60
+        web/http/server_admission.cpp)
+    # Its HTTP/3 counterpart, with its own application and HTTP/3 listener.
+    ruvia_add_web_standalone_test(ruvia_http3_server_pipeline_tests 60
+        web/http3/server_pipeline.cpp)
+
+    # Feature directories join the unit suite only when their feature is built.
+    ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
+    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(auth|db|redis)/")
+    list(REMOVE_ITEM _ruvia_web_unit_sources ${_ruvia_web_standalone_sources})
+    if(RUVIA_ENABLE_JWT)
+        ruvia_collect_test_sources(_ruvia_web_feature_sources web/auth/*.cpp)
+        list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
     endif()
+    if(RUVIA_ENABLE_REDIS)
+        ruvia_collect_test_sources(_ruvia_web_feature_sources web/redis/*.cpp)
+        list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
+    endif()
+    if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+        ruvia_collect_test_sources(_ruvia_web_feature_sources web/db/*.cpp)
+        # The event-loop DB client is PostgreSQL-only.
+        if(NOT RUVIA_ENABLE_POSTGRESQL)
+            list(REMOVE_ITEM _ruvia_web_feature_sources web/db/event_loop_client.cpp)
+        endif()
+        list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
+    endif()
+    list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
+    list(SORT _ruvia_web_unit_sources)
+
+    ruvia_add_web_test(ruvia_web_unit_tests 360 ${_ruvia_web_unit_sources})
 endif()

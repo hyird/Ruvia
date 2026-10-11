@@ -7,9 +7,10 @@
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http1_request_body_plan.h"
+#include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 
 #include "request/http_request_access.h"
@@ -23,31 +24,12 @@ namespace {
 
 [[nodiscard]] bool websocket_header_equals(
     std::string_view value, std::string_view expected) noexcept {
-    return detail::http_ascii_equals_ignore_case(detail::http_trim_ows(value), expected);
-}
-
-[[nodiscard]] std::optional<std::uint8_t> base64_value(char c) noexcept {
-    if (c >= 'A' && c <= 'Z') {
-        return static_cast<std::uint8_t>(c - 'A');
-    }
-    if (c >= 'a' && c <= 'z') {
-        return static_cast<std::uint8_t>(26 + c - 'a');
-    }
-    if (c >= '0' && c <= '9') {
-        return static_cast<std::uint8_t>(52 + c - '0');
-    }
-    if (c == '+') {
-        return 62;
-    }
-    if (c == '/') {
-        return 63;
-    }
-    return std::nullopt;
+    return http_ascii_equals_ignore_case(http_trim_ows(value), expected);
 }
 
 [[nodiscard]] std::optional<std::array<std::uint8_t, 16>> decode_websocket_key(
     std::string_view key) noexcept {
-    key = detail::http_trim_ows(key);
+    key = http_trim_ows(key);
     if (key.size() != 24) {
         return std::nullopt;
     }
@@ -73,11 +55,11 @@ namespace {
             if (padding != 0) {
                 return std::nullopt;
             }
-            const auto value = base64_value(ch);
-            if (!value) {
+            const auto value = http_base64_decode_char(ch);
+            if (value < 0) {
                 return std::nullopt;
             }
-            values[j] = *value;
+            values[j] = static_cast<std::uint8_t>(value);
         }
         if (padding > 2 || (padding != 0 && i + 4 != key.size())) {
             return std::nullopt;
@@ -158,7 +140,7 @@ websocket_handshake_validation_result validate_websocket_handshake(
             if (upgrade_protocols.parse_field(header_value.value(), detail::http_field_list_role::recipient,
                     [&websocket_upgrade](const detail::http_upgrade_protocol& protocol) noexcept {
                         if (protocol.version_.empty() &&
-                            detail::http_ascii_equals_ignore_case(protocol.name_, "websocket")) {
+                            http_ascii_equals_ignore_case(protocol.name_, "websocket")) {
                             websocket_upgrade = true;
                         }
                         return true;

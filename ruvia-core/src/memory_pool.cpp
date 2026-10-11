@@ -9,8 +9,6 @@
 
 namespace ruvia {
 
-namespace detail {
-
 std::pmr::memory_resource* process_resource() noexcept {
     // Explicit process-lifetime storage for startup metadata and shutdown
     // cross-thread completions. It is never installed as std::pmr's default
@@ -32,6 +30,8 @@ std::pmr::memory_resource* process_resource() noexcept {
         std::pmr::new_delete_resource());
     return resource;
 }
+
+namespace detail {
 
 namespace {
 
@@ -151,7 +151,7 @@ public:
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {
     if (impl != nullptr) {
         auto* upstream = impl->pool_.upstream_resource();
-        detail::destroy_pmr_object(impl, upstream);
+        destroy_pmr_object(impl, upstream);
     }
 }
 
@@ -162,10 +162,10 @@ void validate_memory_pool_config(const memory_pool_config& config) {
 }
 
 worker_memory::worker_memory(const memory_pool_config& config)
-    : worker_memory(*detail::process_resource(), config) {}
+    : worker_memory(*process_resource(), config) {}
 
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
-    : impl_((validate_memory_pool_config(config), detail::construct_pmr_object<impl_type>(&upstream, upstream))),
+    : impl_((validate_memory_pool_config(config), construct_pmr_object<impl_type>(&upstream, upstream))),
       resource_(&impl_->pool_),
       request_initial_buffer_bytes_(config.request_initial_buffer_bytes_) {}
 

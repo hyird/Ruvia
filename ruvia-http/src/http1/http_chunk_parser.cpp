@@ -48,6 +48,10 @@ http_chunk_trailer_parse_result http_chunk_trailer_parser::next() noexcept {
         is_forbidden_http_request_trailer_name(name)) {
         return fail(http_chunk_scan_error::invalid_trailer);
     }
+    if (!http_request_trailer_field_fits(field_bytes_, name.size(), value.size())) {
+        return fail(http_chunk_scan_error::too_large);
+    }
+    field_bytes_ += name.size() + value.size() + 4;
     cursor_ = line_end == std::string_view::npos ? trailers_.size() : line_end + 2;
     return http_chunk_trailer_parse_result(http_chunk_trailer_field(name, value));
 }

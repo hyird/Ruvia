@@ -1,9 +1,7 @@
 #include "ruvia/web/db/db_client.h"
 
 #include <memory>
-#include <span>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 
 #include "db/db_client_state.h"
@@ -17,6 +15,7 @@ db_client_state::db_client_state(event_loop loop, const db_config& config)
       databases_(loop_.io_context(), worker_, memory_.resource(), config),
       lifecycle_(*this, loop_, worker_) {}
 
+#ifdef RUVIA_ENABLE_REDIS
 db_client_state::db_client_state(event_loop loop, const db_config& config,
     const redis_handle& cache_store, const db_cache_config& cache_policy)
     : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
@@ -24,6 +23,7 @@ db_client_state::db_client_state(event_loop loop, const db_config& config,
       memory_(),
       databases_(loop_.io_context(), worker_, memory_.resource(), config, cache_store, cache_policy),
       lifecycle_(*this, loop_, worker_) {}
+#endif
 
 void db_client_state::throw_not_ready() {
     throw std::logic_error("database client is not connected");
@@ -43,11 +43,13 @@ db_client::db_client(event_loop loop, const db_config& config)
     state_->bind_stop();
 }
 
+#ifdef RUVIA_ENABLE_REDIS
 db_client::db_client(event_loop loop, const db_config& config,
     const redis_handle& cache_store, const db_cache_config& cache_policy)
     : state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
     state_->bind_stop();
 }
+#endif
 
 db_client::~db_client() {
     state_->request_close();
@@ -61,23 +63,8 @@ db_handle db_client::with_options(operation_options options) const& {
     return state_->handle(std::move(options));
 }
 
-scoped_operation<db_rows> db_client::query(
-    std::string_view sql, std::span<const db_value> params) const& {
-    return with_options({}).query(sql, params);
-}
-
-scoped_operation<db_exec_result> db_client::execute(
-    std::string_view sql, std::span<const db_value> params) const& {
-    return with_options({}).execute(sql, params);
-}
-
-scoped_operation<db_stream_result> db_client::query_stream(
-    std::string_view sql, std::span<const db_value> params) const& {
-    return with_options({}).query_stream(sql, params);
-}
-
-scoped_operation<db_transaction> db_client::begin_transaction(db_transaction_options options) const& {
-    return with_options({}).begin_transaction(std::move(options));
+db_handle db_client::handle() const& {
+    return state_->handle({});
 }
 
 void db_client::close() noexcept {

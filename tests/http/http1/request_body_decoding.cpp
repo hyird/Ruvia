@@ -1,6 +1,6 @@
 #include <array>
 
-#include "ruvia/http/http1_request_parser.h"
+#include "ruvia/http/http1_server_request_parser.h"
 
 #include "content_decoding_fixture.h"
 
@@ -27,25 +27,25 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
         std::string_view(incomplete.what()), std::string_view("incomplete request body"));
 }
 
-RUVIA_TEST(http1_public_parser_classifies_cleartext_request_line_failures) {
-    const ruvia::http1_request_parser parser;
+RUVIA_TEST(http1_parse_message_classifies_cleartext_request_line_failures) {
+    const http1_server_request_parser parser;
     constexpr std::string_view invalid_request_line = "GET / NOT-HTTP\r\n\r\n";
-    const auto parsed_line = parser.parse(invalid_request_line);
+    const auto parsed_line = parser.parse_message(invalid_request_line);
     const auto* line_failure = parsed_line.failure();
     RUVIA_CHECK(line_failure != nullptr);
     if (line_failure != nullptr) {
         RUVIA_CHECK(line_failure->source() ==
-                    ruvia::http1_request_parse_failure_source::request_line);
+                    ruvia::http1_server_request_parse_failure_source::request_line);
         RUVIA_CHECK(ruvia::should_drop_invalid_cleartext_http1_input(
             invalid_request_line, line_failure->source()));
     }
 
-    const auto malformed_header = parser.parse("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
+    const auto malformed_header = parser.parse_message("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
     const auto* message_failure = malformed_header.failure();
     RUVIA_CHECK(message_failure != nullptr);
     if (message_failure != nullptr) {
         RUVIA_CHECK(message_failure->source() ==
-                    ruvia::http1_request_parse_failure_source::message);
+                    ruvia::http1_server_request_parse_failure_source::message);
         RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
             "GET / HTTP/1.1\r\nBad Header\r\n\r\n",
             message_failure->source()));

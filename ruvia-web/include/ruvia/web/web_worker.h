@@ -105,11 +105,9 @@ private:
         const detail::worker_client_registry_view&, const detail::worker_state_registry*, blocking_pool*,
         stop_token&&) = delete;
 
-    // web_worker_dispatch owns these stable values until every posted task has
-    // completed. In particular, client_registries_ borrows its view; retire()
-    // detaches that view only after active_started_ reaches zero. Contexts borrow
-    // them so starting a task does not copy endpoint or cancellation-state
-    // ownership on the worker thread.
+    // The server worker owns these values and joins every posted job before
+    // retiring them. Contexts borrow them so starting a job does not copy
+    // endpoint or cancellation-state ownership on the worker thread.
     detail::worker_context_capabilities capabilities_;
     std::pmr::memory_resource* resource_;
     const detail::worker_client_registry_view& client_registries_;

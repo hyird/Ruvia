@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/worker_timer.h"
 
@@ -20,10 +21,10 @@ class pool_lease_scheduler::impl_type final {
 public:
     impl_type(std::size_t pool_size, const worker_handle* worker_value, std::pmr::memory_resource* resource)
         : worker_(worker_value != nullptr ? *worker_value : worker_handle{}),
-          free_slots_(detail::pmr_resource_or_default(resource)),
-          busy_(detail::pmr_resource_or_default(resource)),
+          free_slots_(pmr_resource_or_default(resource)),
+          busy_(pmr_resource_or_default(resource)),
           waiter_state_(std::allocate_shared<waiter_state_type>(
-              std::pmr::polymorphic_allocator<waiter_state_type>(detail::process_resource()))) {
+              std::pmr::polymorphic_allocator<waiter_state_type>(process_resource()))) {
         free_slots_.reserve(pool_size);
         busy_.resize(pool_size, 0);
         for (std::size_t i = 0; i < pool_size; ++i) {
@@ -103,13 +104,11 @@ public:
             co_return pool_waiter_result::make_acquired(slot);
         }
 
-        const auto deadline_value = timeout.has_value() ? ::ruvia::worker_timer_deadline_after(*timeout)
-                                                        : std::chrono::steady_clock::time_point::max();
         auto waiter_id = ++owner_value.next_waiter_id_;
         if (waiter_id == 0) {
             waiter_id = ++owner_value.next_waiter_id_;
         }
-        detail::pool_waiter waiter(deadline_value, waiter_id);
+        detail::pool_waiter waiter(waiter_id);
         auto* const waiter_state = owner_value.waiter_state_.get();
         waiter_state->queue_.enqueue(waiter);
         struct waiter_guard final {
@@ -122,10 +121,10 @@ public:
 
         ::ruvia::worker_timer_registration deadline_timer;
         // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
-        // pending deadline: the waiter keeps its deadline for scan_deadlines()
-        // and still completes on release, close(), or its stop token.
+        // pending deadline: the waiter still completes on release, close(), or
+        // its stop token.
         if (timeout.has_value() && worker_value != nullptr && worker_value->valid()) {
-            (*worker_value).schedule_timer(deadline_timer, deadline_value, [waiter_state, waiter_id](::ruvia::worker_timer_outcome outcome) noexcept {
+            (*worker_value).schedule_timer(deadline_timer, ::ruvia::worker_timer_deadline_after(*timeout), [waiter_state, waiter_id](::ruvia::worker_timer_outcome outcome) noexcept {
                 if (outcome == ::ruvia::worker_timer_outcome::expired) {
                     (void)waiter_state->queue_.expire(waiter_id);
                 }
@@ -139,19 +138,10 @@ public:
             (void)waiter_state->queue_.cancel(waiter_id);
         }
 
-        const auto& result_value = co_await waiter;
+        auto result_value = co_await waiter;
         deadline_timer.cancel();
         stop_registration_value.reset();
-        if (result_value.acquired() != nullptr) {
-            co_return pool_waiter_result::make_acquired(result_value.acquired()->index());
-        }
-        if (result_value.timed_out() != nullptr) {
-            co_return pool_waiter_result::make_timed_out();
-        }
-        if (result_value.closed() != nullptr) {
-            co_return pool_waiter_result::make_closed();
-        }
-        co_return pool_waiter_result::make_cancelled();
+        co_return result_value;
     }
 
     [[nodiscard]] pool_lease_release_status release(std::size_t slot) noexcept {
@@ -176,10 +166,6 @@ public:
         closing_ = true;
         waiter_state_->queue_.close_all();
         return true;
-    }
-
-    void scan_deadlines(std::chrono::steady_clock::time_point now) noexcept {
-        waiter_state_->queue_.expire_deadlines(now);
     }
 
     worker_handle worker_;
@@ -222,10 +208,6 @@ pool_lease_release_status pool_lease_scheduler::release(std::size_t slot) noexce
 
 bool pool_lease_scheduler::close() noexcept {
     return impl_->close();
-}
-
-void pool_lease_scheduler::scan_deadlines(std::chrono::steady_clock::time_point now) noexcept {
-    impl_->scan_deadlines(now);
 }
 
 bool pool_lease_scheduler::closing() const noexcept {

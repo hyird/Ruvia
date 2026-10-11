@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
-#include <new>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -18,8 +17,8 @@ namespace ruvia::detail {
 
 class http_client_advertisement_memory final {
 public:
-    explicit http_client_advertisement_memory(const worker_handle& worker_value, std::pmr::memory_resource& upstream)
-        : memory_(upstream),
+    explicit http_client_advertisement_memory(const worker_handle& worker_value)
+        : memory_(*process_resource()),
           worker_(worker_value) {}
 
     void retain(std::size_t bytes_value) noexcept {
@@ -131,9 +130,6 @@ void release_advertisement(http_client_advertisement_state* state_value) noexcep
 
 http_client_advertisement_queue::http_client_advertisement_queue(const worker_handle& worker_value,
     http_client_advertisement_config config, std::pmr::memory_resource* resource)
-    : http_client_advertisement_queue(worker_value, config, resource, *process_resource()) {}
-http_client_advertisement_queue::http_client_advertisement_queue(const worker_handle& worker_value,
-    http_client_advertisement_config config, std::pmr::memory_resource* resource, std::pmr::memory_resource& upstream)
     : worker_(worker_value),
       config_(config),
       pending_(resource) {
@@ -141,7 +137,7 @@ http_client_advertisement_queue::http_client_advertisement_queue(const worker_ha
         throw std::invalid_argument("HTTP advertisement queue requires worker, memory and positive bounds");
     }
     if (config.receive_origins_ || config.receive_alternative_services_) {
-        memory_ = make_pmr_object<http_client_advertisement_memory>(process_resource(), worker_value, upstream).release();
+        memory_ = make_pmr_object<http_client_advertisement_memory>(process_resource(), worker_value).release();
     }
 }
 http_client_advertisement_queue::~http_client_advertisement_queue() {

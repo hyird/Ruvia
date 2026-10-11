@@ -14,7 +14,6 @@
 #include "context/context_access.h"
 #include "http/http_error_response.h"
 #include "http/unsupported_request_content_coding.h"
-#include "router/route_dispatch_services.h"
 #include "router/route_table.h"
 #include "server/inbound_buffer_resource.h"
 
@@ -103,8 +102,8 @@ void assign_exception_error(owned_http_error_info& error_info, const std::except
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
-        // what() to the client: normalize_error renders a generic "Internal Server
-        // Error" body. The exception_ptr is still set on the context, so an on_error
+        // what() to the client: an info without a message renders the generic
+        // "Internal Server Error" body. The exception_ptr is still set on the context, so an on_error
         // handler can log or inspect the full detail server-side.
         error_info.assign(http_error_info({.status_ = ruvia::http_status::internal_server_error}));
     } catch (...) {
@@ -155,24 +154,34 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     request_memory& memory, http_error_info error, context_services services) const {
     const auto error_handler = error_handler_for(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
-    if (error_handler == nullptr && unmatched_middleware_count_ == 0) {
+    if (error_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         auto response = make_default_error_response(memory.resource(), error);
         apply_automatic_response_headers(response, services);
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request,
-        with_route_handlers(services, *this, error_handler, not_found_handler_for(request.path())));
+    auto context_value = detail::context_access::make(
+        memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
     auto terminal = [this, error, error_handler](context& terminal_context) -> task<http_response> {
         if (error_handler == nullptr) {
             co_return make_default_error_response(terminal_context.arena(), error);
         }
         co_return co_await handle_error(terminal_context, error);
     };
-    const auto terminal_ref = make_callable_ref<http_response, context&>(terminal);
-    auto response = co_await run_unmatched_chain(context_value, terminal_ref);
-    apply_automatic_response_headers(response, context_value);
-    co_return response;
+    // Drivers call this to answer a rejection or a recovery outcome, so it must
+    // always produce a response: a failure escaping the wrapping middleware
+    // chain (for example a middleware that neither responds nor awaits next())
+    // is answered the way dispatch answers it, without re-entering the chain.
+    std::exception_ptr exception;
+    try {
+        auto response = co_await run_unmatched_chain(
+            context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+        apply_automatic_response_headers(response, context_value);
+        co_return response;
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await handle_exception(request, memory, exception, services);
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
@@ -185,9 +194,8 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request,
-        with_route_handlers(
-            services, *this, error_handler_for(request.path()), not_found_handler_for(request.path())));
+    auto context_value = detail::context_access::make(
+        memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
     co_return co_await handle_exception(context_value, exception);
 }
 
@@ -201,15 +209,15 @@ task<http_response> detail::route_table::handle_error(context& context_value, ht
 task<http_response> detail::route_table::handle_not_found(
     const http_request& request, request_memory& memory, context_services services) const {
     const auto not_found_handler = not_found_handler_for(request.path());
-    if (not_found_handler == nullptr && unmatched_middleware_count_ == 0) {
+    if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         auto response = make_default_error_response(memory.resource(),
             http_error_info({.status_ = ruvia::http_status::not_found, .message_ = "route not found"}));
         apply_automatic_response_headers(response, services);
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request,
-        with_route_handlers(services, *this, error_handler_for(request.path()), not_found_handler));
+    auto context_value =
+        detail::context_access::make(memory, request, services.with_route_handlers(*this, not_found_handler));
 
     // The handler's own failure keeps going through handle_exception, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
@@ -227,8 +235,8 @@ task<http_response> detail::route_table::handle_not_found(
         }
         co_return co_await handle_exception(terminal_context, exception);
     };
-    const auto terminal_ref = make_callable_ref<http_response, context&>(terminal);
-    auto response = co_await run_unmatched_chain(context_value, terminal_ref);
+    auto response =
+        co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
     apply_automatic_response_headers(response, context_value);
     co_return response;
 }
@@ -244,44 +252,9 @@ task<http_response> detail::route_table::handle_exception(
 }
 
 // Which handler answers a failure on a given path: the most specific prefix
-// scope that covers it, or the table-wide fallback. The dispatch above is the
-// only caller.
-
-void detail::route_table::set_error_handler(http_error_handler_ref_type handler) noexcept {
-    error_handler_ = handler;
-}
-
-void detail::route_table::set_not_found_handler(http_not_found_handler_ref_type handler) noexcept {
-    not_found_handler_ = handler;
-}
+// scope that covers it, or the plan-wide fallback.
 
 namespace {
-
-template <typename stored_type, typename registration_type>
-void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::pmr::memory_resource* resource,
-    std::span<const registration_type> handlers) {
-    std::pmr::vector<stored_type> normalized(resource);
-    normalized.reserve(handlers.size());
-    for (const auto& registration : handlers) {
-        if (registration.handler_ == nullptr) {
-            throw std::invalid_argument("fallback handler must not be null");
-        }
-        const auto prefix = detail::normalize_fallback_prefix(registration.prefix_);
-        for (const auto& existing : normalized) {
-            if (detail::fallback_prefixes_equivalent(existing.prefix_, prefix)) {
-                throw std::invalid_argument("duplicate fallback prefix");
-            }
-        }
-        normalized.emplace_back(resource, prefix, registration.handler_);
-    }
-    // Deepest prefix first: selection is a first-match scan. A nested scope
-    // always has more segments; distinct scopes of equal depth cannot nest, so
-    // their relative order is irrelevant; keep it stable.
-    std::ranges::stable_sort(normalized, [](const stored_type& left, const stored_type& right) noexcept {
-        return detail::fallback_prefix_depth(left.prefix_) > detail::fallback_prefix_depth(right.prefix_);
-    });
-    stored = std::move(normalized);
-}
 
 // Deepest-first stored order: the first hit is the tightest scope. Matching
 // follows path_is_under_prefix: whole, percent-decoded path segments, so "/api"
@@ -300,25 +273,16 @@ template <typename stored_type>
 
 }  // namespace
 
-void detail::route_table::set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers) {
-    replace_prefix_handlers(prefix_error_handlers_, resource_, handlers);
-}
-
-void detail::route_table::set_prefix_not_found_handlers(
-    std::span<const http_prefix_not_found_handler> handlers) {
-    replace_prefix_handlers(prefix_not_found_handlers_, resource_, handlers);
-}
-
 detail::http_error_handler_ref_type detail::route_table::error_handler_for(
     std::string_view path) const noexcept {
-    const auto handler = select_prefix_handler(prefix_error_handlers_, path);
-    return handler != nullptr ? handler : error_handler_;
+    const auto handler = select_prefix_handler(plan_->prefix_error_handlers_, path);
+    return handler != nullptr ? handler : plan_->error_handler_;
 }
 
 detail::http_not_found_handler_ref_type detail::route_table::not_found_handler_for(
     std::string_view path) const noexcept {
-    const auto handler = select_prefix_handler(prefix_not_found_handlers_, path);
-    return handler != nullptr ? handler : not_found_handler_;
+    const auto handler = select_prefix_handler(plan_->prefix_not_found_handlers_, path);
+    return handler != nullptr ? handler : plan_->not_found_handler_;
 }
 
 }  // namespace ruvia

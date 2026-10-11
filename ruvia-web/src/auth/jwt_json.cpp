@@ -1,38 +1,58 @@
+#include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <forward_list>
+#include <functional>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/decimal_number.h"
-#include "ruvia/core/number_format.h"
+#include "ruvia/http/http_number_format.h"
+#include "ruvia/web/detail/json/json_array_elements.h"
 #include "ruvia/web/detail/json/json_escape.h"
+#include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_string.h"
+#include "ruvia/web/detail/util/decimal_number.h"
 
 #include "auth/jwt_primitives.h"
 
 namespace ruvia {
 namespace detail {
 
+// Duplicate names are detected once the object is complete; any duplicate
+// rejects the object, so visiting it first changes nothing for callers.
 template <typename visitor_type>
 [[nodiscard]] bool visit_unique_jwt_json_object_fields(
     std::string_view json, std::pmr::memory_resource* resource, visitor_type&& visitor) {
-    std::pmr::vector<std::pmr::string> names(resource);
+    // Literal names are views into json. Escaped names arrive decoded in storage
+    // that lives for one visitor call, so only those are copied; list nodes keep
+    // each copy at a stable address.
+    std::pmr::vector<std::string_view> names(resource);
+    std::pmr::forward_list<std::pmr::string> decoded_names(resource);
+    const std::less_equal<> not_after;
     const auto visited = visit_json_object_fields(resolved_pmr_resource_tag{}, json, resource,
         [&](std::string_view name, std::string_view value) {
-            for (const auto& existing : names) {
-                if (std::string_view(existing) == name) {
-                    return false;
-                }
+            if (not_after(json.data(), name.data()) &&
+                not_after(name.data() + name.size(), json.data() + json.size())) {
+                names.push_back(name);
+            } else {
+                names.emplace_back(decoded_names.emplace_front(name));
             }
-            names.emplace_back(name);
             visitor(name, value);
-            return true;
         });
-    return visited == json_object_visit_result::complete;
+    if (visited != json_object_visit_result::complete) {
+        return false;
+    }
+    std::ranges::sort(names);
+    return std::ranges::adjacent_find(names) == names.end();
 }
 
 [[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwt_parse_json_numeric_date(
@@ -58,7 +78,7 @@ template <typename visitor_type>
                fractional_text.back() == '\r' || fractional_text.back() == '\n')) {
         fractional_text.remove_suffix(1);
     }
-    const auto parsed_fractional = ruvia::parse_decimal_number(fractional_text);
+    const auto parsed_fractional = detail::parse_decimal_number(fractional_text);
     if ((parsed_fractional.index() != 0) || !std::isfinite(std::get<0>(parsed_fractional))) {
         return std::nullopt;
     }
@@ -78,6 +98,14 @@ template <typename visitor_type>
         std::chrono::duration<long double>(fractional)));
 }
 
+[[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_token(
+    const json_string_token& token, std::pmr::memory_resource* resource) {
+    if (token.encoding() == json_string_encoding::literal) {
+        return std::pmr::string(token.raw(), resource);
+    }
+    return decode_json_string(token.raw(), resource);
+}
+
 [[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_value(
     std::string_view value, std::pmr::memory_resource* resource) {
     const auto parsed_value = parse_json_string(value);
@@ -88,25 +116,18 @@ template <typename visitor_type>
     if (!value.empty()) {
         return std::nullopt;
     }
-
-    if (parsed_value->encoding() == json_string_encoding::literal) {
-        return std::pmr::string(parsed_value->raw(), resource);
-    }
-    return decode_json_string(parsed_value->raw(), resource);
+    return jwt_decode_json_string_token(*parsed_value, resource);
 }
 
-void jwt_append_json_escaped(std::pmr::string& out, std::string_view value) {
-    append_json_string<json_hex_case::lower>(out, value);
-}
 void jwt_append_json_member(
     std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
     if (!first) {
         out.push_back(',');
     }
     first = false;
-    jwt_append_json_escaped(out, name);
+    append_json_string<json_hex_case::lower>(out, name);
     out.push_back(':');
-    jwt_append_json_escaped(out, value);
+    append_json_string<json_hex_case::lower>(out, value);
 }
 
 void jwt_append_json_member(
@@ -115,9 +136,9 @@ void jwt_append_json_member(
         out.push_back(',');
     }
     first = false;
-    jwt_append_json_escaped(out, name);
+    append_json_string<json_hex_case::lower>(out, name);
     out.push_back(':');
-    append_formatted_number(out, value, "failed to format JWT numeric claim");
+    http_append_formatted_number(out, value, "failed to format JWT numeric claim");
 }
 
 std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memory_resource* resource) {
@@ -172,60 +193,32 @@ namespace {
         return false;
     }
 
-    value.remove_prefix(1);  // consume '['
-    detail::skip_json_whitespace(value);
-    if (!value.empty() && value.front() == ']') {
-        value.remove_prefix(1);
-        detail::skip_json_whitespace(value);
-        return value.empty();  // an empty array carries no audience
-    }
-    for (;;) {
-        detail::skip_json_whitespace(value);
-        const auto parsed_value = detail::parse_json_string(value);
-        if (!parsed_value.has_value()) {
-            out.clear();
-            return false;  // a non-string array element is not a valid audience
-        }
-        std::optional<std::pmr::string> decoded;
-        if (parsed_value->encoding() == detail::json_string_encoding::escaped) {
-            decoded = detail::decode_json_string(parsed_value->raw(), resource);
+    const bool consumed = detail::consume_json_array_elements(value, 0,
+        [&out, resource](std::string_view& element) {
+            const auto parsed_value = detail::parse_json_string(element);
+            if (!parsed_value.has_value()) {
+                return false;
+            }
+            auto decoded = detail::jwt_decode_json_string_token(*parsed_value, resource);
             if (!decoded.has_value()) {
-                out.clear();
                 return false;
             }
-        } else {
-            decoded.emplace(parsed_value->raw(), resource);
-        }
-        out.push_back(std::move(*decoded));
-
-        detail::skip_json_whitespace(value);
-        if (value.empty()) {
-            out.clear();  // unterminated array
-            return false;
-        }
-        if (value.front() == ',') {
-            value.remove_prefix(1);
-            continue;
-        }
-        if (value.front() == ']') {
-            value.remove_prefix(1);
-            detail::skip_json_whitespace(value);
-            if (!value.empty()) {
-                out.clear();  // trailing junk after the array
-                return false;
-            }
+            out.push_back(std::move(*decoded));
             return true;
-        }
-        out.clear();  // malformed element separator
+        });
+    detail::skip_json_whitespace(value);
+    if (!consumed || !value.empty()) {
+        out.clear();
         return false;
     }
+    return true;
 }
 
 }  // namespace
 
 jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resource) {
-    auto* resolved = detail::pmr_resource_or_default(resource);
+    auto* resolved = pmr_resource_or_default(resource);
     jwt_payload payload_value({.resource_ = resolved});
 
     bool registered_claim_invalid = false;

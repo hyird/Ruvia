@@ -69,11 +69,6 @@ public:
     }
     const context_pending_response* pending() const&& = delete;
 
-    [[nodiscard]] const context_provisional_response* provisional() const& noexcept {
-        return std::get_if<context_provisional_response>(&value_);
-    }
-    const context_provisional_response* provisional() const&& = delete;
-
     [[nodiscard]] const context_final_response* final() const& noexcept {
         return std::get_if<context_final_response>(&value_);
     }

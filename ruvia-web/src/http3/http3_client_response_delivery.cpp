@@ -180,12 +180,12 @@ void http3_client_response_delivery::deliver(const http3_connection_event& event
             state_.headers_.reserve(event.head_->headers_.size());
             for (const auto& field : event.head_->headers_) {
                 state_.headers_.push_back(
-                    http_header::copy_of(field.name_, field.value_, state_.resource_));
+                    http_header::copy_of(field.name(), field.value(), state_.resource_));
             }
             state_.status_ = *status;
             state_.protocol_version_ = http_protocol_version::http3;
             if (state_.tunnel_) {
-                state_.tunnel_->accepted_ = response_body_plan_->content_semantics() == http_response_content_semantics_type::connect_tunnel;
+                state_.tunnel_->accepted_ = response_body_plan_->content_semantics() == http_response_content_semantics::connect_tunnel;
                 if (state_.tunnel_->accepted_ && state_.tunnel_->udp_) {
                     std::pmr::vector<http_header_view> fields_value(state_.resource_);
                     for (const auto& field : state_.headers_) {
@@ -209,7 +209,7 @@ void http3_client_response_delivery::deliver(const http3_connection_event& event
         }
         case http3_connection_event_kind::body:
         case http3_connection_event_kind::tunnel_data:
-            if (event.kind_ == http3_connection_event_kind::tunnel_data ? (!state_.tunnel_ || !state_.tunnel_->accepted_ || !response_body_plan_ || response_body_plan_->content_semantics() != http_response_content_semantics_type::connect_tunnel) : (response_body_plan_ && (response_body_plan_->body_suppressed() || !response_body_plan_->status_allows_body() || response_body_plan_->content_semantics() != http_response_content_semantics_type::with_content))) {
+            if (event.kind_ == http3_connection_event_kind::tunnel_data ? (!state_.tunnel_ || !state_.tunnel_->accepted_ || !response_body_plan_ || response_body_plan_->content_semantics() != http_response_content_semantics::connect_tunnel) : (response_body_plan_ && (response_body_plan_->body_suppressed() || !response_body_plan_->status_allows_body() || response_body_plan_->content_semantics() != http_response_content_semantics::with_content))) {
                 request_retirement(retirement_reason_type::protocol_error);
                 return;
             }
@@ -242,11 +242,7 @@ void http3_client_response_delivery::deliver(const http3_connection_event& event
                 request_retirement(retirement_reason_type::protocol_error);
                 return;
             }
-            std::pmr::vector<http_header_view> fields_value(state_.resource_);
-            for (const auto& field : event.head_->headers_) {
-                fields_value.emplace_back(field.name_, field.value_);
-            }
-            state_.retain_informational(http_status_code::from_value(event.head_->status_), fields_value);
+            state_.retain_informational(http_status_code::from_value(event.head_->status_), event.head_->headers_);
             return;
         }
         case http3_connection_event_kind::request_head:
@@ -273,10 +269,6 @@ void http3_client_response_delivery::request_retirement(retirement_reason_type r
     if (retirement_reason_ == retirement_reason_type::none) {
         retirement_reason_ = reason;
     }
-}
-
-void http3_client_response_delivery::reconcile_body_bytes() noexcept {
-    state_.reconcile_producer_body_bytes();
 }
 
 std::size_t http3_client_response_delivery::remaining_body_capacity() const noexcept {

@@ -89,37 +89,26 @@ public:
 
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_find(request_binding_kind kind) const noexcept {
-        using value_t_type = std::remove_cvref_t<t_type>;
-        const auto* key = request_binding_key<value_t_type>();
-        for (auto* node_value = head_; node_value != nullptr; node_value = node_value->previous_) {
-            if (node_value->type_key_ == key && node_value->kind_ == kind) {
-                return static_cast<const value_t_type*>(node_value->value_);
-            }
-        }
-        return nullptr;
+        const auto* node_value = find_node<t_type>(kind, false);
+        return node_value == nullptr ? nullptr
+                                     : static_cast<const std::remove_cvref_t<t_type>*>(node_value->value_);
     }
 
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>& get_validated() const {
-        const auto* found = try_find<t_type>(request_binding_kind::validated_model);
-        if (found == nullptr) {
-            throw std::logic_error("validated request model is not available");
-        }
-        return *found;
+        return find_required<t_type>(
+            request_binding_kind::validated_model, "validated request model is not available");
     }
 
     template <typename t_type>
     [[nodiscard]] validated_json<std::remove_cvref_t<t_type>> get_validated_json() const {
         using model_t_type = std::remove_cvref_t<t_type>;
-        const auto* key = request_binding_key<model_t_type>();
-        for (auto* node_value = head_; node_value != nullptr; node_value = node_value->previous_) {
-            if (node_value->type_key_ == key && node_value->kind_ == request_binding_kind::validated_model &&
-                !node_value->raw_json_.empty()) {
-                return validated_json<model_t_type>(
-                    *static_cast<const model_t_type*>(node_value->value_), node_value->raw_json_);
-            }
+        const auto* node_value = find_node<t_type>(request_binding_kind::validated_model, true);
+        if (node_value == nullptr) {
+            throw std::logic_error("validated JSON request model is not available");
         }
-        throw std::logic_error("validated JSON request model is not available");
+        return validated_json<model_t_type>(
+            *static_cast<const model_t_type*>(node_value->value_), node_value->raw_json_);
     }
 
     template <typename t_type>
@@ -129,11 +118,7 @@ public:
 
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>& get_state() const {
-        const auto* found = try_find<t_type>(request_binding_kind::request_state);
-        if (found == nullptr) {
-            throw std::logic_error("request state is not bound for this type");
-        }
-        return *found;
+        return find_required<t_type>(request_binding_kind::request_state, "request state is not bound for this type");
     }
 
     template <typename t_type>
@@ -172,6 +157,31 @@ private:
             std::terminate();
         }
         head_ = node_value.previous_;
+    }
+
+    // The innermost binding of t_type and kind; with requires_raw_json, the
+    // innermost one that also carries its source JSON.
+    template <typename t_type>
+    [[nodiscard]] const request_binding_node* find_node(
+        request_binding_kind kind, bool requires_raw_json) const noexcept {
+        const auto* key = request_binding_key<std::remove_cvref_t<t_type>>();
+        for (auto* node_value = head_; node_value != nullptr; node_value = node_value->previous_) {
+            if (node_value->type_key_ == key && node_value->kind_ == kind &&
+                (!requires_raw_json || !node_value->raw_json_.empty())) {
+                return node_value;
+            }
+        }
+        return nullptr;
+    }
+
+    template <typename t_type>
+    [[nodiscard]] const std::remove_cvref_t<t_type>& find_required(
+        request_binding_kind kind, const char* missing_message) const {
+        const auto* found = try_find<t_type>(kind);
+        if (found == nullptr) {
+            throw std::logic_error(missing_message);
+        }
+        return *found;
     }
 
     request_binding_node* head_{nullptr};

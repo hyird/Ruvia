@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "ruvia/core/scoped_operation.h"
+#ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/db/db_query_result_cache.h"
+#endif
 #include "ruvia/web/db/db_transaction.h"
 #include "ruvia/web/detail/db/db_backend.h"
 #include "ruvia/web/detail/db/db_mapped_query.h"
@@ -18,6 +20,13 @@
 #include "ruvia/web/detail/db/db_sql_literal.h"
 
 namespace ruvia {
+
+namespace detail {
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state;
+#endif
+struct db_query_backend;
+}  // namespace detail
 
 class db_query;
 template <typename entity_type>
@@ -33,7 +42,9 @@ public:
     db_handle& operator=(const db_handle&) = delete;
 
     [[nodiscard]] db_handle with_options(operation_options options) const;
+#ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] db_query_result_cache query_result_cache() const;
+#endif
 
     template <typename entity_type>
     [[nodiscard]] db_repository<entity_type, db_handle> get_repository() const;
@@ -138,16 +149,24 @@ private:
             detail::map_db_query<result_type>(std::move(task_value), resource_, std::move(mapper)));
     }
 
+#ifdef RUVIA_ENABLE_REDIS
     db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
-        operation_scope& operation_scope, detail::db_query_cache_state* cache = nullptr) noexcept;
+        operation_scope& operation_scope, detail::db_query_cache_state* cache) noexcept;
+#else
+    db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
+        operation_scope& operation_scope) noexcept;
+#endif
+    [[nodiscard]] detail::db_query_backend query_backend() const;
     static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
         operation_scope& operation_scope, operation_options options);
-    static task<db_transaction> begin_transaction_prepared(detail::db_pool_ref_type client,
-        std::pmr::memory_resource* resource, operation_scope& operation_scope,
-        operation_options operation_options, db_transaction_options transaction_options, detail::db_query_cache_state* cache);
+    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend,
+        operation_scope& operation_scope, operation_options operation_options,
+        db_transaction_options transaction_options);
 
+#ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* cache_{nullptr};
+#endif
     detail::db_pool_ref_type client_;
     std::pmr::memory_resource* resource_;
     operation_options options_;

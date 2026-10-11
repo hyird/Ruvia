@@ -17,8 +17,8 @@
 namespace ruvia::detail {
 class http3_buffered_request_dispatch;
 
-// One worker-owned response stream. The publisher parks on the connection's
-// bounded output buffer; neither the sink nor the producer owns QUIC state.
+// One worker-owned response stream. Each write publishes one framed HEADERS
+// or DATA frame straight to QUIC and resumes once QUIC accepted all of it.
 class http3_response_stream_sink final {
 public:
     http3_response_stream_sink(http3_buffered_request_dispatch& publisher,

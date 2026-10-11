@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/detail/json/json_array_elements.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_limits.h"
 #include "ruvia/web/detail/json/json_number.h"
@@ -15,34 +15,9 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept;
 
 [[nodiscard]] inline bool skip_json_array(std::string_view& input, std::size_t depth) noexcept {
-    if (depth > max_json_depth) {
-        return false;
-    }
-    if (!consume_json_char(input, '[')) {
-        return false;
-    }
-    skip_json_whitespace(input);
-    if (!input.empty() && input.front() == ']') {
-        input.remove_prefix(1);
-        return true;
-    }
-
-    while (skip_json_value(input, depth + 1)) {
-        skip_json_whitespace(input);
-        if (!input.empty() && input.front() == ']') {
-            input.remove_prefix(1);
-            return true;
-        }
-        if (!consume_json_char(input, ',')) {
-            return false;
-        }
-    }
-
-    return false;
-}
-
-[[nodiscard]] inline bool skip_json_array(std::string_view& input) noexcept {
-    return skip_json_array(input, 0);
+    return consume_json_array_elements(input, depth, [depth](std::string_view& element) noexcept {
+        return skip_json_value(element, depth + 1);
+    });
 }
 
 [[nodiscard]] inline bool skip_json_object(std::string_view& input, std::size_t depth) noexcept {
@@ -111,30 +86,5 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool skip_json_value(std::string_view& input) noexcept {
     return skip_json_value(input, 0);
 }
-
-class json_scanner final {
-public:
-    explicit json_scanner(borrowed_text input) noexcept
-        : input_(input.view()) {}
-
-    [[nodiscard]] bool consume_object() noexcept {
-        return skip_json_object(input_);
-    }
-
-    void skip_whitespace() noexcept {
-        skip_json_whitespace(input_);
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return input_.empty();
-    }
-
-    [[nodiscard]] std::string_view remaining() const noexcept {
-        return input_;
-    }
-
-private:
-    std::string_view input_;
-};
 
 }  // namespace ruvia::detail

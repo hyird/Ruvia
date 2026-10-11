@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"

@@ -13,8 +13,8 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
 
 namespace ruvia {
@@ -57,8 +57,7 @@ struct redis_config {
     std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
     // Must be greater than zero.
     std::size_t max_array_depth_{64};
-    tcp_no_delay_policy tcp_no_delay_{tcp_no_delay_policy::enable};
-    tcp_keep_alive_policy tcp_keep_alive_{tcp_keep_alive_policy::system_default};
+    client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
 };
 
 class redis_block_wait final {
@@ -259,10 +258,10 @@ private:
     friend struct detail::redis_types_access;
 
     redis_key_value(std::string_view key, std::string_view value, std::pmr::memory_resource* resource)
-        : redis_key_value(key, value, detail::resolved_pmr_resource_tag{},
-              detail::pmr_resource_or_default(resource)) {}
+        : redis_key_value(key, value, resolved_pmr_resource_tag{},
+              pmr_resource_or_default(resource)) {}
 
-    redis_key_value(std::string_view key, std::string_view value, detail::resolved_pmr_resource_tag,
+    redis_key_value(std::string_view key, std::string_view value, resolved_pmr_resource_tag,
         std::pmr::memory_resource* resource)
         : key_(key.data(), key.size(), resource),
           value_(value.data(), value.size(), resource) {}
@@ -296,10 +295,10 @@ private:
     friend struct detail::redis_types_access;
 
     redis_scored_value(std::string_view value, double score, std::pmr::memory_resource* resource)
-        : redis_scored_value(value, score, detail::resolved_pmr_resource_tag{},
-              detail::pmr_resource_or_default(resource)) {}
+        : redis_scored_value(value, score, resolved_pmr_resource_tag{},
+              pmr_resource_or_default(resource)) {}
 
-    redis_scored_value(std::string_view value, double score, detail::resolved_pmr_resource_tag,
+    redis_scored_value(std::string_view value, double score, resolved_pmr_resource_tag,
         std::pmr::memory_resource* resource)
         : value_(value.data(), value.size(), resource),
           score_(score) {}
@@ -327,7 +326,7 @@ private:
     friend struct detail::redis_types_access;
 
     explicit redis_scan_result(std::pmr::memory_resource* resource)
-        : values_(detail::pmr_resource_or_default(resource)) {}
+        : values_(pmr_resource_or_default(resource)) {}
 
     std::optional<redis_scan_cursor> next_cursor_;
     std::pmr::vector<std::pmr::string> values_;
@@ -352,7 +351,7 @@ private:
     friend struct detail::redis_types_access;
 
     explicit redis_hash_scan_result(std::pmr::memory_resource* resource)
-        : entries_(detail::pmr_resource_or_default(resource)) {}
+        : entries_(pmr_resource_or_default(resource)) {}
 
     std::optional<redis_scan_cursor> next_cursor_;
     std::pmr::vector<redis_key_value> entries_;
@@ -377,7 +376,7 @@ private:
     friend struct detail::redis_types_access;
 
     explicit redis_z_scan_result(std::pmr::memory_resource* resource)
-        : entries_(detail::pmr_resource_or_default(resource)) {}
+        : entries_(pmr_resource_or_default(resource)) {}
 
     std::optional<redis_scan_cursor> next_cursor_;
     std::pmr::vector<redis_scored_value> entries_;
@@ -543,10 +542,10 @@ private:
         std::string_view value, std::pmr::memory_resource* resource);
     [[nodiscard]] static redis_value integer_value(
         std::int64_t value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static redis_value array_value(
-        std::pmr::vector<redis_value> values, std::pmr::memory_resource* resource);
+    // An empty array with room for `capacity` elements, all in `resource`.
+    [[nodiscard]] static redis_value array_value(std::size_t capacity, std::pmr::memory_resource* resource);
 
-    redis_value(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    redis_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
 
     kind_type kind_{kind_type::null};
     std::pmr::string string_;

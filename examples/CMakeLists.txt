@@ -14,7 +14,6 @@ function(ruvia_add_example name)
 endfunction()
 
 ruvia_add_example(ruvia_example_basic_http web/basic_http.cpp)
-ruvia_add_example(ruvia_example_bench_server web/bench_server.cpp)
 ruvia_add_example(ruvia_example_api_surface web/api_surface.cpp)
 ruvia_add_example(ruvia_example_models_validation web/models_validation.cpp)
 ruvia_add_example(ruvia_example_streaming web/streaming.cpp)

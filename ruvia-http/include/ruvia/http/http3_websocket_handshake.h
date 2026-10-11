@@ -4,9 +4,11 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/http3_headers_frame.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
@@ -67,7 +69,7 @@ public:
     http3_websocket_handshake& operator=(http3_websocket_handshake&&) = delete;
 
     [[nodiscard]] std::span<const char> headers_frame() const& noexcept {
-        return headers_frame_;
+        return headers_frame_.frame();
     }
     std::span<const char> headers_frame() const&& = delete;
 
@@ -85,13 +87,13 @@ private:
     make_http3_websocket_handshake(const http_request&, std::string_view, bool,
         http3_websocket_handshake_options);
 
-    explicit http3_websocket_handshake(std::pmr::memory_resource* resource)
+    http3_websocket_handshake(std::pmr::memory_resource* resource, http3_headers_frame headers_frame)
         : subprotocol_(resource),
-          headers_frame_(resource) {}
+          headers_frame_(std::move(headers_frame)) {}
 
     std::pmr::string subprotocol_;
     websocket_compression compression_{(websocket_compression{})};
-    std::pmr::vector<char> headers_frame_;
+    http3_headers_frame headers_frame_;
 };
 
 [[nodiscard]] std::variant<http3_websocket_handshake, http3_websocket_handshake_failure>

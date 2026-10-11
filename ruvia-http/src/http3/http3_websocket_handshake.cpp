@@ -8,14 +8,14 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/response/http_response_header_state.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/http3_field_section.h"
-#include "ruvia/http/http3_frames.h"
-#include "ruvia/http/http3_var_int.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_response.h"
 
+#include "http3/http3_field_section_encoder.h"
 #include "server/http_date_cache.h"
 #include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/websocket_server_negotiation.h"
@@ -25,10 +25,6 @@ namespace {
 
 std::pmr::memory_resource* normalized_resource(std::pmr::memory_resource* resource) noexcept {
     return resource != nullptr ? resource : std::pmr::get_default_resource();
-}
-
-bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
-    return http_ascii_equals_ignore_case(name, expected);
 }
 
 }  // namespace
@@ -62,14 +58,15 @@ std::variant<std::monostate, http3_websocket_handshake_failure> validate_http3_w
     std::string_view version;
     for (const auto& header : request.headers()) {
         const auto name = header.name();
-        if (header_name_equals(name, "content-length") ||
-            header_name_equals(name, "sec-websocket-key") ||
-            header_name_equals(name, "sec-websocket-accept") ||
-            header_name_equals(name, "connection") || header_name_equals(name, "upgrade")) {
+        // RFC 9220 / RFC 8441 section 5: extended CONNECT carries no content
+        // and neither the HTTP/1.1 key exchange nor connection-specific fields.
+        if (detail::http_field_name_in(name, detail::http_message_framing_fields) ||
+            detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
+            detail::http_field_name_in(name, detail::http_websocket_key_exchange_fields)) {
             return http3_websocket_handshake_failure(
                 http3_websocket_handshake_failure::kind_type::invalid_request);
         }
-        if (header_name_equals(name, "sec-websocket-version")) {
+        if (detail::classify_request_header(name) == detail::request_header_kind::sec_websocket_version) {
             ++version_count;
             version = header.value();
         }
@@ -102,13 +99,12 @@ make_http3_websocket_handshake(const http_request& request, std::string_view pro
                                                                               .deflate_ = options.deflate_,
                                                                           });
 
-    http3_websocket_handshake result(resource);
-    result.subprotocol_.assign(negotiation.subprotocol());
-    result.compression_ = negotiation.compression();
+    const auto subprotocol = negotiation.subprotocol();
+    const auto compression = negotiation.compression();
 
     const auto application_headers = negotiation.response_headers();
     const bool application_date = std::ranges::any_of(application_headers,
-        [](const http_header& header_value) { return header_name_equals(header_value.name(), "date"); });
+        [](const http_header& header_value) { return http_ascii_equals_ignore_case(header_value.name(), "date"); });
     const auto date = options.date_.empty() ? detail::cached_date_value() : options.date_;
     if (!date.empty() && !is_valid_http_header_value(date)) {
         return http3_websocket_handshake_failure(
@@ -132,24 +128,24 @@ make_http3_websocket_handshake(const http_request& request, std::string_view pro
         fields.emplace_back(header.name(), header.value());
     }
 
-    auto section = encode_http3_field_section(fields, resource);
-    if ((section.index() != 0)) {
-        return http3_websocket_handshake_failure(
-            http3_websocket_handshake_failure::kind_type::invalid_request);
+    detail::http_header_section_size section_size(std::numeric_limits<std::size_t>::max());
+    for (const auto& field : fields) {
+        if (!section_size.add(field.name_, field.value_)) {
+            return http3_websocket_handshake_failure(
+                http3_websocket_handshake_failure::kind_type::invalid_request);
+        }
     }
-    constexpr auto header_capacity = 2 * http3_var_int_max_bytes;
-    if (std::get<0>(section).size() > std::numeric_limits<std::size_t>::max() - header_capacity) {
-        return http3_websocket_handshake_failure(
-            http3_websocket_handshake_failure::kind_type::invalid_request);
-    }
-    result.headers_frame_.resize(header_capacity + std::get<0>(section).size());
-    const auto encoded = encode_http3_frame(result.headers_frame_,
-        static_cast<std::uint64_t>(http3_frame_type::headers), std::get<0>(section));
+    constexpr auto unlimited = std::numeric_limits<std::size_t>::max();
+    auto encoded = detail::http3_headers_frame_access::encode(fields, resource,
+        {.max_encoded_bytes_ = unlimited, .max_decoded_bytes_ = unlimited, .max_fields_ = unlimited}, nullptr, 0,
+        section_size.bytes());
     if ((encoded.index() != 0)) {
         return http3_websocket_handshake_failure(
             http3_websocket_handshake_failure::kind_type::invalid_request);
     }
-    result.headers_frame_.resize(std::get<0>(encoded));
+    http3_websocket_handshake result(resource, std::move(std::get<0>(encoded)));
+    result.subprotocol_.assign(subprotocol);
+    result.compression_ = compression;
     return result;
 }
 

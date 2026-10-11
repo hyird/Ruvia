@@ -1,50 +1,37 @@
 #pragma once
 
+#include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
-    std::string_view prefix, std::pmr::memory_resource* resource = nullptr) {
+    std::string_view prefix, std::pmr::memory_resource* resource) {
     resource = pmr_resource_or_default(resource);
     constexpr std::string_view root = "ruvia:orm:";
-    constexpr char hex[] = "0123456789abcdef";
     std::pmr::string result(root, resource);
     result.reserve(root.size() + prefix.size() * 2U + 1U);
     for (const unsigned char byte : prefix) {
-        result.push_back(hex[byte >> 4U]);
-        result.push_back(hex[byte & 0x0fU]);
+        result.push_back(http_lower_hex_digit(byte >> 4U));
+        result.push_back(http_lower_hex_digit(byte));
     }
     result.push_back(':');
     return result;
 }
 
-template <typename entity_type>
-[[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
-    std::string_view prefix, std::pmr::memory_resource* resource = nullptr) {
-    (void)sizeof(entity_type);
-    return redis_entity_storage_prefix(prefix, resource);
-}
-
-template <typename entity_type>
-[[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
-    std::pmr::memory_resource* resource = nullptr) {
-    return redis_entity_storage_prefix(entity_type::prefix(), resource);
-}
-
-template <typename entity_type>
-[[nodiscard]] inline std::pmr::string redis_entity_key(std::string_view id,
-    std::pmr::memory_resource* resource, std::string_view prefix = {}) {
+[[nodiscard]] inline std::pmr::string redis_entity_key(
+    std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource) {
     if (id.empty()) {
         throw std::invalid_argument("Redis entity ID must not be empty");
     }
-    auto key = redis_entity_storage_prefix(
-        prefix.empty() ? entity_type::prefix() : prefix, resource);
+    auto key = redis_entity_storage_prefix(prefix, resource);
     key.append(id.data(), id.size());
     return key;
 }
@@ -54,12 +41,12 @@ template <typename entity_type>
     const entity_type& entity, std::pmr::memory_resource* resource) {
     validate_redis_entity<entity_type>();
     std::pmr::string id(pmr_resource_or_default(resource));
-    for_each_redis_field<entity_type>([&]<typename field_type> {
-        if constexpr (field_type::options.id_) {
-            if (!entity.template is_set<field_type::name>() || entity.template is_null<field_type::name>()) {
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        if constexpr (column_type::options.primary_key_) {
+            if (!entity.template is_set<column_type::name>() || entity.template is_null<column_type::name>()) {
                 throw std::invalid_argument("Redis entity requires an ID");
             }
-            id = encode_redis_scalar(entity.template get<field_type::name>(), resource);
+            id = encode_redis_scalar(entity.template get<column_type::name>(), resource);
         }
     });
     if (id.empty()) {

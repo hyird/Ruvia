@@ -6,9 +6,9 @@
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <system_error>
 #include <thread>
-#include <utility>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
@@ -20,42 +20,39 @@
 
 namespace ruvia::detail {
 
-// Owner-thread-only QUIC wire driver borrowing the Acceptor's datagram channel.
-// The worker io_context, channel and TLS context must outlive it.
+// The HTTP/3 worker's QUIC wire: the borrowed Acceptor datagram channel, the
+// sans-I/O QUIC server and its expiry timer. Owner-thread only. Packet ingress
+// and egress live here, driven from the owner's single protocol loop; only
+// asynchronous timer events wake that loop (endpoint events are observed by the
+// owner's own calls). The worker io_context, channel and TLS context must
+// outlive it.
 class http3_quic_wire_owner final {
 public:
     using clock_type = std::chrono::steady_clock;
 
-    enum class protocol_pump_result_type : std::uint8_t { idle,
-        progress,
-        fatal };
-
-    struct protocol_pump_type final {
+    struct wake_type final {
         void* context_{};
-        protocol_pump_result_type (*drive_)(void*, http3_quic_server_transport&,
-            http3_worker_datagram_endpoint&) noexcept {};
+        void (*wake_)(void*) noexcept {};
     };
 
-    struct stop_status_type final {
-        bool stopping_{};
-        bool endpoint_retired_{};
-        bool timer_handlers_retired_{};
-        bool transport_destroyed_{};
-        bool outbound_pending_{};
-        bool failed_{};
-
-        [[nodiscard]] bool complete() const noexcept {
-            return stopping_ && endpoint_retired_ && timer_handlers_retired_ && transport_destroyed_ &&
-                   !outbound_pending_;
-        }
+    struct received_type final {
+        enum class kind_type : std::uint8_t { none,
+            dropped,
+            connection,
+            failed_connection,
+            initial_offer };
+        kind_type kind_{kind_type::none};
+        ruvia::quic_connection_token connection_{};
+        ruvia::quic_initial_offer offer_{};
     };
 
     // timer_handler_resource is borrowed through owner destruction and supplies
     // the associated allocator for timer waits and their retirement posts.
+    // Prepares the endpoint and QUIC server without consuming channel input.
     http3_quic_wire_owner(asio::io_context& worker_io, http3_datagram_channel& channel,
         http3_worker_datagram_endpoint::udp::endpoint local_endpoint, http3_quic_tls_context& tls,
         ruvia::quic_server_config transport_config,
-        std::pmr::memory_resource* timer_handler_resource, protocol_pump_type protocol_pump);
+        std::pmr::memory_resource* timer_handler_resource, wake_type wake);
     ~http3_quic_wire_owner();
 
     http3_quic_wire_owner(const http3_quic_wire_owner&) = delete;
@@ -63,47 +60,48 @@ public:
     http3_quic_wire_owner(http3_quic_wire_owner&&) = delete;
     http3_quic_wire_owner& operator=(http3_quic_wire_owner&&) = delete;
 
-    // Prepare the worker endpoint and QUIC server without consuming channel input or
-    // scheduling timers. Called once on the owner thread before the application's
-    // serving barrier is released.
-    // Failure starts shutdown and is rethrown; poll_stop() must complete before
-    // destruction, just as after a failed start().
-    void prepare();
-    // Start receiving after prepare(). Synchronous failures are recorded and
-    // rethrown after initiating shutdown; the owner must remain alive until
-    // poll_stop() reports complete.
-    void start();
-    void request_stop() noexcept;
-    // The worker runtime uses this gate when it must retire connections/channels
-    // after a fatal endpoint stop but before destroying the QUIC transport.
-    void defer_transport_retirement() noexcept;
-    void release_transport_retirement() noexcept;
-    // Requests another bounded owner-thread turn after a worker/channel wake.
-    void request_drive() noexcept;
-    void poll_datagrams() noexcept;
+    // Starts consuming channel input. A failure is recorded and starts the stop.
+    void start() noexcept;
+    void poll_channel() noexcept;
+    // Routes one received datagram into the QUIC server and consumes it. A
+    // Version Negotiation reply is sent here. kind none: nothing was received.
+    [[nodiscard]] received_type receive_one(clock_type::time_point now);
+    // A received datagram is waiting (the ingress batch budget was exhausted).
+    [[nodiscard]] bool receive_pending() const noexcept {
+        return started_ && !stopping_ && endpoint_.receive_slot().has_value();
+    }
+    // Writes packets of one connection until it has none or the channel has no
+    // free output buffer. Returns the packet count, or nullopt when the
+    // connection failed.
+    [[nodiscard]] std::optional<std::size_t> send(ruvia::quic_connection_token token, clock_type::time_point now);
+    [[nodiscard]] bool output_available() noexcept;
+    // Arms the single timer for the earlier of QUIC expiry and local_deadline.
+    void schedule(std::optional<clock_type::time_point> local_deadline) noexcept;
+    // True once after the armed deadline elapsed.
+    [[nodiscard]] bool take_expiry() noexcept;
 
-    // Call on the owner thread outside I/O callbacks to perform the final ordered
-    // destruction once channel loans and timer completion handlers have retired.
-    void poll_stop() noexcept;
-    [[nodiscard]] stop_status_type stop_status() const noexcept;
+    [[nodiscard]] http3_quic_server_transport& transport() noexcept {
+        return *transport_;
+    }
+    [[nodiscard]] bool transport_available() const noexcept {
+        return transport_.has_value() && !stopping_;
+    }
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
-    [[nodiscard]] http3_quic_server_transport* transport() noexcept {
-        return transport_ ? &*transport_ : nullptr;
+    [[nodiscard]] bool stopping() const noexcept {
+        return stopping_;
     }
-    [[nodiscard]] bool outbound_quiescent() const noexcept {
-        return endpoint_.outbound_quiescent();
+    [[nodiscard]] std::exception_ptr failure() const noexcept {
+        return failure_;
     }
-    [[nodiscard]] bool endpoint_io_quiescent() const noexcept {
-        require_owner_thread();
-        return endpoint_.endpoint_retired() && !endpoint_.outbound_pending();
+
+    // Stop: no new input, timer cancelled. The caller retires every QUIC
+    // connection first; poll_stop then destroys the transport once timer
+    // handlers and channel output loans have retired, and releases the channel.
+    void request_stop() noexcept;
+    void poll_stop() noexcept;
+    [[nodiscard]] bool stopped() const noexcept {
+        return transport_destroyed_;
     }
-    [[nodiscard]] bool consume_transport_activity() noexcept {
-        require_owner_thread();
-        return std::exchange(transport_activity_, false);
-    }
-    [[nodiscard]] std::size_t timer_expirations() const noexcept;
-    [[nodiscard]] std::exception_ptr failure() const noexcept;
-    void rethrow_failure() const;
 
 private:
     class timer_wait_handler_type final {
@@ -155,9 +153,9 @@ private:
         http3_worker_datagram_endpoint::notification_kind kind) noexcept;
 
     void require_owner_thread() const noexcept;
-    void on_endpoint_notification(http3_worker_datagram_endpoint::notification_kind kind) noexcept;
-    void drive() noexcept;
-    void update_deadline();
+    void wake() noexcept;
+    [[nodiscard]] bool send_packet(std::span<std::byte> packet_buffer,
+        const ruvia::quic_packet_result& packet);
     void reconcile_timer() noexcept;
     void arm_timer(clock_type::time_point deadline) noexcept;
     void on_timer_completion(std::uint64_t generation,
@@ -165,20 +163,16 @@ private:
     void on_timer_handler_retired(std::uint64_t generation) noexcept;
     void on_timer_retirement_wake() noexcept;
     void on_timer_retirement_handler_retired() noexcept;
-    void begin_stop() noexcept;
     void record_failure(std::exception_ptr failure) noexcept;
     void record_current_failure() noexcept;
-    void record_error(std::error_code error, const char* operation) noexcept;
     void capture_endpoint_error() noexcept;
 
     std::thread::id owner_thread_;
     asio::io_context& network_io_;
-    http3_quic_tls_context& tls_;
-    ruvia::quic_server_config transport_config_;
+    wake_type wake_;
     http3_worker_datagram_endpoint endpoint_;
     asio::steady_timer timer_;
     std::pmr::polymorphic_allocator<std::byte> timer_handler_allocator_;
-    protocol_pump_type protocol_pump_{};
     std::optional<http3_quic_server_transport> transport_;
     std::optional<clock_type::time_point> desired_deadline_;
     std::optional<clock_type::time_point> armed_deadline_;
@@ -186,21 +180,16 @@ private:
     std::uint64_t timer_generation_{};
     std::uint64_t armed_generation_{};
     std::uint64_t failed_timer_submission_generation_{};
-    std::size_t timer_expirations_{};
     bool timer_submitting_{};
-    bool prepared_{};
     bool started_{};
     bool stopping_{};
-    bool driving_{};
-    bool drive_requested_{};
+    bool expired_{};
     bool timer_wait_outstanding_{};
     bool timer_cancel_requested_{};
     bool timer_completion_delivered_{};
     bool timer_wake_outstanding_{};
     bool timer_handlers_retired_{true};
-    bool transport_destroyed_{true};
-    bool transport_retirement_released_{true};
-    bool transport_activity_{};
+    bool transport_destroyed_{};
 };
 
 }  // namespace ruvia::detail

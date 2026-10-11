@@ -36,7 +36,7 @@ template <typename value_t_type>
     } else if constexpr (std::is_floating_point_v<t_type>) {
         return 32;
     } else if constexpr (is_ruvia_bytes<t_type>) {
-        return ruvia::base64_encoded_size(value.size()) + 2;
+        return http_base64_encoded_size(value.size()) + 2;
     } else if constexpr (is_ruvia_string<t_type>) {
         return json_string_size_hint(value.view());
     } else if constexpr (is_model<t_type>) {

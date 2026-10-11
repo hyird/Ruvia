@@ -89,6 +89,105 @@ struct reentrant_discarded_task final {
     }
 };
 
+enum class move_action { query,
+    submit,
+    stop };
+
+struct reentrant_move_state final {
+    blocking_pool* pool_{};
+    move_action action_{};
+    std::atomic<int> moves_{};
+    std::atomic<int> queries_{};
+    std::atomic<int> destroyed_{};
+    std::atomic<int> ran_{};
+    std::binary_semaphore ran_signal_{0};
+    blocking_submit_status nested_status_{blocking_submit_status::accepted};
+};
+
+struct reentrant_moving_task final {
+    explicit reentrant_moving_task(reentrant_move_state& state)
+        : state_(&state) {}
+    reentrant_moving_task(const reentrant_moving_task&) = delete;
+    reentrant_moving_task& operator=(const reentrant_moving_task&) = delete;
+    reentrant_moving_task(reentrant_moving_task&& other) noexcept
+        : state_(other.state_),
+          owns_(std::exchange(other.owns_, false)) {
+        const auto move = state_->moves_.fetch_add(1) + 1;
+        static_cast<void>(state_->pool_->stats());
+        state_->queries_.fetch_add(1);
+        if (move == 3) {
+            if (state_->action_ == move_action::submit) {
+                state_->nested_status_ = state_->pool_->submit([] {});
+            } else if (state_->action_ == move_action::stop) {
+                state_->pool_->stop();
+            }
+        }
+    }
+    ~reentrant_moving_task() {
+        static_cast<void>(state_->pool_->stats());
+        state_->queries_.fetch_add(1);
+        if (owns_) {
+            state_->destroyed_.fetch_add(1);
+        }
+    }
+    void operator()() const noexcept {
+        state_->ran_.fetch_add(1);
+        state_->ran_signal_.release();
+    }
+
+    reentrant_move_state* state_;
+    bool owns_{true};
+};
+
+bool test_callable_moves_and_destruction_can_query_pool() {
+    for (const auto action : {move_action::query, move_action::submit}) {
+        thread_gate gate;
+        reentrant_move_state state;
+        blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+        state.pool_ = &pool;
+        state.action_ = action;
+        gate.occupy(pool);
+        ruvia::move_only_function<void()> task_value{reentrant_moving_task(state)};
+        const auto status = pool.submit(std::move(task_value));
+        const auto queued = pool.stats();
+        gate.release_.release();
+        if (status != blocking_submit_status::accepted) {
+            pool.join();
+            return false;
+        }
+        state.ran_signal_.acquire();
+        pool.join();
+        const auto finished = pool.stats();
+        if (queued.queued_ != 1 || finished.completed_ != 2 || finished.running_ != 0 ||
+            state.moves_.load() < 4 || state.queries_.load() < 4 ||
+            state.ran_.load() != 1 || state.destroyed_.load() != 1 ||
+            (action == move_action::submit &&
+                (state.nested_status_ != blocking_submit_status::queue_full || finished.rejected_ != 1))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool test_callable_move_can_stop_pool_before_publication() {
+    thread_gate gate;
+    reentrant_move_state state;
+    blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 2});
+    state.pool_ = &pool;
+    state.action_ = move_action::stop;
+    gate.occupy(pool);
+    std::atomic<bool> queued_ran{};
+    const auto queued = pool.submit([&] { queued_ran.store(true); });
+    ruvia::move_only_function<void()> task_value{reentrant_moving_task(state)};
+    const auto status = pool.submit(std::move(task_value));
+    gate.release_.release();
+    pool.join();
+    const auto stopped = pool.stats();
+    return queued == blocking_submit_status::accepted && status == blocking_submit_status::pool_stopped &&
+           stopped.queued_ == 0 && stopped.running_ == 0 && stopped.discarded_ == 2 && stopped.completed_ == 1 &&
+           !queued_ran.load() && state.ran_.load() == 0 && state.destroyed_.load() == 1;
+}
+
 task<void> exercise_results(blocking_pool& pool, worker_handle worker_value, bool& success) {
     auto value = co_await ruvia::try_run_blocking(pool, worker_value, [] { return 42; });
     if (!value.completed() || std::move(value).value() != 42) {
@@ -557,10 +656,12 @@ int main() {
     const bool join_stops_and_waits = test_join_stops_and_waits_for_running_callable();
     const bool join_rejects_pool_thread = test_join_rejects_pool_thread_before_stopping();
     const bool stop_drains_without_running = test_stop_drains_without_running_queued_tasks();
+    const bool callable_reentry = test_callable_moves_and_destruction_can_query_pool();
+    const bool stop_during_move = test_callable_move_can_stop_pool_before_publication();
     const bool all_passed = default_sizing && results && worker_stays_free &&
                             cancelled && timeout && saturating_timeout && stopped_pool && queue_full &&
                             worker_stopping && stopped_worker && rejects_empty_task &&
                             destruction_does_not_join && join_stops_and_waits && join_rejects_pool_thread &&
-                            stop_drains_without_running;
+                            stop_drains_without_running && callable_reentry && stop_during_move;
     return all_passed ? 0 : 1;
 }

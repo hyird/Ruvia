@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_limits.h"
 
 namespace ruvia {
@@ -33,7 +33,7 @@ public:
     [[nodiscard]] bool append_list(std::string_view value) noexcept {
         while (true) {
             const auto comma = value.find(',');
-            const auto protocol = detail::http_trim_ows(
+            const auto protocol = http_trim_ows(
                 comma == std::string_view::npos ? value : value.substr(0, comma));
             if (!protocol.empty() && !append(protocol)) {
                 return false;

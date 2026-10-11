@@ -5,6 +5,7 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/url_encoding.h"
 
 #include "request/http_request_access.h"
@@ -23,7 +24,7 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
 
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
-        if (detail::http_ascii_equals_ignore_case(headers_[index].name(), name)) {
+        if (http_ascii_equals_ignore_case(headers_[index].name(), name)) {
             return headers_[index].value();
         }
     }
@@ -66,6 +67,22 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
         }
     }
     return std::nullopt;
+}
+
+http_response_coding_selection_result http_response_coding_selection_for(
+    const http_request& request) noexcept {
+    http_response_coding_qualities qualities;
+    if (detail::request_has_known_header(request, detail::request_header_kind::accept_encoding)) {
+        // Every field line contributes: RFC 9110 section 5.3 combines repeated
+        // list fields, and the request cache records only the last line.
+        for (const auto& field : request.headers()) {
+            if (detail::classify_request_header(field.name()) ==
+                detail::request_header_kind::accept_encoding) {
+                qualities.update(field.value());
+            }
+        }
+    }
+    return http_response_coding_selection::select(qualities);
 }
 
 std::pmr::memory_resource* http_request::resource() const noexcept {

@@ -9,14 +9,12 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/hex.h"
+#include "ruvia/http/http_hex.h"
 
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia::detail {
 namespace {
-
-// URI reg-name chars: unreserved / sub-delims (pct-encoded handled by caller).
 
 struct normalized_host_unit final {
     unsigned char byte_{0};
@@ -32,8 +30,8 @@ struct normalized_host_unit final {
     auto byte = static_cast<unsigned char>(value[cursor_value++]);
     bool encoded_reserved = false;
     if (byte == '%' && cursor_value + 1 < value.size()) {
-        const auto high = decode_hex_nibble(value[cursor_value]);
-        const auto low = decode_hex_nibble(value[cursor_value + 1]);
+        const auto high = http_decode_hex_nibble(value[cursor_value]);
+        const auto low = http_decode_hex_nibble(value[cursor_value + 1]);
         if (high >= 0 && low >= 0) {
             byte = static_cast<unsigned char>((high << 4) | low);
             cursor_value += 2;
@@ -64,13 +62,6 @@ struct normalized_host_unit final {
 
 }  // namespace
 
-struct http_authority_view_access final {
-    [[nodiscard]] static constexpr http_authority_view make(
-        std::string_view host, http_authority_port_kind port_kind, std::uint16_t port = 0) noexcept {
-        return http_authority_view(host, port_kind, port);
-    }
-};
-
 bool is_valid_request_target_bytes(std::string_view target) noexcept {
     if (target.empty()) {
         return false;
@@ -78,8 +69,8 @@ bool is_valid_request_target_bytes(std::string_view target) noexcept {
     for (std::size_t i = 0; i < target.size(); ++i) {
         const auto byte = static_cast<unsigned char>(target[i]);
         if (byte == '%') {
-            if (i + 2 >= target.size() || decode_hex_nibble(target[i + 1]) < 0 ||
-                decode_hex_nibble(target[i + 2]) < 0) {
+            if (i + 2 >= target.size() || http_decode_hex_nibble(target[i + 1]) < 0 ||
+                http_decode_hex_nibble(target[i + 2]) < 0) {
                 return false;
             }
             i += 2;
@@ -128,54 +119,6 @@ bool is_valid_http_host(std::string_view value) noexcept {
         return is_valid_ipv6_literal(literal) || is_valid_ipv_future(literal);
     }
     return !(value.find(':') != std::string_view::npos) && is_valid_reg_name(value);
-}
-
-std::optional<http_authority_view> parse_http_authority(std::string_view value) noexcept {
-    if (value.empty()) {
-        return std::nullopt;
-    }
-
-    std::string_view host;
-    std::string_view port_text;
-    bool has_port_delimiter = false;
-    if (value.front() == '[') {
-        const auto close = value.find(']');
-        if (close == std::string_view::npos) {
-            return std::nullopt;
-        }
-        host = value.substr(0, close + 1);
-        const auto remainder = value.substr(close + 1);
-        if (!remainder.empty()) {
-            if (remainder.front() != ':') {
-                return std::nullopt;
-            }
-            has_port_delimiter = true;
-            port_text = remainder.substr(1);
-        }
-    } else {
-        const auto colon = value.find(':');
-        host = colon == std::string_view::npos ? value : value.substr(0, colon);
-        if (colon != std::string_view::npos) {
-            has_port_delimiter = true;
-            port_text = value.substr(colon + 1);
-        }
-    }
-
-    if (!is_valid_http_host(host)) {
-        return std::nullopt;
-    }
-    if (!has_port_delimiter) {
-        return http_authority_view_access::make(host, http_authority_port_kind::absent);
-    }
-    if (port_text.empty()) {
-        return http_authority_view_access::make(host, http_authority_port_kind::empty);
-    }
-
-    const auto port = parse_port_value(port_text);
-    if ((port.index() != 0)) {
-        return std::nullopt;
-    }
-    return http_authority_view_access::make(host, http_authority_port_kind::value, std::get<0>(port));
 }
 
 bool http_uri_host_equals(std::string_view left, std::string_view right) noexcept {

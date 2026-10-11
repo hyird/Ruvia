@@ -14,17 +14,19 @@
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/hpack.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/http_interim_response_validation.h"
+#include "field/response_field_validation.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_hpack.h"
 #include "http2/http2_response_head_plan.h"
 #include "http2/http2_stream_state.h"
 #include "response/http_response_header_access.h"
 #include "server/http_date_cache.h"
-#include "util/pmr_string.h"
 
 namespace ruvia::detail {
 
@@ -105,7 +107,7 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
             write_lower(name, stack.data());
             return std::string_view(stack.data(), name.size());
         }
-        resize_pmr_string_for_overwrite(scratch, name.size());
+        http_resize_pmr_string_for_overwrite(scratch, name.size());
         write_lower(name, scratch.data());
         return scratch;
     }
@@ -118,8 +120,8 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     std::pmr::string& lower_name_scratch) {
     const auto known = get_http2_known_header_encoding(known_bit);
     if (known.hpack_name_index_ != 0) {
-        hpack_encoder::encode_header_with_name_index(
-            header_block, known.hpack_name_index_, value, hpack_header_name_is_sensitive(known.name_));
+        hpack_encoder::encode_header_with_name_index(header_block, known.hpack_name_index_, value,
+            {.never_indexed_ = hpack_header_name_is_sensitive(known.name_)});
         return;
     }
     hpack_encoder::encode_header(header_block,
@@ -129,23 +131,13 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
 }
 
 [[nodiscard]] inline bool http2_is_valid_encoded_response_header(
-    std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept {
+    std::string_view name, std::string_view value, response_field_state& fields) noexcept {
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value) ||
         is_forbidden_http_binary_response_field(name)) {
         return false;
     }
-    if (known_bit == response_header_content_type && !is_valid_http_content_type_field_value(value)) {
-        return false;
-    }
-    if (known_bit == response_header_content_encoding &&
-        !is_valid_http_content_encoding_field_value(value, http_field_list_role::sender)) {
-        return false;
-    }
-    if (http_ascii_equals_ignore_case(name, "Trailer") &&
-        !is_valid_http_response_trailer_field_value(value, http_field_list_role::sender)) {
-        return false;
-    }
-    return true;
+    return validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields) ==
+           response_field_status::ok;
 }
 
 [[nodiscard]] inline http2_interim_response_header_encode_status validate_http2_interim_response_headers(
@@ -213,6 +205,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         return false;
     }
     std::size_t field_count = 0;
+    response_field_state fields;
     for (const auto& header : response.headers()) {
         const auto known_bit = response_header_known_bit(header);
         if (known_bit == response_header_content_length) {
@@ -220,7 +213,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         }
         ++field_count;
         if (field_count > max_http_header_fields ||
-            !http2_is_valid_encoded_response_header(header.name(), header.value(), known_bit) ||
+            !http2_is_valid_encoded_response_header(header.name(), header.value(), fields) ||
             !section_size.add(header.name(), header.value())) {
             return false;
         }
@@ -284,7 +277,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
 }
 
 inline void http2_release_local_header_block(http2_stream_state& stream) {
-    clear_pmr_string_retaining_small(stream.local_header_block());
+    http_clear_pmr_string_retaining_small(stream.local_header_block());
 }
 
 inline void append_http2_response_trailers(

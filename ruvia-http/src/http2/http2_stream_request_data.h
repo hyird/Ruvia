@@ -136,10 +136,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool headers_full() const noexcept {
-        return headers_.full();
-    }
-
     [[nodiscard]] std::size_t header_count() const noexcept {
         return headers_.size();
     }

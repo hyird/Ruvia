@@ -12,11 +12,6 @@ namespace ruvia::detail {
     return static_cast<std::uint16_t>((static_cast<std::uint16_t>(data[0]) << 8) | data[1]);
 }
 
-[[nodiscard]] inline std::uint32_t http2_read24(const unsigned char* data) noexcept {
-    return (static_cast<std::uint32_t>(data[0]) << 16) |
-           (static_cast<std::uint32_t>(data[1]) << 8) | static_cast<std::uint32_t>(data[2]);
-}
-
 [[nodiscard]] inline std::uint32_t http2_read31(const unsigned char* data) noexcept {
     return ((static_cast<std::uint32_t>(data[0] & 0x7f) << 24) |
             (static_cast<std::uint32_t>(data[1]) << 16) |

@@ -1,15 +1,9 @@
 #pragma once
-#include <bit>
 #include <cstddef>
-#include <cstdint>
-#include <limits>
 #include <optional>
 #include <span>
-#include <stdexcept>
-#include <utility>
 #include <vector>
 
-#include "ruvia/core/config_validation.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_ascii.h"
 
@@ -19,6 +13,7 @@
 #include "server/http_server_options.h"
 #include "server/http_server_tls_identity.h"
 #include "tls/tls_host.h"
+#include "util/config_validation.h"
 
 namespace ruvia::detail {
 

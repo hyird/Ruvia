@@ -74,8 +74,11 @@ struct worker_handle_access {
     static void defer(const worker_handle& worker, move_only_function<void()> task);
     [[nodiscard]] static bool defer_if_attached(
         const worker_handle& worker, move_only_function<void()> task);
-    static void defer_or_terminate(
-        const worker_handle& worker, move_only_function<void()> task) noexcept;
+    // Defined in detail/worker/worker_dispatcher.h, which every caller includes:
+    // the callable reaches the worker's io_context without type erasure when
+    // already on that worker.
+    template <typename fn_type>
+    static void defer_or_terminate(const worker_handle& worker, fn_type&& fn) noexcept;
     static void register_shutdown_listener(
         const worker_handle& worker, const std::shared_ptr<worker_shutdown_listener>& listener);
     static void when_shutdown_notifications_complete(

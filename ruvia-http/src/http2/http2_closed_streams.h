@@ -5,8 +5,9 @@
 #include <cstdint>
 #include <optional>
 
+#include "ruvia/http/http2_types.h"
+
 #include "http2/http2_local_settings.h"
-#include "http2/http2_stream_close_source.h"
 
 namespace ruvia::detail {
 

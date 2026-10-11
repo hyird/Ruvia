@@ -10,8 +10,8 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] bool is_compress_coding_token(std::string_view token) noexcept {
-    return detail::http_ascii_equals_ignore_case(token, "compress") ||
-           detail::http_ascii_equals_ignore_case(token, "x-compress");
+    return http_ascii_equals_ignore_case(token, "compress") ||
+           http_ascii_equals_ignore_case(token, "x-compress");
 }
 
 }  // namespace
@@ -25,7 +25,7 @@ void http_accepted_encoding_quality::update(
             const auto token = detail::http_header_token_before_parameters(item);
             const bool explicit_match = gzip_coding       ? http_is_gzip_coding_token(token)
                                         : compress_coding ? is_compress_coding_token(token)
-                                                          : detail::http_ascii_equals_ignore_case(token, coding);
+                                                          : http_ascii_equals_ignore_case(token, coding);
             if (explicit_match) {
                 detail::http_accumulate_accepted_quality(
                     detail::http_weight_parameter(item), explicit_quality_);
@@ -39,11 +39,11 @@ void http_accepted_encoding_quality::update(
 
 bool http_accepts_encoding(std::string_view accept_encoding, std::string_view coding) noexcept {
     if (accept_encoding.empty()) {
-        return detail::http_ascii_equals_ignore_case(coding, "identity");
+        return http_ascii_equals_ignore_case(coding, "identity");
     }
     http_accepted_encoding_quality quality;
     quality.update(accept_encoding, coding);
-    return quality.accepts(detail::http_ascii_equals_ignore_case(coding, "identity"));
+    return quality.accepts(http_ascii_equals_ignore_case(coding, "identity"));
 }
 
 void http_response_coding_qualities::update(std::string_view accept_encoding) noexcept {
@@ -54,16 +54,16 @@ void http_response_coding_qualities::update(std::string_view accept_encoding) no
         if (http_is_gzip_coding_token(token)) {
             detail::http_accumulate_accepted_quality(
                 detail::http_weight_parameter(item), gzip_.explicit_quality_);
-        } else if (detail::http_ascii_equals_ignore_case(token, "deflate")) {
+        } else if (http_ascii_equals_ignore_case(token, "deflate")) {
             detail::http_accumulate_accepted_quality(
                 detail::http_weight_parameter(item), deflate_.explicit_quality_);
-        } else if (detail::http_ascii_equals_ignore_case(token, "br")) {
+        } else if (http_ascii_equals_ignore_case(token, "br")) {
             detail::http_accumulate_accepted_quality(
                 detail::http_weight_parameter(item), brotli_.explicit_quality_);
-        } else if (detail::http_ascii_equals_ignore_case(token, "zstd")) {
+        } else if (http_ascii_equals_ignore_case(token, "zstd")) {
             detail::http_accumulate_accepted_quality(
                 detail::http_weight_parameter(item), zstd_.explicit_quality_);
-        } else if (detail::http_ascii_equals_ignore_case(token, "identity")) {
+        } else if (http_ascii_equals_ignore_case(token, "identity")) {
             detail::http_accumulate_accepted_quality(
                 detail::http_weight_parameter(item), identity_.explicit_quality_);
         } else if (token == "*") {

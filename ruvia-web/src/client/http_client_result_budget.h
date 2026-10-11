@@ -24,9 +24,6 @@ public:
     // independently use the thread-safe retained-result counter above.
     [[nodiscard]] bool reserve_in_flight(std::size_t bytes) noexcept;
     void release_in_flight(std::size_t bytes) noexcept;
-    [[nodiscard]] std::size_t in_flight_bytes() const noexcept {
-        return in_flight_bytes_;
-    }
 
 private:
     const std::size_t max_retained_bytes_;

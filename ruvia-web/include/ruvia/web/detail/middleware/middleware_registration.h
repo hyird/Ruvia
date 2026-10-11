@@ -15,8 +15,8 @@
 namespace ruvia::detail {
 
 // context::respond() needs a complete context. This header is included by
-// application.h and by session.h while context is still incomplete, so the call lives
-// in a .cpp that already has the class definition.
+// session.h and the built-in middleware headers while context is still
+// incomplete, so the call lives in a .cpp that already has the class definition.
 void apply_middleware_response(context& context_value, http_response&& response);
 
 template <typename middleware_t_type>
@@ -44,14 +44,13 @@ template <typename middleware_t_type>
         return invoke_response_middleware<middleware_t_type>(target, context_value, next_value);
     } else {
         static_assert(void_handle_middleware<middleware_t_type> || response_handle_middleware<middleware_t_type>,
-            "middleware must implement async Task<void> or Task<HttpResponse> handle(Context&, "
-            "ruvia::Next&)");
+            "middleware must implement task<void> or task<http_response> handle(context&, next&)");
     }
 }
 
 // Constructs the middleware from the arguments use<T>(args...) captured. The
 // tuple lives on the registration resource for the process lifetime, so it is
-// still readable every time the router materializes an instance -- including
+// still readable every time a worker's route table materializes an instance -- including
 // across a stop()/run() cycle, which rebuilds instances from the same
 // descriptors. Registering without arguments is the empty-tuple case, not a
 // separate path: std::apply then calls the default constructor.
@@ -115,10 +114,6 @@ template <typename middleware_t_type>
     }
 }
 
-// A handler deadline this middleware declares for the routes it is on, in
-// milliseconds, or 0 for none. Read by the server before dispatch, for the same
-// reason the body limit is: by the time a middleware's handle() runs, the clock
-// it wants to start has already been running.
 template <typename middleware_t_type>
 [[nodiscard]] constexpr bool middleware_replay_safe() noexcept {
     if constexpr (requires { middleware_t_type::ruvia_replay_safe; }) {
@@ -128,6 +123,10 @@ template <typename middleware_t_type>
     }
 }
 
+// A handler deadline this middleware declares for the routes it is on, in
+// milliseconds, or 0 for none. Read by the server before dispatch, for the same
+// reason the body limit is: by the time a middleware's handle() runs, the clock
+// it wants to start has already been running.
 template <typename middleware_t_type>
 [[nodiscard]] constexpr std::int64_t middleware_deadline_ms() noexcept {
     if constexpr (requires { middleware_t_type::ruvia_deadline_ms; }) {
@@ -139,14 +138,14 @@ template <typename middleware_t_type>
 
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
-// registration; a middleware is built per router materialization, so they must
+// registration; a middleware is built per worker route table, so they must
 // stay readable for the process lifetime rather than the caller's scope.
 // Registering without arguments is the zero-argument case of this, so there is
 // one descriptor shape and one construction path.
 template <typename middleware_t_type, typename... args_type>
 [[nodiscard]] controller_middleware_descriptor make_middleware_descriptor(args_type&&... args) {
     static_assert(std::is_base_of_v<middleware, middleware_t_type>,
-        "middleware must derive from ruvia::Middleware");
+        "middleware must derive from ruvia::middleware");
     static_assert(std::is_final_v<middleware_t_type>, "middleware must be final");
     static_assert(std::is_constructible_v<middleware_t_type, const std::decay_t<args_type>&...>,
         "middleware is not constructible from the arguments passed to use<T>(); a middleware "

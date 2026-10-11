@@ -8,7 +8,7 @@ template <typename stream_type>
 stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
     std::pmr::polymorphic_allocator<char> allocator, std::string_view initial_body_and_pipeline,
     http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-    ruvia::connection_scanner::entry_type& scanner_entry)
+    connection_scanner::entry_type& scanner_entry)
     : stream_(stream),
       buffer_(allocator),
       transfer_output_(allocator),
@@ -101,7 +101,7 @@ void stream_body_reader<stream_type>::decode_transfer_append(
     std::string_view input, std::pmr::string& target) {
     for (;;) {
         const auto old_size = target.size();
-        ::ruvia::resize_pmr_string_for_overwrite(target, old_size + http_body_buffer_bytes);
+        http_resize_pmr_string_for_overwrite(target, old_size + http_body_buffer_bytes);
         const auto result_value = transfer_decoder_->decode(
             input, std::span<char>(target.data() + old_size, http_body_buffer_bytes));
         input.remove_prefix(std::min(input.size(), result_value.consumed_bytes()));
@@ -110,19 +110,8 @@ void stream_body_reader<stream_type>::decode_transfer_append(
             continue;
         }
         target.resize(old_size);
-        if (const auto* failure = result_value.failure()) {
-            throw_transfer_coding_protocol_failure(*failure);
-        }
-        if (result_value.decoder_failure() != nullptr) {
-            throw_http_transfer_coding_decoder_failure();
-        }
-        if (result_value.complete() != nullptr) {
-            return;
-        }
-        if (result_value.need_input() != nullptr) {
-            return;
-        }
-        throw std::logic_error("unexpected transfer-coding decode result");
+        require_transfer_coding_progress(result_value);
+        return;
     }
 }
 
@@ -152,9 +141,9 @@ task<void> stream_body_reader<stream_type>::read_more() {
         buffer_.reserve(next_capacity);
     }
     const auto writable = std::min<std::size_t>(http_body_buffer_bytes, hard_limit - old_size);
-    ::ruvia::resize_pmr_string_for_overwrite(buffer_, old_size + writable);
+    http_resize_pmr_string_for_overwrite(buffer_, old_size + writable);
 
-    scanner_entry_.set_phase(ruvia::connection_scanner::phase_type::reading_payload);
+    scanner_entry_.set_phase(connection_scanner::phase_type::reading_payload);
     auto read_completion =
         co_await ruvia::async_asio<std::size_t>([this, old_size, writable](auto handler) mutable {
             stream_.async_read_some(
@@ -178,7 +167,7 @@ bool stream_body_reader<stream_type>::exceeds_limit(std::size_t bytes_value) con
 template <typename stream_type>
 void stream_body_reader<stream_type>::mark_finished() noexcept {
     finished_ = true;
-    scanner_entry_.set_phase(ruvia::connection_scanner::phase_type::idle);
+    scanner_entry_.set_phase(connection_scanner::phase_type::idle);
 }
 
 }  // namespace ruvia::detail

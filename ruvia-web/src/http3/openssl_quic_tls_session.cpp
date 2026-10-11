@@ -8,6 +8,8 @@
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
+#include "ruvia/http/http3_settings.h"
+
 #include "client/client_transport.h"
 
 namespace ruvia::detail {
@@ -87,9 +89,8 @@ const OSSL_DISPATCH callbacks[]{
 }  // namespace
 
 openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context_value, quic_role role,
-    std::span<const unsigned char> alpn, std::string_view peer_host,
-    std::pmr::memory_resource* resource, SSL_SESSION* resumption_session,
-    bool enable_early_data)
+    std::string_view peer_host, std::pmr::memory_resource* resource,
+    SSL_SESSION* resumption_session, bool enable_early_data)
     : role_(role),
       resource_(resource ? resource : std::pmr::get_default_resource()),
       peer_host_(peer_host, resource_),
@@ -113,7 +114,8 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context_value, quic_
                 throw std::runtime_error("failed to configure QUIC TLS peer identity");
             }
         }
-        if (!alpn.empty() && SSL_set_alpn_protos(ssl_.get(), alpn.data(), static_cast<unsigned int>(alpn.size())) != 0) {
+        if (SSL_set_alpn_protos(ssl_.get(), http3_alpn_protocol_list.data(),
+                static_cast<unsigned int>(http3_alpn_protocol_list.size())) != 0) {
             throw std::runtime_error("failed to configure QUIC TLS ALPN");
         }
     } else {

@@ -273,9 +273,8 @@ ruvia::task<void> receive_through_timer_stop(
 }
 
 ruvia::task<void> acquire_after_timer_stop(
-    ruvia::pool_lease_scheduler& pool, std::optional<ruvia::pool_waiter_result::status_type>& status) {
-    const auto result_value = co_await pool.acquire(std::chrono::milliseconds(1));
-    status = result_value.status();
+    ruvia::pool_lease_scheduler& pool, std::optional<ruvia::pool_waiter_result>& result) {
+    result.emplace(co_await pool.acquire(std::chrono::milliseconds(1)));
 }
 
 // Once the worker's timer queue stops, every timed primitive reports its
@@ -333,14 +332,14 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::worker_runtime_context& runti
     if (!held.acquired()) {
         co_return;
     }
-    std::optional<ruvia::pool_waiter_result::status_type> waiting_status;
+    std::optional<ruvia::pool_waiter_result> waiting_result;
     {
         ruvia::task_scope scope(worker_value);
-        scope.spawn(acquire_after_timer_stop(pool, waiting_status));
+        scope.spawn(acquire_after_timer_stop(pool, waiting_result));
         static_cast<void>(pool.close());
         co_await scope.join();
     }
-    success = waiting_status == ruvia::pool_waiter_result::status_type::closed;
+    success = waiting_result.has_value() && waiting_result->closed() != nullptr;
 }
 
 bool timed_primitives_report_timer_stop() {

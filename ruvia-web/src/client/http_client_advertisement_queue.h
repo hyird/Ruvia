@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <list>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 
@@ -21,11 +20,6 @@ public:
         std::pmr::memory_resource* resource);
     http_client_advertisement_queue(worker_handle&&, http_client_advertisement_config,
         std::pmr::memory_resource*) = delete;
-    // An explicit accounting upstream must outlive every returned observation.
-    http_client_advertisement_queue(const worker_handle& worker_value, http_client_advertisement_config config,
-        std::pmr::memory_resource* resource, std::pmr::memory_resource& memory_upstream);
-    http_client_advertisement_queue(worker_handle&&, http_client_advertisement_config,
-        std::pmr::memory_resource*, std::pmr::memory_resource&) = delete;
     ~http_client_advertisement_queue();
     http_client_advertisement_queue(const http_client_advertisement_queue&) = delete;
     http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;

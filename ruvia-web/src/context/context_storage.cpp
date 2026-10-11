@@ -29,7 +29,7 @@ context::context(request_memory& memory, const http_request& request,
       param_values_(param_values),
       param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
       route_rate_limit_scope_(route_rate_limit_scope),
-      request_storage_(detail::make_pmr_object<detail::context_request_storage>(memory.resource(),
+      request_storage_(make_pmr_object<detail::context_request_storage>(memory.resource(),
           services, memory.resource())) {
     if (!services.automatic_alt_svc().empty()) {
         set_stable_response_header("Alt-Svc", services.automatic_alt_svc());

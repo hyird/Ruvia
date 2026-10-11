@@ -150,7 +150,7 @@ http_client_response_header_lookup_result lookup_unique_http_client_response_hea
     std::string_view found;
     bool seen = false;
     for (const auto& header : head.headers()) {
-        if (!detail::http_ascii_equals_ignore_case(header.name(), name)) {
+        if (!http_ascii_equals_ignore_case(header.name(), name)) {
             continue;
         }
         if (seen) {
@@ -190,7 +190,7 @@ http_client_origin_authority_status classify_http_client_origin_authority(
     if ((authority.find('@') != std::string_view::npos)) {
         return http_client_origin_authority_status::invalid_authority;
     }
-    const auto parsed_value = detail::parse_http_authority(authority);
+    const auto parsed_value = parse_http_authority(authority);
     if (!parsed_value) {
         return http_client_origin_authority_status::invalid_authority;
     }
@@ -215,7 +215,7 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
             http_client_redirect_resolution_error::invalid_current_target);
     }
 
-    location = detail::http_trim_ows(location);
+    location = http_trim_ows(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
         if (!detail::is_valid_uri_component(location.substr(hash + 1), true, true)) {
             return http_client_redirect_resolution_result::make_failure(
@@ -236,8 +236,8 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
             return http_client_redirect_resolution_result::make_failure(
                 http_client_redirect_resolution_error::invalid_location);
         }
-        const bool is_https = detail::http_ascii_equals_ignore_case(scheme, "https");
-        if (!is_https && !detail::http_ascii_equals_ignore_case(scheme, "http")) {
+        const bool is_https = http_ascii_equals_ignore_case(scheme, "https");
+        if (!is_https && !http_ascii_equals_ignore_case(scheme, "http")) {
             return http_client_redirect_resolution_result::make_failure(
                 http_client_redirect_resolution_error::unsupported_scheme);
         }
@@ -266,7 +266,7 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
             return http_client_redirect_resolution_result::make_failure(
                 http_client_redirect_resolution_error::invalid_location);
         }
-        const auto parsed_value = detail::parse_http_authority(authority);
+        const auto parsed_value = parse_http_authority(authority);
         if (!parsed_value) {
             return http_client_redirect_resolution_result::make_failure(
                 http_client_redirect_resolution_error::invalid_location);

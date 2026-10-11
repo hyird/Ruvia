@@ -7,12 +7,11 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 #include <variant>
 
 #include "ruvia/core/ip_address.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/native_path.h"
+#include "ruvia/http/http_native_path.h"
 
 #include "server/http_server_options_validation.h"
 
@@ -32,7 +31,7 @@ void assign_tls_file_name_from_native(
 }
 
 void assign_tls_file_name(std::pmr::string& output, const std::filesystem::path& path) {
-    assign_tls_file_name_from_native(output, ruvia::native_path_view(path));
+    assign_tls_file_name_from_native(output, http_native_path_view(path));
 }
 
 }  // namespace

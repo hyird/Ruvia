@@ -1,6 +1,9 @@
+#include <cstddef>
 #include <exception>
 #include <memory>
+#include <new>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -8,55 +11,51 @@
 
 #include "context/context_access.h"
 #include "http/http_error_response.h"
-#include "http/session_access.h"
-#include "router/route_stream_state.h"
+#include "router/middleware_chain.h"
 #include "router/route_table.h"
-#include "server/http_response_stream_state.h"
 
 namespace ruvia {
 
+namespace detail {
+
+struct next_access final {
+    [[nodiscard]] static next& make_at(void* storage, next_state state_value, next_invoke_type invoke) noexcept {
+        return *::new (storage) next(state_value, invoke);
+    }
+};
+
+}  // namespace detail
+
 namespace {
 
-void store_repeated_next_error(context& context_value) {
-    detail::context_access::set_error(
-        context_value, std::make_exception_ptr(std::logic_error("next() called multiple times")));
+void store_next_misuse_error(context& context_value, const char* message, std::string_view code) {
+    detail::context_access::set_error(context_value, std::make_exception_ptr(std::logic_error(message)));
     detail::context_access::set_response(
         context_value, detail::make_default_error_response(context_value.arena(),
                            http_error_info({.status_ = ruvia::http_status::internal_server_error,
-                               .code_ = "next_called_multiple_times",
-                               .message_ = "next() called multiple times"})));
+                               .code_ = code,
+                               .message_ = message})));
 }
 
-void store_next_after_response_error(context& context_value) {
-    detail::context_access::set_error(
-        context_value, std::make_exception_ptr(std::logic_error("next() called after respond()")));
-    detail::context_access::set_response(
-        context_value, detail::make_default_error_response(context_value.arena(),
-                           http_error_info({.status_ = ruvia::http_status::internal_server_error,
-                               .code_ = "next_called_after_response",
-                               .message_ = "next() called after respond()"})));
-}
-
-[[nodiscard]] bool validate_next_invocation(detail::next_state& state_value) {
+[[nodiscard]] bool validate_next_invocation(const detail::next_state& state_value) {
     auto& context_value = *state_value.context_;
     if (state_value.invocation_ != detail::next_state::invocation_type::ready) {
-        store_repeated_next_error(context_value);
+        store_next_misuse_error(context_value, "next() called multiple times", "next_called_multiple_times");
         return false;
     }
     if (detail::context_access::has_response(context_value)) {
-        store_next_after_response_error(context_value);
+        store_next_misuse_error(context_value, "next() called after respond()", "next_called_after_response");
         return false;
     }
     return true;
 }
 
-detail::next_state::control_type* make_next_control(context& context_value) {
-    auto* control = static_cast<detail::next_state::control_type*>(context_value.arena()->allocate(
-        sizeof(detail::next_state::control_type), alignof(detail::next_state::control_type)));
-    std::construct_at(control);
-    return control;
+task<void> ignore_expired_next(detail::next_state) {
+    co_return;
 }
 
+// Expires a hop's next() when the frame that received it completes, so a
+// stored next() called later is ignored.
 class next_control_scope final {
 public:
     explicit next_control_scope(detail::next_state::control_type& control) noexcept
@@ -73,224 +72,157 @@ private:
     detail::next_state::control_type* control_;
 };
 
-next_control_scope make_next_control_scope(detail::next_state::control_type& control) noexcept {
-    return next_control_scope(control);
+// One hop's control block and the next() handed to its frame share a single
+// request-arena allocation; both outlive the frame so a late next() stays safe.
+struct next_hop_layout final {
+    static constexpr std::size_t next_offset =
+        (sizeof(detail::next_state::control_type) + alignof(next) - 1) / alignof(next) * alignof(next);
+    static constexpr std::size_t size = next_offset + sizeof(next);
+    static constexpr std::size_t alignment = alignof(next) > alignof(detail::next_state::control_type)
+                                                 ? alignof(next)
+                                                 : alignof(detail::next_state::control_type);
+};
+
+task<void> run_chain_hop(detail::next_state state_value);
+
+[[nodiscard]] std::size_t applicable_frame(
+    const detail::middleware_chain& chain, std::size_t index, const context& context_value) noexcept {
+    if (chain.scopes_.empty()) {
+        return index;
+    }
+    // The same path the route table resolved this request against.
+    const auto path = detail::context_access::request(context_value).path();
+    while (index < chain.frames_.size() && !detail::path_is_under_prefix(path, chain.scopes_[index])) {
+        ++index;
+    }
+    return index;
+}
+
+// One coroutine per hop: the entry hop (no control) lets failures propagate to
+// the dispatcher; every hop reached through next() validates the single-shot
+// invocation first and contains failures below it through the chain's policy.
+task<void> run_chain_hop(detail::next_state state_value) {
+    auto& context_value = *state_value.context_;
+    const auto& chain = *state_value.chain_;
+    const bool contained = state_value.control_ != nullptr;
+    if (contained && !validate_next_invocation(state_value)) {
+        co_return;
+    }
+    std::exception_ptr exception;
+    try {
+        const auto index = applicable_frame(chain, state_value.index_, context_value);
+        if (index >= chain.frames_.size()) {
+            co_await chain.terminal_(context_value);
+        } else {
+            auto* storage = static_cast<std::byte*>(
+                context_value.arena()->allocate(next_hop_layout::size, next_hop_layout::alignment));
+            auto& control = *std::construct_at(reinterpret_cast<detail::next_state::control_type*>(storage));
+            const next_control_scope control_scope(control);
+            auto& next_value = detail::next_access::make_at(storage + next_hop_layout::next_offset,
+                detail::next_state{
+                    .chain_ = &chain, .context_ = &context_value, .control_ = &control, .index_ = index + 1},
+                &run_chain_hop);
+            co_await chain.frames_[index](context_value, next_value);
+        }
+    } catch (...) {
+        if (!contained) {
+            throw;
+        }
+        exception = std::current_exception();
+    }
+    if (exception != nullptr) {
+        co_await chain.failure_(*chain.table_, context_value, exception);
+    }
 }
 
 }  // namespace
 
-task<http_response> detail::route_table::invoke_route(
-    const route_entry& route, context& context_value) const {
-    const auto* endpoint = route.endpoint().buffered();
-    if (endpoint == nullptr) {
+next::awaitable_type next::operator()() & {
+    auto state_value = state_;
+    auto* control = state_value.control_;
+    state_value.invocation_ =
+        control == nullptr ? detail::next_state::invocation_type::expired : control->begin_invocation();
+    if (state_value.invocation_ == detail::next_state::invocation_type::expired) {
+        return awaitable_type(state_value, &ignore_expired_next);
+    }
+    return awaitable_type(state_value, invoke_);
+}
+
+task<void> detail::run_chain(const middleware_chain& chain, context& context_value) {
+    return run_chain_hop(next_state{.chain_ = &chain, .context_ = &context_value});
+}
+
+detail::middleware_chain detail::route_table::route_chain(const route_entry& route) const noexcept {
+    const auto offset = route.middleware_offset();
+    const auto count = route.middleware_count();
+    return middleware_chain{.table_ = this,
+        .frames_ = std::span<const route_middleware_type>(middleware_frames_).subspan(offset, count),
+        .scopes_ = route.has_conditional_middleware()
+                       ? std::span<const std::string_view>(plan_->middleware_scopes_).subspan(offset, count)
+                       : std::span<const std::string_view>{},
+        .failure_ = &route_table::contain_failure};
+}
+
+task<http_response> detail::route_table::invoke_route(const resolved_route& resolved, context& context_value) const {
+    const auto& route = resolved.route();
+    if (route.endpoint().buffered() == nullptr) {
         throw std::logic_error("route is not a buffered-response route");
     }
     // Hot path: a route with no middleware goes straight to the handler. The
     // context response slot is only needed when middleware can observe the
     // downstream response through context::response().
     if (!route.has_middleware()) {
-        return endpoint->handler()(context_value);
+        return resolved.handler()(context_value);
     }
-    return invoke_route_with_middleware(route, context_value);
+    return respond_through_chain(route_chain(route), context_value, resolved.handler());
 }
 
-task<http_response> detail::route_table::invoke_route_with_middleware(
-    const route_entry& route, context& context_value) const {
-    co_await invoke_middleware_at(route, 0, context_value);
+task<http_response> detail::route_table::respond_through_chain(
+    middleware_chain chain, context& context_value, route_handler_type terminal) const {
+    auto respond = [terminal](context& terminal_context) -> task<void> {
+        detail::context_access::set_response(terminal_context, co_await terminal(terminal_context));
+    };
+    chain.terminal_ = callback_access::bind<task<void>(context&)>(respond);
+    co_await run_chain(chain, context_value);
     if (detail::context_access::has_response(context_value)) {
         co_return detail::context_access::take_response(context_value);
     }
     if (auto exception = context_value.exception()) {
         co_return co_await handle_exception(context_value, exception);
     }
-    throw std::logic_error(
-        "context is not finalized; middleware must set a response or await next()");
+    throw std::logic_error("context is not finalized; middleware must set a response or await next()");
 }
 
-task<void> detail::route_table::invoke_middleware_at(
-    const route_entry& route, std::size_t index, context& context_value) const {
-    index = applicable_middleware_index(route, index, context_value);
-    if (index >= route.middleware_count()) {
-        const auto* endpoint = route.endpoint().buffered();
-        if (endpoint == nullptr) {
-            throw std::logic_error("route is not a buffered-response route");
-        }
-        auto response = co_await endpoint->handler()(context_value);
-        detail::context_access::set_response(context_value, std::move(response));
-        co_return;
-    }
-
-    const auto& middleware_value = middleware_frames_[route.middleware_offset() + index];
-    auto& control = *make_next_control(context_value);
-    auto control_scope = make_next_control_scope(control);
-    auto& next_value = next_access::make_in(context_value.arena(),
-        detail::next_state{.table_ = this,
-            .route_ = &route,
-            .context_ = &context_value,
-            .control_ = &control,
-            .index_ = index + 1},
-        &route_table::invoke_middleware_continuation);
-    auto task_value = middleware_value(context_value, next_value);
-    co_await std::move(task_value);
-    co_return;
-}
-
-task<void> detail::route_table::invoke_middleware_continuation(next_state state_value) {
-    if (!validate_next_invocation(state_value)) {
-        co_return;
-    }
-    auto* context_value = state_value.context_;
-    const auto* table_value = state_value.table_;
-    const auto* route = state_value.route_;
-    std::exception_ptr exception;
-    try {
-        co_await table_value->invoke_middleware_at(*route, state_value.index_, *context_value);
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    if (exception != nullptr) {
-        co_await table_value->store_middleware_exception_response(*context_value, exception);
-    }
-}
-
-std::size_t detail::route_table::applicable_middleware_index(
-    const route_entry& route, std::size_t index, const context& context_value) const noexcept {
-    if (!route.has_conditional_middleware()) {
-        return index;
-    }
-    // The same path the route table resolved this request against.
-    const auto path = detail::context_access::request(context_value).path();
-    const auto* scopes = middleware_scopes_.data() + route.middleware_offset();
-    while (index < route.middleware_count() && !path_is_under_prefix(path, scopes[index])) {
-        ++index;
-    }
-    return index;
-}
-
-// The unmatched-request chain. It mirrors the route chain exactly except for
-// its terminal: there is no route endpoint, so the 404/405/501 response comes
-// from the caller-supplied thunk instead.
 task<http_response> detail::route_table::run_unmatched_chain(
-    context& context_value, const unmatched_terminal_type& terminal) const {
-    if (unmatched_middleware_count_ == 0) {
+    context& context_value, route_handler_type terminal) const {
+    if (plan_->unmatched_middleware_count_ == 0) {
         return terminal(context_value);
     }
-    return [](const route_table* table_value, context* unmatched_context,
-               const unmatched_terminal_type* unmatched_terminal) -> task<http_response> {
-        co_await table_value->invoke_unmatched_middleware_at(0, *unmatched_context, *unmatched_terminal);
-        if (detail::context_access::has_response(*unmatched_context)) {
-            co_return detail::context_access::take_response(*unmatched_context);
-        }
-        if (auto exception = unmatched_context->exception()) {
-            co_return co_await table_value->handle_exception(*unmatched_context, exception);
-        }
-        throw std::logic_error(
-            "context is not finalized; middleware must set a response or await next()");
-    }(this, &context_value, &terminal);
+    return respond_through_chain(
+        middleware_chain{.table_ = this,
+            .frames_ = std::span<const route_middleware_type>(middleware_frames_)
+                           .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
+            .failure_ = &route_table::contain_failure},
+        context_value, terminal);
 }
 
-task<void> detail::route_table::invoke_unmatched_middleware_at(
-    std::size_t index, context& context_value, const unmatched_terminal_type& terminal) const {
-    if (index >= unmatched_middleware_count_) {
-        auto response = co_await terminal(context_value);
-        detail::context_access::set_response(context_value, std::move(response));
-        co_return;
-    }
-
-    const auto& middleware_value = middleware_frames_[unmatched_middleware_offset_ + index];
-    auto& control = *make_next_control(context_value);
-    auto control_scope = make_next_control_scope(control);
-    auto& next_value = next_access::make_in(context_value.arena(),
-        detail::next_state{.table_ = this,
-            .context_ = &context_value,
-            .unmatched_terminal_ = &terminal,
-            .control_ = &control,
-            .index_ = index + 1},
-        &route_table::invoke_unmatched_middleware_continuation);
-    auto task_value = middleware_value(context_value, next_value);
-    co_await std::move(task_value);
-    co_return;
-}
-
-task<void> detail::route_table::invoke_unmatched_middleware_continuation(next_state state_value) {
-    if (!validate_next_invocation(state_value)) {
-        co_return;
-    }
-    auto* context_value = state_value.context_;
-    const auto* table_value = state_value.table_;
-    const auto* terminal =
-        static_cast<const route_table::unmatched_terminal_type*>(state_value.unmatched_terminal_);
-    std::exception_ptr exception;
-    try {
-        co_await table_value->invoke_unmatched_middleware_at(state_value.index_, *context_value, *terminal);
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    if (exception != nullptr) {
-        co_await table_value->store_middleware_exception_response(*context_value, exception);
-    }
-}
-
-task<void> detail::route_table::invoke_stream_middleware_at(const route_entry& route, std::size_t index,
-    context& context_value, stream_middleware_chain_state& chain, const route_stream_handler_type& handler) const {
-    index = applicable_middleware_index(route, index, context_value);
-    if (index >= route.middleware_count()) {
-        if (route.endpoint().get_websocket() != nullptr && context_value.try_session()) {
-            co_await session_access::commit(context_value);
-        }
-        chain.mark_handler_invoked();
-        co_await handler(context_value);
-        co_return;
-    }
-
-    const auto& middleware_value = middleware_frames_[route.middleware_offset() + index];
-    auto& control = *make_next_control(context_value);
-    auto control_scope = make_next_control_scope(control);
-    auto& next_value = next_access::make_in(context_value.arena(),
-        detail::next_state{.table_ = this,
-            .route_ = &route,
-            .context_ = &context_value,
-            .stream_chain_ = &chain,
-            .stream_handler_ = &handler,
-            .control_ = &control,
-            .index_ = index + 1},
-        &route_table::invoke_stream_middleware_continuation);
-    auto task_value = middleware_value(context_value, next_value);
-    co_await std::move(task_value);
-    co_return;
-}
-
-task<void> detail::route_table::invoke_stream_middleware_continuation(next_state state_value) {
-    if (!validate_next_invocation(state_value)) {
-        co_return;
-    }
-    auto* context_value = state_value.context_;
-    const auto* table_value = state_value.table_;
-    const auto* route = state_value.route_;
-    auto* chain = state_value.stream_chain_;
-    std::exception_ptr exception;
-    try {
-        co_await table_value->invoke_stream_middleware_at(
-            *route, state_value.index_, *context_value, *chain, *state_value.stream_handler_);
-    } catch (const response_stream_head_only_complete&) {
-        // Not a failure: the committed head already completed a
-        // body-suppressed message (HEAD on a streaming route). Let the signal
-        // unwind through every middleware frame so dispatch_stream_route can
-        // finish the stream as a head-only success instead of rendering a
-        // buffered error response that can no longer be sent.
-        throw;
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    if (exception != nullptr) {
-        co_await table_value->store_middleware_exception_response(*context_value, exception);
-    }
-}
-
-task<void> detail::route_table::store_middleware_exception_response(
-    context& context_value, std::exception_ptr exception) const {
-    auto response = co_await handle_exception(context_value, exception);
+task<void> detail::route_table::contain_failure(
+    const route_table& table, context& context_value, std::exception_ptr exception) {
+    auto response = co_await table.handle_exception(context_value, exception);
     detail::context_access::set_response(context_value, std::move(response));
+}
+
+task<void> detail::route_table::contain_stream_failure(
+    const route_table& table, context& context_value, std::exception_ptr exception) {
+    // Not a failure: the committed head already completed a body-suppressed
+    // message (HEAD on a streaming route). Let the signal unwind through every
+    // middleware frame so dispatch_stream_route can finish the stream as a
+    // head-only success instead of rendering a buffered error response that
+    // can no longer be sent.
+    if (detail::is_head_only_complete(exception)) {
+        std::rethrow_exception(exception);
+    }
+    co_await contain_failure(table, context_value, exception);
 }
 
 }  // namespace ruvia

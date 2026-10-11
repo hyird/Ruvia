@@ -53,7 +53,7 @@ namespace ruvia {
                                     static_cast<std::size_t>(needs_http1_chunked) +
                                     static_cast<std::size_t>(needs_sse_cache_control);
     if (additional_headers != 0) {
-        detail::reserve_response_headers(response, response.headers().size() + additional_headers);
+        response.reserve_headers(response.headers().size() + additional_headers);
     }
 
     if (needs_sse_content_type) {

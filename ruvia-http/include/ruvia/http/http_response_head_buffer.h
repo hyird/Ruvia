@@ -69,10 +69,4 @@ private:
     std::variant<stack_state_type, heap_state_type> state_{stack_state_type{}};
 };
 
-namespace detail {
-using response_head_buffer_type = http_response_head_buffer;
-inline constexpr auto response_head_stack_bytes = ::ruvia::response_head_stack_bytes;
-inline constexpr auto response_head_retained_heap_bytes = ::ruvia::response_head_retained_heap_bytes;
-}  // namespace detail
-
 }  // namespace ruvia

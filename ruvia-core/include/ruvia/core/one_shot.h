@@ -106,19 +106,7 @@ struct one_shot_consumed final {};
 struct one_shot_receiver_closed final {};
 struct one_shot_worker_stopping final {};
 
-template <typename t_type>
-class one_shot_ready final {
-public:
-    explicit one_shot_ready(t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>)
-        : value_(std::move(value)) {}
-
-    [[nodiscard]] t_type take_value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
-        return std::move(value_);
-    }
-
-private:
-    t_type value_;
-};
+struct one_shot_ready final {};
 
 template <typename t_type>
 struct one_shot_state final : worker_shutdown_listener {
@@ -131,11 +119,18 @@ struct one_shot_state final : worker_shutdown_listener {
 
     void worker_stopping() noexcept override;
 
+    [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
+        return std::unique_lock(mutex_);
+    }
+
     worker_handle worker_;
     std::mutex mutex_;
-    using lifecycle_type = std::variant<one_shot_pending, one_shot_ready<t_type>, one_shot_consumed,
+    using lifecycle_type = std::variant<one_shot_pending, one_shot_ready, one_shot_consumed,
         one_shot_receiver_closed, one_shot_worker_stopping>;
     lifecycle_type lifecycle_;
+    // After publishing consumed/closed, the thread that claimed ready owns this
+    // stable slot until its value has been moved or destroyed outside mutex_.
+    std::optional<t_type> ready_value_;
     worker_single_wait_awaiter<t_type, one_shot_state<t_type>>* waiter_{nullptr};
     std::uint64_t waiter_generation_{0};
     std::uint64_t next_waiter_generation_{0};
@@ -151,11 +146,18 @@ struct one_shot_awaiter final {
 
     [[nodiscard]] bool await_ready() {
         auto& owner_value = wait_.state();
-        std::lock_guard lock(owner_value.mutex_);
-        if (auto* ready = std::get_if<one_shot_ready<t_type>>(&owner_value.lifecycle_)) {
-            (void)wait_.complete_result(
-                worker_wait_result_access::value(std::move(*ready).take_value()));
+        std::unique_lock lock(owner_value.mutex_);
+        if (std::holds_alternative<one_shot_ready>(owner_value.lifecycle_)) {
             owner_value.lifecycle_.template emplace<one_shot_consumed>();
+            lock.unlock();
+            struct ready_consumption final {
+                std::optional<t_type>& value_;
+                ~ready_consumption() {
+                    value_.reset();
+                }
+            } consumption{owner_value.ready_value_};
+            (void)wait_.complete_result(
+                worker_wait_result_access::value(std::move(*owner_value.ready_value_)));
             return true;
         }
         if (std::holds_alternative<one_shot_worker_stopping>(owner_value.lifecycle_)) {
@@ -208,7 +210,7 @@ template <typename t_type>
 template <typename t_type>
 void one_shot_state<t_type>::worker_stopping() noexcept {
     std::lock_guard lock(mutex_);
-    if (!std::holds_alternative<one_shot_ready<t_type>>(lifecycle_)) {
+    if (!std::holds_alternative<one_shot_ready>(lifecycle_)) {
         lifecycle_.template emplace<one_shot_worker_stopping>();
     }
     complete_worker_single_wait(*this, worker_wait_status::worker_stopping);
@@ -226,27 +228,19 @@ public:
             return one_shot_complete_result<t_type>::reject(
                 one_shot_complete_status::receiver_closed, std::move(value));
         }
+        std::optional<one_shot_complete_status> rejection;
         {
             std::lock_guard lock(state_->mutex_);
-            if (std::holds_alternative<detail::one_shot_ready<t_type>>(state_->lifecycle_) ||
+            if (std::holds_alternative<detail::one_shot_ready>(state_->lifecycle_) ||
                 std::holds_alternative<detail::one_shot_consumed>(state_->lifecycle_)) {
-                return one_shot_complete_result<t_type>::reject(
-                    one_shot_complete_status::already_completed, std::move(value));
-            }
-            if (std::holds_alternative<detail::one_shot_worker_stopping>(state_->lifecycle_)) {
-                return one_shot_complete_result<t_type>::reject(
-                    one_shot_complete_status::worker_stopping, std::move(value));
-            }
-            if (std::holds_alternative<detail::one_shot_receiver_closed>(state_->lifecycle_)) {
-                return one_shot_complete_result<t_type>::reject(
-                    one_shot_complete_status::receiver_closed, std::move(value));
-            }
-            assert(std::holds_alternative<detail::one_shot_pending>(state_->lifecycle_));
-            if (!state_->worker_.accepting()) {
-                return one_shot_complete_result<t_type>::reject(
-                    one_shot_complete_status::worker_stopping, std::move(value));
-            }
-            if (auto* waiter = state_->waiter_) {
+                rejection = one_shot_complete_status::already_completed;
+            } else if (std::holds_alternative<detail::one_shot_worker_stopping>(state_->lifecycle_)) {
+                rejection = one_shot_complete_status::worker_stopping;
+            } else if (std::holds_alternative<detail::one_shot_receiver_closed>(state_->lifecycle_)) {
+                rejection = one_shot_complete_status::receiver_closed;
+            } else if (!state_->worker_.accepting()) {
+                rejection = one_shot_complete_status::worker_stopping;
+            } else if (auto* waiter = state_->waiter_) {
                 const bool wake =
                     waiter->complete_result(detail::worker_wait_result_access::value(std::move(value)));
                 state_->lifecycle_.template emplace<detail::one_shot_consumed>();
@@ -260,13 +254,13 @@ public:
                     waiter->wake();
                 }
             } else {
-                try {
-                    state_->lifecycle_.template emplace<detail::one_shot_ready<t_type>>(std::move(value));
-                } catch (...) {
-                    state_->lifecycle_.template emplace<detail::one_shot_pending>();
-                    throw;
-                }
+                assert(std::holds_alternative<detail::one_shot_pending>(state_->lifecycle_));
+                state_->ready_value_.emplace(std::move(value));
+                state_->lifecycle_.template emplace<detail::one_shot_ready>();
             }
+        }
+        if (rejection) {
+            return one_shot_complete_result<t_type>::reject(*rejection, std::move(value));
         }
         return one_shot_complete_result<t_type>::accept();
     }
@@ -335,16 +329,26 @@ public:
     }
     const worker_handle& worker() const&& = delete;
 
+    // Closing discards an unconsumed value before returning and closes every
+    // future wait. Its destruction may reenter this receiver or its completion.
     void close() const {
         if (!state_) {
             return;
         }
-        std::lock_guard lock(state_->mutex_);
-        if (!std::holds_alternative<detail::one_shot_pending>(state_->lifecycle_)) {
-            return;
+        const auto state = state_;
+        bool discard = false;
+        {
+            std::lock_guard lock(state->mutex_);
+            discard = std::holds_alternative<detail::one_shot_ready>(state->lifecycle_);
+            if (!discard && !std::holds_alternative<detail::one_shot_pending>(state->lifecycle_)) {
+                return;
+            }
+            state->lifecycle_.template emplace<detail::one_shot_receiver_closed>();
+            detail::complete_worker_single_wait(*state, worker_wait_status::closed);
         }
-        state_->lifecycle_.template emplace<detail::one_shot_receiver_closed>();
-        detail::complete_worker_single_wait(*state_, worker_wait_status::closed);
+        if (discard) {
+            state->ready_value_.reset();
+        }
     }
 
 private:
@@ -360,7 +364,7 @@ template <typename t_type>
 // transferring the stable dispatcher endpoint into the one-shot state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_one_shot(worker_handle worker_value, one_shot_options options = {}) {
-    auto* resolved = detail::pmr_resource_or_default(options.resource_);
+    auto* resolved = pmr_resource_or_default(options.resource_);
     std::pmr::polymorphic_allocator<detail::one_shot_state<t_type>> allocator(resolved);
     auto state_value = std::allocate_shared<detail::one_shot_state<t_type>>(allocator, std::move(worker_value));
     detail::worker_handle_access::register_shutdown_listener(state_value->worker_, state_value);

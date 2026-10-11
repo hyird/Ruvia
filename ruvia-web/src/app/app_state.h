@@ -2,15 +2,13 @@
 
 #include <condition_variable>
 #include <cstddef>
-#include <exception>
 #include <mutex>
 #include <optional>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/native_path.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/web/app.h"
 
 #include "app/app_lifecycle.h"
@@ -40,7 +38,7 @@ struct app_document_root_config final {
         : root_(resource),
           static_options_(std::move(configured_static_options)) {}
 
-    ruvia::native_path_string_type root_;
+    http_native_path_string_type root_;
     static_root_config_storage static_options_;
     document_root_runtime_config runtime_;
     static_root_precompression_options precompression_;

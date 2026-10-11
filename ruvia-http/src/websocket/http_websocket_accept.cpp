@@ -7,7 +7,7 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 
-#include "util/http_base64.h"
+#include "ruvia/http/http_base64.h"
 #include "websocket/http_websocket_accept_key.h"
 
 namespace ruvia::detail {
@@ -123,9 +123,9 @@ void encode_websocket_accept(websocket_accept_key_type& output, std::string_view
         key.size() > max_sha1_message_bytes - websocket_guid.size()) {
         throw std::length_error("WebSocket accept input is too large");
     }
-    key = detail::http_trim_ows(key);
+    key = http_trim_ows(key);
     const auto digest = sha1(key, websocket_guid);
-    encode_http_base64(output.data(), std::span<const std::uint8_t>(digest));
+    http_base64_encode(output.data(), std::span<const std::uint8_t>(digest));
 }
 
 }  // namespace ruvia::detail

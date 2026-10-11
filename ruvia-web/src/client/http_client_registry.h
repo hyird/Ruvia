@@ -22,21 +22,18 @@ namespace ruvia::detail {
 
 class http_client_pool;
 
+// Every pool of one owner shares the owner's result budget domain: one per
+// standalone client, one per application worker.
 class http_client_registry final {
 public:
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
         std::pmr::memory_resource* resource, const http_client_config& default_config,
-        http_client_result_budget_config result_budget = {});
-    http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, std::span<const http_client_definition_type> definitions,
-        http_client_result_budget_config result_budget = {});
+        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
         std::pmr::memory_resource* resource, std::span<const http_client_definition_type> definitions,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     http_client_registry(asio::io_context&, worker_handle&&, std::pmr::memory_resource*,
-        const http_client_config&, http_client_result_budget_config = {}) = delete;
-    http_client_registry(asio::io_context&, worker_handle&&, std::pmr::memory_resource*,
-        std::span<const http_client_definition_type>, http_client_result_budget_config = {}) = delete;
+        const http_client_config&, const std::shared_ptr<http_client_result_budget_domain>&) = delete;
     http_client_registry(asio::io_context&, worker_handle&&, std::pmr::memory_resource*,
         std::span<const http_client_definition_type>,
         const std::shared_ptr<http_client_result_budget_domain>&) = delete;
@@ -50,14 +47,14 @@ public:
     [[nodiscard]] http_client_handle get(
         ::ruvia::operation_scope& scope, operation_options options) const;
     [[nodiscard]] http_client_handle get(std::string_view alias, ::ruvia::operation_scope& scope) const;
+    // The default alias's pool, for configuration and statistics reads that
+    // need no operation capability.
+    [[nodiscard]] http_client_pool& default_pool() const;
 
 private:
     using pool_owner_type = std::unique_ptr<http_client_pool, pmr_object_deleter<http_client_pool>>;
 
-    void add(asio::io_context& io_context, const worker_handle& worker,
-        http_client_config_storage config, http_client_result_budget_config result_budget);
-    void add(asio::io_context& io_context, const worker_handle& worker,
-        http_client_config_storage config,
+    void add(asio::io_context& io_context, const worker_handle& worker, http_client_config_storage config,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     std::pmr::memory_resource* resource_;
     std::pmr::vector<pool_owner_type> pools_;

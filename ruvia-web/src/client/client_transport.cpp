@@ -8,18 +8,17 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <utility>
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/config_validation.h"
-#include "ruvia/core/dns_host.h"
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "tls/tls_file_paths.h"
 #include "tls/tls_password_scope.h"
+#include "util/config_validation.h"
+#include "util/dns_host.h"
 
 namespace ruvia::detail {
 namespace {
@@ -62,44 +61,13 @@ std::string_view selected_client_alpn(SSL* ssl) noexcept {
     return {reinterpret_cast<const char*>(selected), size};
 }
 
-client_transport_config_storage::client_transport_config_storage(
-    client_transport_config_view source_value, std::pmr::memory_resource* resource)
-    : client_transport_config_storage(
-          resolved_pmr_resource_tag{}, source_value, pmr_resource_or_default(resource)) {}
-
-client_transport_config_storage::client_transport_config_storage(
-    resolved_pmr_resource_tag, client_transport_config_view source_value, std::pmr::memory_resource* resource)
-    : tls_peer_verification_(source_value.tls_peer_verification_),
-      tcp_no_delay_(source_value.tcp_no_delay_),
-      tcp_keep_alive_(source_value.tcp_keep_alive_),
-      ca_file_(source_value.ca_file_, resource),
-      certificate_chain_file_(source_value.certificate_chain_file_, resource),
-      private_key_file_(source_value.private_key_file_, resource),
-      private_key_password_(source_value.private_key_password_, resource) {}
-
-client_transport_config_storage::client_transport_config_storage(
-    const client_transport_config_storage& source_value, std::pmr::memory_resource* resource)
-    : client_transport_config_storage(source_value.view(), resource) {}
-
-client_transport_config_view client_transport_config_storage::view() const noexcept {
-    return {
-        .tls_peer_verification_ = tls_peer_verification_,
-        .tcp_no_delay_ = tcp_no_delay_,
-        .tcp_keep_alive_ = tcp_keep_alive_,
-        .ca_file_ = ca_file_,
-        .certificate_chain_file_ = certificate_chain_file_,
-        .private_key_file_ = private_key_file_,
-        .private_key_password_ = private_key_password_,
-    };
-}
-
 void validate_client_origin_host(
     std::string_view host, const char* empty_message, const char* invalid_message) {
-    ruvia::ensure_config_host(host, empty_message, invalid_message, ruvia::separated_port_host_rules);
+    detail::ensure_config_host(host, empty_message, invalid_message, detail::separated_port_host_rules);
     if (is_client_ip_address(host)) {
         return;
     }
-    if (!ruvia::is_valid_dns_host(host)) {
+    if (!detail::is_valid_dns_host(host)) {
         throw std::invalid_argument(invalid_message);
     }
 }
@@ -117,22 +85,11 @@ std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resourc
     return wire_host;
 }
 
-void validate_client_transport_config(client_transport_config_view config) {
-    if (config.tls_peer_verification_ != tls_peer_verification_policy::verify &&
-        config.tls_peer_verification_ != tls_peer_verification_policy::skip_verification) {
-        throw std::invalid_argument("client TLS peer verification policy is invalid");
-    }
-    ruvia::validate_tcp_socket_policies(config.tcp_no_delay_, config.tcp_keep_alive_);
-    validate_tls_file_paths({config.ca_file_, config.certificate_chain_file_, config.private_key_file_});
-    if (config.certificate_chain_file_.empty() != config.private_key_file_.empty()) {
-        throw std::invalid_argument(
-            "client certificate chain and private key must be configured together");
-    }
-}
-
-void configure_client_tls_context(SSL_CTX& context_value, client_transport_config_view config,
+void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config,
     client_tls_protocol protocol) {
-    validate_client_transport_config(config);
+    if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification) {
+        throw std::invalid_argument("client TLS context requires TLS to be enabled");
+    }
     if (protocol != client_tls_protocol::stream && protocol != client_tls_protocol::quic) {
         throw std::invalid_argument("invalid client TLS protocol");
     }
@@ -141,7 +98,7 @@ void configure_client_tls_context(SSL_CTX& context_value, client_transport_confi
         SSL_CTX_set_max_proto_version(&context_value, quic ? TLS1_3_VERSION : 0) != 1) {
         throw std::runtime_error("failed to configure client TLS versions");
     }
-    const bool verify = config.tls_peer_verification_ == tls_peer_verification_policy::verify;
+    const bool verify = config.mode_ == client_tls_mode::verify_identity;
     SSL_CTX_set_verify(&context_value, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
     if (verify) {
         const int loaded = config.ca_file_.empty()
@@ -174,33 +131,38 @@ bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool 
            X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
 
-client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
-    const std::pmr::string& host, client_transport_config_view config, client_alpn_mode alpn_mode) {
-    if (SSL_clear(stream.native_handle()) != 1) {
-        return client_tls_setup_error::reset_failed;
-    }
+client_tls_setup_error prepare_client_tls_session(SSL& ssl, std::string_view host, client_tls_mode mode) noexcept {
     const bool is_ip_address = is_client_ip_address(host);
-    std::array<char, 254> sni_host_buffer;
-    std::string_view tls_host = host;
     if (!is_ip_address && host.ends_with('.')) {
-        tls_host.remove_suffix(1);
-        for (std::size_t i = 0; i < tls_host.size(); ++i) {
-            sni_host_buffer[i] = tls_host[i];
-        }
-        sni_host_buffer[tls_host.size()] = '\0';
-        tls_host = std::string_view(sni_host_buffer.data(), tls_host.size());
+        host.remove_suffix(1);
     }
+    std::array<char, 256> tls_host_buffer;
+    if (host.size() >= tls_host_buffer.size()) {
+        return client_tls_setup_error::sni_failed;
+    }
+    std::ranges::copy(host, tls_host_buffer.begin());
+    tls_host_buffer[host.size()] = '\0';
     // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6 literal.
     // Host verification still receives IP literals so OpenSSL can validate IP
     // subjectAltName entries.
-    if (!is_ip_address &&
-        SSL_set_tlsext_host_name(stream.native_handle(), tls_host.data()) != 1) {
+    if (!is_ip_address && SSL_set_tlsext_host_name(&ssl, tls_host_buffer.data()) != 1) {
         return client_tls_setup_error::sni_failed;
     }
-    if (config.tls_peer_verification_ == tls_peer_verification_policy::verify) {
-        if (!configure_client_tls_peer_identity(*stream.native_handle(), tls_host.data(), is_ip_address)) {
-            return client_tls_setup_error::peer_identity_failed;
-        }
+    if (mode == client_tls_mode::verify_identity &&
+        !configure_client_tls_peer_identity(ssl, tls_host_buffer.data(), is_ip_address)) {
+        return client_tls_setup_error::peer_identity_failed;
+    }
+    return client_tls_setup_error::none;
+}
+
+client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
+    std::string_view host, client_tls_mode mode, client_alpn_mode alpn_mode) {
+    if (SSL_clear(stream.native_handle()) != 1) {
+        return client_tls_setup_error::reset_failed;
+    }
+    if (const auto prepared = prepare_client_tls_session(*stream.native_handle(), host, mode);
+        prepared != client_tls_setup_error::none) {
+        return prepared;
     }
     const auto protocols = client_alpn_bytes(alpn_mode);
     if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
@@ -224,6 +186,25 @@ std::string_view client_tls_setup_error_message(client_tls_setup_error error) no
             return "failed to configure TLS peer identity";
     }
     std::terminate();
+}
+
+namespace {
+
+class client_tls_setup_category_type final : public std::error_category {
+public:
+    [[nodiscard]] const char* name() const noexcept override {
+        return "client TLS setup";
+    }
+    [[nodiscard]] std::string message(int value) const override {
+        return std::string(client_tls_setup_error_message(static_cast<client_tls_setup_error>(value)));
+    }
+};
+
+}  // namespace
+
+std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept {
+    static const client_tls_setup_category_type category;
+    return {static_cast<int>(error), category};
 }
 
 }  // namespace ruvia::detail

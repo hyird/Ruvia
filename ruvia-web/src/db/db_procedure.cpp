@@ -17,7 +17,7 @@ void require_sql_state(std::string_view state_value) {
 }  // namespace
 
 db_procedure::db_procedure(std::pmr::memory_resource* resource)
-    : resource_(detail::pmr_resource_or_default(resource)),
+    : resource_(pmr_resource_or_default(resource)),
       declarations_(resource_),
       statements_(resource_),
       variables_(resource_),
@@ -193,7 +193,7 @@ std::pmr::string db_procedure::body(std::pmr::memory_resource* resource) const {
     if (!blocks_.empty()) {
         throw std::invalid_argument("procedure has unclosed control-flow blocks");
     }
-    std::pmr::string result(detail::pmr_resource_or_default(resource));
+    std::pmr::string result(pmr_resource_or_default(resource));
     if (!declarations_.empty()) {
         result += "DECLARE\n";
         result += declarations_;

@@ -1,12 +1,9 @@
 #pragma once
 #include <chrono>
-#include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/http/http1_websocket_client_handshake.h"
 #include "ruvia/http/http_request_target.h"
@@ -50,7 +47,11 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
         }
     }
     validate_websocket_heartbeat_config(config.heartbeat_);
-    validate_client_transport_config(make_client_transport_config_view(config));
+    validate_client_tls_config(config.tls_);
+    validate_client_tcp_config(config.tcp_);
+    if (config.scheme_ == websocket_scheme::wss && config.tls_.mode_ == client_tls_mode::disabled) {
+        throw std::invalid_argument("wss WebSocket client requires TLS; use the ws scheme for plaintext");
+    }
 
     if (config.compression_level_ < 0 || config.compression_level_ > 9) {
         throw std::invalid_argument("WebSocket client compression level must be between 0 and 9");

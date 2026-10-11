@@ -49,10 +49,6 @@ void worker_runtime_context::run() {
     impl_->dispatcher_->run_context();
 }
 
-void worker_runtime_context::run(move_only_function<void(std::exception_ptr)> failure_handler) {
-    impl_->dispatcher_->run_context(std::move(failure_handler));
-}
-
 void worker_runtime_context::run(move_only_function<void()> startup_handler,
     move_only_function<void(std::exception_ptr)> failure_handler,
     move_only_function<void()> shutdown_handler) {

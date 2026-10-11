@@ -124,28 +124,6 @@ public:
         }
     }
 
-    template <typename callback>
-    void remove_aborted(callback&& callback_value) {
-        for (auto& slot : inline_) {
-            if (!slot || !slot->is_aborted()) {
-                continue;
-            }
-            callback_value(*slot);
-            slot.reset();
-            --size_;
-        }
-        for (std::size_t i = 0; i < overflow_.size();) {
-            auto& stream = overflow_[i];
-            if (stream == nullptr || !stream->is_aborted()) {
-                ++i;
-                continue;
-            }
-            callback_value(*stream);
-            erase_overflow_at(i);
-            --size_;
-        }
-    }
-
     [[nodiscard]] bool apply_send_window_delta(
         std::int64_t delta, std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
         // Preflight the extrema of the ordered SETTINGS transaction before

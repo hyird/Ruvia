@@ -18,11 +18,6 @@ template <typename reader_type>
 }
 
 template <typename reader_type>
-void emplace_body_reader_facade(std::optional<body_reader>& storage, reader_type& reader_value) {
-    streaming_access::emplace_body_reader(storage, &reader_value, &body_reader_read_thunk<reader_type>);
-}
-
-template <typename reader_type>
 [[nodiscard]] body_reader make_body_reader_facade(reader_type& reader_value) noexcept {
     return streaming_access::make_body_reader(&reader_value, &body_reader_read_thunk<reader_type>);
 }

@@ -2,14 +2,11 @@
 
 #include <algorithm>
 #include <csignal>
-#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -65,19 +62,6 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
     }
 }
 
-[[nodiscard]] std::unique_ptr<detail::router, detail::pmr_object_deleter<detail::router>>
-build_worker_router(const detail::app_state& state_value, std::pmr::memory_resource* runtime_resource,
-    detail::controller_store& controllers,
-    std::span<const detail::controller_registrar_type> controller_registrars,
-    const detail::compiled_route_plan* compiled_plan) {
-    auto router_value = detail::make_pmr_object<detail::router>(runtime_resource);
-    detail::register_controllers(*router_value, controllers, controller_registrars);
-    auto& routes_value = detail::router_impl::from(*router_value);
-    state_value.configuration_.apply(routes_value, runtime_resource);
-    routes_value.finalize(compiled_plan);
-    return router_value;
-}
-
 class app_run_coordinator final {
 public:
     app_run_coordinator(application& owner_value, detail::app_state& state_value)
@@ -109,24 +93,32 @@ public:
             throw;
         }
 
+        auto& group = state_.runtime_->group_;
         std::exception_ptr primary_failure;
         try {
             if (!stop_requested()) {
                 start_signal_handling();
-                start_workers();
-                run_start_hooks();
-                start_serving();
-                wait_for_stop();
+                // Ingress stages its QUIC channels before workers launch; every
+                // worker and the acceptor are ready before any start hook runs,
+                // and no listener accepts until every hook succeeded.
+                if (group.start()) {
+                    run_start_hooks();
+                    if (!stop_requested() && group.serve()) {
+                        wait_for_stop();
+                    }
+                }
             }
         } catch (...) {
             primary_failure = std::current_exception();
             owner_.stop();
         }
 
-        stop_workers();
+        // Stop admission is distinct from final retirement: stop hooks run
+        // after admission closes and before any worker is finalized.
+        group.request_stop();
         stop_signal_handling();
         invoke_stop_hooks(state_);
-        const auto failure = join_workers();
+        const auto failure = group.join();
         const auto signal_failure = signal_runtime_.failure();
         retire_runtime();
 
@@ -157,7 +149,7 @@ private:
     void build_and_publish_runtime() {
         const auto controller_registrars = detail::seal_controller_registrars();
         auto runtime =
-            detail::make_pmr_object<detail::app_runtime_graph>(runtime_resource_, runtime_resource_);
+            make_pmr_object<detail::app_runtime_graph>(runtime_resource_, runtime_resource_);
         auto prepared_options = state_.options_;
         prepared_options.env_ = &state_.env_;
         prepared_options.failure_ = detail::worker_failure_sink{
@@ -168,11 +160,11 @@ private:
                 },
         };
 
-        std::unique_ptr<static_root, detail::pmr_object_deleter<static_root>> configured_document_root(
-            nullptr, detail::pmr_object_deleter<static_root>{runtime_resource_});
+        std::unique_ptr<static_root, pmr_object_deleter<static_root>> configured_document_root(
+            nullptr, pmr_object_deleter<static_root>{runtime_resource_});
         if (state_.document_root_config_.has_value()) {
             const auto document_root_path =
-                ruvia::make_path_from_native_path(state_.document_root_config_->root_);
+                http_make_path_from_native_path(state_.document_root_config_->root_);
             configured_document_root = detail::static_root_access::make(
                 runtime_resource_, document_root_path, state_.document_root_config_->static_options_);
             if (prepared_options.compression_.has_value() &&
@@ -186,22 +178,24 @@ private:
         }
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =
-                detail::make_pmr_object<blocking_pool>(runtime_resource_, *state_.blocking_pool_);
+                make_pmr_object<blocking_pool>(runtime_resource_, *state_.blocking_pool_);
             prepared_options.blocking_pool_ = runtime->blocking_pool_.get();
         }
 
         const auto validated_configuration =
             detail::validate_http_server_configuration(state_.listeners_, std::move(prepared_options));
 
+        // One immutable route plan per run, declared against the first worker's
+        // controller instances; every worker only binds its own instances.
+        detail::controller_store first_controllers(controller_registrars);
+        runtime->route_plan_ = detail::compile_route_plan(
+            runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
         runtime->workers_.reserve(state_.worker_count_);
         for (std::size_t i = 0; i < state_.worker_count_; ++i) {
-            detail::controller_store controllers;
-            auto router_value = build_worker_router(state_, runtime_resource_, controllers,
-                controller_registrars, runtime->route_plan_.get());
-            auto& routes_value = detail::router_impl::from(*router_value);
-            if (runtime->route_plan_ == nullptr) {
-                runtime->route_plan_ = routes_value.release_compiled_plan();
-            }
+            auto controllers =
+                i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
+            auto routes_value = make_pmr_object<detail::route_table>(
+                runtime_resource_, runtime_resource_, *runtime->route_plan_, controllers);
             const detail::worker_capability_definitions capabilities{
 #ifdef RUVIA_ENABLE_DATABASE
                 .databases_ = std::span<const detail::db_definition>(state_.databases_),
@@ -212,21 +206,21 @@ private:
                 .worker_states_ = state_.configuration_.worker_states(),
                 .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
-            auto worker_value = detail::make_pmr_object<detail::web_worker_runtime>(
-                runtime_resource_, validated_configuration, routes_value.route_table(), capabilities);
-            worker_value->prepare();
+            auto worker_value = make_pmr_object<detail::web_worker_runtime>(
+                runtime_resource_, validated_configuration, *routes_value, capabilities);
             runtime->workers_.emplace_back(
-                std::move(controllers), std::move(router_value), std::move(worker_value));
+                std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
         const bool has_http3 = std::ranges::any_of(validated_configuration.listeners(),
             [](const detail::http_server_listener_definition& listener_value) {
                 return listener_value.http3_.has_value();
             });
-        runtime->acceptor_targets_.reserve(runtime->workers_.size());
+        std::pmr::vector<detail::acceptor::worker_target> acceptor_targets(runtime_resource_);
+        acceptor_targets.reserve(runtime->workers_.size());
         for (auto& slot : runtime->workers_) {
             auto* target = slot.runtime_.get();
-            runtime->acceptor_targets_.push_back({
+            acceptor_targets.push_back({
                 .submission_ = target->network_submission(),
                 .object_ = target,
                 .available_ = &acceptor_target_available,
@@ -235,8 +229,13 @@ private:
             });
         }
         runtime->ingress_ = std::make_unique<detail::acceptor>(
-            validated_configuration.listeners(), runtime->acceptor_targets_, &owner_, &acceptor_failed);
+            validated_configuration.listeners(), acceptor_targets, &owner_, &acceptor_failed);
         runtime->ingress_->prepare();
+        // Ingress is the external producer of every worker.
+        runtime->group_.add(runtime->ingress_->runtime(), 0);
+        for (auto& slot : runtime->workers_) {
+            runtime->group_.add(slot.runtime_->runtime(), 1);
+        }
 
         std::lock_guard lock(state_.mutex_);
         state_.runtime_ = std::move(runtime);
@@ -271,69 +270,6 @@ private:
         signal_runtime_.start();
     }
 
-    void start_workers() {
-        // Bind ingress and stage the datagram channels before workers construct
-        // their own QUIC/TLS and HTTP/3 state.
-        {
-            std::lock_guard lock(state_.mutex_);
-            if (state_.lifecycle_.stop_requested()) {
-                return;
-            }
-            state_.runtime_->ingress_->launch();
-        }
-        state_.runtime_->ingress_->wait_until_ready();
-        state_.runtime_->ingress_->rethrow_failure();
-        if (stop_requested()) {
-            return;
-        }
-
-        for (auto& worker_value : state_.runtime_->workers_) {
-            {
-                std::lock_guard lock(state_.mutex_);
-                if (state_.lifecycle_.stop_requested()) {
-                    return;
-                }
-                worker_value.runtime_->launch();
-            }
-        }
-        for (auto& worker_value : state_.runtime_->workers_) {
-            if (stop_requested()) {
-                return;
-            }
-            worker_value.runtime_->wait_until_ready();
-        }
-    }
-
-    void start_serving() {
-        for (auto& worker_value : state_.runtime_->workers_) {
-            if (stop_requested()) {
-                return;
-            }
-            worker_value.runtime_->request_serve();
-        }
-        for (auto& worker_value : state_.runtime_->workers_) {
-            if (stop_requested()) {
-                return;
-            }
-            if (!worker_value.runtime_->wait_until_serving()) {
-                if (stop_requested()) {
-                    return;
-                }
-                throw std::runtime_error("web worker stopped before the application began serving");
-            }
-        }
-        if (!stop_requested()) {
-            state_.runtime_->ingress_->request_serve();
-            if (!state_.runtime_->ingress_->wait_until_serving()) {
-                state_.runtime_->ingress_->rethrow_failure();
-                if (stop_requested()) {
-                    return;
-                }
-                throw std::runtime_error("acceptor stopped before the application began serving");
-            }
-        }
-    }
-
     void run_start_hooks() {
         for (auto& hook : state_.on_start_hooks_) {
             if (stop_requested()) {
@@ -351,63 +287,14 @@ private:
         state_.lifecycle_changed_.wait(lock, [this] { return state_.lifecycle_.stop_requested(); });
     }
 
-    void stop_workers() noexcept {
-        if (state_.runtime_->ingress_) {
-            state_.runtime_->ingress_->stop();
-        }
-        for (auto& worker_value : state_.runtime_->workers_) {
-            try {
-                worker_value.runtime_->stop_admission();
-            } catch (...) {
-                ruvia::report_unhandled_failure("web worker stop", std::current_exception());
-            }
-        }
-    }
-
     void stop_signal_handling() noexcept {
         signal_runtime_.request_stop();
         signal_runtime_.join();
     }
 
-    [[nodiscard]] std::exception_ptr join_workers() noexcept {
-        std::exception_ptr first_failure;
-        // The acceptor joins after datagram publishers acknowledge closure.
-        // Workers retain their own protocol state until their task scopes join.
-        bool acceptor_quiesced = state_.runtime_->ingress_ == nullptr;
-        if (state_.runtime_->ingress_) {
-            try {
-                state_.runtime_->ingress_->join();
-                acceptor_quiesced = true;
-                state_.runtime_->ingress_->rethrow_failure();
-            } catch (...) {
-                if (!acceptor_quiesced) {
-                    std::terminate();
-                }
-                first_failure = std::current_exception();
-            }
-        }
-        if (!acceptor_quiesced) {
-            std::terminate();
-        }
-        for (auto& worker_value : state_.runtime_->workers_) {
-            try {
-                worker_value.runtime_->finalize_after_network_quiesced();
-                worker_value.runtime_->join();
-            } catch (...) {
-                if (first_failure == nullptr) {
-                    first_failure = std::current_exception();
-                } else {
-                    ruvia::report_unhandled_failure(
-                        "additional web worker failure", std::current_exception());
-                }
-            }
-        }
-        return first_failure;
-    }
-
     void retire_runtime() noexcept {
-        std::unique_ptr<detail::app_runtime_graph, detail::pmr_object_deleter<detail::app_runtime_graph>>
-            retired(nullptr, detail::pmr_object_deleter<detail::app_runtime_graph>{runtime_resource_});
+        std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
+            retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{runtime_resource_});
         {
             std::lock_guard lock(state_.mutex_);
             retired = std::move(state_.runtime_);
@@ -430,6 +317,12 @@ private:
 
 void detail::run_app(application& app, app_state& state_value) {
     app_run_coordinator(app, state_value).run();
+}
+
+void detail::request_runtime_stop(app_state& state_value) noexcept {
+    if (state_value.runtime_ != nullptr) {
+        state_value.runtime_->group_.request_stop();
+    }
 }
 
 }  // namespace ruvia

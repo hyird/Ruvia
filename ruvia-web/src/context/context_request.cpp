@@ -20,6 +20,8 @@
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/model/parse/parser.h"
 #include "ruvia/web/model_json.h"
+#include "ruvia/web/multipart_reader.h"
+#include "ruvia/web/streaming.h"
 
 #include "auth/cookie_signature.h"
 #include "context/context_request_storage.h"
@@ -28,6 +30,7 @@
 #include "http/request_field_parsing.h"
 #include "http/request_query_values.h"
 #include "http/unsupported_request_content_coding.h"
+#include "util/constant_time.h"
 
 namespace ruvia {
 
@@ -192,8 +195,7 @@ const request_name_value_list& context::request_cookies() const {
         auto cookies = detail::request_name_value_list_access::make(arena());
         const auto headers = request_.headers();
         if (request_.header("Cookie").has_value()) {
-            detail::request_name_value_list_access::reserve(
-                cookies, detail::bounded_field_reserve(8));
+            detail::request_name_value_list_access::reserve(cookies, 8);
         }
         for (const auto& header : headers) {
             if (!http_ascii_equals_ignore_case(header.name(), "Cookie")) {
@@ -235,8 +237,7 @@ void context::ensure_route_params() const {
                 request_storage_->route_params_invalid_ = true;
                 detail::throw_invalid_param();
             }
-            auto& owned = storage.emplace_back(std::move(*decoded));
-            value = detail::stored_string_view(owned);
+            value = storage.emplace_back(std::move(*decoded));
         }
         detail::request_name_value_list_access::push_back(
             params, detail::request_name_value_view_access::make(param_names_[i], value));
@@ -430,7 +431,7 @@ std::optional<std::string_view> context_request::signed_cookie(
     const auto signature = stored->substr(value_size + 1);
     char expected[detail::cookie_signature_size];
     detail::write_cookie_signature(expected, secret, name, value);
-    if (!detail::cookie_signature_equals(signature, std::string_view(expected, sizeof(expected)))) {
+    if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
         return std::nullopt;
     }
     return value;

@@ -4,7 +4,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
 
 #include "coding/http_transfer_encoding.h"
@@ -93,17 +94,19 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     }
 
     bool valid = true;
-    bool saw_item = false;
     http_visit_comma_separated_quoted_items(
-        value, [&valid, &saw_item, mode](std::string_view item) noexcept {
-            saw_item = true;
+        value, [&valid, mode](std::string_view item) noexcept {
+            // RFC 9110 section 5.6.1 requires recipients to ignore empty list members.
+            if (item.empty() && mode == http_te_field_validation_mode::recipient) {
+                return true;
+            }
             if (!is_valid_http_te_field_item(item, mode)) {
                 valid = false;
                 return false;
             }
             return true;
         });
-    return valid && saw_item;
+    return valid;
 }
 
 [[nodiscard]] inline bool is_valid_received_http_te_field_value(std::string_view value) noexcept {
@@ -112,6 +115,28 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
 
 [[nodiscard]] inline bool is_valid_client_http_te_field_value(std::string_view value) noexcept {
     return is_valid_http_te_field_value(value, http_te_field_validation_mode::client_capability);
+}
+
+// HTTP/2 and HTTP/3 carry no transfer codings, so TE may only advertise
+// "trailers" (RFC 9113 section 8.2.2, RFC 9114 section 4.2). The member is an
+// unprefixed ABNF literal and therefore case-insensitive (RFC 7405 section
+// 2.1); list members are OWS-trimmed (RFC 9110 section 5.6.1). Recipients
+// ignore empty members, senders must not generate them, and a field without
+// any member is rejected because it carries no permitted value.
+[[nodiscard]] inline bool is_valid_binary_http_te_field_value(
+    std::string_view value, http_field_list_role role) noexcept {
+    bool valid = true;
+    bool has_member = false;
+    http_visit_comma_separated_quoted_items(value, [&valid, &has_member, role](std::string_view member) noexcept {
+        if (member.empty() ? role == http_field_list_role::sender
+                           : !http_ascii_equals_ignore_case(member, "trailers")) {
+            valid = false;
+            return false;
+        }
+        has_member = has_member || !member.empty();
+        return true;
+    });
+    return valid && has_member;
 }
 
 }  // namespace ruvia::detail

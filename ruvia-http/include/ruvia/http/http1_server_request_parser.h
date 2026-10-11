@@ -1,58 +1,29 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
-#include "ruvia/http/http1_request_parser.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_request.h"
 
 namespace ruvia {
-
-class http1_server_request_parse_failure;
-
-namespace detail {
-struct http1_request_parse_result_access;
-}
 
 enum class http1_server_request_parse_failure_source : std::uint8_t { request_line,
     message };
 
-namespace detail {
-
-struct http1_request_parse_result_access final {
-    [[nodiscard]] static http1_request_parse_result need_more() noexcept {
-        return http1_request_parse_result(http1_request_need_more());
-    }
-
-    [[nodiscard]] static http1_request_parse_result need_more(std::size_t required_total_bytes) noexcept {
-        return http1_request_parse_result(http1_request_need_more(required_total_bytes));
-    }
-
-    // http_request is a fixed-size collection of borrowed views; the request and
-    // framing plan are transferred into the result without allocating copies.
-    [[nodiscard]] static http1_request_parse_result parsed(http_request request,
-        http1_request_body_plan body_plan, std::string_view wire_body,
-        std::size_t consumed_bytes) noexcept {
-        return http1_request_parse_result(http1_parsed_request(
-            std::move(request), std::move(body_plan), wire_body, consumed_bytes));
-    }
-
-    [[nodiscard]] static http1_request_parse_result failure(http_parse_error error,
-        http1_request_parse_failure_source source_value) noexcept {
-        return http1_request_parse_result(http1_request_parse_failure(error, source_value));
-    }
-
-    [[nodiscard]] static http1_request_parse_result failure(
-        const ::ruvia::http1_server_request_parse_failure& failure) noexcept;
-};
-
-}  // namespace detail
+// Cleartext listeners can silently discard inputs that failed before a valid
+// HTTP-version token was recognized (for example, TLS bytes on an HTTP port).
+[[nodiscard]] bool should_drop_invalid_cleartext_http1_input(
+    std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept;
 
 class http1_server_need_request_head final {};
 
@@ -149,24 +120,12 @@ public:
 
 private:
     friend class http1_server_request_parser;
-    friend struct detail::http1_request_parse_result_access;
 
     explicit constexpr http1_server_request_parse_failure(http_parse_error error) noexcept
         : error_(error) {}
 
     http_parse_error error_;
 };
-
-namespace detail {
-inline http1_request_parse_result http1_request_parse_result_access::failure(
-    const ::ruvia::http1_server_request_parse_failure& failure) noexcept {
-    const auto source_value = failure.source() == http1_server_request_parse_failure_source::request_line
-                                  ? http1_request_parse_failure_source::request_line
-                                  : http1_request_parse_failure_source::message;
-    return http1_request_parse_result(http1_request_parse_failure(failure.error_, source_value));
-}
-
-}  // namespace detail
 
 class http1_server_request_parse_state final {
 public:
@@ -233,8 +192,11 @@ public:
     void parse_head(buffer_type&&, http1_server_request_parse_state&, std::size_t = 0,
         std::pmr::memory_resource* = nullptr) const = delete;
 
-    // Whole-message scanner used by the public sans-I/O API. It always advances
-    // beyond request_head_ready to an unambiguous message/failure/need-more phase.
+    // Stateless whole-message scan: always advances beyond request_head_ready
+    // to an unambiguous message/failure/need-more phase. Allocation failures
+    // propagate; syntax and framing failures are typed. Field text and body
+    // borrow buffer; the framed wire body (chunk lines and trailers included)
+    // is buffer[header_bytes(), message_bytes()) of message_ready().
     [[nodiscard]] http1_server_request_parse_state parse_message(std::string_view buffer,
         std::pmr::memory_resource* resource = nullptr) const;
 

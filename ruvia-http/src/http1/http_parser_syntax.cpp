@@ -3,8 +3,8 @@
 #include <limits>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/util/hex.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_hex.h"
 
 namespace ruvia::detail {
 
@@ -14,6 +14,11 @@ request_header_kind classify_request_header(std::string_view name) noexcept {
     }
     const auto first = http_ascii_to_lower(static_cast<unsigned char>(name.front()));
     switch (name.size()) {
+        case 2:
+            if (first == 't' && http_ascii_equals_ignore_case(name, "TE")) {
+                return request_header_kind::te;
+            }
+            break;
         case 4:
             if (first == 'h' && http_ascii_equals_ignore_case(name, "Host")) {
                 return request_header_kind::host;
@@ -53,6 +58,9 @@ request_header_kind classify_request_header(std::string_view name) noexcept {
         case 7:
             if (first == 'u' && http_ascii_equals_ignore_case(name, "Upgrade")) {
                 return request_header_kind::upgrade;
+            }
+            if (first == 't' && http_ascii_equals_ignore_case(name, "Trailer")) {
+                return request_header_kind::trailer;
             }
             break;
         case 9:
@@ -154,6 +162,9 @@ request_header_kind classify_request_header(std::string_view name) noexcept {
         case 19:
             if (first == 'i' && http_ascii_equals_ignore_case(name, "If-Unmodified-Since")) {
                 return request_header_kind::if_unmodified_since;
+            }
+            if (first == 'p' && http_ascii_equals_ignore_case(name, "Proxy-Authorization")) {
+                return request_header_kind::proxy_authorization;
             }
             break;
         case 21:
@@ -307,7 +318,7 @@ chunk_size_line_status parse_http_chunk_size_line(std::string_view value, std::s
     std::size_t parsed_value = 0;
     constexpr auto max_before_shift = std::numeric_limits<std::size_t>::max() >> 4U;
     while (cursor_value < value.size()) {
-        const int nibble = decode_hex_nibble(value[cursor_value]);
+        const int nibble = http_decode_hex_nibble(value[cursor_value]);
         if (nibble < 0) {
             break;
         }

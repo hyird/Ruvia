@@ -94,7 +94,7 @@ db_error mysql_error(
     const auto* message = mysql_error(mutable_connection);
     const auto code = mysql_errno(mutable_connection);
     const auto* state_value = mysql_sqlstate(mutable_connection);
-    std::pmr::string error(operation, detail::process_resource());
+    std::pmr::string error(operation, process_resource());
     error.append(" failed");
     if (code != 0) {
         error.append(" [errno=");

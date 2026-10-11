@@ -4,9 +4,9 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/detail/server/http_response_write_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_response.h"
 
 namespace ruvia {
 

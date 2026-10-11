@@ -1,6 +1,5 @@
 #include "server/static_root_runtime.h"
 
-#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <utility>

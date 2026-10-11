@@ -4,9 +4,9 @@
 #include <string_view>
 
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_stream_state.h"
-#include "util/pmr_string.h"
 
 namespace ruvia::detail {
 
@@ -19,7 +19,7 @@ namespace ruvia::detail {
 inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http_header_bytes;
 
 inline void http2_reset_header_block(http2_stream_state& stream) {
-    clear_pmr_string_retaining_small(stream.remote_header_block());
+    http_clear_pmr_string_retaining_small(stream.remote_header_block());
 }
 
 [[nodiscard]] inline bool http2_append_header_block(

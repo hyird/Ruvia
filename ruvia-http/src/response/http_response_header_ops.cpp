@@ -13,12 +13,11 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_response.h"
 
-#include "coding/http_content_coding.h"
-#include "field/http_media_type.h"
+#include "field/response_field_validation.h"
 #include "response/http_response_header_access.h"
 #include "response/http_response_headers_access.h"
 #include "response/response_header_index_cache.h"
-#include "util/http_number_format.h"
+#include "ruvia/http/http_number_format.h"
 
 namespace ruvia {
 namespace {
@@ -33,7 +32,7 @@ void write_unsigned_header_value(http_response_header& header_value, std::uint64
 }
 
 void validate_connection_control_field(std::string_view name, std::string_view value) {
-    if (detail::http_ascii_equals_ignore_case(name, "Connection")) {
+    if (http_ascii_equals_ignore_case(name, "Connection")) {
         detail::http_connection_options options;
         if (options.parse_field(
                 value, detail::http_field_list_role::sender, [](std::string_view option) noexcept {
@@ -41,14 +40,14 @@ void validate_connection_control_field(std::string_view name, std::string_view v
                 }) != detail::http_field_list_parse_status::ok) {
             throw std::invalid_argument("invalid HTTP Connection header");
         }
-    } else if (detail::http_ascii_equals_ignore_case(name, "Upgrade")) {
+    } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
         detail::http_upgrade_protocols protocols;
         if (protocols.parse_field(value, detail::http_field_list_role::sender,
                 [](const detail::http_upgrade_protocol&) noexcept { return true; }) !=
             detail::http_field_list_parse_status::ok) {
             throw std::invalid_argument("invalid HTTP Upgrade header");
         }
-    } else if (detail::http_ascii_equals_ignore_case(name, "TE")) {
+    } else if (http_ascii_equals_ignore_case(name, "TE")) {
         throw std::invalid_argument("TE is not a response field");
     }
 }
@@ -144,17 +143,10 @@ void http_response::header(std::string_view key, std::string_view value, header_
     }
     validate_connection_control_field(key, value);
     const auto known_bit = detail::classify_response_header_name(key);
-    if (known_bit == detail::response_header_content_type &&
-        !detail::is_valid_http_content_type_field_value(value)) {
-        throw std::invalid_argument("invalid HTTP Content-Type header");
-    }
-    if (known_bit == detail::response_header_content_encoding &&
-        !detail::is_valid_http_content_encoding_field_value(value, detail::http_field_list_role::sender)) {
-        throw std::invalid_argument("invalid HTTP Content-Encoding header");
-    }
-    if (detail::http_ascii_equals_ignore_case(key, "Trailer") &&
-        !detail::is_valid_http_response_trailer_field_value(value, detail::http_field_list_role::sender)) {
-        throw std::invalid_argument("invalid HTTP Trailer header");
+    detail::response_field_state fields;
+    if (detail::validate_response_field(detail::classify_request_header(key), value,
+            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
+        throw std::invalid_argument("invalid HTTP response field value");
     }
     if (response_header_mode_appends(options.mode_)) {
         if (detail::response_header_append_forbidden(known_bit)) {
@@ -247,7 +239,7 @@ http_response_header& http_response::collapse_response_headers(
     for (auto* read = begin; read != end; ++read) {
         const auto header_known_bit = detail::response_header_known_bit(*read);
         const bool matches = known_bit != 0 ? header_known_bit == known_bit
-                                            : detail::http_ascii_equals_ignore_case(read->name(), key);
+                                            : http_ascii_equals_ignore_case(read->name(), key);
         if (matches && read != retained_address) {
             headers_.release_header(*read);
             continue;
@@ -280,7 +272,7 @@ bool http_response::remove_header_validated(std::string_view key, std::uint32_t 
     for (auto* read = begin; read != end; ++read) {
         const auto header_known_bit = detail::response_header_known_bit(*read);
         const bool matches = known_bit != 0 ? header_known_bit == known_bit
-                                            : detail::http_ascii_equals_ignore_case(read->name(), key);
+                                            : http_ascii_equals_ignore_case(read->name(), key);
         if (matches) {
             if (!removed) {
                 retired_key_header = std::exchange(*read, http_response_header{});
@@ -326,7 +318,7 @@ void http_response::header_stable_view(std::string_view key, std::string_view va
 
 void http_response::set_header_unsigned(
     std::string_view key, std::uint64_t value, std::uint32_t known_bit) {
-    auto& header_value = prepare_header_value_storage(key, detail::http_unsigned_decimal_size(value), known_bit);
+    auto& header_value = prepare_header_value_storage(key, http_unsigned_decimal_size(value), known_bit);
     write_unsigned_header_value(header_value, value);
 }
 

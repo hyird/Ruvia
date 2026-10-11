@@ -30,6 +30,9 @@ namespace ruvia::detail {
         case request_header_kind::range:
         case request_header_kind::upgrade:
         case request_header_kind::authorization:
+        case request_header_kind::te:
+        case request_header_kind::trailer:
+        case request_header_kind::proxy_authorization:
             return true;
         case request_header_kind::other:
         case request_header_kind::accept:
@@ -49,10 +52,6 @@ namespace ruvia::detail {
     }
 
     switch (name.size()) {
-        case 2:
-            return http_ascii_equals_ignore_case(name, "TE");
-        case 7:
-            return http_ascii_equals_ignore_case(name, "Trailer");
         case 10:
             return http_ascii_equals_ignore_case(name, "Keep-Alive") ||
                    http_ascii_equals_ignore_case(name, "Set-Cookie");
@@ -65,8 +64,6 @@ namespace ruvia::detail {
             return http_ascii_equals_ignore_case(name, "Proxy-Connection");
         case 18:
             return http_ascii_equals_ignore_case(name, "Proxy-Authenticate");
-        case 19:
-            return http_ascii_equals_ignore_case(name, "Proxy-Authorization");
         default:
             return false;
     }

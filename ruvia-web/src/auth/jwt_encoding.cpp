@@ -2,7 +2,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/core/base64_url.h"
+#include "ruvia/http/http_base64.h"
 
 #include "auth/jwt_primitives.h"
 
@@ -49,11 +49,11 @@ std::pmr::string jwt_base64_url_encode(std::string_view input, std::pmr::memory_
         bits += 8;
         while (bits >= 6) {
             bits -= 6;
-            out[written++] = ruvia::base64_url_alphabet[(buffer >> bits) & 0x3F];
+            out[written++] = http_base64_url_alphabet[(buffer >> bits) & 0x3F];
         }
     }
     if (bits > 0) {
-        out[written++] = ruvia::base64_url_alphabet[(buffer << (6 - bits)) & 0x3F];
+        out[written++] = http_base64_url_alphabet[(buffer << (6 - bits)) & 0x3F];
     }
     out.resize(written);
     return out;
@@ -66,7 +66,7 @@ std::pmr::string jwt_base64_url_decode(std::string_view input, std::pmr::memory_
     std::uint32_t buffer = 0;
     int bits = 0;
     for (const auto ch : input) {
-        const auto value = ruvia::decode_base64_url_char(ch);
+        const auto value = http_base64_url_decode_char(ch);
         if (value < 0) {
             throw std::invalid_argument("JWT base64url value is invalid");
         }

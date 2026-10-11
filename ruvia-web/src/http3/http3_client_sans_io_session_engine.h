@@ -12,9 +12,11 @@
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_request_writer.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 
-#include "http3/http3_client_body_budget.h"
+#include "http3/http3_body_budget.h"
 
 namespace ruvia::detail {
 
@@ -74,8 +76,8 @@ struct http3_client_sans_io_response_header final {
 };
 
 // Only terminal snapshots are exposed; their views borrow the engine and stay
-// valid until release(stream_id) or destruction. In event-sink mode body is
-// delivered solely through the sink, not retained in this snapshot.
+// valid until release(stream_id) or destruction. In event-sink mode headers,
+// trailers and body are delivered solely through the sink, not retained here.
 struct http3_client_sans_io_response_view final {
     std::uint16_t status_{0};
     std::optional<http_response_body_plan> response_body_plan_{};
@@ -92,12 +94,11 @@ public:
     using limits_type = http3_client_sans_io_response_limits;
     using result_type = http3_client_sans_io_session_result;
 
-    explicit http3_client_sans_io_session_engine(std::pmr::memory_resource* worker_resource,
-        limits_type limits = {});
-    // Shared budget also accounts for results held outside this engine. It
-    // must outlive the engine; event-sink storage is budgeted by its own owner.
+    // A shared budget also accounts for results held outside this engine and
+    // must outlive it; null selects this engine's own budget. Event-sink
+    // storage is budgeted by its own owner.
     http3_client_sans_io_session_engine(std::pmr::memory_resource* worker_resource,
-        http3_client_body_budget& body_budget, limits_type limits = {});
+        http3_body_budget* body_budget, limits_type limits);
     ~http3_client_sans_io_session_engine();
     http3_client_sans_io_session_engine(const http3_client_sans_io_session_engine&) = delete;
     http3_client_sans_io_session_engine& operator=(const http3_client_sans_io_session_engine&) = delete;
@@ -134,12 +135,31 @@ public:
         return limits_.max_live_streams_;
     }
     [[nodiscard]] std::variant<http3_client_request_head, http3_client_request_head_failure> encode_request_head(
-        std::uint64_t stream_id, http3_client_request_head_view view) {
-        http3_field_section_limits limits{};
-        if (const auto& settings = connection_.peer_settings(); settings && settings->max_field_section_size_) {
-            limits.max_decoded_bytes_ = static_cast<std::size_t>(std::min<std::uint64_t>(limits.max_decoded_bytes_, *settings->max_field_section_size_));
-        }
+        std::uint64_t stream_id, http3_client_request_head_view view, http3_field_section_limits limits = {}) {
         return connection_.encode_client_request_head(stream_id, view, limits);
+    }
+    [[nodiscard]] std::variant<http3_headers_frame, http3_request_trailer_error> encode_request_trailers(
+        std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields,
+        http3_field_section_limits limits = {}) {
+        return connection_.encode_request_trailers(stream_id, fields, limits);
+    }
+    [[nodiscard]] std::variant<http3_client_request_head, http3_client_request_head_failure> encode_websocket_request_head(
+        std::uint64_t stream_id, const websocket_client_negotiation& negotiation,
+        std::string_view scheme, std::string_view authority, std::string_view target) {
+        return negotiation.encode_http3_request(connection_, stream_id, scheme, authority, target);
+    }
+    [[nodiscard]] result_type begin_early_data(http3_settings remembered) {
+        return from_connection(connection_.begin_early_data(remembered));
+    }
+    [[nodiscard]] result_type complete_early_data(bool accepted) {
+        const auto result = from_connection(connection_.complete_early_data(accepted));
+        if (result.scope_ == http3_connection_error_scope::connection) {
+            fail_connection(result);
+        }
+        return result;
+    }
+    [[nodiscard]] const std::optional<http3_settings>& effective_peer_settings() const noexcept {
+        return connection_.effective_peer_settings();
     }
     [[nodiscard]] http3_settings local_settings() const noexcept {
         return connection_.local_settings();
@@ -158,21 +178,15 @@ public:
     void observe_origins(http3_connection_callback_type callback_value, void* context_value) noexcept {
         origin_observer_ = {.callback_ = callback_value, .context_ = context_value};
     }
-    [[nodiscard]] std::span<const char> pending_control_output() const noexcept {
-        return control_output_;
+    // Queued control frames and QPACK instructions for the local critical
+    // streams; the span stays stable until the next consume/queue/encode/feed.
+    [[nodiscard]] std::span<const char> pending_critical_output(
+        http3_critical_stream_output::stream_kind kind) const noexcept {
+        return connection_.pending_critical_output(kind);
     }
-    [[nodiscard]] bool consume_control_output(std::size_t bytes) noexcept;
-    [[nodiscard]] std::span<const char> pending_encoder_output() const noexcept {
-        return connection_.pending_qpack_encoder_output();
-    }
-    [[nodiscard]] bool consume_encoder_output(std::size_t bytes_value) noexcept {
-        return connection_.consume_qpack_encoder_output(bytes_value);
-    }
-    [[nodiscard]] std::span<const char> pending_decoder_output() const noexcept {
-        return connection_.pending_qpack_decoder_output();
-    }
-    [[nodiscard]] bool consume_decoder_output(std::size_t bytes_value) noexcept {
-        return connection_.consume_qpack_decoder_output(bytes_value);
+    [[nodiscard]] bool consume_critical_output(
+        http3_critical_stream_output::stream_kind kind, std::size_t bytes_value) noexcept {
+        return connection_.consume_critical_output(kind, bytes_value);
     }
     [[nodiscard]] std::size_t live_stream_count() const noexcept;
     [[nodiscard]] std::size_t retained_body_bytes() const noexcept;
@@ -206,7 +220,6 @@ private:
         result_type result_{};
         bool complete_{false};
         bool reset_{false};
-        bool final_head_seen_{false};
         bool limit_exceeded_{false};
         bool terminal_{false};
         bool body_transferred_{false};
@@ -218,10 +231,9 @@ private:
 
     std::pmr::memory_resource* resource_;
     limits_type limits_;
-    http3_client_body_budget local_body_budget_;
-    http3_client_body_budget* body_budget_;
+    http3_body_budget local_body_budget_;
+    http3_body_budget* body_budget_;
     http3_connection connection_;
-    std::pmr::string control_output_;
     http3_client_response_event_sink origin_observer_{};
     http3_client_response_event_sink push_observer_{};
     std::pmr::unordered_map<std::uint64_t, stored_response_type> responses_;

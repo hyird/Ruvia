@@ -6,9 +6,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/ascii_case.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_whitespace.h"
 
 namespace ruvia::detail {
 
@@ -271,16 +271,6 @@ std::optional<std::string_view> http_find_semicolon_parameter_ignore_case(
         return token.size() == expected.size() &&
                http_ascii_to_lower(static_cast<unsigned char>(token.front())) == expected_first &&
                http_ascii_equals_ignore_case(token, expected);
-    }).empty();
-}
-
-[[nodiscard]] inline bool http_has_exact_token(
-    std::string_view value, std::string_view expected) noexcept {
-    if (expected.empty()) {
-        return false;
-    }
-    return !http_find_header_token(value, [expected](std::string_view token) noexcept {
-        return token == expected;
     }).empty();
 }
 

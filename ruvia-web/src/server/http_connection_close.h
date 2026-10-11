@@ -5,9 +5,10 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+
+#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 

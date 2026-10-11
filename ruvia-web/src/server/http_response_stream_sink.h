@@ -2,7 +2,6 @@
 
 #include <array>
 #include <chrono>
-#include <cstddef>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -15,12 +14,12 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -238,10 +237,10 @@ private:
         const auto& trailer_section = *trailer_result.section();
         const auto trailer_intent = response_trailer_intent(trailer_section);
         if (!trailer_section.empty()) {
-            ::ruvia::clear_pmr_string_retaining_small(trailers_);
+            http_clear_pmr_string_retaining_small(trailers_);
             append_http1_response_trailers(trailers_, trailer_section);
         } else {
-            ::ruvia::clear_pmr_string_retaining_small(trailers_);
+            http_clear_pmr_string_retaining_small(trailers_);
         }
 
         co_await commit(trailer_intent);

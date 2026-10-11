@@ -1,3 +1,8 @@
+# Shared build/install helpers used by every Ruvia component.
+# The root lists no per-target build logic of its own. Functions capture
+# CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
+# paths against its own directory.
+
 function(ruvia_collect_cpp_sources out relative_dir)
     file(GLOB_RECURSE _ruvia_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.cpp")
@@ -5,17 +10,12 @@ function(ruvia_collect_cpp_sources out relative_dir)
     set(${out} ${_ruvia_sources} PARENT_SCOPE)
 endfunction()
 
-# Shared build/install helpers used by every Ruvia component.
-# The root lists no per-target build logic of its own. Functions capture
-# CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
-# paths against its own directory.
-
+# Every component compiles its sources against its own src/pch.h.
 function(ruvia_configure_library target component)
     add_library(ruvia::${component} ALIAS ${target})
-    set_target_properties(${target} PROPERTIES
-        EXPORT_NAME ${component}
-        WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    set_target_properties(${target} PROPERTIES EXPORT_NAME ${component})
     target_compile_features(${target} PUBLIC cxx_std_20)
+    target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
 
     target_include_directories(${target}
         PUBLIC
@@ -52,11 +52,6 @@ function(ruvia_configure_library target component)
             target_compile_options(${target} PRIVATE -Wno-psabi)
         endif()
     endif()
-
-endfunction()
-
-function(ruvia_configure_runtime_library target)
-    target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
 endfunction()
 
 function(ruvia_install_target target component)
@@ -101,37 +96,11 @@ function(ruvia_assert_component_header_path component relative_path)
     endif()
 endfunction()
 
-function(ruvia_install_public_headers component)
-    foreach(_ruvia_header ${ARGN})
-        ruvia_assert_component_header_path(${component} "${_ruvia_header}")
-        get_property(_ruvia_installed_header_paths GLOBAL PROPERTY
-            RUVIA_INSTALLED_HEADER_PATHS)
-        if(_ruvia_header IN_LIST _ruvia_installed_header_paths)
-            continue()
-        endif()
-        set_property(GLOBAL APPEND PROPERTY
-            RUVIA_INSTALLED_HEADER_PATHS "${_ruvia_header}")
-        get_filename_component(_ruvia_header_dir "${_ruvia_header}" DIRECTORY)
-        file(
-            RELATIVE_PATH
-            _ruvia_header_install_subdir
-            "${CMAKE_CURRENT_SOURCE_DIR}/include"
-            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header_dir}"
-        )
-        install(
-            FILES "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
-            COMPONENT ${component}
-        )
-    endforeach()
-endfunction()
-
 # Install the public header surface plus exactly the same-component detail
 # headers that surface includes transitively. Source-only implementation headers
 # stay build-private without requiring a second hand-maintained header list.
 function(ruvia_install_public_header_closure component relative_dir)
-    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" ""
-        "EXCLUDE_DIRECTORIES;EXCLUDE_HEADERS")
+    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" "" "EXCLUDE_DIRECTORIES")
     ruvia_assert_component_header_path(${component} "${relative_dir}")
 
     file(GLOB_RECURSE _ruvia_closure_candidates CONFIGURE_DEPENDS
@@ -145,9 +114,6 @@ function(ruvia_install_public_header_closure component relative_dir)
     set(_ruvia_closure_headers)
     while(_ruvia_closure_queue)
         list(POP_FRONT _ruvia_closure_queue _ruvia_header)
-        if(_ruvia_header IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
-            continue()
-        endif()
         string(REPLACE "/" ";" _ruvia_header_components "${_ruvia_header}")
         set(_ruvia_header_excluded FALSE)
         foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
@@ -163,6 +129,8 @@ function(ruvia_install_public_header_closure component relative_dir)
             continue()
         endif()
         list(APPEND _ruvia_closure_headers "${_ruvia_header}")
+        # The GLOB only tracks added and removed files; the closure also depends
+        # on each member's include lines, so editing one must re-run the scan.
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}")
 
@@ -186,7 +154,18 @@ function(ruvia_install_public_header_closure component relative_dir)
     endwhile()
 
     list(SORT _ruvia_closure_headers)
-    ruvia_install_public_headers(${component} ${_ruvia_closure_headers})
+    foreach(_ruvia_header IN LISTS _ruvia_closure_headers)
+        ruvia_assert_component_header_path(${component} "${_ruvia_header}")
+        cmake_path(GET _ruvia_header PARENT_PATH _ruvia_header_dir)
+        file(RELATIVE_PATH _ruvia_header_install_subdir
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header_dir}")
+        install(
+            FILES "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
+            COMPONENT ${component}
+        )
+    endforeach()
 endfunction()
 
 function(ruvia_install_generated_public_header component generated_header relative_path)

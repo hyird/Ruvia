@@ -1,10 +1,8 @@
 #include "http3/http3_client_sans_io_session_engine.h"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/http3_peer_streams.h"
 
@@ -24,23 +22,16 @@ std::pmr::memory_resource* checked_resource(std::pmr::memory_resource* resource)
 }  // namespace
 
 http3_client_sans_io_session_engine::http3_client_sans_io_session_engine(
-    std::pmr::memory_resource* worker_resource, limits_type limits)
+    std::pmr::memory_resource* worker_resource, http3_body_budget* body_budget, limits_type limits)
     : resource_(checked_resource(worker_resource)),
       limits_(limits),
       local_body_budget_(limits.max_total_body_bytes_),
-      body_budget_(&local_body_budget_),
+      body_budget_(body_budget != nullptr ? body_budget : &local_body_budget_),
       connection_(http3_peer_role::client, resource_, limits.connection_),
-      control_output_(resource_),
       responses_(resource_) {
     if (limits_.max_live_streams_ == 0) {
         throw std::invalid_argument("HTTP/3 response session must allow at least one live stream");
     }
-}
-
-http3_client_sans_io_session_engine::http3_client_sans_io_session_engine(
-    std::pmr::memory_resource* worker_resource, http3_client_body_budget& body_budget, limits_type limits)
-    : http3_client_sans_io_session_engine(worker_resource, limits) {
-    body_budget_ = &body_budget;
 }
 
 http3_client_sans_io_session_engine::~http3_client_sans_io_session_engine() {
@@ -52,53 +43,28 @@ bool http3_client_sans_io_session_engine::queue_priority_update(std::uint64_t st
         !responses_.contains(stream_id) || responses_.at(stream_id).terminal_ || priority.urgency_ > 7) {
         return false;
     }
-    auto frame = connection_.prepare_priority_update({.element_id_ = stream_id,
-        .fields_ = {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}});
-    if ((frame.index() != 0) || std::get<0>(frame).size() > max_http_header_bytes - std::min(control_output_.size(), max_http_header_bytes)) {
-        return false;
-    }
-    control_output_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
-    return true;
+    return connection_.queue_priority_update({.element_id_ = stream_id,
+               .fields_ = {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}}) ==
+           http3_connection_error_code::no_error;
 }
 
 bool http3_client_sans_io_session_engine::queue_max_push_id(std::uint64_t maximum) {
-    if (feeding_ || connection_failure_.scope_ != http3_connection_error_scope::none || control_output_.size() > max_http_header_bytes - 24) {
-        return false;
-    }
-    // Reserve before the protocol core commits authorization. Appending the
-    // complete bounded control frame cannot allocate after that commit.
-    control_output_.reserve(control_output_.size() + 24);
-    auto frame = connection_.prepare_max_push_id(maximum);
-    if ((frame.index() != 0)) {
-        return false;
-    }
-    control_output_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
-    return true;
+    return !feeding_ && connection_failure_.scope_ == http3_connection_error_scope::none &&
+           connection_.queue_max_push_id(maximum) == http3_connection_error_code::no_error;
 }
 
 bool http3_client_sans_io_session_engine::queue_cancel_push(std::uint64_t push_id) {
-    if (feeding_ || connection_failure_.scope_ != http3_connection_error_scope::none || control_output_.size() > max_http_header_bytes - 24) {
-        return false;
-    }
-    control_output_.reserve(control_output_.size() + 24);
-    auto frame = connection_.prepare_cancel_push(push_id);
-    if ((frame.index() != 0)) {
-        return false;
-    }
-    control_output_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
-    return true;
+    return !feeding_ && connection_failure_.scope_ == http3_connection_error_scope::none &&
+           connection_.queue_cancel_push(push_id) == http3_connection_error_code::no_error;
 }
 
 bool http3_client_sans_io_session_engine::queue_push_priority_update(std::uint64_t push_id, http_priority priority) {
     if (feeding_ || connection_failure_.scope_ != http3_connection_error_scope::none || priority.urgency_ > 7) {
         return false;
     }
-    auto frame = connection_.prepare_priority_update({.element_id_ = push_id, .push_ = true, .fields_ = {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}});
-    if ((frame.index() != 0) || std::get<0>(frame).size() > max_http_header_bytes - std::min(control_output_.size(), max_http_header_bytes)) {
-        return false;
-    }
-    control_output_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
-    return true;
+    return connection_.queue_priority_update({.element_id_ = push_id, .push_ = true,
+               .fields_ = {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}}) ==
+           http3_connection_error_code::no_error;
 }
 
 bool http3_client_sans_io_session_engine::retire_push_stream(std::uint64_t stream_id) {
@@ -109,17 +75,6 @@ bool http3_client_sans_io_session_engine::retire_push_stream(std::uint64_t strea
     // A peer FIN/reset may have already released the push parser.
     return result_value.scope_ == http3_connection_error_scope::none ||
            (result_value.scope_ == http3_connection_error_scope::stream && result_value.code_ == http3_connection_error_code::stream_creation_error);
-}
-
-bool http3_client_sans_io_session_engine::consume_control_output(std::size_t bytes_value) noexcept {
-    if (bytes_value > control_output_.size()) {
-        return false;
-    }
-    control_output_.erase(0, bytes_value);
-    if (control_output_.empty()) {
-        std::pmr::string(resource_).swap(control_output_);
-    }
-    return true;
 }
 
 http3_client_sans_io_session_engine::result_type http3_client_sans_io_session_engine::register_request(
@@ -247,27 +202,29 @@ void http3_client_sans_io_session_engine::on_event(void* context_value, const ht
             }
             response.response_body_plan_ = event.response_body_plan_;
             response.status_ = event.head_->status_;
+            if (response.sink_.callback_) {
+                // An incremental owner copies the head itself; retain nothing.
+                response.sink_.callback_(response.sink_.context_, event);
+                return;
+            }
             response.headers_.clear();
             response.headers_.reserve(event.head_->headers_.size());
             for (const auto& field : event.head_->headers_) {
                 http3_client_sans_io_response_header copied(self.resource_);
-                copied.name_.assign(field.name_);
-                copied.value_.assign(field.value_);
+                copied.name_.assign(field.name());
+                copied.value_.assign(field.value());
                 response.headers_.push_back(std::move(copied));
-            }
-            response.final_head_seen_ = true;
-            if (response.sink_.callback_) {
-                response.sink_.callback_(response.sink_.context_, event);
             }
             return;
         case http3_connection_event_kind::trailer_field: {
+            if (response.sink_.callback_) {
+                response.sink_.callback_(response.sink_.context_, event);
+                return;
+            }
             http3_client_sans_io_response_header copied(self.resource_);
             copied.name_.assign(event.trailer_.name_);
             copied.value_.assign(event.trailer_.value_);
             response.trailers_.push_back(std::move(copied));
-            if (response.sink_.callback_) {
-                response.sink_.callback_(response.sink_.context_, event);
-            }
             return;
         }
         case http3_connection_event_kind::body:
@@ -418,7 +375,6 @@ http3_client_sans_io_session_engine::result_type http3_client_sans_io_session_en
         return {http3_client_sans_io_session_status::invalid_state};
     }
     (void)connection_.retire();
-    std::pmr::string(resource_).swap(control_output_);
     fail_connection({http3_client_sans_io_session_status::transport_error,
         http3_connection_error_scope::connection, http3_connection_error_code::no_error});
     return connection_failure_;

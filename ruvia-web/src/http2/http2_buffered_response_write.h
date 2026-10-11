@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -11,11 +10,11 @@
 #include "ruvia/http/http2_connection.h"
 
 #include "http2/http2_data_output_budget.h"
+#include "server/response_file_source.h"
 
 namespace ruvia {
 class http_response;
 class http_buffered_response_write_plan;
-class worker_memory;
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -215,16 +214,14 @@ static_assert(sizeof(http2_buffered_response_write_result) <= 4);
 
 // Non-transport HTTP/2 buffered/file response driver. The session template owns
 // socket reads/writes and event dispatch; this object owns the single response
-// commit, DATA backpressure, file I/O, and typed terminal result chain. Keeping it
-// non-template compiles that policy once for plain and TLS sessions.
+// commit, DATA backpressure, the file body (through response_file_source), and
+// the typed terminal result chain. Keeping it non-template compiles that policy
+// once for plain and TLS sessions.
 class http2_buffered_response_writer final {
 public:
     http2_buffered_response_writer(ruvia::http2_connection& connection,
-        http2_sans_io_stream_runtime_table& stream_runtimes, worker_memory& worker_value,
-        worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept;
-    http2_buffered_response_writer(ruvia::http2_connection& connection,
-        http2_sans_io_stream_runtime_table& stream_runtimes, worker_memory& worker_value,
-        worker_signal& write_signal) noexcept;
+        http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal,
+        http2_data_output_budget& output_budget, response_file_io file_io) noexcept;
 
     http2_buffered_response_writer(const http2_buffered_response_writer&) = delete;
     http2_buffered_response_writer& operator=(const http2_buffered_response_writer&) = delete;
@@ -245,9 +242,9 @@ private:
 
     ruvia::http2_connection& connection_;
     http2_sans_io_stream_runtime_table& stream_runtimes_;
-    worker_memory& worker_;
     worker_signal& write_signal_;
-    http2_data_output_budget* output_budget_{nullptr};
+    http2_data_output_budget& output_budget_;
+    response_file_io file_io_;
 };
 
 }  // namespace ruvia::detail

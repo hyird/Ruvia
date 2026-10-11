@@ -15,19 +15,6 @@ namespace ruvia::detail {
     return value == nullptr ? std::string_view{} : std::string_view(value);
 }
 
-template <typename t_type>
-[[nodiscard]] constexpr std::string_view http_borrowed_view(const t_type& value) noexcept {
-    using value_type = std::remove_cv_t<t_type>;
-    if constexpr (std::is_same_v<value_type, std::nullptr_t>) {
-        return {};
-    } else if constexpr (std::is_pointer_v<value_type> &&
-                         std::is_same_v<std::remove_cv_t<std::remove_pointer_t<value_type>>, char>) {
-        return http_borrowed_c_string_view(value);
-    } else {
-        return std::string_view(value);
-    }
-}
-
 // Zero-copy protocol values frequently retain views into caller-owned character
 // storage. Use this shared predicate on deleted overloads so a temporary
 // std::string (including std::pmr::string) cannot silently satisfy a

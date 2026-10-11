@@ -1,6 +1,7 @@
 #include "ruvia/http/http3_qpack.h"
 
 #include <array>
+#include <cstring>
 #include <limits>
 #include <string_view>
 
@@ -119,16 +120,19 @@ std::variant<std::size_t, http3_qpack_error> encode_http3_qpack_string(std::span
     if ((length_bytes.index() != 0)) {
         return std::get<1>(length_bytes);
     }
-    if (output.size() < std::get<0>(length_bytes) + value.size()) {
+    const auto prefix_bytes = std::get<0>(length_bytes);
+    if (output.size() < prefix_bytes || value.size() > output.size() - prefix_bytes) {
         return http3_qpack_error::output_too_small;
     }
-    for (std::size_t i = 0; i < std::get<0>(length_bytes); ++i) {
+    // Move the payload before writing its prefix: both ranges can belong to
+    // the same buffer, including a source that starts at output.data().
+    if (!value.empty()) {
+        std::memmove(output.data() + prefix_bytes, value.data(), value.size());
+    }
+    for (std::size_t i = 0; i < prefix_bytes; ++i) {
         output[i] = length[i];
     }
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        output[std::get<0>(length_bytes) + i] = value[i];
-    }
-    return std::get<0>(length_bytes) + value.size();
+    return prefix_bytes + value.size();
 }
 
 }  // namespace ruvia

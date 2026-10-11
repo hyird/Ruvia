@@ -34,12 +34,11 @@ template <typename entity_type, typename executor_type>
 class db_query_builder;
 
 namespace detail {
+#ifdef RUVIA_ENABLE_REDIS
 class db_query_cache_state;
+#endif
+struct db_query_backend;
 struct db_query_plan;
-struct db_transaction_start_plan;
-template <typename pool_type>
-task<db_transaction> begin_db_transaction(pool_type&, std::pmr::memory_resource*,
-    operation_options, db_transaction_start_plan);
 }  // namespace detail
 
 class db_transaction final {
@@ -155,12 +154,8 @@ private:
         return make_scoped_operation(registration_.scope(),
             detail::map_db_query<result_type>(std::move(task_value), resource, std::move(mapper)));
     }
-    friend class detail::mariadb_pool;
-    friend class detail::postgresql_pool;
-    template <typename pool_type>
-    friend task<db_transaction> detail::begin_db_transaction(
-        pool_type&, std::pmr::memory_resource*, operation_options,
-        detail::db_transaction_start_plan);
+    template <typename driver_type>
+    friend class detail::db_pool;
 
     struct lease_type final {
         lease_type(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
@@ -176,7 +171,7 @@ private:
     using operation_guard_type = detail::db_operation_guard<lease_type>;
 
     class state_type;
-    using state_owner_type = std::unique_ptr<state_type, detail::pmr_object_deleter<state_type>>;
+    using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
 
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
         operation_options options);
@@ -190,10 +185,13 @@ private:
     void bind_operation_scope(operation_scope& scope) noexcept;
     static void expire_capability(void* target) noexcept;
 
+    [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
     static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(
-        detail::db_query_plan plan, detail::db_query_cache_state* cache, operation_guard_type operation);
+        detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
+#ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* cache_{nullptr};
+#endif
     state_owner_type state_;
     scoped_capability_registration registration_;
 };

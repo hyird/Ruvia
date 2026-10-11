@@ -226,7 +226,7 @@ private:
             throw std::invalid_argument("ring queue capacity must be nonzero");
         }
         if (!resource) {
-            resource = detail::process_resource();
+            resource = process_resource();
         }
         std::pmr::polymorphic_allocator<value_type> allocator(resource);
         storage_owner storage(allocator.allocate(capacity), storage_deleter{resource, capacity, 0});

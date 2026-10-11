@@ -2,6 +2,7 @@ ruvia_collect_cpp_sources(ruvia_http_sources src)
 add_library(ruvia-http STATIC ${ruvia_http_sources})
 
 if(WIN32)
+    # ngtcp2.h pulls in the Windows socket headers.
     target_compile_definitions(ruvia-http PRIVATE NOMINMAX)
 endif()
 
@@ -9,10 +10,9 @@ ruvia_configure_library(ruvia-http http)
 
 target_link_libraries(ruvia-http
     PRIVATE
-        # Content/transfer coding only (gzip/deflate/brotli/zstd). NO OpenSSL: the pure
-        # protocol library does no TLS -- client transports are supplied externally and
-        # the server driver lives in web -- while WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
-        # http consumer would otherwise pull OpenSSL in for nothing.
+        # Content/transfer codings and the QUIC transport state machine. No
+        # OpenSSL: the sans-I/O protocol library does no TLS (Web supplies it)
+        # and the WebSocket accept key's SHA-1 is implemented in-tree.
         ${RUVIA_HTTP_DEPENDENCIES}
 )
 

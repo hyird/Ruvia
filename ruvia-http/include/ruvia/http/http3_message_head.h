@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_header.h"
 
 namespace ruvia {
 
@@ -25,18 +27,19 @@ enum class http3_message_head_error : std::uint8_t {
     field_section_too_large,
 };
 
-struct http3_message_header final {
-    std::pmr::string name_;
-    std::pmr::string value_;
-
-    explicit http3_message_header(std::pmr::memory_resource* resource);
-    http3_message_header(std::string_view name, std::string_view value, std::pmr::memory_resource* resource);
-};
-
 // All strings and headers are owned by resource. The resource must outlive this
-// value; destroying the value returns its allocations to that resource.
+// value; destroying the value returns its allocations to that resource. Moving
+// transfers that storage; an implicit copy would silently pick another
+// resource, so copies name their destination explicitly.
 struct http3_message_head final {
     explicit http3_message_head(std::pmr::memory_resource* resource);
+    http3_message_head(const http3_message_head&) = delete;
+    http3_message_head& operator=(const http3_message_head&) = delete;
+    http3_message_head(http3_message_head&&) = default;
+    http3_message_head& operator=(http3_message_head&&) = default;
+
+    // Deep copy whose every string, header and the vector use resource.
+    [[nodiscard]] http3_message_head copy(std::pmr::memory_resource* resource) const;
 
     std::pmr::string method_;
     std::pmr::string protocol_;
@@ -45,7 +48,10 @@ struct http3_message_head final {
     std::pmr::string path_;
     std::uint16_t status_{0};
     std::optional<std::uint64_t> content_length_{};
-    std::pmr::vector<http3_message_header> headers_;
+    // Request heads only: the Expect fields, validated and folded once while
+    // decoding so request owners never re-parse them.
+    http_request_expectations expectations_{};
+    std::pmr::vector<http_header> headers_;
 };
 
 struct http3_message_head_limits final {

@@ -4,7 +4,6 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/core/constant_time.h"
 
 namespace ruvia::detail {
 
@@ -57,11 +56,5 @@ private:
 // Fills `buffer` (which must hold at least 48 bytes) with a cryptographically
 // random hex token. Failure is explicit and cannot be mistaken for a token.
 [[nodiscard]] secure_token_result generate_secure_token(std::span<char> buffer) noexcept;
-
-// Length-checked constant-time compare of the double-submit CSRF token; see
-// ruvia::constant_time_bytes_equal for the timing-safety rationale.
-[[nodiscard]] inline bool csrf_tokens_equal(std::string_view left, std::string_view right) noexcept {
-    return ruvia::constant_time_bytes_equal(left, right);
-}
 
 }  // namespace ruvia::detail

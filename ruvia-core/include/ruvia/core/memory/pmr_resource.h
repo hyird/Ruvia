@@ -4,7 +4,7 @@
 
 #include "ruvia/core/memory/process_resource.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 struct resolved_pmr_resource_tag final {};
 
@@ -15,4 +15,4 @@ struct resolved_pmr_resource_tag final {};
     return resource == nullptr ? process_resource() : resource;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

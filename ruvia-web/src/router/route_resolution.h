@@ -8,6 +8,8 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/web/detail/router/route_handlers.h"
+
 #include "router/route_limits.h"
 
 // Lightweight, self-contained route-resolution result types. A materialized
@@ -74,9 +76,15 @@ private:
 
 class resolved_route final {
 public:
+    // Process-invariant route data from the compiled plan.
     [[nodiscard]] const route_entry& route() const noexcept {
         return *route_;
     }
+
+    // The resolving worker's handler. handler() requires a buffered-response
+    // endpoint; stream_handler() a response-stream, websocket or tunnel one.
+    [[nodiscard]] route_handler_type handler() const noexcept;
+    [[nodiscard]] route_stream_handler_type stream_handler() const noexcept;
 
     // Static routes carry an empty match; dynamic routes carry their captured
     // values in the same value object. Callers never need a nullable match side
@@ -89,11 +97,13 @@ public:
 private:
     friend class route_resolution;
 
-    resolved_route(const route_entry& route, route_match match) noexcept
+    resolved_route(const route_entry& route, void* handler_target, route_match match) noexcept
         : route_(&route),
+          handler_target_(handler_target),
           match_(match) {}
 
     const route_entry* route_;
+    void* handler_target_;
     route_match match_;
 };
 
@@ -103,8 +113,8 @@ public:
         : value_(route_not_found{}) {}
 
     [[nodiscard]] static route_resolution resolved(
-        const route_entry& route, route_match match = {}) noexcept {
-        return route_resolution(resolved_route(route, match));
+        const route_entry& route, void* handler_target, route_match match = {}) noexcept {
+        return route_resolution(resolved_route(route, handler_target, match));
     }
 
     // The mask spans only classified methods, so it can be empty for a resource

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -9,13 +10,16 @@
 
 #include "ruvia/http/http3_client_request_head.h"
 #include "ruvia/http/http3_connection_error.h"
+#include "ruvia/http/http3_critical_stream_output.h"
 #include "ruvia/http/http3_field_section.h"
 #include "ruvia/http/http3_message_body.h"
 #include "ruvia/http/http3_message_head.h"
 #include "ruvia/http/http3_peer_streams.h"
 #include "ruvia/http/http3_qpack_connection.h"
+#include "ruvia/http/http3_request_writer.h"
 #include "ruvia/http/http3_response_writer.h"
 #include "ruvia/http/http3_settings.h"
+#include "ruvia/http/http3_var_int.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_known_method.h"
@@ -44,6 +48,11 @@ enum class http3_connection_event_kind : std::uint8_t {
     push_canceled,
     priority_update,
     origin_advertisement,
+    // Server: the request HEADERS section is complete and decoded. Emitted in
+    // the feed() call that completes it (after QPACK unblocking, if blocked),
+    // before any body, tunnel data, trailers or message_end of that stream.
+    // This is the request-head boundary, e.g. for switching from a header
+    // read timeout to a body read timeout.
     request_head,
     informational_head,
     final_head,
@@ -57,7 +66,9 @@ enum class http3_connection_event_kind : std::uint8_t {
 struct http3_connection_event final {
     http3_connection_event_kind kind_{http3_connection_event_kind::body};
     std::uint64_t stream_id_{0};
-    const http3_message_head* head_{nullptr};
+    // Head events hand the decoded head to the callee, which may move from it
+    // (for example into http3_server_request); nothing reads it afterwards.
+    http3_message_head* head_{nullptr};
     http3_field_section_field_view trailer_{};
     std::span<const char> body_{};
     // Client response final-head and message-end events preserve the same value.
@@ -90,6 +101,17 @@ struct http3_connection_config final {
     // Client role: authorize pushes up to this ID; advertise MAX_PUSH_ID on control.
     std::optional<std::uint64_t> max_push_id_{};
     std::size_t max_remembered_pushes_{128};
+};
+
+// Server push stream prefix: the stream type and Push ID that open a push stream.
+struct http3_push_stream_prefix final {
+    std::array<char, 1 + http3_var_int_max_bytes> bytes_{};
+    std::size_t size_{0};
+
+    [[nodiscard]] std::span<const char> bytes() const& noexcept {
+        return std::span<const char>(bytes_).first(size_);
+    }
+    std::span<const char> bytes() const&& = delete;
 };
 
 struct http3_connection_result final {
@@ -126,6 +148,20 @@ public:
     http3_connection(const http3_connection&) = delete;
     http3_connection& operator=(const http3_connection&) = delete;
 
+    // Client only: own ticket SETTINGS before the first peer feed or local field
+    // section encoding. Queued control frames and registered requests are allowed.
+    // Until the TLS outcome is supplied, outgoing QPACK uses static/literal fields.
+    // Invalid values throw invalid_argument; a late/repeated or wrong-role call
+    // throws logic_error. A latched connection failure is returned unchanged.
+    [[nodiscard]] http3_connection_result begin_early_data(http3_settings remembered);
+    // Supply the TLS outcome once, before replaying rejected requests or feeding
+    // subsequent peer bytes. Rejection discards remembered SETTINGS. Acceptance
+    // validates them against actual SETTINGS, whether those arrive before or
+    // after this call; incompatibility returns and latches a connection error.
+    // Allocator exceptions propagate and latch internal_error. Calls without a
+    // preceding begin, repeated calls, and calls during feed throw logic_error.
+    [[nodiscard]] http3_connection_result complete_early_data(bool accepted);
+
     [[nodiscard]] http3_connection_result register_client_request(std::uint64_t stream_id,
         http_known_method method);
     // Local stream cancellation: emit QPACK Stream Cancellation before releasing
@@ -142,32 +178,38 @@ public:
     // No callbacks or wire signals are generated. Invalidates peer_settings()
     // references. False when already retired or called from a feed callback.
     [[nodiscard]] bool retire() noexcept;
+    // Server: request heads completed during this call are decoded directly
+    // into request_head_resource (nullptr selects the connection resource), so
+    // a per-request owner can adopt the head from the request_head event.
     [[nodiscard]] http3_connection_result feed(std::uint64_t stream_id, std::span<const char> bytes,
-        bool fin, bool reset, http3_connection_callback_type callback, void* context);
+        bool fin, bool reset, http3_connection_callback_type callback, void* context,
+        std::pmr::memory_resource* request_head_resource = nullptr);
     // Server: creates a complete PUSH_PROMISE frame; caller transmits it on the
     // associated request stream. The returned bytes use this connection's resource.
     // The associated response's send half must still be open; the driver owns
     // send-side HEADERS/DATA/FIN progression through the message write plans.
     [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_push_promise(
         std::uint64_t associated_stream_id, std::uint64_t push_id, http_push_request_view request);
-    // Complete control frames, excluding the control stream type and SETTINGS.
-    // Queue the returned bytes in order. Protocol state commits at preparation.
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_max_push_id(std::uint64_t maximum);
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_cancel_push(std::uint64_t push_id);
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_goaway(std::uint64_t first_unprocessed_id);
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_priority_update(http_priority_update update);
+    // Control frames (excluding the control stream type and SETTINGS, which
+    // http3_critical_stream_output owns) are appended to this connection's
+    // control output; no_error means queued. Protocol state commits only once
+    // the frame is queued. Drain it with pending/consume_critical_output.
+    [[nodiscard]] http3_connection_error_code queue_max_push_id(std::uint64_t maximum);
+    [[nodiscard]] http3_connection_error_code queue_cancel_push(std::uint64_t push_id);
+    [[nodiscard]] http3_connection_error_code queue_goaway(std::uint64_t first_unprocessed_id);
+    [[nodiscard]] http3_connection_error_code queue_priority_update(http_priority_update update);
+    [[nodiscard]] http3_connection_error_code queue_origin_advertisement(std::span<const std::string_view> origins);
     // Server: stream type + push ID. One server unidirectional stream per push.
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_push_stream(std::uint64_t stream_id, std::uint64_t push_id);
-    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_connection_error_code> prepare_origin_advertisement(
-        std::span<const std::string_view> origins);
+    [[nodiscard]] std::variant<http3_push_stream_prefix, http3_connection_error_code> prepare_push_stream(std::uint64_t stream_id, std::uint64_t push_id);
     [[nodiscard]] std::optional<std::uint64_t> peer_max_push_id() const noexcept;
     // Validated promise metadata, borrowed until connection retirement. Available
     // to either role after preparing or receiving the complete PUSH_PROMISE.
     [[nodiscard]] const http3_message_head* promised_request(std::uint64_t push_id) const& noexcept;
     const http3_message_head* promised_request(std::uint64_t) const&& = delete;
 
-    // Uses peer SETTINGS to encode a QPACK section for any local message or
-    // promise. Before SETTINGS, only static/literal representations are used.
+    // Uses effective_peer_settings() to encode a QPACK section for any local
+    // message or promise. Before actual SETTINGS or while the TLS early-data
+    // outcome is pending, only static/literal representations are used.
     // All connection-owned encoders enforce the peer's decoded field-section
     // limit before compression, independently of local encoded-byte budgets.
     // Message helpers validate HTTP semantics; this entry point owns compression.
@@ -175,6 +217,8 @@ public:
         std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields);
     [[nodiscard]] std::variant<http3_client_request_head, http3_client_request_head_failure> encode_client_request_head(
         std::uint64_t stream_id, http3_client_request_head_view view, http3_field_section_limits limits = {});
+    [[nodiscard]] std::variant<http3_headers_frame, http3_request_trailer_error> encode_request_trailers(std::uint64_t stream_id,
+        std::span<const http3_field_section_field_view> fields, http3_field_section_limits limits = {});
     [[nodiscard]] std::variant<http3_response_head, http3_response_head_failure> encode_connect_response_head(std::uint64_t stream_id,
         const http_response& response, http3_field_section_limits limits = {});
     [[nodiscard]] std::variant<http3_response_head, http3_response_head_failure> encode_response_head(std::uint64_t stream_id,
@@ -183,23 +227,30 @@ public:
         http_response response, http_known_method method, http_response_stream_kind kind, http_response_trailer_intent trailers, http3_field_section_limits limits = {});
     [[nodiscard]] std::variant<http3_response_head, http3_response_head_failure> encode_interim_response_head(std::uint64_t stream_id,
         const http_interim_response_head& response, http3_field_section_limits limits = {});
-    [[nodiscard]] std::variant<http3_response_field_section, http3_response_head_failure> encode_response_trailers(std::uint64_t stream_id,
+    [[nodiscard]] std::variant<http3_headers_frame, http3_response_head_failure> encode_response_trailers(std::uint64_t stream_id,
         std::span<const http3_field_section_field_view> fields, http3_field_section_limits limits = {});
-    [[nodiscard]] std::span<const char> pending_qpack_encoder_output() const& noexcept;
-    std::span<const char> pending_qpack_encoder_output() const&& = delete;
-    [[nodiscard]] bool consume_qpack_encoder_output(std::size_t bytes) noexcept;
 
-    // Decoder instructions (without stream-type prefix) belong on the local
-    // QPACK decoder critical stream. Consume only successfully transmitted bytes.
-    [[nodiscard]] std::span<const char> pending_qpack_decoder_output() const& noexcept;
-    std::span<const char> pending_qpack_decoder_output() const&& = delete;
-    [[nodiscard]] bool consume_qpack_decoder_output(std::size_t bytes) noexcept;
+    // Bytes this connection owns for a local critical stream, after the stream
+    // prefix that http3_critical_stream_output emits: queued control frames,
+    // QPACK encoder instructions or QPACK decoder instructions. The span stays
+    // stable until the next consume or queue/encode/feed call, so drivers
+    // write straight from it and then consume exactly the accepted bytes.
+    [[nodiscard]] std::span<const char> pending_critical_output(http3_critical_stream_output::stream_kind kind) const& noexcept;
+    std::span<const char> pending_critical_output(http3_critical_stream_output::stream_kind) const&& = delete;
+    [[nodiscard]] bool consume_critical_output(http3_critical_stream_output::stream_kind kind, std::size_t bytes) noexcept;
 
     [[nodiscard]] std::size_t active_request_count() const noexcept;
     // Use these exact settings to construct http3_local_critical_streams. This
     // binds advertised receive capabilities to their connection-owned state.
     [[nodiscard]] http3_settings local_settings() const noexcept;
+    // Actual peer SETTINGS only; never substitutes ticket values. References
+    // remain borrowed from this connection and are invalidated by retirement.
     [[nodiscard]] const std::optional<http3_settings>& peer_settings() const noexcept;
+    // Sending limits/capabilities: actual SETTINGS take precedence immediately;
+    // otherwise remembered SETTINGS apply until early data is rejected. Empty
+    // means protocol defaults. The reference is invalidated by begin/complete,
+    // feed, move or retirement; do not retain it across those operations.
+    [[nodiscard]] const std::optional<http3_settings>& effective_peer_settings() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> peer_goaway_id() const noexcept;
     // Conservative RFC 9114 unprocessed evidence for a live client request.
     // Query before feeding a RESET or retiring the request. The optional code

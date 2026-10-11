@@ -9,15 +9,14 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_coding.h"
 #include "coding/http_content_length.h"
-#include "field/http_media_type.h"
+#include "field/response_field_validation.h"
 #include "http1/http1_chunked_framing.h"
 #include "response/http_response_header_access.h"
 #include "server/http_date_cache.h"
@@ -56,7 +55,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
 }
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
-// via response_head_buffer_type::append_generated. Constant-size appends inline to stores.
+// via http_response_head_buffer::append_generated. Constant-size appends inline to stores.
 struct raw_head_sink {
     char* out_;
 
@@ -81,7 +80,7 @@ struct raw_head_sink {
         // out + 20, ...) would form a pointer past the 512-byte stack buffer's
         // end (undefined per [expr.add]) when the head nearly fills it, even
         // though no byte beyond the digits is written. Mirrors
-        // response_head_buffer_type::append_unsigned.
+        // http_response_head_buffer::append_unsigned.
         std::array<char, 20> digits;
         const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
         append(std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
@@ -105,31 +104,26 @@ void add_response_head_bytes(std::size_t& total, std::size_t bytes_value) {
 }
 
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
-    std::uint32_t known_bit, bool trailer_header_allowed) noexcept {
+    bool trailer_header_allowed, response_field_state& fields, http_connection_options& connection_options,
+    http_upgrade_protocols& upgrade_protocols) noexcept {
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
         return false;
     }
-    if (known_bit == response_header_content_type && !is_valid_http_content_type_field_value(value)) {
-        return false;
-    }
-    if (known_bit == response_header_content_encoding &&
-        !is_valid_http_content_encoding_field_value(value, http_field_list_role::sender)) {
+    if (validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields) !=
+        response_field_status::ok) {
         return false;
     }
     if (http_ascii_equals_ignore_case(name, "Trailer")) {
-        return is_valid_http_response_trailer_field_value(value, http_field_list_role::sender) &&
-               (trailer_header_allowed || http_trim_ows(value).empty());
+        return trailer_header_allowed || http_trim_ows(value).empty();
     }
     if (http_ascii_equals_ignore_case(name, "Connection")) {
-        http_connection_options options;
-        return options.parse_field(
+        return connection_options.parse_field(
                    value, http_field_list_role::sender, [](std::string_view option) noexcept {
                        return !http_connection_option_conflicts_with_managed_field(option);
                    }) == http_field_list_parse_status::ok;
     }
     if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-        http_upgrade_protocols protocols;
-        return protocols.parse_field(value, http_field_list_role::sender,
+        return upgrade_protocols.parse_field(value, http_field_list_role::sender,
                    [](const http_upgrade_protocol&) noexcept { return true; }) ==
                http_field_list_parse_status::ok;
     }
@@ -185,7 +179,7 @@ void emit_response_head(const http_response& response, raw_head_sink& sink_value
 }  // namespace
 
 void append_response_head(
-    const http_response& response, response_head_buffer_type& head, const http1_response_head_plan& plan) {
+    const http_response& response, http_response_head_buffer& head, const http1_response_head_plan& plan) {
     const auto body_plan = plan.body_plan();
     if (response.status() != body_plan.response_status()) {
         throw std::invalid_argument("HTTP/1 response plan status does not match response");
@@ -241,6 +235,9 @@ void append_response_head(
     add_response_head_bytes(head_bytes, reason_phrase.size());
     add_response_head_bytes(head_bytes, 2);
     std::size_t field_count = 0;
+    response_field_state fields;
+    http_connection_options connection_options;
+    http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
         const auto known_bit = response_header_known_bit(header);
         if (known_bit == response_header_transfer_encoding ||
@@ -248,13 +245,17 @@ void append_response_head(
             continue;
         }
         if (!is_valid_http1_emitted_response_header(
-                header.name(), header.value(), known_bit, emit_chunked_transfer_encoding)) {
+                header.name(), header.value(), emit_chunked_transfer_encoding, fields,
+                connection_options, upgrade_protocols)) {
             throw std::invalid_argument("invalid HTTP response header");
         }
         ++field_count;
         add_response_head_bytes(head_bytes, header.name().size());
         add_response_head_bytes(head_bytes, header.value().size());
         add_response_head_bytes(head_bytes, 4);
+    }
+    if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
+        throw std::invalid_argument("HTTP Upgrade response requires Connection: Upgrade");
     }
     if ((known_bits & response_header_date) == 0 && !date_header.empty()) {
         ++field_count;

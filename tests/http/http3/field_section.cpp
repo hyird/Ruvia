@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -10,6 +11,7 @@
 #include "ruvia/http/http3_field_section.h"
 #include "ruvia/http/http3_qpack.h"
 #include "ruvia/http/http3_qpack_connection.h"
+#include "ruvia/http/http3_var_int.h"
 
 #include "test_harness.h"
 
@@ -190,6 +192,70 @@ RUVIA_TEST(http3_qpack_encoders_compare_complete_names_before_using_static_refer
     }
 }
 
+RUVIA_TEST(http3_field_section_accepts_nonzero_base_without_dynamic_references) {
+    for (const auto base : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{127}, std::uint64_t{128}, ruvia::http3_var_int_max}) {
+        std::array<char, 11> prefix{};
+        const auto encoded = ruvia::encode_http3_qpack_integer(prefix, 7, 0, base);
+        RUVIA_CHECK(encoded.index() == 0);
+        if (encoded.index() != 0) {
+            continue;
+        }
+        std::vector<char> wire{0};
+        wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(encoded));
+        wire.push_back(static_cast<char>(0xd1));  // Static :method GET.
+        captured_fields static_fields;
+        const auto decoded = ruvia::decode_http3_field_section(wire, capture, &static_fields);
+        RUVIA_CHECK(decoded.index() == 0);
+        if (decoded.index() == 0) {
+            RUVIA_CHECK_EQ(std::get<0>(decoded), 1U);
+        }
+        ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 0});
+        captured_fields shared_fields;
+        const auto shared = decoder.decode(0, wire, capture, &shared_fields);
+        RUVIA_CHECK(shared.index() == 0 && std::get<0>(shared).status_ == ruvia::http3_qpack_decode_status::decoded);
+        RUVIA_CHECK_EQ(static_fields.names_, shared_fields.names_);
+        RUVIA_CHECK_EQ(static_fields.values_, shared_fields.values_);
+        RUVIA_CHECK_EQ(shared_fields.names_, std::vector<std::string>{":method"});
+        RUVIA_CHECK_EQ(shared_fields.values_, std::vector<std::string>{"GET"});
+        RUVIA_CHECK(decoder.pending_decoder_output().empty());
+    }
+}
+
+RUVIA_TEST(http3_field_section_rejects_invalid_base_encodings) {
+    for (const auto delta : {std::uint64_t{0}, std::uint64_t{127}, std::uint64_t{128}}) {
+        std::array<char, 11> prefix{};
+        const auto encoded = ruvia::encode_http3_qpack_integer(prefix, 7, 0x80, delta);
+        RUVIA_CHECK(encoded.index() == 0);
+        if (encoded.index() != 0) {
+            continue;
+        }
+        std::vector<char> wire{0};
+        wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(encoded));
+        wire.push_back(static_cast<char>(0xd1));
+        const auto decoded = ruvia::decode_http3_field_section(wire, nullptr, nullptr);
+        RUVIA_CHECK(decoded.index() != 0 && std::get<1>(decoded) == ruvia::http3_field_section_error::invalid_base);
+        ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 0});
+        const auto shared = decoder.decode(0, wire, nullptr, nullptr);
+        RUVIA_CHECK(shared.index() != 0 && std::get<1>(shared) == ruvia::http3_qpack_connection_error::decompression_failed);
+    }
+    std::array<char, 11> prefix{};
+    const auto encoded = ruvia::encode_http3_qpack_integer(prefix, 7, 0, ruvia::http3_var_int_max + 1);
+    RUVIA_CHECK(encoded.index() == 0);
+    if (encoded.index() == 0) {
+        std::vector<char> wire{0};
+        wire.insert(wire.end(), prefix.begin(), prefix.begin() + std::get<0>(encoded));
+        wire.push_back(static_cast<char>(0xd1));
+        const auto oversized = ruvia::decode_http3_field_section(wire, nullptr, nullptr);
+        RUVIA_CHECK(oversized.index() != 0 && std::get<1>(oversized) == ruvia::http3_field_section_error::invalid_base);
+        ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 0});
+        const auto shared = decoder.decode(0, wire, nullptr, nullptr);
+        RUVIA_CHECK(shared.index() != 0 && std::get<1>(shared) == ruvia::http3_qpack_connection_error::decompression_failed);
+    }
+    constexpr std::array<char, 2> truncated{0, 0x7f};
+    const auto decoded = ruvia::decode_http3_field_section(truncated, nullptr, nullptr);
+    RUVIA_CHECK(decoded.index() != 0 && std::get<1>(decoded) == ruvia::http3_field_section_error::need_more_data);
+}
+
 RUVIA_TEST(http3_field_section_rejects_bad_prefix_dynamic_references_and_truncation) {
     constexpr std::array<char, 2> short_prefix{0, 0};
     RUVIA_CHECK(std::get<1>(ruvia::decode_http3_field_section(std::span<const char>(short_prefix).first(1), nullptr,
@@ -198,9 +264,11 @@ RUVIA_TEST(http3_field_section_rejects_bad_prefix_dynamic_references_and_truncat
     constexpr std::array<char, 3> nonzero_ric{1, 0, 0};
     RUVIA_CHECK(std::get<1>(ruvia::decode_http3_field_section(nonzero_ric, nullptr, nullptr)) ==
                 ruvia::http3_field_section_error::nonzero_required_insert_count);
-    constexpr std::array<char, 3> invalid_base{0, 1, 0};
-    RUVIA_CHECK(std::get<1>(ruvia::decode_http3_field_section(invalid_base, nullptr, nullptr)) ==
-                ruvia::http3_field_section_error::invalid_base);
+    // Base 1 is valid, but a permanently empty table cannot resolve this entry.
+    constexpr std::array<char, 3> nonzero_base_dynamic{0, 1, 0};
+    const auto nonzero_base_result = ruvia::decode_http3_field_section(nonzero_base_dynamic, nullptr, nullptr);
+    RUVIA_CHECK(nonzero_base_result.index() != 0 && std::get<1>(nonzero_base_result) ==
+                                                        ruvia::http3_field_section_error::dynamic_reference);
     constexpr std::array<char, 3> dynamic_indexed{0, 0, static_cast<char>(0x80)};
     RUVIA_CHECK(std::get<1>(ruvia::decode_http3_field_section(dynamic_indexed, nullptr, nullptr)) ==
                 ruvia::http3_field_section_error::dynamic_reference);

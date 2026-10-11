@@ -49,11 +49,11 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
 }
 
 [[nodiscard]] detail::static_root_state* make_static_root_state(detail::static_root_config_storage config) {
-    auto* const resource = detail::process_resource();
+    auto* const resource = process_resource();
     if (resource == nullptr) {
         std::terminate();
     }
-    return detail::construct_pmr_object<detail::static_root_state>(
+    return construct_pmr_object<detail::static_root_state>(
         resource, resource, std::move(config));
 }
 
@@ -215,7 +215,7 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
     if (suffix.empty()) {
         return nullptr;
     }
-    std::pmr::string variant_path(detail::process_resource());
+    std::pmr::string variant_path(process_resource());
     variant_path.reserve(identity.relative_path_.size() + suffix.size());
     variant_path.append(identity.relative_path_.data(), identity.relative_path_.size());
     variant_path.append(suffix.data(), suffix.size());
@@ -399,7 +399,7 @@ void detail::static_root_access::install_precompressed_variants(
     }
 
     auto& state_value = *root.state_;
-    auto* const resource = detail::process_resource();
+    auto* const resource = process_resource();
     const std::array<http_content_coding, 3> codings{
         http_content_coding::brotli,
         http_content_coding::zstd,
@@ -504,7 +504,7 @@ static_root::prepared_construction_type static_root::prepare_construction(
     detail::validate_static_root_options(options);
     return prepared_construction_type{
         .canonical_root_ = canonical_static_root_path(root),
-        .config_ = detail::store_validated_static_root_config(options, detail::process_resource()),
+        .config_ = detail::store_validated_static_root_config(options, process_resource()),
     };
 }
 
@@ -512,17 +512,17 @@ static_root::prepared_construction_type static_root::prepare_construction(
     const std::filesystem::path& root, const detail::static_root_config_storage& config) {
     return prepared_construction_type{
         .canonical_root_ = canonical_static_root_path(root),
-        .config_ = detail::static_root_config_storage(config, detail::process_resource()),
+        .config_ = detail::static_root_config_storage(config, process_resource()),
     };
 }
 
 static_root::prepared_construction_type static_root::prepare_construction(
     const std::filesystem::path& root, detail::static_root_config_storage&& config) {
     auto canonical_root = canonical_static_root_path(root);
-    if (config.cache_control_.get_allocator().resource() != detail::process_resource()) {
+    if (config.cache_control_.get_allocator().resource() != process_resource()) {
         return prepared_construction_type{
             .canonical_root_ = std::move(canonical_root),
-            .config_ = detail::static_root_config_storage(config, detail::process_resource()),
+            .config_ = detail::static_root_config_storage(config, process_resource()),
         };
     }
     return prepared_construction_type{
@@ -531,7 +531,7 @@ static_root::prepared_construction_type static_root::prepare_construction(
     };
 }
 
-std::unique_ptr<static_root, detail::pmr_object_deleter<static_root>>
+std::unique_ptr<static_root, pmr_object_deleter<static_root>>
 detail::static_root_access::construct(
     std::pmr::memory_resource* object_resource, static_root::prepared_construction_type prepared) {
     auto* const resource = pmr_resource_or_default(object_resource);
@@ -546,19 +546,19 @@ detail::static_root_access::construct(
     }
 }
 
-std::unique_ptr<static_root, detail::pmr_object_deleter<static_root>> detail::static_root_access::make(
+std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
     std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
     const static_root_config_storage& config) {
     return construct(object_resource, static_root::prepare_construction(root, config));
 }
 
-std::unique_ptr<static_root, detail::pmr_object_deleter<static_root>> detail::static_root_access::make(
+std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
     std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
     static_root_config_storage&& config) {
     return construct(object_resource, static_root::prepare_construction(root, std::move(config)));
 }
 
-std::unique_ptr<static_root, detail::pmr_object_deleter<static_root>> detail::static_root_access::clone(
+std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::clone(
     std::pmr::memory_resource* object_resource, const static_root& source_value) {
     return make(object_resource, source_value.path(), source_value.state_->config_);
 }
@@ -571,9 +571,9 @@ static_root::static_root(prepared_construction_type prepared)
     const auto& canonical_root = prepared.canonical_root_;
     std::error_code ec;
     auto& state_value = *state_;
-    ruvia::assign_native_path(state_value.root_, canonical_root);
+    http_assign_native_path(state_value.root_, canonical_root);
 
-    auto* const upstream = detail::process_resource();
+    auto* const upstream = process_resource();
     const auto& config = state_value.config_;
     const auto serve_dotfiles = detail::static_root_serves_dotfiles(config.dotfiles_);
     if (!config.index_file_.empty()) {
@@ -642,7 +642,7 @@ static_root::static_root(prepared_construction_type prepared)
             config.response_validators_ == static_response_validator_policy::emit;
         detail::static_root_entry entry(upstream);
         entry.relative_path_ = std::move(relative);
-        ruvia::assign_native_path(entry.file_path_, file_path);
+        http_assign_native_path(entry.file_path_, file_path);
         entry.content_type_ = detail::content_type_for(file_path, extension, config, upstream);
         entry.size_ = snapshot.size_;
         entry.identity_ = snapshot.identity_;
@@ -681,11 +681,11 @@ void static_root::state_deleter_type::operator()(detail::static_root_state* stat
         // undefined behavior.
         std::terminate();
     }
-    detail::destroy_pmr_object(state_value, detail::process_resource());
+    destroy_pmr_object(state_value, process_resource());
 }
 
 std::filesystem::path static_root::path() const {
-    return ruvia::make_path_from_native_path(state_->root_);
+    return http_make_path_from_native_path(state_->root_);
 }
 
 }  // namespace ruvia

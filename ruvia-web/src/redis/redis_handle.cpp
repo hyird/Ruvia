@@ -55,7 +55,7 @@ redis_handle::redis_handle(detail::redis_pool& general_pool, detail::redis_pool&
     std::pmr::memory_resource* resource, ::ruvia::operation_scope& operation_scope) noexcept
     : pool_(&general_pool),
       blocking_pool_(&blocking_pool_value),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       registration_(operation_scope, this, &redis_handle::expire_capability) {}
 
 redis_handle::redis_handle(detail::redis_pool& general_pool, detail::redis_pool& blocking_pool_value,
@@ -63,7 +63,7 @@ redis_handle::redis_handle(detail::redis_pool& general_pool, detail::redis_pool&
     operation_options options) noexcept
     : pool_(&general_pool),
       blocking_pool_(&blocking_pool_value),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       operation_options_(std::move(options)),
       registration_(operation_scope, this, &redis_handle::expire_capability) {}
 
@@ -76,16 +76,16 @@ redis_handle::redis_handle(const redis_handle& other) noexcept
 
 redis_handle redis_handle::with_options(operation_options options) const {
     registration_.require_active();
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     redis_handle configured(*this);
     configured.operation_options_ =
-        detail::merge_operation_options(operation_options_, std::move(options));
+        merge_operation_options(operation_options_, std::move(options));
     return configured;
 }
 
 const worker_handle& redis_handle::worker() const& {
     registration_.require_active();
-    return pool_->worker_;
+    return pool_->slots_.worker();
 }
 
 detail::redis_command_executor redis_handle::executor() const {
@@ -105,10 +105,6 @@ void redis_handle::expire_capability(void* target) noexcept {
 }
 
 scoped_operation<redis_value> redis_handle::command(std::span<const std::string_view> args) const {
-    return scoped(command_owned(args));
-}
-
-task<redis_value> redis_handle::command_owned(std::span<const std::string_view> args) const {
     registration_.require_active();
     const bool blocking = detail::validate_redis_pooled_command(args, true);
     auto& selected_pool = blocking ? *blocking_pool_ : *pool_;
@@ -117,8 +113,17 @@ task<redis_value> redis_handle::command_owned(std::span<const std::string_view> 
         throw std::invalid_argument(
             "raw blocking redis command requires a stop_token or finite operation timeout");
     }
-    return detail::execute_owned_redis_command(
-        selected_pool, detail::own_redis_args(args, resource_), operation_options_, resource_);
+    return scoped(detail::execute_owned_redis_command(
+        selected_pool, detail::own_redis_args(args, resource_), operation_options_, resource_));
+}
+
+task<redis_value> redis_handle::command_owned(std::pmr::vector<std::pmr::string>&& args) const {
+    registration_.require_active();
+    if (args.get_allocator().resource() == resource_) {
+        return detail::execute_owned_redis_command(*pool_, std::move(args), operation_options_, resource_);
+    }
+    return detail::execute_owned_redis_command(*pool_,
+        std::pmr::vector<std::pmr::string>(args.begin(), args.end(), resource_), operation_options_, resource_);
 }
 
 scoped_operation<void> redis_handle::ping() const {

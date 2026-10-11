@@ -19,12 +19,6 @@ task<result_type> map_db_query(task<db_rows> query, std::pmr::memory_resource* r
     co_return mapper(std::move(rows), resource);
 }
 
-inline task<std::pair<db_rows, db_rows>> query_db_pair(task<db_rows> first, task<db_rows> second) {
-    auto rows = co_await std::move(first);
-    auto count = co_await std::move(second);
-    co_return std::pair{std::move(rows), std::move(count)};
-}
-
 inline std::uint64_t db_count_value(const db_rows& rows) {
     if (rows.size() != 1) {
         throw std::runtime_error("database count did not return exactly one row");

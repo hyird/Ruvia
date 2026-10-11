@@ -14,13 +14,14 @@
 #include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_length.h"
 #include "field/binary_field_name.h"
 #include "field/http_interim_response_validation.h"
+#include "field/response_field_validation.h"
 #include "http3/http3_field_section_encoder.h"
 #include "server/http_date_cache.h"
 
@@ -73,6 +74,10 @@ bool valid_field(const http3_field_section_field_view& field) noexcept {
     return detail::is_valid_http_field_value_bytes(field.value_);
 }
 
+bool forbidden_response_field(std::string_view name) noexcept {
+    return detail::is_forbidden_http_binary_response_field(name) || http_ascii_equals_ignore_case(name, "host");
+}
+
 // Keep per-field validation in its callers. MSVC otherwise outlines this
 // helper inside the response projection loop.
 #if defined(_MSC_VER)
@@ -108,8 +113,12 @@ public:
         if (!valid_field(field)) {
             return http3_response_head_failure{http3_response_head_error::invalid_field};
         }
-        if (detail::is_forbidden_http_binary_response_field(field.name_)) {
+        if (forbidden_response_field(field.name_)) {
             return http3_response_head_failure{http3_response_head_error::forbidden_field};
+        }
+        if (detail::validate_response_field(detail::classify_request_header(field.name_), field.value_,
+                detail::http_field_list_role::sender, response_fields_) != detail::response_field_status::ok) {
+            return http3_response_head_failure{http3_response_head_error::invalid_field};
         }
         if (http_ascii_equals_ignore_case(field.name_, "content-length")) {
             if (content_length_.parse_single_value(field.value_) != detail::http_content_length_parse_status::ok ||
@@ -132,21 +141,18 @@ public:
                     http3_field_section_error::field_list_too_large};
             }
         }
-        auto encoded = detail::encode_http3_fields(fields_, fields_.get_allocator().resource(), limits_, encoder, stream_id);
+        auto encoded = detail::http3_headers_frame_access::encode(fields_, fields_.get_allocator().resource(), limits_, encoder, stream_id, section_size.bytes());
         if ((encoded.index() != 0)) {
             return http3_response_head_failure{http3_response_head_error::field_section_error, std::get<1>(encoded)};
         }
-        if (std::get<0>(encoded).size() > limits_.max_encoded_bytes_) {
-            return http3_response_head_failure{http3_response_head_error::field_section_error,
-                http3_field_section_error::field_section_too_large};
-        }
-        return http3_response_head(std::move(std::get<0>(encoded)), body_plan_, section_size.bytes(), content_length_.value());
+        return http3_response_head{std::move(std::get<0>(encoded)), body_plan_, content_length_.value()};
     }
 
 private:
     http_response_body_plan body_plan_;
     http3_field_section_limits limits_;
     detail::http_content_length_state<std::uint64_t> content_length_;
+    detail::response_field_state response_fields_;
     std::array<char, 3> status_bytes_{};
     std::pmr::vector<http3_field_section_field_view> fields_;
 };
@@ -171,7 +177,7 @@ bool valid_response_header(std::string_view name, std::string_view value) noexce
 
 }  // namespace
 
-static std::variant<http3_response_field_section, http3_response_head_failure> encode_response_trailers(
+static std::variant<http3_headers_frame, http3_response_head_failure> encode_response_trailers(
     std::span<const http3_field_section_field_view> fields_value, http3_field_section_limits limits,
     std::pmr::memory_resource* resource, http3_qpack_encoder* encoder, std::uint64_t stream_id) {
     if (fields_value.size() > limits.max_fields_) {
@@ -211,15 +217,11 @@ static std::variant<http3_response_field_section, http3_response_head_failure> e
     for (const auto& field : fields_value) {
         normalized.push_back({lowercase.project(field.name_), field.value_, true});
     }
-    auto encoded = detail::encode_http3_fields(normalized, memory, limits, encoder, stream_id);
+    auto encoded = detail::http3_headers_frame_access::encode(normalized, memory, limits, encoder, stream_id, section_size.bytes());
     if ((encoded.index() != 0)) {
         return http3_response_head_failure{http3_response_head_error::field_section_error, std::get<1>(encoded)};
     }
-    if (std::get<0>(encoded).size() > limits.max_encoded_bytes_) {
-        return http3_response_head_failure{http3_response_head_error::field_section_error,
-            http3_field_section_error::field_section_too_large};
-    }
-    return http3_response_field_section(std::move(std::get<0>(encoded)), section_size.bytes());
+    return std::move(std::get<0>(encoded));
 }
 
 static std::variant<http3_response_head, http3_response_head_failure> encode_response_head(
@@ -261,7 +263,7 @@ static std::variant<http3_response_head, http3_response_head_failure> encode_res
         if (!valid_response_header(name, value)) {
             return http3_response_head_failure{http3_response_head_error::invalid_field};
         }
-        if (detail::is_forbidden_http_binary_response_field(name)) {
+        if (forbidden_response_field(name)) {
             return http3_response_head_failure{http3_response_head_error::forbidden_field};
         }
         if (http_ascii_equals_ignore_case(name, "date")) {
@@ -465,7 +467,7 @@ std::variant<http3_response_head, http3_response_head_failure> encode_http3_resp
     http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return encode_response_head(response, plan, limits, resource, nullptr, 0);
 }
-std::variant<http3_response_field_section, http3_response_head_failure> encode_http3_response_trailers(
+std::variant<http3_headers_frame, http3_response_head_failure> encode_http3_response_trailers(
     std::span<const http3_field_section_field_view> fields_value,
     http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return encode_response_trailers(fields_value, limits, resource, nullptr, 0);
@@ -481,7 +483,7 @@ std::variant<http3_response_head, http3_response_head_failure> encode_http3_resp
     http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return encode_response_head(response, plan, limits, resource, &encoder, stream_id);
 }
-std::variant<http3_response_field_section, http3_response_head_failure> encode_http3_response_trailers(
+std::variant<http3_headers_frame, http3_response_head_failure> encode_http3_response_trailers(
     http3_qpack_encoder& encoder, std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields_value,
     http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return encode_response_trailers(fields_value, limits, resource, &encoder, stream_id);

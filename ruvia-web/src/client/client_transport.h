@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
-#include <span>
 #include <string>
 #include <string_view>
 
@@ -14,59 +13,11 @@
 #include <openssl/types.h>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/tcp_socket_options.h"
-#include "ruvia/web/tls_peer_verification.h"
+#include "ruvia/web/client_tls_config.h"
+
+#include "client/client_tls_config_storage.h"
 
 namespace ruvia::detail {
-
-struct client_transport_config_view final {
-    tls_peer_verification_policy tls_peer_verification_{tls_peer_verification_policy::verify};
-    tcp_no_delay_policy tcp_no_delay_{tcp_no_delay_policy::enable};
-    tcp_keep_alive_policy tcp_keep_alive_{tcp_keep_alive_policy::enable};
-    std::string_view ca_file_{};
-    std::string_view certificate_chain_file_{};
-    std::string_view private_key_file_{};
-    std::string_view private_key_password_{};
-};
-
-class client_transport_config_storage final {
-public:
-    client_transport_config_storage(
-        client_transport_config_view source_value, std::pmr::memory_resource* resource);
-    client_transport_config_storage(
-        const client_transport_config_storage& source_value, std::pmr::memory_resource* resource);
-
-    [[nodiscard]] client_transport_config_view view() const noexcept;
-
-private:
-    client_transport_config_storage(resolved_pmr_resource_tag, client_transport_config_view source_value,
-        std::pmr::memory_resource* resource);
-
-    tls_peer_verification_policy tls_peer_verification_;
-    tcp_no_delay_policy tcp_no_delay_;
-    tcp_keep_alive_policy tcp_keep_alive_;
-    std::pmr::string ca_file_;
-    std::pmr::string certificate_chain_file_;
-    std::pmr::string private_key_file_;
-    std::pmr::string private_key_password_;
-};
-
-template <typename config_type>
-[[nodiscard]] client_transport_config_view make_client_transport_config_view(const config_type& config) noexcept {
-    if constexpr (requires { config.transport_.view(); }) {
-        return config.transport_.view();
-    } else {
-        return {
-            .tls_peer_verification_ = config.tls_peer_verification_,
-            .tcp_no_delay_ = config.tcp_no_delay_,
-            .tcp_keep_alive_ = config.tcp_keep_alive_,
-            .ca_file_ = config.ca_file_,
-            .certificate_chain_file_ = config.certificate_chain_file_,
-            .private_key_file_ = config.private_key_file_,
-            .private_key_password_ = config.private_key_password_,
-        };
-    }
-}
 
 enum class client_alpn_mode : std::uint8_t {
     http11,
@@ -94,18 +45,25 @@ void validate_client_origin_host(
 [[nodiscard]] std::string_view format_client_port(
     std::uint16_t port, client_port_text_buffer_type& buffer) noexcept;
 [[nodiscard]] std::string_view selected_client_alpn(SSL* ssl) noexcept;
-void validate_client_transport_config(client_transport_config_view config);
 enum class client_tls_protocol : std::uint8_t { stream,
     quic };
 // Startup-only. Trust and client identity loading have one implementation;
 // protocol-specific ALPN and QUIC callbacks are installed by the transport.
-void configure_client_tls_context(SSL_CTX& context_value, client_transport_config_view config,
+// The storage must come from a validated client_tls_config with TLS enabled.
+void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config,
     client_tls_protocol protocol = client_tls_protocol::stream);
 [[nodiscard]] bool configure_client_tls_peer_identity(
     SSL& connection, const char* host, bool ip_address) noexcept;
-[[nodiscard]] client_tls_setup_error prepare_client_tls_stream(
-    asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host,
-    client_transport_config_view config, client_alpn_mode alpn_mode);
+// Per-connection SNI (DNS names only, one trailing dot removed) and, when the
+// mode verifies identity, the expected peer host or IP. `host` need not be
+// NUL-terminated.
+[[nodiscard]] client_tls_setup_error prepare_client_tls_session(
+    SSL& ssl, std::string_view host, client_tls_mode mode) noexcept;
+// Resets a reusable stream, prepares its session and installs HTTP ALPN.
+[[nodiscard]] client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
+    std::string_view host, client_tls_mode mode, client_alpn_mode alpn_mode);
 [[nodiscard]] std::string_view client_tls_setup_error_message(client_tls_setup_error error) noexcept;
+// Carries a setup failure through transport results; message() names it.
+[[nodiscard]] std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept;
 
 }  // namespace ruvia::detail

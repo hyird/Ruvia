@@ -2,15 +2,12 @@
 #include <memory_resource>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_expectations.h"
 #include "ruvia/http/detail/field/http_header_section_size.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/hpack.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
-#include "coding/http_content_coding.h"
-#include "field/http_cors_fields.h"
-#include "field/http_media_type.h"
-#include "field/http_origin_fields.h"
+#include "field/http_expect_token.h"
+#include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_request_headers.h"
@@ -26,83 +23,38 @@
 namespace ruvia::detail {
 namespace {
 
-struct http2_outbound_request_header_facts final {
-    bool has_content_type_{false};
-};
-
 [[nodiscard]] bool http2_is_valid_outbound_method(std::string_view method) noexcept {
     return method != "CONNECT" && is_valid_http_method_token(method);
 }
 
 [[nodiscard]] bool http2_are_valid_outbound_request_headers(std::optional<std::string_view> authority,
     std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
-    bool allow_trailers, http_header_section_size& section_size, std::size_t generated_fields = 0,
-    http2_outbound_request_header_facts* facts = nullptr) noexcept {
+    bool allow_trailers, http_header_section_size& section_size, request_field_state& fields,
+    std::size_t generated_fields = 0) noexcept {
     if (generated_fields > max_http_header_fields ||
         headers.size() > max_http_header_fields - generated_fields) {
         return false;
     }
-    std::uint32_t singleton_headers = 0;
-    bool host_seen = false;
-    bool has_content_type = false;
     for (const auto& header : headers) {
         if (!http2_is_valid_regular_header(header.name(), header.value()) ||
             !section_size.add(header.name(), header.value())) {
             return false;
         }
         const auto kind = classify_request_header(header.name());
-        if ((kind == request_header_kind::origin && !is_valid_http_origin_field_value(header.value())) ||
-            (kind == request_header_kind::access_control_request_method &&
-                !is_valid_http_cors_request_method(header.value())) ||
-            (kind == request_header_kind::access_control_request_headers &&
-                !is_valid_http_cors_request_header_names(header.value()))) {
+        if ((!allow_trailers && (kind == request_header_kind::trailer || kind == request_header_kind::te)) ||
+            (!allow_host && kind == request_header_kind::host)) {
             return false;
         }
-        // Content-Length belongs exclusively to http2_request_content, even when a raw
-        // value happens to match. Accepting both would restore two framing truths.
-        if (kind == request_header_kind::content_length) {
+        // Content-Length belongs exclusively to http2_request_content and Expect
+        // to http_client_request_expectation; the validator refuses both.
+        if (validate_request_field(kind, header.value(), http_field_list_role::sender, fields) !=
+            request_field_status::ok) {
             return false;
         }
-        if (header.name() == "trailer") {
-            if (!allow_trailers ||
-                !is_valid_http_request_trailer_field_value(header.value(), http_field_list_role::sender)) {
-                return false;
-            }
-        } else if (!allow_trailers && header.name() == "te") {
+        if (kind == request_header_kind::host && authority.has_value() &&
+            !authority_matches_host(*authority, header.value(), default_port)) {
             return false;
         }
-        if (kind == request_header_kind::host) {
-            if (!allow_host || host_seen || !is_valid_host_header(header.value()) ||
-                (authority.has_value() &&
-                    !authority_matches_host(*authority, header.value(), default_port))) {
-                return false;
-            }
-            host_seen = true;
-        }
-        if (kind == request_header_kind::content_type) {
-            if (has_content_type || !is_valid_http_content_type_field_value(header.value())) {
-                return false;
-            }
-            has_content_type = true;
-        }
-        if (kind == request_header_kind::content_encoding &&
-            !is_valid_http_content_encoding_field_value(header.value(), http_field_list_role::sender)) {
-            return false;
-        }
-        if (kind == request_header_kind::expect) {
-            // Expect is generated only from http_client_request_expectation. Raw
-            // fields would create a second source of truth for the body gate.
-            return false;
-        }
-        if (const auto bit = singleton_request_header_bit(kind); bit != 0) {
-            if ((singleton_headers & bit) != 0) {
-                return false;
-            }
-            singleton_headers |= bit;
-        }
-    }
-    if (facts != nullptr) {
-        facts->has_content_type_ = has_content_type;
     }
     return true;
 }
@@ -137,11 +89,11 @@ struct http2_outbound_request_header_facts final {
         (expect_continue && !section_size.add("expect", http_continue_expectation_token))) {
         return false;
     }
-    http2_outbound_request_header_facts facts;
+    request_field_state fields{request_field_framing::binary};
     if (!http2_are_valid_outbound_request_headers(authority, default_port, headers,
             /*allow_host=*/true,
-            /*allow_trailers=*/true, section_size,
-            (content_length_value.empty() ? 0 : 1) + (expect_continue ? 1 : 0), &facts)) {
+            /*allow_trailers=*/true, section_size, fields,
+            (content_length_value.empty() ? 0 : 1) + (expect_continue ? 1 : 0))) {
         return false;
     }
     if (!content_length_value.empty() && !section_size.add("content-length", content_length_value)) {
@@ -153,18 +105,19 @@ struct http2_outbound_request_header_facts final {
     const auto content_semantics = http_request_content_semantics(method);
     return content_semantics != http_request_content_semantics::forbidden &&
            (content_semantics != http_request_content_semantics::content_type_required ||
-               facts.has_content_type_);
+               fields.seen(request_header_kind::content_type));
 }
 
+// Host is already refused for websocket extended CONNECT by the outbound field
+// check (:authority is the sole target authority there).
 [[nodiscard]] bool http2_is_valid_websocket_connect_headers(
     std::span<const http_header_view> headers) noexcept {
     bool saw_version = false;
     for (const auto& header : headers) {
-        if (header.name() == "host" || header.name() == "sec-websocket-key" ||
-            header.name() == "sec-websocket-accept") {
+        if (http_field_name_in(header.name(), http_websocket_key_exchange_fields)) {
             return false;
         }
-        if (header.name() == "sec-websocket-version") {
+        if (classify_request_header(header.name()) == request_header_kind::sec_websocket_version) {
             if (saw_version || header.value() != "13") {
                 return false;
             }
@@ -283,11 +236,12 @@ http2_request_head_submit_result http2_connection::submit_connect_request_head(
 
     request_target_view target;
     http_header_section_size section_size;
+    request_field_state fields{request_field_framing::binary};
     if (!parse_request_target(http_known_method::connect, authority, target) ||
         !section_size.add(":method", "CONNECT") || !section_size.add(":authority", authority) ||
         !http2_are_valid_outbound_request_headers(authority, 0, headers,
             /*allow_host=*/false,
-            /*allow_trailers=*/false, section_size)) {
+            /*allow_trailers=*/false, section_size, fields)) {
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);
     }
@@ -323,6 +277,7 @@ http2_request_head_submit_result http2_connection::submit_extended_connect_reque
         http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
     const auto encoded_protocol = websocket_value ? std::string_view("websocket") : protocol;
     http_header_section_size section_size;
+    request_field_state fields{request_field_framing::binary};
     if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) ||
         (websocket_value && !websocket_scheme_value) || !http2_is_valid_request_authority(scheme, authority) ||
         !http2_is_valid_extended_connect_path(scheme, path) || !section_size.add(":method", "CONNECT") ||
@@ -330,7 +285,7 @@ http2_request_head_submit_result http2_connection::submit_extended_connect_reque
         !section_size.add(":authority", authority) || !section_size.add(":path", path) ||
         !http2_are_valid_outbound_request_headers(authority, http_uri_scheme_default_port(scheme), headers,
             /*allow_host=*/!websocket_value,
-            /*allow_trailers=*/false, section_size) ||
+            /*allow_trailers=*/false, section_size, fields) ||
         (websocket_value && !http2_is_valid_websocket_connect_headers(headers))) {
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);

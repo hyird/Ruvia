@@ -4,14 +4,13 @@
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
 
+#include "http2/http2_connection.h"
+
 namespace ruvia::detail {
 
 http2_connection_owner_endpoint::http2_connection_owner_endpoint(
-    void* target, abandon_request_type abandon_request, abandon_credit_type abandon_credit,
-    std::pmr::memory_resource* resource) noexcept
-    : target_(target),
-      abandon_request_(abandon_request),
-      abandon_credit_(abandon_credit),
+    http2_connection* connection, std::pmr::memory_resource* resource) noexcept
+    : connection_(connection),
       resource_(resource) {}
 
 void http2_connection_owner_endpoint::retain() noexcept {
@@ -40,19 +39,19 @@ void http2_connection_owner_endpoint::release() noexcept {
 }
 
 void http2_connection_owner_endpoint::detach() noexcept {
-    target_ = nullptr;
+    connection_ = nullptr;
 }
 
 void http2_connection_owner_endpoint::abandon_request(std::uint32_t stream_id) noexcept {
-    if (target_ != nullptr) {
-        abandon_request_(target_, stream_id);
+    if (connection_ != nullptr) {
+        connection_->abandon_stream_lease(stream_id);
     }
 }
 
 void http2_connection_owner_endpoint::abandon_credit(
     std::uint32_t stream_id, std::uint32_t bytes_value) noexcept {
-    if (target_ != nullptr) {
-        abandon_credit_(target_, stream_id, bytes_value);
+    if (connection_ != nullptr) {
+        connection_->abandon_received_data(stream_id, bytes_value);
     }
 }
 

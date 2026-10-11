@@ -1,4 +1,4 @@
-#include "ruvia/core/detail/util/failure_report.h"
+#include "ruvia/core/failure_report.h"
 
 #include <chrono>
 #include <cstddef>

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef RUVIA_ENABLE_REDIS
+
 #include <span>
 #include <string_view>
 
@@ -28,3 +30,5 @@ private:
     scoped_capability_registration registration_;
 };
 }  // namespace ruvia
+
+#endif

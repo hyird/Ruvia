@@ -5,28 +5,41 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "http_header_access.h"
 #include "websocket/http_websocket_permessage_deflate.h"
-#include "websocket/websocket_subprotocol_set.h"
 
 namespace ruvia {
 namespace {
 using error_type = websocket_client_negotiation_error;
-bool equal(std::string_view a, std::string_view b) noexcept {
-    return detail::http_ascii_equals_ignore_case(a, b);
-}
+// The handshake owns Host, the connection-specific fields, framing, Trailer,
+// Expect and every Sec-WebSocket-* field it generates.
 bool reserved(std::string_view name) noexcept {
-    return name.empty() || name.front() == ':' || equal(name, "host") || equal(name, "connection") || equal(name, "upgrade") || equal(name, "keep-alive") || equal(name, "proxy-connection") || equal(name, "transfer-encoding") || equal(name, "content-length") || equal(name, "trailer") || equal(name, "expect") || equal(name, "sec-websocket-key") || equal(name, "sec-websocket-accept") || equal(name, "sec-websocket-version") || equal(name, "sec-websocket-protocol") || equal(name, "sec-websocket-extensions");
+    if (name.empty() || name.front() == ':') {
+        return true;
+    }
+    switch (detail::classify_request_header(name)) {
+        case detail::request_header_kind::host:
+        case detail::request_header_kind::trailer:
+        case detail::request_header_kind::expect:
+            return true;
+        default:
+            return detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
+                   detail::http_field_name_in(name, detail::http_message_framing_fields) ||
+                   detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
+    }
 }
 std::optional<websocket_compression> parse_response_extension(std::string_view text, websocket_client_deflate_offer offer) {
     if (!offer.enabled_) {
         return {};
     }
     auto first = detail::http_find_unquoted_delimiter(text, 0, ';');
-    if (!equal(detail::http_trim_ows(text.substr(0, first)), "permessage-deflate")) {
+    if (!http_ascii_equals_ignore_case(http_trim_ows(text.substr(0, first)), "permessage-deflate")) {
         return {};
     }
     websocket_compression result_value{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false};
@@ -34,30 +47,30 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     for (auto start = first; start < text.size();) {
         ++start;
         auto end = detail::http_find_unquoted_delimiter(text, start, ';');
-        auto part = detail::http_trim_ows(text.substr(start, end - start));
+        auto part = http_trim_ows(text.substr(start, end - start));
         auto equals = part.find('=');
-        auto name = detail::http_trim_ows(part.substr(0, equals));
-        auto value = equals == std::string_view::npos ? std::string_view{} : detail::http_trim_ows(part.substr(equals + 1));
+        auto name = http_trim_ows(part.substr(0, equals));
+        auto value = equals == std::string_view::npos ? std::string_view{} : http_trim_ows(part.substr(equals + 1));
         std::uint8_t bit = 0;
-        if (equal(name, "server_no_context_takeover")) {
+        if (http_ascii_equals_ignore_case(name, "server_no_context_takeover")) {
             bit = 1;
             if (equals != std::string_view::npos) {
                 return {};
             }
             result_value.server_no_context_takeover_ = true;
-        } else if (equal(name, "client_no_context_takeover")) {
+        } else if (http_ascii_equals_ignore_case(name, "client_no_context_takeover")) {
             bit = 2;
             if (equals != std::string_view::npos) {
                 return {};
             }
             result_value.client_no_context_takeover_ = true;
-        } else if (equal(name, "server_max_window_bits")) {
+        } else if (http_ascii_equals_ignore_case(name, "server_max_window_bits")) {
             bit = 4;
             result_value.server_max_window_bits_ = detail::websocket_deflate_window_bits(value);
             if (!result_value.server_max_window_bits_) {
                 return {};
             }
-        } else if (equal(name, "client_max_window_bits")) {
+        } else if (http_ascii_equals_ignore_case(name, "client_max_window_bits")) {
             bit = 8;
             result_value.client_max_window_bits_ = detail::websocket_deflate_window_bits(value);
             if (!result_value.client_max_window_bits_ || (!offer.offer_client_max_window_bits_ && !offer.client_max_window_bits_)) {
@@ -89,9 +102,10 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
     for (const auto& field : fields_value) {
         auto n = name(field);
         auto v = value(field);
-        if (equal(n, "sec-websocket-protocol")) {
+        const auto kind = detail::classify_request_header(n);
+        if (kind == detail::request_header_kind::sec_websocket_protocol) {
             ++selected;
-            result.selected_subprotocol_ = detail::http_trim_ows(v);
+            result.selected_subprotocol_ = http_trim_ows(v);
             bool found = false;
             for (const auto& protocol : protocols) {
                 found = found || protocol == result.selected_subprotocol_;
@@ -99,17 +113,19 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
             if (selected > 1 || !found) {
                 return error_type::subprotocol;
             }
-        } else if (equal(n, "sec-websocket-extensions")) {
+        } else if (kind == detail::request_header_kind::sec_websocket_extensions) {
             ++extensions;
             if (extensions > 1) {
                 return error_type::extensions;
             }
-            auto negotiation = parse_response_extension(detail::http_trim_ows(v), offer);
+            auto negotiation = parse_response_extension(http_trim_ows(v), offer);
             if (!negotiation) {
                 return error_type::extensions;
             }
             result.compression_ = *negotiation;
-        } else if (extended && (equal(n, "sec-websocket-accept") || equal(n, "sec-websocket-key") || equal(n, "upgrade") || equal(n, "connection"))) {
+        } else if (extended && (detail::http_field_name_in(n, detail::http_websocket_key_exchange_fields) ||
+                                   kind == detail::request_header_kind::upgrade ||
+                                   kind == detail::request_header_kind::connection)) {
             return error_type::forbidden_field;
         }
     }
@@ -127,7 +143,7 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
         (config.deflate_.client_max_window_bits_ && !config.deflate_.offer_client_max_window_bits_)) {
         throw std::invalid_argument("invalid WebSocket client deflate offer");
     }
-    detail::websocket_subprotocol_set seen;
+    websocket_subprotocol_set seen;
     std::size_t joined_bytes = 0;
     for (const auto protocol_view : config.subprotocols_) {
         if (!seen.append(protocol_view)) {
@@ -222,7 +238,7 @@ http2_request_head_submit_result websocket_client_negotiation::submit_http2_requ
     }
     return connection.submit_request_head(http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = scheme, .authority_ = authority, .target_ = target, .headers_ = headers});
 }
-std::variant<http3_client_request_head, http3_client_request_head_failure> websocket_client_negotiation::encode_http3_request(std::string_view scheme, std::string_view authority, std::string_view target, bool peer_enable_connect_protocol, http3_field_section_limits limits) const {
+std::variant<http3_client_request_head, http3_client_request_head_failure> websocket_client_negotiation::encode_http3_request(http3_connection& connection, std::uint64_t stream_id, std::string_view scheme, std::string_view authority, std::string_view target, http3_field_section_limits limits) const {
     if (scheme != "https" && scheme != "http") {
         return http3_client_request_head_failure{http3_client_request_head_error::invalid_target};
     }
@@ -230,7 +246,7 @@ std::variant<http3_client_request_head, http3_client_request_head_failure> webso
     for (const auto& field : fields_) {
         fields.push_back({field.name(), field.value()});
     }
-    return encode_http3_client_request_head({.method_ = "CONNECT", .scheme_ = scheme, .authority_ = authority, .path_ = target, .fields_ = fields, .protocol_ = "websocket", .peer_enable_connect_protocol_ = peer_enable_connect_protocol}, limits, resource_);
+    return connection.encode_client_request_head(stream_id, {.method_ = "CONNECT", .scheme_ = scheme, .authority_ = authority, .path_ = target, .fields_ = fields, .protocol_ = "websocket"}, limits);
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_response(const http_client_response_head& head, bool stream_open) const {
     if (head.status().value() < 200 || head.status().value() >= 300) {
@@ -248,6 +264,6 @@ std::variant<websocket_client_negotiation_result_view, error_type> websocket_cli
     if (!stream_open) {
         return error_type::stream_closed;
     }
-    return validate(head.headers_, [](const auto& field) -> std::string_view { return field.name_; }, [](const auto& field) -> std::string_view { return field.value_; }, protocols_, deflate_, true);
+    return validate(head.headers_, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, true);
 }
 }  // namespace ruvia

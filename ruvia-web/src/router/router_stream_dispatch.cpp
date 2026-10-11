@@ -1,11 +1,13 @@
 #include <optional>
 #include <utility>
 
+#include "ruvia/web/session.h"
+#include "ruvia/web/streaming.h"
+
 #include "context/context_access.h"
 #include "http/session_access.h"
 #include "http/streaming_access.h"
-#include "router/route_dispatch_services.h"
-#include "router/route_stream_state.h"
+#include "router/route_context.h"
 #include "router/route_table.h"
 #include "server/http_response_stream_state.h"
 
@@ -49,15 +51,11 @@ private:
 
 task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
-    const route_stream_handler_type& handler, context_services services) const {
+    route_stream_handler_type handler, context_services services) const {
     const auto& route = resolved.route();
-    stream_middleware_chain_state middleware_chain;
-    auto context_value = make_route_context(memory, request, resolved,
-        with_route_handlers(
-            services, *this, error_handler_for(request.path()), not_found_handler_for(request.path())));
+    auto context_value =
+        make_route_context(memory, request, resolved, services.with_route_handlers(*this, not_found_handler_for(request.path())));
     const auto* response_stream_output = services.response_output().response_stream();
-    const bool websocket_route = route.endpoint().get_websocket() != nullptr;
-    const bool tunnel_route = route.endpoint().tunnel() != nullptr;
     response_stream_context_binding stream_context_binding(
         response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
     if (response_stream_output != nullptr) {
@@ -65,21 +63,33 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
             response_stream_output->writer(), context_value, context_value.get_stop_token(), &streaming_head_thunk);
     }
 
+    // Records that next() reached the handler even when it emitted no bytes.
+    bool handler_invoked = false;
     std::exception_ptr exception;
     try {
         if (!route.has_middleware()) {
-            middleware_chain.mark_handler_invoked();
+            handler_invoked = true;
             co_await handler(context_value);
         } else {
-            co_await invoke_stream_middleware_at(route, 0, context_value, middleware_chain, handler);
+            // The stream terminal: a websocket upgrade commits the session the
+            // middleware chain opened before the handshake, then the handler
+            // runs.
+            auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
+                if (route.endpoint().get_websocket() != nullptr && terminal_context.try_session()) {
+                    co_await session_access::commit(terminal_context);
+                }
+                handler_invoked = true;
+                co_await handler(terminal_context);
+            };
+            auto chain = route_chain(route);
+            chain.terminal_ = callback_access::bind<task<void>(context&)>(terminal);
+            chain.failure_ = &route_table::contain_stream_failure;
+            co_await run_chain(chain, context_value);
             if (!detail::context_access::has_response(context_value)) {
                 if (auto context_exception = context_value.exception()) {
                     std::rethrow_exception(context_exception);
                 }
-                const bool stream_committed =
-                    response_stream_output != nullptr &&
-                    detail::streaming_access::committed(response_stream_output->writer());
-                if (!middleware_chain.handler_invoked() && !stream_committed) {
+                if (!handler_invoked && !detail::context_access::output_committed(context_value)) {
                     throw std::logic_error(
                         "context is not finalized; stream middleware must set a response, write "
                         "the stream, or await next()");
@@ -95,26 +105,13 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         // failure: the committed head already ended the message, and the
         // handler was merely stopped at its first body write. Finish the stream
         // as a normal head-only success.
-        bool head_only_complete = false;
         if (response_stream_output != nullptr &&
-            detail::streaming_access::committed(response_stream_output->writer())) {
-            try {
-                std::rethrow_exception(exception);
-            } catch (const detail::response_stream_head_only_complete&) {
-                head_only_complete = true;
-            } catch (...) {
-                // Classification only: `exception` still holds this and the
-                // committed-failure path below reports it.
-            }
-        }
-        if (head_only_complete) {
+            detail::streaming_access::committed(response_stream_output->writer()) &&
+            detail::is_head_only_complete(exception)) {
             co_await response_stream_output->writer().end();
             co_return std::nullopt;
         }
-        if ((websocket_route && detail::context_access::websocket_handshake_started(context_value)) ||
-            (tunnel_route && detail::context_access::tunnel_handshake_started(context_value)) ||
-            (response_stream_output != nullptr &&
-                detail::streaming_access::committed(response_stream_output->writer()))) {
+        if (detail::context_access::output_committed(context_value)) {
             std::rethrow_exception(exception);
         }
         auto response = co_await handle_exception(context_value, exception);
@@ -122,32 +119,24 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     }
 
     // The middleware chain converts a handler exception into a buffered error
-    // response and records it via context.exception() (store_middleware_exception_response
+    // response and records it via context.exception() (contain_failure
     // -> handle_exception -> set_error), so a mid-request failure does not surface as
-    // a local exception above. When the stream is already committed (or this is a
-    // committed websocket handshake), that buffered response can no longer be sent, and finalizing
-    // the stream with a clean terminator would frame a truncated body as complete.
-    // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
-    // no-middleware path does through the committed check above.
-    if ((websocket_route && detail::context_access::websocket_handshake_started(context_value)) ||
-        (tunnel_route && detail::context_access::tunnel_handshake_started(context_value)) || (response_stream_output != nullptr && detail::streaming_access::committed(response_stream_output->writer()))) {
+    // a local exception above. Once the output is committed -- a started stream or
+    // a websocket/tunnel handshake -- that buffered response can no longer be sent,
+    // and finalizing the stream with a clean terminator would frame a truncated
+    // body as complete. Rethrow so the driver aborts (connection close /
+    // RST_STREAM), exactly as the no-middleware path does above. Middleware may
+    // still replace an uncommitted response stream, or a websocket terminal that
+    // failed during handshake preparation, with a buffered response after `next()`.
+    const bool output_committed = detail::context_access::output_committed(context_value);
+    if (output_committed) {
         if (auto context_exception = context_value.exception()) {
             std::rethrow_exception(context_exception);
         }
-    }
-
-    const bool stream_committed = response_stream_output != nullptr &&
-                                  detail::streaming_access::committed(response_stream_output->writer());
-    const bool handler_invoked = middleware_chain.handler_invoked();
-    const bool websocket_handled = (websocket_route && detail::context_access::websocket_handshake_started(context_value)) ||
-                                   (tunnel_route && detail::context_access::tunnel_handshake_started(context_value));
-    // Middleware may replace an uncommitted response stream with a buffered
-    // response after `next()`. A websocket terminal can still fail during
-    // handshake preparation; only a started handshake prevents HTTP recovery.
-    if (detail::context_access::has_response(context_value) && !stream_committed && !websocket_handled) {
+    } else if (detail::context_access::has_response(context_value)) {
         co_return detail::context_access::take_response(context_value);
     }
-    if (handler_invoked || stream_committed) {
+    if (handler_invoked || output_committed) {
         // The bound context is local to this coroutine. Finish a response stream
         // before it is destroyed so an empty/bodyless handler cannot leave the
         // sink with a dangling context* that a higher layer later dereferences.

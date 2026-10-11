@@ -2,7 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
-#include <exception>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -25,7 +25,6 @@
 #include "http3/http3_datagram_endpoint.h"
 #include "server/http_server_listener.h"
 #include "server/native_accepted_socket_ticket.h"
-#include "server/runtime_completion.h"
 
 namespace ruvia::detail {
 
@@ -35,6 +34,9 @@ class http3_datagram_channel;
 // UDP packets are forwarded by CID without accessing worker connection state.
 // Target objects must outlive this owner and its joined thread. Only endpoint
 // values and the QUIC listener selection are retained from configuration.
+// Core owns the lifecycle: startup stages QUIC channels into the (unlaunched)
+// workers, serving starts accepting, and stopping retires QUIC before this
+// runtime finalizes itself.
 class acceptor final {
 public:
     struct worker_target final {
@@ -56,18 +58,16 @@ public:
     acceptor(const acceptor&) = delete;
     acceptor& operator=(const acceptor&) = delete;
 
+    // Binds every TCP listener. Cold, once, before the runtime launches.
     void prepare();
-    void launch();
-    void wait_until_ready();
-    void request_serve();
-    [[nodiscard]] bool wait_until_serving();
-    void stop() noexcept;
-    void join();
-    [[nodiscard]] asio::ip::tcp::endpoint local_endpoint(std::size_t index) const;
-    [[nodiscard]] std::exception_ptr failure() const noexcept;
-    void rethrow_failure() const;
-    [[nodiscard]] runtime_lifecycle::state_type state() const noexcept {
-        return runtime_.state();
+    [[nodiscard]] worker_runtime& runtime() & noexcept {
+        return runtime_;
+    }
+    worker_runtime& runtime() && = delete;
+    // TCP connections closed at ingress because no worker could take them or
+    // the chosen worker's bounded queue rejected the hand-off. Any thread.
+    [[nodiscard]] std::size_t refused_connections() const noexcept {
+        return refused_connections_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -94,7 +94,6 @@ private:
     void begin_accept(std::size_t index) noexcept;
     void accepted(std::size_t index, const asio::error_code&, asio::ip::tcp::socket) noexcept;
     void schedule_retry(std::size_t index) noexcept;
-    void fail(std::exception_ptr) noexcept;
     void close_listeners() noexcept;
     void stop_on_owner() noexcept;
 
@@ -106,16 +105,17 @@ private:
     std::pmr::vector<channel_ptr> quic_channels_;
     std::unique_ptr<http3_acceptor_datagram_endpoint, pmr_object_deleter<http3_acceptor_datagram_endpoint>> udp_;
     worker_notification quic_notification_;
+    // Channels with Acceptor work since the last wake, and this wake's visits.
+    std::optional<http3_channel_ready_set> quic_ready_;
+    std::pmr::vector<std::uint32_t> quic_visits_;
     asio::steady_timer quic_retirement_;
     void* failure_target_{};
     failure_callback failure_callback_{};
-    runtime_completion completion_;
-    bool prepared_{};
-    std::atomic<bool> serve_requested_{};
     bool quic_running_{};
     bool quic_stopping_{};
     std::size_t next_target_{};
     std::size_t next_output_{};
+    std::atomic<std::size_t> refused_connections_{};
 };
 
 }  // namespace ruvia::detail

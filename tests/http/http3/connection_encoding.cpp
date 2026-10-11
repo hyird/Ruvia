@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -72,7 +74,7 @@ std::variant<std::size_t, ruvia::http3_response_head_failure> encode_response(
         if ((result_value.index() != 0)) {
             return std::get<1>(result_value);
         }
-        return std::get<0>(result_value).field_section_.decoded_field_section_size();
+        return std::get<0>(result_value).headers_.decoded_field_section_size();
     }
     ruvia::http_response response;
     response.header("date", "Thu, 01 Jan 1970 00:00:00 GMT");
@@ -83,7 +85,7 @@ std::variant<std::size_t, ruvia::http3_response_head_failure> encode_response(
         if ((result_value.index() != 0)) {
             return std::get<1>(result_value);
         }
-        return std::get<0>(result_value).head_.field_section_.decoded_field_section_size();
+        return std::get<0>(result_value).head_.headers_.decoded_field_section_size();
     }
     auto result_value = kind == response_kind::connect
                             ? connection.encode_connect_response_head(0, response, limits)
@@ -91,7 +93,7 @@ std::variant<std::size_t, ruvia::http3_response_head_failure> encode_response(
     if ((result_value.index() != 0)) {
         return std::get<1>(result_value);
     }
-    return std::get<0>(result_value).field_section_.decoded_field_section_size();
+    return std::get<0>(result_value).headers_.decoded_field_section_size();
 }
 }  // namespace
 
@@ -109,7 +111,7 @@ RUVIA_TEST(http3_connection_response_encoding_applies_peer_decoded_limit_before_
             ruvia::http3_connection connection(ruvia::http3_peer_role::server, std::pmr::get_default_resource());
             const auto settings = settings_wire({.qpack_max_table_capacity_ = 512, .max_field_section_size_ = peer_limit, .qpack_blocked_streams_ = 2});
             RUVIA_CHECK(connection.feed(2, settings, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
-            const auto pending = connection.pending_qpack_encoder_output();
+            const auto pending = connection.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder);
             const std::vector<char> before(pending.begin(), pending.end());
             const auto result_value = encode_response(connection, kind);
             const bool allowed = !peer_limit || *peer_limit >= std::get<0>(size);
@@ -117,7 +119,7 @@ RUVIA_TEST(http3_connection_response_encoding_applies_peer_decoded_limit_before_
             if (!allowed && (result_value.index() != 0)) {
                 RUVIA_CHECK(std::get<1>(result_value).kind_ == ruvia::http3_response_head_error::peer_field_section_limit);
                 RUVIA_CHECK(std::get<1>(result_value).field_section_error_ == ruvia::http3_field_section_error::field_list_too_large);
-                const auto after = connection.pending_qpack_encoder_output();
+                const auto after = connection.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder);
                 RUVIA_CHECK(std::vector<char>(after.begin(), after.end()) == before);
                 // A refused response must not poison the shared encoder.
                 RUVIA_CHECK((connection.encode_field_section(4, {}).index() == 0));
@@ -155,7 +157,7 @@ RUVIA_TEST(http3_connection_response_encoding_applies_normalized_local_budgets) 
     const auto baseline = encode({}, 512, requested);
     RUVIA_CHECK((baseline.index() == 0));
     if ((baseline.index() == 0)) {
-        RUVIA_CHECK_EQ(std::get<0>(baseline).field_section_.decoded_field_section_size(), std::size_t{391});
+        RUVIA_CHECK_EQ(std::get<0>(baseline).headers_.decoded_field_section_size(), std::size_t{391});
     }
     const ruvia::http3_connection_config decoded_limit{.max_field_section_size_ = 256};
     for (const auto peer_limit : {512, 384}) {
@@ -197,13 +199,13 @@ RUVIA_TEST(http3_connection_client_request_and_push_promise_share_peer_limit) {
         ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
         auto settings = settings_wire({.qpack_max_table_capacity_ = 512, .max_field_section_size_ = peer_limit, .qpack_blocked_streams_ = 2});
         RUVIA_CHECK(client.feed(3, settings, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
-        const auto output = client.pending_qpack_encoder_output();
+        const auto output = client.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder);
         const std::vector<char> before(output.begin(), output.end());
         const auto request = client.encode_client_request_head(0,
             {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
         RUVIA_CHECK_EQ((request.index() == 0), peer_limit >= decoded_size);
         if ((request.index() != 0)) {
-            const auto after = client.pending_qpack_encoder_output();
+            const auto after = client.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder);
             RUVIA_CHECK(std::vector<char>(after.begin(), after.end()) == before);
         }
 
@@ -227,7 +229,7 @@ RUVIA_TEST(http3_reset_before_headers_releases_unpublished_dynamic_references) {
             ruvia::http3_connection server(ruvia::http3_peer_role::server, &memory,
                 {.qpack_max_table_capacity_ = 64, .qpack_blocked_streams_ = 1});
             if (goaway) {
-                RUVIA_CHECK((server.prepare_goaway(0).index() == 0));
+                RUVIA_CHECK(server.queue_goaway(0) == ruvia::http3_connection_error_code::no_error);
             }
             const auto settings = settings_wire({.qpack_max_table_capacity_ = 64, .qpack_blocked_streams_ = 1});
             RUVIA_CHECK(client.feed(3, settings, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
@@ -240,7 +242,7 @@ RUVIA_TEST(http3_reset_before_headers_releases_unpublished_dynamic_references) {
                     const std::array fields_value{ruvia::http3_field_section_field_view{round % 2 == 0 ? "x-first" : "x-other", "value"}};
                     auto unsent = client.encode_field_section(stream_id, fields_value);
                     RUVIA_CHECK((unsent.index() == 0));
-                    const auto instructions = client.pending_qpack_encoder_output();
+                    const auto instructions = client.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder);
                     // This table holds one field. Every new insertion requires
                     // release of the preceding stream's dynamic reference pin.
                     RUVIA_CHECK(!instructions.empty());
@@ -250,19 +252,19 @@ RUVIA_TEST(http3_reset_before_headers_releases_unpublished_dynamic_references) {
                     }
                     encoder_wire.insert(encoder_wire.end(), instructions.begin(), instructions.end());
                     RUVIA_CHECK(server.feed(6, encoder_wire, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
-                    RUVIA_CHECK(client.consume_qpack_encoder_output(instructions.size()));
+                    RUVIA_CHECK(client.consume_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder, instructions.size()));
                     RUVIA_CHECK_EQ(server.active_request_count(), std::size_t{0});
 
                     // Reset arrives without any request HEADERS/parser state.
                     RUVIA_CHECK(server.feed(stream_id, {}, false, true, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
-                    const auto cancellation = server.pending_qpack_decoder_output();
+                    const auto cancellation = server.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_decoder);
                     std::vector<char> decoder_wire;
                     if (round == 0) {
                         decoder_wire.push_back(3);
                     }
                     decoder_wire.insert(decoder_wire.end(), cancellation.begin(), cancellation.end());
                     RUVIA_CHECK(client.feed(11, decoder_wire, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
-                    RUVIA_CHECK(server.consume_qpack_decoder_output(cancellation.size()));
+                    RUVIA_CHECK(server.consume_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_decoder, cancellation.size()));
                     RUVIA_CHECK_EQ(server.active_request_count(), std::size_t{0});
                     if (round == 0) {
                         retained.emplace(std::move(std::get<0>(unsent)));
@@ -303,5 +305,183 @@ RUVIA_TEST(http3_connection_request_and_generic_encoding_apply_peer_decoded_limi
         if (role == ruvia::http3_peer_role::client) {
             RUVIA_CHECK((connection.encode_client_request_head(8, {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"}).index() != 0));
         }
+    }
+}
+
+RUVIA_TEST(http3_early_data_encoding_applies_remembered_head_and_trailer_limits) {
+    constexpr auto encoder_kind = ruvia::http3_critical_stream_output::stream_kind::qpack_encoder;
+    const std::array fields{ruvia::http3_field_section_field_view{"x", "value"}};
+    for (const std::uint64_t limit : {37, 38, 39}) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        RUVIA_CHECK(client.queue_max_push_id(0) == ruvia::http3_connection_error_code::no_error);
+        RUVIA_CHECK(client.begin_early_data({.qpack_max_table_capacity_ = 512, .max_field_section_size_ = limit, .qpack_blocked_streams_ = 2}).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(!client.peer_settings());
+        const auto raw = client.encode_field_section(0, fields);
+        RUVIA_CHECK_EQ(raw.index() == 0, limit >= 38);
+        const auto trailer = client.encode_request_trailers(4, fields);
+        RUVIA_CHECK_EQ(trailer.index() == 0, limit >= 38);
+        if (trailer.index() != 0) {
+            RUVIA_CHECK(std::get<1>(trailer) == ruvia::http3_request_trailer_error::field_list_too_large);
+        }
+        RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+    }
+    for (const std::uint64_t limit : {177, 178, 179}) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        RUVIA_CHECK(client.begin_early_data({.qpack_max_table_capacity_ = 512, .max_field_section_size_ = limit, .qpack_blocked_streams_ = 2}).scope_ ==
+                    ruvia::http3_connection_error_scope::none);
+        const auto head = client.encode_client_request_head(0,
+            {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+        RUVIA_CHECK_EQ(head.index() == 0, limit >= 178);
+        if (head.index() == 0) {
+            RUVIA_CHECK_EQ(std::get<0>(head).headers_.decoded_field_section_size(), std::size_t{178});
+            // A peer with dynamic QPACK disabled can decode this early head.
+            ruvia::http3_connection server(ruvia::http3_peer_role::server, std::pmr::get_default_resource());
+            RUVIA_CHECK(server.feed(0, std::get<0>(head).headers_.frame(), true, false, ignore_event, nullptr).status_ ==
+                        ruvia::http3_connection_status::message_end);
+        }
+        RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+    }
+}
+
+RUVIA_TEST(http3_early_data_actual_settings_immediately_control_send_limits_and_connect) {
+    for (const bool increases : {false, true}) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        RUVIA_CHECK(client.begin_early_data({.qpack_max_table_capacity_ = 512,
+                                                .max_field_section_size_ = increases ? 177u : 178u,
+                                                .qpack_blocked_streams_ = 2,
+                                                .enable_connect_protocol_ = true})
+                        .scope_ == ruvia::http3_connection_error_scope::none);
+        const auto actual = settings_wire({.qpack_max_table_capacity_ = 256, .max_field_section_size_ = increases ? 178u : 177u});
+        RUVIA_CHECK(client.feed(3, actual, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+        const auto head = client.encode_client_request_head(0,
+            {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+        RUVIA_CHECK_EQ(head.index() == 0, increases);
+        const auto connect = client.encode_client_request_head(4,
+            {.method_ = "CONNECT", .scheme_ = "https", .authority_ = "example.test", .path_ = "/socket", .protocol_ = "websocket", .peer_enable_connect_protocol_ = true});
+        RUVIA_CHECK(connect.index() != 0);
+        if (connect.index() != 0) {
+            RUVIA_CHECK(std::get<1>(connect).kind_ == ruvia::http3_client_request_head_error::connect_protocol_disabled);
+        }
+        RUVIA_CHECK(client.pending_critical_output(ruvia::http3_critical_stream_output::stream_kind::qpack_encoder).empty());
+        RUVIA_CHECK(client.complete_early_data(false).scope_ == ruvia::http3_connection_error_scope::none);
+    }
+    for (const bool enabled : {false, true}) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        RUVIA_CHECK(client.begin_early_data({.enable_connect_protocol_ = enabled}).scope_ == ruvia::http3_connection_error_scope::none);
+        const auto connect = client.encode_client_request_head(0,
+            {.method_ = "CONNECT", .scheme_ = "https", .authority_ = "example.test", .path_ = "/socket", .protocol_ = "websocket", .peer_enable_connect_protocol_ = !enabled});
+        RUVIA_CHECK_EQ(connect.index() == 0, enabled);
+    }
+}
+
+RUVIA_TEST(http3_early_data_rejection_discards_cached_settings_and_preserves_prepared_output) {
+    constexpr auto encoder_kind = ruvia::http3_critical_stream_output::stream_kind::qpack_encoder;
+    for (const bool settings_first : {false, true}) {
+        counting_resource memory;
+        {
+            ruvia::http3_connection client(ruvia::http3_peer_role::client, &memory);
+            RUVIA_CHECK(client.begin_early_data({.qpack_max_table_capacity_ = 512, .max_field_section_size_ = 177, .qpack_blocked_streams_ = 2}).scope_ ==
+                        ruvia::http3_connection_error_scope::none);
+            const auto denied = client.encode_client_request_head(0,
+                {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+            RUVIA_CHECK(denied.index() != 0);
+            const std::array trailer_fields{ruvia::http3_field_section_field_view{"x-retained", "value"}};
+            auto retained = client.encode_request_trailers(0, trailer_fields);
+            RUVIA_CHECK(retained.index() == 0);
+            if (retained.index() != 0) {
+                continue;
+            }
+            const auto frame = std::get<0>(retained).frame();
+            const std::vector<char> before(frame.begin(), frame.end());
+            const auto actual = settings_wire({.qpack_max_table_capacity_ = 256, .max_field_section_size_ = 512, .qpack_blocked_streams_ = 2});
+            if (settings_first) {
+                RUVIA_CHECK(client.feed(3, actual, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+                RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+            }
+            RUVIA_CHECK(client.complete_early_data(false).scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK_EQ(client.effective_peer_settings().has_value(), settings_first);
+            const auto replay = client.encode_client_request_head(4,
+                {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+            RUVIA_CHECK(replay.index() == 0);
+            if (!settings_first) {
+                RUVIA_CHECK(client.feed(3, actual, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+            }
+            RUVIA_CHECK(client.effective_peer_settings()->max_field_section_size_ == 512);
+            RUVIA_CHECK(!client.pending_critical_output(encoder_kind).empty());
+            RUVIA_CHECK(std::ranges::equal(std::get<0>(retained).frame(), before));
+            RUVIA_CHECK(client.retire());
+            RUVIA_CHECK(std::ranges::equal(std::get<0>(retained).frame(), before));
+            RUVIA_CHECK(memory.live_bytes_ != 0);  // The prepared frame still owns its storage.
+        }
+        RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
+        RUVIA_CHECK_EQ(memory.allocations_, memory.returns_);
+    }
+}
+
+RUVIA_TEST(http3_early_data_accepted_settings_enable_dynamic_qpack_only_after_tls_outcome) {
+    constexpr auto encoder_kind = ruvia::http3_critical_stream_output::stream_kind::qpack_encoder;
+    for (const bool settings_first : {false, true}) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        const ruvia::http3_settings settings{.qpack_max_table_capacity_ = 512, .max_field_section_size_ = 512, .qpack_blocked_streams_ = 2};
+        RUVIA_CHECK(client.begin_early_data(settings).scope_ == ruvia::http3_connection_error_scope::none);
+        auto early = client.encode_client_request_head(0,
+            {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+        RUVIA_CHECK(early.index() == 0);
+        RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+        const auto wire = settings_wire(settings);
+        if (settings_first) {
+            RUVIA_CHECK(client.feed(3, wire, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+        }
+        RUVIA_CHECK(client.complete_early_data(true).scope_ == ruvia::http3_connection_error_scope::none);
+        if (!settings_first) {
+            RUVIA_CHECK(client.pending_critical_output(encoder_kind).empty());
+            RUVIA_CHECK(client.feed(3, wire, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+        }
+        RUVIA_CHECK(!client.pending_critical_output(encoder_kind).empty());
+        auto later = client.encode_client_request_head(4,
+            {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+        RUVIA_CHECK(later.index() == 0);
+        ruvia::http3_connection server(ruvia::http3_peer_role::server, std::pmr::get_default_resource(),
+            {.qpack_max_table_capacity_ = 512, .qpack_blocked_streams_ = 2});
+        if (early.index() == 0) {
+            RUVIA_CHECK(server.feed(0, std::get<0>(early).headers_.frame(), true, false, ignore_event, nullptr).status_ == ruvia::http3_connection_status::message_end);
+        }
+        if (later.index() == 0) {
+            RUVIA_CHECK(server.feed(4, std::get<0>(later).headers_.frame(), true, false, ignore_event, nullptr).status_ == ruvia::http3_connection_status::qpack_blocked);
+            const auto output = client.pending_critical_output(encoder_kind);
+            std::vector<char> encoder_wire{2};
+            encoder_wire.insert(encoder_wire.end(), output.begin(), output.end());
+            RUVIA_CHECK(server.feed(2, encoder_wire, false, false, ignore_event, nullptr).scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(server.feed(4, {}, true, false, ignore_event, nullptr).status_ == ruvia::http3_connection_status::message_end);
+        }
+    }
+}
+
+RUVIA_TEST(http3_early_data_snapshot_validation_is_retryable_and_follows_connection_move) {
+    const std::array invalid{
+        ruvia::http3_settings{.qpack_max_table_capacity_ = ruvia::http3_var_int_max + 1},
+        ruvia::http3_settings{.max_field_section_size_ = ruvia::http3_var_int_max + 1},
+        ruvia::http3_settings{.qpack_blocked_streams_ = ruvia::http3_var_int_max + 1}};
+    for (const auto& settings : invalid) {
+        ruvia::http3_connection client(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+        bool rejected = false;
+        try {
+            (void)client.begin_early_data(settings);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK(!client.effective_peer_settings());
+        RUVIA_CHECK(client.begin_early_data({.max_field_section_size_ = 178}).scope_ == ruvia::http3_connection_error_scope::none);
+        ruvia::http3_connection moved(std::move(client));
+        RUVIA_CHECK(!client.effective_peer_settings());
+        RUVIA_CHECK(moved.effective_peer_settings()->max_field_section_size_ == 178);
+        const auto head = moved.encode_client_request_head(0,
+            {.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .path_ = "/"});
+        RUVIA_CHECK(head.index() == 0);
+        RUVIA_CHECK(moved.complete_early_data(false).scope_ == ruvia::http3_connection_error_scope::none);
+        RUVIA_CHECK(!moved.effective_peer_settings());
     }
 }

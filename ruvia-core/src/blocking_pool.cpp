@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <limits>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
@@ -10,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/util/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/spsc_ring_queue.h"
 
 namespace ruvia {
 
@@ -65,16 +66,13 @@ blocking_operation_rejected::blocking_operation_rejected(blocking_status status)
 
 struct blocking_pool::thread_state_type final {
     explicit thread_state_type()
-        : threads_(detail::process_resource()) {}
+        : threads_(process_resource()) {}
 
     std::pmr::vector<std::thread> threads_;
 };
 
 struct blocking_pool::impl_type final {
     struct node_type final {
-        explicit node_type(move_only_function<void()>&& value)
-            : task_(std::move(value)) {}
-
         move_only_function<void()> task_;
         node_type* next_{nullptr};
     };
@@ -82,7 +80,25 @@ struct blocking_pool::impl_type final {
     explicit impl_type(const blocking_pool_options& options)
         : thread_count_(resolve_thread_count(options.thread_count_)),
           queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
-          node_resource_(detail::process_resource()) {}
+          queue_(queue_capacity_, process_resource()),
+          nodes_(process_resource()) {
+        if (thread_count_ > std::numeric_limits<std::size_t>::max() - queue_capacity_) {
+            throw std::invalid_argument("blocking pool storage capacity is out of range");
+        }
+        // Reserved/queued submissions occupy at most queue_capacity_ nodes;
+        // each thread may also hold one node while moving its callable out.
+        nodes_.resize(queue_capacity_ + thread_count_);
+        for (auto& node : nodes_) {
+            node.next_ = free_head_;
+            free_head_ = &node;
+        }
+    }
+
+    void release_node(node_type& node) noexcept {
+        std::lock_guard lock(mutex_);
+        node.next_ = free_head_;
+        free_head_ = &node;
+    }
 
     void start(const std::shared_ptr<impl_type>& self, std::pmr::vector<std::thread>& threads) {
         threads.reserve(thread_count_);
@@ -102,8 +118,8 @@ struct blocking_pool::impl_type final {
 
     void run() noexcept {
         for (;;) {
-            std::unique_ptr<node_type, detail::pmr_object_deleter<node_type>> node_value(nullptr,
-                detail::pmr_object_deleter<node_type>{node_resource_});
+            move_only_function<void()> task;
+            node_type* node = nullptr;
             {
                 std::unique_lock lock(mutex_);
                 condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
@@ -113,26 +129,23 @@ struct blocking_pool::impl_type final {
                     // the stop request becomes visible.
                     return;
                 }
-                node_value.reset(queue_head_);
-                queue_head_ = node_value->next_;
-                node_value->next_ = nullptr;
-                if (queue_head_ == nullptr) {
-                    queue_tail_ = nullptr;
-                }
+                (void)queue_.try_pop(node);
                 --queued_;
                 ++running_;
             }
+            task = std::move(node->task_);
+            release_node(*node);
             try {
-                node_value->task_();
+                task();
             } catch (...) {
                 // The blocking wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
                 // submit() whose task threw with nobody to receive it.
-                detail::report_unhandled_failure("blocking pool task", std::current_exception());
+                report_unhandled_failure("blocking pool task", std::current_exception());
             }
             // The task owns the completion it answered; destroy it here rather
             // than under the lock the next iteration takes.
-            node_value.reset();
+            task = nullptr;
             {
                 std::lock_guard lock(mutex_);
                 --running_;
@@ -145,7 +158,7 @@ struct blocking_pool::impl_type final {
         // Only the first stop caller owns the drain. In particular, a queued
         // task's destructor may call stop() again; letting that call recurse
         // into the drain would grow the stack once per queued task.
-        node_type* dropped = nullptr;
+        std::size_t dropped = 0;
         {
             std::lock_guard lock(mutex_);
             if (stopping_) {
@@ -153,22 +166,19 @@ struct blocking_pool::impl_type final {
             }
             stopping_ = true;
             discarded_ += queued_;
-            dropped = queue_head_;
-            queue_head_ = nullptr;
-            queue_tail_ = nullptr;
-            queued_ = 0;
+            dropped = std::exchange(queued_, 0);
         }
         condition_.notify_all();
 
-        // The detached chain owns all queued callables. Destroy nodes
-        // iteratively outside the mutex so callable destructors may reenter
-        // stats(), stop(), or submit() safely without allocation or recursion.
-        std::unique_ptr<node_type, detail::pmr_object_deleter<node_type>> node_value(
-            dropped, detail::pmr_object_deleter<node_type>{node_resource_});
-        while (node_value != nullptr) {
-            node_type* next_value = node_value->next_;
-            node_value->next_ = nullptr;
-            node_value.reset(next_value);
+        // Once stopping is published no thread pops or pushes the ring again,
+        // so the first stop caller owns the remaining slots. Destroy them
+        // outside the mutex so callable destructors may reenter stats(),
+        // stop(), or submit() safely without recursion.
+        node_type* node = nullptr;
+        while (dropped-- != 0) {
+            (void)queue_.try_pop(node);
+            node->task_ = nullptr;
+            release_node(*node);
         }
     }
 
@@ -199,12 +209,15 @@ struct blocking_pool::impl_type final {
 
     std::size_t thread_count_;
     std::size_t queue_capacity_;
-    std::pmr::memory_resource* node_resource_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
-    node_type* queue_head_{nullptr};
-    node_type* queue_tail_{nullptr};
+    // Queue operations move only pointers under mutex_. A claimed node stays
+    // exclusive while user callable moves/destruction run outside the lock.
+    local_ring_queue<node_type*> queue_;
+    std::pmr::vector<node_type> nodes_;
+    node_type* free_head_{nullptr};
     std::size_t queued_{0};
+    std::size_t reserved_{0};
     std::size_t running_{0};
     std::uint64_t completed_{0};
     std::uint64_t rejected_{0};
@@ -246,46 +259,47 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
+    const auto owner = impl_;
+    impl_type::node_type* node = nullptr;
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (impl_->stopping_) {
-            ++impl_->discarded_;
+        std::lock_guard lock(owner->mutex_);
+        if (owner->stopping_) {
+            ++owner->discarded_;
             return blocking_submit_status::pool_stopped;
         }
-        if (impl_->queued_ >= impl_->queue_capacity_) {
-            ++impl_->rejected_;
+        if (owner->queued_ + owner->reserved_ >= owner->queue_capacity_) {
+            ++owner->rejected_;
             return blocking_submit_status::queue_full;
         }
+        node = owner->free_head_;
+        owner->free_head_ = node->next_;
+        ++owner->reserved_;
     }
-    auto node_value = detail::make_pmr_object<impl_type::node_type>(impl_->node_resource_, std::move(task_value));
-    blocking_submit_status status = blocking_submit_status::accepted;
+    node->task_ = std::move(task_value);
+    bool stopped = false;
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (impl_->stopping_) {
-            ++impl_->discarded_;
-            status = blocking_submit_status::pool_stopped;
-        } else if (impl_->queued_ >= impl_->queue_capacity_) {
-            ++impl_->rejected_;
-            status = blocking_submit_status::queue_full;
+        std::lock_guard lock(owner->mutex_);
+        --owner->reserved_;
+        stopped = owner->stopping_;
+        if (stopped) {
+            ++owner->discarded_;
         } else {
-            if (impl_->queue_tail_ != nullptr) {
-                impl_->queue_tail_->next_ = node_value.get();
-            } else {
-                impl_->queue_head_ = node_value.get();
-            }
-            impl_->queue_tail_ = node_value.release();
-            ++impl_->queued_;
+            (void)owner->queue_.try_push(node);
+            ++owner->queued_;
         }
     }
-    if (status != blocking_submit_status::accepted) {
-        return status;
+    if (stopped) {
+        node->task_ = nullptr;
+        owner->release_node(*node);
+        return blocking_submit_status::pool_stopped;
     }
-    impl_->condition_.notify_one();
+    owner->condition_.notify_one();
     return blocking_submit_status::accepted;
 }
 
 void blocking_pool::stop() noexcept {
-    impl_->stop();
+    const auto owner = impl_;
+    owner->stop();
 }
 
 void blocking_pool::join() {

@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/attributes.h"
 #include "ruvia/web/client_tls_config.h"
 
 namespace ruvia {
@@ -51,6 +51,8 @@ struct db_transaction_options final {
     db_transaction_access_mode access_mode_{db_transaction_access_mode::default_value};
 };
 
+// Each worker opens one connection per database alias, so operations issued on
+// one worker run one at a time and the worker count is the pool size.
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.
@@ -63,6 +65,7 @@ struct db_config final {
     std::string database_{};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
+    // Bound one socket wait for readability or writability, for both drivers.
     std::optional<std::chrono::milliseconds> read_timeout_{};
     std::optional<std::chrono::milliseconds> write_timeout_{};
     std::optional<std::chrono::milliseconds> query_timeout_{std::chrono::seconds(30)};
@@ -133,8 +136,6 @@ private:
 
 namespace detail {
 
-class mariadb_pool;
-class postgresql_pool;
 class db_registry;
 class db_migration_runner;
 struct db_value_access;

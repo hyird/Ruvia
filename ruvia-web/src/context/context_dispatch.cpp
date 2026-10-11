@@ -1,23 +1,39 @@
-#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstddef>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio/error.hpp>
 
-#include "ruvia/http/http1_request_parser.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 
 #include "context/context_services.h"
-#include "router/route_early_data.h"
 #include "router/route_table.h"
+#include "server/http_request_admission.h"
 #include "server/request_deadline.h"
 
 namespace ruvia {
+
+namespace {
+
+// Subrequest framing headers are owned by dispatch, as on the wire.
+constexpr std::size_t subrequest_field_method = 0;
+constexpr std::size_t subrequest_field_target = 1;
+constexpr std::size_t subrequest_field_body = 2;
+constexpr std::size_t subrequest_field_headers = 3;
+constexpr std::size_t max_subrequest_header_bytes = 64 * 1024;
+
+}  // namespace
 
 std::optional<std::string_view> dispatch_response::header(std::string_view name) const& noexcept {
     for (const auto& [key, value] : headers_) {
@@ -39,12 +55,19 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
         options.target_.find_first_of("\r\n\t #") != std::string_view::npos || options.target_.find('\0') != std::string_view::npos) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
-    detail::validate_operation_options(options.operation_);
+    validate_operation_options(options.operation_);
     if (options.body_.size() > services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
-    std::pmr::string wire(pool());
-    wire.append(options.method_).append(" ").append(options.target_).append(" HTTP/1.1\r\nHost: localhost\r\n");
+    // The operation is lazy and the options borrow caller storage: take owned
+    // copies now. The subrequest is built directly as a parsed request; it
+    // never round-trips through a wire format.
+    std::pmr::vector<std::pmr::string> fields(pool());
+    fields.reserve(subrequest_field_headers + 2 * options.headers_.size());
+    fields.emplace_back(options.method_);
+    fields.emplace_back(options.target_);
+    fields.emplace_back(options.body_);
+    std::size_t header_bytes = options.method_.size() + options.target_.size();
     for (const auto& header : options.headers_) {
         if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
             throw std::invalid_argument("invalid subrequest header");
@@ -54,54 +77,66 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
                 throw std::invalid_argument("subrequest framing headers are owned by dispatch");
             }
         }
-        wire.append(header.name()).append(": ").append(header.value()).append("\r\n");
+        header_bytes += header.name().size() + header.value().size();
+        if (header_bytes > max_subrequest_header_bytes) {
+            throw std::invalid_argument("subrequest headers exceed the configured limit");
+        }
+        fields.emplace_back(header.name());
+        fields.emplace_back(header.value());
     }
-    if (wire.size() > 64 * 1024) {
-        throw std::invalid_argument("subrequest headers exceed the configured limit");
-    }
-    wire.append("Content-Length: ").append(std::to_string(options.body_.size())).append("\r\n\r\n").append(options.body_);
-    return ::ruvia::make_scoped_operation(operation_scope_, dispatch_task(std::move(wire), std::move(options.operation_)));
+    return ::ruvia::make_scoped_operation(
+        operation_scope_, dispatch_task(std::move(fields), std::move(options.operation_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::pmr::string wire, operation_options options) {
+task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, operation_options options) {
     auto memory = memory_.fork();
-    const auto parsed_value = http1_request_parser{}.parse(std::string_view(wire));
-    if (!parsed_value.parsed() || parsed_value.parsed()->consumed_bytes() != wire.size()) {
+    const std::string_view body = fields[subrequest_field_body];
+    std::array<char, 20> content_length_text{};
+    const auto content_length_end =
+        std::to_chars(content_length_text.data(), content_length_text.data() + content_length_text.size(), body.size()).ptr;
+    std::pmr::vector<http_header_view> headers(memory.resource());
+    headers.reserve(2 + (fields.size() - subrequest_field_headers) / 2);
+    headers.emplace_back("Host", "localhost");
+    for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
+        headers.emplace_back(fields[index], fields[index + 1]);
+    }
+    headers.emplace_back("Content-Length",
+        std::string_view(content_length_text.data(), static_cast<std::size_t>(content_length_end - content_length_text.data())));
+    const auto [request, parse_error] = make_parsed_http_request(fields[subrequest_field_method],
+        fields[subrequest_field_target], headers, std::as_bytes(std::span(body.data(), body.size())), memory.resource());
+    if (parse_error.has_value()) {
         throw std::invalid_argument("invalid subrequest");
     }
-    const auto& request = parsed_value.parsed()->request();
-    const auto resolution = services().routes()->resolve(request);
+    const auto& routes = *services().routes();
+    const auto resolution = routes.resolve(request);
     const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(options.stop_token_));
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
-    detail::request_deadline deadline(stop);
-    auto subrequest_services = services().for_subrequest(conn_info_, early_data_info_, services().dispatch_depth() + 1, stop).with_request_deadline(deadline);
-    auto timeout = options.timeout_;
-    std::optional<http_response> rejected;
-    if (early_data_info_.received_from_early_data() &&
-        !detail::early_data_request_allowed(request.known_method(), !parsed_value.parsed()->wire_body().empty(), resolution)) {
-        // The parent passed the early-data policy; work it dispatches is still
-        // replayable and must meet the same policy (RFC 8470 §5.1).
-        rejected = co_await services().routes()->handle_error(request, memory,
-            http_error_info({.status_ = http_status::too_early, .message_ = "subrequest is not replay-safe for early data"}), subrequest_services);
-    } else if (const auto* resolved = resolution.resolved()) {
-        const auto& route = resolved->route();
-        if (route.deadline_ms() > 0) {
-            const auto route_timeout = std::chrono::milliseconds(route.deadline_ms());
-            if (!timeout || route_timeout < *timeout) {
-                timeout = route_timeout;
-            }
-        }
-        if (route.max_request_body_bytes() && parsed_value.parsed()->wire_body().size() > route.max_request_body_bytes()) {
-            rejected = co_await services().routes()->handle_error(request, memory,
-                http_error_info({.status_ = http_status::content_too_large, .message_ = "subrequest body exceeds route limit"}), subrequest_services);
-        }
-    }
-    if (timeout) {
-        deadline.arm(capabilities_.worker(), *timeout);
-    }
-    auto response = rejected ? std::move(*rejected) : co_await services().routes()->dispatch(request, resolution, memory, subrequest_services);
+    // The parent request already passed the application rate limit. Work it
+    // dispatches is still replayable when the parent arrived as early data and
+    // must meet the same policy (RFC 8470 §5.1); the operation timeout is the
+    // subrequest's deployment deadline, which a route may only tighten.
+    const detail::http_request_admission_policy policy{
+        .handler_deadline_ = options.timeout_,
+        .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
+        .apply_rate_limit_ = false,
+    };
+    std::optional<detail::request_deadline> deadline;
+    auto admission = detail::admit_http_request(
+        {
+            .request_ = request,
+            .resolution_ = resolution,
+            .coding_ = http_response_coding_selection_for(request),
+            .resource_ = memory.resource(),
+            .received_early_data_ = early_data_info_.received_from_early_data(),
+        },
+        policy, services().for_subrequest(conn_info_, early_data_info_, services().dispatch_depth() + 1, stop), deadline);
+    const auto* rejection = admission.rejection();
+    auto response = rejection != nullptr
+                        ? co_await detail::respond_http_request_rejection(
+                              routes, request, memory, *rejection, admission.services())
+                        : co_await routes.dispatch(request, resolution, memory, admission.services());
     if (response.file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
     }

@@ -10,6 +10,10 @@
 
 #include "ruvia/http/http3_field_section.h"
 
+namespace ruvia::detail {
+struct http3_headers_frame_access;
+}
+
 namespace ruvia {
 
 enum class http3_qpack_connection_error : std::uint8_t {
@@ -111,6 +115,17 @@ public:
     [[nodiscard]] std::uint64_t known_received_count() const noexcept;
 
 private:
+    friend class http3_connection;
+    // Connection-only transition from the initial static encoder to actual
+    // peer SETTINGS. Retains decoder-stream input, including partial integers.
+    void configure_peer_settings(http3_qpack_encoder_config config);
+    friend struct detail::http3_headers_frame_access;
+    // Same as encode(), leaving reserved_prefix_bytes unspecified leading
+    // bytes for a frame header; limits apply to the field section alone.
+    [[nodiscard]] std::variant<std::pmr::vector<char>, http3_qpack_connection_error> encode_after_prefix(
+        std::uint64_t stream_id, std::span<const http3_field_section_field_view> fields,
+        http3_field_section_limits limits, std::pmr::memory_resource* result_resource, std::size_t reserved_prefix_bytes);
+
     struct impl_type;
     std::pmr::memory_resource* resource_;
     impl_type* impl_;

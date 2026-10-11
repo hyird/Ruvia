@@ -16,7 +16,7 @@ template <typename entity_type>
 class entity_rows final {
 public:
     explicit entity_rows(std::pmr::memory_resource* resource = nullptr)
-        : rows_(detail::pmr_resource_or_default(resource)) {}
+        : rows_(pmr_resource_or_default(resource)) {}
     entity_rows(const entity_rows&) = delete;
     entity_rows& operator=(const entity_rows&) = delete;
     entity_rows(entity_rows&&) noexcept = default;

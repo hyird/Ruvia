@@ -44,9 +44,6 @@ struct static_root_config_storage final {
     static_dotfile_policy dotfiles_{static_dotfile_policy::deny};
 };
 
-[[nodiscard]] static_root_config_storage make_static_root_config_storage(
-    const static_root_options& source_value, std::pmr::memory_resource* resource);
-
 // The caller owns whole-config validation and invokes this only after every
 // related policy has passed. This split lets application validate document_root_config
 // atomically before the first owner-PMR allocation.

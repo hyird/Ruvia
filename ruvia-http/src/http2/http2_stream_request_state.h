@@ -70,18 +70,6 @@ public:
         regular_header_seen_ = true;
     }
 
-    [[nodiscard]] bool mark_singleton_header(std::uint32_t bit) noexcept {
-        if ((singleton_header_bits_ & bit) != 0) {
-            return false;
-        }
-        singleton_header_bits_ |= bit;
-        return true;
-    }
-
-    [[nodiscard]] bool has_singleton_header(std::uint32_t bit) const noexcept {
-        return (singleton_header_bits_ & bit) != 0;
-    }
-
     // Client role: nullptr until the final response :status is committed once for
     // a stream this endpoint opened. The owner bounds preceding 1xx heads.
     [[nodiscard]] const http_status_code* response_status() const& noexcept {
@@ -113,7 +101,6 @@ private:
     bool has_host_ : 1 {false};
     bool has_cookie_ : 1 {false};
     bool regular_header_seen_ : 1 {false};
-    std::uint32_t singleton_header_bits_{0};
     std::uint16_t scheme_default_port_{0};
     std::optional<http_status_code> response_status_;
     std::uint8_t interim_responses_{0};

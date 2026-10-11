@@ -7,19 +7,20 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/http_ows.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
+#include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "http_header_access.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_accept_key.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 #include "websocket/websocket_server_negotiation.h"
-#include "websocket/websocket_subprotocol_set.h"
 
 namespace ruvia::detail {
 namespace {
@@ -55,10 +56,12 @@ namespace {
         for (char& ch : name) {
             ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
         }
-        if (name == "connection" || name == "upgrade" || name == "keep-alive" ||
-            name == "proxy-connection" || name == "transfer-encoding" ||
-            name == "content-length" || name == "trailer" || name == "te" ||
-            name.starts_with("sec-websocket-")) {
+        // Every Sec-WebSocket-* name is handshake-owned, including ones this
+        // implementation does not know yet.
+        const auto kind = classify_request_header(name);
+        if (http_field_name_in(name, http_connection_specific_fields) ||
+            http_field_name_in(name, http_message_framing_fields) || kind == request_header_kind::trailer ||
+            kind == request_header_kind::te || name.starts_with("sec-websocket-")) {
             throw std::invalid_argument("WebSocket handshake controls this response header");
         }
         if (!size.add(name, header.value())) {

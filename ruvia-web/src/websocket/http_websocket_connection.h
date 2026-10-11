@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
@@ -13,15 +12,15 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/websocket_server_protocol.h"
 #include "ruvia/web/websocket.h"
 
 #include "http/http_stream_read_result.h"
+#include "server/connection_scanner.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {
@@ -38,7 +37,7 @@ template <typename transport_type>
 class websocket_connection final {
 public:
     websocket_connection(transport_type transport, const worker_handle& worker_value,
-        ruvia::connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
+        connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource,
         std::string_view initial_bytes = {},
         websocket_compression compression = (websocket_compression{}),
@@ -56,7 +55,7 @@ public:
             periodic_check_, this, &websocket_connection::heartbeat_tick_thunk);
     }
 
-    websocket_connection(transport_type, worker_handle&&, ruvia::connection_scanner::entry_type&,
+    websocket_connection(transport_type, worker_handle&&, connection_scanner::entry_type&,
         websocket_lifecycle_options, protocol_byte_limit, std::pmr::memory_resource*,
         std::string_view = {}, websocket_compression = (websocket_compression{}), int = 6) = delete;
 
@@ -231,7 +230,7 @@ private:
 
     transport_type transport_;
     const worker_handle* worker_;
-    ruvia::connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry_type& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};
     std::pmr::string buffer_;
     websocket_server_protocol protocol_;
@@ -244,7 +243,7 @@ private:
     std::uint64_t heartbeat_sequence_{0};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
-    ruvia::connection_scanner::periodic_check_registration_type periodic_check_;
+    connection_scanner::periodic_check_registration_type periodic_check_;
 };
 
 }  // namespace ruvia::detail

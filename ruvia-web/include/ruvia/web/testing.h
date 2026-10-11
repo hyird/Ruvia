@@ -4,17 +4,20 @@
 // test_request / Hono app.request() analog. test_app collects every controller
 // linked into the binary (the same CRTP registration path application::run() uses),
 // finalizes the production route table, and dispatches TestRequests through
-// the real buffered dispatch pipeline: routing, controller/route/global
-// middleware, validators, prefix and app-wide not_found/on_error fallbacks,
-// url_for, route body limits, route rate limits, and worker state all behave as
-// they do in a running server.
-// No socket is opened; request() drives a private worker to completion
+// the real buffered request chain of a server with default options: request
+// admission (body ceilings, handler deadlines, rate limits), routing,
+// controller/route/global middleware, validators, prefix and app-wide
+// not_found/on_error fallbacks, url_for, worker state, and the response tail
+// (CORS, content-coding and error recovery) all behave as they do in a
+// running server. The private worker is brought up and retired by the same
+// worker capability chain a server worker uses.
+// No socket is opened; request() drives that worker to completion
 // synchronously and copies the response out.
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/websocket routes and handlers that await worker-bound
 // services (db(), redis(), run_blocking()) need a running server; drive those
-// through a real loopback server instead. Route deadlines are enforced by the
+// through a real loopback server instead. Deadlines are enforced by the
 // private worker's timer.
 
 #include <cstddef>

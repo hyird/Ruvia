@@ -4,11 +4,11 @@
 #include <coroutine>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <utility>
 
 #include "ruvia/core/detail/suspend_race_state.h"
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -30,8 +30,8 @@ void cancel_worker_single_wait(const std::shared_ptr<state_type>& state_value, s
 // Shared storage and transition machinery for one worker-bound waiter. Domain
 // awaiters own this component by value and publish its typed address directly,
 // without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
-// State must expose worker, mutex, waiter, waiter_generation_, and
-// next_waiter_generation_.
+// State must expose worker_, lock_state() (the lock guarding the waiter
+// fields), waiter_, waiter_generation_, and next_waiter_generation_.
 template <typename t_type, typename state_type>
 class worker_single_wait_awaiter final {
 public:
@@ -78,7 +78,7 @@ public:
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
         auto& owner_value = state();
         auto* waiter = this;
-        std::lock_guard lock(owner_value.mutex_);
+        auto lock = owner_value.lock_state();
         // Arm the deadline before publishing the continuation: the timer only
         // fires on this worker after suspension, and a stopped timer queue can
         // still complete the wait synchronously. A published waiter that is no
@@ -90,7 +90,7 @@ public:
                     worker_timer_deadline_after(*timeout_),
                     [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
                         {
-                            std::lock_guard state_lock(owner_value.mutex_);
+                            auto state_lock = owner_value.lock_state();
                             if (owner_value.waiter_ == waiter) {
                                 // Still pending: a cancellation reaching a
                                 // pending wait comes only from stop_timers().
@@ -125,6 +125,7 @@ public:
     // Completion has already detached the intrusive waiter before wake() runs.
     // A failed continuation dispatch is therefore unrecoverable and shares the
     // same explicit terminate boundary as worker_signal and timer cancellation.
+    // A wake on the worker's own thread posts the resume directly.
     void wake() noexcept {
         if (timer_.registered()) {
             timer_.cancel();
@@ -141,7 +142,7 @@ public:
 
 private:
     [[nodiscard]] static std::uint64_t reserve_generation(state_type& state_value) noexcept {
-        std::lock_guard lock(state_value.mutex_);
+        auto lock = state_value.lock_state();
         if (++state_value.next_waiter_generation_ == 0) {
             ++state_value.next_waiter_generation_;
         }
@@ -170,7 +171,7 @@ private:
     stop_registration stop_registration_;
 };
 
-// Called with the state's mutex_ held. Every terminal source uses this one transition,
+// Called with the state's lock held. Every terminal source uses this one transition,
 // so detachment, generation invalidation, result publication, and wake ordering
 // cannot drift between channel and one_shot.
 template <typename state_type>
@@ -185,7 +186,7 @@ void complete_worker_single_wait(state_type& state_value, worker_wait_status sta
 template <typename state_type>
 void cancel_worker_single_wait(
     const std::shared_ptr<state_type>& state_value, std::uint64_t generation) noexcept {
-    std::lock_guard lock(state_value->mutex_);
+    auto lock = state_value->lock_state();
     if (state_value->waiter_ == nullptr || state_value->waiter_generation_ != generation) {
         return;
     }

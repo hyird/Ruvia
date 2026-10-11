@@ -15,7 +15,7 @@ namespace ruvia::detail {
 
 template <typename entity_type>
 entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
-    std::pmr::memory_resource* resource, std::string_view prefix = {}) {
+    std::pmr::memory_resource* resource, std::string_view prefix) {
     const auto fields_value = redis_orm_array(reply);
     if (fields_value.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "invalid entity hash reply");
@@ -35,7 +35,7 @@ entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
         throw redis_error(redis_error::code_type::protocol_error, "entity storage marker missing");
     }
     entity_type entity(resource);
-    for_each_redis_field<entity_type>([&]<typename field_type> {
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t> {
         std::optional<std::string_view> value;
         for (std::size_t i = 0; i < fields_value.size(); i += 2) {
             if (redis_orm_string(fields_value[i]) == field_type::name.view()) {
@@ -55,7 +55,7 @@ entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
     });
     try {
         const auto id = redis_entity_id(entity, resource);
-        if (redis_entity_key<entity_type>(id, resource, prefix) != key) {
+        if (redis_entity_key(prefix, id, resource) != key) {
             throw redis_error(redis_error::code_type::protocol_error, "entity ID does not match its Redis key");
         }
     } catch (const std::invalid_argument&) {
@@ -136,6 +136,16 @@ struct redis_map_count final {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity count reply");
         }
         return redis_orm_count(values.front());
+    }
+};
+
+struct redis_map_exists final {
+    bool operator()(redis_value&& reply, std::pmr::memory_resource*) const {
+        const auto values = redis_orm_array(reply);
+        if (values.size() != 1) {
+            throw redis_error(redis_error::code_type::protocol_error, "invalid entity exists reply");
+        }
+        return redis_orm_count(values.front()) != 0;
     }
 };
 

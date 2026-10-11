@@ -1,8 +1,6 @@
 #include "ruvia/web/http_client_handle.h"
 
 #include <algorithm>
-#include <array>
-#include <charconv>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -41,7 +39,7 @@ void check_response_operation_affinity(void* target) noexcept {
 }  // namespace
 
 http_client_response::http_client_response(detail::http_client_pool& pool)
-    : state_(pool.response_memory_->create_state(pool)),
+    : state_(pool.response_memory().create_state(pool)),
       body_(state_) {}
 
 http_client_response::http_client_response(detail::http_client_response_state* state_value, bool retain) noexcept
@@ -104,7 +102,7 @@ std::span<const http_client_informational_response> http_client_response::inform
     return state_->informational_;
 }
 
-void detail::http_client_response_state::retain_informational(http_status_code status_code, std::span<const http_header_view> fields_value) {
+void detail::http_client_response_state::retain_informational(http_status_code status_code, std::span<const http_header> fields_value) {
     // Retained progress metadata has a separate fixed aggregate bound. It must
     // never grow with the duration of an upstream response stream.
     if (informational_.size() >= 8) {
@@ -138,7 +136,11 @@ void http_client_response::reprioritize(http_priority priority) & {
     if (priority.urgency_ > 7) {
         throw std::invalid_argument("HTTP priority urgency must be between 0 and 7");
     }
-    if (state_->complete_ || state_->abandoned_ || state_->pool_ == nullptr) {
+    if (state_->complete_) {
+        // The peer already finished the stream; there is nothing left to schedule.
+        return;
+    }
+    if (state_->abandoned_ || state_->pool_ == nullptr) {
         throw http_client_error(http_client_error::code_type::closing, "response transport is retired");
     }
     state_->pool_->reprioritize(*state_, priority);
@@ -167,7 +169,7 @@ void detail::http_client_response_state::release_reference() noexcept {
         if (auto* domain = memory_domain()) {
             domain->destroy_state(this);
         } else {
-            detail::destroy_pmr_object(this, resource_);
+            destroy_pmr_object(this, resource_);
         }
     }
 }
@@ -180,7 +182,7 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
 }
 
 bool detail::http_client_response_state::bind_http3_body_budget(
-    detail::http3_client_body_budget& budget) noexcept {
+    detail::http3_body_budget& budget) noexcept {
     return http3_body_budget_.attach(budget, producer_body_bytes());
 }
 
@@ -461,10 +463,10 @@ void http_client_handle::expire_capability(void* target) noexcept {
 }
 
 http_client_handle http_client_handle::with_options(operation_options options) const {
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     registration_.require_active();
     http_client_handle copy(*this);
-    copy.options_ = detail::merge_operation_options(options_, std::move(options));
+    copy.options_ = merge_operation_options(options_, std::move(options));
     return copy;
 }
 
@@ -472,14 +474,14 @@ scoped_operation<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
     registration_.require_active();
     detail::http_client_request_storage request(
-        view.method_.view(), view.target_.view(), detail::pmr_resource_or_default(resource_));
+        view.method_.view(), view.target_.view(), pmr_resource_or_default(resource_));
     for (const auto& header : view.headers_) {
         request.append_header(header.name(), header.value());
     }
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());
     }
-    detail::validate_operation_options(options_);
+    validate_operation_options(options_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), pool_->execute(std::move(request), options_));
 }
@@ -491,7 +493,7 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
         (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
-    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), detail::pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), pmr_resource_or_default(resource_));
     for (const auto& field : head.headers_) {
         request.append_header(field.name(), field.value());
     }
@@ -500,7 +502,7 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
-    auto* resource = detail::pmr_resource_or_default(resource_);
+    auto* resource = pmr_resource_or_default(resource_);
     std::pmr::vector<http_header_view> fields(resource);
     fields.reserve(head.headers_.size() + 1);
     for (const auto& field : head.headers_) {
@@ -510,15 +512,8 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(
         fields.push_back(field);
     }
     fields.emplace_back("Capsule-Protocol", "?1");
-    auto authority = detail::client_uri_host(host(), resource);
-    if (port() != (scheme() == http_scheme::https ? 443 : 80)) {
-        std::array<char, 5> digits;
-        const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), port()).ptr;
-        authority.push_back(':');
-        authority.append(digits.data(), end);
-    }
     // open_tunnel owns all fields before this temporary preparation storage dies.
-    return open_tunnel({.authority_ = authority, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
+    return open_tunnel({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
 }
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
@@ -527,7 +522,7 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    detail::http_client_request_storage request("CONNECT", head.target_, detail::pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request("CONNECT", head.target_, pmr_resource_or_default(resource_));
     if (head.protocol_ == "connect-udp" && (validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
                                                                                   .scheme_ = scheme() == http_scheme::https ? "https" : "http",
                                                                                   .authority_ = head.authority_,
@@ -543,10 +538,9 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 
-quic_path_migration http_client_handle::start_quic_path_migration(
-    const asio::ip::udp::endpoint& local_endpoint) const {
+quic_path_migration http_client_handle::start_quic_path_migration(const quic_address& local_address) const {
     registration_.require_active();
-    return pool_->start_quic_path_migration(local_endpoint);
+    return pool_->start_quic_path_migration(local_address);
 }
 
 std::optional<quic_path_migration> http_client_handle::path_migration(

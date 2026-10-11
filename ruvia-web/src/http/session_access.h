@@ -1,9 +1,6 @@
 #pragma once
 
-#include <array>
 #include <chrono>
-#include <cstddef>
-#include <cstdint>
 #include <memory_resource>
 #include <string_view>
 
@@ -57,33 +54,34 @@ inline constexpr std::string_view session_rotation_script =
     return true;
 }
 
-inline void append_session_cookie_header(http_response& response, std::pmr::memory_resource* resource,
-    std::string_view cookie_name, std::string_view id, bool secure) {
-    const cookie_options options{
-        .same_site_ = cookie_same_site::lax,
-        .http_only_ = cookie_attribute_policy::emit,
-        .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
-    };
-    const set_cookie_plan plan(cookie_name, id, options);
+inline void append_session_set_cookie(http_response& response, std::pmr::memory_resource* resource,
+    std::string_view cookie_name, std::string_view value, const cookie_options& options) {
+    const set_cookie_plan plan(cookie_name, value, options);
     std::pmr::string set_cookie(resource);
     set_cookie.resize(plan.size());
     plan.write(set_cookie.data());
     response.header("Set-Cookie", set_cookie, {.mode_ = ruvia::http_response_header_mode::append});
 }
 
+inline void append_session_cookie_header(http_response& response, std::pmr::memory_resource* resource,
+    std::string_view cookie_name, std::string_view id, bool secure) {
+    append_session_set_cookie(response, resource, cookie_name, id,
+        {
+            .same_site_ = cookie_same_site::lax,
+            .http_only_ = cookie_attribute_policy::emit,
+            .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
+        });
+}
+
 inline void append_expired_session_cookie_header(http_response& response,
     std::pmr::memory_resource* resource, std::string_view cookie_name, bool secure) {
-    const cookie_options options{
-        .same_site_ = cookie_same_site::lax,
-        .max_age_ = std::chrono::seconds(0),
-        .http_only_ = cookie_attribute_policy::emit,
-        .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
-    };
-    const set_cookie_plan plan(cookie_name, "", options);
-    std::pmr::string set_cookie(resource);
-    set_cookie.resize(plan.size());
-    plan.write(set_cookie.data());
-    response.header("Set-Cookie", set_cookie, {.mode_ = ruvia::http_response_header_mode::append});
+    append_session_set_cookie(response, resource, cookie_name, "",
+        {
+            .same_site_ = cookie_same_site::lax,
+            .max_age_ = std::chrono::seconds(0),
+            .http_only_ = cookie_attribute_policy::emit,
+            .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
+        });
 }
 
 }  // namespace ruvia::detail

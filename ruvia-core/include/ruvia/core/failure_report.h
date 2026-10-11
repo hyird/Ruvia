@@ -30,7 +30,3 @@ namespace ruvia {
 void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception) noexcept;
 
 }  // namespace ruvia
-
-namespace ruvia::detail {
-using ::ruvia::report_unhandled_failure;
-}  // namespace ruvia::detail

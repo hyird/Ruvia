@@ -22,40 +22,41 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/attributes.h"
 #include "ruvia/web/conn_info.h"
 #include "ruvia/web/context_request.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/dispatch.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/error_handlers.h"
 #include "ruvia/web/http3_early_data_info.h"
-#include "ruvia/web/http_client_handle.h"
-#include "ruvia/web/http_tunnel.h"
-#include "ruvia/web/model_types.h"
-#include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/request_fields.h"
-#include "ruvia/web/session.h"
 #include "ruvia/web/static_text.h"
-#include "ruvia/web/streaming.h"
 #include "ruvia/web/task.h"
-#include "ruvia/web/validation_types.h"
-#include "ruvia/web/websocket.h"
 
 namespace ruvia {
 
 class context;
 class env;
 class static_root;
+// Capabilities a handler reaches through context; include the defining header
+// where they are used: http_client_handle.h, websocket.h, http_tunnel.h,
+// session.h, streaming.h and multipart_reader.h.
 class http_client_handle;
-class http_request_trailers;
-
+class websocket;
+class http_tunnel;
+class session;
+class body_reader;
+class response_stream_writer;
+class sse_writer;
+class multipart_reader;
+class multipart_part;
+class multipart_boundary;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_handle;
 #endif
@@ -63,12 +64,6 @@ class db_handle;
 class redis_handle;
 #endif
 namespace detail {
-struct steady_rate_limiter_clock;
-template <typename clock_type>
-class rate_limiter;
-using rate_limiter_type = rate_limiter<steady_rate_limiter_clock>;
-class route_table;
-class worker_state_registry;
 class context_request_storage;
 class context_request_body_source;
 class context_response_output;
@@ -81,10 +76,6 @@ class request_query_values;
 enum class static_file_selection_mode : std::uint8_t;
 struct context_access;
 class context_services;
-class request_deadline;
-class http_interim_response_output;
-class http_connection_advertisement_output;
-class http_push_output;
 struct session_access;
 }  // namespace detail
 
@@ -288,10 +279,10 @@ public:
     // the worker's whole life and is shared by every request on it; this lives
     // for one dynamic next() scope and is private to that request.
     //
-    //   task<void> handle(context& c, Next& next) {
+    //   task<void> handle(context& c, next& next_value) {
     //       const auto user = authenticate(c);          // owned by this frame
     //       const auto binding = c.bind_request_state(user);
-    //       co_await next();                            // handler sees it
+    //       co_await next_value();                      // handler sees it
     //   }                                               // unbound here
     //
     // The binding stores the value by address and never copies it, so the bound
@@ -452,7 +443,9 @@ private:
     [[nodiscard]] http_response streaming_head(std::string_view content_type = {}) const;
 
     [[nodiscard]] task<http_response> not_found_task();
-    [[nodiscard]] task<dispatch_response> dispatch_task(std::pmr::string request, operation_options options);
+    // `fields`: method, target, body, then header name/value pairs (owned copies).
+    [[nodiscard]] task<dispatch_response> dispatch_task(
+        std::pmr::vector<std::pmr::string> fields, operation_options options);
     [[nodiscard]] task<std::string_view> request_body() const;
     task<void> request_discard_body() const;
     [[nodiscard]] task<std::pmr::vector<multipart_part>> request_multipart() const;
@@ -508,7 +501,7 @@ private:
     std::size_t param_count_{0};
     std::uintptr_t route_rate_limit_scope_{0};
     using request_storage_owner_type = std::unique_ptr<detail::context_request_storage,
-        detail::pmr_object_deleter<detail::context_request_storage>>;
+        pmr_object_deleter<detail::context_request_storage>>;
     // One typed arena allocation owns request caches, response/session state,
     // and bindings. Destroyed after operation_scope_ so outstanding operations
     // still see request-owned objects.

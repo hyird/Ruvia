@@ -5,23 +5,15 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
-#include <utility>
 
 #include "ruvia/web/db/db_entity.h"
 
 namespace ruvia::detail {
 
-template <typename tuple_type, typename function_type>
-constexpr void for_each_db_descriptor(function_type&& function) {
-    [&]<std::size_t... i>(std::index_sequence<i...>) {
-        (function.template operator()<std::tuple_element_t<i, tuple_type>, i>(), ...);
-    }(std::make_index_sequence<std::tuple_size_v<tuple_type>>{});
-}
-
 template <typename entity_type, fixed_string name>
 consteval std::size_t db_relation_index() {
     std::size_t result_value = std::tuple_size_v<typename entity_type::relations_type>;
-    for_each_db_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
+    for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
         if constexpr (relation_type::name == name) {
             result_value = i;
         }
@@ -113,7 +105,7 @@ template <typename columns_type>
 consteval bool unique_db_join_columns() {
     constexpr auto count = std::tuple_size_v<columns_type>;
     std::array<std::string_view, count> local{}, referenced{};
-    for_each_db_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+    for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
         local[i] = column_type::local.view();
         referenced[i] = column_type::referenced.view();
     });
@@ -143,25 +135,25 @@ constexpr void validate_db_relation() {
             "join table column mappings must be nonempty and unique");
         static_assert([] {
             bool unique = true;
-            for_each_db_descriptor<owner>([&]<typename left_type, std::size_t> {
-                for_each_db_descriptor<other_type>([&]<typename right_type, std::size_t> {
+            for_each_descriptor<owner>([&]<typename left_type, std::size_t> {
+                for_each_descriptor<other_type>([&]<typename right_type, std::size_t> {
                     unique &= left_type::local.view() != right_type::local.view();
                 });
             });
             return unique;
         }(),
             "join table owner and inverse columns must have distinct names");
-        for_each_db_descriptor<owner>([]<typename column_type, std::size_t> {
+        for_each_descriptor<owner>([]<typename column_type, std::size_t> {
             (void)source::template column_index<column_type::referenced>();
         });
-        for_each_db_descriptor<other_type>([]<typename column_type, std::size_t> {
+        for_each_descriptor<other_type>([]<typename column_type, std::size_t> {
             (void)target_type::template column_index<column_type::referenced>();
         });
     } else {
         using columns_type = typename mapping_type::join_columns_type;
         static_assert(std::tuple_size_v<columns_type> > 0, "a database relation requires join columns");
         static_assert(unique_db_join_columns<columns_type>(), "database relation column mappings must be nonempty and unique");
-        for_each_db_descriptor<columns_type>([]<typename column_type, std::size_t> {
+        for_each_descriptor<columns_type>([]<typename column_type, std::size_t> {
             (void)source::template column_index<column_type::local>();
             (void)target_type::template column_index<column_type::referenced>();
         });
@@ -171,7 +163,7 @@ constexpr void validate_db_relation() {
 template <typename entity_type>
 consteval std::size_t db_primary_key_count() {
     std::size_t count = 0;
-    for_each_db_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
         count += column_type::options.primary_key_ ? 1 : 0;
     });
     return count;
@@ -181,7 +173,7 @@ template <typename entity_type>
 consteval auto db_primary_key_columns() {
     std::array<std::string_view, db_primary_key_count<entity_type>()> result_value{};
     std::size_t i = 0;
-    for_each_db_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
         if constexpr (column_type::options.primary_key_) {
             result_value[i++] = column_type::name.view();
         }

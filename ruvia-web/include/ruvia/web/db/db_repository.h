@@ -53,12 +53,6 @@ inline db_expression write_condition(db_query& query, db_expression predicate, s
     return query.import_expression(predicate);
 }
 
-template <typename e_type, typename fn_type>
-void for_each_entity_column(fn_type&& fn) {
-    [&]<std::size_t... i>(std::index_sequence<i...>) {
-        (fn.template operator()<std::tuple_element_t<i, typename e_type::columns_type>>(), ...);
-    }(std::make_index_sequence<std::tuple_size_v<typename e_type::columns_type>>{});
-}
 template <typename e_type>
 constexpr bool has_entity_column(std::string_view name) noexcept {
     return [&]<typename... columns_type>(std::tuple<columns_type...>*) {
@@ -74,7 +68,7 @@ void require_entity_column(std::string_view name) {
 template <typename e_type>
 bool is_generated_entity_column(std::string_view name) {
     bool generated = false;
-    for_each_entity_column<e_type>([&]<typename c_type> {
+    for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
         if constexpr (c_type::options.generated_type_ != db_generated_type::none) {
             generated |= name == c_type::name.view();
         }
@@ -84,7 +78,7 @@ bool is_generated_entity_column(std::string_view name) {
 template <typename e_type>
 void select_entity(db_query& query, std::string_view alias) {
     const auto qualifier = alias.empty() ? e_type::table_name() : alias;
-    for_each_entity_column<e_type>([&]<typename c_type> { query.add_select(query.column(c_type::name.view(), qualifier)); });
+    for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> { query.add_select(query.column(c_type::name.view(), qualifier)); });
     query.from(e_type::table_name(), alias);
 }
 template <typename e_type>
@@ -121,8 +115,9 @@ struct db_map_one_entity final {
             return std::nullopt;
         }
         e_type entity(resource);
-        decode_entity(entity, rows.front(), resource, static_cast<typename e_type::columns_type*>(nullptr),
-            std::make_index_sequence<std::tuple_size_v<typename e_type::columns_type>>{});
+        for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
+            decode_entity_column<e_type, c_type>(entity, rows.front(), resource);
+        });
         return std::optional<e_type>(std::in_place, std::move(entity));
     }
 };
@@ -157,16 +152,14 @@ struct db_map_projection final {
         for (const auto& name : selected) {
             require_entity_column<e_type>(name);
         }
-        std::size_t index = 0;
-        for_each_entity_column<e_type>([&]<typename c_type> {
-            selected_columns_[index++] = selected.empty() || std::ranges::find(selected, c_type::name.view()) != selected.end();
+        for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
+            selected_columns_[index] = selected.empty() || std::ranges::find(selected, c_type::name.view()) != selected.end();
         });
     }
     e_type decode(const db_row& row, std::pmr::memory_resource* resource) const {
         e_type result(resource);
-        std::size_t index = 0;
-        for_each_entity_column<e_type>([&]<typename c_type> {
-            if (selected_columns_[index++]) {
+        for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
+            if (selected_columns_[index]) {
                 decode_entity_column<e_type, c_type>(result, row, resource);
             }
         });
@@ -194,28 +187,9 @@ struct db_map_one_projection final {
         return mapper_.decode(rows.front(), resource);
     }
 };
-inline std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<const db_selection> selection,
-    std::string_view qualifier, bool returning = false) {
-    if (selection.empty()) {
-        throw std::invalid_argument("projection requires at least one field");
-    }
-    std::pmr::vector<std::pmr::string> columns(query.resource());
-    std::pmr::vector<db_expression> values(query.resource());
-    for (const auto& field : selection) {
-        if (field.column_.empty() || std::ranges::find(columns, std::string_view(field.column_)) != columns.end()) {
-            throw std::invalid_argument("projection requires unique nonempty field names");
-        }
-        columns.emplace_back(field.column_);
-        auto expression = field.expression_.empty() ? query.column(field.column_, qualifier) : query.import_expression(field.expression_);
-        values.push_back(query.alias(expression, field.column_));
-    }
-    if (returning) {
-        query.returning(values);
-    } else {
-        query.select(values);
-    }
-    return columns;
-}
+// Selects (or returns) the named fields and yields their owned result names.
+std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<const db_selection> selection,
+    std::string_view qualifier, bool returning = false);
 
 template <typename executor_type>
 using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_handle>, db_handle, executor_type&>;
@@ -558,7 +532,7 @@ public:
         return *this;
     }
     db_write_query_builder& set(const entity_type& changes) {
-        detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if constexpr (c_type::options.generated_type_ == db_generated_type::none) {
                 if (changes.template is_set<c_type::name>()) {
                     query_.set(c_type::name.view(), detail::entity_column_value<entity_type, c_type>(query_, changes));
@@ -625,7 +599,7 @@ public:
     db_write_query_builder& returning(std::span<const db_selection> fields = {}) {
         if (fields.empty()) {
             std::pmr::vector<db_expression> expressions(query_.resource());
-            detail::for_each_entity_column<entity_type>([&]<typename c_type> { expressions.push_back(query_.column(c_type::name.view(), qualifier())); });
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> { expressions.push_back(query_.column(c_type::name.view(), qualifier())); });
             query_.returning(expressions);
             selected_.clear();
         } else {
@@ -773,7 +747,7 @@ public:
     [[nodiscard]] scoped_operation<db_exec_result> remove(const entity_type& entity) const {
         db_query query(executor_.query_resource());
         query.delete_from(entity_type::table_name());
-        detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if constexpr (c_type::options.primary_key_) {
                 if (!entity.template is_set<c_type::name>() || entity.template is_null<c_type::name>()) {
                     throw std::invalid_argument("remove requires all primary key values");
@@ -852,7 +826,7 @@ private:
             throw std::invalid_argument("repository increment/decrement requires a condition");
         }
         bool numeric = false;
-        detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if (c_type::name.view() == property_path && c_type::options.generated_type_ == db_generated_type::none && !detail::is_pmr_vector<typename c_type::value_type>::value) {
                 numeric = c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int || c_type::data_type == db_data_type::numeric || c_type::data_type == db_data_type::real || c_type::data_type == db_data_type::double_value;
             }
@@ -887,7 +861,7 @@ private:
             }(static_cast<typename output_type::columns_type*>(nullptr));
             if constexpr (entity_columns_only) {
                 std::pmr::vector<db_expression> values(query.resource());
-                detail::for_each_entity_column<output_type>([&]<typename c_type> {
+                detail::for_each_descriptor<typename output_type::columns_type>([&]<typename c_type, std::size_t> {
                     values.push_back(query.column(c_type::name.view()));
                 });
                 query.returning(values);
@@ -912,7 +886,7 @@ private:
         db_query query(executor_.query_resource());
         query.update(entity_type::table_name()).where(detail::write_condition(query, predicate));
         bool selected = false;
-        detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if constexpr (c_type::options.generated_type_ == db_generated_type::none) {
                 if (changes.template is_set<c_type::name>()) {
                     query.set(c_type::name.view(), detail::entity_column_value<entity_type, c_type>(query, changes));
@@ -979,7 +953,7 @@ private:
             throw std::invalid_argument("upsert update condition requires an update action");
         }
         if (!options.do_nothing_) {
-            detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 bool selected = false;
                 const auto custom_value = std::ranges::find_if(options.update_expressions_, [](const auto& item) { return item.column_ == c_type::name.view(); });
                 if (custom_value != options.update_expressions_.end()) {
@@ -1023,7 +997,7 @@ private:
         }
         db_query query(executor_.query_resource());
         std::pmr::vector<std::string_view> columns(query.resource());
-        detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if constexpr (c_type::options.generated_type_ == db_generated_type::none) {
                 if (std::ranges::any_of(entities, [](const entity_type& entity) { return entity.template is_set<c_type::name>(); })) {
                     columns.push_back(c_type::name.view());
@@ -1039,7 +1013,7 @@ private:
         }
         for (const auto& entity : entities) {
             std::pmr::vector<db_expression> row(query.resource());
-            detail::for_each_entity_column<entity_type>([&]<typename c_type> {
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 if constexpr (c_type::options.generated_type_ == db_generated_type::none) {
                     if (std::ranges::find(columns, c_type::name.view()) != columns.end()) {
                         row.push_back(detail::entity_column_value<entity_type, c_type>(query, entity));

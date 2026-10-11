@@ -10,11 +10,6 @@ namespace ruvia::detail {
 
 [[nodiscard]] std::pmr::memory_resource* registration_resource() noexcept;
 
-[[nodiscard]] inline std::pmr::memory_resource* registration_resource_or_default(
-    std::pmr::memory_resource* resource) noexcept {
-    return resource == nullptr ? registration_resource() : resource;
-}
-
 [[nodiscard]] inline std::string_view retain_registration_text(std::string_view text) {
     if (text.empty()) {
         return {};

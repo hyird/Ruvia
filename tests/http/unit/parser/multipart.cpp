@@ -16,8 +16,8 @@ RUVIA_TEST(multipart_parser_retries_owned_metadata_without_consuming_limits) {
     const std::string name(160, 'n');
     const std::string filename(160, 'f');
     const std::string content_type_value = "application/" + std::string(160, 't');
-    const std::string headers = "Content-Disposition: form-data; name=\"" + name +
-                                "\"; filename=\"" + filename + "\"\r\nContent-Type: " +
+    const std::string headers = "Content-Disposition: form-data;\r\n name=\"" + name +
+                                "\";\r\n\tfilename=\"" + filename + "\"\r\nContent-Type:\r\n " +
                                 content_type_value + "\r\n\r\n";
     const std::string body = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
 
@@ -119,6 +119,67 @@ RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
             RUVIA_CHECK(result_value.part() != nullptr);
         }
         RUVIA_CHECK(terminal);
+    }
+}
+
+RUVIA_TEST(multipart_parser_feed_preserves_borrowed_body_before_input_compaction) {
+    for (const bool compact_prefix : {false, true}) {
+        for (const int allocation_failure : {-1, 0, 1}) {
+            if (!compact_prefix && allocation_failure == 1) {
+                continue;
+            }
+            failing_memory_resource resource;
+            {
+                ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"), .resource_ = &resource});
+                std::string payload(128 * 1024, 'a');
+                for (std::size_t index = 0; index < payload.size(); ++index) {
+                    payload[index] = static_cast<char>('a' + (index * 29 + index / 17) % 26);
+                }
+                std::string wire = compact_prefix ? std::string(64 * 1024 - 2, 'p') + "\r\n" : std::string{};
+                wire += "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n";
+                wire += payload;
+                parser.feed(wire);
+                const auto first = parser.poll();
+                const auto* part = first.part();
+                RUVIA_CHECK(part != nullptr);
+                if (part == nullptr) {
+                    continue;
+                }
+                RUVIA_CHECK(part->phase() == ruvia::multipart_chunk_phase::first);
+                const std::string copied(part->body());
+                std::string received = copied;
+                if (allocation_failure >= 0) {
+                    resource.fail_after(static_cast<std::size_t>(allocation_failure));
+                    bool failed = false;
+                    try {
+                        parser.feed(part->body());
+                    } catch (const std::bad_alloc&) {
+                        failed = true;
+                    }
+                    RUVIA_CHECK(failed);
+                    resource.allow_allocations();
+                    // The rejected append must leave the original body available
+                    // for this exact retry, before any input storage is compacted.
+                    RUVIA_CHECK(part->body() == copied);
+                }
+                parser.feed(part->body());
+                parser.feed("\r\n--abc--\r\n");
+                parser.finish_input();
+                bool completed = false;
+                for (std::size_t attempt = 0; attempt < 8; ++attempt) {
+                    const auto result = parser.poll();
+                    if (const auto* chunk = result.part()) {
+                        received.append(chunk->body());
+                    } else {
+                        completed = result.done() != nullptr;
+                        break;
+                    }
+                }
+                RUVIA_CHECK(completed);
+                RUVIA_CHECK(received == payload + copied);
+            }
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        }
     }
 }
 
@@ -340,6 +401,8 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=field; x=one; X=two",
              "Content-Disposition: form-data; name=field; broken",
              "Content-Disposition: form-data; name=field\r\n"
+             " filename=shadow.txt",
+             "Content-Disposition: form-data; name=field\r\n"
              "Content-Disposition: form-data; name=shadow"}) {
         std::string body = "--BOUNDARY\r\n";
         body.append(invalid);
@@ -362,8 +425,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
                                            "Content-Disposition: form-data; name=field",
              " Content-Disposition: form-data; name=field",
              "Content-Disposition : form-data; name=field",
-             "Content-Disposition: form-data; name=field\r\n"
-             " filename=shadow.txt",
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Type: text/plain\r\n"
              "Content-Type: application/json"}) {

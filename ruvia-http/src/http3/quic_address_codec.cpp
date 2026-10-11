@@ -108,4 +108,13 @@ void fill_quic_path(ngtcp2_path_storage& path, const quic_address& local,
         &peer_storage.sa, peer_length, nullptr);
 }
 
+ngtcp2_cid encode_quic_connection_id(const quic_connection_id& id) noexcept {
+    ngtcp2_cid result_value{};
+    result_value.datalen = id.size();
+    if (id.size() != 0) {
+        std::memcpy(result_value.data, id.view().data(), id.size());
+    }
+    return result_value;
+}
+
 }  // namespace ruvia::detail

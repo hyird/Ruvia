@@ -1,5 +1,8 @@
+#include <optional>
+#include <string>
 #include <variant>
 
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
@@ -8,6 +11,7 @@
 #include "client/http_client_response_head.h"
 #include "client/http_client_response_limits.h"
 #include "http_header_access.h"
+#include "parser/field_line_folding.h"
 #include "parser/http_header_block_parser.h"
 
 namespace ruvia::detail {
@@ -125,7 +129,20 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
 
     // Remove the terminal CRLF CRLF. The last field line then has the same
     // shape as every preceding line except that it has no trailing delimiter.
-    const auto head_section = buffer.substr(0, header_bytes - 4);
+    auto head_section = buffer.substr(0, header_bytes - 4);
+    std::optional<std::pmr::string> unfolded_head;
+    const auto status_line_end = head_section.find("\r\n");
+    if (status_line_end != std::string_view::npos) {
+        // The status line is not a field: its following whitespace cannot be
+        // folded into the reason phrase. Only normalize within the field block.
+        const auto first_fold = detail::find_field_line_fold(head_section, status_line_end + 2);
+        if (first_fold != std::string_view::npos) {
+            unfolded_head.emplace(detail::http_pmr_resource_or_default(resource_));
+            detail::copy_unfolded_field_lines(
+                head_section, first_fold, detail::field_line_folding_policy::http, *unfolded_head);
+            head_section = *unfolded_head;
+        }
+    }
     auto parsed_head =
         detail::parse_http1_client_response_head_fields(head_section, exchange_state_, resource_);
     if ((parsed_head.index() != 0)) {
@@ -147,8 +164,8 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     }
 
     // No owning response head is observable until the entire head and framing
-    // plan have validated. Protocol failure therefore has no partially mutated
-    // out-parameter and performs no PMR allocation.
+    // plan have validated. Field views borrow the input or unfolded_head until
+    // they are copied below; neither failure nor allocation commits the exchange.
     auto head = detail::http_client_response_head_access::make(
         parsed_value.status_code_, parsed_value.protocol_version_, resource_);
     auto& headers = detail::http_client_response_head_access::headers(head);

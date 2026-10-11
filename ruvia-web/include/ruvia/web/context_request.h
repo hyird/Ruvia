@@ -12,25 +12,25 @@
 
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/web/attributes.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/model_types.h"
-#include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/request_fields.h"
-#include "ruvia/web/streaming.h"
 
 namespace ruvia {
 
 class context;
 class context_request;
+class body_reader;
+class multipart_reader;
+class multipart_part;
 template <typename t_type>
 class validated_json;
-
 namespace detail {
 template <typename t_type>
 [[nodiscard]] request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
@@ -163,8 +163,6 @@ private:
     explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept
         : context_(&context_value) {}
 
-    [[nodiscard]] bool content_type_matches(std::string_view expected) const noexcept;
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] const detail::request_bindings& request_bindings() const noexcept;
     [[nodiscard]] static task<std::span<const std::byte>> bytes_task(const context* context);
     [[nodiscard]] static task<request_blob_type> blob_task(const context* context);

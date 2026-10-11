@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -8,100 +7,9 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/pool_lease_scheduler.h"
+
 namespace ruvia::detail {
-
-class pool_lease_scheduler;
-class pool_waiter_result;
-
-class pool_waiter_acquired final {
-public:
-    [[nodiscard]] constexpr std::size_t index() const noexcept {
-        return index_;
-    }
-
-private:
-    friend class pool_waiter_result;
-
-    explicit constexpr pool_waiter_acquired(std::size_t index) noexcept
-        : index_(index) {}
-
-    std::size_t index_;
-};
-
-class pool_waiter_timed_out final {
-private:
-    friend class pool_waiter_result;
-
-    constexpr pool_waiter_timed_out() noexcept = default;
-};
-
-class pool_waiter_closed final {
-private:
-    friend class pool_waiter_result;
-
-    constexpr pool_waiter_closed() noexcept = default;
-};
-
-class pool_waiter_cancelled final {
-private:
-    friend class pool_waiter_result;
-
-    constexpr pool_waiter_cancelled() noexcept = default;
-};
-
-// A completed pool wait owns exactly one outcome. Only acquisition carries a
-// slot index; timeout and pool closure can never expose a plausible sentinel.
-class pool_waiter_result final {
-public:
-    [[nodiscard]] constexpr const pool_waiter_acquired* acquired() const& noexcept {
-        return std::get_if<pool_waiter_acquired>(&value_);
-    }
-    [[nodiscard]] constexpr const pool_waiter_acquired* acquired() const&& = delete;
-
-    [[nodiscard]] constexpr const pool_waiter_timed_out* timed_out() const& noexcept {
-        return std::get_if<pool_waiter_timed_out>(&value_);
-    }
-    [[nodiscard]] constexpr const pool_waiter_timed_out* timed_out() const&& = delete;
-
-    [[nodiscard]] constexpr const pool_waiter_closed* closed() const& noexcept {
-        return std::get_if<pool_waiter_closed>(&value_);
-    }
-    [[nodiscard]] constexpr const pool_waiter_closed* closed() const&& = delete;
-
-    [[nodiscard]] constexpr const pool_waiter_cancelled* cancelled() const& noexcept {
-        return std::get_if<pool_waiter_cancelled>(&value_);
-    }
-    [[nodiscard]] constexpr const pool_waiter_cancelled* cancelled() const&& = delete;
-
-private:
-    friend class pool_waiter;
-    friend class pool_lease_scheduler;
-
-    using value_type =
-        std::variant<pool_waiter_acquired, pool_waiter_timed_out, pool_waiter_closed, pool_waiter_cancelled>;
-
-    template <typename alternative_type>
-    explicit constexpr pool_waiter_result(alternative_type alternative) noexcept
-        : value_(std::move(alternative)) {}
-
-    [[nodiscard]] static constexpr pool_waiter_result make_acquired(std::size_t index) noexcept {
-        return pool_waiter_result(pool_waiter_acquired(index));
-    }
-
-    [[nodiscard]] static constexpr pool_waiter_result make_timed_out() noexcept {
-        return pool_waiter_result(pool_waiter_timed_out());
-    }
-
-    [[nodiscard]] static constexpr pool_waiter_result make_closed() noexcept {
-        return pool_waiter_result(pool_waiter_closed());
-    }
-
-    [[nodiscard]] static constexpr pool_waiter_result make_cancelled() noexcept {
-        return pool_waiter_result(pool_waiter_cancelled());
-    }
-
-    value_type value_;
-};
 
 struct pool_waiter_idle final {};
 struct pool_waiter_queued final {};
@@ -113,10 +21,8 @@ struct pool_waiter_queued final {};
 // resumes the coroutine, so callers never coordinate external readiness flags.
 class pool_waiter final {
 public:
-    explicit pool_waiter(
-        std::chrono::steady_clock::time_point deadline_value, std::uint64_t id = 0) noexcept
-        : deadline_(deadline_value),
-          id_(id) {}
+    explicit pool_waiter(std::uint64_t id) noexcept
+        : id_(id) {}
 
     pool_waiter(const pool_waiter&) = delete;
     pool_waiter& operator=(const pool_waiter&) = delete;
@@ -177,7 +83,6 @@ private:
     using state_type = std::variant<pool_waiter_idle, pool_waiter_queued, pool_waiter_result>;
 
     state_type state_;
-    std::chrono::steady_clock::time_point deadline_{};
     std::uint64_t id_{0};
     std::coroutine_handle<> handle_{};
     pool_waiter* previous_{nullptr};
@@ -298,43 +203,6 @@ public:
             auto* resume_waiter = closed_head;
             closed_head = closed_head->next_;
             resume_waiter->next_ = nullptr;
-            resume_waiter->resume();
-        }
-    }
-
-    // Fail every waiter whose acquire deadline has passed. Callers must only
-    // invoke this when an acquire timeout is configured; otherwise the deadlines
-    // are not meaningful.
-    void expire_deadlines(std::chrono::steady_clock::time_point now) noexcept {
-        // Two-phase to stay safe against re-entrancy: resuming a timed-out waiter
-        // can run application continuations that re-enter the pool (e.g. an outer
-        // connection lease releasing during unwind, which resumes another
-        // queued waiter). So first detach every expired waiter into a private
-        // list, then resume them once the traversal is complete — a resumed
-        // coroutine can no longer touch a node that is already off the queue, so
-        // no waiter is ever resumed twice. close_all() applies the same
-        // commit-before-resume rule to the entire queue.
-        pool_waiter* expired_head = nullptr;
-        pool_waiter* expired_tail = nullptr;
-        auto* waiter = head_;
-        while (waiter != nullptr) {
-            auto* next_value = waiter->next_;
-            if (waiter->deadline_ <= now) {
-                remove(*waiter);
-                waiter->complete_timed_out();
-                waiter->next_ = nullptr;
-                if (expired_tail != nullptr) {
-                    expired_tail->next_ = waiter;
-                } else {
-                    expired_head = waiter;
-                }
-                expired_tail = waiter;
-            }
-            waiter = next_value;
-        }
-        while (expired_head != nullptr) {
-            auto* resume_waiter = expired_head;
-            expired_head = expired_head->next_;
             resume_waiter->resume();
         }
     }

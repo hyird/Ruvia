@@ -40,14 +40,6 @@ void pmr_codec_allocation_context::rethrow_allocation_failure() const {
 }
 
 void* pmr_codec_allocate(void* opaque, std::size_t bytes_value) noexcept {
-    try {
-        return allocate_codec_block(static_cast<std::pmr::memory_resource*>(opaque), bytes_value);
-    } catch (...) {
-        return nullptr;
-    }
-}
-
-void* pmr_codec_allocate_with_exception(void* opaque, std::size_t bytes_value) noexcept {
     auto* context_value = static_cast<pmr_codec_allocation_context*>(opaque);
     if (context_value == nullptr) {
         return nullptr;

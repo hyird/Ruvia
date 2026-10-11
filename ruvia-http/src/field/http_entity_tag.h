@@ -86,10 +86,4 @@ struct http_etag_list_match_result final {
     return {true, matched};
 }
 
-[[nodiscard]] inline bool http_etag_list_matches(
-    std::string_view values, std::string_view expected, bool strong) noexcept {
-    const auto result_value = http_parse_etag_list_matches(values, expected, strong);
-    return result_value.valid_ && result_value.matched_;
-}
-
 }  // namespace ruvia::detail

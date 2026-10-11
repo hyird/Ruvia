@@ -10,7 +10,7 @@
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_response_state.h"
-#include "http3/http3_client_body_budget.h"
+#include "http3/http3_body_budget.h"
 #include "http3/http3_client_receive_driver.h"
 
 namespace ruvia::detail {
@@ -62,7 +62,7 @@ public:
     };
 
     explicit http3_client_response_delivery(http_client_response_state& state_value,
-        http3_client_body_budget* body_budget = nullptr)
+        http3_body_budget* body_budget = nullptr)
         : state_(state_value) {
         if (body_budget != nullptr && !state_.bind_http3_body_budget(*body_budget)) {
             throw std::length_error("HTTP/3 response body budget is exhausted");
@@ -84,7 +84,6 @@ public:
     [[nodiscard]] std::size_t retained_body_bytes() const noexcept {
         return state_.producer_body_bytes();
     }
-    void reconcile_body_bytes() noexcept;
     // Owns the protocol-computed final-head classification by value, so it
     // remains usable after the parser has been retired.
     [[nodiscard]] std::optional<http_response_body_plan> response_body_plan() const noexcept {

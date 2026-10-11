@@ -39,7 +39,8 @@ std::filesystem::path path_or_empty(std::optional<std::string_view> value) {
 
 // Registered app-wide below (application::use): one instance per worker runs before the
 // controller and route middlewares of EVERY matched route, in use() order.
-// Requests that match no route (404/405) never enter a middleware chain.
+// Requests that match no route (404/405) skip it: only a middleware declaring
+// `static constexpr bool ruvia_runs_on_unmatched_requests = true;` wraps those.
 class global_header_middleware final : public ruvia::middleware {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {

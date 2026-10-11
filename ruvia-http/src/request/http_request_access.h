@@ -46,10 +46,6 @@ struct http_request_access final {
                request.cached_headers_[slot] <= request.headers_.size();
     }
 
-    [[nodiscard]] static std::span<const std::byte> body_bytes(const http_request& request) noexcept {
-        return request.body_;
-    }
-
     static void reset(http_request& request) noexcept {
         request = make();
     }
@@ -143,10 +139,6 @@ struct http_request_access final {
 [[nodiscard]] inline bool request_has_known_header(
     const http_request& request, request_header_kind name) noexcept {
     return http_request_access::has_known_header(request, name);
-}
-
-[[nodiscard]] inline std::span<const std::byte> request_body_bytes(const http_request& request) noexcept {
-    return http_request_access::body_bytes(request);
 }
 
 }  // namespace ruvia::detail

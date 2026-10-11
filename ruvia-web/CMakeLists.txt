@@ -6,15 +6,17 @@ if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
 else()
     if(NOT RUVIA_ENABLE_MARIADB)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/(db|db_mysql_runtime|db_pool_io|db_pool_lifecycle|db_sql)\\.cpp$")
+            REGEX "/src/db/(mariadb_driver|db_mysql_runtime|db_sql)\\.cpp$")
     endif()
     if(NOT RUVIA_ENABLE_POSTGRESQL)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/(db_postgresql|pg_[^/]*)\\.cpp$")
+            REGEX "/src/db/(db_postgresql|postgresql_driver)\\.cpp$")
     endif()
 endif()
+# The database query-result cache stores rows in Redis.
 if(NOT RUVIA_ENABLE_REDIS)
     list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis/")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db/db_query(_result)?_cache\\.cpp$")
 endif()
 if(NOT RUVIA_ENABLE_JWT)
     list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/auth/jwt[^/]*\\.cpp$")
@@ -23,9 +25,6 @@ endif()
 add_library(ruvia-web STATIC ${ruvia_web_sources})
 
 ruvia_configure_library(ruvia-web web)
-ruvia_configure_runtime_library(ruvia-web)
-
-target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_WEB)
 
 target_link_libraries(ruvia-web
     PUBLIC
@@ -38,10 +37,6 @@ target_link_libraries(ruvia-web
         ${RUVIA_WEB_DEPENDENCIES}
 )
 target_compile_definitions(ruvia-web PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-
-if(WIN32)
-    target_link_libraries(ruvia-web PRIVATE Ws2_32)
-endif()
 
 foreach(_ruvia_feature IN ITEMS MARIADB POSTGRESQL REDIS JWT)
     if(RUVIA_ENABLE_${_ruvia_feature})
@@ -56,27 +51,17 @@ endif()
 ruvia_install_target(ruvia-web web)
 
 set(_ruvia_web_excluded_header_directories)
-set(_ruvia_web_excluded_headers)
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
     list(APPEND _ruvia_web_excluded_header_directories db)
 endif()
 if(NOT RUVIA_ENABLE_REDIS)
-    if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-        file(GLOB _ruvia_redis_runtime_headers CONFIGURE_DEPENDS
-            RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/web/redis/*.h")
-        list(REMOVE_ITEM _ruvia_redis_runtime_headers "include/ruvia/web/redis/redis_types.h")
-        list(APPEND _ruvia_web_excluded_headers ${_ruvia_redis_runtime_headers})
-    else()
-        list(APPEND _ruvia_web_excluded_header_directories redis)
-    endif()
+    list(APPEND _ruvia_web_excluded_header_directories redis)
 endif()
 if(NOT RUVIA_ENABLE_JWT)
     list(APPEND _ruvia_web_excluded_header_directories auth)
 endif()
 
 ruvia_install_public_header_closure(web include/ruvia/web
-    EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories}
-    EXCLUDE_HEADERS ${_ruvia_web_excluded_headers})
+    EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories})
 
 ruvia_install_export(web)

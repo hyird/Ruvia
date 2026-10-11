@@ -20,15 +20,15 @@ client_quic_connections::client_quic_connections(asio::io_context& io, const wor
       push_(push),
       resource_(resource),
       tls_(nullptr, pmr_object_deleter<http3_quic_client_tls_context>{resource}),
-      body_budget_(nullptr, pmr_object_deleter<http3_client_body_budget>{resource}),
+      body_budget_(nullptr, pmr_object_deleter<http3_body_budget>{resource}),
       connections_(resource),
       generation_signal_(worker_value),
       cancellations_(resource) {
     if (config.protocol_ != http_client_protocol::http3_only) {
         return;
     }
-    tls_ = make_pmr_object<http3_quic_client_tls_context>(resource, config.transport_.view(), resource);
-    body_budget_ = make_pmr_object<http3_client_body_budget>(resource, std::size_t{64} * 1024 * 1024);
+    tls_ = make_pmr_object<http3_quic_client_tls_context>(resource, config.tls_, resource);
+    body_budget_ = make_pmr_object<http3_body_budget>(resource, std::size_t{64} * 1024 * 1024);
     connections_.reserve(config.connection_count_);
     for (std::size_t i = 0; i < config.connection_count_; ++i) {
         connections_.emplace_back(nullptr, pmr_object_deleter<http3_client_connection>{resource});
@@ -60,8 +60,7 @@ bool client_quic_connections::cancel(std::uint64_t id) noexcept {
     }
     return true;
 }
-ruvia::quic_path_migration client_quic_connections::start_path_migration(
-    const asio::ip::udp::endpoint& local_endpoint) {
+ruvia::quic_path_migration client_quic_connections::start_path_migration(const ruvia::quic_address& local_address) {
     if (!worker_.is_current() || retired_) {
         return {.status_ = ruvia::quic_migration_status::rejected};
     }
@@ -89,7 +88,7 @@ ruvia::quic_path_migration client_quic_connections::start_path_migration(
         if (!connection || !connection->running()) {
             continue;
         }
-        const auto result_value = connection->start_path_migration(local_endpoint);
+        const auto result_value = connection->start_path_migration(local_address);
         if (result_value.status_ == ruvia::quic_migration_status::started ||
             result_value.status_ == ruvia::quic_migration_status::validated) {
             auto id = next_migration_id_++;
@@ -158,12 +157,11 @@ http3_client_connection& client_quic_connections::acquire(std::size_t connection
     }
     auto& owner_value = connections_.at(connection_index % connections_.size());
     if (!owner_value || (owner_value->terminal() && !owner_value->running() && owner_value->retained_requests() == 0)) {
-        const auto origin = http_origin_view::https(
-            {.host_ = config_.host_, .port_ = config_.port_});
         auto push = push_;
         push.connection_slot_ = connection_index % connections_.size();
         owner_value = make_pmr_object<http3_client_connection>(resource_, io_, worker_,
-            tasks_, *tls_, origin, config_.connect_timeout_, resource_,
+            tasks_, *tls_, config_.host_, config_.tls_.tls_host(config_.host_), config_.origin(),
+            config_.authority_, config_.connect_timeout_, resource_,
             requests_per_connection, config_.max_response_bytes_,
             std::chrono::seconds(30), body_budget_.get(), config_.write_timeout_,
             http3_client_connection::lifecycle_notification_type{

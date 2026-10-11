@@ -10,7 +10,7 @@
 #include "ruvia/http/http_response.h"
 
 #include "response/http_response_header_access.h"
-#include "util/http_number_format.h"
+#include "ruvia/http/http_number_format.h"
 // The two response fields Ruvia formats itself rather than taking as a value:
 // Allow, built from the method mask a route matched, and Content-Range in both
 // its satisfied and unsatisfied forms. Each writes straight into the response's
@@ -172,8 +172,8 @@ void http_response::set_content_range(std::uint64_t offset, std::uint64_t length
     }
     const auto end_offset = offset + length - 1;
     const auto value_size =
-        std::string_view("bytes ").size() + detail::http_unsigned_decimal_size(offset) + 1 +
-        detail::http_unsigned_decimal_size(end_offset) + 1 + detail::http_unsigned_decimal_size(size);
+        std::string_view("bytes ").size() + http_unsigned_decimal_size(offset) + 1 +
+        http_unsigned_decimal_size(end_offset) + 1 + http_unsigned_decimal_size(size);
     auto& header_value =
         prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_header_value(header_value, offset, length, size);
@@ -181,7 +181,7 @@ void http_response::set_content_range(std::uint64_t offset, std::uint64_t length
 
 void http_response::set_content_range_unsatisfied(std::uint64_t size) {
     const auto value_size =
-        std::string_view("bytes */").size() + detail::http_unsigned_decimal_size(size);
+        std::string_view("bytes */").size() + http_unsigned_decimal_size(size);
     auto& header_value =
         prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_unsatisfied_header_value(header_value, size);

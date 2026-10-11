@@ -8,7 +8,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -17,6 +16,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -28,7 +28,7 @@
 
 #include "client/http_client_tunnel_state.h"
 #include "client/http_client_upload_state.h"
-#include "http3/http3_client_body_budget.h"
+#include "http3/http3_body_budget.h"
 
 namespace ruvia {
 class response_stream_writer;
@@ -37,6 +37,7 @@ class response_stream_writer;
 namespace ruvia::detail {
 
 class http_client_pool;
+class http_client_request_storage;
 class http_client_response_memory_domain;
 class http_client_result_budget_domain;
 class http3_client_connection;
@@ -76,7 +77,7 @@ public:
         return memory_domain_;
     }
     void notify_producer_space() noexcept;
-    [[nodiscard]] bool bind_http3_body_budget(http3_client_body_budget& budget) noexcept;
+    [[nodiscard]] bool bind_http3_body_budget(http3_body_budget& budget) noexcept;
     void release_http3_body_budget() noexcept;
     [[nodiscard]] bool has_http3_body_budget() const noexcept;
     [[nodiscard]] std::size_t producer_body_bytes() const noexcept;
@@ -89,7 +90,8 @@ public:
     void discard_response_body() noexcept;
     void release_consumed_body_prefix();
 
-    void retain_informational(http_status_code status, std::span<const http_header_view> fields);
+    // The one interim-head retention path; every protocol passes its parsed fields.
+    void retain_informational(http_status_code status, std::span<const http_header> fields);
 
     [[nodiscard]] http_client_output_queue* output() noexcept {
         return tunnel_ ? &tunnel_->output_ : upload_ ? &upload_->output_
@@ -104,6 +106,9 @@ public:
     worker_signal data_signal_;
     worker_signal space_signal_;
     http_client_pool* pool_{nullptr};
+    // The pool request driving this HTTP/3 response until its result is
+    // recorded; borrowed from that driver's frame.
+    const http_client_request_storage* pool_request_{nullptr};
     // Borrows the stable shared_ptr member owned by the response memory domain.
     // Only read_all() copies it after its single-result byte limit has passed.
     const std::shared_ptr<http_client_result_budget_domain>* result_budget_domain_{nullptr};
@@ -118,7 +123,7 @@ public:
     std::pmr::vector<http_header> trailers_;
     // Declared before body strings so their storage is destroyed before the
     // receive reservation is returned to its worker-stable owner.
-    http3_client_body_budget::lease_type http3_body_budget_;
+    http3_body_budget::lease_type http3_body_budget_;
     std::pmr::string buffered_;
     // Producers only append here. The consumer swaps it with `buffered` before
     // returning a view, so later network progress cannot invalidate that view.
@@ -134,6 +139,8 @@ public:
     bool incremental_read_{false};
     bool collect_all_{false};
     bool body_decode_required_{false};
+    // Content-Encoding parsed with the final head while decoding is pending.
+    std::optional<http_content_coding_field_result> content_coding_{};
     // Any informational/final response event proves the peer processed some
     // part of the request; GOAWAY/REQUEST_REJECTED must not replay it.
     bool http3_response_started_{false};

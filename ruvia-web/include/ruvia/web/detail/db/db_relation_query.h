@@ -56,16 +56,7 @@ public:
     db_relation_plan(db_relation_plan&&) noexcept = default;
     db_relation_plan& operator=(db_relation_plan&&) = delete;
 
-    [[nodiscard]] db_relation_plan clone() const {
-        db_relation_plan result(resource_);
-        result.column_count_ = column_count_;
-        result.next_alias_ = next_alias_;
-        result.next_projection_ = next_projection_;
-        for (const auto& node : nodes_) {
-            result.nodes_.emplace_back(node, resource_);
-        }
-        return result;
-    }
+    [[nodiscard]] db_relation_plan clone() const;
     [[nodiscard]] bool empty() const noexcept {
         return nodes_.empty();
     }
@@ -75,14 +66,7 @@ public:
     [[nodiscard]] std::span<const node_type> nodes() const noexcept {
         return nodes_;
     }
-    [[nodiscard]] std::size_t find(std::size_t parent_value, std::size_t relation) const noexcept {
-        for (std::size_t i = 0; i < nodes_.size(); ++i) {
-            if (nodes_[i].parent_ == parent_value && nodes_[i].relation_ == relation) {
-                return i;
-            }
-        }
-        return root;
-    }
+    [[nodiscard]] std::size_t find(std::size_t parent_value, std::size_t relation) const noexcept;
 
     template <typename entity_type>
     void add(db_query& query, std::string_view root_alias, std::string_view path,
@@ -119,20 +103,7 @@ public:
     }
 
 private:
-    std::pmr::string normalize(std::string_view root_alias, std::string_view path) const {
-        if (path.size() > root_alias.size() && path.starts_with(root_alias) && path[root_alias.size()] == '.') {
-            path.remove_prefix(root_alias.size() + 1);
-        } else if (const auto dot = path.find('.'); dot != std::string_view::npos) {
-            for (const auto& node : nodes_) {
-                if (path.substr(0, dot) == node.alias_) {
-                    std::pmr::string result_value(node.path_, resource_);
-                    result_value.append(path.substr(dot));
-                    return result_value;
-                }
-            }
-        }
-        return std::pmr::string(path, resource_);
-    }
+    [[nodiscard]] std::pmr::string normalize(std::string_view root_alias, std::string_view path) const;
 
     template <typename entity_type>
     static void validate_path(std::string_view path, std::size_t depth) {
@@ -146,7 +117,7 @@ private:
             throw std::invalid_argument("relation path contains an empty component");
         }
         bool found = false;
-        for_each_db_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
+        for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
             if (name != relation_type::name.view()) {
                 return;
             }
@@ -164,27 +135,9 @@ private:
         }
     }
 
-    std::pmr::string unique_alias(const db_query& query, std::string_view reserved) {
-        for (;;) {
-            std::pmr::string alias("__ruvia_relation_", resource_);
-            append_db_number(alias, static_cast<std::uint64_t>(next_alias_++));
-            if (alias != reserved && !query.uses_source_name(alias)) {
-                return alias;
-            }
-        }
-    }
-    std::pmr::string unique_projection(const db_query& query) {
-        for (;;) {
-            std::pmr::string name("__ruvia_column_", resource_);
-            append_db_number(name, static_cast<std::uint64_t>(next_projection_++));
-            if (!query.uses_projection_name(name)) {
-                return name;
-            }
-        }
-    }
-    static void conjunction(db_query& query, db_expression& predicate, db_expression term) {
-        predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_value, term);
-    }
+    [[nodiscard]] std::pmr::string unique_alias(const db_query& query, std::string_view reserved);
+    [[nodiscard]] std::pmr::string unique_projection(const db_query& query);
+    static void conjunction(db_query& query, db_expression& predicate, db_expression term);
 
     template <typename entity_type, typename relation_type>
     void append_join(db_query& query, std::string_view source_alias, node_type& node_value,
@@ -199,21 +152,21 @@ private:
             if (junction == reserved_alias) {
                 junction = unique_alias(query, reserved_alias);
             }
-            for_each_db_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
+            for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
                 conjunction(query, predicate, query.binary(query.column(column_type::referenced.view(), source_alias), db_binary_operator::equal, query.column(column_type::local.view(), junction)));
             });
             query.join(node_value.join_, mapping_type::table_name(), predicate, junction);
             predicate = {};
-            for_each_db_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
+            for_each_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
                 conjunction(query, predicate, query.binary(query.column(column_type::local.view(), junction), db_binary_operator::equal, query.column(column_type::referenced.view(), node_value.alias_)));
             });
         } else {
-            for_each_db_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
+            for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
                 conjunction(query, predicate, query.binary(query.column(column_type::local.view(), source_alias), db_binary_operator::equal, query.column(column_type::referenced.view(), node_value.alias_)));
             });
         }
         query.join(node_value.join_, target_type::table_name(), predicate, node_value.alias_);
-        for_each_db_descriptor<typename target_type::columns_type>([&]<typename column_type, std::size_t> {
+        for_each_descriptor<typename target_type::columns_type>([&]<typename column_type, std::size_t> {
             auto name = unique_projection(query);
             query.add_select(query.alias(query.column(column_type::name.view(), node_value.alias_), name));
             node_value.columns_.push_back(std::move(name));
@@ -226,7 +179,7 @@ private:
         const auto dot = path.find('.');
         const auto name = path.substr(0, dot);
         const auto rest = dot == std::string_view::npos ? std::string_view{} : path.substr(dot + 1);
-        for_each_db_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
+        for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
             if (name != relation_type::name.view()) {
                 return;
             }
@@ -330,7 +283,7 @@ private:
             }
             return found;
         };
-        for_each_db_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
+        for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             columns_[i] = resolve(column_type::name.view());
         });
         for (const auto& node : plan_.nodes()) {
@@ -342,7 +295,7 @@ private:
 
     template <typename entity_type>
     void decode_columns(entity_type& entity, const db_row& row, std::size_t offset) const {
-        for_each_db_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
+        for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             decode_entity_field<entity_type, column_type>(entity, row[columns_[offset + i]], resource_);
         });
     }
@@ -355,7 +308,7 @@ private:
         append_db_number(key_, static_cast<std::uint64_t>(relation));
         key_.push_back('/');
         std::size_t nulls = 0;
-        for_each_db_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
+        for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             if constexpr (column_type::options.primary_key_) {
                 const auto value = row[columns_[offset + i]].value();
                 if (!value) {
@@ -375,7 +328,7 @@ private:
 
     template <typename entity_type>
     void decode_relations(entity_type& entity, const db_row& row, std::size_t parent_value, std::size_t scope) {
-        for_each_db_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
+        for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
             const auto node_index = plan_.find(parent_value, i);
             if (node_index == db_relation_plan::root) {
                 return;

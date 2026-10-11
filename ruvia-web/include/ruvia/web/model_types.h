@@ -19,7 +19,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/attributes.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/fixed_string.h"
 
@@ -30,10 +30,18 @@ class request_name_value_list;
 namespace detail {
 
 template <typename t_type>
-inline constexpr bool is_model_narrow_integer =
+inline constexpr bool is_model_integer =
     std::is_integral_v<t_type> && !std::is_same_v<t_type, bool> && !std::is_same_v<t_type, char> &&
     !std::is_same_v<t_type, wchar_t> && !std::is_same_v<t_type, char8_t> &&
     !std::is_same_v<t_type, char16_t> && !std::is_same_v<t_type, char32_t>;
+
+template <typename target_type, typename input_type>
+[[nodiscard]] constexpr target_type checked_model_integer(input_type input) {
+    if (!std::in_range<target_type>(input)) {
+        throw std::out_of_range("model integer value is out of range");
+    }
+    return static_cast<target_type>(input);
+}
 
 class model_input;
 struct model_value_factory;
@@ -136,11 +144,11 @@ struct model_serialize_options final {
 class string final {
 public:
     explicit string(model_options options = {})
-        : string(detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(options.resource_)) {
+        : string(resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {
     }
 
     string(std::string_view value, model_options options = {})
-        : resource_(detail::pmr_resource_or_default(options.resource_)) {
+        : resource_(pmr_resource_or_default(options.resource_)) {
         storage_.assign_owned(value, resource_);
     }
 
@@ -199,24 +207,24 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    string(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+    string(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
         : resource_(resource) {}
 
-    string(detail::resolved_pmr_resource_tag, std::string_view value, std::pmr::memory_resource* resource)
+    string(resolved_pmr_resource_tag, std::string_view value, std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(value) {}
 
-    string(detail::resolved_pmr_resource_tag, detail::model_text_storage&& storage,
+    string(resolved_pmr_resource_tag, detail::model_text_storage&& storage,
         std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(std::move(storage)) {}
 
     [[nodiscard]] string rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return string(detail::resolved_pmr_resource_tag{}, storage_.rebind(resource), resource);
+        return string(resolved_pmr_resource_tag{}, storage_.rebind(resource), resource);
     }
 
     [[nodiscard]] string rebind_for_model(std::pmr::memory_resource* resource) && {
-        return string(detail::resolved_pmr_resource_tag{}, std::move(storage_).rebind(resource), resource);
+        return string(resolved_pmr_resource_tag{}, std::move(storage_).rebind(resource), resource);
     }
 
     std::pmr::memory_resource* resource_;
@@ -259,24 +267,15 @@ struct int8 final {
     constexpr int8(std::int8_t input) noexcept
         : value_(input) {}
     template <typename t_type>
-        requires(detail::is_model_narrow_integer<t_type> &&
+        requires(detail::is_model_integer<t_type> &&
                  !std::is_same_v<std::remove_cv_t<t_type>, std::int8_t>)
     constexpr int8(t_type input)
-        : value_(checked(input)) {}
+        : value_(detail::checked_model_integer<std::int8_t>(input)) {}
     template <typename t_type>
-        requires(!detail::is_model_narrow_integer<t_type>)
+        requires(!detail::is_model_integer<t_type>)
     int8(t_type) = delete;
     [[nodiscard]] constexpr operator std::int8_t() const noexcept {
         return value_;
-    }
-
-private:
-    template <typename t_type>
-    static constexpr std::int8_t checked(t_type input) {
-        if (!std::in_range<std::int8_t>(input)) {
-            throw std::out_of_range("Int8 value is out of range");
-        }
-        return static_cast<std::int8_t>(input);
     }
 };
 
@@ -286,24 +285,15 @@ struct uint8 final {
     constexpr uint8(std::uint8_t input) noexcept
         : value_(input) {}
     template <typename t_type>
-        requires(detail::is_model_narrow_integer<t_type> &&
+        requires(detail::is_model_integer<t_type> &&
                  !std::is_same_v<std::remove_cv_t<t_type>, std::uint8_t>)
     constexpr uint8(t_type input)
-        : value_(checked(input)) {}
+        : value_(detail::checked_model_integer<std::uint8_t>(input)) {}
     template <typename t_type>
-        requires(!detail::is_model_narrow_integer<t_type>)
+        requires(!detail::is_model_integer<t_type>)
     uint8(t_type) = delete;
     [[nodiscard]] constexpr operator std::uint8_t() const noexcept {
         return value_;
-    }
-
-private:
-    template <typename t_type>
-    static constexpr std::uint8_t checked(t_type input) {
-        if (!std::in_range<std::uint8_t>(input)) {
-            throw std::out_of_range("UInt8 value is out of range");
-        }
-        return static_cast<std::uint8_t>(input);
     }
 };
 
@@ -313,24 +303,15 @@ struct int16 final {
     constexpr int16(std::int16_t input) noexcept
         : value_(input) {}
     template <typename t_type>
-        requires(detail::is_model_narrow_integer<t_type> &&
+        requires(detail::is_model_integer<t_type> &&
                  !std::is_same_v<std::remove_cv_t<t_type>, std::int16_t>)
     constexpr int16(t_type input)
-        : value_(checked(input)) {}
+        : value_(detail::checked_model_integer<std::int16_t>(input)) {}
     template <typename t_type>
-        requires(!detail::is_model_narrow_integer<t_type>)
+        requires(!detail::is_model_integer<t_type>)
     int16(t_type) = delete;
     [[nodiscard]] constexpr operator std::int16_t() const noexcept {
         return value_;
-    }
-
-private:
-    template <typename t_type>
-    static constexpr std::int16_t checked(t_type input) {
-        if (!std::in_range<std::int16_t>(input)) {
-            throw std::out_of_range("Int16 value is out of range");
-        }
-        return static_cast<std::int16_t>(input);
     }
 };
 
@@ -340,24 +321,15 @@ struct uint16 final {
     constexpr uint16(std::uint16_t input) noexcept
         : value_(input) {}
     template <typename t_type>
-        requires(detail::is_model_narrow_integer<t_type> &&
+        requires(detail::is_model_integer<t_type> &&
                  !std::is_same_v<std::remove_cv_t<t_type>, std::uint16_t>)
     constexpr uint16(t_type input)
-        : value_(checked(input)) {}
+        : value_(detail::checked_model_integer<std::uint16_t>(input)) {}
     template <typename t_type>
-        requires(!detail::is_model_narrow_integer<t_type>)
+        requires(!detail::is_model_integer<t_type>)
     uint16(t_type) = delete;
     [[nodiscard]] constexpr operator std::uint16_t() const noexcept {
         return value_;
-    }
-
-private:
-    template <typename t_type>
-    static constexpr std::uint16_t checked(t_type input) {
-        if (!std::in_range<std::uint16_t>(input)) {
-            throw std::out_of_range("UInt16 value is out of range");
-        }
-        return static_cast<std::uint16_t>(input);
     }
 };
 
@@ -366,6 +338,14 @@ struct int32 final {
     constexpr int32() noexcept = default;
     constexpr int32(std::int32_t input) noexcept
         : value_(input) {}
+    template <typename t_type>
+        requires(detail::is_model_integer<t_type> &&
+                 !std::is_same_v<std::remove_cv_t<t_type>, std::int32_t>)
+    constexpr int32(t_type input)
+        : value_(detail::checked_model_integer<std::int32_t>(input)) {}
+    template <typename t_type>
+        requires(!detail::is_model_integer<t_type>)
+    int32(t_type) = delete;
     [[nodiscard]] constexpr operator std::int32_t() const noexcept {
         return value_;
     }
@@ -376,6 +356,14 @@ struct uint32 final {
     constexpr uint32() noexcept = default;
     constexpr uint32(std::uint32_t input) noexcept
         : value_(input) {}
+    template <typename t_type>
+        requires(detail::is_model_integer<t_type> &&
+                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint32_t>)
+    constexpr uint32(t_type input)
+        : value_(detail::checked_model_integer<std::uint32_t>(input)) {}
+    template <typename t_type>
+        requires(!detail::is_model_integer<t_type>)
+    uint32(t_type) = delete;
     [[nodiscard]] constexpr operator std::uint32_t() const noexcept {
         return value_;
     }
@@ -386,6 +374,14 @@ struct int64 final {
     constexpr int64() noexcept = default;
     constexpr int64(std::int64_t input) noexcept
         : value_(input) {}
+    template <typename t_type>
+        requires(detail::is_model_integer<t_type> &&
+                 !std::is_same_v<std::remove_cv_t<t_type>, std::int64_t>)
+    constexpr int64(t_type input)
+        : value_(detail::checked_model_integer<std::int64_t>(input)) {}
+    template <typename t_type>
+        requires(!detail::is_model_integer<t_type>)
+    int64(t_type) = delete;
     [[nodiscard]] constexpr operator std::int64_t() const noexcept {
         return value_;
     }
@@ -396,6 +392,14 @@ struct uint64 final {
     constexpr uint64() noexcept = default;
     constexpr uint64(std::uint64_t input) noexcept
         : value_(input) {}
+    template <typename t_type>
+        requires(detail::is_model_integer<t_type> &&
+                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint64_t>)
+    constexpr uint64(t_type input)
+        : value_(detail::checked_model_integer<std::uint64_t>(input)) {}
+    template <typename t_type>
+        requires(!detail::is_model_integer<t_type>)
+    uint64(t_type) = delete;
     [[nodiscard]] constexpr operator std::uint64_t() const noexcept {
         return value_;
     }
@@ -404,11 +408,11 @@ struct uint64 final {
 class bytes final {
 public:
     explicit bytes(model_options options = {})
-        : resource_(detail::pmr_resource_or_default(options.resource_)),
+        : resource_(pmr_resource_or_default(options.resource_)),
           items_(resource_) {}
 
     bytes(std::span<const std::uint8_t> value, model_options options = {})
-        : resource_(detail::pmr_resource_or_default(options.resource_)),
+        : resource_(pmr_resource_or_default(options.resource_)),
           items_(value.begin(), value.end(), resource_) {}
 
     bytes(const bytes&) = delete;
@@ -493,7 +497,7 @@ public:
     using const_iterator = typename std::pmr::vector<t_type>::const_iterator;
 
     explicit array(model_options options = {})
-        : array(detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(options.resource_)) {}
+        : array(resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {}
 
     array(const array&) = delete;
     array& operator=(const array&) = delete;
@@ -631,7 +635,7 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    array(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+    array(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
         : resource_(resource),
           items_(resource_) {}
 
@@ -640,7 +644,7 @@ private:
     }
 
     [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) const& {
-        array rebound(detail::resolved_pmr_resource_tag{}, resource);
+        array rebound(resolved_pmr_resource_tag{}, resource);
         rebound.reserve(size());
         for (const auto& value : items_) {
             (void)rebound.emplace_parsed(detail::rebind_model_value(value, resource));
@@ -649,7 +653,7 @@ private:
     }
 
     [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) && {
-        array rebound(detail::resolved_pmr_resource_tag{}, resource);
+        array rebound(resolved_pmr_resource_tag{}, resource);
         rebound.reserve(size());
         for (auto& value : items_) {
             (void)rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
@@ -671,7 +675,7 @@ public:
 
     explicit boxed_array(model_options options = {})
         : boxed_array(
-              detail::resolved_pmr_resource_tag{}, detail::pmr_resource_or_default(options.resource_)) {}
+              resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {}
 
     boxed_array(const boxed_array&) = delete;
     boxed_array& operator=(const boxed_array&) = delete;
@@ -752,7 +756,7 @@ public:
 
     void clear() noexcept {
         for (auto* value : items_) {
-            detail::destroy_pmr_object(detail::resolved_pmr_resource_tag{}, value, resource_);
+            destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
         }
         items_.clear();
     }
@@ -766,7 +770,7 @@ public:
             while (size() > count) {
                 auto* value = items_.back();
                 items_.pop_back();
-                detail::destroy_pmr_object(detail::resolved_pmr_resource_tag{}, value, resource_);
+                destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
             }
             return;
         }
@@ -808,7 +812,7 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    boxed_array(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+    boxed_array(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
         : resource_(resource),
           items_(resource_) {}
 
@@ -857,19 +861,19 @@ private:
     };
 
     t_type& emplace_parsed(t_type&& value) {
-        auto* const stored = detail::construct_pmr_object<t_type>(
-            detail::resolved_pmr_resource_tag{}, resource_, std::move(value));
+        auto* const stored = construct_pmr_object<t_type>(
+            resolved_pmr_resource_tag{}, resource_, std::move(value));
         try {
             items_.push_back(stored);
         } catch (...) {
-            detail::destroy_pmr_object(detail::resolved_pmr_resource_tag{}, stored, resource_);
+            destroy_pmr_object(resolved_pmr_resource_tag{}, stored, resource_);
             throw;
         }
         return *stored;
     }
 
     [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) const& {
-        boxed_array rebound(detail::resolved_pmr_resource_tag{}, resource);
+        boxed_array rebound(resolved_pmr_resource_tag{}, resource);
         rebound.reserve(size());
         for (const auto& value : *this) {
             rebound.emplace_parsed(detail::rebind_model_value(value, resource));
@@ -878,7 +882,7 @@ private:
     }
 
     [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) && {
-        boxed_array rebound(detail::resolved_pmr_resource_tag{}, resource);
+        boxed_array rebound(resolved_pmr_resource_tag{}, resource);
         rebound.reserve(size());
         for (auto& value : *this) {
             rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));

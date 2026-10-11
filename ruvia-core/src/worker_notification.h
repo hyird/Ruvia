@@ -2,16 +2,13 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <system_error>
-
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_notification.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,15 +18,17 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#endif
 
+#include <asio/io_context.hpp>
+#ifdef _WIN32
 #include <asio/windows/stream_handle.hpp>
 #else
 #include <asio/posix/stream_descriptor.hpp>
 #endif
 
-namespace ruvia {
-class worker_runtime_context;
-}
+#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_notification.h"
 
 namespace ruvia::detail {
 
@@ -39,16 +38,8 @@ namespace ruvia::detail {
 // reuse it without allocating or overlapping the previous operation.
 class worker_notification_wait_resource final : public std::pmr::memory_resource {
 public:
-    [[nodiscard]] std::size_t allocation_count() const noexcept {
-        return allocation_count_;
-    }
-
-    [[nodiscard]] std::size_t deallocation_count() const noexcept {
-        return deallocation_count_;
-    }
-
-    [[nodiscard]] std::size_t outstanding_allocations() const noexcept {
-        return allocated_ ? 1 : 0;
+    [[nodiscard]] bool allocated() const noexcept {
+        return allocated_;
     }
 
 private:
@@ -60,8 +51,6 @@ private:
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
 
     std::array<std::byte, buffer_size + max_alignment - 1> buffer_storage_{};
-    std::size_t allocation_count_{0};
-    std::size_t deallocation_count_{0};
     void* allocated_pointer_{nullptr};
     std::size_t allocated_bytes_{0};
     std::size_t allocated_alignment_{0};
@@ -69,16 +58,55 @@ private:
 };
 
 #ifdef _WIN32
-using worker_notification_native_handle_type = HANDLE;
-using worker_notification_receiver_type = asio::windows::stream_handle;
+using native_wake_handle = HANDLE;
+using native_wake_stream = asio::windows::stream_handle;
+inline constexpr native_wake_handle invalid_native_wake_handle = nullptr;
 #else
-using worker_notification_native_handle_type = int;
-using worker_notification_receiver_type = asio::posix::stream_descriptor;
+using native_wake_handle = int;
+using native_wake_stream = asio::posix::stream_descriptor;
+inline constexpr native_wake_handle invalid_native_wake_handle = -1;
+#endif
+
+enum class native_wake_signal : std::uint8_t {
+    signaled,
+    full,
+    failed,
+};
+
+// The platform wake channel: a nonblocking sender and the receiver handle that
+// the worker adopts into its Asio stream. Implemented by
+// worker_notification_win32.cpp (named pipe) and worker_notification_linux.cpp
+// (eventfd).
+struct native_wake_pair final {
+    native_wake_handle sender_{invalid_native_wake_handle};
+    native_wake_handle receiver_{invalid_native_wake_handle};
+
+    native_wake_pair() = default;
+    native_wake_pair(const native_wake_pair&) = delete;
+    native_wake_pair& operator=(const native_wake_pair&) = delete;
+    native_wake_pair(native_wake_pair&& other) noexcept;
+    native_wake_pair& operator=(native_wake_pair&& other) noexcept;
+    ~native_wake_pair();
+
+    // Safe from any thread; writes one token without blocking.
+    [[nodiscard]] native_wake_signal signal() const noexcept;
+    void close_receiver() noexcept;
+};
+
+// startup_timeout bounds the Windows pipe connection; the eventfd ignores it.
+[[nodiscard]] native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout);
+
+[[noreturn]] void throw_native_wake_error(const char* operation, int error);
+
+#ifdef _WIN32
+void disconnect_native_receiver(native_wake_handle receiver) noexcept;
+#else
+// Consumes the eventfd counter; returns whether a notification was pending.
+[[nodiscard]] bool drain_native_receiver(native_wake_handle receiver, std::error_code& error) noexcept;
 #endif
 
 class worker_notification_state final {
 public:
-    worker_notification_state(event_loop loop, worker_notification_options options);
     worker_notification_state(
         ::ruvia::worker_runtime_context& runtime, worker_notification_options options);
     ~worker_notification_state();
@@ -92,16 +120,6 @@ public:
     [[nodiscard]] worker_notification_wait_status take_wait_result();
     void close();
 
-    [[nodiscard]] const worker_notification_wait_resource& wait_resource() const noexcept {
-        return wait_resource_;
-    }
-
-#ifndef _WIN32
-    [[nodiscard]] int sender_descriptor() const noexcept {
-        return sender_;
-    }
-#endif
-
 private:
     static constexpr std::uint64_t closed = std::uint64_t{1} << 63;
     static constexpr std::uint64_t count_mask = ~closed;
@@ -110,28 +128,23 @@ private:
     void leave_producer() noexcept;
     [[nodiscard]] bool is_closed() const noexcept;
     void require_worker() const;
-    void initialize(worker_notification_options options);
-    [[nodiscard]] asio::io_context& io_context() const;
     void ensure_receiver();
+#ifndef _WIN32
     [[nodiscard]] bool drain_receiver(std::error_code& error) noexcept;
+#endif
     void retire_receiver() noexcept;
     void complete_wait(const std::error_code& error, std::size_t bytes_transferred) noexcept;
 
-    event_loop loop_;
-    asio::io_context* runtime_io_context_{nullptr};
-    const worker_handle* runtime_handle_{nullptr};
+    asio::io_context& io_context_;
+    const worker_handle& worker_;
+    native_wake_pair wake_;
 #ifdef _WIN32
-    worker_notification_native_handle_type sender_{nullptr};
-    worker_notification_native_handle_type receiver_{nullptr};
     std::array<char, 4096> read_buffer_{};
-#else
-    worker_notification_native_handle_type sender_{-1};
-    worker_notification_native_handle_type receiver_{-1};
 #endif
     std::atomic<std::uint64_t> activity_{0};
     std::atomic<bool> pending_{false};
     worker_notification_wait_resource wait_resource_;
-    std::optional<worker_notification_receiver_type> receiver_stream_;
+    std::optional<native_wake_stream> receiver_stream_;
     std::coroutine_handle<> wait_continuation_{};
     std::error_code wait_error_;
     worker_notification_wait_status wait_result_{worker_notification_wait_status::notified};

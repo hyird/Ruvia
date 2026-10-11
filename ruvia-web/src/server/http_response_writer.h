@@ -16,6 +16,7 @@
 
 #include "server/http1_buffered_response_write.h"
 #include "server/http_file_write.h"
+#include "server/response_file_source.h"
 
 namespace ruvia::detail {
 
@@ -61,64 +62,73 @@ template <typename const_buffer_sequence_type>
 #endif
 }
 
+// Writes a committed file or multipart/byteranges body. Plain TCP hands file
+// ranges to the kernel (sendfile/TransmitFile) where the platform has one;
+// every other stream reads through the shared response_file_source.
 template <typename stream_type>
-task<http1_buffered_response_write_result> write_response_with_scratch(stream_type& stream,
-    worker_memory& memory, http_response_head_buffer& head, std::pmr::string* file_chunk_buffer,
-    const http_response& response, const http1_buffered_response_plan& response_plan) {
-    head.reset();
-    append_http1_response_head(response, head, response_plan.head_plan());
-    const auto response_head_bytes = head.view().size();
-    if (response.has_multipart_file_body()) {
-        auto write_completion = co_await ruvia::async_asio<std::size_t>(
-            [&stream, head_view = head.view()](auto handler) mutable {
-                asio::async_write(stream, asio::buffer(head_view), std::move(handler));
-            });
-        auto error = write_completion.error_code();
-        auto written = write_completion.result();
-        if (error || !response_plan.send_body()) {
-            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, error, written);
-        }
+task<std::error_code> write_http1_file_body(
+    stream_type& stream, const http_response& response, const response_file_io& file_io) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
+                  native_response_file_write_available) {
         for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
             const auto segment = response.body_segment(index);
             if (segment.file_) {
-                error = co_await write_http_response_file(stream, memory, file_chunk_buffer, *segment.file_);
-                if (error) {
-                    break;
+                if (const auto error = co_await write_http_response_file(stream, *segment.file_)) {
+                    co_return error;
                 }
             } else if (!segment.bytes_.empty()) {
                 auto part = co_await ruvia::async_asio<std::size_t>(
                     [&stream, bytes = segment.bytes_](auto handler) mutable {
                         asio::async_write(stream, asio::buffer(bytes), std::move(handler));
                     });
-                error = part.error_code();
-                if (error) {
-                    break;
+                if (const auto error = part.error_code()) {
+                    co_return error;
                 }
             }
         }
-        co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, error, response_head_bytes);
+        co_return std::error_code{};
+    } else {
+        response_file_source source(response, file_io);
+        for (;;) {
+            const auto chunk = co_await source.next();
+            if (chunk.kind() == response_body_chunk::kind_type::end) {
+                co_return std::error_code{};
+            }
+            if (chunk.kind() == response_body_chunk::kind_type::failed) {
+                co_return std::make_error_code(std::errc::io_error);
+            }
+            auto written = co_await ruvia::async_asio<std::size_t>(
+                [&stream, bytes = chunk.bytes()](auto handler) mutable {
+                    asio::async_write(stream, asio::buffer(bytes), std::move(handler));
+                });
+            if (const auto error = written.error_code()) {
+                co_return error;
+            }
+        }
     }
-    if (const auto file_body = response.file_body()) {
+}
+
+template <typename stream_type>
+task<http1_buffered_response_write_result> write_response(stream_type& stream, http_response_head_buffer& head,
+    const http_response& response, const http1_buffered_response_plan& response_plan,
+    const response_file_io& file_io) {
+    head.reset();
+    append_http1_response_head(response, head, response_plan.head_plan());
+    const auto response_head_bytes = head.view().size();
+    if (response.file_body() || response.has_multipart_file_body()) {
         auto write_completion = co_await ruvia::async_asio<std::size_t>(
             [&stream, head_view = head.view()](auto handler) mutable {
                 asio::async_write(stream, asio::buffer(head_view), std::move(handler));
             });
         const auto ec = write_completion.error_code();
         const auto bytes_transferred = write_completion.result();
-        if (ec) {
+        if (ec || !response_plan.send_body()) {
             co_return classify_http1_buffered_response_write(
                 response_plan, response_head_bytes, ec, bytes_transferred);
         }
-        if (!response_plan.send_body()) {
-            co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, {}, bytes_transferred);
-        }
-
-        const auto file_error =
-            co_await write_http_response_file(stream, memory, file_chunk_buffer, *file_body);
+        const auto body_error = co_await write_http1_file_body(stream, response, file_io);
         co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, file_error, response_head_bytes);
+            response_plan, response_head_bytes, body_error, response_head_bytes);
     }
 
     constexpr bool plain_tcp_stream =
@@ -174,26 +184,6 @@ task<http1_buffered_response_write_result> write_response_with_scratch(stream_ty
     }
     co_return classify_http1_buffered_response_write(
         response_plan, response_head_bytes, write_ec, written_bytes);
-}
-
-template <typename stream_type>
-task<http1_buffered_response_write_result> write_response_with_local_head(stream_type& stream,
-    worker_memory& memory, std::pmr::string* file_chunk_buffer, const http_response& response,
-    const http1_buffered_response_plan& response_plan) {
-    http_response_head_buffer local_head(memory.allocator<char>());
-    co_return co_await write_response_with_scratch(
-        stream, memory, local_head, file_chunk_buffer, response, response_plan);
-}
-
-template <typename stream_type>
-task<http1_buffered_response_write_result> write_response(stream_type& stream, worker_memory& memory,
-    http_response_head_buffer* reusable_head, std::pmr::string* file_chunk_buffer,
-    const http_response& response, const http1_buffered_response_plan& response_plan) {
-    if (reusable_head != nullptr) {
-        return write_response_with_scratch(
-            stream, memory, *reusable_head, file_chunk_buffer, response, response_plan);
-    }
-    return write_response_with_local_head(stream, memory, file_chunk_buffer, response, response_plan);
 }
 
 }  // namespace ruvia::detail

@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "ruvia/http/detail/response/http_response_header_state.h"
-#include "ruvia/http/detail/server/http_response_write_plan.h"
 #include "ruvia/http/http_response.h"
 
 namespace ruvia::detail {

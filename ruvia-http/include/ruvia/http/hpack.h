@@ -98,10 +98,15 @@ struct hpack_header_with_name_index_options final {
 
 class hpack_encoder final {
 public:
+    // Indexed representations require a nonzero index; zero throws
+    // std::invalid_argument before changing output.
     static void encode_indexed(std::pmr::string& output, std::uint32_t index);
     static void encode_dynamic_table_size_update(std::pmr::string& output, std::uint32_t maximum);
+    // Names and values may borrow output. Aliasing inputs are owned in output's
+    // resource before appending can invalidate them.
     static void encode_header(
         std::pmr::string& output, std::string_view name, std::string_view value);
+    // The same borrowing contract applies to value; name_index must be nonzero.
     static void encode_header_with_name_index(std::pmr::string& output, std::uint32_t name_index,
         std::string_view value, hpack_header_with_name_index_options options = {});
     static void encode_status(std::pmr::string& output, http_status_code status);

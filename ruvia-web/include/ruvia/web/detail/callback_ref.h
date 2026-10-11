@@ -95,6 +95,16 @@ struct callback_access final {
     [[nodiscard]] static constexpr callback_ref_type<signature_type> bind(callable_type& callable) noexcept {
         return callback_ref_type<signature_type>::bind(callable);
     }
+
+    template <typename ref_type>
+    [[nodiscard]] static constexpr void* target(ref_type value) noexcept {
+        return value.target_;
+    }
+
+    template <typename ref_type>
+    [[nodiscard]] static constexpr typename ref_type::invoke_type invoke(ref_type value) noexcept {
+        return value.invoke_;
+    }
 };
 
 static_assert(sizeof(callback_ref_type<void()>) == 2 * sizeof(void*));

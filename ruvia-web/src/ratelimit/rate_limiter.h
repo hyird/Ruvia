@@ -53,12 +53,6 @@ public:
         return rate_limit_decision(rate_limit_rejection(retry_after));
     }
 
-    [[nodiscard]] constexpr const rate_limit_allowed* allowed() const& noexcept {
-        return std::get_if<rate_limit_allowed>(&value_);
-    }
-
-    [[nodiscard]] const rate_limit_allowed* allowed() const&& = delete;
-
     [[nodiscard]] constexpr const rate_limit_rejection* rejection() const& noexcept {
         return std::get_if<rate_limit_rejection>(&value_);
     }
@@ -78,15 +72,11 @@ private:
 static_assert(std::is_trivially_copyable_v<rate_limit_decision>);
 static_assert(sizeof(rate_limit_decision) <= 2 * sizeof(std::chrono::milliseconds));
 
-[[nodiscard]] inline std::int64_t rate_limiter_now_ms() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 struct steady_rate_limiter_clock final {
     [[nodiscard]] static std::int64_t now_ms() noexcept {
-        return rate_limiter_now_ms();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
     }
 };
 
@@ -124,10 +114,6 @@ public:
 
     [[nodiscard]] bool has_default_rule() const noexcept {
         return default_rule_per_worker_.has_value();
-    }
-
-    [[nodiscard]] std::size_t key_capacity() const noexcept {
-        return slots_.size();
     }
 
     [[nodiscard]] rate_limit_decision allow_default(std::string_view remote_address) noexcept {

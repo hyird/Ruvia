@@ -13,7 +13,10 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <variant>
 #include <vector>
+
+#include "ruvia/http/http3_var_int.h"
 
 #include "test_harness.h"
 
@@ -247,11 +250,56 @@ struct fake_tls_pair final {
     std::vector<std::byte> server_parameters_;
 };
 
+class close_packet_failure_resource final : public std::pmr::memory_resource {
+public:
+    void reject_next_packet_storage() noexcept {
+        reject_packet_storage_ = true;
+    }
+
+    [[nodiscard]] std::size_t rejected_bytes() const noexcept {
+        return rejected_bytes_;
+    }
+
+    [[nodiscard]] std::size_t live_allocations() const noexcept {
+        return live_allocations_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        // The native ngtcp2 allocator wraps every block at max_align_t alignment.
+        // After handshake completion, the close packet's byte vector is the
+        // byte-aligned allocation on this path, distinct from native storage.
+        if (reject_packet_storage_ && alignment == alignof(std::byte) && bytes >= 16) {
+            reject_packet_storage_ = false;
+            rejected_bytes_ = bytes;
+            throw std::bad_alloc();
+        }
+        auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++live_allocations_;
+        return allocation;
+    }
+
+    void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(allocation, bytes, alignment);
+        --live_allocations_;
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t live_allocations_{};
+    std::size_t rejected_bytes_{};
+    bool reject_packet_storage_{};
+};
+
 struct fake_tls_endpoint final {
     fake_tls_pair* pair_{};
     bool client_{};
     bool emitted_initial_crypto_{};
     bool completed_{};
+    std::optional<std::uint64_t> advertised_idle_timeout_;
+    bool repeat_peer_parameters_{};
 };
 
 ruvia::quic_tls_drive_result drive_fake_tls(void* opaque,
@@ -265,6 +313,17 @@ ruvia::quic_tls_drive_result drive_fake_tls(void* opaque,
         if (own_parameters.empty()) {
             const auto local_parameters = handshake.local_transport_parameters();
             own_parameters.assign(local_parameters.begin(), local_parameters.end());
+            if (endpoint.advertised_idle_timeout_) {
+                // These fixtures use a zero local timeout, so the original extension
+                // omits it. Advertise the peer wire value without relaxing local limits.
+                std::array<char, 2 + ruvia::http3_var_int_max_bytes> parameter{};
+                parameter[0] = 0x01;
+                const auto encoded = std::get<std::size_t>(ruvia::encode_http3_var_int(
+                    std::span(parameter).subspan(2), *endpoint.advertised_idle_timeout_));
+                parameter[1] = static_cast<char>(encoded);
+                const auto bytes = std::as_bytes(std::span(parameter).first(2 + encoded));
+                own_parameters.insert(own_parameters.end(), bytes.begin(), bytes.end());
+            }
         }
         if (endpoint.client_ && !endpoint.emitted_initial_crypto_) {
             constexpr std::array client_hello{
@@ -281,6 +340,13 @@ ruvia::quic_tls_drive_result drive_fake_tls(void* opaque,
         }
         record.consume(record.bytes().size());
         handshake.submit_peer_transport_parameters(peer_parameters);
+        if (endpoint.repeat_peer_parameters_) {
+            // The final parameter is the injected eight-byte timeout. Repeated
+            // TLS extension delivery must keep the first accepted advertisement.
+            auto repeated = peer_parameters;
+            repeated.back() ^= std::byte{1};
+            handshake.submit_peer_transport_parameters(repeated);
+        }
         constexpr std::array secret{
             std::byte{0x31}, std::byte{0x32}, std::byte{0x33}, std::byte{0x34},
             std::byte{0x35}, std::byte{0x36}, std::byte{0x37}, std::byte{0x38},
@@ -1104,6 +1170,95 @@ RUVIA_TEST(quic_server_generated_cids_preserve_partition_through_migration_and_r
     }
 }
 
+RUVIA_TEST(quic_connection_reports_negotiated_idle_timeout_through_retirement) {
+    struct timeout_case final {
+        std::uint64_t client_;
+        std::uint64_t server_;
+        std::uint64_t expected_;
+        std::optional<std::uint64_t> advertised_server_timeout_;
+    };
+    for (const auto timeout : {timeout_case{30000, 5000, 5000}, timeout_case{5000, 30000, 5000},
+             timeout_case{0, 5000, 5000}, timeout_case{5000, 0, 5000}, timeout_case{0, 0, 0},
+             timeout_case{0, 0, 18'446'744'073'709, 18'446'744'073'709},
+             timeout_case{0, 0, 18'446'744'073'710, 18'446'744'073'710},
+             timeout_case{0, 0, ruvia::http3_var_int_max, ruvia::http3_var_int_max},
+             timeout_case{5000, 0, 5000, ruvia::http3_var_int_max}}) {
+        std::pmr::unsynchronized_pool_resource memory;
+        deterministic_crypto client_crypto;
+        deterministic_crypto server_crypto;
+        fake_tls_pair tls_pair;
+        fake_tls_endpoint client_tls{.pair_ = &tls_pair,
+            .client_ = true,
+            .repeat_peer_parameters_ = timeout.advertised_server_timeout_.has_value()};
+        fake_tls_endpoint server_tls{.pair_ = &tls_pair,
+            .client_ = false,
+            .advertised_idle_timeout_ = timeout.advertised_server_timeout_};
+        const auto server_address = test_address(4433);
+        const auto client_address = test_address(43001);
+        std::array<std::byte, 8> initial_dcid{};
+        std::array<std::byte, 8> client_scid{};
+        for (std::size_t i = 0; i < initial_dcid.size(); ++i) {
+            initial_dcid[i] = static_cast<std::byte>(0x10 + i);
+            client_scid[i] = static_cast<std::byte>(0x30 + i);
+        }
+        ruvia::quic_connection_config client_config;
+        client_config.local_address_ = client_address;
+        client_config.peer_address_ = server_address;
+        client_config.destination_connection_id_ = ruvia::quic_connection_id(initial_dcid);
+        client_config.source_connection_id_ = ruvia::quic_connection_id(client_scid);
+        client_config.local_transport_parameters_.idle_timeout_ms_ = timeout.client_;
+        ruvia::quic_connection client(client_config, deterministic_provider(client_crypto),
+            fake_tls_driver(client_tls), &memory, {});
+        RUVIA_CHECK_EQ(client.info().negotiated_idle_timeout_ms_, timeout.client_);
+        std::array<std::byte, 2048> packet{};
+        auto now = ruvia::quic_timestamp{};
+        const auto initial_value = client.write_packet(packet, now);
+        RUVIA_CHECK_EQ(initial_value.status_, ruvia::quic_operation_status::accepted);
+        ruvia::quic_server_config server_config;
+        server_config.local_transport_parameters_.idle_timeout_ms_ = timeout.server_;
+        ruvia::quic_server server(server_config, deterministic_provider(server_crypto), &memory);
+        const auto offer = server.route_datagram({.bytes_ = std::span(packet).first(initial_value.size_),
+            .local_ = server_address,
+            .peer_ = client_address});
+        RUVIA_CHECK_EQ(offer.kind_, ruvia::quic_server_route_kind::initial_offer);
+        const auto admitted = server.admit_initial(offer.offer_, fake_tls_driver(server_tls), now);
+        RUVIA_CHECK_EQ(admitted.status_, ruvia::quic_operation_status::accepted);
+        if (admitted.status_ != ruvia::quic_operation_status::accepted) {
+            continue;
+        }
+        auto& peer = server.connection(admitted.connection_);
+        for (std::size_t i = 0; i < 16; ++i) {
+            now += std::chrono::milliseconds(10);
+            const auto outbound = peer.write_packet(packet, now);
+            if (outbound.size_ != 0) {
+                (void)client.receive({.bytes_ = std::span(packet).first(outbound.size_),
+                                         .local_ = client_address,
+                                         .peer_ = server_address},
+                    now);
+            }
+            const auto inbound = client.write_packet(packet, now);
+            if (inbound.size_ != 0) {
+                (void)server.receive(admitted.connection_,
+                    {.bytes_ = std::span(packet).first(inbound.size_), .local_ = server_address, .peer_ = client_address}, now);
+            }
+        }
+        RUVIA_CHECK(client.info().tls_handshake_complete_);
+        RUVIA_CHECK(peer.info().tls_handshake_complete_);
+        RUVIA_CHECK_EQ(client.info().negotiated_idle_timeout_ms_, timeout.expected_);
+        if (!timeout.advertised_server_timeout_) {
+            RUVIA_CHECK_EQ(peer.info().negotiated_idle_timeout_ms_, timeout.expected_);
+        }
+        RUVIA_CHECK_EQ(client.close({.kind_ = ruvia::quic_close_kind::application}), ruvia::quic_operation_status::accepted);
+        (void)client.write_packet(packet, now);
+        const auto expiry = client.next_expiry();
+        RUVIA_CHECK(expiry.has_value());
+        if (expiry) {
+            RUVIA_CHECK_EQ(client.handle_expiry(*expiry), ruvia::quic_operation_status::retired);
+            RUVIA_CHECK_EQ(client.info().negotiated_idle_timeout_ms_, timeout.expected_);
+        }
+    }
+}
+
 RUVIA_TEST(quic_connection_close_reaches_peer_and_both_closing_periods_retire) {
     std::pmr::unsynchronized_pool_resource memory;
     deterministic_crypto client_crypto;
@@ -1210,6 +1365,100 @@ RUVIA_TEST(quic_connection_close_reaches_peer_and_both_closing_periods_retire) {
         RUVIA_CHECK_EQ(connection->handle_expiry(*expiry), ruvia::quic_operation_status::retired);
         RUVIA_CHECK_EQ(connection->info().state_, ruvia::quic_connection_state::retired);
     }
+}
+
+RUVIA_TEST(quic_connection_close_packet_storage_failure_allows_retry) {
+    close_packet_failure_resource memory;
+    {
+        deterministic_crypto client_crypto;
+        deterministic_crypto server_crypto;
+        fake_tls_pair tls_pair;
+        fake_tls_endpoint client_tls{.pair_ = &tls_pair, .client_ = true};
+        fake_tls_endpoint server_tls{.pair_ = &tls_pair, .client_ = false};
+        const auto server_address = test_address(4433);
+        const auto client_address = test_address(43001);
+        std::array<std::byte, 8> initial_dcid{};
+        std::array<std::byte, 8> client_scid{};
+        for (std::size_t i = 0; i < initial_dcid.size(); ++i) {
+            initial_dcid[i] = static_cast<std::byte>(0x10 + i);
+            client_scid[i] = static_cast<std::byte>(0x30 + i);
+        }
+        ruvia::quic_connection_config config;
+        config.local_address_ = client_address;
+        config.peer_address_ = server_address;
+        config.destination_connection_id_ = ruvia::quic_connection_id(initial_dcid);
+        config.source_connection_id_ = ruvia::quic_connection_id(client_scid);
+        ruvia::quic_connection client(config, deterministic_provider(client_crypto),
+            fake_tls_driver(client_tls), &memory, {});
+        std::array<std::byte, 2048> packet{};
+        auto now = ruvia::quic_timestamp{};
+        const auto initial = client.write_packet(packet, now);
+        RUVIA_CHECK_EQ(initial.status_, ruvia::quic_operation_status::accepted);
+        ruvia::quic_server server({}, deterministic_provider(server_crypto), &memory);
+        const auto offer = server.route_datagram({.bytes_ = std::span(packet).first(initial.size_),
+            .local_ = server_address,
+            .peer_ = client_address});
+        RUVIA_CHECK_EQ(offer.kind_, ruvia::quic_server_route_kind::initial_offer);
+        const auto admitted = server.admit_initial(offer.offer_, fake_tls_driver(server_tls), now);
+        RUVIA_CHECK_EQ(admitted.status_, ruvia::quic_operation_status::accepted);
+        if (admitted.status_ != ruvia::quic_operation_status::accepted) {
+            return;
+        }
+        auto& peer = server.connection(admitted.connection_);
+        for (std::size_t i = 0; i < 16; ++i) {
+            now += std::chrono::milliseconds(10);
+            if (const auto expiry = peer.next_expiry(); expiry && *expiry <= now) {
+                (void)peer.handle_expiry(now);
+            }
+            if (const auto expiry = client.next_expiry(); expiry && *expiry <= now) {
+                (void)client.handle_expiry(now);
+            }
+            const auto outbound = peer.write_packet(packet, now);
+            if (outbound.size_ != 0) {
+                (void)client.receive({.bytes_ = std::span(packet).first(outbound.size_),
+                                         .local_ = client_address,
+                                         .peer_ = server_address},
+                    now);
+            }
+            const auto inbound = client.write_packet(packet, now);
+            if (inbound.size_ != 0) {
+                (void)server.receive(admitted.connection_,
+                    {.bytes_ = std::span(packet).first(inbound.size_),
+                        .local_ = server_address,
+                        .peer_ = client_address},
+                    now);
+            }
+        }
+        RUVIA_CHECK(client.info().confirmed_);
+        RUVIA_CHECK_EQ(client.close({.kind_ = ruvia::quic_close_kind::application, .code_ = 0x100}),
+            ruvia::quic_operation_status::accepted);
+        const auto unchanged_packet = packet;
+        memory.reject_next_packet_storage();
+        bool failed = false;
+        try {
+            (void)client.write_packet(packet, now);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK(memory.rejected_bytes() >= 16);
+        RUVIA_CHECK(packet == unchanged_packet);
+        RUVIA_CHECK_EQ(client.info().state_, ruvia::quic_connection_state::closing);
+
+        const auto retried = client.write_packet(packet, now);
+        RUVIA_CHECK_EQ(retried.status_, ruvia::quic_operation_status::accepted);
+        RUVIA_CHECK(retried.size_ != 0);
+        if (retried.size_ != 0) {
+            RUVIA_CHECK_EQ(server.receive(admitted.connection_,
+                               {.bytes_ = std::span(packet).first(retried.size_),
+                                   .local_ = server_address,
+                                   .peer_ = client_address},
+                               now),
+                ruvia::quic_operation_status::draining);
+            RUVIA_CHECK_EQ(peer.info().close_error_code_, std::uint64_t{0x100});
+        }
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
 }
 
 }  // namespace

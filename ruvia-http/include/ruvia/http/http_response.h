@@ -19,6 +19,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/http/http_status.h"
@@ -387,9 +388,6 @@ private:
     class encoded_header_update;
     void apply_encoded_representation(std::string_view content_encoding, std::pmr::string* body);
 
-    void set_body_borrowed_view(std::string_view value) noexcept;
-    void set_body_static_view(std::string_view value) noexcept;
-    void set_body_owned(std::pmr::string&& value);
     void set_header_unsigned(std::string_view key, std::uint64_t value, std::uint32_t known_bit);
     void set_content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void set_content_range_unsatisfied(std::uint64_t size);
@@ -418,10 +416,9 @@ private:
     void set_borrowed_file_body(const std::filesystem::path& file, std::uint64_t size);
     void set_borrowed_file_body(const std::filesystem::path& file, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length);
-    void set_borrowed_native_file_body(const detail::http_native_path_char_type* file, std::uint64_t size);
-    void set_borrowed_native_file_body(const detail::http_native_path_char_type* file, std::uint64_t size,
+    void set_borrowed_native_file_body(const http_native_path_char_type* file, std::uint64_t size);
+    void set_borrowed_native_file_body(const http_native_path_char_type* file, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length);
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] std::string_view known_header_value(std::uint32_t bit) const noexcept;
     [[nodiscard]] http_response_header* find_header_for_update(
         std::string_view key, std::uint32_t known_bit) noexcept;
@@ -430,7 +427,6 @@ private:
     http_response_header& prepare_header_value_storage(
         std::string_view key, std::size_t value_size, std::uint32_t known_bit);
     void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
-    [[nodiscard]] http_response clone_for_transaction() const;
     http_status_code status_code_{http_status::ok};
     std::uint32_t known_header_bits_{0};
     std::array<std::int16_t, known_header_count> known_header_indexes_{};

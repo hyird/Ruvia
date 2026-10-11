@@ -10,11 +10,11 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/web_worker.h"
 
+#include "server/connection_scanner.h"
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_server_listener.h"

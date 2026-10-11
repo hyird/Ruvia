@@ -211,7 +211,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), response.status_code_);
 
-    if (content_semantics == http_response_content_semantics_type::protocol_switch) {
+    if (content_semantics == http_response_content_semantics::protocol_switch) {
         if (response.protocol_version_ != http_protocol_version::http11 ||
             response.content_length_field_present_ || response.saw_transfer_encoding_ ||
             !request_allows_protocol_switch(exchange_state, response, request_content_phase)) {
@@ -219,13 +219,13 @@ http1_client_response_planning_result_type plan_http1_client_response(
         }
         return http1_client_response_plan_access::protocol_upgrade(std::nullopt);
     }
-    if (content_semantics == http_response_content_semantics_type::informational) {
+    if (content_semantics == http_response_content_semantics::informational) {
         const auto persistence = response_persistence(response);
         return http1_client_response_plan_access::informational(
             persistence, request_content_signal(request_content_phase, response.status_code_,
                              persistence == http1_close_policy::close_after_response));
     }
-    if (content_semantics == http_response_content_semantics_type::connect_tunnel) {
+    if (content_semantics == http_response_content_semantics::connect_tunnel) {
         return http1_client_response_plan_access::connect_tunnel(std::nullopt);
     }
 
@@ -238,7 +238,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
     const auto persistence = final_response_persistence(exchange_state, response);
     const auto persistent_content_signal = request_content_signal(request_content_phase,
         response.status_code_, persistence == http1_close_policy::close_after_response);
-    if (content_semantics == http_response_content_semantics_type::without_content) {
+    if (content_semantics == http_response_content_semantics::without_content) {
         return http1_client_response_plan_access::without_content(persistence, persistent_content_signal);
     }
 

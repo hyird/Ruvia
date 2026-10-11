@@ -119,7 +119,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
         auto token = value.substr(pos, comma - pos);
         pos = comma == value.size() ? value.size() : comma + 1;
 
-        token = detail::http_trim_ows(token);
+        token = http_trim_ows(token);
         if (token.empty()) {
             continue;
         }
@@ -128,32 +128,32 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
         const auto name = eq == std::string_view::npos ? token : token.substr(0, eq);
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
-        if (!has_argument && detail::http_ascii_equals_ignore_case(name, "no-store")) {
+        if (!has_argument && http_ascii_equals_ignore_case(name, "no-store")) {
             value_.set(cache_control_directive::no_store);
         } else if ((!has_argument || is_valid_cache_directive_argument(arg)) &&
-                   detail::http_ascii_equals_ignore_case(name, "no-cache")) {
+                   http_ascii_equals_ignore_case(name, "no-cache")) {
             value_.set(cache_control_directive::no_cache);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "no-transform")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "no-transform")) {
             value_.set(cache_control_directive::no_transform);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "must-revalidate")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "must-revalidate")) {
             value_.set(cache_control_directive::must_revalidate);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "proxy-revalidate")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "proxy-revalidate")) {
             value_.set(cache_control_directive::proxy_revalidate);
         } else if ((!has_argument || is_valid_cache_directive_argument(arg)) &&
-                   detail::http_ascii_equals_ignore_case(name, "private")) {
+                   http_ascii_equals_ignore_case(name, "private")) {
             value_.set(cache_control_directive::private_value);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "public")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "public")) {
             value_.set(cache_control_directive::public_value);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "immutable")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "immutable")) {
             value_.set(cache_control_directive::immutable);
-        } else if (!has_argument && detail::http_ascii_equals_ignore_case(name, "only-if-cached")) {
+        } else if (!has_argument && http_ascii_equals_ignore_case(name, "only-if-cached")) {
             value_.set(cache_control_directive::only_if_cached);
-        } else if (detail::http_ascii_equals_ignore_case(name, "max-age")) {
+        } else if (http_ascii_equals_ignore_case(name, "max-age")) {
             if (!max_age_seen_) {
                 max_age_seen_ = true;
                 value_.max_age_ = parse_delta_seconds(arg);
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "max-stale")) {
+        } else if (http_ascii_equals_ignore_case(name, "max-stale")) {
             if (!max_stale_seen_) {
                 max_stale_seen_ = true;
                 if (!has_argument) {
@@ -162,22 +162,22 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                     value_.max_stale_ = parse_delta_seconds(arg);
                 }
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "min-fresh")) {
+        } else if (http_ascii_equals_ignore_case(name, "min-fresh")) {
             if (!min_fresh_seen_) {
                 min_fresh_seen_ = true;
                 value_.min_fresh_ = parse_delta_seconds(arg);
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "s-maxage")) {
+        } else if (http_ascii_equals_ignore_case(name, "s-maxage")) {
             if (!s_max_age_seen_) {
                 s_max_age_seen_ = true;
                 value_.s_max_age_ = parse_delta_seconds(arg);
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "stale-while-revalidate")) {
+        } else if (http_ascii_equals_ignore_case(name, "stale-while-revalidate")) {
             if (!stale_while_revalidate_seen_) {
                 stale_while_revalidate_seen_ = true;
                 value_.stale_while_revalidate_ = parse_delta_seconds(arg);
             }
-        } else if (detail::http_ascii_equals_ignore_case(name, "stale-if-error")) {
+        } else if (http_ascii_equals_ignore_case(name, "stale-if-error")) {
             if (!stale_if_error_seen_) {
                 stale_if_error_seen_ = true;
                 value_.stale_if_error_ = parse_delta_seconds(arg);
@@ -193,7 +193,7 @@ cache_control parse_cache_control(std::string_view value) noexcept {
 }
 
 std::optional<std::time_t> parse_http_date(std::string_view value) noexcept {
-    return detail::http_parse_http_date(detail::http_trim_ows(value));
+    return detail::http_parse_http_date(http_trim_ows(value));
 }
 
 }  // namespace ruvia

@@ -1,6 +1,7 @@
 #include "ruvia/core/memory/process_resource.h"
 
 #include "server/http_server_options_validation.h"
+#include "server/http_server_tls_identity.h"
 
 namespace ruvia::detail {
 
@@ -13,8 +14,10 @@ validated_http_server_configuration::validated_http_server_configuration(
         auto& validated = listeners_.emplace_back(listener.clone(listeners_.get_allocator().resource()));
         // One ticket key set per TLS listener for this configuration, so TLS
         // resumption does not depend on which worker accepts the connection.
+        // Credentials are parsed here once; every worker installs them.
         if (auto* tls = std::get_if<http_server_listener_definition::tls_type>(&validated.transport_)) {
             tls->session_ticket_keys_ = tls_session_ticket_keys::generate();
+            load_http_server_tls_credentials(*tls);
         }
     }
 }
@@ -25,7 +28,7 @@ const server_config& server_config_defaults() noexcept {
 }
 
 http_server_options normalize_server_options(const server_config& config, http_server_options options) {
-    ruvia::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
+    detail::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
     if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
         config.process_signal_handlers_ != process_signal_handler_policy::install) {
         throw std::invalid_argument("process signal handler policy is invalid");
@@ -56,7 +59,7 @@ void validate_document_root_runtime_config(const http_server_options& options) {
     if (refresh == nullptr) {
         return;
     }
-    ruvia::ensure_positive_duration(
+    detail::ensure_positive_duration(
         refresh->refresh_interval_, "document root refresh interval must be greater than zero");
     if (options.blocking_pool_ == nullptr) {
         throw std::invalid_argument(
@@ -66,7 +69,7 @@ void validate_document_root_runtime_config(const http_server_options& options) {
     if (precompression == nullptr) {
         return;
     }
-    ruvia::ensure_positive_size(precompression->min_bytes_,
+    detail::ensure_positive_size(precompression->min_bytes_,
         "document root precompression minimum size must be greater than zero");
     if (precompression->max_bytes_ < precompression->min_bytes_) {
         throw std::invalid_argument(
@@ -75,37 +78,37 @@ void validate_document_root_runtime_config(const http_server_options& options) {
 }
 
 void validate_worker_queue_capacity(std::size_t capacity) {
-    ruvia::ensure_positive_size(capacity, "worker queue capacity must be greater than zero");
+    detail::ensure_positive_size(capacity, "worker queue capacity must be greater than zero");
     if (capacity == std::numeric_limits<std::size_t>::max()) {
         throw std::invalid_argument("worker queue capacity must leave a reserved execution slot");
     }
 }
 
 void validate_server_limits(const http_server_options& options) {
-    ruvia::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
+    detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
         options.idle_timeout_, options.request_header_timeout_, options.request_body_timeout_,
         options.write_timeout_);
-    ruvia::ensure_positive_duration(options.scan_interval_, "connection scan interval must be greater than 0");
+    detail::ensure_positive_duration(options.scan_interval_, "connection scan interval must be greater than 0");
     validate_worker_queue_capacity(options.worker_queue_capacity_);
     ruvia::validate_memory_pool_config(options.memory_config_);
-    ruvia::ensure_positive_size(options.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
-    ruvia::ensure_positive_optional_size(
+    detail::ensure_positive_size(options.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
+    detail::ensure_positive_optional_size(
         options.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
-    ruvia::ensure_positive_size(
+    detail::ensure_positive_size(
         options.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
-    ruvia::ensure_positive_optional_size(
+    detail::ensure_positive_optional_size(
         options.max_connections_, "configured connection limit must be greater than zero");
-    ruvia::ensure_positive_optional_size(options.max_requests_per_connection_,
+    detail::ensure_positive_optional_size(options.max_requests_per_connection_,
         "configured requests-per-connection limit must be greater than zero");
-    ruvia::ensure_positive_size(options.max_inbound_buffer_bytes_per_worker_,
+    detail::ensure_positive_size(options.max_inbound_buffer_bytes_per_worker_,
         "worker inbound buffer budget must be greater than zero");
-    ruvia::ensure_positive_size(options.max_inbound_buffer_bytes_per_connection_,
+    detail::ensure_positive_size(options.max_inbound_buffer_bytes_per_connection_,
         "connection inbound buffer budget must be greater than zero");
-    ruvia::ensure_positive_optional_durations("completion deadlines must be greater than zero",
+    detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
         options.header_completion_timeout_, options.body_completion_timeout_);
-    ruvia::ensure_positive_size(options.http_client_result_budget_.max_retained_bytes_,
+    detail::ensure_positive_size(options.http_client_result_budget_.max_retained_bytes_,
         "HTTP client retained result byte budget must be greater than zero");
-    ruvia::ensure_positive_size(options.http_client_result_budget_.max_in_flight_bytes_,
+    detail::ensure_positive_size(options.http_client_result_budget_.max_in_flight_bytes_,
         "HTTP client in-flight response budget must be greater than zero");
 }
 
@@ -115,7 +118,7 @@ void validate_http_server_options(const http_server_options& options) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
     if (options.compression_.has_value()) {
-        ruvia::ensure_positive_size(
+        detail::ensure_positive_size(
             options.compression_->min_bytes_, "compression minimum size must be greater than zero");
         if (options.compression_->sync_bytes_ < options.compression_->min_bytes_) {
             throw std::invalid_argument(
@@ -177,7 +180,7 @@ void validate_http3_server_limits(
     if (!max_connections.has_value()) {
         throw std::invalid_argument("HTTP/3 requires a finite per-worker connection limit");
     }
-    ruvia::ensure_positive_size(*max_connections,
+    detail::ensure_positive_size(*max_connections,
         "HTTP/3 per-worker connection limit must be greater than zero");
 
     // Keep the aggregate startup-allocated slot count representable as a
@@ -195,7 +198,7 @@ void validate_http3_server_limits(
         throw std::invalid_argument(
             "HTTP/3 requires a finite per-connection request limit");
     }
-    ruvia::ensure_positive_size(*max_requests_per_connection,
+    detail::ensure_positive_size(*max_requests_per_connection,
         "HTTP/3 per-connection request limit must be greater than zero");
 
     // The request-stream boundary is a client-bidi QUIC stream ID: 4 * N.
@@ -228,9 +231,9 @@ void validate_http3_server_limits(
 void validate_http3_listen_config(const http3_listen_config& config) {
     (void)normalize_http3_capacity(config, 1);
     validate_http3_qpack_config(config.qpack_);
-    ruvia::ensure_positive_duration(config.handshake_timeout_,
+    detail::ensure_positive_duration(config.handshake_timeout_,
         "HTTP/3 handshake timeout must be greater than zero");
-    ruvia::ensure_positive_duration(config.drain_timeout_,
+    detail::ensure_positive_duration(config.drain_timeout_,
         "HTTP/3 drain timeout must be greater than zero");
     if (std::chrono::duration<long double>(config.drain_timeout_) >
         std::chrono::duration<long double>(std::chrono::steady_clock::duration::max())) {
@@ -249,7 +252,7 @@ void validate_http_server_listener(const http_server_listener_definition& listen
     }
     if (const auto* redirect =
             std::get_if<http_server_listener_definition::redirect_http_to_https_type>(&listener_value.transport_)) {
-        ruvia::ensure_non_zero_port(
+        detail::ensure_non_zero_port(
             redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
 }

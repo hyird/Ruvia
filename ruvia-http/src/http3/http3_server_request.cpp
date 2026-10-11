@@ -3,44 +3,27 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "http3/http3_request_content.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
 
 namespace ruvia {
-namespace {
 
-std::pmr::memory_resource* normalized_resource(std::pmr::memory_resource* resource) noexcept {
-    return resource != nullptr ? resource : std::pmr::get_default_resource();
-}
-
-void copy_head(http3_message_head& to, const http3_message_head& from) {
-    to.method_ = from.method_;
-    to.protocol_ = from.protocol_;
-    to.scheme_ = from.scheme_;
-    to.authority_ = from.authority_;
-    to.path_ = from.path_;
-    to.status_ = from.status_;
-    to.content_length_ = from.content_length_;
-    to.headers_.reserve(from.headers_.size());
-    for (const auto& field : from.headers_) {
-        to.headers_.emplace_back(field.name_, field.value_, to.headers_.get_allocator().resource());
-    }
-}
-
-}  // namespace
-
-http3_server_request::http3_server_request(const http3_message_head& callback_head,
-    std::pmr::memory_resource* request_resource, std::pmr::memory_resource* body_pool)
-    : head_(normalized_resource(request_resource)),
-      cookies_(normalized_resource(request_resource)),
-      body_(normalized_resource(body_pool)) {
-    copy_head(head_, callback_head);
-    for (const auto& field : head_.headers_) {
-        if (field.name_ == "expect") {
-            expectations_.parse_field(field.value_);
-        }
+http3_server_request::http3_server_request(http3_message_head&& head, std::pmr::memory_resource* body_pool)
+    : head_(std::move(head)),
+      cookies_(head_.method_.get_allocator().resource()),
+      body_(body_pool != nullptr ? body_pool : std::pmr::get_default_resource()),
+      body_state_(head_.content_length_, detail::http3_request_payload_allowed(head_)) {
+    if (!detail::http3_request_content_metadata_valid(head_)) {
+        throw std::invalid_argument("HTTP/3 request method does not permit its declared content");
     }
     build_request();
+}
+
+http_server_expectation_plan http3_server_request::expectation_plan(http_unsupported_expectation_policy policy) const noexcept {
+    const bool content_remaining = !body_complete_ && !body_aborted_ && detail::http3_request_payload_allowed(head_) &&
+                                   (!head_.content_length_ || *head_.content_length_ > body_state_.received_length());
+    return head_.expectations_.server_plan(content_remaining ? http_request_content_indication::will_follow : http_request_content_indication::no_content, policy);
 }
 
 void http3_server_request::build_request() {
@@ -55,14 +38,14 @@ void http3_server_request::build_request() {
     bool has_host = false;
     std::size_t cookie_count = 0;
     for (const auto& field : head_.headers_) {
-        if (field.name_ == "host") {
+        if (field.name() == "host") {
             has_host = true;
         }
-        if (field.name_ == "cookie") {
+        if (field.name() == "cookie") {
             if (cookie_count != 0) {
                 cookies_.append("; ");
             }
-            cookies_.append(field.value_);
+            cookies_.append(field.value());
             ++cookie_count;
         }
     }
@@ -75,7 +58,7 @@ void http3_server_request::build_request() {
         throw std::length_error("too many HTTP/3 request headers");
     }
 
-    detail::http_request_access::set_resource(request_, normalized_resource(head_.method_.get_allocator().resource()));
+    detail::http_request_access::set_resource(request_, head_.method_.get_allocator().resource());
     detail::http_request_access::set_method(request_, head_.method_);
     detail::http_request_access::set_protocol_version(request_, http_protocol_version::http3);
     detail::http_request_access::set_target(request_, target);
@@ -88,14 +71,14 @@ void http3_server_request::build_request() {
 
     bool emitted_cookie = false;
     for (const auto& field : head_.headers_) {
-        if (field.name_ == "cookie") {
+        if (field.name() == "cookie") {
             if (!emitted_cookie) {
                 detail::http_request_access::add_header(request_, http_header_view("cookie", cookies_));
                 emitted_cookie = true;
             }
             continue;
         }
-        detail::http_request_access::add_header(request_, http_header_view(field.name_, field.value_));
+        detail::http_request_access::add_header(request_, http_header_view(field.name(), field.value()));
     }
     if (synthesize_host) {
         detail::http_request_access::add_header(request_, http_header_view("host", head_.authority_));
@@ -106,14 +89,24 @@ void http3_server_request::append_body(std::span<const std::byte> bytes_value) {
     if (body_complete_ || body_aborted_) {
         throw std::logic_error("HTTP/3 request body is terminal");
     }
+    auto next_state = body_state_;
+    if (next_state.feed(bytes_value.size(), false) != http3_message_body_result::accepted) {
+        throw std::invalid_argument("HTTP/3 request content violates its method or declared length");
+    }
     body_.insert(body_.end(), bytes_value.begin(), bytes_value.end());
+    body_state_ = next_state;
 }
 
 void http3_server_request::finish_body() {
     if (body_complete_ || body_aborted_) {
         throw std::logic_error("HTTP/3 request body is terminal");
     }
+    auto next_state = body_state_;
+    if (next_state.feed(0, true) != http3_message_body_result::complete) {
+        throw std::logic_error("HTTP/3 request body does not satisfy Content-Length");
+    }
     detail::http_request_access::set_body(request_, std::span<const std::byte>(body_));
+    body_state_ = next_state;
     body_complete_ = true;
 }
 

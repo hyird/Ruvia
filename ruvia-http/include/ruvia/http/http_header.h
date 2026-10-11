@@ -23,8 +23,10 @@ inline constexpr std::size_t max_http_header_fields = 64;
 // represents initial fields and trailers for requests and responses.
 class http_header final {
 public:
+    // A copy shares the source's owning resource, mirroring the move
+    // constructor; use copy_of() to place the copy in another resource.
     http_header(const http_header& other)
-        : http_header(other.name(), other.value(), std::pmr::get_default_resource()) {}
+        : http_header(other.name(), other.value(), other.resource_) {}
 
     http_header(http_header&& other) noexcept
         : resource_(other.resource_),

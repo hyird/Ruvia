@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/web/detail/model/rule/numeric_comparison.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation_types.h"
@@ -45,17 +46,14 @@ public:
     explicit validation_error(const issue_list_type& issues, validation_error_options options = {})
         : issues_(copy_issues(issues)),
           status_code_(options.status_),
-          code_(options.code_.view(), detail::process_resource()),
-          message_(options.message_.view(), detail::process_resource()) {}
-
-    explicit validation_error(issue_list_type&& issues, validation_error_options options = {})
-        : validation_error(static_cast<const issue_list_type&>(issues), options) {}
+          code_(options.code_.view(), process_resource()),
+          message_(options.message_.view(), process_resource()) {}
 
     validation_error(const validation_error& other)
         : issues_(copy_issues(other.issues_)),
           status_code_(other.status_code_),
-          code_(other.code_, detail::process_resource()),
-          message_(other.message_, detail::process_resource()) {}
+          code_(other.code_, process_resource()),
+          message_(other.message_, process_resource()) {}
 
     validation_error& operator=(const validation_error& other) {
         if (this == &other) {
@@ -63,8 +61,8 @@ public:
         }
 
         auto copied_issues = copy_issues(other.issues_);
-        std::pmr::string copied_code(other.code_, detail::process_resource());
-        std::pmr::string copied_message(other.message_, detail::process_resource());
+        std::pmr::string copied_code(other.code_, process_resource());
+        std::pmr::string copied_message(other.message_, process_resource());
         issues_ = std::move(copied_issues);
         code_ = std::move(copied_code);
         message_ = std::move(copied_message);
@@ -109,21 +107,21 @@ public:
 
 private:
     [[nodiscard]] static issue_list_type copy_issues(const issue_list_type& issues) {
-        issue_list_type copied(detail::process_resource());
+        issue_list_type copied(process_resource());
         const auto count = std::min(issues.size(), max_validation_issues);
         copied.reserve(count);
         for (std::size_t index = 0; index < count; ++index) {
             const auto& issue = issues[index];
             copied.push_back(detail::validation_issue_access::copy(
-                issue, detail::process_resource()));
+                issue, process_resource()));
         }
         return copied;
     }
 
-    issue_list_type issues_{detail::process_resource()};
+    issue_list_type issues_{process_resource()};
     http_status_code status_code_{http_status::bad_request};
-    std::pmr::string code_{detail::process_resource()};
-    std::pmr::string message_{detail::process_resource()};
+    std::pmr::string code_{process_resource()};
+    std::pmr::string message_{process_resource()};
 };
 
 class validator final {
@@ -138,7 +136,7 @@ public:
         : validator(options_type{}) {}
 
     explicit validator(options_type options)
-        : resource_(detail::pmr_resource_or_default(options.resource_)),
+        : resource_(pmr_resource_or_default(options.resource_)),
           issues_(resource_) {}
 
     [[nodiscard]] bool full() const noexcept {
@@ -185,9 +183,9 @@ public:
     validator& range(const optional_t_type& value, std::string_view field, min_t_type min_value, max_t_type max_value,
         std::string_view message = "is out of range") & {
         if (value) {
-            if (*value < min_value) {
+            if (detail::validation_less(*value, min_value)) {
                 add(field, "too_small", message);
-            } else if (*value > max_value) {
+            } else if (detail::validation_greater(*value, max_value)) {
                 add(field, "too_big", message);
             }
         }
@@ -229,12 +227,6 @@ public:
     void throw_if_invalid(validation_error_options options = {}) const& {
         if (!ok()) {
             throw validation_error(issues_, options);
-        }
-    }
-
-    void throw_if_invalid(validation_error_options options = {}) && {
-        if (!ok()) {
-            throw validation_error(std::move(issues_), options);
         }
     }
 

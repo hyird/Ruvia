@@ -49,7 +49,7 @@ void db_query::storage_deleter_type::operator()(detail::db_query_storage* storag
 }
 
 db_query::db_query(std::pmr::memory_resource* resource)
-    : storage_(nullptr, storage_deleter_type{detail::pmr_resource_or_default(resource)}) {
+    : storage_(nullptr, storage_deleter_type{pmr_resource_or_default(resource)}) {
     auto* resolved = storage_.get_deleter().resource_;
     void* block = resolved->allocate(sizeof(detail::db_query_storage), alignof(detail::db_query_storage));
     try {
@@ -288,7 +288,7 @@ db_query::storage_owner_type db_query::copy_storage(const detail::db_query_stora
     return std::move(copy.storage_);
 }
 db_query db_query::clone(std::pmr::memory_resource* resource) const {
-    return db_query(copy_storage(storage(), detail::pmr_resource_or_default(resource)));
+    return db_query(copy_storage(storage(), pmr_resource_or_default(resource)));
 }
 
 bool db_query::cacheable() const {

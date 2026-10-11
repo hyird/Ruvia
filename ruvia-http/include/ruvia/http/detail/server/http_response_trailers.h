@@ -14,8 +14,8 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
-#include "ruvia/http/detail/util/ascii_case.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_trailer_section.h"
@@ -148,10 +148,6 @@ class http_response_trailer_section_result;
 [[nodiscard]] http_response_trailer_section_result check_http_response_trailer_section(
     std::span<const http_header_view>) noexcept;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class http_response_trailer_section_failure;
 
 class http_response_trailer_section_error final : public std::exception {
@@ -165,11 +161,6 @@ private:
 
     http_response_trailer_section_error() noexcept = default;
 };
-
-// Borrowed proof that the complete terminal section passed the shared response-
-// trailer rules. Protocol encoders accept this value instead of revalidating raw
-// fields independently. The source span must outlive its synchronous consumption.
-using http_response_trailer_section = ::ruvia::http_response_trailer_section;
 
 class http_response_trailer_section_failure final {
 public:

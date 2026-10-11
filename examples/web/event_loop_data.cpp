@@ -17,7 +17,9 @@
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_repository.h"
 
 #include "backend_tls.h"
 
@@ -66,8 +68,8 @@ struct worker_data final {
 
     task<void> read() {
         // Both operations explicitly use ORM; no raw SQL/Redis escape hatch.
-        auto devices = db_.get_repository<device>();
-        auto cached = redis_.get_repository<cached_device>({.prefix_ = "ruvia:example:devices"});
+        auto devices = db_.handle().get_repository<device>();
+        auto cached = redis_.handle().get_repository<cached_device>({.prefix_ = "ruvia:example:devices"});
         auto device = co_await devices.find_one({.where_ = device::column<"id">() == 1});
         auto cache = co_await cached.find_one({.where_ = cached_device::field<"id">() == "1"});
         // Results stay in this coroutine on the owner loop and die before

@@ -2,13 +2,17 @@
 #include <array>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_websocket_client_handshake.h"
+#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_local_critical_streams.h"
 #include "ruvia/http/http3_message_head.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
@@ -16,7 +20,15 @@
 
 namespace {
 void add(ruvia::http3_message_head& head, std::string_view name, std::string_view value) {
-    head.headers_.emplace_back(name, value, head.headers_.get_allocator().resource());
+    head.headers_.push_back(ruvia::http_header::copy_of(name, value, head.headers_.get_allocator().resource()));
+}
+void ignore_event(void*, const ruvia::http3_connection_event&) {}
+void apply_http3_peer_settings(
+    ruvia::testing::test_context& ruvia_ctx, ruvia::http3_connection& connection, ruvia::http3_settings settings) {
+    const auto prefixes = ruvia::http3_local_critical_streams::create(settings);
+    RUVIA_CHECK(prefixes.index() == 0);
+    const auto fed = connection.feed(3, std::get<0>(prefixes).control_prefix(), false, false, ignore_event, nullptr);
+    RUVIA_CHECK(fed.scope_ == ruvia::http3_connection_error_scope::none);
 }
 }  // namespace
 RUVIA_TEST(websocket_client_http2_tunnel_peer_fin_keeps_local_send_open) {
@@ -75,12 +87,14 @@ RUVIA_TEST(websocket_client_http2_tunnel_peer_fin_keeps_local_send_open) {
 RUVIA_TEST(websocket_client_extended_connect_requires_peer_setting_and_emits_protocol) {
     const std::array protocols{std::string_view("chat")};
     ruvia::websocket_client_negotiation client({.subprotocols_ = protocols, .deflate_ = {.enabled_ = true}});
-    auto disabled = client.encode_http3_request("https", "example.com", "/chat", false);
+    ruvia::http3_connection http3(ruvia::http3_peer_role::client, std::pmr::get_default_resource());
+    auto disabled = client.encode_http3_request(http3, 0, "https", "example.com", "/chat");
     RUVIA_CHECK(!(disabled.index() == 0));
     RUVIA_CHECK(std::get<1>(disabled).kind_ == ruvia::http3_client_request_head_error::connect_protocol_disabled);
-    auto encoded = client.encode_http3_request("https", "example.com", "/chat", true);
+    apply_http3_peer_settings(ruvia_ctx, http3, {.enable_connect_protocol_ = true});
+    auto encoded = client.encode_http3_request(http3, 0, "https", "example.com", "/chat");
     RUVIA_CHECK((encoded.index() == 0));
-    auto head = ruvia::decode_http3_message_head(std::get<0>(encoded).field_section_, ruvia::http3_message_head_kind::request);
+    auto head = ruvia::decode_http3_message_head(std::get<0>(encoded).headers_.field_section(), ruvia::http3_message_head_kind::request);
     RUVIA_CHECK((head.index() == 0));
     RUVIA_CHECK_EQ(std::string_view(std::get<0>(head).protocol_), std::string_view("websocket"));
     RUVIA_CHECK_EQ(std::string_view(std::get<0>(head).method_), std::string_view("CONNECT"));
@@ -198,22 +212,26 @@ RUVIA_TEST(websocket_client_negotiation_preserves_owned_offers_and_retained_resu
     {
         const std::array<std::string_view, 1> protocols{"channel.protocol.v1"};
         ruvia::websocket_client_negotiation negotiation({.subprotocols_ = protocols, .deflate_ = {.enabled_ = true}}, &resource);
-        const auto retained = negotiation.encode_http3_request("https", "example.test", "/socket", true);
+        ruvia::http3_connection connection(ruvia::http3_peer_role::client, &resource);
+        apply_http3_peer_settings(ruvia_ctx, connection, {.enable_connect_protocol_ = true});
+        const auto retained = negotiation.encode_http3_request(connection, 0, "https", "example.test", "/socket");
         RUVIA_CHECK((retained.index() == 0));
-        const std::vector<char> snapshot(std::get<0>(retained).field_section_.begin(), std::get<0>(retained).field_section_.end());
+        const auto retained_section = std::get<0>(retained).headers_.field_section();
+        const std::vector<char> snapshot(retained_section.begin(), retained_section.end());
         const auto baseline = resource.live_;
         for (std::size_t i = 0; i < 32; ++i) {
             {
-                const auto head = negotiation.encode_http3_request("https", "example.test", "/other", true);
+                const auto head = negotiation.encode_http3_request(connection, 4, "https", "example.test", "/other");
                 RUVIA_CHECK((head.index() == 0));
             }
             RUVIA_CHECK_EQ(resource.live_, baseline);
-            RUVIA_CHECK(std::equal(snapshot.begin(), snapshot.end(), std::get<0>(retained).field_section_.begin(), std::get<0>(retained).field_section_.end()));
+            const auto current = std::get<0>(retained).headers_.field_section();
+            RUVIA_CHECK(std::equal(snapshot.begin(), snapshot.end(), current.begin(), current.end()));
         }
         resource.fail_ = true;
         bool threw = false;
         try {
-            (void)negotiation.encode_http3_request("https", "example.test", "/allocation", true);
+            (void)negotiation.encode_http3_request(connection, 8, "https", "example.test", "/allocation");
         } catch (const std::bad_alloc&) {
             threw = true;
         }
@@ -228,4 +246,35 @@ RUVIA_TEST(websocket_client_negotiation_preserves_owned_offers_and_retained_resu
         RUVIA_CHECK(resource.live_ > 0);
     }
     RUVIA_CHECK_EQ(resource.live_, 0u);
+}
+
+RUVIA_TEST(websocket_client_http3_uses_connection_settings_and_retains_its_request_after_offer_retirement) {
+    negotiation_resource connection_resource;
+    {
+        ruvia::http3_connection connection(ruvia::http3_peer_role::client, &connection_resource);
+        const auto begun = connection.begin_early_data({.max_field_section_size_ = 1, .enable_connect_protocol_ = true});
+        RUVIA_CHECK(begun.scope_ == ruvia::http3_connection_error_scope::none);
+        std::optional<ruvia::http3_client_request_head> retained;
+        {
+            negotiation_resource offer_resource;
+            const std::array protocols{std::string_view("retained.protocol")};
+            ruvia::websocket_client_negotiation negotiation({.subprotocols_ = protocols}, &offer_resource);
+            auto limited = negotiation.encode_http3_request(connection, 0, "https", "example.test", "/socket");
+            RUVIA_CHECK(limited.index() != 0);
+            RUVIA_CHECK(std::get<1>(limited).field_section_error_ == ruvia::http3_field_section_error::field_list_too_large);
+            const auto rejected = connection.complete_early_data(false);
+            RUVIA_CHECK(rejected.scope_ == ruvia::http3_connection_error_scope::none);
+            RUVIA_CHECK(!connection.peer_settings());
+            apply_http3_peer_settings(ruvia_ctx, connection, {.enable_connect_protocol_ = true});
+            auto encoded = negotiation.encode_http3_request(connection, 4, "https", "example.test", "/socket");
+            RUVIA_CHECK(encoded.index() == 0);
+            retained.emplace(std::move(std::get<0>(encoded)));
+        }
+        const auto decoded = ruvia::decode_http3_message_head(retained->headers_.field_section(), ruvia::http3_message_head_kind::request);
+        RUVIA_CHECK(decoded.index() == 0);
+        const auto& headers = std::get<0>(decoded).headers_;
+        const auto protocol = std::ranges::find_if(headers, [](const auto& field) { return field.name() == "sec-websocket-protocol"; });
+        RUVIA_CHECK(protocol != headers.end() && protocol->value() == "retained.protocol");
+    }
+    RUVIA_CHECK_EQ(connection_resource.live_, std::size_t{0});
 }

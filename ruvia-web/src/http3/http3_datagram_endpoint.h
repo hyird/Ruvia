@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -47,6 +48,9 @@ public:
 // outlive native callback retirement. Destruction requires finalized callbacks.
 // send_owned_datagram moves only on admission: rejection or backpressure leaves
 // the caller's lease intact. An admitted lease survives stop until its callback.
+// Receive leases armed on the socket plus received packets awaiting routing stay
+// within http3_capacity::receive_slots; up to http3_capacity::send_slots sends
+// are in flight at once.
 class http3_acceptor_datagram_endpoint final {
 public:
     using udp = http3_datagram_endpoint_types::udp;
@@ -63,7 +67,9 @@ public:
     void prepare();
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] pump_result start() noexcept;
+    // Received packets in completion order.
     [[nodiscard]] std::optional<datagram> take_receive() noexcept;
+    // Arms every receive slot that pool storage and routing backlog allow.
     void poll_receive() noexcept;
     [[nodiscard]] pump_result send_owned_datagram(datagram&&) noexcept;
     [[nodiscard]] bool outbound_capacity() const noexcept;
@@ -76,13 +82,25 @@ public:
     [[nodiscard]] std::error_code error() const noexcept;
 
 private:
+    static constexpr std::size_t receive_capacity = http3_capacity::receive_slots;
+    static constexpr std::size_t send_capacity = http3_capacity::send_slots;
+    // Each native operation's callback context; its lease lives until the callback.
+    struct receive_operation final {
+        http3_acceptor_datagram_endpoint* owner_{};
+        std::optional<buffer_lease> lease_;
+    };
+    struct send_operation final {
+        http3_acceptor_datagram_endpoint* owner_{};
+        std::optional<datagram> packet_;
+    };
+
     static void receive_completion(void*, std::error_code, http3_udp_socket::receive_view) noexcept;
     static void send_completion(void*, std::error_code, std::size_t) noexcept;
     void require_owner_thread() const noexcept;
     [[nodiscard]] bool valid_packet(std::span<const std::byte>, const udp::endpoint&, const udp::endpoint&) noexcept;
-    [[nodiscard]] bool arm_receive() noexcept;
-    void handle_receive(std::error_code, http3_udp_socket::receive_view) noexcept;
-    void handle_send(std::error_code, std::size_t) noexcept;
+    void arm_receives() noexcept;
+    void handle_receive(receive_operation&, std::error_code, http3_udp_socket::receive_view) noexcept;
+    void handle_send(send_operation&, std::error_code, std::size_t) noexcept;
     void notify(notification_kind) noexcept;
     void fail(std::error_code) noexcept;
     udp::endpoint bind_endpoint_;
@@ -91,14 +109,21 @@ private:
     buffer_pool& pool_;
     http3_udp_socket socket_;
     notification notification_;
-    std::optional<buffer_lease> receive_lease_;
-    std::optional<datagram> held_receive_;
-    std::optional<datagram> pending_send_;
+    std::array<receive_operation, receive_capacity> receive_operations_;
+    std::array<send_operation, send_capacity> send_operations_;
+    // Stacks of idle operation indices.
+    std::array<std::uint32_t, receive_capacity> idle_receives_{};
+    std::array<std::uint32_t, send_capacity> idle_sends_{};
+    std::size_t idle_receive_count_{};
+    std::size_t idle_send_count_{};
+    // FIFO of received packets awaiting take_receive.
+    std::array<std::optional<datagram>, receive_capacity> held_receives_;
+    std::size_t held_head_{};
+    std::size_t held_count_{};
     std::error_code error_;
     std::size_t callback_depth_{};
     bool prepared_{};
     bool started_{};
-    bool receive_armed_{};
     bool stopping_{};
     bool stopping_notified_{};
 };

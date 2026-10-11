@@ -9,13 +9,8 @@
 #include <vector>
 
 #include "ruvia/http/hpack_protocol_types.h"
-#include "ruvia/http/http_status.h"
 
 namespace ruvia::detail {
-
-struct hpack_decoder_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
 
 struct hpack_static_index final {
     static constexpr std::uint32_t status_ok = 8;
@@ -83,7 +78,7 @@ public:
         bool active_{true};
     };
 
-    explicit hpack_decoder(hpack_decoder_options options = {});
+    explicit hpack_decoder(std::pmr::memory_resource* resource);
 
     hpack_decoder(const hpack_decoder&) = delete;
     hpack_decoder& operator=(const hpack_decoder&) = delete;
@@ -182,25 +177,6 @@ private:
     std::size_t transaction_dynamic_offset_{0};
     std::size_t transaction_dynamic_vector_size_{0};
     std::size_t transaction_max_dynamic_size_{0};
-};
-
-class hpack_encoder final {
-public:
-    static void encode_indexed(std::pmr::string& out, std::uint32_t index);
-    static void encode_dynamic_table_size_update(std::pmr::string& out, std::uint32_t maximum);
-    // Throws std::length_error before changing `out` when a literal name or value
-    // exceeds the uint32 length domain permitted by HPACK string literals.
-    static void encode_header(std::pmr::string& out, std::string_view name, std::string_view value);
-    // Throws std::length_error before changing `out` when `value` is too large for
-    // the HPACK string length field.
-    static void encode_header_with_name_index(std::pmr::string& out, std::uint32_t name_index,
-        std::string_view value, bool never_indexed = false);
-    static void encode_status(std::pmr::string& out, http_status_code status);
-
-private:
-    static void encode_integer(std::pmr::string& out, std::uint8_t first_byte_mask,
-        std::uint8_t prefix_bits, std::uint32_t value);
-    static void encode_string(std::pmr::string& out, std::string_view value);
 };
 
 }  // namespace ruvia::detail

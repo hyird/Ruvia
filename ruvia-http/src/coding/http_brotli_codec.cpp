@@ -6,8 +6,8 @@
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
+#include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
-#include "coding/pmr_codec_allocation.h"
 
 // br (RFC 7932) through the Brotli reference library.
 
@@ -34,20 +34,11 @@ namespace {
 http_content_decode_result decode_brotli_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
-    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
-    auto* state_value = BrotliDecoderCreateInstance(
-        &pmr_codec_allocate_with_exception, &pmr_codec_free, &allocation_context);
-    if (state_value == nullptr) {
-        allocation_context.rethrow_allocation_failure();
+    brotli_decoder_stream decoder(output.get_allocator().resource());
+    if (!decoder.initialized()) {
         return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
     }
-    struct guard final {
-        BrotliDecoderState* state_;
-        ~guard() {
-            BrotliDecoderDestroyInstance(state_);
-        }
-    } guard_value{state_value};
-    allocation_context.rethrow_allocation_failure();
+    auto* state_value = decoder.native();
 
     const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
     std::size_t available_input = input.size();
@@ -77,7 +68,7 @@ http_content_decode_result decode_brotli_content(
             return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
         }
         if (result_value == BROTLI_DECODER_RESULT_ERROR) {
-            allocation_context.rethrow_allocation_failure();
+            decoder.rethrow_allocation_failure();
             return http_content_decode_result_access::failure(brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))
                                                                   ? http_content_decode_error::decoder_failure
                                                                   : http_content_decode_error::invalid_content);
@@ -93,25 +84,11 @@ http_content_decode_result decode_brotli_content(
 http_content_encode_result encode_brotli_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
-    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
-    auto* state_value = BrotliEncoderCreateInstance(
-        &pmr_codec_allocate_with_exception, &pmr_codec_free, &allocation_context);
-    if (state_value == nullptr) {
-        allocation_context.rethrow_allocation_failure();
+    brotli_encoder_stream encoder(output.get_allocator().resource());
+    if (!encoder.initialized()) {
         return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
     }
-    struct guard final {
-        BrotliEncoderState* state_;
-        ~guard() {
-            BrotliEncoderDestroyInstance(state_);
-        }
-    } guard_value{state_value};
-    allocation_context.rethrow_allocation_failure();
-    const auto configured = BrotliEncoderSetParameter(state_value, BROTLI_PARAM_QUALITY, 5);
-    allocation_context.rethrow_allocation_failure();
-    if (configured != BROTLI_TRUE) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
-    }
+    auto* state_value = encoder.native();
 
     std::size_t available_input = input.size();
     const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
@@ -120,9 +97,8 @@ http_content_encode_result encode_brotli_content(
         std::size_t available_output = 0;
         const auto compressed = BrotliEncoderCompressStream(state_value, BROTLI_OPERATION_FINISH,
             &available_input, &next_input, &available_output, nullptr, nullptr);
-        allocation_context.rethrow_allocation_failure();
+        encoder.rethrow_allocation_failure();
         if (compressed != BROTLI_TRUE) {
-            allocation_context.rethrow_allocation_failure();
             return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
         }
         std::size_t produced = 0;

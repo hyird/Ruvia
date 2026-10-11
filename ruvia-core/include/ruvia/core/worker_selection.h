@@ -15,7 +15,3 @@ namespace ruvia {
 }
 
 }  // namespace ruvia
-
-namespace ruvia::detail {
-using ::ruvia::worker_selection_hash;
-}  // namespace ruvia::detail

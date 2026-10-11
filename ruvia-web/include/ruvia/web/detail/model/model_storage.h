@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/attributes.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/web/detail/model/model_schema.h"
 
 namespace ruvia::detail::model {
@@ -21,7 +21,7 @@ public:
         (descriptor_types::options_type::has_initial || ... || false);
 
     explicit model_storage(::ruvia::model_options options = {}) noexcept
-        : resource_(detail::pmr_resource_or_default(options.resource_)) {
+        : resource_(pmr_resource_or_default(options.resource_)) {
         static_assert(unique_model_field_names<descriptor_types...>(),
             "Ruvia model source field names must be unique");
         static_assert(

@@ -6,7 +6,7 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 template <typename t_type, typename... args_type>
 [[nodiscard]] t_type* construct_pmr_object(
@@ -59,4 +59,4 @@ template <typename t_type, typename... args_type>
         pmr_object_deleter<t_type>{memory_resource});
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

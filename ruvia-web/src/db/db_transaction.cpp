@@ -5,9 +5,9 @@
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
+#include "db/db_pool.h"
 #include "db/db_prepared_statement.h"
-#include "db/db_query_cache_state.h"
-#include "db/db_registry.h"
+#include "db/db_query_execution.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
 // destruction, and a transaction abandoned by an unwinding scope must roll back
@@ -57,7 +57,7 @@ db_transaction::lease_type::lease_type(detail::db_pool_ref_type client, std::siz
     std::pmr::memory_resource* resource, operation_options options) noexcept
     : client_(client),
       slot_(slot),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       options_(std::move(options)) {}
 
 class db_transaction::state_type final {
@@ -76,12 +76,15 @@ public:
 
 db_transaction::db_transaction(detail::db_pool_ref_type client, std::size_t slot,
     std::pmr::memory_resource* resource, operation_options options)
-    : state_(detail::make_pmr_object<state_type>(resource, client, slot, resource, std::move(options))) {}
+    : state_(make_pmr_object<state_type>(resource, client, slot, resource, std::move(options))) {}
 
 db_transaction::db_transaction(db_transaction&& other) noexcept
-    : cache_(other.cache_),
-      state_(std::move(other.state_)),
-      registration_(std::move(other.registration_), this) {}
+    : state_(std::move(other.state_)),
+      registration_(std::move(other.registration_), this) {
+#ifdef RUVIA_ENABLE_REDIS
+    cache_ = other.cache_;
+#endif
+}
 
 db_transaction::~db_transaction() = default;
 
@@ -108,34 +111,40 @@ std::pmr::memory_resource* db_transaction::query_resource() const {
     return state_->operation_.active_payload().resource_;
 }
 
+detail::db_query_backend db_transaction::query_backend(const lease_type& lease) const {
+    detail::db_query_backend backend{lease.client_, lease.slot_, lease.resource_};
+#ifdef RUVIA_ENABLE_REDIS
+    backend.cache_ = cache_;
+#endif
+    return backend;
+}
+
 task<db_rows> db_transaction::query_task(const db_query& query) {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    const auto& lease_value = operation.lease();
-    auto plan = detail::db_query_plan::prepare(query, nullptr,
-        detail::db_pool_driver(lease_value.client_), lease_value.resource_, cache_);
-    return query_plan_prepared<false>(std::move(plan), cache_, std::move(operation));
+    const auto backend = query_backend(operation.lease());
+    auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
+    return query_plan_prepared<false>(std::move(plan), backend, std::move(operation));
 }
 
 task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_query& query, const db_query& count) {
     registration_.require_active();
     operation_guard_type operation(state_->operation_);
-    const auto& lease_value = operation.lease();
-    auto plan = detail::db_query_plan::prepare(query, &count,
-        detail::db_pool_driver(lease_value.client_), lease_value.resource_, cache_);
-    return query_plan_prepared<true>(std::move(plan), cache_, std::move(operation));
+    const auto backend = query_backend(operation.lease());
+    auto plan = detail::db_query_plan::prepare(query, &count, backend);
+    return query_plan_prepared<true>(std::move(plan), backend, std::move(operation));
 }
 
 template <bool with_count>
 task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
-    detail::db_query_plan plan, detail::db_query_cache_state* cache, operation_guard_type pending) {
+    detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type pending) {
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
     bool backend_failed = false;
+    backend.backend_failed_ = &backend_failed;
     try {
-        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan),
-            detail::db_query_backend{lease_value.client_, lease_value.slot_, lease_value.resource_, cache, &backend_failed},
+        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend,
             lease_value.options_);
         operation.finish_active();
         co_return result_value;

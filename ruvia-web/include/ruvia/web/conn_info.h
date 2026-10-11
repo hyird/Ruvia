@@ -5,11 +5,10 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_scheme.h"
 
 namespace ruvia {
 
-class context;
 namespace detail {
 class context_services;
 }

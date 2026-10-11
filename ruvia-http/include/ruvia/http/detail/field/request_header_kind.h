@@ -38,11 +38,14 @@ enum class request_header_kind : std::uint8_t {
     forwarded,
     x_forwarded_for,
     x_forwarded_proto,
-    sec_websocket_extensions
+    sec_websocket_extensions,
+    te,
+    trailer,
+    proxy_authorization
 };
 
 inline constexpr std::size_t request_header_kind_count =
-    static_cast<std::uint8_t>(request_header_kind::sec_websocket_extensions) + 1;
+    static_cast<std::uint8_t>(request_header_kind::proxy_authorization) + 1;
 
 [[nodiscard]] inline constexpr std::size_t request_header_kind_known_slot(
     request_header_kind kind) noexcept {

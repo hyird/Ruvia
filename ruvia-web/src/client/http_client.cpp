@@ -6,6 +6,8 @@
 #include <string_view>
 #include <utility>
 
+#include "client/http_client_pool.h"
+#include "client/http_client_result_budget.h"
 #include "client/http_client_state.h"
 
 namespace ruvia::detail {
@@ -15,7 +17,8 @@ http_client_state::http_client_state(event_loop loop, const http_client_config& 
     : loop_(client_lifecycle<http_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      clients_(loop_.io_context(), worker_, memory_.resource(), config, result_budget),
+      clients_(loop_.io_context(), worker_, memory_.resource(), config,
+          std::make_shared<http_client_result_budget_domain>(result_budget)),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
@@ -29,23 +32,22 @@ http_client_handle http_client_state::handle(operation_options options) {
 
 http_client_stats http_client_state::stats() {
     lifecycle_.require_ready();
-    return clients_.get(lifecycle_.operation_scope()).stats();
+    return clients_.default_pool().stats();
 }
 
 std::string_view http_client_state::host() {
     lifecycle_.require_ready();
-    const auto client = clients_.get(lifecycle_.operation_scope());
-    return client.host();
+    return clients_.default_pool().host();
 }
 
 std::uint16_t http_client_state::port() {
     lifecycle_.require_ready();
-    return clients_.get(lifecycle_.operation_scope()).port();
+    return clients_.default_pool().port();
 }
 
 http_scheme http_client_state::scheme() {
     lifecycle_.require_ready();
-    return clients_.get(lifecycle_.operation_scope()).scheme();
+    return clients_.default_pool().scheme();
 }
 
 }  // namespace ruvia::detail
@@ -94,9 +96,8 @@ http_client_stats http_client::stats() const {
     return state_->stats();
 }
 
-quic_path_migration http_client::start_quic_path_migration(
-    const asio::ip::udp::endpoint& local_endpoint) const {
-    return with_options({}).start_quic_path_migration(local_endpoint);
+quic_path_migration http_client::start_quic_path_migration(const quic_address& local_address) const {
+    return with_options({}).start_quic_path_migration(local_address);
 }
 
 std::optional<quic_path_migration> http_client::path_migration(std::uint64_t id) const {

@@ -1208,7 +1208,7 @@ private:
 namespace ruvia {
 
 db_statement db_query::compile(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode) const {
-    detail::db_query_compiler compiler(driver, detail::pmr_resource_or_default(resource), mode);
+    detail::db_query_compiler compiler(driver, pmr_resource_or_default(resource), mode);
     compiler.query(storage());
     return db_statement(std::move(compiler.output_.sql_), std::move(compiler.output_.params_), returns_rows());
 }
@@ -1218,7 +1218,7 @@ std::pmr::string db_query::render_expression(expr_type expression, db_driver dri
     if (mode != db_parameter_mode::literal) {
         throw std::invalid_argument("standalone expression rendering requires literal mode");
     }
-    detail::db_query_compiler compiler(driver, detail::pmr_resource_or_default(resource), mode);
+    detail::db_query_compiler compiler(driver, pmr_resource_or_default(resource), mode);
     compiler.expression(expression);
     return std::move(compiler.output_.sql_);
 }

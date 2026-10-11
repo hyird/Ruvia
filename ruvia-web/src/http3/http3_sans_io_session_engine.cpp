@@ -5,6 +5,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -74,7 +75,6 @@ http3_sans_io_session_engine::http3_sans_io_session_engine(const route_table& ro
       inbound_buffers_(limits.inbound_buffer_pool_ != nullptr ? limits.inbound_buffer_pool_ : worker_value.resource(),
           limits.max_inbound_buffer_bytes_),
       connection_(http3_peer_role::server, worker_value.resource(), limits.connection_),
-      control_output_(worker_value.resource()),
       streams_(worker_value.resource()) {
     if (limits_.max_buffered_body_bytes_ == 0 || limits_.max_live_streams_ == 0 ||
         limits_.max_buffered_bytes_in_flight_ == 0 || limits_.max_tunnel_buffered_bytes_ == 0 || limits_.max_stream_backlog_bytes_ < 4096) {
@@ -83,7 +83,7 @@ http3_sans_io_session_engine::http3_sans_io_session_engine(const route_table& ro
 }
 
 http3_sans_io_session_engine::http3_sans_io_session_engine(const route_table& routes_value,
-    worker_memory& worker_value, http3_server_body_budget& body_budget, http3_sans_io_session_limits limits)
+    worker_memory& worker_value, http3_body_budget& body_budget, http3_sans_io_session_limits limits)
     : http3_sans_io_session_engine(routes_value, worker_value, limits) {
     body_budget_ = &body_budget;
 }
@@ -137,12 +137,7 @@ std::optional<http3_sans_io_session_engine::request_lease_type> http3_sans_io_se
     return request_lease_type(*this, *found->second);
 }
 
-std::variant<std::pmr::vector<char>, http3_connection_error_code> http3_sans_io_session_engine::admit_push_stream(
-    std::uint64_t stream_id, std::uint64_t push_id) {
-    const auto* head = connection_.promised_request(push_id);
-    if (terminated_ || head == nullptr || streams_.contains(stream_id) || streams_.size() >= limits_.max_live_streams_) {
-        return http3_connection_error_code::request_rejected;
-    }
+http3_sans_io_session_engine::stream_ptr_type http3_sans_io_session_engine::make_stream(std::uint64_t stream_id) {
     std::pmr::polymorphic_allocator<stream_type> allocator(worker_.resource());
     auto* raw_stream = allocator.allocate(1);
     try {
@@ -151,9 +146,20 @@ std::variant<std::pmr::vector<char>, http3_connection_error_code> http3_sans_io_
         allocator.deallocate(raw_stream, 1);
         throw;
     }
-    stream_ptr_type stream(raw_stream, stream_deleter_type{worker_.resource()});
+    return stream_ptr_type(raw_stream, stream_deleter_type{worker_.resource()});
+}
+
+std::variant<http3_push_stream_prefix, http3_connection_error_code> http3_sans_io_session_engine::admit_push_stream(
+    std::uint64_t stream_id, std::uint64_t push_id) {
+    const auto* head = connection_.promised_request(push_id);
+    if (terminated_ || head == nullptr || streams_.contains(stream_id) || streams_.size() >= limits_.max_live_streams_) {
+        return http3_connection_error_code::request_rejected;
+    }
+    auto stream = make_stream(stream_id);
     stream->push_id_ = push_id;
-    stream->request_.emplace(*head, stream->memory_.resource(), &inbound_buffers_);
+    // The connection keeps the promise for duplicate detection; the push
+    // stream owns its own copy in the stream arena.
+    stream->request_.emplace(head->copy(stream->memory_.resource()), &inbound_buffers_);
     stream->request_->finish_body();
     const auto& request = stream->request_->request();
     // Push admission and completed receive state remain separate from ordinary
@@ -205,26 +211,15 @@ void http3_sans_io_session_engine::bind_control_output_wake(void* context_value,
     control_wake_ = wake;
 }
 bool http3_sans_io_session_engine::queue_origin_advertisement(std::span<const std::string_view> origins) {
-    if (terminated_) {
+    if (terminated_ ||
+        connection_.pending_critical_output(http3_critical_stream_output::stream_kind::control).size() > max_http_header_bytes) {
         return false;
     }
-    auto frame = connection_.prepare_origin_advertisement(origins);
-    if ((frame.index() != 0) || std::get<0>(frame).size() > max_http_header_bytes - std::min(control_output_.size(), max_http_header_bytes)) {
+    if (connection_.queue_origin_advertisement(origins) != http3_connection_error_code::no_error) {
         return false;
     }
-    control_output_.append(std::get<0>(frame).data(), std::get<0>(frame).size());
     if (control_wake_ != nullptr) {
         control_wake_(control_wake_context_);
-    }
-    return true;
-}
-bool http3_sans_io_session_engine::consume_control_output(std::size_t bytes_value) noexcept {
-    if (bytes_value > control_output_.size()) {
-        return false;
-    }
-    control_output_.erase(0, bytes_value);
-    if (control_output_.empty()) {
-        std::pmr::string(worker_.resource()).swap(control_output_);
     }
     return true;
 }
@@ -236,8 +231,17 @@ http3_connection_result http3_sans_io_session_engine::feed(std::uint64_t stream_
     }
     try {
         const auto input = std::span<const char>(bytes_value.data(), bytes_value.size());
+        // A request head completed by this call is decoded straight into the
+        // arena of the stream that will own it; handle_event adopts the stream.
+        std::pmr::memory_resource* head_resource = nullptr;
+        if (!reset && is_http3_request_stream_id(stream_id) && !streams_.contains(stream_id) &&
+            streams_.size() < limits_.max_live_streams_) {
+            pending_stream_ = make_stream(stream_id);
+            head_resource = pending_stream_->memory_.resource();
+        }
         const auto result_value = connection_.feed(
-            stream_id, input, fin, reset, &http3_sans_io_session_engine::on_connection_event, this);
+            stream_id, input, fin, reset, &http3_sans_io_session_engine::on_connection_event, this, head_resource);
+        pending_stream_.reset();
         if (result_value.scope_ == http3_connection_error_scope::connection ||
             result_value.status_ == http3_connection_status::connection_error) {
             terminate(result_value);
@@ -263,11 +267,13 @@ http3_connection_result http3_sans_io_session_engine::feed(std::uint64_t stream_
         }
         return result_value;
     } catch (const std::length_error&) {
+        pending_stream_.reset();
         const http3_connection_result failure{http3_connection_status::connection_error,
             http3_connection_error_scope::connection, http3_connection_error_code::excessive_load};
         terminate(failure);
         return failure;
     } catch (...) {
+        pending_stream_.reset();
         const http3_connection_result failure{http3_connection_status::connection_error,
             http3_connection_error_scope::connection, http3_connection_error_code::internal_error};
         terminate(failure);
@@ -316,17 +322,10 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
         if (streams_.size() >= limits_.max_live_streams_) {
             throw std::length_error("HTTP/3 live stream budget exhausted");
         }
-        std::pmr::polymorphic_allocator<stream_type> allocator(worker_.resource());
-        auto* raw_stream = allocator.allocate(1);
-        try {
-            allocator.construct(raw_stream, worker_, event.stream_id_, &inbound_buffers_);
-        } catch (...) {
-            allocator.deallocate(raw_stream, 1);
-            throw;
-        }
-        stream_ptr_type stream(raw_stream, stream_deleter_type{worker_.resource()});
-        stream->request_.emplace(*event.head_, stream->memory_.resource(),
-            &inbound_buffers_);
+        auto stream = pending_stream_ && pending_stream_->id_ == event.stream_id_ ? std::move(pending_stream_)
+                                                                                  : make_stream(event.stream_id_);
+        const auto content_length = event.head_->content_length_;
+        stream->request_.emplace(std::move(*event.head_), &inbound_buffers_);
         const auto& request = stream->request_->request();
         stream->connect_request_ = request.known_method() == http_known_method::connect;
         stream->resolution_ = routes_.resolve(route_request_view{request.known_method(),
@@ -365,8 +364,7 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
             }
         }
         if (stream->state_ != stream_state_type::rejected && !stream->connect_request_ &&
-            event.head_->content_length_.has_value() &&
-            *event.head_->content_length_ > stream->body_limit_) {
+            content_length.has_value() && *content_length > stream->body_limit_) {
             stream->state_ = stream_state_type::rejected;
             stream->rejection_ = rejection_type::body_too_large;
         }
@@ -401,7 +399,7 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
                     buffered_bytes_in_flight_ > limits_.max_buffered_bytes_in_flight_ ||
                     tunnel_bytes_in_flight_ > limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ ||
                     event.body_.size() > limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ - tunnel_bytes_in_flight_ ||
-                    (body_budget_ != nullptr && !body_budget_->try_reserve(event.body_.size()))) {
+                    (body_budget_ != nullptr && !body_budget_->try_retain(event.body_.size()))) {
                     stream.body_failure_ = rejection_type::in_flight_body_capacity;
                     return;
                 }
@@ -441,7 +439,7 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
                 reject_body(stream, rejection_type::in_flight_body_capacity);
                 return;
             }
-            if (body_budget_ != nullptr && !body_budget_->try_reserve(event.body_.size())) {
+            if (body_budget_ != nullptr && !body_budget_->try_retain(event.body_.size())) {
                 reject_body(stream, rejection_type::worker_body_budget_exhausted);
                 return;
             }
@@ -484,7 +482,7 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
                 stream.tunnel_input_overflow_ = true;
                 return;
             }
-            if (body_budget_ != nullptr && !body_budget_->try_reserve(event.body_.size())) {
+            if (body_budget_ != nullptr && !body_budget_->try_retain(event.body_.size())) {
                 stream.tunnel_input_overflow_ = true;
                 return;
             }
@@ -509,10 +507,9 @@ void http3_sans_io_session_engine::handle_event(const http3_connection_event& ev
         case http3_connection_event_kind::message_end:
             stream.receive_ended_ = true;
             if (stream.connect_request_ || stream.streaming_body_) {
+                // Streaming DATA bypasses the buffered request owner. The
+                // protocol connection has already validated its final length.
                 stream.tunnel_receive_ended_ = true;
-                if (stream.streaming_body_) {
-                    stream.request_->finish_body();
-                }
             } else {
                 stream.pending_finish_ = stream.state_ == stream_state_type::receiving;
             }
@@ -569,19 +566,24 @@ bool http3_sans_io_session_engine::streaming_request(std::uint64_t stream_id) co
     return found != streams_.end() && found->second->streaming_body_;
 }
 
-bool http3_sans_io_session_engine::can_accept_input(std::uint64_t stream_id, std::size_t wire_bytes) const noexcept {
+std::size_t http3_sans_io_session_engine::input_capacity(std::uint64_t stream_id) const noexcept {
     const auto found = streams_.find(stream_id);
     if (found == streams_.end() || (!found->second->streaming_body_ && !found->second->connect_request_) ||
         found->second->retired_ || found->second->body_failure_ != rejection_type::none) {
-        return true;
+        return std::numeric_limits<std::size_t>::max();
     }
     const auto limit = found->second->connect_request_ ? limits_.max_tunnel_buffered_bytes_ : limits_.max_stream_backlog_bytes_;
-    return found->second->tunnel_buffered_bytes_ <= limit &&
-           buffered_bytes_in_flight_ <= limits_.max_buffered_bytes_in_flight_ &&
-           tunnel_bytes_in_flight_ <= limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ &&
-           wire_bytes <= limit - found->second->tunnel_buffered_bytes_ &&
-           wire_bytes <= limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ - tunnel_bytes_in_flight_ &&
-           (body_budget_ == nullptr || wire_bytes <= body_budget_->available());
+    if (found->second->tunnel_buffered_bytes_ > limit ||
+        buffered_bytes_in_flight_ > limits_.max_buffered_bytes_in_flight_ ||
+        tunnel_bytes_in_flight_ > limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_) {
+        return 0;
+    }
+    auto capacity = std::min(limit - found->second->tunnel_buffered_bytes_,
+        limits_.max_buffered_bytes_in_flight_ - buffered_bytes_in_flight_ - tunnel_bytes_in_flight_);
+    if (body_budget_ != nullptr) {
+        capacity = std::min(capacity, body_budget_->available());
+    }
+    return capacity;
 }
 
 http3_sans_io_session_engine::rejection_type http3_sans_io_session_engine::streaming_body_failure(std::uint64_t stream_id) const noexcept {
@@ -762,7 +764,7 @@ void http3_sans_io_session_engine::terminate(http3_connection_result failure) no
     }
     failure_ = failure;
     terminated_ = true;
-    std::pmr::string(worker_.resource()).swap(control_output_);
+    pending_stream_.reset();
     if (!connection_.retire()) {
         std::terminate();
     }

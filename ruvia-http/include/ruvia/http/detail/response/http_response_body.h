@@ -15,8 +15,8 @@
 #include <vector>
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
-#include "ruvia/http/detail/util/native_path.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
 
 namespace ruvia {
@@ -117,7 +117,7 @@ private:
           offset_(offset),
           length_(length),
           identity_(identity) {
-        assign_http_native_path(*native_path_, file);
+        http_assign_native_path(*native_path_, file);
     }
 
     std::unique_ptr<http_native_path_string_type, http_pmr_object_deleter<http_native_path_string_type>> native_path_;
@@ -177,7 +177,7 @@ public:
           plan_(plan.resource() == resource ? std::move(plan) : plan.clone(resource)),
           size_(size),
           identity_(identity) {
-        assign_http_native_path(*native_path_, path);
+        http_assign_native_path(*native_path_, path);
         if (plan_.segments().empty()) {
             throw std::invalid_argument("multipart response plan must contain segments");
         }

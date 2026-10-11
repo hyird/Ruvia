@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -9,8 +12,8 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
-#include "ruvia/http/detail/util/ascii_case.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
@@ -26,15 +29,44 @@ enum class http_field_list_parse_status : std::uint8_t { ok,
     malformed,
     rejected };
 
+// Named reserved-field sets. Field names are case-insensitive (RFC 9110
+// section 5.1), so every set is matched through http_field_name_in.
+[[nodiscard]] inline bool http_field_name_in(
+    std::string_view name, std::span<const std::string_view> fields) noexcept {
+    return std::ranges::any_of(
+        fields, [name](std::string_view field) noexcept { return http_ascii_equals_ignore_case(name, field); });
+}
+
+// Message framing (RFC 9110 sections 8.6 and 6.1): owned by the protocol
+// layer, never by an application field list.
+inline constexpr std::array<std::string_view, 2> http_message_framing_fields{
+    "content-length", "transfer-encoding"};
+
+// Connection-specific fields (RFC 9110 section 7.6.1). HTTP/2 and HTTP/3
+// forbid them outright (RFC 9113 section 8.2.2, RFC 9114 section 4.2).
+inline constexpr std::array<std::string_view, 5> http_connection_specific_fields{
+    "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"};
+
+// A successful CONNECT or extended-CONNECT tunnel carries no representation
+// (RFC 9110 section 9.3.6, RFC 9298 section 3): its head must not declare
+// framing or representation metadata.
+inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
+    "content-length", "transfer-encoding", "content-type", "content-encoding", "trailer"};
+
+// WebSocket opening-handshake fields owned by the handshake implementation
+// (RFC 6455 section 4). The key exchange pair leads so the HTTP/1.1-only
+// proof fields, which extended CONNECT forbids (RFC 8441 section 5), are a
+// named prefix of the full set.
+inline constexpr std::array<std::string_view, 5> http_websocket_handshake_fields{"sec-websocket-key",
+    "sec-websocket-accept", "sec-websocket-version", "sec-websocket-protocol", "sec-websocket-extensions"};
+inline constexpr std::span<const std::string_view, 2> http_websocket_key_exchange_fields =
+    std::span(http_websocket_handshake_fields).first<2>();
+
 // HTTP/2 and HTTP/3 share the connection-specific field ban. Decoded-name
 // lowercase validation and the request-only TE value exception belong to the
 // protocol boundary; application-owned names are matched case-insensitively.
 [[nodiscard]] inline bool is_forbidden_http_binary_connection_field(std::string_view name) noexcept {
-    return http_ascii_equals_ignore_case(name, "connection") ||
-           http_ascii_equals_ignore_case(name, "keep-alive") ||
-           http_ascii_equals_ignore_case(name, "proxy-connection") ||
-           http_ascii_equals_ignore_case(name, "transfer-encoding") ||
-           http_ascii_equals_ignore_case(name, "upgrade");
+    return http_field_name_in(name, http_connection_specific_fields);
 }
 
 [[nodiscard]] inline bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
@@ -50,10 +82,6 @@ enum class http_connection_option : std::uint8_t {
 
 [[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(
     std::string_view option) noexcept {
-    if (http_ascii_equals_ignore_case(option, "Host") || http_ascii_equals_ignore_case(option, "Expect") ||
-        http_ascii_equals_ignore_case(option, "Trailer")) {
-        return true;
-    }
     switch (classify_request_header(option)) {
         case request_header_kind::other:
         case request_header_kind::connection:
@@ -63,6 +91,8 @@ enum class http_connection_option : std::uint8_t {
         case request_header_kind::x_forwarded_for:
         case request_header_kind::x_forwarded_proto:
         case request_header_kind::sec_websocket_extensions:
+        case request_header_kind::te:
+        case request_header_kind::proxy_authorization:
             break;
         case request_header_kind::accept:
         case request_header_kind::accept_encoding:
@@ -86,6 +116,7 @@ enum class http_connection_option : std::uint8_t {
         case request_header_kind::sec_websocket_protocol:
         case request_header_kind::sec_websocket_version:
         case request_header_kind::user_agent:
+        case request_header_kind::trailer:
             return true;
     }
     const auto known_bit = classify_response_header_name(option);

@@ -14,15 +14,16 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/http/http3_settings.h"
 
+#include "http3/http3_client_sans_io_session_engine.h"
 #include "http3/http3_critical_stream_driver.h"
 #include "http3/http3_quic_client_transport.h"
-#include "http3/http3_quic_datagram_bridge.h"
 
 namespace ruvia::detail {
 
 // Worker-affine UDP socket and QUIC client adapter; the caller owns all waits.
+// Each pump drives the local critical streams straight from the bound engine's
+// pending output. The engine and tls_host must outlive this session.
 class http3_quic_client_socket_session final {
 public:
     static constexpr std::size_t datagram_buffer_size = 65536;
@@ -50,13 +51,13 @@ public:
         bool output_backpressured_{};
         bool critical_streams_ready_{};
         bool critical_output_progress_{};
+        std::optional<http3_client_sans_io_session_result> protocol_failure_{};
         std::optional<std::chrono::steady_clock::duration> event_timeout_;
     };
 
     http3_quic_client_socket_session(asio::io_context& io,
-        const asio::ip::udp::endpoint& peer, std::string_view tls_hostname,
-        http3_quic_client_tls_context& tls,
-        http3_settings settings = {.qpack_max_table_capacity_ = 4096, .qpack_blocked_streams_ = 16},
+        const asio::ip::udp::endpoint& peer, std::string_view tls_host,
+        http3_quic_client_tls_context& tls, http3_client_sans_io_session_engine& engine,
         ruvia::quic_version initial_version = ruvia::quic_version::v1,
         bool enable_early_data = false,
         std::pmr::memory_resource* resource = std::pmr::get_default_resource());
@@ -97,17 +98,11 @@ public:
     [[nodiscard]] const asio::ip::udp::endpoint& local_endpoint() const noexcept {
         return local_endpoint_;
     }
-    [[nodiscard]] const asio::ip::udp::endpoint& peer_endpoint() const noexcept {
-        return peer_;
-    }
-    [[nodiscard]] ruvia::quic_path_migration start_path_migration(
-        const asio::ip::udp::endpoint& local_endpoint);
+    [[nodiscard]] ruvia::quic_path_migration start_path_migration(const ruvia::quic_address& local_address);
     [[nodiscard]] std::optional<ruvia::quic_path_migration> path_migration(
         std::uint64_t id) const noexcept;
     [[nodiscard]] std::optional<ruvia::quic_path_migration> active_path_migration() const noexcept;
     [[nodiscard]] ruvia::quic_operation_status cancel_path_migration(std::uint64_t id);
-    [[nodiscard]] ruvia::quic_stream_write_result write_critical_stream(
-        ruvia::http3_critical_stream_output::stream_kind kind, std::span<const char> bytes);
     void close() noexcept;
 
 private:
@@ -146,9 +141,10 @@ private:
     asio::steady_timer work_timer_;
     asio::ip::udp::endpoint local_endpoint_;
     http3_quic_client_transport transport_;
-    http3_settings settings_;
+    http3_client_sans_io_session_engine& engine_;
     std::pmr::vector<std::uint64_t> rejected_early_streams_;
     bool early_data_enabled_{};
+    bool early_data_completed_{};
     std::optional<http3_critical_stream_driver> critical_streams_;
     std::array<std::byte, datagram_buffer_size> receive_buffer_{};
     std::array<std::byte, datagram_buffer_size> packet_buffer_{};

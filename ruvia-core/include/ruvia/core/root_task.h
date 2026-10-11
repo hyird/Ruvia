@@ -3,7 +3,6 @@
 #include <concepts>
 #include <condition_variable>
 #include <exception>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -11,7 +10,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/util/failure_report.h"
 #include "ruvia/core/worker_handle.h"
 
 namespace ruvia {
@@ -20,13 +18,18 @@ class event_loop;
 
 namespace detail {
 
-using event_loop_failure_sink_type = std::function<void(std::exception_ptr)>;
+struct event_loop_state;
+
+// Routes an unobserved root-task failure through the loop's own failure sink,
+// borrowed from the live loop state instead of copied into every task. A
+// retired loop falls back to the unhandled-failure diagnostic.
+void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::exception_ptr failure) noexcept;
 
 class root_task_completion final {
 public:
-    root_task_completion(worker_handle worker_value, event_loop_failure_sink_type failure_sink)
+    root_task_completion(worker_handle worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
         : worker_(std::move(worker_value)),
-          failure_sink_(std::move(failure_sink)) {}
+          loop_(std::move(loop_value)) {}
 
     root_task_completion(const root_task_completion&) = delete;
     root_task_completion& operator=(const root_task_completion&) = delete;
@@ -105,15 +108,11 @@ private:
         if (!failure) {
             return;
         }
-        if (failure_sink_) {
-            failure_sink_(std::move(failure));
-            return;
-        }
-        report_unhandled_failure("unobserved event-loop root task", std::move(failure));
+        report_root_task_failure(loop_, std::move(failure));
     }
 
     worker_handle worker_;
-    event_loop_failure_sink_type failure_sink_;
+    std::weak_ptr<event_loop_state> loop_;
     mutable std::mutex mutex_;
     mutable std::condition_variable completed_;
     std::exception_ptr failure_;
@@ -126,8 +125,8 @@ struct root_task_void_result final {};
 template <typename t_type>
 class root_task_state final {
 public:
-    root_task_state(worker_handle worker_value, event_loop_failure_sink_type failure_sink)
-        : completion_(std::move(worker_value), std::move(failure_sink)) {}
+    root_task_state(worker_handle worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
+        : completion_(std::move(worker_value), std::move(loop_value)) {}
 
     [[nodiscard]] bool valid() const noexcept {
         return completion_.valid();

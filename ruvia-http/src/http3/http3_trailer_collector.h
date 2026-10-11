@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <vector>
 
+#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/http3_field_section.h"
 
 #include "field/binary_field_name.h"
@@ -25,11 +27,19 @@ struct http3_trailer_collector final {
         bool never_indexed_;
     };
 
-    explicit http3_trailer_collector(std::pmr::memory_resource* resource)
-        : fields_(resource) {}
+    http3_trailer_collector(std::pmr::memory_resource* resource, http3_field_section_limits limits)
+        : fields_(resource),
+          section_size_(limits.max_decoded_bytes_),
+          max_fields_(limits.max_fields_) {}
 
     static bool collect(void* opaque, http3_field_section_field_view field) {
         auto& collector_value = *static_cast<http3_trailer_collector*>(opaque);
+        if (collector_value.fields_.size() >= collector_value.max_fields_ ||
+            !collector_value.section_size_.add(field.name_, field.value_)) {
+            collector_value.valid_ = false;
+            collector_value.limit_exceeded_ = true;
+            return false;
+        }
         if (!is_valid_binary_field_name(field.name_) || !validate_field_policy(field)) {
             collector_value.valid_ = false;
             return false;
@@ -40,6 +50,11 @@ struct http3_trailer_collector final {
 
     std::pmr::vector<field_storage> fields_;
     bool valid_{true};
+    bool limit_exceeded_{false};
+
+private:
+    http_header_section_size section_size_;
+    std::size_t max_fields_;
 };
 
 }  // namespace ruvia::detail

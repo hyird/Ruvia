@@ -71,64 +71,34 @@ inline constexpr bool is_redis_entity_scalar =
     is_redis_entity_string<t_type> || std::is_same_v<std::remove_cvref_t<t_type>, bool> ||
     is_redis_entity_native_number<t_type> || is_redis_entity_model_scalar<t_type>;
 
-struct redis_entity_field_options final {
-    bool id_{false};
-    bool nullable_{false};
-    constexpr bool operator==(const redis_entity_field_options&) const = default;
-};
-
-template <typename column_t_type>
-struct redis_entity_field_adapter final {
-    static constexpr auto name = column_t_type::name;
-    using value_type = typename column_t_type::value_type;
-    using column_type = column_t_type;
-    static constexpr redis_entity_field_options options{
-        .id_ = column_type::options.primary_key_,
-        .nullable_ = column_type::options.nullable_,
-    };
-};
-
-template <typename entity_type, std::size_t... i>
-consteval bool redis_entity_columns_are_scalar(std::index_sequence<i...>) {
-    return (is_redis_entity_scalar<
-                typename std::tuple_element_t<i, typename entity_type::columns_type>::value_type> &&
-            ...);
-}
-
 template <typename entity_type>
 consteval bool redis_entity_columns_are_scalar() {
-    return redis_entity_columns_are_scalar<entity_type>(
-        std::make_index_sequence<std::tuple_size_v<typename entity_type::columns_type>>{});
-}
-
-template <typename entity_type, std::size_t... i>
-consteval std::size_t redis_entity_primary_key_count(std::index_sequence<i...>) {
-    return (std::size_t{
-                std::tuple_element_t<i, typename entity_type::columns_type>::options.primary_key_} +
-            ... +
-            std::size_t{0});
+    bool result_value = true;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        result_value = result_value && is_redis_entity_scalar<typename column_type::value_type>;
+    });
+    return result_value;
 }
 
 template <typename entity_type>
 consteval std::size_t redis_entity_primary_key_count() {
-    return redis_entity_primary_key_count<entity_type>(
-        std::make_index_sequence<std::tuple_size_v<typename entity_type::columns_type>>{});
-}
-
-template <typename entity_type, std::size_t... i>
-consteval bool redis_entity_primary_key_is_valid(std::index_sequence<i...>) {
-    return ((
-                !std::tuple_element_t<i, typename entity_type::columns_type>::options.primary_key_ ||
-                (is_redis_entity_primary_key_scalar<typename std::tuple_element_t<
-                        i, typename entity_type::columns_type>::value_type> &&
-                    !std::tuple_element_t<i, typename entity_type::columns_type>::options.nullable_)) &&
-            ...);
+    std::size_t result_value = 0;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        result_value += column_type::options.primary_key_ ? 1U : 0U;
+    });
+    return result_value;
 }
 
 template <typename entity_type>
 consteval bool redis_entity_primary_key_is_valid() {
-    return redis_entity_primary_key_is_valid<entity_type>(
-        std::make_index_sequence<std::tuple_size_v<typename entity_type::columns_type>>{});
+    bool result_value = true;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        if constexpr (column_type::options.primary_key_) {
+            result_value = result_value && is_redis_entity_primary_key_scalar<typename column_type::value_type> &&
+                           !column_type::options.nullable_;
+        }
+    });
+    return result_value;
 }
 
 template <typename entity>

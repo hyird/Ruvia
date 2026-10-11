@@ -266,7 +266,7 @@ task<http3_quic_client_endpoint_resolver::result_type> http3_quic_client_endpoin
     if (result.status_ == status_type::resolved) {
         for (const auto& entry : outcome.results_) {
             const auto endpoint = entry.endpoint();
-            if ((to_http3_quic_datagram_address(endpoint).index() != 0) ||
+            if ((to_quic_address(endpoint).index() != 0) ||
                 std::find(result.endpoints_.begin(), result.endpoints_.end(), endpoint) !=
                     result.endpoints_.end()) {
                 continue;

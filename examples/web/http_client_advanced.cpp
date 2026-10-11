@@ -11,6 +11,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <memory_resource>
@@ -70,9 +71,10 @@ ruvia::task<void> migrate(ruvia::http_client& client, ruvia::event_loop loop) {
     // then release it so the client can bind its replacement socket there.
     asio::ip::udp::socket reservation(loop.io_context(),
         {asio::ip::make_address("127.0.0.1"), 0});
-    const auto endpoint = reservation.local_endpoint();
+    const auto port = reservation.local_endpoint().port();
     reservation.close();
-    auto migration = client.start_quic_path_migration(endpoint);
+    auto migration = client.start_quic_path_migration(
+        {.bytes_ = {std::byte{127}, std::byte{0}, std::byte{0}, std::byte{1}}, .port_ = port});
     if (migration.status_ == ruvia::quic_migration_status::rejected) {
         // A peer can disable active migration. Rejection leaves the current
         // connection usable, as the download below demonstrates.
@@ -213,8 +215,8 @@ int main(int argc, char** argv) {
             .http3_early_data_ = env.get<bool>("RUVIA_EARLY_DATA").value_or(false),
             .advertisements_ = {.receive_origins_ = tls, .receive_alternative_services_ = tls},
             .push_ = {.enabled_ = true},
+            .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
             .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
-            .ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or("")),
         };
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         loops.start();

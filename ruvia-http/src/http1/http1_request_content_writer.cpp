@@ -1,6 +1,7 @@
 #include "ruvia/http/http1_request_content_writer.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 
@@ -8,7 +9,43 @@
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http_limits.h"
 
+#include "util/http_text_overlap.h"
+
 namespace ruvia {
+namespace {
+
+void write_chunked_trailers(char* output, std::span<const http_header_view> trailers) noexcept {
+    const auto append = [&output](std::string_view value) {
+        if (!value.empty()) {
+            std::memcpy(output, value.data(), value.size());
+            output += value.size();
+        }
+    };
+    append(http1_last_chunk_prefix);
+    for (const auto& field : trailers) {
+        append(field.name());
+        append(": ");
+        append(field.value());
+        append("\r\n");
+    }
+    append(http1_trailer_section_terminator);
+}
+
+// Keep the bounded scratch storage off the ordinary non-overlapping call path.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+void write_overlapping_chunked_trailers(
+    std::span<char> output, std::span<const http_header_view> trailers) noexcept {
+    std::array<char, max_http_header_bytes> scratch;
+    write_chunked_trailers(scratch.data(), trailers);
+    std::memcpy(output.data(), scratch.data(), output.size());
+}
+
+}  // namespace
+
 using error_type = http1_request_content_write_error;
 http1_request_content_writer::http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept
     : length_(plan.content_length()),
@@ -98,17 +135,22 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     if (buffer.size() < required) {
         return error_type::output_too_small;
     }
-    char* cursor_value = buffer.data();
-    auto append = [&](std::string_view value) {if (!value.empty()){std::memcpy(cursor_value,value.data(),value.size());cursor_value+=value.size();} };
     if (!length_) {
-        append(http1_last_chunk_prefix);
+        const auto output = buffer.first(required);
+        const auto output_view = std::string_view(output.data(), output.size());
+        bool overlaps = false;
         for (const auto& field : trailers) {
-            append(field.name());
-            append(": ");
-            append(field.value());
-            append("\r\n");
+            if (detail::http_text_overlaps(field.name(), output_view) ||
+                detail::http_text_overlaps(field.value(), output_view)) {
+                overlaps = true;
+                break;
+            }
         }
-        append(http1_trailer_section_terminator);
+        if (overlaps) {
+            write_overlapping_chunked_trailers(output, trailers);
+        } else {
+            write_chunked_trailers(output.data(), trailers);
+        }
     }
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};

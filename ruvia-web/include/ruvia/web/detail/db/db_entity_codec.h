@@ -174,12 +174,6 @@ void decode_entity_column(e_type& entity, const db_row& row, std::pmr::memory_re
     decode_entity_field<e_type, c_type>(entity, row[c_type::name.view()], resource);
 }
 
-template <typename e_type, typename... c_type, std::size_t... i>
-void decode_entity(e_type& entity, const db_row& row, std::pmr::memory_resource* resource,
-    std::tuple<c_type...>*, std::index_sequence<i...>) {
-    (decode_entity_column<e_type, std::tuple_element_t<i, std::tuple<c_type...>>>(entity, row, resource), ...);
-}
-
 template <typename e_type>
 class db_entity_row_decoder final {
     using columns_type = typename e_type::columns_type;
@@ -196,44 +190,34 @@ public:
     e_type decode(const db_row& row, std::pmr::memory_resource* resource) {
         const auto names = db_result_access::column_names(row);
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
-            [&]<std::size_t... i>(std::index_sequence<i...>) {
-                (bind_column<i>(names), ...);
-            }(std::make_index_sequence<column_count>{});
+            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                indices_[i] = missing_column;
+                if (!selected_[i]) {
+                    return;
+                }
+                for (std::size_t index = 0; index < names.size(); ++index) {
+                    if (names[index] == column_type::name.view()) {
+                        indices_[i] = index;
+                        return;
+                    }
+                }
+            });
             schema_ = names;
         }
         e_type result(resource);
-        [&]<std::size_t... i>(std::index_sequence<i...>) {
-            (decode_column<i>(result, row, resource), ...);
-        }(std::make_index_sequence<column_count>{});
+        for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+            if (!selected_[i]) {
+                return;
+            }
+            if (indices_[i] == missing_column) {
+                throw std::out_of_range("database result has no such column");
+            }
+            decode_entity_field<e_type, column_type>(result, row[indices_[i]], resource);
+        });
         return result;
     }
 
 private:
-    template <std::size_t i>
-    void bind_column(std::span<const std::pmr::string> names) noexcept {
-        indices_[i] = missing_column;
-        if (!selected_[i]) {
-            return;
-        }
-        using column_type = std::tuple_element_t<i, columns_type>;
-        for (std::size_t index = 0; index < names.size(); ++index) {
-            if (names[index] == column_type::name.view()) {
-                indices_[i] = index;
-                return;
-            }
-        }
-    }
-    template <std::size_t i>
-    void decode_column(e_type& result_value, const db_row& row, std::pmr::memory_resource* resource) const {
-        if (!selected_[i]) {
-            return;
-        }
-        if (indices_[i] == missing_column) {
-            throw std::out_of_range("database result has no such column");
-        }
-        decode_entity_field<e_type, std::tuple_element_t<i, columns_type>>(result_value, row[indices_[i]], resource);
-    }
-
     std::array<bool, column_count> selected_{};
     std::array<std::size_t, column_count> indices_{};
     // Used only while synchronously mapping a live, immutable db_rows result.

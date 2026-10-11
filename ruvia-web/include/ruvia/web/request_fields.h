@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/attributes.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/attributes.h"
 
 namespace ruvia {
 
@@ -106,7 +106,7 @@ private:
     friend struct detail::request_name_value_list_access;
 
     explicit request_name_value_list(std::pmr::memory_resource* resource, bool case_insensitive = false)
-        : owned_(detail::pmr_resource_or_default(resource)),
+        : owned_(pmr_resource_or_default(resource)),
           items_(owned_),
           case_insensitive_(case_insensitive) {}
 

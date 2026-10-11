@@ -95,15 +95,15 @@ RUVIA_MODEL(http_error_response_model,
 
 http_error::http_error(http_error_info_options options)
     : status_(options.status_),
-      status_text_(options.status_text_.view(), detail::process_resource()),
-      code_(options.code_.view(), detail::process_resource()),
-      message_(options.message_.view(), detail::process_resource()) {}
+      status_text_(options.status_text_.view(), process_resource()),
+      code_(options.code_.view(), process_resource()),
+      message_(options.message_.view(), process_resource()) {}
 
 http_error::http_error(const http_error& other)
     : status_(other.status_),
-      status_text_(other.status_text_, detail::process_resource()),
-      code_(other.code_, detail::process_resource()),
-      message_(other.message_, detail::process_resource()) {}
+      status_text_(other.status_text_, process_resource()),
+      code_(other.code_, process_resource()),
+      message_(other.message_, process_resource()) {}
 
 http_error& http_error::operator=(const http_error& other) {
     if (this != &other) {

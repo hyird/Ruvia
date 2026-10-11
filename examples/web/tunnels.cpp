@@ -19,6 +19,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/http_udp_tunnel.h"
 #include "ruvia/web/middleware.h"
 
@@ -241,7 +242,7 @@ int main(int argc, char** argv) {
                 .protocol_ = protocol == "3"   ? ruvia::http_client_protocol::http3_only
                              : protocol == "2" ? ruvia::http_client_protocol::http2_only
                                                : ruvia::http_client_protocol::http1_only,
-                .ca_file_ = std::string(env_value.get("RUVIA_TLS_CA").value_or("")),
+                .tls_ = {.ca_file_ = std::string(env_value.get("RUVIA_TLS_CA").value_or(""))},
             };
             ruvia::event_loop_pool loops({.loop_count_ = 1});
             loops.start();

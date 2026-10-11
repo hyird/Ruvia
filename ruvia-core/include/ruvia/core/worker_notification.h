@@ -9,7 +9,6 @@
 
 namespace ruvia {
 
-class event_loop;
 class worker_runtime_context;
 
 struct worker_notification_options final {
@@ -37,9 +36,8 @@ class worker_notification_state;
 
 // A startup-created, address-stable, cross-thread latched wake channel for one
 // worker runtime. The native wake pair is created at construction; the receiver
-// Asio handle is adopted on the worker's first wait. The event_loop constructor
-// retains its loop, while the worker_runtime_context constructor borrows that
-// runtime, which must outlive the notification. Before destruction, every
+// Asio handle is adopted on the worker's first wait. The notification borrows
+// its worker_runtime_context, which must outlive it. Before destruction, every
 // notify() call must have returned and no future call may begin. close()
 // rejects new notifications but does not join producers. The owner worker must
 // explicitly close the notification and join every suspended wait before its
@@ -62,7 +60,6 @@ public:
         friend class worker_notification;
     };
 
-    explicit worker_notification(event_loop loop, worker_notification_options options = {});
     explicit worker_notification(
         worker_runtime_context& runtime, worker_notification_options options = {});
     ~worker_notification();
@@ -87,7 +84,7 @@ public:
 
 private:
     std::unique_ptr<detail::worker_notification_state,
-        detail::pmr_object_deleter<detail::worker_notification_state>>
+        pmr_object_deleter<detail::worker_notification_state>>
         state_;
     wait_awaiter_type wait_awaiter_;
 };

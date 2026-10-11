@@ -7,9 +7,9 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_connection.h"
@@ -30,7 +30,7 @@ public:
 
     [[nodiscard]] task<http_stream_read_result> read_more(std::pmr::string& buffer) {
         const auto old_size = buffer.size();
-        ::ruvia::resize_pmr_string_for_overwrite(buffer, old_size + 4096);
+        http_resize_pmr_string_for_overwrite(buffer, old_size + 4096);
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, old_size, &buffer](
                                                                            auto handler) mutable {
             stream_.async_read_some(

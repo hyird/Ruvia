@@ -119,7 +119,7 @@ RUVIA_TEST(http3_buffered_response_write_preserves_encoded_decoded_field_section
     if ((encoded.index() != 0)) {
         return;
     }
-    const auto decoded_size = std::get<0>(encoded).field_section_.decoded_field_section_size();
+    const auto decoded_size = std::get<0>(encoded).headers_.decoded_field_section_size();
     RUVIA_CHECK(decoded_size > 42U);
 
     cursor cursor_value = make_cursor(response, plan, nullptr);
@@ -284,7 +284,7 @@ RUVIA_TEST(http3_buffered_response_write_file_without_payload_sends_only_metadat
         if ((encoded.index() != 0)) {
             return;
         }
-        const auto decoded_size = std::get<0>(encoded).field_section_.decoded_field_section_size();
+        const auto decoded_size = std::get<0>(encoded).headers_.decoded_field_section_size();
         RUVIA_CHECK(decoded_size > 42U);
         auto cursor_value = make_cursor(response, plan, &memory);
         RUVIA_CHECK_EQ(cursor_value.decoded_field_section_size(), decoded_size);
@@ -406,7 +406,7 @@ RUVIA_TEST(http3_buffered_response_write_handles_out_of_memory_and_not_started_c
     RUVIA_CHECK_EQ(memory.allocations_, memory.returns_);
 }
 
-RUVIA_TEST(http3_buffered_response_cursor_consumes_encoded_head_storage) {
+RUVIA_TEST(http3_buffered_response_cursor_adopts_encoded_head_frame) {
     counting_resource head_memory;
     counting_resource cursor_memory;
     ruvia::http_response response;
@@ -421,22 +421,23 @@ RUVIA_TEST(http3_buffered_response_cursor_consumes_encoded_head_storage) {
         if ((head.index() != 0)) {
             return;
         }
-        decoded_size = std::get<0>(head).field_section_.decoded_field_section_size();
-        auto created = cursor::create(response, plan, std::move(std::get<0>(head)), &cursor_memory);
+        decoded_size = std::get<0>(head).headers_.decoded_field_section_size();
+        auto created = cursor::create(response, plan, std::move(std::get<0>(head)));
         RUVIA_CHECK((created.index() == 0));
         if ((created.index() != 0)) {
             return;
         }
         cursor.emplace(std::move(std::get<0>(created)));
     }
-    RUVIA_CHECK(head_memory.allocations_ > 0);
-    RUVIA_CHECK_EQ(head_memory.allocations_, head_memory.returns_);
-    RUVIA_CHECK(cursor_memory.allocations_ > cursor_memory.returns_);
+    // The cursor owns the encoded frame's storage; nothing was copied elsewhere.
+    RUVIA_CHECK(head_memory.allocations_ > head_memory.returns_);
+    RUVIA_CHECK_EQ(cursor_memory.allocations_, std::size_t{0});
     RUVIA_CHECK_EQ(cursor->decoded_field_section_size(), decoded_size);
     acknowledge_all(*cursor);
     RUVIA_CHECK((cursor->acknowledge_fin(true)).index() == 0);
     RUVIA_CHECK(cursor->finished());
     RUVIA_CHECK(response.body_bytes() == "retained body");
     cursor.reset();
-    RUVIA_CHECK_EQ(cursor_memory.allocations_, cursor_memory.returns_);
+    RUVIA_CHECK_EQ(head_memory.allocations_, head_memory.returns_);
+    RUVIA_CHECK_EQ(cursor_memory.allocations_, std::size_t{0});
 }

@@ -72,6 +72,14 @@ struct controller_store_state final {
 controller_store::controller_store()
     : state_(construct_pmr_object<controller_store_state>(registration_resource())) {}
 
+controller_store::controller_store(std::span<const controller_registrar_type> registrars)
+    : controller_store() {
+    state_->lifetimes_.reserve(registrars.size());
+    for (const auto& registrar : registrars) {
+        registrar.create_(*this);
+    }
+}
+
 controller_store::~controller_store() = default;
 
 controller_store::controller_store(controller_store&&) noexcept = default;
@@ -86,12 +94,12 @@ std::pmr::memory_resource* registration_resource() noexcept {
     return process_resource();
 }
 
-void controller_store::reserve(std::size_t count) {
-    state_->lifetimes_.reserve(count);
-}
-
 std::size_t controller_store::size() const noexcept {
     return state_->lifetimes_.size();
+}
+
+void* controller_store::instance(std::size_t slot) const noexcept {
+    return state_->lifetimes_[slot].target_;
 }
 
 void controller_store::add_lifetime(
@@ -100,7 +108,7 @@ void controller_store::add_lifetime(
 }
 
 bool add_controller_registrar(controller_registrar_type registrar_value) {
-    if (registrar_value == nullptr) {
+    if (registrar_value.create_ == nullptr || registrar_value.register_routes_ == nullptr) {
         throw std::invalid_argument("controller registrar must not be null");
     }
     auto& state_value = controller_registry();
@@ -110,7 +118,7 @@ bool add_controller_registrar(controller_registrar_type registrar_value) {
             "controller registration is sealed; load every controller module before application::run() or "
             "test_app::request()");
     }
-    for (const auto existing : state_value.registrars_) {
+    for (const auto& existing : state_value.registrars_) {
         if (existing == registrar_value) {
             return true;
         }
@@ -126,14 +134,6 @@ std::pmr::vector<controller_registrar_type> seal_controller_registrars() {
     state_value.sealed_ = true;
     registrars = state_value.registrars_;
     return registrars;
-}
-
-void run_controller_registrars(router& router_value, controller_store& controller_lifetimes,
-    std::span<const controller_registrar_type> registrars) {
-    controller_lifetimes.reserve(controller_lifetimes.size() + registrars.size());
-    for (const auto registrar : registrars) {
-        registrar(router_value, controller_lifetimes);
-    }
 }
 
 }  // namespace ruvia::detail

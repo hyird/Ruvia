@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/http_limits.h"
+
 namespace ruvia {
 
 http1_chunk_decode_result http1_chunk_decode_result::make_need_more(std::size_t consumed_bytes) noexcept {
@@ -29,7 +31,7 @@ http1_chunk_decode_result http1_chunk_decode_result::make_failure(
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config)
     : framing_({
           .body_limit_ = config.body_limit_,
-          .trailer_section_limit_ = protocol_byte_limit::unlimited(),
+          .trailer_section_limit_ = protocol_byte_limit::limited(max_http_header_bytes),
           .trailer_role_ = config.trailer_role_ == http1_chunk_trailer_role::response
                                ? detail::chunk_trailer_role::response
                                : detail::chunk_trailer_role::request,

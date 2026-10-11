@@ -52,15 +52,6 @@ bool detail::worker_handle_access::defer_if_attached(
     return dispatcher && dispatcher->defer_if_attached(std::move(task_value));
 }
 
-void detail::worker_handle_access::defer_or_terminate(
-    const worker_handle& worker_value, move_only_function<void()> task_value) noexcept {
-    const auto& dispatcher = worker_value.dispatcher_;
-    if (!dispatcher) {
-        std::terminate();
-    }
-    dispatcher->defer_or_terminate(std::move(task_value));
-}
-
 void detail::worker_handle_access::register_shutdown_listener(
     const worker_handle& worker_value, const std::shared_ptr<worker_shutdown_listener>& listener_value) {
     const auto& dispatcher = worker_value.dispatcher_;

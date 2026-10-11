@@ -19,18 +19,6 @@ bool valid_host(std::string_view host) {
     return !host.empty() && host.find('%') == std::string_view::npos &&
            (host.find(':') != std::string_view::npos ? detail::is_valid_ipv6_literal(host) : detail::is_valid_reg_name(host));
 }
-bool same(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c; };
-        if (lower(a[i]) != lower(b[i])) {
-            return false;
-        }
-    }
-    return true;
-}
 struct handshake_fields {
     bool capsule_{false}, upgrade_{false}, connection_{false}, connection_field_{false}, host_{false}, forbidden_{false};
 };
@@ -40,31 +28,30 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const ht
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
             return http_connect_udp_error::invalid_request;
         }
-        if (same(field.name(), "capsule-protocol")) {
+        if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             const auto value = parse_http_capsule_protocol(field.value());
             if (found.capsule_ || (value.index() != 0) || !std::get<0>(value)) {
                 return http_connect_udp_error::invalid_capsule_protocol;
             }
             found.capsule_ = true;
-        } else if (same(field.name(), "upgrade")) {
-            if (found.upgrade_ || !same(field.value(), "connect-udp")) {
+        } else if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
+            if (found.upgrade_ || !http_ascii_equals_ignore_case(field.value(), "connect-udp")) {
                 return http_connect_udp_error::invalid_request;
             }
             found.upgrade_ = true;
-        } else if (same(field.name(), "connection")) {
+        } else if (http_ascii_equals_ignore_case(field.name(), "connection")) {
             found.connection_field_ = true;
             detail::http_connection_options options;
             if (options.parse_field(field.value(), detail::http_field_list_role::recipient) != detail::http_field_list_parse_status::ok) {
                 return http_connect_udp_error::invalid_request;
             }
             found.connection_ = found.connection_ || options.contains(detail::http_connection_option::upgrade);
-        } else if (same(field.name(), "host")) {
+        } else if (http_ascii_equals_ignore_case(field.name(), "host")) {
             if (found.host_ || field.value().empty()) {
                 return http_connect_udp_error::invalid_request;
             }
             found.host_ = true;
-        } else if (same(field.name(), "content-length") || same(field.name(), "transfer-encoding") ||
-                   same(field.name(), "content-type") || same(field.name(), "content-encoding") || same(field.name(), "trailer")) {
+        } else if (detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
             found.forbidden_ = true;
         }
     }
@@ -156,7 +143,7 @@ std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_r
 }
 bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     return request.known_method() == http_known_method::get &&
-           same(detail::http_trim_ows(request.header("upgrade").value_or("")), "connect-udp");
+           http_ascii_equals_ignore_case(http_trim_ows(request.header("upgrade").value_or("")), "connect-udp");
 }
 std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
     return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? request.header("host").value_or("") : request.authority(), .path_ = request.target(), .headers_ = request.headers()});
@@ -167,9 +154,9 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         return http_connect_udp_error::invalid_response;
     }
     for (const auto& field : response.headers()) {
-        if (same(field.name(), "connection") || same(field.name(), "upgrade") ||
-            same(field.name(), "content-length") || same(field.name(), "transfer-encoding") ||
-            same(field.name(), "content-type") || same(field.name(), "content-encoding") || same(field.name(), "trailer")) {
+        if (http_ascii_equals_ignore_case(field.name(), "connection") ||
+            http_ascii_equals_ignore_case(field.name(), "upgrade") ||
+            detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
             return http_connect_udp_error::invalid_response;
         }
     }
@@ -185,7 +172,7 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         response.header("Connection", "Upgrade");
         response.header("Upgrade", "connect-udp");
     }
-    std::pmr::vector<http_header_view> fields_value(response.resource());
+    std::pmr::vector<http_header_view> fields_value(response.memory_resource());
     for (const auto& field : response.headers()) {
         fields_value.emplace_back(field.name(), field.value());
     }
@@ -200,24 +187,23 @@ std::variant<http1_response_head_plan, http_connect_udp_error> prepare_http1_con
     }
     bool capsule{}, upgrade{}, connection{};
     for (const auto& field : response.headers()) {
-        if (same(field.name(), "capsule-protocol")) {
+        if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             const auto enabled = parse_http_capsule_protocol(field.value());
             if (capsule || (enabled.index() != 0) || !std::get<0>(enabled)) {
                 return http_connect_udp_error::invalid_capsule_protocol;
             }
             capsule = true;
-        } else if (same(field.name(), "upgrade")) {
-            if (upgrade || !same(field.value(), "connect-udp")) {
+        } else if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
+            if (upgrade || !http_ascii_equals_ignore_case(field.value(), "connect-udp")) {
                 return http_connect_udp_error::invalid_response;
             }
             upgrade = true;
-        } else if (same(field.name(), "connection")) {
-            if (connection || !same(field.value(), "Upgrade")) {
+        } else if (http_ascii_equals_ignore_case(field.name(), "connection")) {
+            if (connection || !http_ascii_equals_ignore_case(field.value(), "Upgrade")) {
                 return http_connect_udp_error::invalid_response;
             }
             connection = true;
-        } else if (same(field.name(), "content-length") || same(field.name(), "transfer-encoding") ||
-                   same(field.name(), "content-type") || same(field.name(), "content-encoding") || same(field.name(), "trailer")) {
+        } else if (detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
             return http_connect_udp_error::invalid_response;
         }
     }

@@ -3,12 +3,12 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/core/dns_host.h"
+#include "util/dns_host.h"
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_valid_sni_host(std::string_view host) noexcept {
-    return !host.empty() && !host.ends_with('.') && ruvia::is_valid_dns_host(host);
+    return !host.empty() && !host.ends_with('.') && detail::is_valid_dns_host(host);
 }
 
 inline void ensure_sni_host(

@@ -85,6 +85,26 @@ void count_retire(void* opaque) noexcept {
     ++static_cast<retire_context*>(opaque)->calls_;
 }
 
+struct rejected_parameters_context final {
+    bool rejected_{};
+};
+
+ruvia::quic_tls_drive_result drive_rejected_parameters(void* opaque, ruvia::quic_tls_handshake& handshake) noexcept {
+    // A complete, maximum idle timeout followed by a truncated parameter must
+    // not replace the connection's proposal when validation fails.
+    constexpr std::array malformed_parameters{
+        std::byte{0x01}, std::byte{0x08},
+        std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff},
+        std::byte{0x01}};
+    try {
+        handshake.submit_peer_transport_parameters(malformed_parameters);
+    } catch (const ruvia::quic_error&) {
+        static_cast<rejected_parameters_context*>(opaque)->rejected_ = true;
+    }
+    return {.progress_ = ruvia::quic_tls_progress::failed};
+}
+
 ruvia::quic_crypto_provider_view provider() {
     return {.random_bytes_ = random_bytes,
         .hkdf_extract_ = hkdf,
@@ -129,6 +149,29 @@ RUVIA_TEST(quic_connection_native_memory_uses_and_releases_the_owner_resource) {
         RUVIA_CHECK(connection.tls_handshake().role() == ruvia::quic_role::client);
         RUVIA_CHECK(resource.allocations_ > 0);
         RUVIA_CHECK(resource.deallocations_ < resource.allocations_);
+    }
+    RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
+}
+
+RUVIA_TEST(quic_connection_rejected_peer_parameters_preserve_idle_timeout_proposal) {
+    counting_resource resource;
+    rejected_parameters_context context;
+    {
+        auto config = client_config();
+        config.local_transport_parameters_.idle_timeout_ms_ = 4321;
+        ruvia::quic_connection connection(config, provider(),
+            {.context_ = &context, .drive_ = drive_rejected_parameters, .retire_ = retire_tls},
+            &resource, {});
+        std::array<std::byte, 1400> packet{};
+        bool failed{};
+        try {
+            (void)connection.write_packet(packet, {});
+        } catch (const ruvia::quic_error&) {
+            failed = true;
+        }
+        RUVIA_CHECK(context.rejected_);
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(connection.info().negotiated_idle_timeout_ms_, std::uint64_t{4321});
     }
     RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
 }

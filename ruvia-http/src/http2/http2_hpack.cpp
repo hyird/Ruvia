@@ -4,15 +4,14 @@
 #include <exception>
 #include <variant>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "field/hpack_huffman.h"
-#include "util/pmr_string.h"
 
 namespace ruvia::detail {
 
-hpack_decoder::hpack_decoder(hpack_decoder_options options)
-    : resource_(http_pmr_resource_or_default(options.resource_)),
+hpack_decoder::hpack_decoder(std::pmr::memory_resource* resource)
+    : resource_(resource),
       dynamic_(std::size_t{0}, resource_),
       name_scratch_(std::string_view{}, resource_),
       value_scratch_(std::string_view{}, resource_) {}
@@ -157,8 +156,8 @@ hpack_decoder::step_result_type hpack_decoder::decode_literal_header(const unsig
 }
 
 void hpack_decoder::release_scratch() {
-    clear_pmr_string_retaining_small(name_scratch_);
-    clear_pmr_string_retaining_small(value_scratch_);
+    http_clear_pmr_string_retaining_small(name_scratch_);
+    http_clear_pmr_string_retaining_small(value_scratch_);
 }
 
 hpack_decode_result hpack_decoder::decode(

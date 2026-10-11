@@ -447,7 +447,10 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // responses advance the same
 // exchange until a final response, CONNECT tunnel, or protocol switch completes
 // it. Header validation is transactional and owning response allocation occurs
-// only after protocol validation succeeds.
+// only after protocol validation succeeds. Response obs-fold is replaced with
+// spaces before field validation; its temporary storage uses the same PMR.
+// Trailer declarations do not create a body or trailer section in HEAD/304
+// responses; those responses end at the first empty line.
 class http1_client_response_parser final {
 public:
     struct options_type final {

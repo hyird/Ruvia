@@ -6,7 +6,7 @@
 #include "ruvia/web/static_files.h"
 
 #include "context/context_access.h"
-#include "router/route_dispatch_services.h"
+#include "router/route_context.h"
 #include "router/route_table.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the
@@ -63,21 +63,14 @@ http_response make_allow_no_content_response(request_memory& memory, std::uint32
 
 }  // namespace
 
-task<http_response> detail::route_table::dispatch(
-    const http_request& request, request_memory& memory, context_services services) const {
-    const auto resolution = resolve(request);
-    co_return co_await dispatch(request, resolution, memory, services);
-}
-
 task<std::optional<http_response>> detail::route_table::dispatch_response_stream(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
     response_stream_writer& response_stream, context_services services) const {
     if (resolved.route().endpoint().response_stream() == nullptr) {
         throw std::logic_error("route is not a response stream route");
     }
-    return dispatch_stream_route(request, resolved, memory,
-        resolved.route().endpoint().response_stream()->handler(),
-        services.with_response_stream(response_stream));
+    return dispatch_stream_route(
+        request, resolved, memory, resolved.stream_handler(), services.with_response_stream(response_stream));
 }
 
 task<std::optional<http_response>> detail::route_table::dispatch_websocket(const http_request& request,
@@ -115,14 +108,13 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
         if (resolved == nullptr) {
             if (auto document_response = select_document_root_fallback(
                     document_root, request, memory, services, static_file_mode)) {
-                auto context_value = detail::context_access::make(memory, request,
-                    with_route_handlers(services, *this, error_handler_for(request.path()),
-                        not_found_handler_for(request.path())));
+                auto context_value = detail::context_access::make(
+                    memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
                 auto terminal = [&document_response](context&) -> task<http_response> {
                     co_return std::move(*document_response);
                 };
-                const auto terminal_ref = make_callable_ref<http_response, context&>(terminal);
-                co_return co_await run_unmatched_chain(context_value, terminal_ref);
+                co_return co_await run_unmatched_chain(
+                    context_value, callback_access::bind<task<http_response>(context&)>(terminal));
             }
             // One handle_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
@@ -178,16 +170,14 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
             co_return co_await handle_not_found(request, memory, services);
         }
 
-        auto context_value = make_route_context(memory, request, *resolved,
-            with_route_handlers(services, *this, error_handler_for(request.path()),
-                not_found_handler_for(request.path())));
+        auto context_value = make_route_context(
+            memory, request, *resolved, services.with_route_handlers(*this, not_found_handler_for(request.path())));
         std::exception_ptr exception;
         try {
-            const auto& route = resolved->route();
-            if (route.endpoint().buffered() == nullptr) {
+            if (resolved->route().endpoint().buffered() == nullptr) {
                 throw std::logic_error("streaming route requires its dedicated dispatch path");
             }
-            co_return co_await invoke_route(route, context_value);
+            co_return co_await invoke_route(*resolved, context_value);
         } catch (...) {
             exception = std::current_exception();
         }

@@ -101,7 +101,7 @@ private:
     friend class detail::db_migration_runner;
 
     explicit db_migration_report(std::pmr::memory_resource* resource);
-    db_migration_report(detail::resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    db_migration_report(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<std::pmr::string> applied_;
     std::pmr::vector<std::pmr::string> skipped_;

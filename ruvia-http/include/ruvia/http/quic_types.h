@@ -217,6 +217,9 @@ struct quic_connection_info {
     bool quic_handshake_complete_{};
     bool confirmed_{};
     quic_early_data_state early_data_{quic_early_data_state::unavailable};
+    // Local proposal before peer parameters arrive; then the minimum nonzero
+    // advertised timeout, or zero when both endpoints disable it. Retained
+    // after retirement; protocol timers still come from next_expiry().
     std::uint64_t negotiated_idle_timeout_ms_{};
     std::uint64_t close_error_code_{};
 };

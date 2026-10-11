@@ -11,6 +11,7 @@
 
 #include "ruvia/http/http3_client_response.h"
 #include "ruvia/http/http3_field_section.h"
+#include "ruvia/http/http3_qpack_connection.h"
 #include "ruvia/http/http3_var_int.h"
 
 #include "failing_memory_resource.h"
@@ -169,6 +170,65 @@ RUVIA_TEST(http3_client_response_rejects_unadvertised_push_promise_with_id_error
     RUVIA_CHECK(events.kinds_.size() == 1);
 }
 
+RUVIA_TEST(http3_client_response_push_promise_limits_report_excessive_load) {
+    enum class encoding_mode { literal,
+        shared_literal,
+        shared_dynamic };
+    struct limit_case final {
+        std::size_t bytes_;
+        std::size_t fields_;
+        bool reject_;
+    };
+    // 42 + 44 + 54 + 38 + 40 = 218 decoded field-section bytes.
+    const std::array fields{ruvia::http3_field_section_field_view{":method", "GET"},
+        ruvia::http3_field_section_field_view{":scheme", "https"},
+        ruvia::http3_field_section_field_view{":authority", "example.test"},
+        ruvia::http3_field_section_field_view{":path", "/"},
+        ruvia::http3_field_section_field_view{"x-test", "ok"}};
+    for (const auto mode : {encoding_mode::literal, encoding_mode::shared_literal, encoding_mode::shared_dynamic}) {
+        for (const auto limit : {limit_case{218, 4, true}, limit_case{217, 5, true}, limit_case{218, 5, false}}) {
+            std::pmr::unsynchronized_pool_resource memory;
+            ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 512, .max_blocked_streams_ = 1}, &memory);
+            ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 512, .max_blocked_streams_ = 1}, &memory);
+            auto* const shared = mode == encoding_mode::literal ? nullptr : &decoder;
+            std::vector<char> payload{0};  // Authorized Push ID 0.
+            if (mode == encoding_mode::shared_dynamic) {
+                const auto encoded = encoder.encode(0, fields);
+                RUVIA_CHECK(encoded.index() == 0);
+                if (encoded.index() != 0) {
+                    continue;
+                }
+                RUVIA_CHECK(std::get<0>(encoded).front() != 0);
+                payload.insert(payload.end(), std::get<0>(encoded).begin(), std::get<0>(encoded).end());
+            } else {
+                const auto encoded = field_section(fields);
+                payload.insert(payload.end(), encoded.begin(), encoded.end());
+            }
+            ruvia::http3_client_response response(0, ruvia::http_known_method::get, &memory,
+                {.max_field_section_size_ = limit.bytes_, .max_fields_ = limit.fields_, .max_push_id_ = 0}, shared);
+            client_response_events events;
+            auto result = response.feed(frame(5, payload), false, false, collect, &events);
+            if (mode == encoding_mode::shared_dynamic) {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::qpack_blocked);
+                RUVIA_CHECK(events.kinds_.empty());
+                RUVIA_CHECK(decoder.consume_encoder(encoder.pending_encoder_output()).index() == 0);
+                result = response.feed({}, false, false, collect, &events);
+            }
+            if (limit.reject_) {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::connection_error);
+                RUVIA_CHECK(result.scope_ == ruvia::http3_connection_error_scope::connection);
+                RUVIA_CHECK(result.code_ == ruvia::http3_connection_error_code::excessive_load);
+                RUVIA_CHECK(events.kinds_.empty());
+            } else {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::need_more_data);
+                RUVIA_CHECK(result.scope_ == ruvia::http3_connection_error_scope::none);
+                RUVIA_CHECK(std::count(events.kinds_.begin(), events.kinds_.end(),
+                                ruvia::http3_client_response_event_kind::push_promise) == 1);
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http3_client_response_head_rejects_payload_but_accepts_empty_fin) {
     std::pmr::monotonic_buffer_resource memory;
     client_response_events events;
@@ -228,6 +288,95 @@ RUVIA_TEST(http3_client_response_validates_all_trailers_before_callback) {
         RUVIA_CHECK(result_value.status_ == ruvia::http3_client_response_status::stream_error);
         RUVIA_CHECK(result_value.code_ == ruvia::http3_connection_error_code::message_error);
         RUVIA_CHECK(rejected_events.trailers_.empty());
+    }
+}
+
+RUVIA_TEST(http3_client_response_trailer_limits_apply_with_shared_qpack) {
+    enum class encoding_mode { literal,
+        shared_literal,
+        shared_dynamic };
+    struct limit_case final {
+        ruvia::http3_client_response_limits limits_;
+        bool reject_;
+    };
+    // Each trailer field occupies 32 + 5 + 1 = 38 decoded bytes; the initial
+    // :status field occupies 42. The limits apply independently to each section.
+    const std::array fields{ruvia::http3_field_section_field_view{"x-one", "1"},
+        ruvia::http3_field_section_field_view{"x-two", "2"}};
+    for (const auto mode : {encoding_mode::literal, encoding_mode::shared_literal, encoding_mode::shared_dynamic}) {
+        for (const auto limit : {limit_case{{.max_field_section_size_ = 76, .max_fields_ = 1}, true},
+                 limit_case{{.max_field_section_size_ = 75, .max_fields_ = 2}, true},
+                 limit_case{{.max_field_section_size_ = 76, .max_fields_ = 2}, false}}) {
+            std::pmr::unsynchronized_pool_resource memory;
+            ruvia::http3_qpack_encoder encoder({.max_table_capacity_ = 512, .max_blocked_streams_ = 2}, &memory);
+            ruvia::http3_qpack_decoder decoder({.max_table_capacity_ = 512, .max_blocked_streams_ = 2}, &memory);
+            auto* const shared = mode == encoding_mode::literal ? nullptr : &decoder;
+            auto encode_trailers = [&](std::uint64_t stream_id, std::span<const ruvia::http3_field_section_field_view> values) {
+                if (mode != encoding_mode::shared_dynamic) {
+                    return frame(1, field_section(values));
+                }
+                const auto section = encoder.encode(stream_id, values);
+                RUVIA_CHECK(section.index() == 0);
+                if (section.index() != 0) {
+                    return std::vector<char>{};
+                }
+                RUVIA_CHECK(std::get<0>(section).front() != 0);
+                return frame(1, std::get<0>(section));
+            };
+            const auto supply_encoder_output = [&] {
+                const auto output = encoder.pending_encoder_output();
+                RUVIA_CHECK(decoder.consume_encoder(output).index() == 0);
+                RUVIA_CHECK(encoder.consume_encoder_output(output.size()));
+            };
+            const auto acknowledge_sections = [&] {
+                const auto output = decoder.pending_decoder_output();
+                RUVIA_CHECK(encoder.consume_decoder(output).index() == 0);
+                RUVIA_CHECK(decoder.consume_decoder_output(output.size()));
+            };
+
+            ruvia::http3_client_response response(0, ruvia::http_known_method::get, &memory, limit.limits_, shared);
+            client_response_events events;
+            RUVIA_CHECK(response.feed(response_head(200), false, false, collect, &events).status_ ==
+                        ruvia::http3_client_response_status::need_more_data);
+            const auto trailers = encode_trailers(0, fields);
+            auto result = response.feed(trailers, true, false, collect, &events);
+            if (mode == encoding_mode::shared_dynamic) {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::qpack_blocked);
+                RUVIA_CHECK(events.trailers_.empty());
+                supply_encoder_output();
+                result = response.feed({}, true, false, collect, &events);
+                acknowledge_sections();
+            }
+            if (limit.reject_) {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::connection_error);
+                RUVIA_CHECK(result.code_ == ruvia::http3_connection_error_code::excessive_load);
+                RUVIA_CHECK(events.trailers_.empty());
+                RUVIA_CHECK(std::find(events.kinds_.begin(), events.kinds_.end(),
+                                ruvia::http3_client_response_event_kind::message_end) == events.kinds_.end());
+            } else {
+                RUVIA_CHECK(result.status_ == ruvia::http3_client_response_status::message_end);
+                RUVIA_CHECK_EQ(events.trailers_, std::vector<std::string>({"x-one", "x-two"}));
+            }
+
+            // Per-response rejection must not poison the shared compression
+            // context. Its next stream can reuse an acknowledged dynamic entry.
+            ruvia::http3_client_response next(4, ruvia::http_known_method::get, &memory,
+                {.max_field_section_size_ = 42, .max_fields_ = 1}, shared);
+            client_response_events next_events;
+            RUVIA_CHECK(next.feed(response_head(200), false, false, collect, &next_events).status_ ==
+                        ruvia::http3_client_response_status::need_more_data);
+            const auto next_trailers = encode_trailers(4, std::span(fields).first(1));
+            if (mode == encoding_mode::shared_dynamic) {
+                RUVIA_CHECK(encoder.pending_encoder_output().empty());
+            }
+            const auto next_result = next.feed(next_trailers, true, false, collect, &next_events);
+            RUVIA_CHECK(next_result.status_ == ruvia::http3_client_response_status::message_end);
+            RUVIA_CHECK_EQ(next_events.trailers_, std::vector<std::string>{"x-one"});
+            RUVIA_CHECK_EQ(next_events.trailer_values_, std::vector<std::string>{"1"});
+            if (mode == encoding_mode::shared_dynamic) {
+                acknowledge_sections();
+            }
+        }
     }
 }
 

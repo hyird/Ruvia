@@ -1,10 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
@@ -12,6 +10,7 @@
 #include "ruvia/http/http_response.h"
 
 #include "router/route_table.h"
+#include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
 #include "server/http_buffered_response.h"
@@ -24,7 +23,7 @@ namespace ruvia::detail {
 
 template <typename stream_type>
 task<http1_session_request_completion> dispatch_http_response_stream_route(http1_route_dispatch<stream_type> d,
-    response_head_buffer_type& response_head, const http1_server_request_head_ready& request_head,
+    http_response_head_buffer& response_head, const http1_server_request_head_ready& request_head,
     const resolved_route& resolved, std::string_view body_and_pipeline, protocol_byte_limit body_limit_value) {
     http_lazy_buffered_body_route_state<stream_type> body_state;
     std::exception_ptr body_setup_failure;
@@ -41,14 +40,14 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto stream_plan =
         http1_plan_response_stream(d.parsed_, d.request_sequence_.next_response_close_policy());
     auto connection_plan = stream_plan.request_connection_plan();
-    using response_sink_type = response_stream_sink<stream_type, ruvia::connection_scanner::entry_type>;
+    using response_sink_type = response_stream_sink<stream_type, connection_scanner::entry_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
     response_sink_type response_sink(d.stream_, d.memory_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), endpoint.kind(), stream_plan, d.response_coding_,
         d.response_coding_availability_);
 
-    d.scanner_entry_.set_phase(ruvia::connection_scanner::phase_type::writing);
+    d.scanner_entry_.set_phase(connection_scanner::phase_type::writing);
     auto result_value = co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
         resolved, d.request_memory_, d.base_route_services_,
         /*peer_aborted=*/[]() noexcept { return false; });

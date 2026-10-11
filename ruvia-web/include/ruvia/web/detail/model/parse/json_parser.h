@@ -8,8 +8,12 @@
 #include <utility>
 
 #include "ruvia/web/detail/http/request/request_fields_access.h"
+#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_lex.h"
+#include "ruvia/web/detail/json/json_limits.h"
 #include "ruvia/web/detail/json/json_number.h"
-#include "ruvia/web/detail/json/json_scanner.h"
+#include "ruvia/web/detail/json/json_object_fields.h"
+#include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/json/json_string.h"
 #include "ruvia/web/detail/model/model_binary.h"
 #include "ruvia/web/detail/model/model_input.h"
@@ -313,48 +317,30 @@ template <typename sequence_t_type>
     using traits_type = json_sequence_value_traits<std::remove_cvref_t<sequence_t_type>>;
     using element_t_type = typename traits_type::value_type;
 
-    if (depth > max_json_depth) {
-        return std::nullopt;
-    }
-    auto remaining = input;
-    if (!consume_json_char(remaining, '[')) {
-        return std::nullopt;
-    }
-
     sequence_t_type value = make_request_value<sequence_t_type>(resource);
-    skip_json_whitespace(remaining);
-    if (!remaining.empty() && remaining.front() == ']') {
-        remaining.remove_prefix(1);
-        input = remaining;
-        return value;
+    const bool consumed = consume_json_array_elements(input, depth,
+        [&value, resource, depth, string_storage, &budget](std::string_view& element_input) {
+            if (!budget.consume_element()) {
+                return false;
+            }
+            // Four element slots cover all geometric vector allocations, including
+            // old buffers held by an arena. Boxed values additionally own pointers.
+            constexpr auto element_bytes = 4 * (sizeof(element_t_type) + sizeof(element_t_type*));
+            if (!budget.consume_bytes(element_bytes)) {
+                return false;
+            }
+            auto element =
+                parse_json_value<element_t_type>(element_input, resource, depth + 1, string_storage, budget);
+            if (!element.has_value()) {
+                return false;
+            }
+            traits_type::emplace(value, std::move(*element));
+            return true;
+        });
+    if (!consumed) {
+        return std::nullopt;
     }
-
-    for (;;) {
-        if (!budget.consume_element()) {
-            return std::nullopt;
-        }
-        // Four element slots cover all geometric vector allocations, including
-        // old buffers held by an arena. Boxed values additionally own pointers.
-        constexpr auto element_bytes = 4 * (sizeof(element_t_type) + sizeof(element_t_type*));
-        if (!budget.consume_bytes(element_bytes)) {
-            return std::nullopt;
-        }
-        auto element = parse_json_value<element_t_type>(remaining, resource, depth + 1, string_storage, budget);
-        if (!element.has_value()) {
-            return std::nullopt;
-        }
-        traits_type::emplace(value, std::move(*element));
-
-        skip_json_whitespace(remaining);
-        if (!remaining.empty() && remaining.front() == ']') {
-            remaining.remove_prefix(1);
-            input = remaining;
-            return value;
-        }
-        if (!consume_json_char(remaining, ',')) {
-            return std::nullopt;
-        }
-    }
+    return value;
 }
 
 template <typename t_type>

@@ -17,14 +17,18 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <exception>
+#include <limits>
+#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <asio/associated_allocator.hpp>
 #include <asio/error.hpp>
@@ -168,19 +172,21 @@ bool parse_native_endpoint(const sockaddr* address, native_socket_length_type le
     return false;
 }
 
+// A receive buffer longer than any UDP payload only wastes the caller's slot.
+constexpr std::size_t max_receive_buffer_bytes = 65536;
+
 #ifndef _WIN32
-std::error_code exception_code() noexcept {
-    try {
-        throw;
-    } catch (const std::system_error& error) {
-        return error.code();
-    } catch (const std::bad_alloc&) {
-        return no_memory();
-    } catch (...) {
-        return io_error();
-    }
-}
+// Datagrams one readiness or flush round may complete per slot before the
+// socket yields its loop turn and re-arms.
+constexpr std::size_t batch_rounds_per_slot = 4;
 #endif
+
+std::size_t checked_operation_count(std::size_t count) {
+    if (count == 0 || count > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::invalid_argument("HTTP/3 UDP operation limits must be positive 32-bit counts");
+    }
+    return count;
+}
 
 #ifdef _WIN32
 // An overlapped completion reports the Win32 translation of its NTSTATUS rather
@@ -212,15 +218,44 @@ std::error_code portable_completion_error(const std::error_code& error) noexcept
 
 class http3_udp_socket::impl final {
 public:
-    impl(asio::io_context& network_io, udp_type::endpoint bind_endpoint)
+    impl(asio::io_context& network_io, udp_type::endpoint bind_endpoint, operation_limits limits)
         : io_(network_io),
           bind_endpoint_(std::move(bind_endpoint)),
           socket_(io_),
-          owner_thread_(std::this_thread::get_id()) {
+          owner_thread_(std::this_thread::get_id()),
+          receive_slots_(checked_operation_count(limits.receive_), process_resource()),
+          send_slots_(checked_operation_count(limits.send_), process_resource()),
+          free_receive_(receive_slots_.size()),
+          free_send_(send_slots_.size())
+#ifndef _WIN32
+          ,
+          receive_queue_(receive_slots_.size()),
+          send_queue_(send_slots_.size())
+#if defined(__linux__)
+          ,
+          receive_messages_(receive_slots_.size(), process_resource()),
+          receive_vectors_(receive_slots_.size(), process_resource()),
+          send_messages_(send_slots_.size(), process_resource()),
+          send_vectors_(send_slots_.size(), process_resource())
+#endif
+#endif
+    {
         if (!valid_bind_address(bind_endpoint_.address())) {
             throw std::invalid_argument("HTTP/3 server network UDP bind address is unsupported");
         }
         ipv6_socket_ = bind_endpoint_.address().is_v6();
+        for (std::size_t index = 0; index < receive_slots_.size(); ++index) {
+            free_receive_.push(static_cast<std::uint32_t>(index));
+#ifdef _WIN32
+            receive_slots_[index].handler_storage_.owner_ = this;
+#endif
+        }
+        for (std::size_t index = 0; index < send_slots_.size(); ++index) {
+            free_send_.push(static_cast<std::uint32_t>(index));
+#ifdef _WIN32
+            send_slots_[index].handler_storage_.owner_ = this;
+#endif
+        }
     }
 
     ~impl() {
@@ -291,24 +326,27 @@ public:
 
     bool async_receive(std::span<std::byte> bytes_value, void* context_value, receive_completion completion) noexcept {
         require_owner_thread_noexcept();
-        if (!prepared_ || stopping_ || receive_.active_ || completion == nullptr ||
-            bytes_value.empty() || bytes_value.size() > http3_udp_socket::datagram_buffer_size) {
+        if (!prepared_ || stopping_ || free_receive_.empty() || completion == nullptr ||
+            bytes_value.empty() || bytes_value.size() > max_receive_buffer_bytes) {
             return false;
         }
-        receive_.active_ = true;
-        receive_.context_ = context_value;
-        receive_.completion_ = completion;
-        receive_.bytes_ = bytes_value;
+        const auto index = free_receive_.pop();
+        auto& slot = receive_slots_[index];
+        slot.active_ = true;
+        slot.context_ = context_value;
+        slot.completion_ = completion;
+        slot.bytes_ = bytes_value;
 #ifdef _WIN32
-        const bool accepted = start_windows_receive();
+        const bool accepted = start_windows_receive(index);
 #else
-        const bool accepted = post_receive_attempt();
+        const bool accepted = queue_posix_receive(index);
 #endif
         if (!accepted) {
-            receive_.active_ = false;
-            receive_.context_ = nullptr;
-            receive_.completion_ = nullptr;
-            receive_.bytes_ = {};
+            slot.active_ = false;
+            slot.context_ = nullptr;
+            slot.completion_ = nullptr;
+            slot.bytes_ = {};
+            free_receive_.push(index);
             return false;
         }
         return true;
@@ -317,25 +355,28 @@ public:
     bool async_send(send_view view, void* context_value, send_completion completion) noexcept {
         require_owner_thread_noexcept();
         const std::size_t max_payload = ipv6_socket_ ? 65527U : 65507U;
-        if (!prepared_ || stopping_ || send_.active_ || completion == nullptr ||
+        if (!prepared_ || stopping_ || free_send_.empty() || completion == nullptr ||
             !valid_source(view.source_, ipv6_socket_, bound_endpoint_) ||
             !valid_peer(view.peer_, ipv6_socket_) || view.bytes_.size() > max_payload) {
             return false;
         }
-        send_.active_ = true;
-        send_.context_ = context_value;
-        send_.completion_ = completion;
-        send_.view_ = view;
+        const auto index = free_send_.pop();
+        auto& slot = send_slots_[index];
+        slot.active_ = true;
+        slot.context_ = context_value;
+        slot.completion_ = completion;
+        slot.view_ = std::move(view);
 #ifdef _WIN32
-        const bool accepted = start_windows_send();
+        const bool accepted = start_windows_send(index);
 #else
-        const bool accepted = post_send_attempt();
+        const bool accepted = queue_posix_send(index);
 #endif
         if (!accepted) {
-            send_.active_ = false;
-            send_.context_ = nullptr;
-            send_.completion_ = nullptr;
-            send_.view_ = {};
+            slot.active_ = false;
+            slot.context_ = nullptr;
+            slot.completion_ = nullptr;
+            slot.view_ = {};
+            free_send_.push(index);
             return false;
         }
         return true;
@@ -349,8 +390,12 @@ public:
         stopping_ = true;
         asio::error_code ignored;
 #ifdef _WIN32
-        cancel_windows_operation(receive_overlapped_);
-        cancel_windows_operation(send_overlapped_);
+        for (auto& slot : receive_slots_) {
+            cancel_windows_operation(slot.overlapped_);
+        }
+        for (auto& slot : send_slots_) {
+            cancel_windows_operation(slot.overlapped_);
+        }
 #else
         (void)socket_.cancel(ignored);
 #endif
@@ -359,40 +404,55 @@ public:
 
     bool done() const noexcept {
         require_owner_thread_noexcept();
-        return stopping_ && !socket_.is_open() && !receive_.active_ && !send_.active_ &&
-               pending_handlers_ == 0 && callbacks_running_ == 0 && handler_storage_retired();
+        return stopping_ && !socket_.is_open() && free_receive_.size() == receive_slots_.size() &&
+               free_send_.size() == send_slots_.size() && pending_handlers_ == 0 &&
+               callbacks_running_ == 0 && handler_storage_retired();
     }
 
 private:
-    [[nodiscard]] bool handler_storage_retired() const noexcept {
-        const auto retired = [](const auto& storages) {
-            return std::all_of(storages.begin(), storages.end(),
-                [](const auto& storage) { return !storage.allocated_; });
-        };
-#ifndef _WIN32
-        return retired(receive_posix_handler_storage_) && retired(send_posix_handler_storage_);
-#else
-        return retired(receive_handler_storage_) && retired(send_handler_storage_);
-#endif
-    }
-    struct receive_slot_type final {
-        std::span<std::byte> bytes_;
-        alignas(std::max_align_t) std::array<std::byte, 256> control_{};
-        sockaddr_storage peer_address_{};
-        native_socket_length_type peer_address_length_{};
-        bool active_{};
-        void* context_{};
-        receive_completion completion_{};
-    };
+    // Fixed FIFO of slot indices. Its capacity is the slot count and every
+    // index sits in at most one ring of a kind, so a push never overflows.
+    class index_ring final {
+    public:
+        explicit index_ring(std::size_t capacity)
+            : indices_(capacity, process_resource()) {}
 
-    struct send_slot_type final {
-        alignas(std::max_align_t) std::array<std::byte, 256> control_{};
-        sockaddr_storage peer_address_{};
-        native_socket_length_type peer_address_length_{};
-        bool active_{};
-        void* context_{};
-        send_completion completion_{};
-        send_view view_{};
+        [[nodiscard]] bool empty() const noexcept {
+            return count_ == 0;
+        }
+        [[nodiscard]] std::size_t size() const noexcept {
+            return count_;
+        }
+        [[nodiscard]] std::uint32_t operator[](std::size_t offset) const noexcept {
+            return indices_[(head_ + offset) % indices_.size()];
+        }
+        void push(std::uint32_t index) noexcept {
+            if (count_ == indices_.size()) {
+                std::terminate();
+            }
+            indices_[(head_ + count_) % indices_.size()] = index;
+            ++count_;
+        }
+        [[nodiscard]] std::uint32_t pop() noexcept {
+            if (count_ == 0) {
+                std::terminate();
+            }
+            const auto index = indices_[head_];
+            head_ = (head_ + 1) % indices_.size();
+            --count_;
+            return index;
+        }
+        void drop_back() noexcept {
+            if (count_ == 0) {
+                std::terminate();
+            }
+            --count_;
+        }
+
+    private:
+        std::pmr::vector<std::uint32_t> indices_;
+        std::size_t head_{};
+        std::size_t count_{};
     };
 
 #ifndef _WIN32
@@ -456,6 +516,8 @@ private:
     enum class posix_direction : std::uint8_t { receive,
         send };
 
+    // One readiness wait per direction plus one deferred send flush serve every
+    // admitted operation; each wake drains every queued slot it can.
     struct posix_io_handler final {
         using allocator_type = posix_handler_allocator<posix_io_handler>;
 
@@ -484,363 +546,6 @@ private:
 
     static_assert(std::is_same_v<asio::associated_allocator_t<posix_io_handler>,
         posix_io_handler::allocator_type>);
-
-    posix_handler_storage* acquire_posix_handler_storage(posix_direction direction) noexcept {
-        auto& storages = direction == posix_direction::receive
-                             ? receive_posix_handler_storage_
-                             : send_posix_handler_storage_;
-        for (auto& storage : storages) {
-            if (!storage.allocated_) {
-                return &storage;
-            }
-        }
-        return nullptr;
-    }
-#endif
-
-    void require_owner_thread() const {
-        if (std::this_thread::get_id() != owner_thread_) {
-            throw std::logic_error("HTTP/3 server network UDP socket used outside its owner thread");
-        }
-    }
-
-    void require_owner_thread_noexcept() const noexcept {
-        if (std::this_thread::get_id() != owner_thread_) {
-            std::terminate();
-        }
-    }
-
-    void set_packet_info_option(int level, int option) {
-#ifdef _WIN32
-        const int enabled = 1;
-        if (::setsockopt(socket_.native_handle(), level, option,
-                reinterpret_cast<const char*>(&enabled), sizeof(enabled)) == SOCKET_ERROR) {
-            throw std::system_error(WSAGetLastError(), std::system_category(),
-                "enable HTTP/3 server network UDP pktinfo");
-        }
-#else
-        const int enabled = 1;
-        if (::setsockopt(socket_.native_handle(), level, option, &enabled, sizeof(enabled)) != 0) {
-            throw std::system_error(errno, std::system_category(),
-                "enable HTTP/3 server network UDP pktinfo");
-        }
-#endif
-    }
-
-    void complete_receive(std::error_code error, std::size_t size = 0,
-        udp_type::endpoint peer = {}, udp_type::endpoint local_destination = {}) noexcept {
-        if (!receive_.active_) {
-            std::terminate();
-        }
-        auto completion = receive_.completion_;
-        void* const context_value = receive_.context_;
-        const auto bytes_value = std::exchange(receive_.bytes_, {});
-        receive_.active_ = false;
-        receive_.completion_ = nullptr;
-        receive_.context_ = nullptr;
-        ++callbacks_running_;
-        completion(context_value, error,
-            receive_view{std::span<const std::byte>(bytes_value.data(), error ? 0 : size),
-                std::move(peer), std::move(local_destination)});
-        --callbacks_running_;
-    }
-
-    void complete_send(std::error_code error, std::size_t size = 0) noexcept {
-        if (!send_.active_) {
-            std::terminate();
-        }
-        auto completion = send_.completion_;
-        void* const context_value = send_.context_;
-        send_.active_ = false;
-        send_.completion_ = nullptr;
-        send_.context_ = nullptr;
-        send_.view_ = {};
-        ++callbacks_running_;
-        completion(context_value, error, error ? 0 : size);
-        --callbacks_running_;
-    }
-
-#ifndef _WIN32
-    bool post_receive_attempt() noexcept {
-        auto* const storage = acquire_posix_handler_storage(posix_direction::receive);
-        if (storage == nullptr) {
-            return false;
-        }
-        ++pending_handlers_;
-        try {
-            asio::post(io_, posix_io_handler{this, storage, posix_direction::receive});
-            if (!storage->allocated_) {
-                std::terminate();
-            }
-            return true;
-        } catch (...) {
-            if (storage->allocated_ || pending_handlers_ == 0) {
-                std::terminate();
-            }
-            --pending_handlers_;
-            return false;
-        }
-    }
-
-    bool post_send_attempt() noexcept {
-        auto* const storage = acquire_posix_handler_storage(posix_direction::send);
-        if (storage == nullptr) {
-            return false;
-        }
-        ++pending_handlers_;
-        try {
-            asio::post(io_, posix_io_handler{this, storage, posix_direction::send});
-            if (!storage->allocated_) {
-                std::terminate();
-            }
-            return true;
-        } catch (...) {
-            if (storage->allocated_ || pending_handlers_ == 0) {
-                std::terminate();
-            }
-            --pending_handlers_;
-            return false;
-        }
-    }
-
-    void handle_posted(posix_direction direction) noexcept {
-        if (stopping_) {
-            direction == posix_direction::receive ? complete_receive(aborted())
-                                                  : complete_send(aborted());
-        } else if (direction == posix_direction::receive) {
-            attempt_receive();
-        } else {
-            attempt_send();
-        }
-        if (pending_handlers_ == 0) {
-            std::terminate();
-        }
-        --pending_handlers_;
-    }
-
-    void handle_wait(posix_direction direction, const asio::error_code& error) noexcept {
-        if (stopping_) {
-            direction == posix_direction::receive ? complete_receive(aborted())
-                                                  : complete_send(aborted());
-        } else if (error) {
-            direction == posix_direction::receive ? complete_receive(error)
-                                                  : complete_send(error);
-        } else if (direction == posix_direction::receive) {
-            attempt_receive();
-        } else {
-            attempt_send();
-        }
-        if (pending_handlers_ == 0) {
-            std::terminate();
-        }
-        --pending_handlers_;
-    }
-
-    void attempt_receive() noexcept {
-        std::fill(receive_.control_.begin(), receive_.control_.end(), std::byte{});
-        receive_.peer_address_ = {};
-        receive_.peer_address_length_ =
-            static_cast<native_socket_length_type>(sizeof(receive_.peer_address_));
-
-        iovec input{};
-        input.iov_base = receive_.bytes_.data();
-        input.iov_len = receive_.bytes_.size();
-        msghdr message{};
-        message.msg_name = &receive_.peer_address_;
-        message.msg_namelen = receive_.peer_address_length_;
-        message.msg_iov = &input;
-        message.msg_iovlen = 1;
-        message.msg_control = receive_.control_.data();
-        message.msg_controllen = receive_.control_.size();
-
-        const ssize_t received_value = ::recvmsg(socket_.native_handle(), &message, MSG_DONTWAIT);
-        if (received_value < 0) {
-            const int error = errno;
-            if (error == EAGAIN || error == EWOULDBLOCK) {
-                wait_readable();
-            } else {
-                complete_receive(std::error_code(error, std::system_category()));
-            }
-            return;
-        }
-
-        udp_type::endpoint peer;
-        udp_type::endpoint destination;
-        if ((message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 ||
-            !parse_native_endpoint(reinterpret_cast<const sockaddr*>(&receive_.peer_address_),
-                message.msg_namelen, ipv6_socket_, peer) ||
-            !parse_packet_info(message, destination)) {
-            complete_receive(bad_message());
-            return;
-        }
-        complete_receive({}, static_cast<std::size_t>(received_value), std::move(peer),
-            std::move(destination));
-    }
-
-    bool parse_packet_info(const msghdr& message, udp_type::endpoint& destination) const noexcept {
-        bool found = false;
-        const auto* const control_start = static_cast<const std::byte*>(message.msg_control);
-        const std::size_t control_size = message.msg_controllen;
-        for (const cmsghdr* header_value = CMSG_FIRSTHDR(const_cast<msghdr*>(&message));
-            header_value != nullptr; header_value = CMSG_NXTHDR(const_cast<msghdr*>(&message),
-                                         const_cast<cmsghdr*>(header_value))) {
-            const auto* const header_bytes = reinterpret_cast<const std::byte*>(header_value);
-            if (header_bytes < control_start ||
-                static_cast<std::size_t>(header_bytes - control_start) > control_size ||
-                header_value->cmsg_len < CMSG_LEN(0) ||
-                header_value->cmsg_len > control_size -
-                                             static_cast<std::size_t>(header_bytes - control_start)) {
-                return false;
-            }
-
-            if (!ipv6_socket_ && header_value->cmsg_level == IPPROTO_IP &&
-                header_value->cmsg_type == IP_PKTINFO) {
-                if (found || header_value->cmsg_len < CMSG_LEN(sizeof(in_pktinfo))) {
-                    return false;
-                }
-                in_pktinfo info{};
-                std::memcpy(&info, CMSG_DATA(const_cast<cmsghdr*>(header_value)), sizeof(info));
-                asio::ip::address_v4::bytes_type bytes_value{};
-                // ipi_addr is the packet's destination. ipi_spec_dst is a local
-                // source-selection hint and is not correct for received-packet metadata.
-                std::memcpy(bytes_value.data(), &info.ipi_addr, bytes_value.size());
-                const asio::ip::address address{asio::ip::address_v4(bytes_value)};
-                if (!valid_concrete_address(address)) {
-                    return false;
-                }
-                destination = udp_type::endpoint(address, bound_endpoint_.port());
-                found = true;
-            } else if (ipv6_socket_ && header_value->cmsg_level == IPPROTO_IPV6 &&
-                       header_value->cmsg_type == IPV6_PKTINFO) {
-                if (found || header_value->cmsg_len < CMSG_LEN(sizeof(in6_pktinfo))) {
-                    return false;
-                }
-                in6_pktinfo info{};
-                std::memcpy(&info, CMSG_DATA(const_cast<cmsghdr*>(header_value)), sizeof(info));
-                asio::ip::address_v6::bytes_type bytes_value{};
-                std::memcpy(bytes_value.data(), &info.ipi6_addr, bytes_value.size());
-                // The interface index is deliberately not converted to a scope
-                // id; link-local addresses are rejected by valid_concrete_address.
-                const asio::ip::address address{asio::ip::address_v6(bytes_value)};
-                if (!valid_concrete_address(address)) {
-                    return false;
-                }
-                destination = udp_type::endpoint(address, bound_endpoint_.port());
-                found = true;
-            }
-        }
-        return found;
-    }
-
-    void attempt_send() noexcept {
-        const auto peer = make_native_endpoint(send_.view_.peer_);
-        send_.peer_address_ = peer.address_;
-        send_.peer_address_length_ = peer.length_;
-
-        std::fill(send_.control_.begin(), send_.control_.end(), std::byte{});
-        iovec output{};
-        std::byte empty_payload{};
-        output.iov_base = send_.view_.bytes_.empty()
-                              ? static_cast<void*>(&empty_payload)
-                              : const_cast<std::byte*>(send_.view_.bytes_.data());
-        output.iov_len = send_.view_.bytes_.size();
-        msghdr message{};
-        message.msg_name = &send_.peer_address_;
-        message.msg_namelen = send_.peer_address_length_;
-        message.msg_iov = &output;
-        message.msg_iovlen = 1;
-        message.msg_control = send_.control_.data();
-        if (ipv6_socket_) {
-            message.msg_controllen = CMSG_SPACE(sizeof(in6_pktinfo));
-            cmsghdr* header_value = CMSG_FIRSTHDR(&message);
-            if (header_value == nullptr) {
-                complete_send(io_error());
-                return;
-            }
-            header_value->cmsg_level = IPPROTO_IPV6;
-            header_value->cmsg_type = IPV6_PKTINFO;
-            header_value->cmsg_len = CMSG_LEN(sizeof(in6_pktinfo));
-            in6_pktinfo info{};
-            const auto bytes_value = send_.view_.source_.address().to_v6().to_bytes();
-            std::memcpy(&info.ipi6_addr, bytes_value.data(), bytes_value.size());
-            std::memcpy(CMSG_DATA(header_value), &info, sizeof(info));
-        } else {
-            message.msg_controllen = CMSG_SPACE(sizeof(in_pktinfo));
-            cmsghdr* header_value = CMSG_FIRSTHDR(&message);
-            if (header_value == nullptr) {
-                complete_send(io_error());
-                return;
-            }
-            header_value->cmsg_level = IPPROTO_IP;
-            header_value->cmsg_type = IP_PKTINFO;
-            header_value->cmsg_len = CMSG_LEN(sizeof(in_pktinfo));
-            in_pktinfo info{};
-            const auto bytes_value = send_.view_.source_.address().to_v4().to_bytes();
-            std::memcpy(&info.ipi_spec_dst, bytes_value.data(), bytes_value.size());
-            std::memcpy(CMSG_DATA(header_value), &info, sizeof(info));
-        }
-
-        const ssize_t sent = ::sendmsg(socket_.native_handle(), &message, MSG_DONTWAIT);
-        if (sent < 0) {
-            const int error = errno;
-            if (error == EAGAIN || error == EWOULDBLOCK) {
-                wait_writable();
-            } else {
-                complete_send(std::error_code(error, std::system_category()));
-            }
-            return;
-        }
-        const auto size = static_cast<std::size_t>(sent);
-        if (size != send_.view_.bytes_.size()) {
-            complete_send(io_error());
-            return;
-        }
-        complete_send({}, size);
-    }
-
-    void wait_readable() noexcept {
-        auto* const storage = acquire_posix_handler_storage(posix_direction::receive);
-        if (storage == nullptr) {
-            complete_receive(no_memory());
-            return;
-        }
-        ++pending_handlers_;
-        try {
-            socket_.async_wait(udp_type::socket::wait_read,
-                posix_io_handler{this, storage, posix_direction::receive});
-            if (!storage->allocated_) {
-                std::terminate();
-            }
-        } catch (...) {
-            if (storage->allocated_ || pending_handlers_ == 0) {
-                std::terminate();
-            }
-            --pending_handlers_;
-            complete_receive(exception_code());
-        }
-    }
-
-    void wait_writable() noexcept {
-        auto* const storage = acquire_posix_handler_storage(posix_direction::send);
-        if (storage == nullptr) {
-            complete_send(no_memory());
-            return;
-        }
-        ++pending_handlers_;
-        try {
-            socket_.async_wait(udp_type::socket::wait_write,
-                posix_io_handler{this, storage, posix_direction::send});
-            if (!storage->allocated_) {
-                std::terminate();
-            }
-        } catch (...) {
-            if (storage->allocated_ || pending_handlers_ == 0) {
-                std::terminate();
-            }
-            --pending_handlers_;
-            complete_send(exception_code());
-        }
-    }
 #else
     struct handler_storage_type final {
         impl* owner_{};
@@ -914,6 +619,7 @@ private:
         impl* owner_{};
         handler_storage_type* storage_{};
         direction_type direction_{};
+        std::uint32_t index_{};
 
         [[nodiscard]] allocator_type get_allocator() const noexcept {
             return allocator_type(storage_);
@@ -925,9 +631,9 @@ private:
             }
             ++owner_->callbacks_running_;
             if (direction_ == direction_type::receive) {
-                owner_->finish_windows_receive(error, size);
+                owner_->finish_windows_receive(index_, error, size);
             } else {
-                owner_->finish_windows_send(error, size);
+                owner_->finish_windows_send(index_, error, size);
             }
             --owner_->callbacks_running_;
         }
@@ -935,20 +641,536 @@ private:
 
     static_assert(std::is_same_v<asio::associated_allocator_t<windows_completion_handler_type>,
         windows_completion_handler_type::allocator_type>);
+#endif
 
-    handler_storage_type* acquire_handler_storage(direction_type direction) noexcept {
-        auto& storages = direction == direction_type::receive
-                             ? receive_handler_storage_
-                             : send_handler_storage_;
-        for (auto& storage : storages) {
-            if (!storage.allocated_) {
-                storage.owner_ = this;
-                return &storage;
-            }
-        }
-        return nullptr;
+    struct receive_slot_type final {
+        std::span<std::byte> bytes_;
+        alignas(std::max_align_t) std::array<std::byte, 256> control_{};
+        sockaddr_storage peer_address_{};
+        bool active_{};
+        void* context_{};
+        receive_completion completion_{};
+#ifdef _WIN32
+        handler_storage_type handler_storage_{};
+        OVERLAPPED* overlapped_{};
+        WSAMSG message_{};
+        WSABUF buffer_{};
+#endif
+    };
+
+    struct send_slot_type final {
+        alignas(std::max_align_t) std::array<std::byte, 256> control_{};
+        sockaddr_storage peer_address_{};
+        native_socket_length_type peer_address_length_{};
+        bool active_{};
+        void* context_{};
+        send_completion completion_{};
+        send_view view_{};
+#ifdef _WIN32
+        handler_storage_type handler_storage_{};
+        OVERLAPPED* overlapped_{};
+        WSAMSG message_{};
+        WSABUF buffer_{};
+#endif
+    };
+
+    [[nodiscard]] bool handler_storage_retired() const noexcept {
+#ifndef _WIN32
+        return !receive_handler_storage_.allocated_ && !send_handler_storage_.allocated_;
+#else
+        const auto retired = [](const auto& slots) {
+            return std::all_of(slots.begin(), slots.end(),
+                [](const auto& slot) { return !slot.handler_storage_.allocated_; });
+        };
+        return retired(receive_slots_) && retired(send_slots_);
+#endif
     }
 
+    void require_owner_thread() const {
+        if (std::this_thread::get_id() != owner_thread_) {
+            throw std::logic_error("HTTP/3 server network UDP socket used outside its owner thread");
+        }
+    }
+
+    void require_owner_thread_noexcept() const noexcept {
+        if (std::this_thread::get_id() != owner_thread_) {
+            std::terminate();
+        }
+    }
+
+    void set_packet_info_option(int level, int option) {
+#ifdef _WIN32
+        const int enabled = 1;
+        if (::setsockopt(socket_.native_handle(), level, option,
+                reinterpret_cast<const char*>(&enabled), sizeof(enabled)) == SOCKET_ERROR) {
+            throw std::system_error(WSAGetLastError(), std::system_category(),
+                "enable HTTP/3 server network UDP pktinfo");
+        }
+#else
+        const int enabled = 1;
+        if (::setsockopt(socket_.native_handle(), level, option, &enabled, sizeof(enabled)) != 0) {
+            throw std::system_error(errno, std::system_category(),
+                "enable HTTP/3 server network UDP pktinfo");
+        }
+#endif
+    }
+
+    // The slot returns to the free ring before its callback, which may re-arm it.
+    void complete_receive(std::uint32_t index, std::error_code error, std::size_t size = 0,
+        udp_type::endpoint peer = {}, udp_type::endpoint local_destination = {}) noexcept {
+        auto& slot = receive_slots_[index];
+        if (!slot.active_) {
+            std::terminate();
+        }
+        auto completion = slot.completion_;
+        void* const context_value = slot.context_;
+        const auto bytes_value = std::exchange(slot.bytes_, {});
+        slot.active_ = false;
+        slot.completion_ = nullptr;
+        slot.context_ = nullptr;
+        free_receive_.push(index);
+        ++callbacks_running_;
+        completion(context_value, error,
+            receive_view{std::span<const std::byte>(bytes_value.data(), error ? 0 : size),
+                std::move(peer), std::move(local_destination)});
+        --callbacks_running_;
+    }
+
+    void complete_send(std::uint32_t index, std::error_code error, std::size_t size = 0) noexcept {
+        auto& slot = send_slots_[index];
+        if (!slot.active_) {
+            std::terminate();
+        }
+        auto completion = slot.completion_;
+        void* const context_value = slot.context_;
+        slot.active_ = false;
+        slot.completion_ = nullptr;
+        slot.context_ = nullptr;
+        slot.view_ = {};
+        free_send_.push(index);
+        ++callbacks_running_;
+        completion(context_value, error, error ? 0 : size);
+        --callbacks_running_;
+    }
+
+#ifndef _WIN32
+    bool queue_posix_receive(std::uint32_t index) noexcept {
+        receive_queue_.push(index);
+        if (receive_waiting_ || receive_draining_ || start_receive_wait()) {
+            return true;
+        }
+        receive_queue_.drop_back();
+        return false;
+    }
+
+    bool queue_posix_send(std::uint32_t index) noexcept {
+        send_queue_.push(index);
+        if (send_scheduled_ || send_flushing_ || post_send_flush()) {
+            return true;
+        }
+        send_queue_.drop_back();
+        return false;
+    }
+
+    bool start_receive_wait() noexcept {
+        auto* const storage = &receive_handler_storage_;
+        ++pending_handlers_;
+        try {
+            socket_.async_wait(udp_type::socket::wait_read,
+                posix_io_handler{this, storage, posix_direction::receive});
+            if (!storage->allocated_) {
+                std::terminate();
+            }
+            receive_waiting_ = true;
+            return true;
+        } catch (...) {
+            if (storage->allocated_ || pending_handlers_ == 0) {
+                std::terminate();
+            }
+            --pending_handlers_;
+            return false;
+        }
+    }
+
+    bool start_send_wait() noexcept {
+        auto* const storage = &send_handler_storage_;
+        ++pending_handlers_;
+        try {
+            socket_.async_wait(udp_type::socket::wait_write,
+                posix_io_handler{this, storage, posix_direction::send});
+            if (!storage->allocated_) {
+                std::terminate();
+            }
+            send_scheduled_ = true;
+            return true;
+        } catch (...) {
+            if (storage->allocated_ || pending_handlers_ == 0) {
+                std::terminate();
+            }
+            --pending_handlers_;
+            return false;
+        }
+    }
+
+    // Sends queued before the flush runs leave together; callbacks never run
+    // inside async_send.
+    bool post_send_flush() noexcept {
+        auto* const storage = &send_handler_storage_;
+        ++pending_handlers_;
+        try {
+            asio::post(io_, posix_io_handler{this, storage, posix_direction::send});
+            if (!storage->allocated_) {
+                std::terminate();
+            }
+            send_scheduled_ = true;
+            return true;
+        } catch (...) {
+            if (storage->allocated_ || pending_handlers_ == 0) {
+                std::terminate();
+            }
+            --pending_handlers_;
+            return false;
+        }
+    }
+
+    void handle_posted(posix_direction direction) noexcept {
+        if (direction != posix_direction::send) {
+            std::terminate();
+        }
+        send_scheduled_ = false;
+        if (stopping_) {
+            abort_sends();
+        } else {
+            flush_sends();
+        }
+        if (pending_handlers_ == 0) {
+            std::terminate();
+        }
+        --pending_handlers_;
+    }
+
+    void handle_wait(posix_direction direction, const asio::error_code& error) noexcept {
+        if (direction == posix_direction::receive) {
+            receive_waiting_ = false;
+            if (stopping_) {
+                abort_receives();
+            } else if (error) {
+                fail_receives(error);
+            } else {
+                drain_receives();
+            }
+        } else {
+            send_scheduled_ = false;
+            if (stopping_) {
+                abort_sends();
+            } else if (error) {
+                fail_sends(error);
+            } else {
+                flush_sends();
+            }
+        }
+        if (pending_handlers_ == 0) {
+            std::terminate();
+        }
+        --pending_handlers_;
+    }
+
+    // Stopping rejects re-arming, so these loops terminate.
+    void abort_receives() noexcept {
+        while (!receive_queue_.empty()) {
+            complete_receive(receive_queue_.pop(), aborted());
+        }
+    }
+
+    void abort_sends() noexcept {
+        while (!send_queue_.empty()) {
+            complete_send(send_queue_.pop(), aborted());
+        }
+    }
+
+    void fail_receives(std::error_code error) noexcept {
+        receive_draining_ = true;
+        for (auto count = receive_queue_.size(); count != 0; --count) {
+            complete_receive(receive_queue_.pop(), error);
+        }
+        finish_receive_round();
+    }
+
+    void fail_sends(std::error_code error) noexcept {
+        send_flushing_ = true;
+        for (auto count = send_queue_.size(); count != 0; --count) {
+            complete_send(send_queue_.pop(), error);
+        }
+        finish_send_round(false);
+    }
+
+    // Receives re-armed by callbacks during a round wait for the next readiness.
+    void finish_receive_round() noexcept {
+        receive_draining_ = false;
+        if (stopping_) {
+            abort_receives();
+            return;
+        }
+        if (!receive_queue_.empty() && !start_receive_wait()) {
+            for (auto count = receive_queue_.size(); count != 0; --count) {
+                complete_receive(receive_queue_.pop(), no_memory());
+            }
+        }
+    }
+
+    // Sends admitted by callbacks during a round leave with the next flush.
+    void finish_send_round(bool wait_writable) noexcept {
+        send_flushing_ = false;
+        if (stopping_) {
+            abort_sends();
+            return;
+        }
+        if (!send_queue_.empty() && !(wait_writable ? start_send_wait() : post_send_flush())) {
+            for (auto count = send_queue_.size(); count != 0; --count) {
+                complete_send(send_queue_.pop(), no_memory());
+            }
+        }
+    }
+
+    void prepare_receive_message(receive_slot_type& slot, msghdr& message, iovec& vector) noexcept {
+        slot.peer_address_ = {};
+        vector.iov_base = slot.bytes_.data();
+        vector.iov_len = slot.bytes_.size();
+        message = {};
+        message.msg_name = &slot.peer_address_;
+        message.msg_namelen = static_cast<native_socket_length_type>(sizeof(slot.peer_address_));
+        message.msg_iov = &vector;
+        message.msg_iovlen = 1;
+        message.msg_control = slot.control_.data();
+        message.msg_controllen = slot.control_.size();
+    }
+
+    // Metadata is parsed before completion returns the slot to its caller.
+    void finish_posix_receive(std::uint32_t index, const msghdr& message, std::size_t size) noexcept {
+        udp_type::endpoint peer;
+        udp_type::endpoint destination;
+        if ((message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 ||
+            !parse_native_endpoint(static_cast<const sockaddr*>(message.msg_name),
+                message.msg_namelen, ipv6_socket_, peer) ||
+            !parse_packet_info(message, destination)) {
+            complete_receive(index, bad_message());
+            return;
+        }
+        complete_receive(index, {}, size, std::move(peer), std::move(destination));
+    }
+
+    void drain_receives() noexcept {
+        receive_draining_ = true;
+        auto budget = receive_slots_.size() * batch_rounds_per_slot;
+        while (!stopping_ && !receive_queue_.empty() && budget != 0) {
+#if defined(__linux__)
+            const auto count = std::min({receive_queue_.size(), budget, receive_messages_.size()});
+            for (std::size_t offset = 0; offset < count; ++offset) {
+                prepare_receive_message(receive_slots_[receive_queue_[offset]],
+                    receive_messages_[offset].msg_hdr, receive_vectors_[offset]);
+                receive_messages_[offset].msg_len = 0;
+            }
+            const int received_value = ::recvmmsg(socket_.native_handle(), receive_messages_.data(),
+                static_cast<unsigned int>(count), MSG_DONTWAIT, nullptr);
+            if (received_value < 0) {
+                const int error = errno;
+                if (error == EAGAIN || error == EWOULDBLOCK) {
+                    break;
+                }
+                if (error != EINTR) {
+                    complete_receive(receive_queue_.pop(), std::error_code(error, std::system_category()));
+                }
+                --budget;
+                continue;
+            }
+            // Callbacks only append re-armed slots, so the head still matches
+            // the prepared messages in order.
+            const auto received_count = static_cast<std::size_t>(received_value);
+            for (std::size_t offset = 0; offset < received_count; ++offset) {
+                finish_posix_receive(receive_queue_.pop(), receive_messages_[offset].msg_hdr,
+                    receive_messages_[offset].msg_len);
+            }
+            budget -= received_count;
+            if (received_count < count) {
+                break;
+            }
+#else
+            msghdr message{};
+            iovec vector{};
+            prepare_receive_message(receive_slots_[receive_queue_[0]], message, vector);
+            const ssize_t received_value = ::recvmsg(socket_.native_handle(), &message, MSG_DONTWAIT);
+            --budget;
+            if (received_value < 0) {
+                const int error = errno;
+                if (error == EAGAIN || error == EWOULDBLOCK) {
+                    break;
+                }
+                if (error != EINTR) {
+                    complete_receive(receive_queue_.pop(), std::error_code(error, std::system_category()));
+                }
+                continue;
+            }
+            finish_posix_receive(receive_queue_.pop(), message, static_cast<std::size_t>(received_value));
+#endif
+        }
+        finish_receive_round();
+    }
+
+    bool parse_packet_info(const msghdr& message, udp_type::endpoint& destination) const noexcept {
+        bool found = false;
+        const auto* const control_start = static_cast<const std::byte*>(message.msg_control);
+        const std::size_t control_size = message.msg_controllen;
+        for (const cmsghdr* header_value = CMSG_FIRSTHDR(const_cast<msghdr*>(&message));
+            header_value != nullptr; header_value = CMSG_NXTHDR(const_cast<msghdr*>(&message),
+                                         const_cast<cmsghdr*>(header_value))) {
+            const auto* const header_bytes = reinterpret_cast<const std::byte*>(header_value);
+            if (header_bytes < control_start ||
+                static_cast<std::size_t>(header_bytes - control_start) > control_size ||
+                header_value->cmsg_len < CMSG_LEN(0) ||
+                header_value->cmsg_len > control_size -
+                                             static_cast<std::size_t>(header_bytes - control_start)) {
+                return false;
+            }
+
+            if (!ipv6_socket_ && header_value->cmsg_level == IPPROTO_IP &&
+                header_value->cmsg_type == IP_PKTINFO) {
+                if (found || header_value->cmsg_len < CMSG_LEN(sizeof(in_pktinfo))) {
+                    return false;
+                }
+                in_pktinfo info{};
+                std::memcpy(&info, CMSG_DATA(const_cast<cmsghdr*>(header_value)), sizeof(info));
+                asio::ip::address_v4::bytes_type bytes_value{};
+                // ipi_addr is the packet's destination. ipi_spec_dst is a local
+                // source-selection hint and is not correct for received-packet metadata.
+                std::memcpy(bytes_value.data(), &info.ipi_addr, bytes_value.size());
+                const asio::ip::address address{asio::ip::address_v4(bytes_value)};
+                if (!valid_concrete_address(address)) {
+                    return false;
+                }
+                destination = udp_type::endpoint(address, bound_endpoint_.port());
+                found = true;
+            } else if (ipv6_socket_ && header_value->cmsg_level == IPPROTO_IPV6 &&
+                       header_value->cmsg_type == IPV6_PKTINFO) {
+                if (found || header_value->cmsg_len < CMSG_LEN(sizeof(in6_pktinfo))) {
+                    return false;
+                }
+                in6_pktinfo info{};
+                std::memcpy(&info, CMSG_DATA(const_cast<cmsghdr*>(header_value)), sizeof(info));
+                asio::ip::address_v6::bytes_type bytes_value{};
+                std::memcpy(bytes_value.data(), &info.ipi6_addr, bytes_value.size());
+                // The interface index is deliberately not converted to a scope
+                // id; link-local addresses are rejected by valid_concrete_address.
+                const asio::ip::address address{asio::ip::address_v6(bytes_value)};
+                if (!valid_concrete_address(address)) {
+                    return false;
+                }
+                destination = udp_type::endpoint(address, bound_endpoint_.port());
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    void prepare_send_message(send_slot_type& slot, msghdr& message, iovec& vector) noexcept {
+        const auto peer = make_native_endpoint(slot.view_.peer_);
+        slot.peer_address_ = peer.address_;
+        slot.peer_address_length_ = peer.length_;
+        slot.control_ = {};
+        vector.iov_base = slot.view_.bytes_.empty()
+                              ? static_cast<void*>(&empty_send_byte_)
+                              : const_cast<std::byte*>(slot.view_.bytes_.data());
+        vector.iov_len = slot.view_.bytes_.size();
+        message = {};
+        message.msg_name = &slot.peer_address_;
+        message.msg_namelen = slot.peer_address_length_;
+        message.msg_iov = &vector;
+        message.msg_iovlen = 1;
+        message.msg_control = slot.control_.data();
+        // The 256-byte control area always holds one packet-info header.
+        if (ipv6_socket_) {
+            message.msg_controllen = CMSG_SPACE(sizeof(in6_pktinfo));
+            cmsghdr* const header_value = CMSG_FIRSTHDR(&message);
+            header_value->cmsg_level = IPPROTO_IPV6;
+            header_value->cmsg_type = IPV6_PKTINFO;
+            header_value->cmsg_len = CMSG_LEN(sizeof(in6_pktinfo));
+            in6_pktinfo info{};
+            const auto bytes_value = slot.view_.source_.address().to_v6().to_bytes();
+            std::memcpy(&info.ipi6_addr, bytes_value.data(), bytes_value.size());
+            std::memcpy(CMSG_DATA(header_value), &info, sizeof(info));
+        } else {
+            message.msg_controllen = CMSG_SPACE(sizeof(in_pktinfo));
+            cmsghdr* const header_value = CMSG_FIRSTHDR(&message);
+            header_value->cmsg_level = IPPROTO_IP;
+            header_value->cmsg_type = IP_PKTINFO;
+            header_value->cmsg_len = CMSG_LEN(sizeof(in_pktinfo));
+            in_pktinfo info{};
+            const auto bytes_value = slot.view_.source_.address().to_v4().to_bytes();
+            std::memcpy(&info.ipi_spec_dst, bytes_value.data(), bytes_value.size());
+            std::memcpy(CMSG_DATA(header_value), &info, sizeof(info));
+        }
+    }
+
+    void flush_sends() noexcept {
+        send_flushing_ = true;
+        auto budget = send_slots_.size() * batch_rounds_per_slot;
+        bool wait_writable = false;
+        while (!stopping_ && !send_queue_.empty() && budget != 0) {
+#if defined(__linux__)
+            const auto count = std::min({send_queue_.size(), budget, send_messages_.size()});
+            for (std::size_t offset = 0; offset < count; ++offset) {
+                prepare_send_message(send_slots_[send_queue_[offset]], send_messages_[offset].msg_hdr,
+                    send_vectors_[offset]);
+                send_messages_[offset].msg_len = 0;
+            }
+            const int sent_value = ::sendmmsg(socket_.native_handle(), send_messages_.data(),
+                static_cast<unsigned int>(count), MSG_DONTWAIT);
+            if (sent_value < 0) {
+                const int error = errno;
+                if (error == EAGAIN || error == EWOULDBLOCK) {
+                    wait_writable = true;
+                    break;
+                }
+                if (error != EINTR) {
+                    complete_send(send_queue_.pop(), std::error_code(error, std::system_category()));
+                }
+                --budget;
+                continue;
+            }
+            // A short count leaves the failing message at the head; the next
+            // call reports its error.
+            const auto sent_count = static_cast<std::size_t>(sent_value);
+            for (std::size_t offset = 0; offset < sent_count; ++offset) {
+                const auto index = send_queue_.pop();
+                const std::size_t size = send_messages_[offset].msg_len;
+                complete_send(index, size == send_slots_[index].view_.bytes_.size() ? std::error_code{} : io_error(), size);
+            }
+            budget -= sent_count;
+#else
+            msghdr message{};
+            iovec vector{};
+            const auto index = send_queue_[0];
+            prepare_send_message(send_slots_[index], message, vector);
+            const ssize_t sent_value = ::sendmsg(socket_.native_handle(), &message, MSG_DONTWAIT);
+            --budget;
+            if (sent_value < 0) {
+                const int error = errno;
+                if (error == EAGAIN || error == EWOULDBLOCK) {
+                    wait_writable = true;
+                    break;
+                }
+                if (error != EINTR) {
+                    complete_send(send_queue_.pop(), std::error_code(error, std::system_category()));
+                }
+                continue;
+            }
+            const auto size = static_cast<std::size_t>(sent_value);
+            (void)send_queue_.pop();
+            complete_send(index, size == send_slots_[index].view_.bytes_.size() ? std::error_code{} : io_error(), size);
+#endif
+        }
+        finish_send_round(wait_writable);
+    }
+#else
     void load_message_extensions() {
         GUID receive_id = WSAID_WSARECVMSG;
         GUID send_id = WSAID_WSASENDMSG;
@@ -980,86 +1202,75 @@ private:
         }
     }
 
-    bool start_windows_receive() noexcept {
-        handler_storage_type* const storage = acquire_handler_storage(direction_type::receive);
-        if (storage == nullptr) {
-            return false;
-        }
-        bool submitted = false;
+    bool start_windows_receive(std::uint32_t index) noexcept {
+        auto& slot = receive_slots_[index];
+        handler_storage_type* const storage = &slot.handler_storage_;
         try {
-            windows_completion_handler_type handler{this, storage, direction_type::receive};
+            windows_completion_handler_type handler{this, storage, direction_type::receive, index};
             asio::windows::overlapped_ptr operation(io_.get_executor(), handler);
             if (!storage->allocated_) {
                 std::terminate();
             }
-            receive_.peer_address_ = {};
-            receive_.control_ = {};
-            receive_buffer_descriptor_.buf = reinterpret_cast<char*>(receive_.bytes_.data());
-            receive_buffer_descriptor_.len = static_cast<ULONG>(receive_.bytes_.size());
-            receive_message_ = {};
-            receive_message_.name = reinterpret_cast<sockaddr*>(&receive_.peer_address_);
-            receive_message_.namelen = static_cast<INT>(sizeof(receive_.peer_address_));
-            receive_message_.lpBuffers = &receive_buffer_descriptor_;
-            receive_message_.dwBufferCount = 1;
-            receive_message_.Control.buf = reinterpret_cast<char*>(receive_.control_.data());
-            receive_message_.Control.len = static_cast<ULONG>(receive_.control_.size());
+            slot.peer_address_ = {};
+            slot.buffer_.buf = reinterpret_cast<char*>(slot.bytes_.data());
+            slot.buffer_.len = static_cast<ULONG>(slot.bytes_.size());
+            slot.message_ = {};
+            slot.message_.name = reinterpret_cast<sockaddr*>(&slot.peer_address_);
+            slot.message_.namelen = static_cast<INT>(sizeof(slot.peer_address_));
+            slot.message_.lpBuffers = &slot.buffer_;
+            slot.message_.dwBufferCount = 1;
+            slot.message_.Control.buf = reinterpret_cast<char*>(slot.control_.data());
+            slot.message_.Control.len = static_cast<ULONG>(slot.control_.size());
             DWORD received_value = 0;
-            const int result_value = receive_message_function_(socket_.native_handle(), &receive_message_,
+            const int result_value = receive_message_function_(socket_.native_handle(), &slot.message_,
                 &received_value, operation.get(), nullptr);
             const int error = result_value == 0 ? 0 : WSAGetLastError();
             if (result_value == 0 || error == WSA_IO_PENDING) {
-                receive_overlapped_ = operation.release();
+                slot.overlapped_ = operation.release();
             } else {
                 // Like send, a synchronous failure (a truncated datagram or a
                 // reported per-peer ICMP error) completes through the callback so
                 // its owner can classify packet-local errors.
                 operation.complete(asio::error_code(error, std::system_category()), 0);
             }
-            submitted = true;
+            return true;
         } catch (...) {
             if (storage->allocated_) {
                 std::terminate();
             }
             return false;
         }
-        if (!submitted && storage->allocated_) {
-            std::terminate();
-        }
-        return submitted;
     }
 
-    bool start_windows_send() noexcept {
-        handler_storage_type* const storage = acquire_handler_storage(direction_type::send);
-        if (storage == nullptr) {
-            return false;
-        }
-        bool submitted = false;
+    bool start_windows_send(std::uint32_t index) noexcept {
+        auto& slot = send_slots_[index];
+        handler_storage_type* const storage = &slot.handler_storage_;
         try {
-            windows_completion_handler_type handler{this, storage, direction_type::send};
+            windows_completion_handler_type handler{this, storage, direction_type::send, index};
             asio::windows::overlapped_ptr operation(io_.get_executor(), handler);
             if (!storage->allocated_) {
                 std::terminate();
             }
-            const auto peer = make_native_endpoint(send_.view_.peer_);
-            send_.peer_address_ = peer.address_;
-            send_.peer_address_length_ = peer.length_;
-            send_.control_ = {};
-            send_buffer_descriptor_.buf = send_.view_.bytes_.empty()
-                                              ? reinterpret_cast<char*>(&empty_send_byte_)
-                                              : const_cast<char*>(reinterpret_cast<const char*>(
-                                                    send_.view_.bytes_.data()));
-            send_buffer_descriptor_.len = static_cast<ULONG>(send_.view_.bytes_.size());
-            send_message_ = {};
-            send_message_.name = reinterpret_cast<sockaddr*>(&send_.peer_address_);
-            send_message_.namelen = static_cast<INT>(send_.peer_address_length_);
-            send_message_.lpBuffers = &send_buffer_descriptor_;
-            send_message_.dwBufferCount = 1;
-            send_message_.Control.buf = reinterpret_cast<char*>(send_.control_.data());
+            const auto peer = make_native_endpoint(slot.view_.peer_);
+            slot.peer_address_ = peer.address_;
+            slot.peer_address_length_ = peer.length_;
+            slot.control_ = {};
+            slot.buffer_.buf = slot.view_.bytes_.empty()
+                                   ? reinterpret_cast<char*>(&empty_send_byte_)
+                                   : const_cast<char*>(reinterpret_cast<const char*>(
+                                         slot.view_.bytes_.data()));
+            slot.buffer_.len = static_cast<ULONG>(slot.view_.bytes_.size());
+            slot.message_ = {};
+            slot.message_.name = reinterpret_cast<sockaddr*>(&slot.peer_address_);
+            slot.message_.namelen = static_cast<INT>(slot.peer_address_length_);
+            slot.message_.lpBuffers = &slot.buffer_;
+            slot.message_.dwBufferCount = 1;
+            slot.message_.Control.buf = reinterpret_cast<char*>(slot.control_.data());
 
             WSACMSGHDR* header_value = nullptr;
             if (ipv6_socket_) {
-                send_message_.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(IN6_PKTINFO)));
-                header_value = WSA_CMSG_FIRSTHDR(&send_message_);
+                slot.message_.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(IN6_PKTINFO)));
+                header_value = WSA_CMSG_FIRSTHDR(&slot.message_);
                 if (header_value == nullptr) {
                     return false;
                 }
@@ -1067,12 +1278,12 @@ private:
                 header_value->cmsg_type = IPV6_PKTINFO;
                 header_value->cmsg_len = WSA_CMSG_LEN(sizeof(IN6_PKTINFO));
                 IN6_PKTINFO info{};
-                const auto bytes_value = send_.view_.source_.address().to_v6().to_bytes();
+                const auto bytes_value = slot.view_.source_.address().to_v6().to_bytes();
                 std::memcpy(&info.ipi6_addr, bytes_value.data(), bytes_value.size());
                 std::memcpy(WSA_CMSG_DATA(header_value), &info, sizeof(info));
             } else {
-                send_message_.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(IN_PKTINFO)));
-                header_value = WSA_CMSG_FIRSTHDR(&send_message_);
+                slot.message_.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(IN_PKTINFO)));
+                header_value = WSA_CMSG_FIRSTHDR(&slot.message_);
                 if (header_value == nullptr) {
                     return false;
                 }
@@ -1080,52 +1291,46 @@ private:
                 header_value->cmsg_type = IP_PKTINFO;
                 header_value->cmsg_len = WSA_CMSG_LEN(sizeof(IN_PKTINFO));
                 IN_PKTINFO info{};
-                const auto bytes_value = send_.view_.source_.address().to_v4().to_bytes();
+                const auto bytes_value = slot.view_.source_.address().to_v4().to_bytes();
                 std::memcpy(&info.ipi_addr, bytes_value.data(), bytes_value.size());
                 std::memcpy(WSA_CMSG_DATA(header_value), &info, sizeof(info));
             }
 
             DWORD sent = 0;
-            const int result_value = send_message_function_(socket_.native_handle(), &send_message_,
+            const int result_value = send_message_function_(socket_.native_handle(), &slot.message_,
                 0, &sent, operation.get(), nullptr);
             const int error = result_value == 0 ? 0 : WSAGetLastError();
             if (result_value == 0 || error == WSA_IO_PENDING) {
-                send_overlapped_ = operation.release();
+                slot.overlapped_ = operation.release();
             } else {
                 // Like POSIX, a synchronous send failure completes through the
                 // callback so its owner can classify destination-local errors.
                 operation.complete(asio::error_code(error, std::system_category()), 0);
             }
-            submitted = true;
+            return true;
         } catch (...) {
             if (storage->allocated_) {
                 std::terminate();
             }
             return false;
         }
-        if (!submitted && storage->allocated_) {
-            std::terminate();
-        }
-        return submitted;
     }
 
-    bool parse_windows_packet_info(udp_type::endpoint& destination) const noexcept {
-        if ((receive_message_.dwFlags & MSG_CTRUNC) != 0) {
+    bool parse_windows_packet_info(const WSAMSG& message, udp_type::endpoint& destination) const noexcept {
+        if ((message.dwFlags & MSG_CTRUNC) != 0) {
             return false;
         }
 #ifdef MSG_TRUNC
-        if ((receive_message_.dwFlags & MSG_TRUNC) != 0) {
+        if ((message.dwFlags & MSG_TRUNC) != 0) {
             return false;
         }
 #endif
         bool found = false;
-        const auto* const control_start = reinterpret_cast<const std::byte*>(
-            receive_message_.Control.buf);
-        const std::size_t control_size = receive_message_.Control.len;
-        for (WSACMSGHDR* header_value = WSA_CMSG_FIRSTHDR(
-                 const_cast<WSAMSG*>(&receive_message_));
+        const auto* const control_start = reinterpret_cast<const std::byte*>(message.Control.buf);
+        const std::size_t control_size = message.Control.len;
+        for (WSACMSGHDR* header_value = WSA_CMSG_FIRSTHDR(const_cast<WSAMSG*>(&message));
             header_value != nullptr; header_value = WSA_CMSG_NXTHDR(
-                                         const_cast<WSAMSG*>(&receive_message_), header_value)) {
+                                         const_cast<WSAMSG*>(&message), header_value)) {
             const auto* const header_bytes = reinterpret_cast<const std::byte*>(header_value);
             if (header_bytes < control_start ||
                 static_cast<std::size_t>(header_bytes - control_start) > control_size ||
@@ -1169,40 +1374,42 @@ private:
         return found;
     }
 
-    void finish_windows_receive(const asio::error_code& error, std::size_t size) noexcept {
-        receive_overlapped_ = nullptr;
+    void finish_windows_receive(std::uint32_t index, const asio::error_code& error, std::size_t size) noexcept {
+        auto& slot = receive_slots_[index];
+        slot.overlapped_ = nullptr;
         if (stopping_) {
-            complete_receive(aborted());
+            complete_receive(index, aborted());
             return;
         }
         if (error) {
             const auto portable = portable_completion_error(error);
-            complete_receive(portable == asio::error::message_size ? bad_message() : portable);
+            complete_receive(index, portable == asio::error::message_size ? bad_message() : portable);
             return;
         }
 
         udp_type::endpoint peer;
         udp_type::endpoint destination;
-        if (size > receive_.bytes_.size() ||
-            !parse_native_endpoint(reinterpret_cast<const sockaddr*>(&receive_.peer_address_),
-                static_cast<native_socket_length_type>(receive_message_.namelen), ipv6_socket_, peer) ||
-            !parse_windows_packet_info(destination)) {
-            complete_receive(bad_message());
+        if (size > slot.bytes_.size() ||
+            !parse_native_endpoint(reinterpret_cast<const sockaddr*>(&slot.peer_address_),
+                static_cast<native_socket_length_type>(slot.message_.namelen), ipv6_socket_, peer) ||
+            !parse_windows_packet_info(slot.message_, destination)) {
+            complete_receive(index, bad_message());
             return;
         }
-        complete_receive({}, size, std::move(peer), std::move(destination));
+        complete_receive(index, {}, size, std::move(peer), std::move(destination));
     }
 
-    void finish_windows_send(const asio::error_code& error, std::size_t size) noexcept {
-        send_overlapped_ = nullptr;
+    void finish_windows_send(std::uint32_t index, const asio::error_code& error, std::size_t size) noexcept {
+        auto& slot = send_slots_[index];
+        slot.overlapped_ = nullptr;
         if (stopping_) {
-            complete_send(aborted());
+            complete_send(index, aborted());
         } else if (error) {
-            complete_send(portable_completion_error(error));
-        } else if (size != send_.view_.bytes_.size()) {
-            complete_send(io_error());
+            complete_send(index, portable_completion_error(error));
+        } else if (size != slot.view_.bytes_.size()) {
+            complete_send(index, io_error());
         } else {
-            complete_send({}, size);
+            complete_send(index, {}, size);
         }
     }
 
@@ -1212,15 +1419,10 @@ private:
         }
         const HANDLE handle = reinterpret_cast<HANDLE>(
             static_cast<ULONG_PTR>(socket_.native_handle()));
-        if (!::CancelIoEx(handle, operation)) {
-            const DWORD error = ::GetLastError();
-            // ERROR_NOT_FOUND means completion already won. In either case the
-            // IOCP completion owns retirement; never synthesize a second result.
-            if (error != ERROR_NOT_FOUND) {
-                // Closing the socket below still cancels the operation. Keep the
-                // exact OVERLAPPED and all message storage until its completion.
-            }
-        }
+        // ERROR_NOT_FOUND means completion already won. Either way the IOCP
+        // completion owns retirement, and closing the socket still cancels the
+        // operation; its OVERLAPPED and message storage stay until then.
+        (void)::CancelIoEx(handle, operation);
     }
 #endif
 
@@ -1229,34 +1431,42 @@ private:
     udp_type::endpoint bound_endpoint_;
     udp_type::socket socket_;
     std::thread::id owner_thread_;
-    receive_slot_type receive_;
-    send_slot_type send_;
+    // Sized once at construction; slot addresses stay stable for native I/O.
+    std::pmr::vector<receive_slot_type> receive_slots_;
+    std::pmr::vector<send_slot_type> send_slots_;
+    index_ring free_receive_;
+    index_ring free_send_;
+#ifndef _WIN32
+    index_ring receive_queue_;
+    index_ring send_queue_;
+#if defined(__linux__)
+    std::pmr::vector<mmsghdr> receive_messages_;
+    std::pmr::vector<iovec> receive_vectors_;
+    std::pmr::vector<mmsghdr> send_messages_;
+    std::pmr::vector<iovec> send_vectors_;
+#endif
+    posix_handler_storage receive_handler_storage_{};
+    posix_handler_storage send_handler_storage_{};
+    bool receive_waiting_{};
+    bool receive_draining_{};
+    // A send flush is posted or a writable wait is armed.
+    bool send_scheduled_{};
+    bool send_flushing_{};
+#else
+    LPFN_WSARECVMSG receive_message_function_{};
+    LPFN_WSASENDMSG send_message_function_{};
+#endif
     std::size_t pending_handlers_{};
     std::size_t callbacks_running_{};
     bool ipv6_socket_{};
     bool prepared_{};
     bool stopping_{};
-#ifndef _WIN32
-    std::array<posix_handler_storage, 2> receive_posix_handler_storage_{};
-    std::array<posix_handler_storage, 2> send_posix_handler_storage_{};
-#else
-    LPFN_WSARECVMSG receive_message_function_{};
-    LPFN_WSASENDMSG send_message_function_{};
-    OVERLAPPED* receive_overlapped_{};
-    OVERLAPPED* send_overlapped_{};
-    std::array<handler_storage_type, 2> receive_handler_storage_{};
-    std::array<handler_storage_type, 2> send_handler_storage_{};
-    WSAMSG receive_message_{};
-    WSAMSG send_message_{};
-    WSABUF receive_buffer_descriptor_{};
-    WSABUF send_buffer_descriptor_{};
     std::byte empty_send_byte_{};
-#endif
 };
 
 http3_udp_socket::http3_udp_socket(asio::io_context& network_io,
-    asio::ip::udp::endpoint bind_endpoint)
-    : impl_(make_pmr_object<impl>(process_resource(), network_io, std::move(bind_endpoint))) {}
+    asio::ip::udp::endpoint bind_endpoint, operation_limits limits)
+    : impl_(make_pmr_object<impl>(process_resource(), network_io, std::move(bind_endpoint), limits)) {}
 
 http3_udp_socket::~http3_udp_socket() = default;
 

@@ -6,15 +6,11 @@
 #include <cstddef>
 #include <system_error>
 
-#include "ruvia/http/detail/util/hex.h"
+#include "ruvia/http/http_hex.h"
 
 namespace ruvia::detail {
 
 namespace {
-
-[[nodiscard]] bool is_hex_digit(char c) noexcept {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
-}
 
 [[nodiscard]] constexpr bool is_uri_sub_delimiter(unsigned char byte) noexcept {
     switch (byte) {
@@ -50,7 +46,7 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
 
 [[nodiscard]] bool parse_ipv6_hex_group(std::string_view literal, std::size_t& offset) noexcept {
     std::size_t digits = 0;
-    while (offset < literal.size() && digits < 4 && is_hex_digit(literal[offset])) {
+    while (offset < literal.size() && digits < 4 && http_decode_hex_nibble(literal[offset]) >= 0) {
         ++offset;
         ++digits;
     }
@@ -63,8 +59,8 @@ template <typename is_allowed_type>
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
-            if (index + 2 >= value.size() || decode_hex_nibble(value[index + 1]) < 0 ||
-                decode_hex_nibble(value[index + 2]) < 0) {
+            if (index + 2 >= value.size() || http_decode_hex_nibble(value[index + 1]) < 0 ||
+                http_decode_hex_nibble(value[index + 2]) < 0) {
                 return false;
             }
             index += 2;
@@ -219,7 +215,7 @@ std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) 
 
     std::size_t cursor_value = 1;
     const auto version_begin = cursor_value;
-    while (cursor_value < literal.size() && is_hex_digit(literal[cursor_value])) {
+    while (cursor_value < literal.size() && http_decode_hex_nibble(literal[cursor_value]) >= 0) {
         ++cursor_value;
     }
     if (cursor_value == version_begin || cursor_value >= literal.size() || literal[cursor_value] != '.') {

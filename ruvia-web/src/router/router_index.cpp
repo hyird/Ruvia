@@ -14,6 +14,19 @@ constexpr std::uint64_t fnv_prime = 1099511628211ULL;
 
 }  // namespace
 
+detail::route_handler_type detail::resolved_route::handler() const noexcept {
+    return callback_access::make<task<http_response>(context&)>(
+        handler_target_, route_->endpoint().buffered()->invoke());
+}
+
+detail::route_stream_handler_type detail::resolved_route::stream_handler() const noexcept {
+    return callback_access::make<task<void>(context&)>(handler_target_, route_->endpoint().stream_invoke());
+}
+
+detail::route_resolution detail::route_table::resolved(const route_entry& route, route_match match) const noexcept {
+    return route_resolution::resolved(route, handler_targets_[route.index()], match);
+}
+
 detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
     // HTTP/1 Upgrade detection remains in its adapter; only normalized routing
     // facts enter the shared classification policy.
@@ -45,12 +58,12 @@ detail::route_resolution detail::route_table::resolve(route_request_view request
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {
     const route_entry* fallback = nullptr;
     for (const auto index : plan_->connect_route_indices_) {
-        const auto& route = routes_[index];
+        const auto& route = plan_->routes_[index];
         if (route.endpoint().tunnel()->protocol() != protocol) {
             continue;
         }
         if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, 0) : route.path() == target)) {
-            return route_resolution::resolved(route);
+            return resolved(route);
         }
         if (protocol.empty() && route.path() == "*") {
             fallback = &route;
@@ -64,12 +77,12 @@ detail::route_resolution detail::route_table::resolve_connect(std::string_view p
             route_match match;
             const auto found = find_dynamic_node(index.root_, target, match);
             if (found != no_route_index) {
-                return route_resolution::resolved(routes_[found], match);
+                return resolved(plan_->routes_[found], match);
             }
             break;
         }
     }
-    return fallback == nullptr ? route_resolution{} : route_resolution::resolved(*fallback);
+    return fallback == nullptr ? route_resolution{} : resolved(*fallback);
 }
 
 detail::route_resolution detail::route_table::resolve_extension_method(
@@ -81,10 +94,10 @@ detail::route_resolution detail::route_table::resolve_extension_method(
         return route_resolution{};
     }
     for (const auto index : plan_->extension_route_indices_) {
-        const auto& route = routes_[index];
+        const auto& route = plan_->routes_[index];
         // RFC 9110 9.1: the method token is case-sensitive.
         if (route.method_token() == method_token && route.path() == path) {
-            return route_resolution::resolved(route);
+            return resolved(route);
         }
     }
 
@@ -102,7 +115,7 @@ detail::route_resolution detail::route_table::resolve_extension_method(
 
 bool detail::route_table::recognizes_method_token(std::string_view method_token) const noexcept {
     for (const auto index : plan_->extension_route_indices_) {
-        if (routes_[index].method_token() == method_token) {
+        if (plan_->routes_[index].method_token() == method_token) {
             return true;
         }
     }
@@ -111,7 +124,7 @@ bool detail::route_table::recognizes_method_token(std::string_view method_token)
 
 bool detail::route_table::has_extension_routes_for(std::string_view path) const noexcept {
     for (const auto index : plan_->extension_route_indices_) {
-        if (routes_[index].path() == path) {
+        if (plan_->routes_[index].path() == path) {
             return true;
         }
     }
@@ -125,7 +138,7 @@ std::span<const std::string_view> detail::route_table::extension_methods_for(
         if (count == buffer.size()) {
             break;
         }
-        const auto& route = routes_[index];
+        const auto& route = plan_->routes_[index];
         if (route.path() != path) {
             continue;
         }
@@ -144,7 +157,7 @@ std::span<const std::string_view> detail::route_table::extension_methods_for(
 }
 
 std::span<const std::string_view> detail::route_table::extension_methods_for_server() const noexcept {
-    return server_extension_method_tokens_;
+    return plan_->server_extension_method_tokens_;
 }
 
 detail::route_resolution detail::route_table::resolve(
@@ -164,14 +177,14 @@ detail::route_resolution detail::route_table::resolve(
     auto hash = has_static_method ? path_hash(path) : 0;
     if (has_static_method) {
         if (const auto* route = find_static_route(method, path, hash); route != nullptr) {
-            return route_resolution::resolved(*route);
+            return resolved(*route);
         }
     }
 
     route_match match;
     const auto* dynamic_route = find_dynamic_route(method, path, match);
     if (dynamic_route != nullptr) {
-        return route_resolution::resolved(*dynamic_route, std::move(match));
+        return resolved(*dynamic_route, match);
     }
 
     if (!has_static_method && plan_->static_method_mask_ != 0) {
@@ -185,7 +198,7 @@ detail::route_resolution detail::route_table::resolve(
             fallback = find_dynamic_route(http_known_method::get, path, match);
         }
         if (fallback != nullptr && supports_head_fallback(*fallback)) {
-            return route_resolution::resolved(*fallback, std::move(match));
+            return resolved(*fallback, match);
         }
     }
     auto method_mask = allowed_methods(path, method, hash);
@@ -245,7 +258,7 @@ const detail::route_entry* detail::route_table::find_static_route(
         if (slot.route_index_ == no_route_index) {
             return nullptr;
         }
-        const auto& route = routes_[slot.route_index_];
+        const auto& route = plan_->routes_[slot.route_index_];
         if (slot.hash_ == key_hash && route.method() == method && route.path() == path) {
             return &route;
         }
@@ -280,7 +293,7 @@ std::uint32_t detail::route_table::allowed_methods(
                                              ? find_dynamic_node_no_params(plan_->dynamic_roots_[i], path)
                                              : no_route_index;
         const auto* route = static_route != nullptr ? static_route
-                                                    : (dynamic_route_index != no_route_index ? &routes_[dynamic_route_index] : nullptr);
+                                                    : (dynamic_route_index != no_route_index ? &plan_->routes_[dynamic_route_index] : nullptr);
         if (route != nullptr) {
             mask |= 1U << i;
             if (supports_head_fallback(*route)) {

@@ -9,20 +9,16 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/field/http_expectations.h"
 #include "ruvia/http/detail/field/http_header_section_size.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/ascii_case.h"
 #include "ruvia/http/http3_message_head.h"
-#include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "coding/http_content_coding.h"
-#include "coding/http_content_length.h"
-#include "field/http_cors_fields.h"
-#include "field/http_origin_fields.h"
+#include "field/http_expect_token.h"
+#include "field/http_request_field_validation.h"
 #include "http3/http3_field_section_encoder.h"
+#include "http3/http3_request_content.h"
 #include "parser/http_request_target.h"
 
 namespace ruvia {
@@ -40,15 +36,7 @@ bool authority_valid(std::string_view authority, std::string_view scheme) noexce
         const auto host = parse_http_authority_host(authority);
         return host && !host->empty();
     }
-    if (authority.empty()) {
-        return false;
-    }
-    for (const unsigned char ch : authority) {
-        if (ch <= 0x20 || ch == 0x7f || ch == '/' || ch == '?' || ch == '#') {
-            return false;
-        }
-    }
-    return true;
+    return !authority.empty() && detail::is_valid_uri_authority(authority);
 }
 
 }  // namespace
@@ -69,8 +57,8 @@ static std::variant<http3_client_request_head, http3_client_request_head_failure
         return failure(http3_client_request_head_error::connect_protocol_disabled);
     }
     if (connect && !extended_connect) {
-        const auto tunnel = detail::parse_http_authority(view.authority_);
-        if (!tunnel || tunnel->port_kind() != detail::http_authority_port_kind::value || *tunnel->port() == 0 ||
+        const auto tunnel = parse_http_authority(view.authority_);
+        if (!tunnel || tunnel->port_kind() != http_authority_port_kind::value || *tunnel->port() == 0 ||
             !view.scheme_.empty() || !view.path_.empty()) {
             return failure(http3_client_request_head_error::invalid_target);
         }
@@ -101,69 +89,57 @@ static std::variant<http3_client_request_head, http3_client_request_head_failure
         ((!connect || extended_connect) && !section_size.add(":path", view.path_))) {
         return field_failure(http3_field_section_error::field_list_too_large);
     }
+    bool expect_continue = false;
+    switch (view.expectation_) {
+        case http_client_request_expectation::none:
+            break;
+        case http_client_request_expectation::continue_value:
+            expect_continue = true;
+            break;
+        default:
+            return failure(http3_client_request_head_error::invalid_field);
+    }
+    // Zero means no payload. TRACE also omits Content-Length at zero; CONNECT
+    // uses the stream for tunnel bytes instead of an HTTP representation.
+    const auto content_indication = !connect && (!view.body_length_ || *view.body_length_ != 0)
+                                        ? http_request_content_indication::will_follow
+                                        : http_request_content_indication::no_content;
+    if (!http_client_expectation_is_valid(expect_continue, content_indication)) {
+        return failure(http3_client_request_head_error::invalid_field);
+    }
     std::size_t lowercase_bytes = 0;
-    bool host_seen = false;
-    bool content_type_seen = false;
-    detail::http_content_length_state<std::uint64_t> content_length;
+    detail::request_field_state request_fields{detail::request_field_framing::binary};
     for (const auto& field : view.fields_) {
-        if (!detail::is_valid_http_header_name(field.name_)) {
+        if (!detail::is_valid_http_header_name(field.name_) || !detail::is_valid_http_field_value_bytes(field.value_)) {
             return failure(http3_client_request_head_error::invalid_field);
         }
-        if (!detail::is_valid_http_field_value_bytes(field.value_) ||
-            (http_ascii_equals_ignore_case(field.name_, "origin") &&
-                !detail::is_valid_http_origin_field_value(field.value_)) ||
-            (http_ascii_equals_ignore_case(field.name_, "access-control-request-method") &&
-                !detail::is_valid_http_cors_request_method(field.value_)) ||
-            (http_ascii_equals_ignore_case(field.name_, "access-control-request-headers") &&
-                !detail::is_valid_http_cors_request_header_names(field.value_)) ||
-            (http_ascii_equals_ignore_case(field.name_, "expect") &&
-                !detail::is_valid_http_expect_field_value(field.value_))) {
-            return failure(http3_client_request_head_error::invalid_field);
-        }
+        const auto kind = detail::classify_request_header(field.name_);
         // RFC 9110 section 9.3.8: never generate known credential/cookie
         // fields in TRACE. Callers must also omit application-specific secrets.
-        if (trace && (http_ascii_equals_ignore_case(field.name_, "authorization") ||
-                         http_ascii_equals_ignore_case(field.name_, "proxy-authorization") ||
-                         http_ascii_equals_ignore_case(field.name_, "cookie"))) {
+        if (trace && (kind == detail::request_header_kind::authorization ||
+                         kind == detail::request_header_kind::proxy_authorization ||
+                         kind == detail::request_header_kind::cookie)) {
             return failure(http3_client_request_head_error::forbidden_field);
         }
         if (detail::is_forbidden_http_binary_connection_field(field.name_)) {
             return failure(http3_client_request_head_error::forbidden_field);
         }
-        if (http_ascii_equals_ignore_case(field.name_, "te") && !http_ascii_equals_ignore_case(field.value_, "trailers")) {
-            return failure(http3_client_request_head_error::forbidden_field);
+        switch (detail::validate_request_field(
+            kind, field.value_, detail::http_field_list_role::sender, request_fields)) {
+            case detail::request_field_status::ok:
+                break;
+            case detail::request_field_status::invalid:
+                // TE beyond "trailers" is a field HTTP/3 forbids (RFC 9114
+                // section 4.2); a bad Host is a target-authority error.
+                return failure(kind == detail::request_header_kind::te     ? http3_client_request_head_error::forbidden_field
+                               : kind == detail::request_header_kind::host ? http3_client_request_head_error::invalid_authority
+                                                                           : http3_client_request_head_error::invalid_field);
+            case detail::request_field_status::managed_by_sender:
+                // Content-Length and Expect come from body_length_ and expectation_.
+                return failure(http3_client_request_head_error::forbidden_field);
         }
-        if (http_ascii_equals_ignore_case(field.name_, "host")) {
-            if (host_seen || field.value_ != view.authority_) {
-                return failure(http3_client_request_head_error::invalid_authority);
-            }
-            host_seen = true;
-        }
-        if (http_ascii_equals_ignore_case(field.name_, "content-type")) {
-            if (content_type_seen || !is_valid_http_content_type_field_value(field.value_)) {
-                return failure(http3_client_request_head_error::invalid_field);
-            }
-            content_type_seen = true;
-        } else if (http_ascii_equals_ignore_case(field.name_, "content-encoding") &&
-                   !detail::is_valid_http_content_encoding_field_value(
-                       field.value_, detail::http_field_list_role::sender)) {
-            return failure(http3_client_request_head_error::invalid_field);
-        }
-        if (http_ascii_equals_ignore_case(field.name_, "trailer") &&
-            !detail::is_valid_http_request_trailer_field_value(
-                field.value_, detail::http_field_list_role::sender)) {
-            return failure(http3_client_request_head_error::invalid_field);
-        }
-        if (http_ascii_equals_ignore_case(field.name_, "content-length")) {
-            if (connect) {
-                return failure(http3_client_request_head_error::invalid_content_length);
-            }
-            if (content_length.value() ||
-                content_length.parse_single_value(field.value_) != detail::http_content_length_parse_status::ok ||
-                (trace && *content_length.value() != 0) ||
-                (view.body_length_ && *content_length.value() != *view.body_length_)) {
-                return failure(http3_client_request_head_error::invalid_content_length);
-            }
+        if (kind == detail::request_header_kind::host && field.value_ != view.authority_) {
+            return failure(http3_client_request_head_error::invalid_authority);
         }
         const bool has_uppercase = std::any_of(field.name_.begin(), field.name_.end(),
             [](unsigned char ch) { return ch >= 'A' && ch <= 'Z'; });
@@ -185,7 +161,20 @@ static std::variant<http3_client_request_head, http3_client_request_head_failure
             return field_failure(http3_field_section_error::field_list_too_large);
         }
     }
-    const bool emit_length = view.emit_content_length_ && view.body_length_ && !content_length.value();
+    const bool explicit_content = !connect &&
+                                  (!view.body_length_ || *view.body_length_ != 0 || (view.emit_content_length_ && !trace));
+    if (explicit_content && !detail::http3_request_payload_allowed(view.method_, request_fields.seen(detail::request_header_kind::content_type))) {
+        return failure(trace ? http3_client_request_head_error::invalid_content_length
+                             : http3_client_request_head_error::invalid_field);
+    }
+    if (expect_continue) {
+        if (projected_count == std::numeric_limits<std::size_t>::max() ||
+            !section_size.add("expect", detail::http_continue_expectation_token)) {
+            return field_failure(http3_field_section_error::field_list_too_large);
+        }
+        ++projected_count;
+    }
+    const bool emit_length = view.emit_content_length_ && view.body_length_ && !trace;
     std::array<char, 20> length_bytes{};
     std::size_t length_size = 0;
     if (emit_length) {
@@ -235,22 +224,19 @@ static std::variant<http3_client_request_head, http3_client_request_head_failure
         }
         fields.push_back({name, field.value_, false});
     }
+    if (expect_continue) {
+        fields.push_back({"expect", detail::http_continue_expectation_token, false});
+    }
     if (emit_length) {
         fields.push_back({"content-length", {length_bytes.data(), length_size}, false});
     }
-    auto encoded = detail::encode_http3_fields(fields, memory, limits, encoder, stream_id);
+    auto encoded = detail::http3_headers_frame_access::encode(fields, memory, limits, encoder, stream_id, section_size.bytes());
     if ((encoded.index() != 0)) {
         return field_failure(std::get<1>(encoded));
     }
-    if (std::get<0>(encoded).size() > limits.max_encoded_bytes_) {
-        return field_failure(http3_field_section_error::field_section_too_large);
-    }
 
-    http3_client_request_head result(memory);
-    result.field_section_ = std::move(std::get<0>(encoded));
-    result.body_plan_.expected_length_ = trace               ? std::optional<std::uint64_t>{0}
-                                         : view.body_length_ ? view.body_length_
-                                                             : content_length.value();
+    http3_client_request_head result{std::move(std::get<0>(encoded))};
+    result.body_plan_.expected_length_ = trace ? std::optional<std::uint64_t>{0} : view.body_length_;
     return result;
 }
 

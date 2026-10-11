@@ -19,6 +19,7 @@
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
 
 #include "backend_tls.h"
@@ -59,7 +60,8 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db) {
-    auto devices = db.get_repository<device>();
+    auto handle = db.handle();
+    auto devices = handle.get_repository<device>();
     device input;
     input.set<"id">(1);
     input.set<"name">("Pump station");
@@ -114,7 +116,7 @@ task<void> demonstrate(db_client& db) {
         std::cout << "updated=" << item.get<"label">() << '\n';
     }
 
-    auto transaction = co_await db.begin_transaction();
+    auto transaction = co_await handle.begin_transaction();
     auto transactional = transaction.get_repository<device>();
     auto candidates = transactional.create_query_builder("candidate");
     candidates.where(device::column<"id">() == 1).take(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
@@ -139,8 +141,10 @@ task<void> demonstrate(db_client& db) {
     std::cout << "after rollback=" << co_await devices.count() << '\n';
 }
 
+#ifdef RUVIA_ENABLE_REDIS
 task<void> demonstrate_cache(db_client& db) {
-    auto devices = db.get_repository<device>();
+    auto handle = db.handle();
+    auto devices = handle.get_repository<device>();
     const db_find_options options{.order_ = {{"id"}}, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .milliseconds_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
     std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
@@ -148,8 +152,9 @@ task<void> demonstrate_cache(db_client& db) {
     query.cache(std::chrono::seconds(5));
     std::cout << "cached count=" << co_await query.get_count() << '\n';
     const std::array<std::string_view, 2> ids{"device-page", "device-page-count"};
-    co_await db.query_result_cache().remove(ids);
+    co_await handle.query_result_cache().remove(ids);
 }
+#endif
 
 task<void> run(const db_config& settings, event_loop_attachment& attachment) {
     std::exception_ptr failure;
@@ -171,7 +176,7 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment) {
             }
             redis = std::make_unique<redis_client>(attachment.loop(), config);
             co_await redis->connect();
-            auto store_value = redis->with_options({});
+            auto store_value = redis->handle();
             db = std::make_unique<db_client>(attachment.loop(), settings, store_value,
                 db_cache_config{.name_space_ = "orm-demo"});
 #else

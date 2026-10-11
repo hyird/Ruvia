@@ -46,12 +46,6 @@ namespace ruvia::detail {
     return (type_specificity << 16) | parameter_count;
 }
 
-[[nodiscard]] inline bool http_media_range_matches(std::string_view range, std::string_view offered) noexcept {
-    http_media_type_parts offered_parts;
-    return http_parse_media_type(offered, false, offered_parts) &&
-           http_media_range_match_specificity(range, offered, offered_parts) >= 0;
-}
-
 // Field lines accumulate as one logical Accept value without concatenation.
 inline void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered,
     int& best_specificity, int& best_quality) noexcept {
@@ -71,17 +65,6 @@ inline void http_accumulate_media_type_acceptance(std::string_view accept, std::
             }
             return true;
         });
-}
-
-[[nodiscard]] inline bool http_accepts_media_type(std::string_view accept, std::string_view offered) noexcept {
-    if (accept.empty()) {
-        http_media_type_parts offered_parts;
-        return http_parse_media_type(offered, false, offered_parts);
-    }
-    int best_specificity = -1;
-    int best_quality = 0;
-    http_accumulate_media_type_acceptance(accept, offered, best_specificity, best_quality);
-    return best_specificity >= 0 && best_quality > 0;
 }
 
 }  // namespace ruvia::detail

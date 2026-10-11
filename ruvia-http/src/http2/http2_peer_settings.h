@@ -7,8 +7,9 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/http2_types.h"
+
 #include "http2/http2_frame_codec.h"
-#include "http2/http2_role.h"
 
 namespace ruvia::detail {
 
@@ -23,32 +24,15 @@ enum class http2_peer_setting_error : std::uint8_t {
 
 class http2_peer_setting_apply_result;
 
-// The setting was valid and required no stream-window propagation. This also
-// represents an unknown setting identifier, which RFC 9113 requires peers to
-// ignore while continuing to process the SETTINGS frame.
+// The setting was valid. This also represents an unknown setting identifier,
+// which RFC 9113 requires peers to ignore while continuing to process the
+// SETTINGS frame. The connection derives stream-window propagation from the
+// whole SETTINGS transaction, not from one entry.
 class http2_peer_setting_applied final {
 private:
     friend class http2_peer_setting_apply_result;
 
     constexpr http2_peer_setting_applied() noexcept = default;
-};
-
-// SETTINGS_INITIAL_WINDOW_SIZE is the only setting whose application must be
-// propagated to every active stream. The signed difference remains observable
-// only on this alternative; a reduction can legitimately make a window negative.
-class http2_peer_initial_window_change final {
-public:
-    [[nodiscard]] constexpr std::int64_t delta() const noexcept {
-        return delta_;
-    }
-
-private:
-    friend class http2_peer_setting_apply_result;
-
-    explicit constexpr http2_peer_initial_window_change(std::int64_t delta) noexcept
-        : delta_(delta) {}
-
-    std::int64_t delta_;
 };
 
 class http2_peer_setting_failure final {
@@ -66,23 +50,9 @@ private:
     http2_peer_setting_error error_;
 };
 
-// Applying one peer setting has exactly one outcome. Ordinary application owns
-// no payload, an initial-window change owns its delta, and failure owns only the
-// protocol reason. There is no status/changed/delta tuple with invalid mixtures.
+// Applying one peer setting either succeeds or fails with only the protocol reason.
 class http2_peer_setting_apply_result final {
 public:
-    [[nodiscard]] constexpr const http2_peer_setting_applied* applied() const& noexcept {
-        return std::get_if<http2_peer_setting_applied>(&value_);
-    }
-    [[nodiscard]] constexpr const http2_peer_setting_applied* applied() const&& = delete;
-
-    [[nodiscard]] constexpr const http2_peer_initial_window_change* initial_window_change()
-        const& noexcept {
-        return std::get_if<http2_peer_initial_window_change>(&value_);
-    }
-    [[nodiscard]] constexpr const http2_peer_initial_window_change* initial_window_change() const&& =
-        delete;
-
     [[nodiscard]] constexpr const http2_peer_setting_failure* failure() const& noexcept {
         return std::get_if<http2_peer_setting_failure>(&value_);
     }
@@ -91,8 +61,7 @@ public:
 private:
     friend class http2_peer_settings;
 
-    using value_type = std::variant<http2_peer_setting_applied, http2_peer_initial_window_change,
-        http2_peer_setting_failure>;
+    using value_type = std::variant<http2_peer_setting_applied, http2_peer_setting_failure>;
 
     template <typename alternative_type>
     explicit constexpr http2_peer_setting_apply_result(alternative_type alternative) noexcept
@@ -100,11 +69,6 @@ private:
 
     [[nodiscard]] static constexpr http2_peer_setting_apply_result make_applied() noexcept {
         return http2_peer_setting_apply_result(http2_peer_setting_applied());
-    }
-
-    [[nodiscard]] static constexpr http2_peer_setting_apply_result make_initial_window_change(
-        std::int64_t delta) noexcept {
-        return http2_peer_setting_apply_result(http2_peer_initial_window_change(delta));
     }
 
     [[nodiscard]] static constexpr http2_peer_setting_apply_result make_failure(
@@ -225,17 +189,15 @@ public:
             case http2_setting_id::max_concurrent_streams:
                 max_concurrent_streams_ = value;
                 return http2_peer_setting_apply_result::make_applied();
-            case http2_setting_id::initial_window_size: {
+            case http2_setting_id::initial_window_size:
                 if (!std::in_range<std::int32_t>(value)) {
                     return http2_peer_setting_apply_result::make_failure(
                         http2_peer_setting_error::invalid_initial_window);
                 }
-                const auto delta = static_cast<std::int64_t>(value) - initial_window_size_;
                 initial_window_size_ = static_cast<std::int32_t>(value);
-                return http2_peer_setting_apply_result::make_initial_window_change(delta);
-            }
+                return http2_peer_setting_apply_result::make_applied();
             case http2_setting_id::max_frame_size:
-                if (value < http2_default_max_frame_size || value > http2_max_frame_size_limit) {
+                if (value < http2_default_max_frame_size || value > http2_max_frame_size) {
                     return http2_peer_setting_apply_result::make_failure(
                         http2_peer_setting_error::invalid_max_frame_size);
                 }

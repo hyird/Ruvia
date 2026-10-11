@@ -40,7 +40,7 @@ public:
     [[nodiscard]] worker_signal& generation_signal() noexcept {
         return generation_signal_;
     }
-    [[nodiscard]] ruvia::quic_path_migration start_path_migration(const asio::ip::udp::endpoint& endpoint);
+    [[nodiscard]] ruvia::quic_path_migration start_path_migration(const ruvia::quic_address& local_address);
     [[nodiscard]] std::optional<ruvia::quic_path_migration> path_migration(std::uint64_t id) const noexcept;
     [[nodiscard]] ruvia::quic_operation_status cancel_path_migration(std::uint64_t id);
 
@@ -65,7 +65,7 @@ private:
     http3_client_push_observer push_;
     std::pmr::memory_resource* resource_;
     std::unique_ptr<http3_quic_client_tls_context, pmr_object_deleter<http3_quic_client_tls_context>> tls_;
-    std::unique_ptr<http3_client_body_budget, pmr_object_deleter<http3_client_body_budget>> body_budget_;
+    std::unique_ptr<http3_body_budget, pmr_object_deleter<http3_body_budget>> body_budget_;
     std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> connections_;
     worker_signal generation_signal_;
     std::pmr::vector<pending_cancellation> cancellations_;

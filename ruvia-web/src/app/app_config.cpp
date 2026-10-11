@@ -47,8 +47,8 @@ application& application::listen(listen_config config) {
             if (!config.http_.has_value() && !config.https_.has_value()) {
                 throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
             }
-            ruvia::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
-            ruvia::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
+            detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
+            detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
             if (config.http_.has_value() && config.http_ == config.https_) {
                 throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
             }
@@ -120,7 +120,7 @@ application& application::server(server_config config) {
 application& application::deadline(deadline_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the deadline while app is running", [config](detail::app_state& state_value) {
-            ruvia::ensure_positive_duration(
+            detail::ensure_positive_duration(
                 config.handler_, "handler deadline must be greater than zero");
             state_value.options_.deadline_ = config;
         });

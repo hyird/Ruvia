@@ -4,8 +4,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-#include "ruvia/http/http1_request_parser.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"
@@ -30,34 +31,34 @@ using ruvia::test::header_memory;
 
 RUVIA_TEST(request_header_blocks_reclaim_repeated_parses_and_preserve_retained_results) {
     header_memory resource;
-    ruvia::http1_request_parser parser;
+    const ruvia::http1_server_request_parser parser;
     {
-        auto retained = parser.parse("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", {.resource_ = &resource});
-        RUVIA_CHECK(retained.parsed() != nullptr);
+        auto retained = parser.parse_message("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", &resource);
+        RUVIA_CHECK(retained.message_ready() != nullptr);
         const auto baseline = resource.live_bytes_;
         for (int i = 0; i < 64; ++i) {
             {
-                auto result_value = parser.parse("GET / HTTP/1.1\r\nHost: second\r\n\r\n", {.resource_ = &resource});
-                RUVIA_CHECK(result_value.parsed() != nullptr);
+                auto result_value = parser.parse_message("GET / HTTP/1.1\r\nHost: second\r\n\r\n", &resource);
+                RUVIA_CHECK(result_value.message_ready() != nullptr);
                 auto moved = std::move(result_value);
-                RUVIA_CHECK_EQ(moved.parsed()->request().header("Host").value(), std::string_view("second"));
-                RUVIA_CHECK_EQ(retained.parsed()->request().header("X-Data").value(), std::string_view("saved"));
+                RUVIA_CHECK_EQ(moved.request_.header("Host").value(), std::string_view("second"));
+                RUVIA_CHECK_EQ(retained.request_.header("X-Data").value(), std::string_view("saved"));
             }
             RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
-            auto incomplete = parser.parse("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", {.resource_ = &resource});
-            RUVIA_CHECK(incomplete.need_more() != nullptr);
+            auto incomplete = parser.parse_message("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", &resource);
+            RUVIA_CHECK(incomplete.need_request_body() != nullptr);
             RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
         }
         resource.reject_ = true;
         bool failed = false;
         try {
-            (void)parser.parse("GET / HTTP/1.1\r\nHost: example\r\n\r\n", {.resource_ = &resource});
+            (void)parser.parse_message("GET / HTTP/1.1\r\nHost: example\r\n\r\n", &resource);
         } catch (const std::bad_alloc&) {
             failed = true;
         }
         RUVIA_CHECK(failed);
         RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
-        RUVIA_CHECK_EQ(retained.parsed()->request().path(), std::string_view("/saved"));
+        RUVIA_CHECK_EQ(retained.request_.path(), std::string_view("/saved"));
     }
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
 }
@@ -167,4 +168,20 @@ RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
     const auto second = request.cookie("b");
     RUVIA_CHECK(second.has_value());
     RUVIA_CHECK_EQ(*second, std::string_view("2"));
+}
+
+RUVIA_TEST(owned_header_copies_stay_in_the_source_resource) {
+    header_memory memory;
+    {
+        std::pmr::vector<ruvia::http_header> headers(&memory);
+        headers.push_back(ruvia::http_header::copy_of("x-name", "value", &memory));
+        const auto before = memory.allocations_;
+        const std::pmr::vector<ruvia::http_header> copied(headers, &memory);
+        const ruvia::http_header single(headers.front());
+        RUVIA_CHECK_EQ(copied.front().name(), std::string_view("x-name"));
+        RUVIA_CHECK_EQ(single.value(), std::string_view("value"));
+        // Vector storage plus both field blocks come from the owning resource.
+        RUVIA_CHECK_EQ(memory.allocations_, before + 3);
+    }
+    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }

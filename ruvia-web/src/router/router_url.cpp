@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/http_hex.h"
+
 #include "router/path_segments.h"
 #include "router/route_table.h"
 
@@ -23,7 +25,6 @@ namespace {
 }
 
 void append_url_for_value(std::pmr::string& output, std::string_view value, bool keep_slashes) {
-    static constexpr char hex_digits[] = "0123456789ABCDEF";
     while (!value.empty()) {
         const auto escaped = std::ranges::find_if_not(value, [keep_slashes](char byte) noexcept {
             return is_url_for_segment_byte(byte) || (keep_slashes && byte == '/');
@@ -36,7 +37,7 @@ void append_url_for_value(std::pmr::string& output, std::string_view value, bool
             return;
         }
         const auto raw = static_cast<unsigned char>(*escaped);
-        const char encoded[] = {'%', hex_digits[raw >> 4], hex_digits[raw & 0x0F]};
+        const char encoded[] = {'%', http_upper_hex_digit(raw >> 4), http_upper_hex_digit(raw)};
         output.append(encoded, sizeof(encoded));
         value.remove_prefix(plain_size + 1);
     }
@@ -46,14 +47,7 @@ void append_url_for_value(std::pmr::string& output, std::string_view value, bool
 
 std::pmr::string detail::route_table::url_for(std::string_view pattern,
     std::span<const std::string_view> values, std::pmr::memory_resource* resource) const {
-    bool registered = false;
-    for (const auto& route : routes_) {
-        if (route.path() == pattern) {
-            registered = true;
-            break;
-        }
-    }
-    if (!registered) {
+    if (!std::ranges::binary_search(plan_->url_patterns_, pattern)) {
         throw std::invalid_argument("url_for pattern is not a registered route");
     }
 

@@ -39,12 +39,11 @@
 #include <vector>
 
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/detail/server/http_response_write_plan.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_request_head_submit_result.h"
 #include "ruvia/http/http2_response_head_submit_result.h"
-#include "ruvia/http/http2_types.h"
+#include "ruvia/http/http2_websocket_handshake_submit_result.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_response.h"
@@ -63,123 +62,29 @@
 #include "http2/http2_peer_settings.h"
 #include "http2/http2_ready_queue.h"
 #include "http2/http2_receive_window_credit.h"
-#include "http2/http2_role.h"
+#include "http2/http2_stream_lease_ledger.h"
 #include "http2/http2_stream_state.h"
 #include "http2/http2_stream_table.h"
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
 
-using ruvia::http2_data_submit_status;
-using ruvia::http2_end_stream;
-using ruvia::http2_ends_stream;
-using ruvia::http2_feed_result;
-using ruvia::http2_output_consume_status;
-using ruvia::http2_request_content_release_status;
-using ruvia::http2_request_head_submit_error;
-using ruvia::http2_submit_status;
-
-enum class http2_websocket_handshake_submit_error : std::uint8_t {
-    closed,
-    invalid_state,
-};
-
-class http2_websocket_handshake_submit_result;
-
-class http2_websocket_handshake_submit_failure final {
-public:
-    [[nodiscard]] constexpr http2_websocket_handshake_submit_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http2_websocket_handshake_submit_result;
-
-    explicit constexpr http2_websocket_handshake_submit_failure(
-        http2_websocket_handshake_submit_error error) noexcept
-        : error_(error) {}
-
-    http2_websocket_handshake_submit_error error_;
-};
-
-// The successful alternative directly owns the exact negotiation encoded in
-// the 200 response. The runtime must configure ws_connection from that committed
-// value, never from a separately recomputed compression/subprotocol tuple.
-class http2_websocket_handshake_submit_result final {
-public:
-    http2_websocket_handshake_submit_result(const http2_websocket_handshake_submit_result&) = delete;
-    http2_websocket_handshake_submit_result& operator=(
-        const http2_websocket_handshake_submit_result&) = delete;
-    http2_websocket_handshake_submit_result(http2_websocket_handshake_submit_result&&) noexcept = default;
-    http2_websocket_handshake_submit_result& operator=(http2_websocket_handshake_submit_result&&) = delete;
-
-    [[nodiscard]] const websocket_server_negotiation* submitted() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    [[nodiscard]] const websocket_server_negotiation* submitted() const&& = delete;
-
-    [[nodiscard]] const http2_websocket_handshake_submit_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    [[nodiscard]] const http2_websocket_handshake_submit_failure* failure() const&& = delete;
-
-private:
-    friend class http2_connection;
-
-    using value_type = std::variant<websocket_server_negotiation, http2_websocket_handshake_submit_failure>;
-
-    explicit http2_websocket_handshake_submit_result(websocket_server_negotiation&& negotiation) noexcept
-        : value_(std::move(negotiation)) {}
-
-    explicit http2_websocket_handshake_submit_result(
-        http2_websocket_handshake_submit_failure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static http2_websocket_handshake_submit_result make_submitted(
-        websocket_server_negotiation&& negotiation) noexcept {
-        return http2_websocket_handshake_submit_result(std::move(negotiation));
-    }
-
-    [[nodiscard]] static http2_websocket_handshake_submit_result make_failure(
-        http2_websocket_handshake_submit_error error) noexcept {
-        return http2_websocket_handshake_submit_result(http2_websocket_handshake_submit_failure(error));
-    }
-
-    value_type value_;
-};
-
-enum class http2_finish_submit_status : std::uint8_t {
-    accepted,
-    queued,
-    // The stream disappeared or was reset while its owner was finishing it.
-    closed,
-    // The stream is not in an open response body/trailers phase, or a
-    // trailers-only response has no submitted terminal section.
-    invalid_state,
-    // The response remains body-open so the caller can submit the missing bytes.
-    content_length_incomplete
-};
-
-// A final response HEADERS transaction either commits one body/stream plan or
-// rejects the submission without exposing a plan that was never committed. The
-// refusal reason is a plain enum, matching the request-head submission contract;
-// protocol layers never manufacture exception objects.
-
-[[nodiscard]] inline std::string_view http2_response_head_submit_error_message(
+// Shared by every facade path that reports a final response head through the
+// plain submission status.
+[[nodiscard]] constexpr http2_submit_status http2_response_head_submit_status(
     http2_response_head_submit_error error) noexcept {
     switch (error) {
         case http2_response_head_submit_error::peer_stream_limit_reached:
-            return "peer concurrent stream limit reached";
+            return http2_submit_status::peer_capability_unavailable;
         case http2_response_head_submit_error::closed:
-            return "HTTP/2 response stream is closed";
+            return http2_submit_status::closed;
         case http2_response_head_submit_error::invalid_state:
-            return "invalid HTTP/2 response head submission state";
         case http2_response_head_submit_error::response_plan_mismatch:
-            return "HTTP/2 response head does not match its write plan";
+            return http2_submit_status::invalid_state;
         case http2_response_head_submit_error::invalid_message:
-            return "invalid HTTP/2 response head message";
+            return http2_submit_status::invalid_message;
     }
-    return "unknown HTTP/2 response head submission failure";
+    return http2_submit_status::invalid_state;
 }
 
 // A response body the send window could not fully drain: the core keeps the unsent
@@ -218,18 +123,15 @@ public:
     // Feed raw bytes read from the peer; advances the protocol. Before
     // begin_connection(), connection_not_started retains the exact input for retry.
     // Calling while events remain returns events_pending with the same retained-input
-    // guarantee; drain next_event() first. accepted and need_input both accept the
+    // guarantee; drain peek_event()/consume_event() first. accepted and need_input both accept the
     // whole input, with the latter buffering a partial preface/frame. protocol_failure
     // is terminal, so that input must be dropped. Every accepted call can emit events,
     // which must be drained before the next input is offered.
     [[nodiscard]] http2_feed_result feed(std::string_view in);
     template <http_temporary_owning_char_string input_type>
     http2_feed_result feed(input_type&&) = delete;
-    // Pull the next protocol event. nullopt means the queue is drained; every
-    // materialized event contains exactly one typed payload.
-    [[nodiscard]] std::optional<http2_event> next_event();
-    // Facades that must perform fallible event materialization use peek/commit so
-    // an exception never consumes the only protocol notification for a stream.
+    // The owner materializes the front event before consuming it, so an exception
+    // never consumes the only protocol notification for a stream.
     [[nodiscard]] http2_event* peek_event() & noexcept;
     [[nodiscard]] http2_event* peek_event() && = delete;
     [[nodiscard]] bool has_pending_events(std::uint32_t stream_id) const noexcept;
@@ -238,6 +140,9 @@ public:
     // Access an assembled request head / stream for the owner to build an http_request.
     [[nodiscard]] http2_stream_state* stream(std::uint32_t stream_id) & noexcept;
     [[nodiscard]] http2_stream_state* stream(std::uint32_t) && = delete;
+    // New outbound work is closed after a fatal connection error. Owner cleanup
+    // uses the raw stream lookup so outstanding leases remain releasable.
+    [[nodiscard]] http2_stream_state* find_outbound_stream(std::uint32_t stream_id) noexcept;
     // Read the peer's receive half-state without exposing stream storage.
     [[nodiscard]] http2_stream_receive_status stream_receive_status(
         std::uint32_t stream_id) const noexcept;
@@ -274,6 +179,8 @@ public:
     // Content-Length metadata before the encoder and local DATA state advance.
     [[nodiscard]] http2_response_head_submit_result submit_response_head(std::uint32_t stream_id,
         const http_response& response, http_buffered_response_write_plan write_plan);
+    [[nodiscard]] http2_submit_status submit_buffered_response(
+        std::uint32_t stream_id, const http_response& response);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK
     // metadata and all later DATA. With no explicit value the body is unbounded.
@@ -295,16 +202,9 @@ public:
     // Queue the RFC 8441 successful response (:status 200, Date and the exact
     // negotiated fields, without END_STREAM) and open the stream as a tunnel.
     // Only the submitted alternative exposes the negotiation committed on wire.
-    // Ownership moves into that alternative only after validation succeeds; a
-    // rejected submission leaves the caller's negotiation unchanged.
-    [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
-        std::uint32_t stream_id, websocket_server_negotiation&& negotiation);
     [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
         std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
-        websocket_server_negotiation&& negotiation);
-    [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
-        std::uint32_t stream_id, const http_request& request,
-        const websocket_handshake_validation_result& validation);
+        const websocket_server_negotiation& negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
@@ -320,7 +220,7 @@ public:
         std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] http2_finish_request_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
-    [[nodiscard]] http2_finish_submit_status finish_response(
+    [[nodiscard]] http2_finish_response_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id,
@@ -439,12 +339,14 @@ public:
     http2_request_head_submit_result submit_extended_connect_request_head(std::string_view,
         std::string_view, std::string_view, path_type&&, std::span<const http_header_view> = {}) = delete;
     // A DATA event borrows bytes from the accepted input and retains the matching
-    // receive-window debt. Once the owner has copied/consumed every currently
-    // delivered DATA event for this stream, transfer the debt into batched
-    // connection/stream credit. WINDOW_UPDATE is emitted only at the shared
-    // half-window threshold. Safe when the stream is gone.
-    [[nodiscard]] bool release_received_data(std::uint32_t stream_id, std::uint32_t bytes);
-    void release_all_received_data(std::uint32_t stream_id);
+    // receive-window debt. Once the owner has consumed a delivered DATA credit,
+    // transfer that debt into batched connection/stream credit and retry the
+    // stream's deferred lease release. WINDOW_UPDATE is emitted only at the shared
+    // half-window threshold. False when the stream or its debt is gone.
+    [[nodiscard]] bool acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes);
+    // Destruction path of an unacknowledged credit: never throws, and a failed
+    // release is retried by retry_deferred_stream_leases().
+    void abandon_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept;
     // Runtime timeout/manual release for an Expect-gated request body. A later
     // 100 response remains observable but emits no duplicate Continue signal.
     [[nodiscard]] http2_request_content_release_status release_request_content(
@@ -457,17 +359,9 @@ public:
     [[nodiscard]] std::optional<http2_send_window_state> send_window_state(
         std::uint32_t stream_id) const noexcept;
     [[nodiscard]] bool stream_aborted(std::uint32_t stream_id) const noexcept;
-    // RFC 8441 capability only. A dedicated CONNECT/tunnel submission API must still
-    // own pseudo-header shape and tunnel lifecycle; regular requests never infer it.
-    [[nodiscard]] bool peer_extended_connect_enabled() const noexcept {
-        return role_ == http2_role::client && peer_settings_.enable_connect_protocol();
-    }
     // Peer handshake / lifecycle observability for client drivers.
     [[nodiscard]] bool received_peer_settings() const noexcept {
         return preface_phase_ == preface_phase_type::ready;
-    }
-    [[nodiscard]] std::optional<http2_peer_goaway> peer_goaway() const noexcept {
-        return peer_goaway_;
     }
 
     // Concurrent dispatch support: a request/response built from a stream holds VIEWS
@@ -475,13 +369,30 @@ public:
     // (possibly-suspended) handler. Pin the stream before spawning its handler; while
     // pinned, a peer RST_STREAM/close only marks it reset (keeping the storage, and
     // emitting stream_closed so the owner can drop the response) instead of freeing it.
-    // Unpin when the handler finishes; the stream is then removed. No-op / safe if the
-    // stream is already gone.
     void pin_stream(std::uint32_t stream_id);
-    void unpin_stream(std::uint32_t stream_id);
+    // Pins the stream of a successful client request-head submission. A pin
+    // failure resets that stream and rethrows.
+    void lease_submitted_request(const http2_request_head_submit_result& result);
+    // Ends an owner lease. The stream is unpinned once its delivered DATA credit
+    // and queued events are gone; until then the release stays deferred.
+    void release_stream_lease(std::uint32_t stream_id);
+    // A client tunnel lease additionally waits for the stream to close.
+    void release_stream_lease_after_tunnel_end(std::uint32_t stream_id) noexcept;
+    // Destruction path of an unreleased lease: resets a live stream, then
+    // releases it. Never throws; a failure is retried later.
+    void abandon_stream_lease(std::uint32_t stream_id) noexcept;
+    // Applies deferred credits and lease releases whose conditions now hold. The
+    // owner calls this after every operation that can satisfy one.
+    void retry_deferred_stream_leases() noexcept;
 
 private:
     void append_goaway(http2_error_code error, std::string_view debug = {});
+    // Unpin when the owner lease ends; the stream is then removed. No-op / safe if
+    // the stream is already gone.
+    void unpin_stream(std::uint32_t stream_id);
+    [[nodiscard]] bool release_received_data(std::uint32_t stream_id, std::uint32_t bytes);
+    void abandon_stream_lease_checked(std::uint32_t stream_id);
+    void retry_deferred_stream_lease(std::uint32_t stream_id) noexcept;
 
     // A WINDOW_UPDATE/SETTINGS change drains core-owned DATA remainders into the
     // outbound buffer. A stream whose remainder fully drains is reported through
@@ -491,7 +402,31 @@ private:
     // Emit a response header block as HEADERS + CONTINUATION frames (atomic sequence,
     // RFC 9113 §6.10) into the outbound buffer, ending the stream when end_stream is set.
     void append_response_header_frames(
-        http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream);
+        http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
+        std::size_t additional_output_bytes = 0, std::size_t additional_output_segments = 0);
+    [[nodiscard]] http2_response_head_submit_result submit_response_head_impl(
+        std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan,
+        std::optional<std::string_view> complete_body);
+    struct prepared_data_submission final {
+        explicit prepared_data_submission(std::pmr::memory_resource* resource)
+            : owned_input_(resource) {}
+        prepared_data_submission(const prepared_data_submission&) = delete;
+        prepared_data_submission& operator=(const prepared_data_submission&) = delete;
+        prepared_data_submission(prepared_data_submission&&) = delete;
+        prepared_data_submission& operator=(prepared_data_submission&&) = delete;
+
+        std::string_view input_;
+        std::pmr::string owned_input_;
+        std::optional<http2_pending_send> deferred_;
+        std::size_t output_bytes_{0};
+        std::size_t output_segments_{0};
+        http2_end_stream end_stream_{http2_end_stream::keep_open};
+    };
+    [[nodiscard]] http2_data_submit_status prepare_data_submission(http2_stream_state& stream,
+        std::string_view chunk, http2_end_stream end_stream, const http2_local_content_state& content,
+        prepared_data_submission& prepared);
+    [[nodiscard]] http2_data_submit_status commit_data_submission(
+        http2_stream_state& stream, prepared_data_submission& prepared);
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
     // Emit DATA frames for data.substr(offset) while the send window allows, returning
     // the new offset (== data.size() when fully sent). Consumes send-window credit.
@@ -528,6 +463,7 @@ private:
     // Release a successfully debited DATA payload that protocol semantics discard.
     // Only connection credit survives because the stream is closed/being abandoned.
     void release_dropped_data_connection_window(std::int32_t flow_bytes);
+    void reserve_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes);
     void queue_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes);
     [[nodiscard]] bool apply_settings_payload(std::string_view payload);
 
@@ -535,18 +471,15 @@ private:
     // WITHOUT resolve_stream_route -- route resolution is application policy the owner runs
     // after pulling message_head). Return the classification; the caller reacts.
     [[nodiscard]] header_decode_status decode_header_block(http2_stream_state& stream,
-        http2_stream_header_decode_transaction& stream_transaction,
         hpack_decoder::decode_transaction_type& hpack_transaction);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
     // stream's header table). A 1xx interim head is validated then discarded WITHOUT
     // leaving the remote head-pending alternative active, so the next HEADERS block
     // decodes as the real head; callers emit events only after that alternative changes.
     [[nodiscard]] header_decode_status decode_response_header_block(http2_stream_state& stream,
-        http2_stream_header_decode_transaction& stream_transaction,
         hpack_decoder::decode_transaction_type& hpack_transaction);
     // Role-aware initial-head decode dispatch (request vs response semantics).
     [[nodiscard]] header_decode_status decode_initial_header_block(http2_stream_state& stream,
-        http2_stream_header_decode_transaction& stream_transaction,
         hpack_decoder::decode_transaction_type& hpack_transaction);
     // Role-aware idle-stream test (server: above the highest peer id; client: any even
     // id or an odd id we have not opened yet).
@@ -556,7 +489,6 @@ private:
     [[nodiscard]] header_decode_status decode_discarded_header_block(
         http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction);
     [[nodiscard]] header_decode_status finish_trailer_block(http2_stream_state& stream,
-        http2_stream_header_decode_transaction& stream_transaction,
         hpack_decoder::decode_transaction_type& hpack_transaction);
     template <http2_header_block_kind kind>
     [[nodiscard]] bool complete_decoded_header_block(http2_stream_state& stream);
@@ -627,7 +559,7 @@ private:
     void discard_deferred_stream_state(std::uint32_t stream_id);
     // Preserve a removed stream's banked debt as batched connection credit.
     void flush_window_debt(http2_stream_state& stream);
-    void reserve_stream_close_effects(http2_stream_state& stream);
+    void reserve_stream_close_effects();
 
     std::pmr::memory_resource* resource_;
 
@@ -666,7 +598,7 @@ private:
     std::optional<http2_stream_state> discarded_header_stream_;
     discarded_header_action_type discarded_header_action_{discarded_header_action_type::ignore};
 
-    // event queue drained by next_event()
+    // event queue drained by peek_event()/consume_event()
     std::pmr::vector<http2_event> events_;
     std::size_t event_offset_{0};
 
@@ -677,6 +609,7 @@ private:
 
     // streams with an in-flight handler; close_stream keeps these alive (see pin_stream)
     std::pmr::vector<std::uint32_t> pinned_streams_;
+    http2_stream_lease_ledger leases_;
 
     std::uint32_t local_max_frame_size_{http2_local_settings::max_frame_size};
     std::uint32_t last_stream_id_{0};
@@ -684,7 +617,7 @@ private:
     http2_role role_{http2_role::server};
     std::uint32_t next_local_stream_id_{1};  // client role: next odd stream id to open
     std::uint32_t active_local_request_streams_{0};
-    std::optional<http2_peer_goaway> peer_goaway_;
+    std::optional<http2_goaway_event> peer_goaway_;
     std::int32_t connection_send_window_{http2_default_initial_window_size};
     std::int32_t connection_receive_window_{
         static_cast<std::int32_t>(http2_local_settings::initial_window_size)};

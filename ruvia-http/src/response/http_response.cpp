@@ -13,15 +13,14 @@
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_response_head_policy.h"
-#include "ruvia/http/detail/server/http_response_write_plan.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_coding.h"
 #include "field/http_entity_tag.h"
+#include "field/response_field_validation.h"
 #include "response/http_response_header_access.h"
 #include "response/http_response_static_headers.h"
 #include "response/response_header_utils.h"
@@ -144,16 +143,12 @@ http_response& http_response::operator=(http_response&& other) noexcept {
     return *this;
 }
 
-std::pmr::memory_resource* http_response::resource() const noexcept {
+std::pmr::memory_resource* http_response::memory_resource() const noexcept {
     return headers_.resource_;
 }
 
-std::pmr::memory_resource* http_response::memory_resource() const noexcept {
-    return resource();
-}
-
 http_response http_response::clone_headers_for_transaction(std::size_t additional_headers) const {
-    http_response clone(detail::http_resolved_pmr_resource_tag{}, resource());
+    http_response clone(detail::http_resolved_pmr_resource_tag{}, memory_resource());
     clone.status_code_ = status_code_;
 
     clone.headers_.reserve(headers_.size() + additional_headers);
@@ -177,31 +172,6 @@ void http_response::commit_headers_from(http_response&& staged) noexcept {
     ::new (static_cast<void*>(&headers_)) http_response_headers(std::move(staged.headers_));
     known_header_bits_ = staged.known_header_bits_;
     known_header_indexes_ = staged.known_header_indexes_;
-}
-
-http_response http_response::clone_for_transaction() const {
-    auto clone = clone_headers_for_transaction();
-
-    if (const auto* const borrowed_bytes = body_.borrowed_bytes()) {
-        clone.body_.set_borrowed(borrowed_bytes->bytes());
-    } else if (const auto* const static_bytes = body_.static_bytes()) {
-        clone.body_.set_static(static_bytes->bytes());
-    } else if (const auto* const owned_bytes = body_.owned_bytes()) {
-        clone.body_.set_copy(clone.resource(), owned_bytes->bytes());
-    } else if (const auto* const owned_file = body_.owned_file()) {
-        clone.body_.set_owned_file(clone.resource(),
-            detail::make_path_from_http_native_path(owned_file->native_path_c_str()), owned_file->size(),
-            owned_file->offset(), owned_file->length(), owned_file->identity());
-    } else if (const auto* const borrowed_file = body_.borrowed_file()) {
-        clone.body_.set_borrowed_file(borrowed_file->native_path_c_str(), borrowed_file->size(),
-            borrowed_file->offset(), borrowed_file->length(), borrowed_file->identity());
-    } else if (const auto* const multipart = body_.multipart_body()) {
-        clone.body_.set_multipart(clone.resource(),
-            multipart->file().to_path(), multipart->file_size(),
-            multipart->identity(), multipart->plan().clone(clone.resource()));
-    }
-
-    return clone;
 }
 
 http_status_code http_response::status() const noexcept {
@@ -277,27 +247,15 @@ void http_response::transfer_headers_from(
 }
 
 void http_response::body(std::string_view value) {
-    body_.set_copy(resource(), value);
+    body_.set_copy(memory_resource(), value);
 }
 
 void http_response::owned_body(std::pmr::string&& value) {
-    set_body_owned(std::move(value));
+    body_.set_owned(memory_resource(), std::move(value));
 }
 
 void http_response::static_body(std::string_view value) noexcept {
-    set_body_static_view(value);
-}
-
-void http_response::set_body_borrowed_view(std::string_view value) noexcept {
-    body_.set_borrowed(value);
-}
-
-void http_response::set_body_static_view(std::string_view value) noexcept {
     body_.set_static(value);
-}
-
-void http_response::set_body_owned(std::pmr::string&& value) {
-    body_.set_owned(resource(), std::move(value));
 }
 
 // Owns only newly staged descriptors, never copies the response's existing
@@ -359,14 +317,16 @@ void http_response::replace_body_with_content_encoding(
 void http_response::apply_encoded_representation(
     std::string_view content_encoding, std::pmr::string* body) {
     detail::validate_response_header_storage_size(std::string_view("Content-Encoding").size(), content_encoding.size());
-    if (!detail::is_valid_http_content_encoding_field_value(content_encoding, detail::http_field_list_role::sender)) {
+    detail::response_field_state fields;
+    if (detail::validate_response_field(detail::request_header_kind::content_encoding, content_encoding,
+            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     constexpr std::size_t encoding_header = 0;
     constexpr std::size_t etag_header = 1;
     constexpr std::size_t length_header = 2;
     const auto weak_etag = weak_etag_for_new_representation(
-        known_header_value(detail::response_header_etag), resource());
+        known_header_value(detail::response_header_etag), memory_resource());
     const std::array<std::pair<std::string_view, std::uint32_t>, 3> fields_value{{
         {"Content-Encoding", detail::response_header_content_encoding},
         {"ETag", detail::response_header_etag},
@@ -402,7 +362,7 @@ void http_response::apply_encoded_representation(
             fields_value[length_header].second);
         // All descriptors exist before replacing the body. set_owned has a strong
         // failure guarantee; everything after it is no-throw publication.
-        body_.set_owned(resource(), std::move(*body));
+        body_.set_owned(memory_resource(), std::move(*body));
     }
     update.commit(encoding_header, fields_value[encoding_header].first, fields_value[encoding_header].second);
     if (body == nullptr) {
@@ -417,7 +377,7 @@ void http_response::apply_encoded_representation(
 }
 
 void http_response::materialize_body() {
-    body_.materialize(resource());
+    body_.materialize(memory_resource());
 }
 
 void http_response::file_body(std::filesystem::path file, std::uint64_t size,
@@ -427,7 +387,7 @@ void http_response::file_body(std::filesystem::path file, std::uint64_t size,
 
 void http_response::multipart_file_body(std::filesystem::path file, std::uint64_t size,
     http_response_file_identity identity, http_multipart_byte_range_plan&& plan) {
-    body_.set_multipart(resource(), file, size, identity, std::move(plan));
+    body_.set_multipart(memory_resource(), file, size, identity, std::move(plan));
 }
 
 void http_response::content_range(
@@ -461,7 +421,7 @@ void http_response::set_file_body(std::filesystem::path file, std::uint64_t size
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(resource(), file, size, offset, length, identity);
+    body_.set_owned_file(memory_resource(), file, size, offset, length, identity);
 }
 
 void http_response::set_borrowed_file_body(const std::filesystem::path& file, std::uint64_t size) {
@@ -481,13 +441,13 @@ void http_response::set_borrowed_file_body(const std::filesystem::path& file, st
 }
 
 void http_response::set_borrowed_native_file_body(
-    const detail::http_native_path_char_type* file, std::uint64_t size) {
+    const http_native_path_char_type* file, std::uint64_t size) {
     set_borrowed_native_file_body(file, size, 0, size);
 }
 
-void http_response::set_borrowed_native_file_body(const detail::http_native_path_char_type* file,
+void http_response::set_borrowed_native_file_body(const http_native_path_char_type* file,
     std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-    if (file == nullptr || *file == detail::http_native_path_char_type{}) {
+    if (file == nullptr || *file == http_native_path_char_type{}) {
         throw std::invalid_argument("file response path must not be empty");
     }
     if (offset > size || length > size - offset) {

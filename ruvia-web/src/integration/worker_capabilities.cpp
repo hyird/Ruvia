@@ -1,5 +1,6 @@
 #include "integration/worker_capabilities.h"
 
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -33,7 +34,8 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),
       options_(std::move(options)) {}
 
-task<void> worker_capabilities::connect() {
+task<void> worker_capabilities::start() {
+    worker_states_.initialize();
     try {
         if (!redis_.empty()) {
             co_await redis_.connect();
@@ -43,12 +45,9 @@ task<void> worker_capabilities::connect() {
         }
     } catch (...) {
         close_now();
+        worker_states_.shutdown();
         throw;
     }
-}
-
-task<void> worker_capabilities::join() {
-    co_await http_clients_.join();
 }
 
 void worker_capabilities::close_now() noexcept {
@@ -57,12 +56,18 @@ void worker_capabilities::close_now() noexcept {
     redis_.close_now();
 }
 
-void worker_capabilities::initialize_worker_state() {
-    worker_states_.initialize();
-}
-
-void worker_capabilities::shutdown_worker_state() noexcept {
+task<void> worker_capabilities::stop() {
+    close_now();
+    std::exception_ptr failure;
+    try {
+        co_await http_clients_.join();
+    } catch (...) {
+        failure = std::current_exception();
+    }
     worker_states_.shutdown();
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 
 context_services worker_capabilities::make_context_services(const stop_token& stop_token_value) {

@@ -6,25 +6,23 @@
 #include <array>
 #include <limits>
 #include <memory>
-#include <new>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
-#include "coding/zlib_pmr_allocation.h"
+#include "coding/http_zlib_stream.h"
 
 namespace ruvia {
 
 namespace detail {
 
 // One zlib stage is an implementation detail of the coding sequence, not a
-// second public decoder. Its address must stay fixed for zlib's opaque pointer.
+// second public decoder. Its address must stay fixed for the pinned zlib stream.
 class transfer_coding_decoder final {
 public:
     transfer_coding_decoder(http_transfer_coding coding, std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit);
-    ~transfer_coding_decoder();
     transfer_coding_decoder(const transfer_coding_decoder&) = delete;
     transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
     [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
@@ -47,11 +45,8 @@ private:
     [[nodiscard]] static http_transfer_coding_decode_result complete(std::size_t consumed) noexcept;
     [[nodiscard]] http_transfer_coding_decode_result fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept;
     [[nodiscard]] http_transfer_coding_decode_result fail_decoder(std::size_t consumed) noexcept;
-    static voidpf zalloc_thunk(voidpf opaque, uInt items, uInt size) noexcept;
-    static void zfree_thunk(voidpf opaque, voidpf address) noexcept;
-    z_stream stream_{};
+    zlib_inflate_stream stream_;
     state state_{active{}};
-    std::pmr::memory_resource* resource_;
     protocol_byte_limit body_limit_;
     std::size_t decoded_bytes_{0};
     // An empty coded body carries no content and completes at framing EOF.
@@ -59,36 +54,29 @@ private:
     http_transfer_coding coding_;
 };
 
-transfer_coding_decoder::transfer_coding_decoder(
-    http_transfer_coding coding, std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit)
-    : resource_(detail::http_pmr_resource_or_default(resource)),
-      body_limit_(decoded_limit),
-      coding_(coding) {
-    int window_bits = 0;
+namespace {
+
+[[nodiscard]] int transfer_coding_window_bits(http_transfer_coding coding) {
     switch (coding) {
         case http_transfer_coding::gzip:
-            window_bits = 15 + 16;
-            break;
+            return 15 + 16;
         case http_transfer_coding::deflate:
-            window_bits = 15;
-            break;
+            return 15;
         default:
             throw std::invalid_argument("unsupported HTTP transfer coding");
     }
-    stream_.zalloc = &transfer_coding_decoder::zalloc_thunk;
-    stream_.zfree = &transfer_coding_decoder::zfree_thunk;
-    stream_.opaque = this;
-    const int rc = inflateInit2(&stream_, window_bits);
-    if (rc == Z_MEM_ERROR) {
-        throw std::bad_alloc();
-    }
-    if (rc != Z_OK) {
-        throw std::runtime_error("failed to initialize transfer-coding decoder");
-    }
 }
 
-transfer_coding_decoder::~transfer_coding_decoder() {
-    (void)inflateEnd(&stream_);
+}  // namespace
+
+transfer_coding_decoder::transfer_coding_decoder(
+    http_transfer_coding coding, std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit)
+    : stream_(detail::http_pmr_resource_or_default(resource), transfer_coding_window_bits(coding)),
+      body_limit_(decoded_limit),
+      coding_(coding) {
+    if (!stream_.initialized()) {
+        throw std::runtime_error("failed to initialize transfer-coding decoder");
+    }
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::decode(
@@ -115,7 +103,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
                            ? output(consumed, std::string_view(output_buffer.data(), produced))
                            : need_input(consumed);
             }
-            if (inflateReset(&stream_) != Z_OK) {
+            if (inflateReset(&stream_.native()) != Z_OK) {
                 return fail_decoder(consumed);
             }
             state_.emplace<active>();
@@ -188,21 +176,22 @@ http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexc
 transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_step(
     std::string_view input, std::span<char> output) noexcept {
     const auto input_bytes = std::min<std::size_t>(input.size(), (std::numeric_limits<uInt>::max)());
-    stream_.next_in =
+    auto& stream = stream_.native();
+    stream.next_in =
         input_bytes == 0 ? Z_NULL : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
-    stream_.avail_in = static_cast<uInt>(input_bytes);
+    stream.avail_in = static_cast<uInt>(input_bytes);
     const auto output_bytes =
         std::min<std::size_t>(output.size(), (std::numeric_limits<uInt>::max)());
-    stream_.next_out = reinterpret_cast<Bytef*>(output.data());
-    stream_.avail_out = static_cast<uInt>(output_bytes);
+    stream.next_out = reinterpret_cast<Bytef*>(output.data());
+    stream.avail_out = static_cast<uInt>(output_bytes);
 
-    const auto status = inflate(&stream_, Z_NO_FLUSH);
-    const auto consumed = input_bytes - stream_.avail_in;
-    const auto produced = output_bytes - stream_.avail_out;
-    stream_.next_in = Z_NULL;
-    stream_.avail_in = 0;
-    stream_.next_out = Z_NULL;
-    stream_.avail_out = 0;
+    const auto status = inflate(&stream, Z_NO_FLUSH);
+    const auto consumed = input_bytes - stream.avail_in;
+    const auto produced = output_bytes - stream.avail_out;
+    stream.next_in = Z_NULL;
+    stream.avail_in = 0;
+    stream.next_out = Z_NULL;
+    stream.avail_out = 0;
     return inflate_step_result{consumed, produced, status};
 }
 
@@ -228,15 +217,6 @@ http_transfer_coding_decode_result transfer_coding_decoder::fail(
 http_transfer_coding_decode_result transfer_coding_decoder::fail_decoder(std::size_t consumed) noexcept {
     state_.emplace<decoder_failed>();
     return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
-}
-
-voidpf transfer_coding_decoder::zalloc_thunk(voidpf opaque, uInt items, uInt size) noexcept {
-    auto* self = static_cast<transfer_coding_decoder*>(opaque);
-    return self == nullptr ? nullptr : detail::zlib_pmr_allocate(self->resource_, items, size);
-}
-
-void transfer_coding_decoder::zfree_thunk(voidpf, voidpf address) noexcept {
-    detail::zlib_pmr_free(address);
 }
 
 }  // namespace detail

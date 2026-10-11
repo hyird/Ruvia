@@ -10,19 +10,19 @@
 #include <string_view>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 #include "body/http_body_buffer.h"
 #include "body/http_stream_body_reader_errors.h"
+#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 
@@ -33,7 +33,7 @@ class stream_body_reader final {
 public:
     stream_body_reader(stream_type& stream, std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initial_body_and_pipeline, http1_request_body_plan body_plan,
-        protocol_byte_limit body_limit_value, ruvia::connection_scanner::entry_type& scanner_entry);
+        protocol_byte_limit body_limit_value, connection_scanner::entry_type& scanner_entry);
     ~stream_body_reader() = default;
 
     stream_body_reader(const stream_body_reader&) = delete;
@@ -80,7 +80,7 @@ private:
     protocol_byte_limit body_limit_;
     http1_chunked_body_decoder chunk_decoder_;
     http_request_trailers trailers_;
-    ruvia::connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry_type& scanner_entry_;
     std::size_t read_cursor_{0};
     std::size_t pending_compact_until_{0};
     std::size_t delivered_bytes_{0};

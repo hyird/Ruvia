@@ -11,8 +11,8 @@
 #include <utility>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
-#include "ruvia/http/detail/util/hex.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_hex.h"
 
 namespace ruvia {
 
@@ -56,8 +56,8 @@ namespace detail {
     if (i + 2 >= input.size()) {
         return -1;
     }
-    const auto high = decode_hex_nibble(input[i + 1]);
-    const auto low = decode_hex_nibble(input[i + 2]);
+    const auto high = http_decode_hex_nibble(input[i + 1]);
+    const auto low = http_decode_hex_nibble(input[i + 2]);
     if (high < 0 || low < 0) {
         return -1;
     }

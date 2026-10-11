@@ -1,0 +1,21 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <limits>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <variant>
+#include <vector>

@@ -14,13 +14,13 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
-#include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/http/websocket_protocol.h"
+#include "ruvia/web/client_tcp_config.h"
+#include "ruvia/web/client_tls_config.h"
 #include "ruvia/web/http3_qpack_config.h"
-#include "ruvia/web/tls_peer_verification.h"
 #include "ruvia/web/websocket.h"
 
 namespace ruvia {
@@ -54,13 +54,9 @@ struct websocket_client_config final {
     // nullopt disables this guard.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
     websocket_heartbeat_config heartbeat_{};
-    tls_peer_verification_policy tls_peer_verification_{tls_peer_verification_policy::verify};
-    tcp_no_delay_policy tcp_no_delay_{tcp_no_delay_policy::enable};
-    tcp_keep_alive_policy tcp_keep_alive_{tcp_keep_alive_policy::enable};
-    std::string ca_file_{};
-    std::string certificate_chain_file_{};
-    std::string private_key_file_{};
-    std::string private_key_password_{};
+    // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
+    client_tls_config tls_{};
+    client_tcp_config tcp_{};
     std::string user_agent_{"Ruvia"};
 };
 
@@ -97,6 +93,11 @@ namespace detail {
 class websocket_client_state;
 }
 
+// Worker-affine capability over one connected websocket_client. Handles and
+// their operations borrow the client; its lifecycle expires every handle and
+// joins every operation before retirement. Write payloads (text, binary, ping,
+// pong) are borrowed, not copied: the bytes must stay valid and unchanged until
+// the returned operation completes or is destroyed unstarted.
 class websocket_client_handle final {
 public:
     websocket_client_handle(const websocket_client_handle& other) noexcept;
@@ -113,11 +114,11 @@ public:
 
 private:
     friend class detail::websocket_client_state;
-    websocket_client_handle(std::shared_ptr<detail::websocket_client_state> state_value,
+    websocket_client_handle(detail::websocket_client_state& state_value,
         ::ruvia::operation_scope& scope, operation_options options) noexcept;
     static void expire_capability(void* target) noexcept;
 
-    std::shared_ptr<detail::websocket_client_state> state_;
+    detail::websocket_client_state* state_;
     operation_options options_;
     scoped_capability_registration registration_;
 };
@@ -137,7 +138,11 @@ public:
 
     // Connect tasks, handles, and operations all depend on this client's open
     // lifecycle. A temporary would request shutdown immediately after creating
-    // one, so operation-producing APIs are lvalue-only.
+    // one, so operation-producing APIs are lvalue-only. Write payloads are
+    // borrowed until the returned operation completes, as for
+    // websocket_client_handle. The client connects once: a completed close
+    // handshake, a transport or protocol failure, a timeout, or cancellation of
+    // any operation retires it.
     [[nodiscard]] task<void> connect() &;
     task<void> connect() && = delete;
     [[nodiscard]] websocket_client_handle with_options(operation_options options) const&;

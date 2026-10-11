@@ -1,6 +1,5 @@
 #pragma once
 
-#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -14,7 +13,6 @@
 #include "ruvia/http/http1_connect.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/web/detail/util/callable_ref.h"
 
 #include "http/http_socket_tunnel_transport.h"
 #include "http/http_tunnel_session.h"
@@ -22,23 +20,26 @@
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
 #include "server/http_server_response_state.h"
+#include "server/http_upgrade_route.h"
 
 namespace ruvia::detail {
 
+// Admission already validated a CONNECT-UDP head (`udp`). HTTP/1 framing adds
+// one rule of its own: a CONNECT request cannot carry request content.
 template <typename stream_type>
 [[nodiscard]] task<std::optional<http1_session_request_completion>> dispatch_http_tunnel_route(
-    http1_route_dispatch<stream_type> d, const resolved_route& resolved, std::string_view pending) {
-    const auto& endpoint = *resolved.route().endpoint().tunnel();
-    const bool udp = endpoint.protocol() == "connect-udp";
-    if (d.parsed_.body_plan_.requires_consumption() || (udp && (validate_http_connect_udp_request(d.parsed_.request_).index() != 0))) {
+    http1_route_dispatch<stream_type> d, const resolved_route& resolved, bool udp, std::string_view pending) {
+    if (d.parsed_.body_plan_.requires_consumption()) {
         d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
         co_return http1_session_request_completion::make_buffered_closing(
             require_http1_final_response_commit(d.response_, d.parsed_.connection_plan_.require_close()));
     }
+    const auto& endpoint = *resolved.route().endpoint().tunnel();
+    using session_type = http_tunnel_session<http_socket_tunnel_transport<stream_type>>;
     std::optional<tls_tunnel_output> tls_output;
-    std::optional<http_tunnel_session<http_socket_tunnel_transport<stream_type>>> tunnel;
-    auto establish_and_run = [&](context& context_value) -> task<void> {
+    std::optional<session_type> tunnel;
+    auto establish = [&](context& context_value) -> task<void> {
         auto head_response = context_access::streaming_head(context_value);
         if (udp) {
             auto negotiated = prepare_http_connect_udp_response(std::move(head_response), d.parsed_.request_.protocol_version());
@@ -62,7 +63,7 @@ template <typename stream_type>
         }
         http_response_head_buffer head(std::pmr::polymorphic_allocator<char>(d.memory_.resource()));
         append_http1_response_head(head_response, head, std::get<0>(plan));
-        context_access::mark_tunnel_handshake_started(context_value);
+        context_access::commit_upgrade(context_value);
         const auto written = co_await async_asio<std::size_t>([&](auto handler) {
             asio::async_write(d.stream_, asio::buffer(head.view()), std::move(handler));
         });
@@ -75,31 +76,33 @@ template <typename stream_type>
         }
         tunnel.emplace(http_socket_tunnel_transport<stream_type>(d.stream_, tls_output ? &*tls_output : nullptr),
             d.base_route_services_.worker(), *d.memory_.resource(), pending);
-        co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, endpoint.handler(), context_value);
+        co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, resolved.stream_handler(), context_value);
     };
-    std::optional<http_response> buffered;
+    auto finish = [&](session_type& session_value, std::exception_ptr failure) {
+        return finish_tunnel_session(session_value, std::move(failure), d.options_.connection_failure_,
+            d.base_route_services_.get_conn_info().remote().address(), d.scanner_entry_,
+            endpoint.config().peer_transport_fin_timeout_);
+    };
+    // The TLS output pump must be stopped and joined on every exit, including
+    // a handler failure that run_http_upgrade_route surfaces.
+    std::optional<http_upgrade_route_outcome> outcome;
     std::exception_ptr failure;
     try {
-        buffered = co_await d.routes_.dispatch_tunnel(d.parsed_.request_, resolved, d.request_memory_,
-            make_callable_ref<void, context&>(establish_and_run), d.base_route_services_);
+        outcome.emplace(co_await run_http_upgrade_route(http_upgrade_kind::tunnel, d.routes_, d.parsed_.request_,
+            resolved, d.request_memory_, d.base_route_services_, tunnel, establish, finish));
     } catch (...) {
         failure = std::current_exception();
     }
-    if (tunnel) {
-        co_await finish_tunnel_session(*tunnel, failure, d.options_.connection_failure_, d.base_route_services_.get_conn_info().remote().address(), d.scanner_entry_, endpoint.config().peer_transport_fin_timeout_);
-    } else if (tls_output) {
-        tls_output->abort();
-    }
     if (tls_output) {
+        if (!tunnel) {
+            tls_output->abort();
+        }
         co_await tls_output->join();
-    }
-    if (tunnel) {
-        co_return std::nullopt;
     }
     if (failure) {
         std::rethrow_exception(failure);
     }
-    if (buffered) {
+    if (auto* buffered = outcome->response()) {
         d.response_ = std::move(*buffered);
         co_return http1_session_request_completion::make_buffered_closing(
             require_http1_final_response_commit(d.response_, d.parsed_.connection_plan_.require_close()));

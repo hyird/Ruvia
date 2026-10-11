@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -8,6 +9,10 @@
 #include <variant>
 
 namespace ruvia {
+
+// RFC 9114 section 3.1: the "h3" ALPN token as a TLS protocol-name list
+// (length-prefixed wire form accepted by SSL_set_alpn_protos and QUIC TLS).
+inline constexpr std::array<unsigned char, 3> http3_alpn_protocol_list{2, 'h', '3'};
 
 enum class http3_settings_error : std::uint8_t {
     need_more_data,

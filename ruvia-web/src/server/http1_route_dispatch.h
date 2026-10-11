@@ -2,7 +2,6 @@
 
 #include <memory_resource>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -10,6 +9,7 @@
 
 #include "context/context_services.h"
 #include "router/route_table.h"
+#include "server/connection_scanner.h"
 #include "server/http1_request_sequence.h"
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
@@ -30,7 +30,7 @@ template <typename stream_type>
 struct http1_route_dispatch final {
     stream_type& stream_;
     worker_memory& memory_;
-    ruvia::connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry_type& scanner_entry_;
     const http1_server_request_parse_state& parsed_;
     http_response_coding_selection response_coding_;
     http_response_coding_availability response_coding_availability_;

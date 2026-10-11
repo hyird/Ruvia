@@ -1,29 +1,30 @@
 #pragma once
 
-#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
-#include <utility>
+#include <string_view>
 
-#include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
-#include <asio/ssl/stream.hpp>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/websocket_client.h"
 
-#include "client/client_close_state.h"
+#include "client/client_lifecycle.h"
+#include "client/client_tcp_transport.h"
 #include "client/websocket_client_config_storage.h"
 #include "http2/websocket_http2_transport.h"
 #include "http3/websocket_http3_transport.h"
@@ -32,41 +33,45 @@
 
 namespace ruvia::detail {
 
+// One WebSocket connection over HTTP/1.1, HTTP/2 or HTTP/3, retired through the
+// shared client_lifecycle. The state is its own lifecycle backend: connect()
+// establishes the transport, performs the opening handshake and starts the
+// protocol; close_now() stops every I/O source; join() retires the heartbeat
+// and protocol drivers. Operations borrow `this`: the lifecycle joins them, and
+// close_now() cancels every timer, before the state can be retired.
 class websocket_client_state final : public std::enable_shared_from_this<websocket_client_state> {
 public:
     websocket_client_state(event_loop loop, const websocket_client_config& config);
-    ~websocket_client_state();
 
-    void bind_stop();
-    [[nodiscard]] task<void> connect();
-    [[nodiscard]] task<void> shutdown();
+    websocket_client_state(const websocket_client_state&) = delete;
+    websocket_client_state& operator=(const websocket_client_state&) = delete;
+
+    [[nodiscard]] client_lifecycle<websocket_client_state>& lifecycle() noexcept {
+        return lifecycle_;
+    }
     [[nodiscard]] websocket_client_handle handle(operation_options options);
+    // Any thread: retires the client with the closing reason on its worker.
     void abort() noexcept;
-    void request_cancel() noexcept;
     [[nodiscard]] bool connected();
     [[nodiscard]] std::string_view subprotocol();
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
     }
 
-    [[nodiscard]] scoped_operation<std::optional<websocket_message>> read(operation_options options);
-    [[nodiscard]] scoped_operation<void> write(
-        websocket_opcode opcode, std::string_view payload, operation_options options, websocket_send_options send_options = {});
+    [[nodiscard]] scoped_operation<std::optional<websocket_message>> read(const operation_options& options);
+    // `payload` is borrowed until the returned operation completes.
+    [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::string_view payload,
+        const operation_options& options, websocket_send_options send_options = {});
     [[nodiscard]] scoped_operation<void> close(
-        websocket_close_options options, operation_options operation_options);
+        websocket_close_options options, const operation_options& operation_options);
 
 private:
+    friend class client_lifecycle<websocket_client_state>;
     friend class websocket_http2_transport;
     friend class websocket_http3_transport;
-    enum class phase_type : std::uint8_t { fresh,
-        connecting,
-        open,
-        closing,
-        closed };
-    enum class abort_reason_type : std::uint8_t { none,
-        timeout,
-        cancelled,
-        closing };
+
+    static constexpr std::string_view client_name{"WebSocket"};
+
     enum class write_phase_type : std::uint8_t { idle,
         application,
         heartbeat };
@@ -105,6 +110,8 @@ private:
         return lease;
     }
 
+    // Bounds one application operation by its timeout and stop token; either
+    // retires the whole connection with the matching abort reason.
     class operation_guard_type final {
     public:
         operation_guard_type(websocket_client_state& state_value, const operation_options& options);
@@ -119,54 +126,60 @@ private:
         stop_registration cancellation_;
     };
 
-    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<websocket_client_state> state);
-    [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<websocket_client_state> state,
-        client_close_state::observation_mode_type mode);
-    [[nodiscard]] static task<std::optional<websocket_message>> read_owned(
-        std::shared_ptr<websocket_client_state> state, operation_options options,
-        operation_lane_lease activity);
-    [[nodiscard]] static task<void> write_owned(std::shared_ptr<websocket_client_state> state,
-        websocket_opcode opcode, std::pmr::string payload, operation_options options, websocket_send_options send_options,
-        operation_lane_lease activity);
-    [[nodiscard]] static task<void> close_owned(std::shared_ptr<websocket_client_state> state,
-        websocket_close_options options, std::pmr::string reason, operation_options operation_options,
-        operation_lane_lease read_activity, operation_lane_lease write_activity, operation_lane_lease close_activity);
+    // client_lifecycle backend.
+    [[nodiscard]] websocket_client_state& backend() noexcept {
+        return *this;
+    }
+    [[noreturn]] static void throw_not_ready();
+    [[nodiscard]] task<void> connect();
+    void close_now() noexcept;
+    [[nodiscard]] task<void> join();
+
+    [[nodiscard]] task<void> establish();
+    [[nodiscard]] task<void> join_transports();
+    [[nodiscard]] task<void> perform_handshake();
+
+    [[nodiscard]] task<std::optional<websocket_message>> run_read(
+        operation_options options, operation_lane_lease activity);
+    [[nodiscard]] task<void> run_write(websocket_opcode opcode, std::string_view payload,
+        operation_options options, websocket_send_options send_options, operation_lane_lease activity);
+    [[nodiscard]] task<void> run_close(websocket_close_options options, std::pmr::string reason,
+        operation_options operation_options, operation_lane_lease read_activity,
+        operation_lane_lease write_activity, operation_lane_lease close_activity);
 
     void require_current() const;
-    void require_open() const;
     [[nodiscard]] ruvia::websocket_connection& require_protocol() noexcept;
-    [[nodiscard]] std::uint16_t port() const noexcept;
-    void close_on_worker(abort_reason_type reason) noexcept;
-    void start_close_on_worker() noexcept;
-    [[nodiscard]] task<void> close_on_worker();
-    void finish_close(std::exception_ptr failure);
-    void request_abort(abort_reason_type reason) noexcept;
-    [[nodiscard]] task<void> establish_transport();
-    [[nodiscard]] task<void> perform_tls_handshake();
+    [[nodiscard]] bool protocol_open() const noexcept;
+    // Worker only: records the first abort reason and retires the client.
+    void retire(client_abort_reason reason) noexcept;
+    // Any thread, including stop callbacks: defers retire(reason) to the worker
+    // so a lifecycle-initiated close records its own reason first.
+    void request_retire(client_abort_reason reason) noexcept;
+    // A transport-internal fatal failure: the client closes.
+    void fail_transport() noexcept;
+    [[nodiscard]] static websocket_client_error abort_error(client_abort_reason reason);
+    void throw_if_aborted() const;
+    [[nodiscard]] websocket_client_error transport_error(const client_transport_result& result) const;
+    // Retires the client and throws the error describing a failed transport result.
+    [[noreturn]] void throw_transport_failure(const client_transport_result& result);
     void finish_write(write_phase_type phase) noexcept;
     [[nodiscard]] task<void> wait_for_write_idle();
-    [[nodiscard]] static task<void> heartbeat_owned(std::shared_ptr<websocket_client_state> state);
-    void finish_heartbeat() noexcept;
+    [[nodiscard]] task<void> heartbeat();
     void heartbeat_timer_fired() noexcept;
     [[nodiscard]] bool heartbeat_ping_due() noexcept;
     void arm_heartbeat_timer(std::chrono::milliseconds delay);
     void touch_activity() noexcept;
     [[nodiscard]] std::chrono::milliseconds heartbeat_delay(std::int64_t now) const noexcept;
     [[nodiscard]] task<void> flush_output();
-    [[nodiscard]] static task<void> throw_protocol_error_after_flush(
-        std::shared_ptr<websocket_client_state> state, std::string_view message);
+    [[nodiscard]] task<void> throw_protocol_error_after_flush(std::string_view message);
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
     void feed_input(std::string_view bytes);
     [[nodiscard]] task<void> write_transport(std::string_view bytes,
         std::optional<std::chrono::milliseconds> configured_timeout);
-    [[nodiscard]] task<void> perform_handshake();
-    [[nodiscard]] task<std::size_t> read_socket(std::span<char> output);
-    [[nodiscard]] task<void> write_socket(std::string_view bytes);
     void arm(worker_timer_registration& timer, std::optional<std::chrono::milliseconds> timeout,
-        abort_reason_type reason);
+        client_abort_reason reason);
     void disarm(worker_timer_registration& timer) noexcept;
-    void throw_abort() const;
     [[nodiscard]] static bool generate_mask(void*, websocket_mask_key_type& key) noexcept;
     static void check_operation_affinity(void* target) noexcept;
 
@@ -175,25 +188,21 @@ private:
     worker_memory memory_;
     websocket_client_config_storage config_;
     asio::ssl::context tls_context_;
-    asio::ip::tcp::resolver resolver_;
-    asio::ssl::stream<asio::ip::tcp::socket> stream_;
+    client_wire_counters wire_counters_{};
+    client_tcp_transport transport_;
     worker_timer_registration connect_timer_;
     worker_timer_registration read_timer_;
     worker_timer_registration write_timer_;
     worker_timer_registration heartbeat_timer_;
     worker_timer_registration close_handshake_timer_;
     worker_signal write_signal_;
-    client_close_state close_state_;
     std::pmr::string input_;
     std::optional<ruvia::websocket_connection> protocol_;
     std::optional<websocket_http2_transport> http2_;
     std::optional<websocket_http3_transport> http3_;
     std::pmr::string selected_subprotocol_;
     websocket_compression negotiated_compression_{};
-    stop_source stop_source_;
-    event_loop_stop_registration stop_registration_;
-    std::atomic<phase_type> phase_{phase_type::fresh};
-    abort_reason_type abort_reason_{abort_reason_type::none};
+    client_abort_reason abort_reason_{client_abort_reason::none};
     bool read_active_{false};
     bool write_active_{false};
     bool close_active_{false};
@@ -201,9 +210,10 @@ private:
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     std::uint64_t heartbeat_sequence_{0};
     std::int64_t last_active_ms_{0};
-    bool connect_in_flight_{false};
     bool heartbeat_in_flight_{false};
-    ::ruvia::operation_scope operation_scope_;
+    task_scope heartbeat_tasks_;
+    // Last: retires operations before the backend and its allocator.
+    client_lifecycle<websocket_client_state> lifecycle_;
 };
 
 }  // namespace ruvia::detail

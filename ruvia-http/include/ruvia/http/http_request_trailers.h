@@ -19,6 +19,8 @@ enum class http_request_trailer_error : unsigned char { invalid_field,
 // Owns decoded terminal request fields, separately from the initial head.
 // Drivers populate this object before reporting successful body completion.
 // resource must outlive this object and every borrowed field view.
+// At most max_http_header_fields fields and max_http_header_bytes normalized
+// bytes (name.size() + value.size() + 4 per field) can be retained.
 class http_request_trailers final {
 public:
     explicit http_request_trailers(std::pmr::memory_resource* resource);

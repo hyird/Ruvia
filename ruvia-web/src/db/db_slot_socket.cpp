@@ -7,13 +7,14 @@ namespace ruvia::detail {
 
 db_slot_socket::db_slot_socket(asio::io_context& io_context)
 #if defined(_WIN32)
-    : socket_(io_context){}
+    : socket_(io_context) {
+}
 #else
     : descriptor_(io_context) {
 }
 #endif
 
-      db_slot_socket::db_slot_socket(db_slot_socket && other) noexcept
+db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
 #if defined(_WIN32)
     : socket_(std::move(other.socket_)),
 #else
@@ -33,6 +34,68 @@ db_slot_socket& db_slot_socket::operator=(db_slot_socket&& other) noexcept {
 #endif
     native_ = std::exchange(other.native_, invalid_socket);
     return *this;
+}
+
+db_slot_socket::waitable_type& db_slot_socket::waitable() noexcept {
+#if defined(_WIN32)
+    return socket_;
+#else
+    return descriptor_;
+#endif
+}
+
+bool db_slot_socket::readiness_awaiter::await_suspend(std::coroutine_handle<> handle) noexcept {
+    continuation_ = handle;
+    try {
+        // Count an operation only after Asio accepts it. If a later initiation
+        // throws, cancel and stay suspended until the already-published
+        // handlers have drained before surfacing the original exception.
+        if (has_db_socket_readiness(wanted_, db_socket_readiness::read)) {
+            start(waitable_type::wait_read, db_socket_readiness::read);
+        }
+        if (has_db_socket_readiness(wanted_, db_socket_readiness::write)) {
+            start(waitable_type::wait_write, db_socket_readiness::write);
+        }
+        if (has_db_socket_readiness(wanted_, db_socket_readiness::error)) {
+            start(waitable_type::wait_error, db_socket_readiness::error);
+        }
+    } catch (...) {
+        initiation_failure_ = std::current_exception();
+        completed_ = true;
+        socket_.cancel();
+    }
+    return pending_ != 0;
+}
+
+void db_slot_socket::readiness_awaiter::start(waitable_type::wait_type wait_type, db_socket_readiness readiness) {
+    socket_.waitable().async_wait(
+        wait_type, [this, readiness](std::error_code wait_error) noexcept { complete(readiness, wait_error); });
+    ++pending_;
+}
+
+void db_slot_socket::readiness_awaiter::complete(db_socket_readiness readiness, std::error_code error) noexcept {
+    if (!completed_) {
+        completed_ = true;
+        result_.error_ = error;
+        if (!error) {
+            result_.ready_ = readiness;
+        }
+        if (pending_ > 1) {
+            socket_.cancel();
+        }
+    }
+    if (--pending_ == 0) {
+        // Asio releases each wait operation before invoking its handler, so
+        // once the last handler runs nothing still borrows this awaiter.
+        continuation_.resume();
+    }
+}
+
+db_socket_wait_result db_slot_socket::readiness_awaiter::await_resume() const {
+    if (initiation_failure_ != nullptr) {
+        std::rethrow_exception(initiation_failure_);
+    }
+    return result_;
 }
 
 std::error_code db_slot_socket::ensure_assigned(native_socket_type fd) noexcept {

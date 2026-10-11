@@ -5,7 +5,6 @@
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
-#include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/process_resource.h"

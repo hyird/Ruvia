@@ -5,10 +5,12 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/http/hpack.h"
 
+#include "poisoned_retirement_resource.h"
 #include "test_harness.h"
 
 namespace {
@@ -38,7 +40,175 @@ private:
     bool reject_{false};
 };
 
+void prepare_alias_output(std::pmr::string& output, bool grow) {
+    output = "content-type|authorization|x-alias-name|abcdefghijklmnopqrstuvwxyz";
+    output.append(192, 'v');
+    if (grow) {
+        output.resize(output.capacity(), '#');
+    } else {
+        output.reserve(output.size() * 4 + 128);
+    }
+}
+
+void check_encoded_field(ruvia::testing::test_context& ruvia_ctx,
+    std::string_view output, std::string_view prefix,
+    std::string_view expected_name, std::string_view expected_value) {
+    RUVIA_CHECK_EQ(output.substr(0, prefix.size()), prefix);
+    ruvia::hpack_decoder decoder;
+    std::size_t fields = 0;
+    const auto result = decoder.decode(output.substr(prefix.size()),
+        [&](std::string_view name, std::string_view value) {
+            ++fields;
+            RUVIA_CHECK_EQ(name, expected_name);
+            RUVIA_CHECK_EQ(value, expected_value);
+            return true;
+        });
+    RUVIA_CHECK(result.decoded());
+    RUVIA_CHECK_EQ(fields, std::size_t{1});
+}
+
 }  // namespace
+
+RUVIA_TEST(hpack_public_encoder_accepts_fields_borrowed_from_output) {
+    enum class alias_kind { name,
+        value,
+        disjoint,
+        overlapping,
+        identical,
+        static_name,
+        sensitive_name };
+    for (const bool grow : {false, true}) {
+        for (const auto kind : {alias_kind::name, alias_kind::value, alias_kind::disjoint,
+                 alias_kind::overlapping, alias_kind::identical, alias_kind::static_name,
+                 alias_kind::sensitive_name}) {
+            ruvia::testing::poisoned_retirement_resource resource;
+            {
+                std::pmr::string output(&resource);
+                prepare_alias_output(output, grow);
+                const std::string prefix(output);
+                const auto* storage = output.data();
+                const auto contents = std::string_view(output);
+                const auto payload = contents.find("abcdefghijklmnopqrstuvwxyz");
+                std::string_view name = "x-outside";
+                std::string_view value = "outside-value";
+                switch (kind) {
+                    case alias_kind::name:
+                        name = contents.substr(contents.find("x-alias-name"), 12);
+                        break;
+                    case alias_kind::value:
+                        value = contents.substr(payload, 100);
+                        break;
+                    case alias_kind::disjoint:
+                        name = contents.substr(contents.find("x-alias-name"), 12);
+                        value = contents.substr(payload, 100);
+                        break;
+                    case alias_kind::overlapping:
+                        name = contents.substr(payload, 40);
+                        value = contents.substr(payload + 11, 80);
+                        break;
+                    case alias_kind::identical:
+                        name = contents.substr(payload, 60);
+                        value = name;
+                        break;
+                    case alias_kind::static_name:
+                        name = contents.substr(0, 12);
+                        value = contents.substr(payload, 100);
+                        break;
+                    case alias_kind::sensitive_name:
+                        name = contents.substr(contents.find("authorization"), 13);
+                        value = contents.substr(payload, 100);
+                        break;
+                }
+                const std::string expected_name(name);
+                const std::string expected_value(value);
+                ruvia::hpack_encoder::encode_header(output, name, value);
+                RUVIA_CHECK(resource.retired(storage) == grow);
+                check_encoded_field(ruvia_ctx, output, prefix, expected_name, expected_value);
+            }
+            RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+        }
+    }
+}
+
+RUVIA_TEST(hpack_public_name_index_encoder_accepts_values_borrowed_from_output) {
+    for (const bool grow : {false, true}) {
+        for (const bool never_indexed : {false, true}) {
+            for (const std::size_t offset : {std::size_t{0}, std::size_t{17}}) {
+                ruvia::testing::poisoned_retirement_resource resource;
+                {
+                    std::pmr::string output(&resource);
+                    prepare_alias_output(output, grow);
+                    const std::string prefix(output);
+                    const auto* storage = output.data();
+                    const auto value = std::string_view(output).substr(offset);
+                    const std::string expected_value(value);
+                    ruvia::hpack_encoder::encode_header_with_name_index(
+                        output, 31, value, {.never_indexed_ = never_indexed});
+                    RUVIA_CHECK(resource.retired(storage) == grow);
+                    check_encoded_field(ruvia_ctx, output, prefix, "content-type", expected_value);
+                }
+                RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+            }
+        }
+    }
+}
+
+RUVIA_TEST(hpack_public_encoder_rejects_zero_indices_before_writing) {
+    for (const auto mode : {0, 1, 2}) {
+        std::pmr::string output("existing bytes");
+        bool rejected = false;
+        try {
+            if (mode == 0) {
+                ruvia::hpack_encoder::encode_indexed(output, 0);
+            } else {
+                ruvia::hpack_encoder::encode_header_with_name_index(
+                    output, 0, "value", {.never_indexed_ = mode == 2});
+            }
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(output, std::string_view("existing bytes"));
+    }
+}
+
+RUVIA_TEST(hpack_public_encoder_preserves_output_when_alias_copy_fails) {
+    for (const bool indexed_name : {false, true}) {
+        toggle_allocation_resource resource;
+        std::pmr::string output(256, 'a', &resource);
+        const std::string before(output);
+        const auto borrowed = std::string_view(output);
+        resource.reject();
+        bool threw = false;
+        try {
+            if (indexed_name) {
+                ruvia::hpack_encoder::encode_header_with_name_index(output, 31, borrowed);
+            } else {
+                ruvia::hpack_encoder::encode_header(output, borrowed, borrowed);
+            }
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+        RUVIA_CHECK_EQ(std::string_view(output), std::string_view(before));
+    }
+}
+
+RUVIA_TEST(hpack_public_encoder_preserves_the_output_terminator_as_input) {
+    for (const bool empty_output : {false, true}) {
+        for (const bool indexed_name : {false, true}) {
+            std::pmr::string output(empty_output ? "" : "prefix");
+            const std::string prefix(output);
+            const std::string_view value(output.data() + output.size(), 1);
+            if (indexed_name) {
+                ruvia::hpack_encoder::encode_header_with_name_index(output, 31, value);
+            } else {
+                ruvia::hpack_encoder::encode_header(output, "content-type", value);
+            }
+            check_encoded_field(ruvia_ctx, output, prefix, "content-type", std::string_view("\0", 1));
+        }
+    }
+}
 
 RUVIA_TEST(hpack_public_dynamic_entries_own_fields_after_input_changes) {
     std::pmr::unsynchronized_pool_resource resource;

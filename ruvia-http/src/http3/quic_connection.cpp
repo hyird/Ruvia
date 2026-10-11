@@ -18,6 +18,7 @@
 #include "http3/quic_cid_partition.h"
 #include "http3/quic_connection_state.h"
 #include "http3/quic_crypto_bridge.h"
+#include "http3/quic_datagram.h"
 #include "http3/quic_stream.h"
 
 namespace ruvia {
@@ -63,15 +64,6 @@ std::uint64_t timestamp_value(quic_timestamp value) {
     return static_cast<std::uint64_t>(nanos);
 }
 
-ngtcp2_cid native_cid(const quic_connection_id& id) {
-    ngtcp2_cid result_value{};
-    result_value.datalen = id.size();
-    if (id.size() != 0) {
-        std::memcpy(result_value.data, id.view().data(), id.size());
-    }
-    return result_value;
-}
-
 void fill_transport_params(ngtcp2_transport_params& params,
     const detail::quic_connection_state& state_value) {
     ngtcp2_transport_params_default(&params);
@@ -89,7 +81,7 @@ void fill_transport_params(ngtcp2_transport_params& params,
     params.disable_active_migration = source_value.disable_active_migration_;
     if (state_value.config_.role_ == quic_role::server) {
         // ngtcp2 derives initial_scid from the scid argument and requires this input field unset.
-        const auto original_dcid = native_cid(*state_value.config_.original_destination_connection_id_);
+        const auto original_dcid = detail::encode_quic_connection_id(*state_value.config_.original_destination_connection_id_);
         params.original_dcid = original_dcid;
         params.original_dcid_present = 1;
     }
@@ -229,7 +221,6 @@ int remove_cid_callback(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) no
 state_owner make_state(quic_connection_config config, quic_crypto_provider_view crypto,
     quic_tls_driver_view driver, std::pmr::memory_resource* resource, quic_timestamp now,
     std::span<const std::byte> early_transport_parameters = {}) {
-    crypto.validate();
     if (!resource) {
         throw std::invalid_argument("QUIC connection requires a memory resource");
     }
@@ -260,6 +251,7 @@ void initialize_native_connection(detail::quic_connection_state& state_value, qu
     ngtcp2_callbacks callbacks{};
     detail::fill_quic_crypto_callbacks(callbacks);
     detail::configure_quic_stream_callbacks(callbacks);
+    detail::configure_quic_datagram_callbacks(callbacks);
     callbacks.get_new_connection_id2 = get_new_cid_callback;
     callbacks.remove_connection_id = remove_cid_callback;
     callbacks.get_path_challenge_data2 = path_challenge_callback;
@@ -299,8 +291,8 @@ void initialize_native_connection(detail::quic_connection_state& state_value, qu
     ngtcp2_transport_params params{};
     fill_transport_params(params, state_value);
     detail::fill_quic_path(state_value.path_, state_value.config_.local_address_, state_value.config_.peer_address_);
-    auto dcid = native_cid(state_value.config_.destination_connection_id_);
-    auto scid = native_cid(*state_value.config_.source_connection_id_);
+    auto dcid = detail::encode_quic_connection_id(state_value.config_.destination_connection_id_);
+    auto scid = detail::encode_quic_connection_id(*state_value.config_.source_connection_id_);
     state_value.ngtcp_memory_ = {&state_value, native_allocate, native_free, native_calloc, native_realloc};
     int result_value{};
     if (state_value.config_.role_ == quic_role::client) {
@@ -598,6 +590,12 @@ quic_packet_result quic_connection::write_packet(std::span<std::byte> output, qu
     ngtcp2_pkt_info packet_info{};
     ngtcp2_ssize written{};
     if (impl_->state_ == quic_connection_state::closing) {
+        // This is the same bound installed as settings.max_tx_udp_payload_size.
+        // Limit native output to the reserved storage: a successful native close
+        // is irreversible, so retaining its packet must not allocate afterwards.
+        output = output.first(std::min(output.size(),
+            static_cast<std::size_t>(impl_->config_.local_transport_parameters_.max_udp_payload_size_)));
+        impl_->close_packet_.reserve(output.size());
         ngtcp2_ccerr error{};
         const auto reason = impl_->close_reason();
         if (reason.kind_ == quic_close_kind::application) {

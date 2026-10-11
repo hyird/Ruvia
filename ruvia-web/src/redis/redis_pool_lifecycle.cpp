@@ -1,13 +1,9 @@
 #include <hiredis/hiredis.h>
 
 #include <stdexcept>
-#include <string>
-#include <system_error>
 #include <utility>
 
-#include <openssl/ssl.h>
-
-#include "client/client_transport.h"
+#include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
 
 namespace ruvia::detail {
@@ -31,9 +27,7 @@ void redis_reader_deleter::operator()(redisReader* reader_value) const noexcept 
 redis_pool::connection_type::connection_type(asio::io_context& io_context, std::pmr::memory_resource* resource)
     : socket_(io_context),
       resolver_(io_context),
-      write_buffer_(detail::pmr_resource_or_default(resource)),
-      reader_(redisReaderCreate()),
-      deadline_timer_(make_pmr_object<worker_timer_registration>(resource)) {}
+      write_buffer_(pmr_resource_or_default(resource)) {}
 
 redis_pool::connection_type::~connection_type() = default;
 
@@ -41,23 +35,15 @@ redis_pool::connection_type::connection_type(connection_type&&) noexcept = defau
 redis_pool::connection_type& redis_pool::connection_type::operator=(connection_type&&) noexcept = default;
 
 redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config,
-    std::optional<std::chrono::milliseconds> command_timeout, std::size_t pool_size,
-    const worker_handle& worker_value, std::pmr::memory_resource* resource)
+    asio::ssl::context* tls_context, std::optional<std::chrono::milliseconds> command_timeout,
+    std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
     : io_context_(io_context),
-      worker_(require_redis_worker(worker_value)),
       config_(config),
+      tls_context_(tls_context),
       command_timeout_(command_timeout),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       connections_(resource_),
-      scheduler_(pool_size, worker_, resource_),
-      cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
-    if (config_.tls_.mode_ == client_tls_mode::verify_identity) {
-        tls_context_.emplace(asio::ssl::context::tls_client);
-        configure_client_tls_context(*tls_context_->native_handle(),
-            {.ca_file_ = config_.tls_.ca_file_,
-                .certificate_chain_file_ = config_.tls_.certificate_file_,
-                .private_key_file_ = config_.tls_.private_key_file_});
-    }
+      slots_(*this, pool_size, require_redis_worker(worker_value), resource_) {
     connections_.reserve(pool_size);
     for (std::size_t i = 0; i < pool_size; ++i) {
         connections_.emplace_back(io_context_, resource_);
@@ -69,24 +55,20 @@ redis_pool::~redis_pool() {
 }
 
 task<void> redis_pool::connect() {
-    for (auto& connection : connections_) {
-        if (!connection.connected_) {
-            co_await connect(connection);
+    for (std::size_t slot = 0; slot < connections_.size(); ++slot) {
+        if (!connections_[slot].connected_) {
+            co_await connect(slot);
         }
     }
     co_return;
 }
 
 void redis_pool::close_now() noexcept {
-    cancellation_target_->detach(*this);
-    if (!scheduler_.close()) {
+    if (!slots_.close()) {
         return;
     }
-    for (auto& connection : connections_) {
-        if (connection.abort_reason_ == connection_type::abort_reason_type::none) {
-            connection.abort_reason_ = connection_type::abort_reason_type::closing;
-        }
-        close(connection);
+    for (std::size_t slot = 0; slot < connections_.size(); ++slot) {
+        close(slot);
     }
 }
 

@@ -11,8 +11,8 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_body_failure.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/router/route_modes.h"
@@ -100,7 +100,7 @@ public:
 
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() & {
-        ::ruvia::clear_pmr_string_retaining_small(active_chunk_);
+        http_clear_pmr_string_retaining_small(active_chunk_);
         release_active_credits();
         if (queued_chunk_.empty()) {
             return {};
@@ -111,7 +111,7 @@ public:
             queued_credit_.reset();
         }
         queued_bytes_ = 0;
-        ::ruvia::clear_pmr_string_retaining_small(queued_chunk_);
+        http_clear_pmr_string_retaining_small(queued_chunk_);
         return std::string_view(active_chunk_);
     }
     std::string_view pop() && = delete;

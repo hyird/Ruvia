@@ -5,12 +5,12 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/connection_scanner.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response_head_buffer.h"
 
 #include "router/route_resolution.h"
+#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 
@@ -32,7 +32,7 @@ inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
 
 // All of a connection's heavy per-request working memory bundled into one
 // poolable unit: the read buffer, the request arena block, the (reused) parse
-// result, the response-head buffer, and the file chunk buffer. A connection
+// result and the response-head buffer. A connection
 // borrows a work set only while it is actively serving requests and returns it
 // the moment it goes idle, so idle keep-alive connections hold none of it and
 // memory scales with in-flight request concurrency rather than connection
@@ -43,7 +43,6 @@ struct connection_work_set final {
 
     std::pmr::string read_buffer_;
     http_response_head_buffer response_head_;
-    std::pmr::string file_chunk_;
     http1_server_request_parser parser_;
     http1_server_request_parse_state parsed_;
     route_resolution route_resolution_;

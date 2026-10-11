@@ -98,7 +98,7 @@ public:
         if (!retirement_lease) {
             throw std::runtime_error("event loop is stopping");
         }
-        auto completion = std::make_shared<detail::root_task_state<t_type>>(handle(), failure_sink());
+        auto completion = std::make_shared<detail::root_task_state<t_type>>(handle(), state_);
         const auto bound_executor = executor();
         // drain() destroys remaining queue closures without invoking them when
         // a posted task throws. Own that destructor path so wait()/get() cannot
@@ -205,7 +205,6 @@ private:
     [[nodiscard]] const worker_handle& dispatch_handle() const noexcept;
     [[nodiscard]] event_loop_stop_registration register_stop_callback(
         move_only_function<task<void>()> callback) const;
-    [[nodiscard]] detail::event_loop_failure_sink_type failure_sink() const;
     [[nodiscard]] std::shared_ptr<void> acquire_root_lease() const;
     [[nodiscard]] bool defer_cleanup_task(move_only_function<void()> task) const;
 

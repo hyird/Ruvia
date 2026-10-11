@@ -48,7 +48,7 @@ private:
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] std::optional<t_type> from_json(std::string_view body, model_parse_options options = {}) {
-    return detail::parse_json_document<t_type>(body, detail::pmr_resource_or_default(options.resource_),
+    return detail::parse_json_document<t_type>(body, pmr_resource_or_default(options.resource_),
         detail::model_string_storage::owned, options);
 }
 
@@ -56,7 +56,7 @@ template <typename t_type>
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_serialize_options options = {}) {
-    std::pmr::string output(detail::pmr_resource_or_default(options.resource_));
+    std::pmr::string output(pmr_resource_or_default(options.resource_));
     // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
     // allocates again. One extra byte stays in the same allocation.
     output.reserve(detail::json_size_hint_value(value) + 1);

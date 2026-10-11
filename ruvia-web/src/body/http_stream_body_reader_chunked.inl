@@ -52,7 +52,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
     }
 
     if (transfer_output_.empty()) {
-        ::ruvia::resize_pmr_string_for_overwrite(transfer_output_, http_body_buffer_bytes);
+        http_resize_pmr_string_for_overwrite(transfer_output_, http_body_buffer_bytes);
     }
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed
@@ -65,15 +65,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
         if (const auto* output = result_value.output()) {
             co_return ::ruvia::as_bytes(output->bytes());
         }
-        if (const auto* failure = result_value.failure()) {
-            throw_transfer_coding_protocol_failure(*failure);
-        }
-        if (result_value.decoder_failure() != nullptr) {
-            throw_http_transfer_coding_decoder_failure();
-        }
-        if (result_value.complete() == nullptr && result_value.need_input() == nullptr) {
-            throw std::logic_error("unexpected transfer-coding decode result");
-        }
+        require_transfer_coding_progress(result_value);
 
         auto chunk = co_await read_chunked();
         if (!chunk) {

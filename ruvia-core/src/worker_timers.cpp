@@ -126,7 +126,8 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     }
     std::ranges::push_heap(impl_->timers_, timer_entry_later{});
     registration.bind(*this, slot_index, slot.generation_, slot);
-    if (!impl_->dispatching_timers_) {
+    // The armed wait already covers every deadline at or after it.
+    if (!impl_->dispatching_timers_ && (!impl_->timer_armed_ || deadline_value < impl_->armed_deadline_)) {
         arm_timer();
     }
     return worker_timer_schedule_status::scheduled;
@@ -147,13 +148,13 @@ void worker_dispatcher::request_timer_cancellation(
         if (impl_->timers_stopping_.load(std::memory_order_acquire) || !impl_->context_attached_) {
             return;
         }
-        current = impl_->io_context_.get_executor().running_in_this_thread();
+        current = io_context_.get_executor().running_in_this_thread();
         if (!current) {
             try {
                 // A stopped io_context can be restarted; queue the cancellation
                 // so a destroyed registration cannot leave a live slot that
                 // expires after that restart.
-                asio::post(impl_->io_context_, [self = shared_from_this(), slot, generation, notify] {
+                asio::post(io_context_, [self = shared_from_this(), slot, generation, notify] {
                     self->cancel_timer(slot, generation, notify);
                 });
             } catch (...) {
@@ -172,25 +173,28 @@ void worker_dispatcher::cancel_timer(
     }
     auto completion = release_timer_slot(slot_index);
     ++impl_->stale_timer_count_;
-    if (impl_->stale_timer_count_ >= 64 && impl_->stale_timer_count_ * 2 >= impl_->timers_.size()) {
+    if (impl_->stale_timer_count_ == impl_->timers_.size()) {
+        // Nothing live remains: drop the heap and the armed wait so an idle
+        // worker holds no timer work.
+        impl_->timers_.clear();
+        impl_->stale_timer_count_ = 0;
+        if (impl_->timer_armed_ && impl_->timer_) {
+            ++impl_->timer_generation_;
+            impl_->timer_armed_ = false;
+            impl_->timer_->cancel();
+        }
+    } else if (impl_->stale_timer_count_ >= 64 && impl_->stale_timer_count_ * 2 >= impl_->timers_.size()) {
         std::erase_if(impl_->timers_,
             [this](const timer_entry& entry_value) { return !has_timer(entry_value.slot_, entry_value.generation_); });
         std::ranges::make_heap(impl_->timers_, timer_entry_later{});
         impl_->stale_timer_count_ = 0;
     }
-    if (!impl_->dispatching_timers_) {
-        arm_timer();
-    }
-    if (notify) {
-        try {
-            if (completion) {
-                defer([completion = std::move(completion)]() mutable {
-                    completion(worker_timer_outcome::cancelled);
-                });
-            }
-        } catch (...) {
-            std::terminate();
-        }
+    // Otherwise the armed wait stays: it fires no later than any live entry,
+    // and fire_timers() skips the stale one.
+    if (notify && completion) {
+        defer_or_terminate([completion = std::move(completion)]() mutable {
+            completion(worker_timer_outcome::cancelled);
+        });
     }
 }
 
@@ -233,8 +237,10 @@ void worker_dispatcher::arm_timer() {
     if (!impl_->timer_) {
         return;
     }
-    impl_->timer_->cancel();
-    impl_->timer_armed_ = false;
+    if (impl_->timer_armed_) {
+        impl_->timer_->cancel();
+        impl_->timer_armed_ = false;
+    }
     while (!impl_->timers_.empty() &&
            !has_timer(impl_->timers_.front().slot_, impl_->timers_.front().generation_)) {
         std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
@@ -246,7 +252,8 @@ void worker_dispatcher::arm_timer() {
     if (impl_->timers_stopping_.load(std::memory_order_acquire) || impl_->timers_.empty()) {
         return;
     }
-    impl_->timer_->expires_at(impl_->timers_.front().deadline_);
+    impl_->armed_deadline_ = impl_->timers_.front().deadline_;
+    impl_->timer_->expires_at(impl_->armed_deadline_);
     impl_->timer_armed_ = true;
     impl_->timer_->async_wait([self = shared_from_this(), generation](const std::error_code& error) {
         if (error || generation != self->impl_->timer_generation_) {

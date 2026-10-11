@@ -5,26 +5,23 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_response_parser.h"
 
 #include "client/http1_client_request_headers.h"
-#include "util/http_base64.h"
+#include "ruvia/http/http_base64.h"
+#include "ruvia/http/websocket_subprotocol_set.h"
 #include "websocket/http_websocket_accept_key.h"
-#include "websocket/websocket_subprotocol_set.h"
 
 namespace ruvia {
 namespace {
+// The handshake generates Host, the Upgrade/Connection pair and every
+// Sec-WebSocket-* field, and an Upgrade request carries no content.
 bool is_reserved_handshake_header(std::string_view name) noexcept {
-    constexpr std::string_view names[] = {"host", "connection", "upgrade",
-        "sec-websocket-key", "sec-websocket-version", "sec-websocket-protocol",
-        "sec-websocket-extensions", "content-length"};
-    for (auto candidate : names) {
-        if (detail::http_ascii_equals_ignore_case(name, candidate)) {
-            return true;
-        }
-    }
-    return false;
+    return detail::classify_request_header(name) == detail::request_header_kind::host ||
+           detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
+           detail::http_field_name_in(name, detail::http_message_framing_fields) ||
+           detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
 }
 }  // namespace
 
@@ -41,7 +38,7 @@ void http1_websocket_client_handshake::validate_configuration(
     if (!analyze_headers(headers, facts, error)) {
         throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
     }
-    detail::websocket_subprotocol_set seen;
+    websocket_subprotocol_set seen;
     for (auto protocol : subprotocols) {
         if (!seen.append(protocol)) {
             throw std::invalid_argument("invalid WebSocket subprotocol");
@@ -65,7 +62,7 @@ http1_websocket_client_handshake::http1_websocket_client_handshake(
       user_agent_(options.user_agent_, resource_) {
     validate_configuration(options.headers_, options.subprotocols_, options.user_agent_);
     std::array<char, 24> encoded{};
-    detail::encode_http_base64(encoded.data(), options.nonce_);
+    http_base64_encode(encoded.data(), options.nonce_);
     key_.assign(encoded.data(), 24);
     headers_.reserve(options.headers_.size());
     for (auto header : options.headers_) {
@@ -105,13 +102,13 @@ http1_websocket_client_handshake::validate_response(const http1_parsed_client_re
     bool accept_matches = false, has_upgrade = false, has_connection = false;
 
     for (const auto& header : response.head().headers()) {
-        if (detail::http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
+        if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
             ++accepts;
-            accept_matches = detail::http_trim_ows(header.value()) ==
+            accept_matches = http_trim_ows(header.value()) ==
                              std::string_view(expected.data(), expected.size());
-        } else if (detail::http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
+        } else if (http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
             has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
-        } else if (detail::http_ascii_equals_ignore_case(header.name(), "Connection")) {
+        } else if (http_ascii_equals_ignore_case(header.name(), "Connection")) {
             has_connection = has_connection || detail::http_has_token(header.value(), "upgrade");
         }
     }

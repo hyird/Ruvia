@@ -7,7 +7,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http3_frames.h"
 #include "ruvia/http/http_response_stream.h"
 
 #include "http3/http3_buffered_request_dispatch.h"
@@ -54,7 +53,7 @@ task<void> http3_response_stream_sink::commit(http_response_trailer_intent trail
         }
         throw std::invalid_argument("invalid HTTP/3 streaming response head");
     }
-    if (!publisher_.response_field_section_allowed(std::get<0>(prepared).head_.field_section_.decoded_field_section_size())) {
+    if (!publisher_.response_field_section_allowed(std::get<0>(prepared).head_.headers_.decoded_field_section_size())) {
         publisher_.reject_peer_field_section();
     }
     data_.emplace(std::get<0>(prepared).head_.body_plan_, std::get<0>(prepared).head_.declared_content_length_);
@@ -63,25 +62,23 @@ task<void> http3_response_stream_sink::commit(http_response_trailer_intent trail
     // entering that operation so recovery never emits a second response head.
     publisher_.commit_final_response();
     state_.mark_committed(std::get<0>(prepared).commit_plan_);
-    co_await publisher_.publish_response_frame(static_cast<std::uint64_t>(http3_frame_type::headers), std::get<0>(prepared).head_.field_section_.field_section_);
+    co_await publisher_.publish_headers(std::get<0>(prepared).head_.headers_);
     if (std::get<0>(prepared).commit_plan_.head_disposition() == http_response_stream_head_disposition::message_ended) {
         co_await publisher_.finish_response();
     }
 }
 task<void> http3_response_stream_sink::write_encoded(std::string_view bytes_value) {
-    constexpr std::size_t block_bytes = 16 * 1024;
-    for (std::size_t offset = 0; offset < bytes_value.size();) {
-        require_active();
-        const auto count = std::min(block_bytes, bytes_value.size() - offset);
-        const auto planned = data_->plan_chunk(std::span<const char>(bytes_value.data() + offset, count), false);
-        if ((planned.index() != 0)) {
-            throw std::length_error("HTTP/3 response content length exceeded");
-        }
-        co_await publisher_.publish_response_frame(static_cast<std::uint64_t>(http3_frame_type::data), std::get<0>(planned).payload_);
-        if ((data_->commit_payload(count, false).index() != 0)) {
-            std::terminate();
-        }
-        offset += count;
+    if (bytes_value.empty()) {
+        co_return;
+    }
+    require_active();
+    const auto planned = data_->plan_chunk(std::span<const char>(bytes_value.data(), bytes_value.size()), false);
+    if (planned.index() != 0) {
+        throw std::length_error("HTTP/3 response content length exceeded");
+    }
+    co_await publisher_.publish_data(std::get<0>(planned));
+    if (data_->commit_payload(bytes_value.size(), false).index() != 0) {
+        std::terminate();
     }
 }
 task<void> http3_response_stream_sink::write(std::string_view bytes_value) {
@@ -153,7 +150,7 @@ task<void> http3_response_stream_sink::end(std::span<const http_header_view> tra
         if (!publisher_.response_field_section_allowed(std::get<0>(encoded).decoded_field_section_size())) {
             publisher_.reject_peer_field_section();
         }
-        co_await publisher_.publish_response_frame(static_cast<std::uint64_t>(http3_frame_type::headers), std::get<0>(encoded).field_section_);
+        co_await publisher_.publish_headers(std::get<0>(encoded));
     }
     co_await publisher_.finish_response();
     if ((data_->commit_payload(0, true).index() != 0)) {

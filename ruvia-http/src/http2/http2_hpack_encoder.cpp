@@ -1,10 +1,13 @@
+#include "ruvia/http/hpack.h"
+
 #include <limits>
 #include <stdexcept>
 
 #include "http2/http2_hpack.h"
 #include "http2/http2_hpack_static_table.h"
+#include "util/http_text_overlap.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 namespace {
 
@@ -16,9 +19,7 @@ void validate_hpack_string_length(std::string_view value) {
     }
 }
 
-}  // namespace
-
-void hpack_encoder::encode_integer(std::pmr::string& out, std::uint8_t first_byte_mask,
+void encode_hpack_integer(std::pmr::string& out, std::uint8_t first_byte_mask,
     std::uint8_t prefix_bits, std::uint32_t value) {
     const auto prefix_max = static_cast<std::uint32_t>((1U << prefix_bits) - 1U);
     if (value < prefix_max) {
@@ -35,19 +36,24 @@ void hpack_encoder::encode_integer(std::pmr::string& out, std::uint8_t first_byt
     out.push_back(static_cast<char>(value));
 }
 
-void hpack_encoder::encode_string(std::pmr::string& out, std::string_view value) {
+void encode_hpack_string(std::pmr::string& out, std::string_view value) {
     validate_hpack_string_length(value);
-    encode_integer(out, 0, 7, static_cast<std::uint32_t>(value.size()));
+    encode_hpack_integer(out, 0, 7, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
 
+}  // namespace
+
 void hpack_encoder::encode_indexed(std::pmr::string& out, std::uint32_t index) {
-    encode_integer(out, 0x80, 7, index);
+    if (index == 0) {
+        throw std::invalid_argument("HPACK indexed fields require a nonzero index");
+    }
+    encode_hpack_integer(out, 0x80, 7, index);
 }
 
 void hpack_encoder::encode_dynamic_table_size_update(std::pmr::string& out, std::uint32_t maximum) {
     // RFC 7541 §6.3: 001xxxxx followed by an HPACK integer with a 5-bit prefix.
-    encode_integer(out, 0x20, 5, maximum);
+    encode_hpack_integer(out, 0x20, 5, maximum);
 }
 
 void hpack_encoder::encode_header(
@@ -57,7 +63,7 @@ void hpack_encoder::encode_header(
     // rejecting it here keeps the output unchanged when the input is invalid.
     validate_hpack_string_length(name);
     validate_hpack_string_length(value);
-    const auto match = hpack_static_fields.find(name, value);
+    const auto match = detail::hpack_static_fields.find(name, value);
     if (match && match->exact_index_) {
         // A fully indexed static-table entry carries no field value on the wire, so
         // there is nothing for an intermediary to index; the never-indexed hint does
@@ -66,54 +72,76 @@ void hpack_encoder::encode_header(
         return;
     }
 
-    const bool never_indexed = hpack_header_name_is_sensitive(name);
+    const bool never_indexed = detail::hpack_header_name_is_sensitive(name);
     if (match) {
-        encode_header_with_name_index(out, static_cast<std::uint32_t>(match->name_index_) + 1, value, never_indexed);
+        encode_header_with_name_index(out, static_cast<std::uint32_t>(match->name_index_) + 1, value,
+            {.never_indexed_ = never_indexed});
         return;
     }
-    encode_integer(
-        out, never_indexed ? hpack_literal_never_indexed : hpack_literal_without_indexing, 4, 0);
-    encode_string(out, name);
-    encode_string(out, value);
+    std::pmr::string owned_name(out.get_allocator());
+    std::pmr::string owned_value(out.get_allocator());
+    const auto storage = std::string_view(out.data(), out.size() + 1);
+    if (detail::http_text_overlaps(name, storage)) {
+        owned_name.assign(name);
+        name = owned_name;
+    }
+    if (detail::http_text_overlaps(value, storage)) {
+        owned_value.assign(value);
+        value = owned_value;
+    }
+    encode_hpack_integer(
+        out, never_indexed ? detail::hpack_literal_never_indexed : detail::hpack_literal_without_indexing, 4, 0);
+    encode_hpack_string(out, name);
+    encode_hpack_string(out, value);
 }
 
-void hpack_encoder::encode_header_with_name_index(
-    std::pmr::string& out, std::uint32_t name_index, std::string_view value, bool never_indexed) {
+void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, std::uint32_t name_index,
+    std::string_view value, hpack_header_with_name_index_options options) {
+    if (name_index == 0) {
+        throw std::invalid_argument("HPACK indexed names require a nonzero index");
+    }
     validate_hpack_string_length(value);
-    encode_integer(
-        out, never_indexed ? hpack_literal_never_indexed : hpack_literal_without_indexing, 4, name_index);
-    encode_string(out, value);
+    std::pmr::string owned_value(out.get_allocator());
+    if (detail::http_text_overlaps(value, std::string_view(out.data(), out.size() + 1))) {
+        owned_value.assign(value);
+        value = owned_value;
+    }
+    encode_hpack_integer(out,
+        options.never_indexed_ ? detail::hpack_literal_never_indexed : detail::hpack_literal_without_indexing, 4,
+        name_index);
+    encode_hpack_string(out, value);
 }
 
 void hpack_encoder::encode_status(std::pmr::string& out, http_status_code status) {
     switch (status.value()) {
         case http_status::ok.value():
-            encode_indexed(out, hpack_static_index::status_ok);
+            encode_indexed(out, detail::hpack_static_index::status_ok);
             return;
         case http_status::no_content.value():
-            encode_indexed(out, hpack_static_index::status_no_content);
+            encode_indexed(out, detail::hpack_static_index::status_no_content);
             return;
         case http_status::partial_content.value():
-            encode_indexed(out, hpack_static_index::status_partial_content);
+            encode_indexed(out, detail::hpack_static_index::status_partial_content);
             return;
         case http_status::not_modified.value():
-            encode_indexed(out, hpack_static_index::status_not_modified);
+            encode_indexed(out, detail::hpack_static_index::status_not_modified);
             return;
         case http_status::bad_request.value():
-            encode_indexed(out, hpack_static_index::status_bad_request);
+            encode_indexed(out, detail::hpack_static_index::status_bad_request);
             return;
         case http_status::not_found.value():
-            encode_indexed(out, hpack_static_index::status_not_found);
+            encode_indexed(out, detail::hpack_static_index::status_not_found);
             return;
         case http_status::internal_server_error.value():
-            encode_indexed(out, hpack_static_index::status_internal_server_error);
+            encode_indexed(out, detail::hpack_static_index::status_internal_server_error);
             return;
         default:
             break;
     }
 
-    const auto token = http_status_code_token(status);
-    encode_header_with_name_index(out, hpack_static_index::status_ok, http_status_code_token_view(token));
+    const auto token = detail::http_status_code_token(status);
+    encode_header_with_name_index(
+        out, detail::hpack_static_index::status_ok, detail::http_status_code_token_view(token));
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

@@ -12,7 +12,7 @@
 namespace ruvia {
 namespace {
 using error_type = http3_request_trailer_error;
-std::variant<std::pmr::vector<char>, error_type> request_trailers(std::span<const http3_field_section_field_view> fields_value,
+std::variant<http3_headers_frame, error_type> request_trailers(std::span<const http3_field_section_field_view> fields_value,
     http3_field_section_limits limits, std::pmr::memory_resource* resource, http3_qpack_encoder* encoder, std::uint64_t stream_id) {
     auto* memory = resource ? resource : std::pmr::get_default_resource();
     if (fields_value.size() > limits.max_fields_) {
@@ -45,21 +45,18 @@ std::variant<std::pmr::vector<char>, error_type> request_trailers(std::span<cons
         }
         normalized.push_back({std::string_view(names.data() + offset, field.name_.size()), field.value_, field.never_indexed_});
     }
-    auto encoded = detail::encode_http3_fields(normalized, memory, limits, encoder, stream_id);
+    auto encoded = detail::http3_headers_frame_access::encode(normalized, memory, limits, encoder, stream_id, decoded);
     if ((encoded.index() != 0)) {
         return std::get<1>(encoded) == http3_field_section_error::qpack_encoding_failed ? error_type::qpack_encoding_failed : error_type::field_section_too_large;
-    }
-    if (std::get<0>(encoded).size() > limits.max_encoded_bytes_) {
-        return error_type::field_section_too_large;
     }
     return std::move(std::get<0>(encoded));
 }
 }  // namespace
-std::variant<std::pmr::vector<char>, error_type> encode_http3_request_trailers(std::span<const http3_field_section_field_view> fields_value,
+std::variant<http3_headers_frame, error_type> encode_http3_request_trailers(std::span<const http3_field_section_field_view> fields_value,
     http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return request_trailers(fields_value, limits, resource, nullptr, 0);
 }
-std::variant<std::pmr::vector<char>, error_type> encode_http3_request_trailers(http3_qpack_encoder& encoder, std::uint64_t stream_id,
+std::variant<http3_headers_frame, error_type> encode_http3_request_trailers(http3_qpack_encoder& encoder, std::uint64_t stream_id,
     std::span<const http3_field_section_field_view> fields_value, http3_field_section_limits limits, std::pmr::memory_resource* resource) {
     return request_trailers(fields_value, limits, resource, &encoder, stream_id);
 }

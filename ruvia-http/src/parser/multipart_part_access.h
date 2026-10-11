@@ -12,8 +12,9 @@ namespace ruvia::detail {
 
 struct multipart_part_access final {
     // name/filename arrive quote-trimmed; decode their RFC 7230 §3.2.6 quoted-pairs
-    // into part-owned storage (they may differ from the raw bytes). content_type/body
-    // stay borrowed views into the request body.
+    // into part-owned storage (they may differ from the raw bytes). These make()
+    // overloads keep content_type/body borrowed; make_decoded() can own a content
+    // type produced by unfolding.
     [[nodiscard]] static multipart_part make(std::string_view name, std::string_view filename,
         std::string_view content_type_value, std::string_view body, std::pmr::memory_resource* resource) {
         return make(name, filename, content_type_value, body, !filename.empty(), resource);
@@ -53,9 +54,13 @@ struct multipart_part_access final {
 
     [[nodiscard]] static multipart_part make_decoded(std::string_view name, std::string_view filename,
         std::string_view content_type_value, std::string_view body, bool filename_present,
-        std::pmr::memory_resource* resource) {
+        std::pmr::memory_resource* resource, bool own_content_type = false) {
+        multipart_part::content_type_storage_type content_type(content_type_value);
+        if (own_content_type) {
+            content_type.emplace<std::pmr::string>(content_type_value, resource);
+        }
         return multipart_part(std::pmr::string(name, resource), std::pmr::string(filename, resource),
-            content_type_value, body, filename_present);
+            std::move(content_type), body, filename_present);
     }
 
     template <http_temporary_owning_char_string content_type>

@@ -12,12 +12,8 @@ namespace ruvia {
 class context;
 
 namespace detail {
-template <typename result_type, typename... args_type>
-class callable_ref;
 struct next_access;
-class route_entry;
-class route_table;
-class stream_middleware_chain_state;
+struct middleware_chain;
 
 struct next_state final {
     enum class invocation_type : std::uint8_t {
@@ -45,22 +41,14 @@ struct next_state final {
             phase_ = phase_type::expired;
         }
 
-        [[nodiscard]] phase_type phase() const noexcept {
-            return phase_;
-        }
-
     private:
         phase_type phase_{phase_type::fresh};
     };
 
-    const route_table* table_{nullptr};
-    const route_entry* route_{nullptr};
+    // The chain being walked, the request it runs for, this hop's single-shot
+    // control block, and the frame index the continuation resumes at.
+    const middleware_chain* chain_{nullptr};
     context* context_{nullptr};
-    stream_middleware_chain_state* stream_chain_{nullptr};
-    const callable_ref<void, context&>* stream_handler_{nullptr};
-    // Set only for the unmatched-request chain, whose terminal is the
-    // 404/405/501 response rather than a route endpoint.
-    const void* unmatched_terminal_{nullptr};
     control_type* control_{nullptr};
     std::size_t index_{0};
     invocation_type invocation_{invocation_type::ready};

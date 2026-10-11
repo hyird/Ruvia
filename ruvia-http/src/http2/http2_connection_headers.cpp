@@ -24,9 +24,8 @@ namespace {
 }  // namespace
 
 header_decode_status http2_connection::decode_header_block(http2_stream_state& stream,
-    http2_stream_header_decode_transaction& stream_transaction,
     hpack_decoder::decode_transaction_type& hpack_transaction) {
-    http2_header_decode_context context_value{stream, &stream_transaction};
+    http2_header_decode_context context_value{stream};
     const auto result_value = decoder_.decode(
         stream.remote_header_block(), &context_value, decode_initial_header_field, hpack_transaction);
     if (const auto status = http2_classify_header_decode_result(result_value);
@@ -90,8 +89,7 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
             // request writer. RFC 9110 section 9.3.7 requires a valid media type.
             const bool explicit_content = stream.remote_content().allowed_known_length() != nullptr ||
                                           stream.remote_receive().head_pending() != nullptr;
-            if (explicit_content && !stream.has_singleton_request_header(singleton_request_header_bit(
-                                        request_header_kind::content_type))) {
+            if (explicit_content && !context_value.request_fields_.seen(request_header_kind::content_type)) {
                 return header_decode_status::protocol_error;
             }
         }
@@ -112,11 +110,10 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
 }
 
 header_decode_status http2_connection::decode_initial_header_block(http2_stream_state& stream,
-    http2_stream_header_decode_transaction& stream_transaction,
     hpack_decoder::decode_transaction_type& hpack_transaction) {
     const auto status = role_ == http2_role::client
-                            ? decode_response_header_block(stream, stream_transaction, hpack_transaction)
-                            : decode_header_block(stream, stream_transaction, hpack_transaction);
+                            ? decode_response_header_block(stream, hpack_transaction)
+                            : decode_header_block(stream, hpack_transaction);
     if (status == header_decode_status::ok && http2_remote_final_head_decoded(stream)) {
         emit_request_headers(stream);  // An interim client response does not publish a message head.
     }
@@ -126,7 +123,7 @@ header_decode_status http2_connection::decode_initial_header_block(http2_stream_
 header_decode_status http2_connection::decode_refused_header_block(
     http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction) {
     http2_stream_header_decode_transaction transaction{stream, true};
-    http2_header_decode_context context_value{stream, &transaction};
+    http2_header_decode_context context_value{stream};
     const auto result_value = decoder_.decode(
         stream.remote_header_block(), &context_value, decode_initial_header_field, hpack_transaction);
     return http2_classify_header_decode_result(result_value);
@@ -216,7 +213,7 @@ bool http2_connection::finish_discarded_header_block() {
     auto* const live_stream = find_stream(stream_id);
     const bool has_live_stream = live_stream != nullptr;
     if (has_live_stream) {
-        reserve_stream_close_effects(*live_stream);
+        reserve_stream_close_effects();
     }
     output_.reserve_additional(http2_frame_header_bytes + 4);
     output_.append_rst_stream(stream_id, error);
@@ -233,13 +230,12 @@ bool http2_connection::finish_discarded_header_block() {
 }
 
 header_decode_status http2_connection::finish_trailer_block(http2_stream_state& stream,
-    http2_stream_header_decode_transaction& stream_transaction,
     hpack_decoder::decode_transaction_type& hpack_transaction) {
     // A successful trailer block publishes exactly one terminal event. Reserve
     // it before HPACK/application-header decoding so a later vector growth cannot
     // leave the decoded stream half-committed without its message end.
     reserve_event_slots(1);
-    http2_header_decode_context context_value{stream, &stream_transaction};
+    http2_header_decode_context context_value{stream};
     const auto result_value =
         role_ == http2_role::server
             ? decoder_.decode(
@@ -261,17 +257,17 @@ header_decode_status http2_connection::finish_trailer_block(http2_stream_state& 
     if (!stream.finish_remote_content()) {
         return header_decode_status::protocol_error;
     }
-    events_.push_back(http2_event::message_end(stream.id()));
+    events_.push_back(http2_event(http2_message_end_record{stream.id()}));
     release_local_request_stream_if_closed(stream);
     return header_decode_status::ok;
 }
 
-void http2_connection::reserve_stream_close_effects(http2_stream_state& stream) {
+void http2_connection::reserve_stream_close_effects() {
     reserve_event_slots(1);
-    if (const auto debt = stream.window_debt();
-        debt != 0 && connection_receive_credit_.ready_after(debt)) {
-        output_.reserve_additional(http2_window_update_frame_bytes);
-    }
+    // The RST_STREAM and a possible connection WINDOW_UPDATE are one terminal
+    // transaction. Reserve both complete frames before either is published.
+    output_.reserve_segments_additional(2);
+    output_.reserve_additional(http2_frame_header_bytes + 4 + http2_window_update_frame_bytes);
 }
 
 bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, header_decode_status status,
@@ -283,7 +279,7 @@ bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, 
     }
     const bool has_live_stream = find_stream(stream.id()) == &stream;
     if (has_live_stream) {
-        reserve_stream_close_effects(stream);
+        reserve_stream_close_effects();
     }
     output_.reserve_additional(http2_frame_header_bytes + 4);
     output_.append_rst_stream(stream.id(), http2_error_code::protocol_error);
@@ -322,7 +318,7 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
                                             ? std::optional<http_client_request_content_signal>(
                                                   http_client_request_content_signal::exchange_complete)
                                             : std::nullopt;
-    events_.push_back(http2_event::message_head(stream.id(), request_content_signal));
+    events_.push_back(http2_event(http2_message_head_record{stream.id(), request_content_signal}));
     if (role_ == http2_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the
         // peer send half: it can remain open for a tunnel or already carry END_STREAM.
@@ -332,13 +328,13 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     }
     if (role_ == http2_role::client && stream.tunnel().open() != nullptr) {
         if (http2_remote_peer_half_closed(stream)) {
-            events_.push_back(http2_event::tunnel_end(stream.id()));
+            events_.push_back(http2_event(http2_tunnel_end_event(stream.id())));
         }
         release_local_request_stream_if_closed(stream);
         return;
     }
     if (http2_remote_peer_half_closed(stream)) {
-        events_.push_back(http2_event::message_end(stream.id()));
+        events_.push_back(http2_event(http2_message_end_record{stream.id()}));
     }
     release_local_request_stream_if_closed(stream);
 }

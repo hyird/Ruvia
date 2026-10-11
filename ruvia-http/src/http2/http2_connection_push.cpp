@@ -1,4 +1,7 @@
 #include "http2/http2_connection.h"
+
+#include <vector>
+
 #include "http2/http2_frame_payload.h"
 #include "http2/http2_header_block.h"
 #include "http2/http2_remote_receive_semantics.h"
@@ -89,7 +92,7 @@ bool http2_connection::finish_push_promise() {
     (void)scratch.record_remote_head_end_stream();
     http2_stream_header_decode_transaction stream_transaction{scratch, true};
     auto hpack_transaction = decoder_.begin_transaction();
-    const auto status = decode_header_block(scratch, stream_transaction, hpack_transaction);
+    const auto status = decode_header_block(scratch, hpack_transaction);
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
@@ -135,8 +138,12 @@ bool http2_connection::finish_push_promise() {
         stream->begin_local_content_forbidden();
         (void)stream->commit_local_head_end_stream();
         stream->reserve_push(http2_push_reservation::remote);
-        events_.push_back(http2_event::push_promise({push_associated_stream_id_, id, std::move(request)}));
+        // Later frames in this feed may reset the push before queued response
+        // events are materialized. Retain their stream storage at publication.
+        pin_stream(id);
+        events_.push_back(http2_event(http2_push_promise_event{push_associated_stream_id_, id, std::move(request)}));
     } catch (...) {
+        std::erase(pinned_streams_, id);
         streams_.remove(id);
         throw;
     }

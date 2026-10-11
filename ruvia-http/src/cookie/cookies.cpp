@@ -14,7 +14,7 @@
 
 #include "cookie/cookie_validation.h"
 #include "field/http_imf_fixdate.h"
-#include "util/http_number_format.h"
+#include "ruvia/http/http_number_format.h"
 
 namespace ruvia {
 
@@ -45,7 +45,7 @@ set_cookie_plan::set_cookie_plan(
     }
     if (has_max_age_) {
         max_age_value_ = static_cast<std::uint64_t>(options.max_age_->count());
-        max_age_size_ = detail::http_unsigned_decimal_size(max_age_value_);
+        max_age_size_ = http_unsigned_decimal_size(max_age_value_);
     }
 
     const auto add_size = [this](std::size_t amount) {

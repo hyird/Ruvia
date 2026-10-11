@@ -5,12 +5,11 @@
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 
-#include "coding/http_content_coding.h"
-#include "field/http_media_type.h"
+#include "field/response_field_validation.h"
 
 namespace ruvia::detail {
 
@@ -43,13 +42,6 @@ public:
         }
 
         const auto known_bit = classify_response_header_name(name);
-        if (known_bit == response_header_content_encoding &&
-            !is_valid_http_content_encoding_field_value(value, role_)) {
-            return http_interim_response_header_validation_status::invalid_header;
-        }
-        if (known_bit == response_header_content_type && !is_valid_http_content_type_field_value(value)) {
-            return http_interim_response_header_validation_status::invalid_header;
-        }
         if (known_bit == response_header_content_length) {
             return http_interim_response_header_validation_status::content_length_forbidden;
         }
@@ -59,7 +51,15 @@ public:
         if (http_ascii_equals_ignore_case(name, "Trailer")) {
             return http_interim_response_header_validation_status::trailer_forbidden;
         }
-        if (known_bit != 0 && (known_bits_ & known_bit) != 0 &&
+        switch (validate_response_field(classify_request_header(name), value, role_, fields_)) {
+            case response_field_status::ok:
+                break;
+            case response_field_status::invalid:
+                return http_interim_response_header_validation_status::invalid_header;
+            case response_field_status::repeated_singleton:
+                return http_interim_response_header_validation_status::repeated_singleton;
+        }
+        if (known_bit != 0 && known_bit != response_header_content_type && (known_bits_ & known_bit) != 0 &&
             response_header_append_forbidden(known_bit)) {
             return http_interim_response_header_validation_status::repeated_singleton;
         }
@@ -69,6 +69,7 @@ public:
 
 private:
     http_field_list_role role_;
+    response_field_state fields_;
     std::uint32_t known_bits_{0};
 };
 

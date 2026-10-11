@@ -11,6 +11,7 @@
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
@@ -193,12 +194,11 @@ std::pmr::string detail::migration_checksum(
         throw std::runtime_error("database migration checksum could not be computed");
     }
 
-    static constexpr char hex_digits[] = "0123456789abcdef";
-    std::pmr::string hex(detail::pmr_resource_or_default(resource));
+    std::pmr::string hex(pmr_resource_or_default(resource));
     hex.reserve(migration_checksum_size);
     for (std::size_t i = 0; i < digest_size; ++i) {
-        hex.push_back(hex_digits[digest[i] >> 4]);
-        hex.push_back(hex_digits[digest[i] & 0x0F]);
+        hex.push_back(http_lower_hex_digit(digest[i] >> 4));
+        hex.push_back(http_lower_hex_digit(digest[i]));
     }
     return hex;
 }
@@ -208,7 +208,7 @@ public:
     [[nodiscard]] static task<db_migration_report> run(asio::io_context& io_context,
         const worker_handle& worker_value, db_config_storage config, std::span<const db_migration> migrations,
         db_migrator_options_storage options, std::pmr::memory_resource* resource) {
-        auto* resolved = detail::pmr_resource_or_default(resource);
+        auto* resolved = pmr_resource_or_default(resource);
         const auto driver = config.driver_;
 
         if (!config.acquire_timeout_.has_value()) {
@@ -372,7 +372,7 @@ public:
 };
 
 void db_migrator::storage_deleter_type::operator()(storage_type* storage) const noexcept {
-    detail::destroy_pmr_object(storage, resource_);
+    destroy_pmr_object(storage, resource_);
 }
 
 namespace {
@@ -407,11 +407,11 @@ task<db_migration_report> stop_migration_loop_when_done(
 
 db_migrator::storage_owner_type db_migrator::make_storage(
     const db_config& config, const db_migrator_options& options) {
-    auto* resource = detail::pmr_resource_or_default(options.resource_);
+    auto* resource = pmr_resource_or_default(options.resource_);
     const auto validated_config = detail::validated_db_config(config);
     validate_db_migrator_options(options, validated_config.get().driver_);
     return storage_owner_type(
-        detail::construct_pmr_object<storage_type>(resource, validated_config, options, resource),
+        construct_pmr_object<storage_type>(resource, validated_config, options, resource),
         storage_deleter_type{resource});
 }
 
@@ -435,7 +435,7 @@ db_migration_report db_migrator::migrate(std::span<const db_migration> migration
 
 db_migration_report db_migrator::migrate(const db_config& config,
     std::span<const db_migration> migrations, const db_migrator_options& options) {
-    auto* resource = detail::pmr_resource_or_default(options.resource_);
+    auto* resource = pmr_resource_or_default(options.resource_);
     const auto validated_config = detail::validated_db_config(config);
     validate_db_migrator_options(options, validated_config.get().driver_);
     detail::validate_migration_list(migrations, validated_config.get().driver_);

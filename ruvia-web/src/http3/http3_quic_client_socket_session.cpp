@@ -10,14 +10,13 @@
 
 #include <asio/error.hpp>
 
-#include "http3/http3_quic_packet_io.h"
 #include "http3/http3_quic_socket_address.h"
 
 namespace ruvia::detail {
 namespace {
 
-http3_quic_datagram_address datagram_address(const asio::ip::udp::endpoint& endpoint) {
-    auto result_value = to_http3_quic_datagram_address(endpoint);
+ruvia::quic_address datagram_address(const asio::ip::udp::endpoint& endpoint) {
+    auto result_value = to_quic_address(endpoint);
     if ((result_value.index() != 0)) {
         throw std::invalid_argument("QUIC UDP endpoint is not a supported concrete address");
     }
@@ -31,8 +30,8 @@ ruvia::quic_connection_config client_connection_config(
     config.role_ = ruvia::quic_role::client;
     config.version_ = initial_version;
     config.preferred_version_ = initial_version;
-    config.local_address_ = to_quic_address(datagram_address(local));
-    config.peer_address_ = to_quic_address(datagram_address(peer));
+    config.local_address_ = datagram_address(local);
+    config.peer_address_ = datagram_address(peer);
     config.local_transport_parameters_.max_datagram_frame_size_ =
         config.limits_.max_datagram_size_;
     return config;
@@ -313,8 +312,7 @@ asio::ip::udp::socket http3_quic_client_socket_session::make_socket(asio::io_con
 asio::ip::udp::socket http3_quic_client_socket_session::make_candidate_socket(
     asio::io_context& io, const asio::ip::udp::endpoint& local,
     const asio::ip::udp::endpoint& peer) {
-    if (local.protocol() != peer.protocol() || local.port() == 0 ||
-        local.address().is_unspecified()) {
+    if (local.protocol() != peer.protocol()) {
         throw std::invalid_argument("QUIC migration requires a concrete same-family local endpoint");
     }
     asio::ip::udp::socket socket(io);
@@ -350,8 +348,8 @@ asio::ip::udp::endpoint http3_quic_client_socket_session::concrete_local_endpoin
 }
 
 http3_quic_client_socket_session::http3_quic_client_socket_session(asio::io_context& io,
-    const asio::ip::udp::endpoint& peer, std::string_view tls_hostname,
-    http3_quic_client_tls_context& tls, http3_settings settings,
+    const asio::ip::udp::endpoint& peer, std::string_view tls_host,
+    http3_quic_client_tls_context& tls, http3_client_sans_io_session_engine& engine,
     ruvia::quic_version initial_version, bool enable_early_data,
     std::pmr::memory_resource* resource)
     : owner_thread_(std::this_thread::get_id()),
@@ -361,18 +359,22 @@ http3_quic_client_socket_session::http3_quic_client_socket_session(asio::io_cont
       event_timer_(io),
       work_timer_(io),
       local_endpoint_(concrete_local_endpoint(socket_)),
-      transport_(tls, client_connection_config(local_endpoint_, peer_, initial_version), tls_hostname,
+      transport_(tls, client_connection_config(local_endpoint_, peer_, initial_version), tls_host,
           std::chrono::steady_clock::now(), resource, enable_early_data),
-      settings_(settings),
+      engine_(engine),
       rejected_early_streams_(resource != nullptr ? resource : std::pmr::get_default_resource()),
       early_data_enabled_(transport_.early_data_enabled()) {
-    const auto prefixes = http3_local_critical_streams::create(settings_);
+    const auto prefixes = http3_local_critical_streams::create(engine_.local_settings());
     if ((prefixes.index() != 0)) {
         throw std::logic_error("failed to prepare local HTTP/3 critical streams");
     }
     critical_streams_.emplace(std::get<0>(prefixes));
     if (early_data_enabled_) {
         rejected_early_streams_.reserve(ruvia::quic_limits{}.max_streams_);
+        const auto begun = engine_.begin_early_data(*transport_.remembered_settings());
+        if (begun.scope_ != http3_connection_error_scope::none) {
+            throw std::logic_error("failed to install remembered HTTP/3 settings");
+        }
     }
 }
 
@@ -412,7 +414,7 @@ void http3_quic_client_socket_session::reset_rejected_early_streams() {
         }
     }
     if (critical_stream_rejected) {
-        const auto prefixes = http3_local_critical_streams::create(settings_);
+        const auto prefixes = http3_local_critical_streams::create(engine_.local_settings());
         if ((prefixes.index() != 0)) {
             throw std::logic_error("failed to rebuild HTTP/3 critical stream prefixes after 0-RTT rejection");
         }
@@ -420,8 +422,7 @@ void http3_quic_client_socket_session::reset_rejected_early_streams() {
     }
 }
 
-ruvia::quic_path_migration http3_quic_client_socket_session::start_path_migration(
-    const asio::ip::udp::endpoint& local_endpoint) {
+ruvia::quic_path_migration http3_quic_client_socket_session::start_path_migration(const ruvia::quic_address& local_address) {
     require_owner_thread();
     if (closed_ || stopping_ || candidate_socket_) {
         return {.status_ = ruvia::quic_migration_status::rejected};
@@ -430,9 +431,13 @@ ruvia::quic_path_migration http3_quic_client_socket_session::start_path_migratio
     if (info.state_ != ruvia::quic_connection_state::ready || !info.confirmed_) {
         return {.status_ = ruvia::quic_migration_status::rejected};
     }
-    auto candidate_value = make_candidate_socket(io_, local_endpoint, peer_);
+    const auto local_endpoint = to_udp_endpoint(local_address);
+    if (local_endpoint.index() != 0) {
+        throw std::invalid_argument("QUIC migration requires a concrete same-family local endpoint");
+    }
+    auto candidate_value = make_candidate_socket(io_, std::get<0>(local_endpoint), peer_);
     const auto bound_endpoint = concrete_local_endpoint(candidate_value);
-    const auto address = to_quic_address(datagram_address(bound_endpoint));
+    const auto address = datagram_address(bound_endpoint);
     const auto migration = transport_.connection().start_path_migration(address);
     if (migration.status_ != ruvia::quic_migration_status::started &&
         migration.status_ != ruvia::quic_migration_status::validated) {
@@ -513,20 +518,6 @@ void http3_quic_client_socket_session::fail_candidate_migration() noexcept {
     }
 }
 
-ruvia::quic_stream_write_result http3_quic_client_socket_session::write_critical_stream(
-    ruvia::http3_critical_stream_output::stream_kind kind, std::span<const char> bytes_value) {
-    require_owner_thread();
-    if (!critical_streams_ || !critical_streams_->complete()) {
-        return {.status_ = ruvia::quic_operation_status::would_block};
-    }
-    const auto id = critical_streams_->stream_id(kind);
-    if (!id) {
-        return {.status_ = ruvia::quic_operation_status::closing};
-    }
-    const auto input = std::as_bytes(bytes_value);
-    return transport_.connection().write_stream(*id, input);
-}
-
 http3_quic_client_socket_session::~http3_quic_client_socket_session() {
     if (std::this_thread::get_id() != owner_thread_ || active_wait_) {
         std::terminate();
@@ -597,8 +588,8 @@ bool http3_quic_client_socket_session::receive_datagrams(pump_result_type& resul
             }
             const auto datagram = ruvia::quic_datagram_view{
                 std::span<const std::byte>(receive_buffer_.data(), size),
-                to_quic_address(datagram_address(local_endpoint)),
-                to_quic_address(datagram_address(sender))};
+                datagram_address(local_endpoint),
+                datagram_address(sender)};
             (void)connection.receive(datagram, std::chrono::steady_clock::now());
         }
         return true;
@@ -612,8 +603,8 @@ http3_quic_client_socket_session::packet_route_type http3_quic_client_socket_ses
     if (output.size_ > packet_buffer_.size()) {
         return packet_route_type::invalid;
     }
-    const auto target = to_udp_endpoint(from_quic_address(output.peer_));
-    const auto local = to_udp_endpoint(from_quic_address(output.local_));
+    const auto target = to_udp_endpoint(output.peer_);
+    const auto local = to_udp_endpoint(output.local_);
     if ((target.index() != 0) || std::get<0>(target) != peer_ || (local.index() != 0)) {
         return packet_route_type::invalid;
     }
@@ -648,6 +639,20 @@ http3_quic_client_socket_session::pump_result_type http3_quic_client_socket_sess
     const auto now = std::chrono::steady_clock::now();
     (void)transport_.handle_expiry(now);
     settle_migration();
+    const auto early_data = connection.info().early_data_;
+    if (early_data_enabled_ && !early_data_completed_ &&
+        (early_data == ruvia::quic_early_data_state::accepted ||
+            early_data == ruvia::quic_early_data_state::rejected)) {
+        // Complete HTTP's remembered-settings phase before any owner feeds
+        // peer streams or rebuilds a rejected request on a fresh QUIC stream.
+        const auto completed = engine_.complete_early_data(early_data == ruvia::quic_early_data_state::accepted);
+        early_data_completed_ = true;
+        if (completed.scope_ == http3_connection_error_scope::connection) {
+            result.protocol_failure_ = completed;
+            result.status_ = pump_status_type::fatal;
+            return result;
+        }
+    }
     if (connection.info().early_data_ == ruvia::quic_early_data_state::rejected) {
         reset_rejected_early_streams();
     }
@@ -662,19 +667,16 @@ http3_quic_client_socket_session::pump_result_type http3_quic_client_socket_sess
                                        connection_info.early_data_ ==
                                            ruvia::quic_early_data_state::available;
     if (connection_info.state_ == ruvia::quic_connection_state::ready || early_streams_allowed) {
-        const auto critical = critical_streams_->drive(
-            [&connection](http3_critical_stream_driver::kind_type) {
-                return connection.open_stream(true);
-            },
-            [&connection](std::uint64_t id, std::span<const char> bytes_value) {
-                return connection.write_stream(id, std::as_bytes(bytes_value));
-            });
-        if (critical == http3_critical_stream_driver::result_type::fatal) {
+        const auto critical = critical_streams_->drive(connection, engine_,
+            connection_info.state_ == ruvia::quic_connection_state::ready
+                ? http3_critical_stream_driver::engine_output::send
+                : http3_critical_stream_driver::engine_output::defer);
+        if (critical.status_ == http3_critical_stream_driver::status_type::fatal) {
             result.status_ = pump_status_type::fatal;
             return result;
         }
-        result.critical_streams_ready_ = critical == http3_critical_stream_driver::result_type::ready;
-        result.critical_output_progress_ = critical == http3_critical_stream_driver::result_type::progress;
+        result.critical_streams_ready_ = critical.status_ == http3_critical_stream_driver::status_type::ready;
+        result.critical_output_progress_ = critical.progress_;
         for (std::size_t index = 0; index < 3; ++index) {
             const auto id = critical_streams_->stream_id(
                 static_cast<http3_critical_stream_driver::kind_type>(index));

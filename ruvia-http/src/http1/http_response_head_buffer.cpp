@@ -1,4 +1,4 @@
-#include "server/http_response_head_buffer.h"
+#include "ruvia/http/http_response_head_buffer.h"
 
 #include <algorithm>
 #include <charconv>
@@ -6,13 +6,13 @@
 #include <stdexcept>
 #include <variant>
 
-#include "util/pmr_string.h"
+#include "ruvia/http/http_pmr_string.h"
 
 namespace ruvia {
 
 void http_response_head_buffer::reset() noexcept {
     // Same retain-small-else-release policy as every other pooled scratch buffer.
-    detail::clear_pmr_string_retaining_small(heap_, response_head_retained_heap_bytes);
+    http_clear_pmr_string_retaining_small(heap_, response_head_retained_heap_bytes);
     state_.emplace<stack_state_type>();
 }
 

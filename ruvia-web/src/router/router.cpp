@@ -4,6 +4,8 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/web/detail/app/app_configuration.h"
+#include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
 #include "router/router_impl.h"
@@ -14,193 +16,118 @@ using namespace detail;
 
 namespace {
 
-task<void> ignore_expired_next(next_state) {
-    co_return;
-}
-
-void validate_unique_validated_model_types(
-    std::span<const controller_middleware_descriptor> descriptors) {
-    for (std::size_t i = 0; i < descriptors.size(); ++i) {
-        const auto* const key = descriptors[i].validated_model_type_key();
-        if (key == nullptr) {
-            continue;
+template <typename stored_type, typename registration_type>
+void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<const registration_type> handlers) {
+    auto* const resource = stored.get_allocator().resource();
+    std::pmr::vector<stored_type> normalized(resource);
+    normalized.reserve(handlers.size());
+    for (const auto& registration : handlers) {
+        if (registration.handler_ == nullptr) {
+            throw std::invalid_argument("fallback handler must not be null");
         }
-        for (std::size_t j = i + 1; j < descriptors.size(); ++j) {
-            if (descriptors[j].validated_model_type_key() == key) {
-                throw std::invalid_argument("duplicate validated model type on route");
+        const auto prefix = detail::normalize_fallback_prefix(registration.prefix_);
+        for (const auto& existing : normalized) {
+            if (detail::fallback_prefixes_equivalent(existing.prefix_, prefix)) {
+                throw std::invalid_argument("duplicate fallback prefix");
             }
         }
+        normalized.emplace_back(resource, prefix, registration.handler_);
     }
+    // Deepest prefix first: selection is a first-match scan. A nested scope
+    // always has more segments; distinct scopes of equal depth cannot nest, so
+    // their relative order is irrelevant; keep it stable.
+    std::ranges::stable_sort(normalized, [](const stored_type& left, const stored_type& right) noexcept {
+        return detail::fallback_prefix_depth(left.prefix_) > detail::fallback_prefix_depth(right.prefix_);
+    });
+    stored = std::move(normalized);
 }
 
-void validate_unique_validated_model_types(std::span<const controller_middleware_descriptor> first,
-    std::span<const controller_middleware_descriptor> second) {
-    validate_unique_validated_model_types(first);
-    validate_unique_validated_model_types(second);
-    for (const auto& left : first) {
-        const auto* const key = left.validated_model_type_key();
-        if (key == nullptr) {
-            continue;
-        }
-        for (const auto& right : second) {
-            if (right.validated_model_type_key() == key) {
-                throw std::invalid_argument("duplicate validated model type on route");
-            }
-        }
+void validate_middleware_descriptor(const controller_middleware_descriptor& descriptor) {
+    if (!descriptor.valid()) {
+        throw std::invalid_argument("middleware must be invocable");
     }
-}
-
-[[nodiscard]] bool uses_route_rate_limit(
-    std::span<const controller_middleware_descriptor> descriptors) noexcept {
-    return std::ranges::any_of(descriptors,
-        [](const auto& descriptor) noexcept { return descriptor.uses_route_rate_limit(); });
+    if (descriptor.create() == nullptr || descriptor.destroy() == nullptr) {
+        throw std::invalid_argument("middleware must be constructible");
+    }
 }
 
 }  // namespace
 
-next::awaitable_type next::operator()() & {
-    auto state_value = state_;
-    auto* control = state_value.control_;
-    state_value.invocation_ =
-        control == nullptr ? detail::next_state::invocation_type::expired : control->begin_invocation();
-    if (state_value.invocation_ == detail::next_state::invocation_type::expired) {
-        return awaitable_type(state_value, &ignore_expired_next);
-    }
-    return awaitable_type(state_value, invoke_);
-}
-
-detail::router_impl::router_impl(router& router_value)
+detail::router_impl::router_impl(router& router_value, std::pmr::memory_resource* plan_resource)
     : owner_(router_value),
-      resource_(registration_resource()),
-      pending_routes_(resource_),
-      pending_route_indices_(std::in_place, resource_),
-      middleware_lifetimes_(resource_),
-      global_middleware_descriptors_(resource_),
-      global_middleware_frames_(resource_),
-      route_table_(nullptr, route_table_deleter_type{resource_}) {}
+      plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
+      route_indices_(registration_resource()),
+      route_middleware_descriptors_(registration_resource()),
+      route_middleware_ranges_(registration_resource()),
+      global_middleware_descriptors_(registration_resource()) {}
 
 void router::impl_deleter_type::operator()(detail::router_impl* impl) const noexcept {
     destroy_pmr_object(impl, registration_resource());
 }
 
-void detail::router_impl::route_table_deleter_type::operator()(detail::route_table* table_value) const noexcept {
-    destroy_pmr_object(table_value, registration_resource_or_default(resource_));
-}
-
-router::router()
-    : impl_(construct_pmr_object<detail::router_impl>(registration_resource(), *this)) {}
+router::router(std::pmr::memory_resource* plan_resource)
+    : impl_(construct_pmr_object<detail::router_impl>(registration_resource(), *this, plan_resource)) {}
 
 router::~router() = default;
 
-router& detail::router_impl::set_error_handler(http_error_handler_ref_type handler) noexcept {
-    error_handler_ = handler;
-    if (route_table_) {
-        route_table_->set_error_handler(handler);
-    }
-    return owner_;
+void detail::router_impl::set_error_handler(http_error_handler_ref_type handler) noexcept {
+    plan_->error_handler_ = handler;
 }
 
-router& detail::router_impl::set_not_found_handler(http_not_found_handler_ref_type handler) noexcept {
-    not_found_handler_ = handler;
-    if (route_table_) {
-        route_table_->set_not_found_handler(handler);
-    }
-    return owner_;
+void detail::router_impl::set_not_found_handler(http_not_found_handler_ref_type handler) noexcept {
+    plan_->not_found_handler_ = handler;
 }
 
-router& detail::router_impl::set_prefix_error_handlers(
-    std::span<const http_prefix_error_handler> handlers) {
-    if (route_table_) {
-        route_table_->set_prefix_error_handlers(handlers);
-    }
-    prefix_error_handlers_.clear();
-    prefix_error_handlers_.reserve(handlers.size());
-    for (const auto& handler : handlers) {
-        prefix_error_handlers_.emplace_back(
-            std::pmr::string(handler.prefix_, resource_), handler.handler_);
-    }
-    return owner_;
+void detail::router_impl::set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers) {
+    replace_prefix_handlers(plan_->prefix_error_handlers_, handlers);
 }
 
-router& detail::router_impl::set_prefix_not_found_handlers(
+void detail::router_impl::set_prefix_not_found_handlers(
     std::span<const http_prefix_not_found_handler> handlers) {
-    if (route_table_) {
-        route_table_->set_prefix_not_found_handlers(handlers);
-    }
-    prefix_not_found_handlers_.clear();
-    prefix_not_found_handlers_.reserve(handlers.size());
-    for (const auto& handler : handlers) {
-        prefix_not_found_handlers_.emplace_back(
-            std::pmr::string(handler.prefix_, resource_), handler.handler_);
-    }
-    return owner_;
+    replace_prefix_handlers(plan_->prefix_not_found_handlers_, handlers);
 }
 
-detail::router_impl::middleware_lifetime_type::middleware_lifetime_type(
-    void* target_value, controller_middleware_descriptor::destroy_type destroy_value) noexcept
-    : target_(target_value),
-      destroy_(destroy_value) {}
-
-detail::router_impl::middleware_lifetime_type::middleware_lifetime_type(middleware_lifetime_type&& other) noexcept
-    : target_(std::exchange(other.target_, nullptr)),
-      destroy_(std::exchange(other.destroy_, nullptr)) {}
-
-detail::router_impl::middleware_lifetime_type& detail::router_impl::middleware_lifetime_type::operator=(
-    middleware_lifetime_type&& other) noexcept {
-    if (this == &other) {
-        return *this;
+void detail::router_impl::set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors) {
+    for (const auto& descriptor : descriptors) {
+        validate_middleware_descriptor(descriptor);
+        plan_->has_route_rate_limit_ = plan_->has_route_rate_limit_ || descriptor.uses_route_rate_limit();
     }
-
-    reset();
-    target_ = std::exchange(other.target_, nullptr);
-    destroy_ = std::exchange(other.destroy_, nullptr);
-    return *this;
+    global_middleware_descriptors_.assign(descriptors.begin(), descriptors.end());
 }
 
-detail::router_impl::middleware_lifetime_type::~middleware_lifetime_type() {
-    reset();
+void detail::router_impl::append_route_middlewares(
+    std::span<const controller_middleware_descriptor> controller_middlewares,
+    std::span<const controller_middleware_descriptor> route_middlewares) {
+    const auto offset = route_middleware_descriptors_.size();
+    route_middleware_descriptors_.reserve(offset + controller_middlewares.size() + route_middlewares.size());
+    for (const auto middlewares : {controller_middlewares, route_middlewares}) {
+        for (const auto& descriptor : middlewares) {
+            validate_middleware_descriptor(descriptor);
+            const auto* const key = descriptor.validated_model_type_key();
+            if (key != nullptr &&
+                std::ranges::any_of(std::span(route_middleware_descriptors_).subspan(offset),
+                    [key](const auto& registered) noexcept { return registered.validated_model_type_key() == key; })) {
+                throw std::invalid_argument("duplicate validated model type on route");
+            }
+            plan_->has_route_rate_limit_ = plan_->has_route_rate_limit_ || descriptor.uses_route_rate_limit();
+            route_middleware_descriptors_.push_back(descriptor);
+        }
+    }
+    route_middleware_ranges_.push_back({offset, route_middleware_descriptors_.size() - offset});
 }
 
-void detail::router_impl::middleware_lifetime_type::reset() noexcept {
-    if (target_ != nullptr && destroy_ != nullptr) {
-        destroy_(target_);
+void detail::router_impl::declare_controllers(
+    std::span<const controller_registrar_type> registrars, const controller_store& controllers) {
+    if (controllers.size() != registrars.size()) {
+        throw std::logic_error("controller instances do not match the controller registrars");
     }
-    target_ = nullptr;
-    destroy_ = nullptr;
-}
-
-detail::route_middleware_type detail::router_impl::materialize_middleware(
-    controller_middleware_descriptor middleware_value) {
-    if (!middleware_value.valid()) {
-        throw std::invalid_argument("middleware must be invocable");
+    for (std::size_t slot = 0; slot < registrars.size(); ++slot) {
+        controller_slot_ = slot;
+        controller_target_ = controllers.instance(slot);
+        registrars[slot].register_routes_(controller_target_, owner_);
     }
-    if (middleware_value.create() == nullptr || middleware_value.destroy() == nullptr) {
-        throw std::invalid_argument("middleware must be constructible");
-    }
-
-    auto* target = middleware_value.create()(middleware_value.args());
-    middleware_lifetimes_.emplace_back(target, middleware_value.destroy());
-    return route_middleware_type(target, middleware_value.invoke());
-}
-
-void detail::router_impl::append_materialized_middlewares(std::pmr::vector<route_middleware_type>& frames,
-    std::span<const controller_middleware_descriptor> descriptors) {
-    for (const auto& middleware : descriptors) {
-        frames.push_back(materialize_middleware(middleware));
-    }
-}
-
-std::pmr::vector<detail::route_middleware_type> detail::router_impl::materialize_middlewares(
-    std::span<const controller_middleware_descriptor> first,
-    std::span<const controller_middleware_descriptor> second) {
-    validate_unique_validated_model_types(first, second);
-    has_route_rate_limit_ =
-        has_route_rate_limit_ || uses_route_rate_limit(first) || uses_route_rate_limit(second);
-    std::pmr::vector<route_middleware_type> frames(resource_);
-    frames.reserve(first.size() + second.size());
-    append_materialized_middlewares(frames, first);
-    append_materialized_middlewares(frames, second);
-    return frames;
+    controller_target_ = nullptr;
+    plan_->controller_count_ = registrars.size();
 }
 
 void detail::router_impl::validate_route_target(
@@ -225,7 +152,7 @@ void detail::router_impl::validate_route_target(
     }
     // Extension routes are matched by a linear scan over a cold list, which has
     // no dynamic-segment index behind it.
-    if (!method_token.empty() && route_table::is_dynamic_path(path)) {
+    if (!method_token.empty() && is_dynamic_path(path)) {
         throw std::invalid_argument("extension method routes must use a static path");
     }
     if ((path.find('?') != std::string_view::npos) || !ruvia::is_valid_http_origin_form_target(path)) {
@@ -233,68 +160,34 @@ void detail::router_impl::validate_route_target(
     }
 }
 
-void detail::router_impl::set_global_middlewares(
-    std::span<const controller_middleware_descriptor> descriptors) {
-    if (route_table_) {
-        // A finalized table's middleware ranges are immutable. Re-applying the
-        // identical set (an app stop()/run() cycle) is a no-op; changing it
-        // requires a fresh router.
-        const bool unchanged = descriptors.size() == global_middleware_descriptors_.size() &&
-                               std::ranges::equal(descriptors, global_middleware_descriptors_);
-        if (unchanged) {
-            return;
+detail::compiled_route_plan_ptr_type detail::router_impl::compile() {
+    validate_no_dynamic_route_conflict();
+    build_middleware_frames();
+    auto& plan = *plan_;
+    for (const auto& route : plan.routes_) {
+        if (route.endpoint().tunnel() != nullptr) {
+            plan.connect_route_indices_.push_back(route.index());
         }
-        throw std::logic_error("cannot change app middleware after router finalize");
+        if (route.method() == http_known_method::unknown) {
+            plan.extension_route_indices_.push_back(route.index());
+        }
     }
-    global_middleware_descriptors_.assign(descriptors.begin(), descriptors.end());
+    build_allowed_method_mask();
+    build_static_index();
+    build_dynamic_routes();
+    build_server_extension_method_tokens();
+    build_url_patterns();
+    return std::move(plan_);
 }
 
-void detail::router_impl::finalize(const compiled_route_plan* compiled_plan) {
-    if (route_table_) {
-        return;
-    }
-
-    global_middleware_frames_ = materialize_middlewares(global_middleware_descriptors_);
-    validate_no_dynamic_route_conflict(pending_routes_);
-    std::unique_ptr<detail::route_table, route_table_deleter_type> table_value(
-        construct_pmr_object<detail::route_table>(resource_, resource_), route_table_deleter_type{resource_});
-    table_value->has_route_rate_limit_ = has_route_rate_limit_;
-    build_route_table(*table_value, compiled_plan);
-    table_value->set_error_handler(error_handler_);
-    table_value->set_not_found_handler(not_found_handler_);
-    if (!prefix_error_handlers_.empty()) {
-        std::pmr::vector<http_prefix_error_handler> views(resource_);
-        views.reserve(prefix_error_handlers_.size());
-        for (const auto& [prefix, handler] : prefix_error_handlers_) {
-            views.push_back({std::string_view(prefix), handler});
-        }
-        table_value->set_prefix_error_handlers(views);
-    }
-    if (!prefix_not_found_handlers_.empty()) {
-        std::pmr::vector<http_prefix_not_found_handler> views(resource_);
-        views.reserve(prefix_not_found_handlers_.size());
-        for (const auto& [prefix, handler] : prefix_not_found_handlers_) {
-            views.push_back({std::string_view(prefix), handler});
-        }
-        table_value->set_prefix_not_found_handlers(views);
-    }
-    route_table_ = std::move(table_value);
-    pending_route_indices_.reset();
-    std::pmr::vector<pending_route_type>(resource_).swap(pending_routes_);
-}
-
-const detail::route_table& detail::router_impl::route_table() const {
-    if (!route_table_) {
-        throw std::logic_error("router has not been finalized");
-    }
-    return *route_table_;
-}
-
-detail::compiled_route_plan_ptr_type detail::router_impl::release_compiled_plan() {
-    if (!route_table_) {
-        throw std::logic_error("router has not been finalized");
-    }
-    return route_table_->release_compiled_plan();
+detail::compiled_route_plan_ptr_type detail::compile_route_plan(std::pmr::memory_resource* resource,
+    std::span<const controller_registrar_type> registrars, const controller_store& controllers,
+    const app_configuration& configuration) {
+    router router_value(resource);
+    auto& routes_value = router_impl::from(router_value);
+    routes_value.declare_controllers(registrars, controllers);
+    configuration.apply(routes_value, resource);
+    return routes_value.compile();
 }
 
 }  // namespace ruvia

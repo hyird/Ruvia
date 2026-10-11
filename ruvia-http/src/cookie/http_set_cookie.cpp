@@ -5,7 +5,8 @@
 #include <limits>
 #include <string_view>
 
-#include "ruvia/http/detail/util/ascii_case.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_whitespace.h"
 
 #include "cookie/cookie_validation.h"
 #include "field/http_date.h"
@@ -16,22 +17,12 @@ namespace {
 constexpr std::size_t max_received_cookie_bytes = 4096;
 constexpr std::size_t max_received_cookie_attribute_bytes = 1024;
 
-std::string_view trim_ows(std::string_view value) noexcept {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
 std::pair<std::string_view, std::string_view> split_attribute(std::string_view value) noexcept {
     const auto equals = value.find('=');
     if (equals == std::string_view::npos) {
-        return {trim_ows(value), {}};
+        return {http_trim_ows(value), {}};
     }
-    return {trim_ows(value.substr(0, equals)), trim_ows(value.substr(equals + 1))};
+    return {http_trim_ows(value.substr(0, equals)), http_trim_ows(value.substr(equals + 1))};
 }
 
 std::optional<std::int64_t> parse_max_age_seconds(std::string_view value) noexcept {
@@ -128,7 +119,7 @@ std::optional<int> parse_cookie_date_month(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 12> months{
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     for (std::size_t index = 0; index < months.size(); ++index) {
-        if (detail::http_ascii_equals_ignore_case(value, months[index])) {
+        if (http_ascii_equals_ignore_case(value, months[index])) {
             return static_cast<int>(index + 1);
         }
     }
@@ -202,7 +193,7 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
     std::string_view name;
     std::string_view cookie_value;
     if (!(cookie_pair.find('=') != std::string_view::npos)) {
-        cookie_value = trim_ows(cookie_pair);
+        cookie_value = http_trim_ows(cookie_pair);
     } else {
         const auto fields_value = split_attribute(cookie_pair);
         name = fields_value.first;
@@ -223,13 +214,13 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
             offset, end == std::string_view::npos ? value.size() - offset : end - offset));
         if (argument.size() > max_received_cookie_attribute_bytes) {
             // Ignore this cookie-av and continue with later attributes.
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Path")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Path")) {
             if (!detail::is_valid_cookie_attribute(argument)) {
                 return std::nullopt;
             }
             result.path_ = argument;
             result.set(http_set_cookie_attribute::path);
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Domain")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Domain")) {
             auto domain = argument;
             if (!domain.empty() && domain.front() == '.') {
                 domain.remove_prefix(1);
@@ -238,23 +229,23 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
                 return std::nullopt;
             }
             result.domain_ = domain;
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Expires")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Expires")) {
             if (const auto expires = parse_cookie_date(argument)) {
                 result.expires_ = expires;
             }
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Max-Age")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Max-Age")) {
             if (const auto seconds = parse_max_age_seconds(argument)) {
                 result.max_age_seconds_ = seconds;
             }
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "SameSite")) {
-            if (detail::http_ascii_equals_ignore_case(argument, "None")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "SameSite")) {
+            if (http_ascii_equals_ignore_case(argument, "None")) {
                 result.set(http_set_cookie_attribute::same_site_none);
             } else {
                 result.clear(http_set_cookie_attribute::same_site_none);
             }
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Secure")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Secure")) {
             result.set(http_set_cookie_attribute::secure);
-        } else if (detail::http_ascii_equals_ignore_case(attribute, "Partitioned")) {
+        } else if (http_ascii_equals_ignore_case(attribute, "Partitioned")) {
             result.set(http_set_cookie_attribute::partitioned);
         }
         if (end == std::string_view::npos) {

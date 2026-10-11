@@ -16,6 +16,8 @@ public:
 
 // Synchronous incremental representation encoder. Each write consumes all of
 // its input and appends to caller-owned output; it does not retain either view.
+// Input may borrow output. Compressed writes snapshot that input in the encoder's
+// resource before an append can invalidate it.
 // The PMR resource must outlive the stable-address encoder. Output can be cleared
 // between calls and remains valid after encoder destruction.
 // Empty input is valid, including repeated flushes; it does not end the stream.

@@ -18,4 +18,7 @@ namespace ruvia::detail {
 void fill_quic_path(ngtcp2_path_storage& path, const quic_address& local,
     const quic_address& peer);
 
+// Copies a connection ID into native ngtcp2 storage.
+[[nodiscard]] ngtcp2_cid encode_quic_connection_id(const quic_connection_id& id) noexcept;
+
 }  // namespace ruvia::detail

@@ -3,11 +3,10 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
-#include <memory>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "server/http1_session_request_completion.h"
 
@@ -29,9 +28,8 @@ constexpr std::size_t max_pooled_work_sets = 64;
 // set is immediately usable; reset_for_reuse() trims it back on return.
 connection_work_set::connection_work_set(worker_memory& memory)
     : read_buffer_(memory.allocator<char>()),
-      response_head_(memory.allocator<char>()),
-      file_chunk_(memory.allocator<char>()) {
-    ::ruvia::resize_pmr_string_for_overwrite(read_buffer_, initial_read_buffer_bytes);
+      response_head_(memory.allocator<char>()) {
+    http_resize_pmr_string_for_overwrite(read_buffer_, initial_read_buffer_bytes);
 }
 
 void connection_work_set::reset_for_reuse() {
@@ -40,8 +38,8 @@ void connection_work_set::reset_for_reuse() {
     // still guards against it.
     trim_read_buffer_storage(read_buffer_, 0);
     response_head_.reset();
-    // parsed is fully overwritten by the next parse_head(); file_chunk/parser
-    // carry no cross-request state worth clearing.
+    // parsed is fully overwritten by the next parse_head(); the parser carries
+    // no cross-request state worth clearing.
 }
 
 connection_work_set_pool::connection_work_set_pool(worker_memory& memory) noexcept
@@ -105,7 +103,7 @@ void install_connection_read_buffer_pipeline(
     // `pipeline` is request-scoped storage handed over by a body runtime, never
     // an alias of read_buffer, so this copies rather than shifts in place.
     if (pipeline.size() > read_buffer.size()) {
-        ::ruvia::resize_pmr_string_for_overwrite(read_buffer, pipeline.size());
+        http_resize_pmr_string_for_overwrite(read_buffer, pipeline.size());
     }
     if (!pipeline.empty()) {
         std::memcpy(read_buffer.data(), pipeline.data(), pipeline.size());
@@ -138,7 +136,7 @@ void trim_read_buffer_storage(std::pmr::string& read_buffer, std::size_t used_by
 
     if (read_buffer.capacity() > read_buffer_shrink_capacity_bytes) {
         std::pmr::string compact(read_buffer.get_allocator());
-        ::ruvia::resize_pmr_string_for_overwrite(compact, initial_read_buffer_bytes);
+        http_resize_pmr_string_for_overwrite(compact, initial_read_buffer_bytes);
         if (used_bytes > 0) {
             std::memcpy(compact.data(), read_buffer.data(), used_bytes);
         }
@@ -147,13 +145,13 @@ void trim_read_buffer_storage(std::pmr::string& read_buffer, std::size_t used_by
     }
 
     if (read_buffer.size() != initial_read_buffer_bytes) {
-        ::ruvia::resize_pmr_string_for_overwrite(read_buffer, initial_read_buffer_bytes);
+        http_resize_pmr_string_for_overwrite(read_buffer, initial_read_buffer_bytes);
     }
 }
 
 void grow_read_buffer(std::pmr::string& read_buffer, std::size_t used_bytes) {
     if (used_bytes == read_buffer.size() && read_buffer.size() < max_http_header_bytes) {
-        ::ruvia::resize_pmr_string_for_overwrite(
+        http_resize_pmr_string_for_overwrite(
             read_buffer, std::min(read_buffer.size() * 2, max_http_header_bytes));
     }
 }

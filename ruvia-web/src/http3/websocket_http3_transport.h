@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -9,21 +8,24 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_data_write_plan.h"
+#include "ruvia/http/http3_headers_frame.h"
+#include "ruvia/http/http3_message_head.h"
 
-#include "http3/http3_quic_client_endpoint_resolver.h"
-#include "http3/http3_quic_client_socket_session.h"
+#include "http3/http3_client_session_driver.h"
+#include "http3/http3_quic_client_tls_context.h"
 
 namespace ruvia::detail {
 class websocket_client_state;
 
-// A single worker-affine QUIC pump owns DNS, critical streams and one Extended
-// CONNECT stream. Application operations publish bounded owned blocks and wake
-// that pump. SSL WANT retries retain the original block until accepted or close.
+// RFC 9220 WebSocket framing adapter over one Extended CONNECT stream that it
+// opens through the shared HTTP/3 client session driver, which owns DNS, QUIC,
+// critical and peer streams. One TLS context serves the owning client. write()
+// borrows the caller's bytes as the DATA payload until QUIC accepts them; all
+// members are worker-affine.
 class websocket_http3_transport final {
 public:
     websocket_http3_transport(websocket_client_state& owner_value, const worker_handle& worker_value,
@@ -36,42 +38,68 @@ public:
     [[nodiscard]] task<void> join();
 
 private:
+    using time_point_type = http3_client_session_driver::time_point_type;
+    friend class http3_client_session_driver;
+
+    // Session-driver hooks: the CONNECT stream keeps the session open until stop().
+    [[nodiscard]] std::optional<time_point_type> next_deadline(std::optional<time_point_type> bound) const noexcept {
+        return bound;
+    }
+    void expire(time_point_type) noexcept {}
+    [[nodiscard]] bool active() const noexcept {
+        return true;
+    }
+    [[nodiscard]] bool draining() const noexcept {
+        return false;
+    }
+    void attempt_started(http3_client_sans_io_session_engine&) noexcept {}
+    void attempt_closing() noexcept {}
+    void attempt_abandoned() noexcept {}
+    [[nodiscard]] bool early_stream_rejected(std::uint64_t) noexcept {
+        return false;
+    }
+    [[nodiscard]] bool sweep(bool requests_may_start, bool early_data_only);
+    [[nodiscard]] std::size_t peer_stream_read_budget(std::uint64_t) const noexcept {
+        return http3_client_receive_driver::read_block_bytes;
+    }
+    [[nodiscard]] bool peer_stream_input(std::uint64_t, const http3_client_receive_driver::result_type&) const noexcept {
+        return false;
+    }
+
     [[nodiscard]] task<void> drive();
     [[nodiscard]] task<void> wait_for_output();
-    [[nodiscard]] bool receive(std::uint64_t id, bool request);
+    [[nodiscard]] bool receive();
     [[nodiscard]] bool drive_output();
+    [[nodiscard]] bool write_segment(std::span<const char> bytes);
+    void record_failure(http3_client_session_driver::outcome_type outcome) noexcept;
+    void abandon_output() noexcept;
     void check_failure() const;
-    void wake() noexcept;
-    void prepare_frame(std::uint64_t type, std::span<const char> payload);
     static void on_event(void* context, const http3_connection_event& event);
 
     websocket_client_state& owner_;
     std::pmr::memory_resource* resource_;
     http3_quic_client_tls_context tls_;
-    http3_quic_client_endpoint_resolver resolver_;
-    ruvia::http3_connection connection_;
+    http3_client_session_driver driver_;
     task_scope drivers_;
     worker_signal progress_;
-    std::optional<http3_quic_client_socket_session> session_{};
-    std::pmr::vector<std::uint64_t> peer_streams_;
     std::pmr::string received_;
     std::size_t read_offset_{0};
-    std::pmr::string outbound_;
+    // The Extended CONNECT HEADERS frame until QUIC accepts it.
+    std::optional<http3_headers_frame> head_{};
+    std::optional<http3_data_write_plan> data_plan_{};
+    // One DATA frame: its header, then the borrowed write() payload.
+    http3_data_write_plan::chunk_type chunk_{};
     std::size_t write_offset_{0};
-    std::pmr::string blocked_input_;
-    std::array<std::pmr::string, 2> critical_output_;
-    std::array<std::size_t, 2> critical_offset_{};
-    std::array<worker_timer_registration, 2> critical_timers_{};
     std::optional<http3_message_head> response_{};
     std::exception_ptr failure_{};
     std::optional<std::uint64_t> stream_id_{};
     bool open_requested_{false};
+    bool chunk_pending_{false};
     bool finish_requested_{false};
     bool finished_{false};
-    bool fin_prepared_{false};
-    bool qpack_blocked_{false};
-    bool blocked_fin_{false};
     bool eof_{false};
+    // Both stream halves ended and the QUIC stream retired.
+    bool completed_{false};
     bool stopped_{false};
 };
 }  // namespace ruvia::detail

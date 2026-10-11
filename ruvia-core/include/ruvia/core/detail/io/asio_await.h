@@ -256,24 +256,6 @@ inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&
     }
 }
 
-template <typename t_type>
-    requires asio_task_result<t_type>
-[[nodiscard]] asio::awaitable<t_type> task_as_awaitable(task<t_type> task_value) {
-    auto result_value = co_await async_start_task(std::move(task_value), asio::use_awaitable);
-    if (const auto* failure = result_value.failure()) {
-        std::rethrow_exception(failure->exception());
-    }
-    co_return std::move(*result_value.success()).take_value();
-}
-
-inline asio::awaitable<void> task_as_awaitable(task<void> task_value) {
-    auto result_value = co_await async_start_task(std::move(task_value), asio::use_awaitable);
-    if (const auto* failure = result_value.failure()) {
-        std::rethrow_exception(failure->exception());
-    }
-    co_return;
-}
-
 template <typename result_type, typename initiate_type>
 class asio_completion_awaiter;
 template <typename result_type>
@@ -385,10 +367,5 @@ private:
     initiate_type initiate_;
     suspend_race_state<asio_completion<result_type>> state_;
 };
-
-template <typename result_type = void, typename initiate_type>
-[[nodiscard]] auto async_asio(initiate_type&& initiate) {
-    return asio_completion_awaiter<result_type, std::decay_t<initiate_type>>(std::forward<initiate_type>(initiate));
-}
 
 }  // namespace ruvia::detail

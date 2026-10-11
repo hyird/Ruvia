@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/http3_var_int.h"
@@ -81,6 +83,7 @@ struct http3_frame_view final {
         .encoded_bytes_ = std::get<0>(header_value).encoded_bytes_ + payload_length};
 }
 
+// Payload may overlap output. Validation failures leave output unchanged.
 [[nodiscard]] inline constexpr std::variant<std::size_t, http3_codec_error> encode_http3_frame(
     std::span<char> output, std::uint64_t type, std::span<const char> payload_value) noexcept {
     if (type > http3_var_int_max) {
@@ -93,14 +96,32 @@ struct http3_frame_view final {
     if (output.size() < header_size || output.size() - header_size < payload_value.size()) {
         return http3_codec_error::output_too_small;
     }
-    const auto written = encode_http3_frame_header(output, type, payload_value.size());
-    if ((written.index() != 0)) {
-        return std::get<1>(written);
+    if (!payload_value.empty()) {
+        if (std::is_constant_evaluated()) {
+            // Relational comparisons of pointers to unrelated arrays are not
+            // constant expressions. Find overlap by element identity instead.
+            bool copy_backward = false;
+            for (std::size_t i = 1; i < payload_value.size(); ++i) {
+                if (output.data() + header_size == payload_value.data() + i) {
+                    copy_backward = true;
+                    break;
+                }
+            }
+            if (copy_backward) {
+                for (std::size_t i = payload_value.size(); i != 0; --i) {
+                    output[header_size + i - 1] = payload_value[i - 1];
+                }
+            } else {
+                for (std::size_t i = 0; i < payload_value.size(); ++i) {
+                    output[header_size + i] = payload_value[i];
+                }
+            }
+        } else {
+            std::memmove(output.data() + header_size, payload_value.data(), payload_value.size());
+        }
     }
-    for (std::size_t i = 0; i < payload_value.size(); ++i) {
-        output[std::get<0>(written) + i] = payload_value[i];
-    }
-    return std::get<0>(written) + payload_value.size();
+    (void)encode_http3_frame_header(output, type, payload_value.size());
+    return header_size + payload_value.size();
 }
 
 }  // namespace ruvia

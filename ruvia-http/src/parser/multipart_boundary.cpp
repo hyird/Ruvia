@@ -56,9 +56,9 @@ namespace {
 
 multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value) {
     const auto media_end = content_type_value.find(';');
-    const auto media_type = detail::http_trim_ows(
+    const auto media_type = http_trim_ows(
         media_end == std::string_view::npos ? content_type_value : content_type_value.substr(0, media_end));
-    if (!detail::http_ascii_equals_ignore_case(media_type, "multipart/form-data")) {
+    if (!http_ascii_equals_ignore_case(media_type, "multipart/form-data")) {
         return multipart_boundary_parse_result::make_not_applicable();
     }
     if (media_end == std::string_view::npos) {
@@ -71,14 +71,14 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
     std::size_t start = 0;
     while (start <= parameters.size()) {
         const auto end = detail::http_find_unquoted_delimiter(parameters, start, ';');
-        const auto parameter = detail::http_trim_ows(parameters.substr(start, end - start));
+        const auto parameter = http_trim_ows(parameters.substr(start, end - start));
         if (!parameter.empty()) {
             std::string_view key;
             std::string_view value;
             if (!detail::http_parse_mime_parameter(parameter, key, value) || !parameter_names.record(key)) {
                 return multipart_boundary_parse_result::make_failure();
             }
-            if (detail::http_ascii_equals_ignore_case(key, "boundary")) {
+            if (http_ascii_equals_ignore_case(key, "boundary")) {
                 boundary = decode_multipart_boundary_parameter(value);
                 if (!boundary) {
                     return multipart_boundary_parse_result::make_failure();

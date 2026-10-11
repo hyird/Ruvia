@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/http_ows.h"
+#include "ruvia/http/http_field_whitespace.h"
 
 #include "field/http_date.h"
 #include "field/http_entity_tag.h"
@@ -25,7 +25,7 @@ void http_etag_field_condition::update(
     std::string_view value, std::string_view expected, bool strong) noexcept {
     present_ = true;
     ++line_count_;
-    const auto trimmed = detail::http_trim_ows(value);
+    const auto trimmed = http_trim_ows(value);
     if (trimmed == "*") {
         wildcard_ = true;
         if (line_count_ != 1) {
@@ -69,12 +69,12 @@ http_etag_preconditions get_http_etag_preconditions(
 }
 
 bool http_date_not_modified(std::string_view header_value, std::time_t modified_seconds) noexcept {
-    const auto date = detail::http_parse_http_date(detail::http_trim_ows(header_value));
+    const auto date = detail::http_parse_http_date(http_trim_ows(header_value));
     return date.has_value() && modified_seconds <= *date;
 }
 
 bool http_date_unmodified(std::string_view header_value, std::time_t modified_seconds) noexcept {
-    const auto date = detail::http_parse_http_date(detail::http_trim_ows(header_value));
+    const auto date = detail::http_parse_http_date(http_trim_ows(header_value));
     return !date.has_value() || modified_seconds <= *date;
 }
 
@@ -83,7 +83,7 @@ bool http_if_range_allows(std::string_view header_value, std::string_view etag,
     if (header_value.empty()) {
         return false;
     }
-    const auto value = detail::http_trim_ows(header_value);
+    const auto value = http_trim_ows(header_value);
     if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
         return detail::http_strong_etag_equals(value, etag);
     }

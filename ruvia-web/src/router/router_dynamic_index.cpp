@@ -13,7 +13,7 @@ std::size_t detail::route_table::find_dynamic_node(
         if (node_value.route_index_ != no_route_index) {
             return node_value.route_index_;
         }
-        if (node_value.wildcard_route_index_ != no_route_index && add_param(match, {})) {
+        if (node_value.wildcard_route_index_ != no_route_index && match.add({})) {
             return node_value.wildcard_route_index_;
         }
         return no_route_index;
@@ -28,7 +28,7 @@ std::size_t detail::route_table::find_dynamic_node(
         match.truncate(original_param_count);
     }
 
-    if (node_value.param_child_ && !segment.empty() && add_param(match, segment)) {
+    if (node_value.param_child_ && !segment.empty() && match.add(segment)) {
         if (const auto route_index = find_dynamic_node(*node_value.param_child_, rest, match);
             route_index != no_route_index) {
             return route_index;
@@ -41,7 +41,7 @@ std::size_t detail::route_table::find_dynamic_node(
         if (capture_value.starts_with('/')) {
             capture_value.remove_prefix(1);
         }
-        if (add_param(match, capture_value)) {
+        if (match.add(capture_value)) {
             return node_value.wildcard_route_index_;
         }
         match.truncate(original_param_count);
@@ -94,10 +94,6 @@ const detail::route_table::dynamic_static_child_type* detail::route_table::find_
     return nullptr;
 }
 
-bool detail::route_table::add_param(route_match& match, std::string_view value) noexcept {
-    return match.add(value);
-}
-
 const detail::route_entry* detail::route_table::find_dynamic_route(
     http_known_method method, std::string_view path, route_match& match) const noexcept {
     match.clear();
@@ -106,19 +102,15 @@ const detail::route_entry* detail::route_table::find_dynamic_route(
     }
 
     const auto method_bit = 1U << method_index(method);
-    return (plan_->dynamic_method_mask_ & method_bit) != 0 ? find_dynamic(method, path, match)
-                                                           : nullptr;
-}
-
-const detail::route_entry* detail::route_table::find_dynamic(
-    http_known_method method, std::string_view path, route_match& match) const noexcept {
-    match.clear();
+    if ((plan_->dynamic_method_mask_ & method_bit) == 0) {
+        return nullptr;
+    }
     const auto route_index = find_dynamic_node(plan_->dynamic_roots_[method_index(method)], path, match);
-    if (route_index == no_route_index || match.size() != routes_[route_index].param_names().size()) {
+    if (route_index == no_route_index || match.size() != plan_->routes_[route_index].param_names().size()) {
         match.clear();
         return nullptr;
     }
-    return &routes_[route_index];
+    return &plan_->routes_[route_index];
 }
 
 }  // namespace ruvia

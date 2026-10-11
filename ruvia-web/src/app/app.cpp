@@ -1,9 +1,7 @@
-#include <exception>
 #include <mutex>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_selection.h"
 
 #include "app/app_run_coordinator.h"
@@ -29,12 +27,12 @@ application& app() {
 }
 
 application::application()
-    : state_(detail::construct_pmr_object<detail::app_state>(detail::app_resource())) {}
+    : state_(construct_pmr_object<detail::app_state>(detail::app_resource())) {}
 
 application::~application() = default;
 
 void application::state_deleter_type::operator()(detail::app_state* state_value) const noexcept {
-    detail::destroy_pmr_object(state_value, detail::app_resource());
+    destroy_pmr_object(state_value, detail::app_resource());
 }
 
 const env& application::env() const noexcept {
@@ -56,6 +54,9 @@ http_server_stats application::http_stats() const {
         total.accept_failures_ += stats.accept_failures_;
         total.worker_failures_ += stats.worker_failures_;
         total.document_root_refresh_failures_ += stats.document_root_refresh_failures_;
+    }
+    if (state_value.runtime_->ingress_) {
+        total.connections_refused_ += state_value.runtime_->ingress_->refused_connections();
     }
     return total;
 }
@@ -107,19 +108,7 @@ void application::stop() {
         if (state_value.lifecycle_.request_stop() == detail::app_stop_request::ignored) {
             return;
         }
-        if (state_value.runtime_ != nullptr) {
-            if (state_value.runtime_->ingress_) {
-                state_value.runtime_->ingress_->stop();
-            }
-            for (auto& worker : state_value.runtime_->workers_) {
-                try {
-                    worker.runtime_->stop_admission();
-                } catch (...) {
-                    ruvia::report_unhandled_failure(
-                        "web worker stop request", std::current_exception());
-                }
-            }
-        }
+        detail::request_runtime_stop(state_value);
     }
     state_value.lifecycle_changed_.notify_all();
 }

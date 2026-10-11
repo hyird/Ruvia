@@ -1,15 +1,14 @@
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
-#include <new>
 #include <utility>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "coding/http_content_codec.h"
-#include "coding/pmr_codec_allocation.h"
-#include "coding/zlib_pmr_allocation.h"
+#include "coding/http_zlib_stream.h"
 
 // gzip (RFC 1952) and zlib-wrapped deflate through zlib, with zlib's allocator
 // routed to the caller's memory resource so neither direction makes a global allocation.
@@ -17,22 +16,6 @@
 namespace ruvia::detail {
 
 namespace {
-
-voidpf gzip_zalloc(voidpf opaque, uInt items, uInt size) noexcept {
-    return zlib_pmr_allocate_with_exception(opaque, items, size);
-}
-
-void gzip_zfree(voidpf, voidpf address) noexcept {
-    zlib_pmr_free(address);
-}
-
-[[nodiscard]] z_stream make_gzip_stream(void* allocation_context) noexcept {
-    z_stream stream{};
-    stream.zalloc = &gzip_zalloc;
-    stream.zfree = &gzip_zfree;
-    stream.opaque = allocation_context;
-    return stream;
-}
 
 inline void refill_gzip_input(
     z_stream& stream, std::string_view input, std::size_t& supplied) noexcept {
@@ -52,18 +35,11 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
     std::size_t max_decoded_bytes, std::pmr::memory_resource* resource, int window_bits,
     bool allow_concatenated_members) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
-    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
-    auto stream = make_gzip_stream(&allocation_context);
-    if (inflateInit2(&stream, window_bits) != Z_OK) {
-        allocation_context.rethrow_allocation_failure();
+    zlib_inflate_stream inflater(output.get_allocator().resource(), window_bits);
+    if (!inflater.initialized()) {
         return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
     }
-    struct guard final {
-        z_stream* stream_;
-        ~guard() {
-            (void)inflateEnd(stream_);
-        }
-    } guard_value{&stream};
+    auto& stream = inflater.native();
 
     std::size_t supplied = 0;
     char buffer[16384];
@@ -74,7 +50,7 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
         stream.avail_out = static_cast<uInt>(sizeof(buffer));
         const int status = inflate(&stream, Z_NO_FLUSH);
         if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END) {
-            allocation_context.rethrow_allocation_failure();
+            inflater.rethrow_allocation_failure();
         }
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (!append_decoded_bytes(output, buffer, produced, max_decoded_bytes)) {
@@ -96,7 +72,7 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
             const auto available_input = stream.avail_in;
             const int reset = inflateReset2(&stream, window_bits);
             if (reset != Z_OK) {
-                allocation_context.rethrow_allocation_failure();
+                inflater.rethrow_allocation_failure();
                 return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
             }
             stream.next_in = next_input;
@@ -123,19 +99,12 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
 static http_content_encode_result encode_zlib_content(std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
-    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
-    auto stream = make_gzip_stream(&allocation_context);
-    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, window_bits, 8, Z_DEFAULT_STRATEGY) !=
-        Z_OK) {
-        allocation_context.rethrow_allocation_failure();
+    zlib_deflate_stream deflater(
+        output.get_allocator().resource(), Z_DEFAULT_COMPRESSION, window_bits, Z_DEFAULT_STRATEGY);
+    if (!deflater.initialized()) {
         return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
     }
-    struct guard final {
-        z_stream* stream_;
-        ~guard() {
-            (void)deflateEnd(stream_);
-        }
-    } guard_value{&stream};
+    auto& stream = deflater.native();
 
     std::size_t supplied = 0;
     for (;;) {
@@ -147,7 +116,7 @@ static http_content_encode_result encode_zlib_content(std::string_view input,
                 stream.avail_out = 1;
                 const auto status = deflate(&stream, Z_FINISH);
                 if (status != Z_OK && status != Z_STREAM_END) {
-                    allocation_context.rethrow_allocation_failure();
+                    deflater.rethrow_allocation_failure();
                 }
                 if (status == Z_STREAM_END && stream.avail_out == 1) {
                     return http_content_encode_result_access::encoded(std::move(output));
@@ -168,7 +137,7 @@ static http_content_encode_result encode_zlib_content(std::string_view input,
         status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
         output.resize(offset + (writable - stream.avail_out));
         if (status != Z_OK && status != Z_STREAM_END) {
-            allocation_context.rethrow_allocation_failure();
+            deflater.rethrow_allocation_failure();
         }
         if (status == Z_STREAM_END) {
             return http_content_encode_result_access::encoded(std::move(output));

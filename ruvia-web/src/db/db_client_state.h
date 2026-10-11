@@ -15,8 +15,10 @@ namespace ruvia::detail {
 class db_client_state final : public std::enable_shared_from_this<db_client_state> {
 public:
     db_client_state(event_loop loop, const db_config& config);
+#ifdef RUVIA_ENABLE_REDIS
     db_client_state(event_loop loop, const db_config& config, const redis_handle& cache_store,
         const db_cache_config& cache_policy);
+#endif
 
     db_client_state(const db_client_state&) = delete;
     db_client_state& operator=(const db_client_state&) = delete;

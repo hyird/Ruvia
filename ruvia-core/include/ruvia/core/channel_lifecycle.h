@@ -4,10 +4,7 @@
 #include <cstddef>
 #include <exception>
 #include <optional>
-#include <type_traits>
 #include <utility>
-
-#include "ruvia/core/spsc_ring_queue.h"
 
 namespace ruvia {
 
@@ -18,9 +15,9 @@ namespace ruvia {
 #endif
 
 // One producer/consumer retirement handshake, independent of data capacity.
-// request_stop and peer observations may cross threads in cross_thread mode.
-// try_admit/close and every admission lease retirement are producer-affine;
-// finalize is consumer-affine. Local mode confines all operations to one thread.
+// request_stop and peer observations may cross threads. try_admit/close and
+// every admission lease retirement are producer-affine; finalize is
+// consumer-affine.
 // Admission races stop at its stop observation: admitted operations still finish.
 // close stops new admissions and publishes producer_closed only after existing
 // admissions retire. A reservation must retain admission through commit/cancel;
@@ -29,10 +26,7 @@ namespace ruvia {
 // return all borrowed buffers, and join I/O. The owner additionally checks its
 // queues and pool credits before destroying their storage. Notifications remain
 // an independent capability; this state never uses a data slot to publish ACK.
-template <ring_synchronization synchronization>
-class basic_channel_lifecycle final {
-    using flag = std::conditional_t<synchronization == ring_synchronization::cross_thread, std::atomic<bool>, bool>;
-
+class spsc_channel_lifecycle final {
 public:
     class admission_lease final {
     public:
@@ -57,18 +51,18 @@ public:
         }
 
     private:
-        explicit admission_lease(basic_channel_lifecycle& owner_value) noexcept
+        explicit admission_lease(spsc_channel_lifecycle& owner_value) noexcept
             : owner_(&owner_value) {}
-        basic_channel_lifecycle* owner_;
-        friend class basic_channel_lifecycle;
+        spsc_channel_lifecycle* owner_;
+        friend class spsc_channel_lifecycle;
     };
 
-    basic_channel_lifecycle() noexcept = default;
-    basic_channel_lifecycle(const basic_channel_lifecycle&) = delete;
-    basic_channel_lifecycle& operator=(const basic_channel_lifecycle&) = delete;
-    basic_channel_lifecycle(basic_channel_lifecycle&&) = delete;
-    basic_channel_lifecycle& operator=(basic_channel_lifecycle&&) = delete;
-    ~basic_channel_lifecycle() {
+    spsc_channel_lifecycle() noexcept = default;
+    spsc_channel_lifecycle(const spsc_channel_lifecycle&) = delete;
+    spsc_channel_lifecycle& operator=(const spsc_channel_lifecycle&) = delete;
+    spsc_channel_lifecycle(spsc_channel_lifecycle&&) = delete;
+    spsc_channel_lifecycle& operator=(spsc_channel_lifecycle&&) = delete;
+    ~spsc_channel_lifecycle() {
         if (producer_.admissions_ != 0 || (producer_.closing_ && !consumer_finalized())) {
             std::terminate();
         }
@@ -83,73 +77,56 @@ public:
     }
 
     void request_stop() noexcept {
-        publish(stop_, true);
+        stop_.store(true, std::memory_order_release);
     }
     [[nodiscard]] bool stop_requested() const noexcept {
-        return observe(stop_);
+        return stop_.load(std::memory_order_acquire);
     }
 
     void close() noexcept {
         request_stop();
         producer_.closing_ = true;
         if (producer_.admissions_ == 0) {
-            publish(producer_.closed_, true);
+            producer_.closed_.store(true, std::memory_order_release);
         }
     }
     [[nodiscard]] bool producer_closed() const noexcept {
-        return observe(producer_.closed_);
+        return producer_.closed_.load(std::memory_order_acquire);
     }
 
     void finalize() noexcept {
         if (!producer_closed()) {
             std::terminate();
         }
-        publish(finalized_, true);
+        finalized_.store(true, std::memory_order_release);
     }
     [[nodiscard]] bool consumer_finalized() const noexcept {
-        return observe(finalized_);
+        return finalized_.load(std::memory_order_acquire);
     }
 
 private:
-    [[nodiscard]] static bool observe(const flag& value) noexcept {
-        if constexpr (synchronization == ring_synchronization::cross_thread) {
-            return value.load(std::memory_order_acquire);
-        } else {
-            return value;
-        }
-    }
-    static void publish(flag& target, bool value) noexcept {
-        if constexpr (synchronization == ring_synchronization::cross_thread) {
-            target.store(value, std::memory_order_release);
-        } else {
-            target = value;
-        }
-    }
     void retire_admission() noexcept {
         if (producer_.admissions_ == 0) {
             std::terminate();
         }
         if (--producer_.admissions_ == 0 && producer_.closing_) {
-            publish(producer_.closed_, true);
+            producer_.closed_.store(true, std::memory_order_release);
         }
     }
 
     struct alignas(64) producer_state final {
-        flag closed_{false};
+        std::atomic<bool> closed_{false};
         std::size_t admissions_{0};
         bool closing_{false};
     };
 
-    alignas(64) flag stop_{false};
+    alignas(64) std::atomic<bool> stop_{false};
     producer_state producer_;
-    alignas(64) flag finalized_{false};
+    alignas(64) std::atomic<bool> finalized_{false};
 };
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-
-using spsc_channel_lifecycle = basic_channel_lifecycle<ring_synchronization::cross_thread>;
-using local_channel_lifecycle = basic_channel_lifecycle<ring_synchronization::local>;
 
 }  // namespace ruvia

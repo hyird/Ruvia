@@ -8,8 +8,18 @@
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_limits.h"
 
 namespace ruvia::detail {
+
+// Count the normalized "name: value\r\n" representation for every field,
+// independently of optional whitespace in the received trailer block.
+[[nodiscard]] constexpr bool http_request_trailer_field_fits(
+    std::size_t bytes, std::size_t name_bytes, std::size_t value_bytes) noexcept {
+    return bytes <= max_http_header_bytes - 4 &&
+           name_bytes <= max_http_header_bytes - bytes - 4 &&
+           value_bytes <= max_http_header_bytes - bytes - 4 - name_bytes;
+}
 
 enum class http_chunk_scan_error : std::uint8_t {
     invalid_size,
@@ -111,6 +121,7 @@ private:
     std::string_view trailers_;
     std::size_t cursor_{0};
     std::size_t field_count_{0};
+    std::size_t field_bytes_{0};
     std::optional<http_chunk_scan_error> failure_;
 };
 

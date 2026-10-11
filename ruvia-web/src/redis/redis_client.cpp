@@ -45,6 +45,10 @@ redis_handle redis_client::with_options(operation_options options) const& {
     return state_->handle(std::move(options));
 }
 
+redis_handle redis_client::handle() const& {
+    return state_->handle({});
+}
+
 void redis_client::close() noexcept {
     state_->request_close();
 }

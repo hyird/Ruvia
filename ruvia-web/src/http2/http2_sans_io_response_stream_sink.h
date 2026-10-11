@@ -27,11 +27,11 @@
 #include <system_error>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/pmr_string.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "context/context_access.h"

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 
@@ -164,7 +165,8 @@ inline void worker_signal::notify() noexcept {
         waiter->state_ = await_state_type::scheduled;
         ++scheduled_waiters_;
         // A detached intrusive node has no recoverable owner. Dispatch failure
-        // is terminal instead of silently stranding the continuation.
+        // is terminal instead of silently stranding the continuation. On the
+        // worker's own thread this small fixed callable is posted directly.
         detail::worker_handle_access::defer_or_terminate(
             worker_, [this, waiter, continuation] { resume_scheduled(waiter, continuation); });
         waiter = next_value;

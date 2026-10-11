@@ -47,6 +47,8 @@ public:
     websocket_connection(websocket_connection&&) noexcept;
     websocket_connection& operator=(websocket_connection&&) noexcept;
 
+    // Input may borrow the previous event payload; any required snapshot uses
+    // the connection resource before reclaiming consumed input storage.
     [[nodiscard]] websocket_feed_status feed(std::string_view input);
     template <detail::http_temporary_owning_char_string input_type>
     websocket_feed_status feed(input_type&&) = delete;
@@ -59,6 +61,9 @@ public:
     void notify_transport_eof() noexcept;
     [[nodiscard]] websocket_abort_disposition abort() noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
+    // A failed submission preserves queued output and discards any unsent
+    // compression history. It can be retried unless resetting the codec also
+    // failed, in which case liveness_mode() reports inactive.
     [[nodiscard]] websocket_frame_submit_status submit_frame(
         websocket_opcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] websocket_close_submit_status submit_close(

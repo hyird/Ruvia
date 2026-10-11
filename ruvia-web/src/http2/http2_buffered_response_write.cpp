@@ -3,21 +3,16 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <ios>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "http2/http2_sans_io_send_window.h"
 #include "http2/http2_sans_io_stream_runtime.h"
-#include "server/http_file_chunk_buffer.h"
-#include "server/http_file_open.h"
 
 namespace ruvia::detail {
 namespace {
@@ -36,21 +31,13 @@ void submit_reset_no_throw(
 }  // namespace
 
 http2_buffered_response_writer::http2_buffered_response_writer(ruvia::http2_connection& connection,
-    http2_sans_io_stream_runtime_table& stream_runtimes, worker_memory& worker_value,
-    worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
+    http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal,
+    http2_data_output_budget& output_budget, response_file_io file_io) noexcept
     : connection_(connection),
       stream_runtimes_(stream_runtimes),
-      worker_(worker_value),
       write_signal_(write_signal),
-      output_budget_(&output_budget) {}
-
-http2_buffered_response_writer::http2_buffered_response_writer(
-    ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes,
-    worker_memory& worker_value, worker_signal& write_signal) noexcept
-    : connection_(connection),
-      stream_runtimes_(stream_runtimes),
-      worker_(worker_value),
-      write_signal_(write_signal) {}
+      output_budget_(output_budget),
+      file_io_(std::move(file_io)) {}
 
 void http2_buffered_response_writer::wake_writer() noexcept {
     write_signal_.notify();
@@ -70,33 +57,29 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
         if (signal == nullptr) {
             co_return data_write_result_type::peer_aborted;
         }
-        if (output_budget_ != nullptr) {
-            for (;;) {
-                const auto window = connection_.send_window_state(stream_id);
-                if (!window) {
-                    co_return data_write_result_type::peer_aborted;
-                }
-                if (window->available_ != 0) {
-                    break;
-                }
-                co_await output_budget_->wait_for_change();
-                if (signal->terminated()) {
-                    co_return data_write_result_type::peer_aborted;
-                }
+        for (;;) {
+            const auto window = connection_.send_window_state(stream_id);
+            if (!window) {
+                co_return data_write_result_type::peer_aborted;
             }
-            if (!(co_await output_budget_->acquire(stream_id, *signal))) {
+            if (window->available_ != 0) {
+                break;
+            }
+            co_await output_budget_.wait_for_change();
+            if (signal->terminated()) {
                 co_return data_write_result_type::peer_aborted;
             }
         }
+        if (!(co_await output_budget_.acquire(stream_id, *signal))) {
+            co_return data_write_result_type::peer_aborted;
+        }
         const auto result_value = connection_.submit_data(stream_id, chunk, end_stream);
-        if (output_budget_ != nullptr &&
-            (result_value == http2_data_submit_status::accepted || result_value == http2_data_submit_status::queued)) {
-            output_budget_->note_data_submitted(stream_id, chunk.size());
+        if (result_value == http2_data_submit_status::accepted || result_value == http2_data_submit_status::queued) {
+            output_budget_.note_data_submitted(stream_id, chunk.size());
         }
         wake_writer();
-        if (result_value != http2_data_submit_status::accepted &&
-            result_value != http2_data_submit_status::queued && output_budget_ != nullptr) {
-            output_budget_->release(stream_id);
+        if (result_value != http2_data_submit_status::accepted && result_value != http2_data_submit_status::queued) {
+            output_budget_.release(stream_id);
         }
         if (result_value == http2_data_submit_status::accepted) {
             co_return data_write_result_type::completed;
@@ -155,110 +138,40 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
         co_return http2_buffered_response_write_result::make_completed(committed_status);
     }
 
-    if (response.has_multipart_file_body()) {
-        std::pmr::string file_chunk(worker_.allocator<char>());
-        ensure_file_chunk_buffer(file_chunk);
-        for (std::size_t segment_index = 0; segment_index < response.body_segment_count(); ++segment_index) {
-            const auto segment = response.body_segment(segment_index);
-            const bool last_segment = segment_index + 1 == response.body_segment_count();
-            if (segment.file_) {
-                auto input = open_response_file_input(*segment.file_);
-                if (!input) {
-                    co_return fail_after_commit();
-                }
-                input.seekg(static_cast<std::streamoff>(segment.file_->offset()), std::ios::beg);
-                if (!input) {
-                    co_return fail_after_commit();
-                }
-                std::uint64_t remaining = segment.file_->length();
-                while (remaining != 0) {
-                    if (connection_.stream_aborted(stream_id)) {
-                        co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(committed_status);
-                    }
-                    const auto next_value = static_cast<std::size_t>(std::min<std::uint64_t>(http2_data_output_credit_bytes, remaining));
-                    input.read(file_chunk.data(), static_cast<std::streamsize>(next_value));
-                    const auto count = input.gcount();
-                    if (count <= 0) {
-                        co_return fail_after_commit();
-                    }
-                    remaining -= static_cast<std::uint64_t>(count);
-                    const bool final_chunk = last_segment && remaining == 0;
-                    const auto result_value = co_await write_data(stream_id,
-                        std::string_view(file_chunk.data(), static_cast<std::size_t>(count)),
-                        final_chunk ? http2_end_stream::end_stream : http2_end_stream::keep_open);
-                    if (result_value == data_write_result_type::peer_aborted) {
-                        co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(committed_status);
-                    }
-                    if (result_value == data_write_result_type::failed) {
-                        co_return fail_after_commit();
-                    }
-                }
-            } else {
-                std::size_t offset = 0;
-                while (offset < segment.bytes_.size()) {
-                    const auto count = std::min<std::size_t>(http2_data_output_credit_bytes, segment.bytes_.size() - offset);
-                    const bool final_chunk = last_segment && offset + count == segment.bytes_.size();
-                    const auto result_value = co_await write_data(stream_id, segment.bytes_.substr(offset, count),
-                        final_chunk ? http2_end_stream::end_stream : http2_end_stream::keep_open);
-                    if (result_value == data_write_result_type::peer_aborted) {
-                        co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(committed_status);
-                    }
-                    if (result_value == data_write_result_type::failed) {
-                        co_return fail_after_commit();
-                    }
-                    offset += count;
-                }
-            }
-        }
-        co_return http2_buffered_response_write_result::make_completed(committed_status);
-    }
-
-    if (const auto file_body = response.file_body()) {
-        auto input = open_response_file_input(*file_body);
-        bool ready = static_cast<bool>(input);
-        if (ready) {
-            input.seekg(static_cast<std::streamoff>(file_body->offset()), std::ios::beg);
-            ready = static_cast<bool>(input);
-        }
-        if (!ready) {
-            // The committed Content-Length can no longer be honoured.
-            co_return fail_after_commit();
-        }
-
-        std::pmr::string file_chunk(worker_.allocator<char>());
-        ensure_file_chunk_buffer(file_chunk);
-        std::uint64_t remaining = file_body->length();
-        while (remaining > 0) {
-            if (connection_.stream_aborted(stream_id)) {
-                co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(
-                    committed_status);
-            }
-            constexpr std::uint64_t data_credit_bytes = http2_data_output_credit_bytes;
-            const auto next_value = static_cast<std::size_t>(
-                std::min<std::uint64_t>(data_credit_bytes, remaining));
-            input.read(file_chunk.data(), static_cast<std::streamsize>(next_value));
-            const auto read_bytes = input.gcount();
-            if (read_bytes <= 0) {
-                co_return fail_after_commit();
-            }
-            remaining -= static_cast<std::uint64_t>(read_bytes);
-            const auto result_value = co_await write_data(stream_id,
-                std::string_view(file_chunk.data(), static_cast<std::size_t>(read_bytes)),
-                remaining == 0 ? http2_end_stream::end_stream : http2_end_stream::keep_open);
-            if (result_value == data_write_result_type::peer_aborted) {
-                co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(
-                    committed_status);
-            }
-            if (result_value == data_write_result_type::failed) {
-                co_return fail_after_commit();
-            }
-        }
-        co_return http2_buffered_response_write_result::make_completed(committed_status);
-    }
-
     // Bound the core-owned window-blocked remainder to one frame-sized slice.
-    const auto body = response.body_bytes();
     constexpr std::size_t slice_bytes = http2_data_output_credit_bytes;
+    if (response.file_body() || response.has_multipart_file_body()) {
+        response_file_source source(response, file_io_);
+        for (;;) {
+            const auto chunk = co_await source.next();
+            if (chunk.kind() == response_body_chunk::kind_type::end) {
+                co_return http2_buffered_response_write_result::make_completed(committed_status);
+            }
+            if (chunk.kind() == response_body_chunk::kind_type::failed) {
+                // The committed Content-Length can no longer be honoured.
+                co_return fail_after_commit();
+            }
+            const auto bytes = chunk.bytes();
+            for (std::size_t offset = 0; offset < bytes.size();) {
+                if (connection_.stream_aborted(stream_id)) {
+                    co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(committed_status);
+                }
+                const auto size = std::min<std::size_t>(slice_bytes, bytes.size() - offset);
+                const bool final_slice = chunk.last() && offset + size == bytes.size();
+                const auto result_value = co_await write_data(stream_id, bytes.substr(offset, size),
+                    final_slice ? http2_end_stream::end_stream : http2_end_stream::keep_open);
+                if (result_value == data_write_result_type::peer_aborted) {
+                    co_return http2_buffered_response_write_result::make_peer_aborted_after_commit(committed_status);
+                }
+                if (result_value == data_write_result_type::failed) {
+                    co_return fail_after_commit();
+                }
+                offset += size;
+            }
+        }
+    }
+
+    const auto body = response.body_bytes();
     std::size_t offset = 0;
     while (offset < body.size()) {
         const auto size = std::min<std::size_t>(slice_bytes, body.size() - offset);

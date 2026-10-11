@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <concepts>
+#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <semaphore>
@@ -17,6 +18,120 @@
 #include "ruvia/core/worker_runtime_context.h"
 
 #include "worker_task_fixture.h"
+
+namespace ruvia::test::one_shot_tests {
+
+struct payload_state final {
+    std::function<void()> reenter_;
+    int destroyed_{};
+    bool query_on_move_{};
+    bool throw_on_move_{};
+};
+
+struct payload final {
+    payload() = default;
+    explicit payload(payload_state& state)
+        : value_(std::make_unique<int>(42)),
+          state_(&state) {}
+    payload(const payload&) = delete;
+    payload& operator=(const payload&) = delete;
+    payload(payload&& other)
+        : state_(other.state_) {
+        if (state_ != nullptr) {
+            if (state_->query_on_move_) {
+                state_->reenter_();
+            }
+            if (state_->throw_on_move_) {
+                throw std::runtime_error("payload move failed");
+            }
+        }
+        value_ = std::move(other.value_);
+    }
+    ~payload() {
+        if (value_) {
+            value_.reset();
+            ++state_->destroyed_;
+            state_->reenter_();
+        }
+    }
+
+    std::unique_ptr<int> value_;
+    payload_state* state_{};
+};
+
+task<void> exercise_payload_retirement(worker_handle worker, bool& success) {
+    for (const auto consume : {false, true}) {
+        payload_state state;
+        auto [completion, receiver] = make_one_shot<payload>(worker);
+        auto observed = one_shot_complete_status::completed;
+        state.reenter_ = [&] {
+            receiver.close();
+            observed = completion.complete(payload{}).status();
+        };
+        if (!completion.complete(payload(state)).accepted()) {
+            co_return;
+        }
+        if (consume) {
+            state.query_on_move_ = true;
+            {
+                const auto result = co_await receiver.wait();
+                if (!result.has_value() || *result.value().value_ != 42 ||
+                    observed != one_shot_complete_status::already_completed) {
+                    co_return;
+                }
+            }
+        } else {
+            receiver.close();
+            if (observed != one_shot_complete_status::receiver_closed) {
+                co_return;
+            }
+        }
+        const auto closed = co_await receiver.wait();
+        if (closed.status() != worker_wait_status::closed || state.destroyed_ != 1) {
+            co_return;
+        }
+    }
+    {
+        payload_state state;
+        auto [completion, receiver] = make_one_shot<payload>(worker);
+        state.reenter_ = [&] { receiver.close(); };
+        if (!completion.complete(payload(state)).accepted()) {
+            co_return;
+        }
+        state.throw_on_move_ = true;
+        bool failed = false;
+        try {
+            static_cast<void>(co_await receiver.wait());
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        state.throw_on_move_ = false;
+        if (!failed || state.destroyed_ != 1 ||
+            (co_await receiver.wait()).status() != worker_wait_status::closed) {
+            co_return;
+        }
+    }
+    {
+        payload_state state;
+        auto [completion, receiver] = make_one_shot<payload>(worker);
+        state.reenter_ = [&] { receiver.close(); };
+        receiver.close();
+        state.query_on_move_ = true;
+        {
+            const auto rejected = completion.complete(payload(state));
+            if (rejected.status() != one_shot_complete_status::receiver_closed ||
+                rejected.rejected() == nullptr || !rejected.rejected()->value_) {
+                co_return;
+            }
+        }
+        if (state.destroyed_ != 1) {
+            co_return;
+        }
+    }
+    success = true;
+}
+
+}  // namespace ruvia::test::one_shot_tests
 
 namespace {
 
@@ -64,8 +179,11 @@ ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, boo
 }
 
 ruvia::task<ruvia::worker_wait_result<int>> make_cold_wait_after_receiver_close(
-    ruvia::worker_handle worker_value, bool timed) {
+    ruvia::worker_handle worker_value, bool timed, bool completed = false) {
     auto [completion, receiver] = ruvia::make_one_shot<int>(std::move(worker_value));
+    if (completed) {
+        static_cast<void>(completion.complete(7));
+    }
     if (timed) {
         return receiver.wait_for(std::chrono::seconds(1));
     }
@@ -73,11 +191,17 @@ ruvia::task<ruvia::worker_wait_result<int>> make_cold_wait_after_receiver_close(
 }
 
 ruvia::task<void> verify_cold_receiver_tasks(ruvia::task<ruvia::worker_wait_result<int>> wait,
-    ruvia::task<ruvia::worker_wait_result<int>> timed_wait, bool& success) {
+    ruvia::task<ruvia::worker_wait_result<int>> timed_wait,
+    ruvia::task<ruvia::worker_wait_result<int>> completed_wait,
+    ruvia::task<ruvia::worker_wait_result<int>> completed_timed_wait, bool& success) {
     const auto cold_closed = co_await std::move(wait);
     const auto timed_cold_closed = co_await std::move(timed_wait);
+    const auto completed_cold_closed = co_await std::move(completed_wait);
+    const auto completed_timed_cold_closed = co_await std::move(completed_timed_wait);
     success = cold_closed.status() == ruvia::worker_wait_status::closed &&
-              timed_cold_closed.status() == ruvia::worker_wait_status::closed;
+              timed_cold_closed.status() == ruvia::worker_wait_status::closed &&
+              completed_cold_closed.status() == ruvia::worker_wait_status::closed &&
+              completed_timed_cold_closed.status() == ruvia::worker_wait_status::closed;
 }
 
 ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
@@ -171,6 +295,27 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 
     {
+        auto [completion, receiver] = ruvia::make_one_shot<std::shared_ptr<int>>(worker_value);
+        auto value = std::make_shared<int>(14);
+        const std::weak_ptr<int> value_lifetime(value);
+        auto wait = receiver.wait();
+        if (!completion.complete(std::move(value)).accepted()) {
+            co_return;
+        }
+        receiver.close();
+        if (!value_lifetime.expired()) {
+            co_return;
+        }
+        const auto closed = co_await std::move(wait);
+        const auto rejected = completion.complete(std::make_shared<int>(15));
+        if (closed.status() != ruvia::worker_wait_status::closed || closed.has_value() ||
+            rejected.status() != ruvia::one_shot_complete_status::receiver_closed ||
+            rejected.rejected() == nullptr || **rejected.rejected() != 15) {
+            co_return;
+        }
+    }
+
+    {
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         bool pending_closed = false;
         ruvia::task_scope scope(worker_value);
@@ -207,15 +352,20 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 int main() {
     bool success = false;
     bool cold_receiver_tasks_safe = false;
+    bool payload_retirement_safe = false;
     {
         asio::io_context io_context;
         ruvia::worker_runtime_context runtime(io_context, 8);
         const auto worker_value = runtime.handle();
         auto cold_wait = make_cold_wait_after_receiver_close(worker_value, false);
         auto timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true);
+        auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
+        auto completed_timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true, true);
         ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success),
             verify_cold_receiver_tasks(std::move(cold_wait), std::move(timed_cold_wait),
-                cold_receiver_tasks_safe));
+                std::move(completed_cold_wait), std::move(completed_timed_cold_wait),
+                cold_receiver_tasks_safe),
+            ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe));
         runtime.detach();
     }
 
@@ -246,7 +396,7 @@ int main() {
         completer.join();
         runtime.detach();
     }
-    const bool all_passed = success && cold_receiver_tasks_safe && worker_stopping && cross_thread_value &&
+    const bool all_passed = success && cold_receiver_tasks_safe && payload_retirement_safe && worker_stopping && cross_thread_value &&
                             cross_thread_completed;
     return all_passed ? 0 : 1;
 }

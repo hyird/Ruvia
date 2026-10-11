@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
@@ -54,12 +55,11 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
     if (driver == db_driver::mariadb) {
         // Hex text is independent of NO_BACKSLASH_ESCAPES and ANSI_QUOTES.
         // It also avoids allowing connection SQL modes to change DDL values.
-        constexpr char digits[] = "0123456789abcdef";
         output += "CONVERT(X'";
         for (const auto ch : value) {
             const auto byte = static_cast<unsigned char>(ch);
-            output.push_back(digits[byte >> 4]);
-            output.push_back(digits[byte & 15]);
+            output.push_back(http_lower_hex_digit(byte >> 4));
+            output.push_back(http_lower_hex_digit(byte));
         }
         output += "' USING utf8mb4)";
         return;

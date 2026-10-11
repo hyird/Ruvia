@@ -41,7 +41,9 @@ struct app_state;
 struct db_registration_config final {
     std::string alias_{"default"};
     db_config config_{};
+#ifdef RUVIA_ENABLE_REDIS
     std::optional<db_query_cache_registration> query_cache_{};
+#endif
 };
 #endif
 

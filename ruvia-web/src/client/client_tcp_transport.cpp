@@ -3,187 +3,205 @@
 #include <chrono>
 #include <utility>
 
+#include <asio/connect.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/asio_task.h"
 #include "ruvia/core/async.h"
+#include "ruvia/core/tcp_socket_options.h"
 
-#include "client/http_client_config_storage.h"
-#include "client/http_client_response_state.h"
+#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] bool is_tls_error(const std::error_code& error) noexcept {
+    return error.category() == asio::error::get_ssl_category() || error == asio::ssl::error::stream_truncated;
+}
+
+}  // namespace
 
 client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
-    const worker_handle& worker_value, const http_client_config_storage& config,
-    client_wire_counters& counters, std::pmr::memory_resource* resource)
+    const worker_handle& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)
     : worker_(worker_value),
-      config_(config),
+      tls_(tls),
+      endpoint_(endpoint),
       counters_(counters),
       resolver_(io),
-      stream_(io, tls),
-      timer_(make_pmr_object<worker_timer_registration>(resource)) {}
+      stream_(io, tls) {}
+
 client_tcp_transport::~client_tcp_transport() = default;
-client_tcp_transport::client_tcp_transport(client_tcp_transport&&) noexcept = default;
-void client_tcp_transport::stop_output() noexcept {
-    if (response_ != nullptr) {
-        if (auto* output = response_->output()) {
-            output->stop();
-        }
+
+void client_tcp_transport::abort(client_abort_reason reason) noexcept {
+    // The latest owner decision wins: a pool shutdown reports closing even if
+    // a request cancellation reached the transport first.
+    if (reason != client_abort_reason::none) {
+        abort_reason_ = reason;
     }
+    resolver_.cancel();
+    std::error_code ignored;
+    (void)stream_.lowest_layer().cancel(ignored);
 }
-void client_tcp_transport::abort_output(client_abort_reason reason) noexcept {
-    abort_reason_ = reason;
-    stop_output();
-    if (response_ != nullptr) {
-        response_->space_signal_.notify();
-    }
-}
+
 void client_tcp_transport::close() noexcept {
-    timer_->cancel();
-    deadline_.reset();
-    resolver_.cancel();
-    std::error_code ignored;
-    (void)stream_.lowest_layer().cancel(ignored);
-    (void)stream_.lowest_layer().close(ignored);
-}
-void client_tcp_transport::cancel(client_abort_reason reason) noexcept {
-    abort_output(reason);
+    read_.timer_.cancel();
+    read_.deadline_.reset();
+    write_.timer_.cancel();
+    write_.deadline_.reset();
     resolver_.cancel();
     std::error_code ignored;
     (void)stream_.lowest_layer().cancel(ignored);
     (void)stream_.lowest_layer().close(ignored);
 }
 
-void client_tcp_transport::prepare_reconnect(asio::ssl::context& tls) {
-    if (!tls_started_) {
-        return;
-    }
-    // Closing a socket leaves Asio's encrypted input cursor and BIO pair alive.
-    // Swap through moved-from streams so the retired SSL engine is destroyed
-    // without overwriting its native owner.
-    asio::ssl::stream<asio::ip::tcp::socket> fresh(stream_.get_executor(), tls);
-    std::swap(stream_, fresh);
-    tls_started_ = false;
-}
-
-bool client_tcp_transport::arm_deadline(const ruvia::operation_timeout& timeout, client_deadline_kind kind) {
-    timer_->cancel();
+bool client_tcp_transport::arm(lane_deadline& lane, lane_type kind, const operation_timeout& timeout) {
+    lane.timer_.cancel();
     const auto remaining = timeout.remaining();
     if (!remaining) {
-        deadline_.reset();
+        lane.deadline_.reset();
         return true;
     }
     if (remaining->count() == 0) {
-        deadline_.reset();
+        lane.deadline_.reset();
         return false;
     }
     const auto deadline_value = *timeout.deadline();
-    deadline_.arm(deadline_value, kind);
-    worker_.schedule_timer(*timer_, deadline_value, [this](worker_timer_outcome outcome) noexcept {
-        if (outcome != worker_timer_outcome::expired) {
-            return;
-        }
-        const auto expired = deadline_.expire(std::chrono::steady_clock::now());
-        if (!expired) {
-            return;
-        }
-        abort_output(client_abort_reason::timeout);
-        std::error_code ignored;
-        if (*expired == client_deadline_kind::resolve) {
-            resolver_.cancel();
-        } else if (*expired == client_deadline_kind::socket) {
-            (void)stream_.lowest_layer().cancel(ignored);
+    lane.deadline_.arm(deadline_value, kind);
+    (void)worker_.schedule_timer(lane.timer_, deadline_value, [this, &lane](worker_timer_outcome outcome) noexcept {
+        if (outcome == worker_timer_outcome::expired && lane.deadline_.expire(std::chrono::steady_clock::now())) {
+            abort(client_abort_reason::timeout);
         }
     });
     return true;
 }
 
-bool client_tcp_transport::clear_deadline() noexcept {
-    timer_->cancel();
-    return deadline_.clear();
+bool client_tcp_transport::clear(lane_deadline& lane) noexcept {
+    lane.timer_.cancel();
+    return lane.deadline_.clear();
 }
 
-void client_tcp_transport::throw_if_aborted() const {
-    switch (abort_reason_) {
-        case client_abort_reason::none:
-            return;
-        case client_abort_reason::timeout:
-            throw http_client_error(http_client_error::code_type::timeout, "http client request timed out");
-        case client_abort_reason::cancelled:
-            throw http_client_error(
-                http_client_error::code_type::cancelled, "http client request cancelled");
-        case client_abort_reason::closing:
-            throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
-    }
+client_transport_result client_tcp_transport::aborted() const noexcept {
+    return {.status_ = client_transport_status::aborted,
+        .abort_ = abort_reason_ == client_abort_reason::none ? client_abort_reason::timeout : abort_reason_};
 }
 
-http_client_error::code_type client_tcp_transport::error_code(
-    const std::error_code& error) const noexcept {
-    return config_.scheme_ == http_scheme::https &&
-                   (error.category() == asio::error::get_ssl_category() ||
-                       error == asio::ssl::error::stream_truncated)
-               ? http_client_error::code_type::tls_failed
-               : http_client_error::code_type::io_error;
-}
-
-task<void> client_tcp_transport::write(std::string_view bytes_value, const ruvia::operation_timeout& timeout) {
-    if (bytes_value.empty()) {
-        co_return;
+client_transport_result client_tcp_transport::finish(lane_deadline& lane, const operation_timeout& timeout,
+    const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept {
+    if ((clear(lane) || timeout.expired()) && abort_reason_ == client_abort_reason::none) {
+        abort_reason_ = client_abort_reason::timeout;
     }
-    const auto write_timeout = timeout.constrained_by(config_.write_timeout_);
-    if (!arm_deadline(write_timeout, client_deadline_kind::socket)) {
-        throw http_client_error(http_client_error::code_type::timeout, "http client write timed out");
+    if (abort_reason_ != client_abort_reason::none) {
+        return aborted();
     }
-    auto completion =
-        config_.scheme_ == http_scheme::https
-            ? co_await ruvia::async_asio<std::size_t>([this, bytes_value](auto handler) mutable {
-                  asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
-              })
-            : co_await ruvia::async_asio<std::size_t>([this, bytes_value](auto handler) mutable {
-                  asio::async_write(
-                      stream_.next_layer(), asio::buffer(bytes_value), std::move(handler));
-              });
-    const bool timed_out = clear_deadline() || write_timeout.expired();
-    throw_if_aborted();
-    if (timed_out) {
-        throw http_client_error(http_client_error::code_type::timeout, "http client write timed out");
-    }
-    if (completion.error_code()) {
-        throw http_client_error(
-            error_code(completion.error_code()), completion.error_code().message());
-    }
-    counters_.sent_ += completion.result();
-}
-
-task<std::size_t> client_tcp_transport::read_some(std::span<char> bytes_value, const ruvia::operation_timeout& timeout, bool allow_eof) {
-    if (!arm_deadline(timeout, client_deadline_kind::socket)) {
-        throw http_client_error(http_client_error::code_type::timeout, "http client request timed out");
-    }
-    auto completion =
-        config_.scheme_ == http_scheme::https
-            ? co_await ruvia::async_asio<std::size_t>([this, bytes_value](auto handler) mutable {
-                  stream_.async_read_some(
-                      asio::buffer(bytes_value.data(), bytes_value.size()), std::move(handler));
-              })
-            : co_await ruvia::async_asio<std::size_t>([this, bytes_value](auto handler) mutable {
-                  stream_.next_layer().async_read_some(
-                      asio::buffer(bytes_value.data(), bytes_value.size()), std::move(handler));
-              });
-    const bool timed_out = clear_deadline() || timeout.expired();
-    throw_if_aborted();
-    if (timed_out) {
-        throw http_client_error(http_client_error::code_type::timeout, "http client request timed out");
-    }
-    if (completion.error_code()) {
-        if (allow_eof && completion.error_code() == asio::error::eof) {
-            co_return 0;
+    if (error) {
+        if (failure == client_transport_status::io_failed && is_stream_read_end(error)) {
+            return {.status_ = client_transport_status::eof, .error_ = error};
         }
-        throw http_client_error(
-            error_code(completion.error_code()), completion.error_code().message());
+        const auto status = secure() && tls_started_ && is_tls_error(error) ? client_transport_status::tls_failed : failure;
+        return {.status_ = status, .bytes_ = bytes, .error_ = error};
     }
-    counters_.received_ += completion.result();
-    co_return completion.result();
+    return {.bytes_ = bytes};
+}
+
+task<client_transport_result> client_tcp_transport::connect(client_alpn_mode alpn, const operation_timeout& timeout) {
+    if (tls_started_) {
+        // Closing a socket leaves Asio's encrypted input cursor and BIO pair
+        // alive. Swap through a fresh stream so the retired SSL engine is
+        // destroyed without overwriting its native owner.
+        asio::ssl::stream<asio::ip::tcp::socket> fresh(stream_.get_executor(), tls_);
+        std::swap(stream_, fresh);
+        tls_started_ = false;
+    }
+    if (!arm(read_, lane_type::read, timeout)) {
+        co_return aborted();
+    }
+    client_port_text_buffer_type port_buffer{};
+    const auto port = format_client_port(endpoint_.port_, port_buffer);
+    auto resolved = co_await async_asio<asio::ip::tcp::resolver::results_type>([this, port](auto handler) mutable {
+        resolver_.async_resolve(endpoint_.host_, port, std::move(handler));
+    });
+    if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
+        co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
+    }
+    if (resolved.error_code()) {
+        co_return finish(read_, timeout, resolved.error_code(), 0, client_transport_status::resolve_failed);
+    }
+    const auto endpoints = std::move(resolved).take_result();
+    const auto connected = co_await async_asio([this, &endpoints](auto handler) mutable {
+        asio::async_connect(stream_.lowest_layer(), endpoints, std::move(handler));
+    });
+    if (connected.error_code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
+        timeout.expired()) {
+        co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
+    }
+    apply_tcp_socket_policies(stream_.next_layer(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
+    if (!secure()) {
+        co_return finish(read_, timeout, {}, 0, client_transport_status::connect_failed);
+    }
+    tls_started_ = true;
+    if (const auto prepared = prepare_client_tls_stream(
+            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, alpn);
+        prepared != client_tls_setup_error::none) {
+        (void)clear(read_);
+        co_return client_transport_result{.status_ = client_transport_status::tls_failed,
+            .error_ = make_client_tls_setup_error_code(prepared)};
+    }
+    const auto handshake = co_await async_asio([this](auto handler) mutable {
+        stream_.async_handshake(asio::ssl::stream_base::client, std::move(handler));
+    });
+    co_return finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
+}
+
+std::string_view client_tcp_transport::alpn() noexcept {
+    return tls_started_ ? selected_client_alpn(stream_.native_handle()) : std::string_view{};
+}
+
+task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_timeout& timeout) {
+    if (abort_reason_ != client_abort_reason::none || !arm(read_, lane_type::read, timeout)) {
+        co_return aborted();
+    }
+    const auto buffer = asio::buffer(bytes_value.data(), bytes_value.size());
+    const auto completion = secure()
+                                ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+                                      stream_.async_read_some(buffer, std::move(handler));
+                                  })
+                                : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+                                      stream_.next_layer().async_read_some(buffer, std::move(handler));
+                                  });
+    auto result_value = finish(read_, timeout, completion.error_code(),
+        completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
+    if (result_value.ok() && result_value.bytes_ == 0) {
+        result_value.status_ = client_transport_status::eof;
+    }
+    counters_.received_ += result_value.bytes_;
+    co_return result_value;
+}
+
+task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_timeout& timeout) {
+    if (abort_reason_ != client_abort_reason::none) {
+        co_return aborted();
+    }
+    if (bytes_value.empty()) {
+        co_return client_transport_result{};
+    }
+    if (!arm(write_, lane_type::write, timeout)) {
+        co_return aborted();
+    }
+    const auto buffer = asio::buffer(bytes_value);
+    const auto completion = secure()
+                                ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+                                      asio::async_write(stream_, buffer, std::move(handler));
+                                  })
+                                : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+                                      asio::async_write(stream_.next_layer(), buffer, std::move(handler));
+                                  });
+    auto result_value = finish(write_, timeout, completion.error_code(),
+        completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
+    if (result_value.status_ == client_transport_status::eof) {
+        result_value.status_ = client_transport_status::io_failed;
+    }
+    counters_.sent_ += result_value.bytes_;
+    co_return result_value;
 }
 
 }  // namespace ruvia::detail

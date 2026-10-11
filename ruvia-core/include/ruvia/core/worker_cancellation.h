@@ -67,7 +67,7 @@ template <typename owner_type>
 make_worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value) {
     using target_type = worker_cancellation_target<owner_type>;
     return std::allocate_shared<target_type>(
-        std::pmr::polymorphic_allocator<target_type>(detail::process_resource()), owner_value, worker_value);
+        std::pmr::polymorphic_allocator<target_type>(process_resource()), owner_value, worker_value);
 }
 
 template <typename target_type>

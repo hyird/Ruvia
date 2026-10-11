@@ -138,8 +138,6 @@ enum class http3_mode : std::uint8_t {
 struct http3_listen_config final {
     http3_mode mode_{http3_mode::automatic};
     http3_qpack_config qpack_{};
-    // Per-worker stream DATA, CONTROL and release slots, independent of task admission.
-    std::size_t stream_buffer_capacity_{1024};
     // Acceptor-to-worker input slots and worker-to-Acceptor output credits.
     std::size_t datagram_input_capacity_{64};
     std::size_t datagram_output_capacity_{16};

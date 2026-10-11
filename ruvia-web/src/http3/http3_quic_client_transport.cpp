@@ -1,14 +1,8 @@
 #include "http3/http3_quic_client_transport.h"
 
-#include <array>
-#include <stdexcept>
-
 #include <openssl/ssl.h>
 
 namespace ruvia::detail {
-namespace {
-constexpr std::array<unsigned char, 3> h3_alpn{2, 'h', '3'};
-}
 
 http3_quic_client_transport::http3_quic_client_transport(http3_quic_client_tls_context& tls,
     ruvia::quic_connection_config config, std::string_view host,
@@ -22,9 +16,11 @@ http3_quic_client_transport::http3_quic_client_transport(http3_quic_client_tls_c
     early_data_enabled_ = enable_early_data && ticket && ticket->session_ &&
                           SSL_SESSION_get_max_early_data(ticket->session_.get()) != 0 &&
                           ticket->settings_.has_value() && !ticket->transport_parameters_.empty();
-    tls_session_.emplace(tls.native_handle(), ruvia::quic_role::client, h3_alpn, host,
+    if (early_data_enabled_) {
+        remembered_settings_ = ticket->settings_;
+    }
+    tls_session_.emplace(tls.native_handle(), ruvia::quic_role::client, host,
         resource_, ticket ? ticket->session_.get() : nullptr, early_data_enabled_);
-    tls.prepare(tls_session_->native_handle(), host);
     config.role_ = ruvia::quic_role::client;
     auto provider = crypto_.view();
     if (config.destination_connection_id_.size() == 0) {

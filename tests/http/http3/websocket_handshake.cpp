@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -42,7 +43,7 @@ bool make_request(std::span<const ruvia::http3_field_section_field_view> fields_
     if ((head.index() != 0)) {
         return false;
     }
-    request.emplace(std::get<0>(head), resource, resource);
+    request.emplace(std::move(std::get<0>(head)), resource);
     return true;
 }
 
@@ -234,12 +235,8 @@ RUVIA_TEST(http3_websocket_handshake_rejects_duplicate_version_and_h1_handshake_
         ruvia::http3_field_section_field_view{"sec-websocket-version", "13"},
     };
     std::optional<ruvia::http3_server_request> duplicate;
-    RUVIA_CHECK(make_request(duplicate_version, &resource, duplicate));
-    if (duplicate) {
-        RUVIA_CHECK((ruvia::validate_http3_websocket_handshake(
-                         duplicate->request(), duplicate->extended_connect_protocol(), true)
-                         .index() != 0));
-    }
+    RUVIA_CHECK(!make_request(duplicate_version, &resource, duplicate));
+    RUVIA_CHECK(!duplicate.has_value());
 
     for (const auto forbidden : {"sec-websocket-key", "sec-websocket-accept", "content-length"}) {
         const std::array base{

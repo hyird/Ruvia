@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia::detail {
@@ -33,5 +34,13 @@ public:
 private:
     bool* active_;
 };
+
+[[nodiscard]] inline operation_lane_lease claim_operation_lane(bool& active, const char* in_progress_message) {
+    operation_lane_lease lease(active);
+    if (!lease) {
+        throw std::logic_error(in_progress_message);
+    }
+    return lease;
+}
 
 }  // namespace ruvia::detail

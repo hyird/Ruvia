@@ -48,10 +48,6 @@ public:
     std::optional<request_query_cache> query_;
     std::optional<request_name_value_list> cookies_;
     std::optional<request_field_cache> route_params_;
-    // Monotonic: survives buffered error construction by middleware after the
-    // handshake has started, when returning to HTTP response mode is impossible.
-    bool websocket_handshake_started_{false};
-    bool tunnel_handshake_started_{false};
     bool query_invalid_{false};
     bool route_params_invalid_{false};
 };

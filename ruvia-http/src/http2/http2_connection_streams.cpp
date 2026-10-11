@@ -39,7 +39,7 @@ void http2_connection::pin_stream(std::uint32_t stream_id) {
 }
 
 void http2_connection::detach_active_header_block(http2_stream_state& stream) {
-    if (!header_continuation_.matches(stream.id())) {
+    if (local_connection_state_.fatal_failure() != nullptr || !header_continuation_.matches(stream.id())) {
         return;
     }
     if (header_continuation_.kind() == http2_header_block_kind::discarded) {
@@ -134,10 +134,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
             reserve_event_slots(1);
         }
         if (!is_pinned(stream_id)) {
-            const auto debt = stream->window_debt();
-            if (debt != 0 && connection_receive_credit_.ready_after(debt)) {
-                output_.reserve_additional(http2_window_update_frame_bytes);
-            }
+            reserve_consumed_data_credit(nullptr, stream->window_debt());
         }
     }
     if (stream != nullptr && !stream->is_aborted()) {
@@ -153,7 +150,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     priorities_.erase(stream_id);
     (void)stream->abort(source_value);
     if (notification == close_notification_type::emit_event) {
-        events_.push_back(http2_event::stream_closed(stream_id, source_value, error));
+        events_.push_back(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
     }
     // A public DATA credit is exact: a pinned closed stream remains the ledger
     // until the credit is acknowledged or its token is abandoned. Unpinned
@@ -237,6 +234,7 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
                 close_output_bytes = http2_window_update_frame_bytes;
             }
         }
+        output_.reserve_segments_additional(1 + static_cast<std::size_t>(close_output_bytes != 0));
         output_.reserve_additional(close_output_bytes + http2_rapid_reset_goaway_bytes);
     }
     if (!close_stream(header_value.stream_id_, http2_stream_close_source::peer, error)) {
@@ -256,6 +254,14 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
 
 http2_stream_state* http2_connection::find_stream(std::uint32_t stream_id) noexcept {
     return streams_.find(stream_id);
+}
+
+http2_stream_state* http2_connection::find_outbound_stream(std::uint32_t stream_id) noexcept {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return nullptr;
+    }
+    auto* stream = find_stream(stream_id);
+    return stream != nullptr && !stream->is_aborted() ? stream : nullptr;
 }
 
 http2_stream_state* http2_connection::create_stream(std::uint32_t stream_id) {
@@ -339,6 +345,23 @@ http2_stream_receive_status http2_connection::stream_receive_status(
     return current->remote_receive().end_stream() != nullptr
                ? http2_stream_receive_status::ended
                : http2_stream_receive_status::open;
+}
+
+std::optional<http2_server_request_view> http2_connection::server_request_view(
+    std::uint32_t stream_id) const noexcept {
+    if (role_ != http2_role::server) {
+        return std::nullopt;
+    }
+    const auto* stream_state = streams_.find(stream_id);
+    if (stream_state == nullptr || stream_state->request_method().empty()) {
+        return std::nullopt;
+    }
+    return http2_server_request_view{
+        .method_ = stream_state->request_method(),
+        .path_ = stream_state->request_path(),
+        .authority_ = stream_state->request_authority(),
+        .protocol_ = stream_state->request_protocol(),
+    };
 }
 
 }  // namespace ruvia::detail

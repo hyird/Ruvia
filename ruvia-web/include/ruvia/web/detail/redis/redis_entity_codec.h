@@ -9,9 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <tuple>
 #include <type_traits>
-#include <utility>
 
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/redis/redis_types.h"
@@ -123,20 +121,6 @@ template <typename t_type>
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
     }
-}
-
-template <typename entity_type, typename fn_type, std::size_t... i>
-void for_each_redis_field_impl(fn_type& function, std::index_sequence<i...>) {
-    (function.template operator()<redis_entity_field_adapter<
-            std::tuple_element_t<i, typename entity_type::columns_type>>>(),
-        ...);
-}
-
-template <typename entity_type, typename fn_type>
-void for_each_redis_field(fn_type&& function) {
-    validate_redis_entity<entity_type>();
-    for_each_redis_field_impl<entity_type>(function,
-        std::make_index_sequence<std::tuple_size_v<typename entity_type::columns_type>>{});
 }
 
 }  // namespace ruvia::detail

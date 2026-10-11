@@ -12,7 +12,7 @@ namespace detail {
 redis_registry::redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
     std::span<const redis_definition_type> redis, worker_handle worker_value)
     : worker_(std::move(worker_value)),
-      resource_(detail::pmr_resource_or_default(resource)),
+      resource_(pmr_resource_or_default(resource)),
       pools_(resource_),
       alias_index_(resource_) {
     if (!worker_.valid()) {

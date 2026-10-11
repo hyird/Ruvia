@@ -9,13 +9,7 @@
 
 namespace ruvia {
 namespace {
-detail::operation_lane_lease claim_tunnel_lane(bool& active) {
-    detail::operation_lane_lease lease(active);
-    if (!lease) {
-        throw std::logic_error("HTTP tunnel operation already in progress on this direction");
-    }
-    return lease;
-}
+constexpr const char* tunnel_lane_in_progress = "HTTP tunnel operation already in progress on this direction";
 class running_tunnel_operation final {
 public:
     explicit running_tunnel_operation(unsigned& count) noexcept
@@ -77,7 +71,7 @@ void http_tunnel::require_active() const {
 }
 scoped_operation<std::optional<std::pmr::string>> http_tunnel::read() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, claim_tunnel_lane(read_active_), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, detail::claim_operation_lane(read_active_, tunnel_lane_in_progress), running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<void> http_tunnel::write(std::string_view bytes_value) & {
@@ -93,12 +87,12 @@ scoped_operation<void> http_tunnel::write(std::pmr::string&& bytes_value) & {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     std::pmr::string owned(std::move(bytes_value), &resource_);
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), claim_tunnel_lane(write_active_), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<void> http_tunnel::finish() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, claim_tunnel_lane(write_active_), running_operations_),
+    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<std::optional<detail::http_datagram_input>> http_tunnel::read_datagram_input() {
@@ -108,7 +102,7 @@ scoped_operation<std::optional<detail::http_datagram_input>> http_tunnel::read_d
         running_tunnel_operation running(count);
         co_return co_await fn(target);
     };
-    return ::ruvia::make_scoped_operation(operations_, read(target_, read_datagram_input_, claim_tunnel_lane(read_active_), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, read(target_, read_datagram_input_, detail::claim_operation_lane(read_active_, tunnel_lane_in_progress), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 scoped_operation<void> http_tunnel::send_datagram(std::string_view bytes_value) {
     require_active();
@@ -121,7 +115,7 @@ scoped_operation<void> http_tunnel::send_datagram(std::string_view bytes_value) 
         fn(target, std::as_bytes(std::span(owned.data(), owned.size())));
         co_return;
     };
-    return ::ruvia::make_scoped_operation(operations_, send(target_, send_datagram_, std::pmr::string(bytes_value, &resource_), claim_tunnel_lane(write_active_), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, send(target_, send_datagram_, std::pmr::string(bytes_value, &resource_), detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 void http_tunnel::abort() noexcept {
     if (!worker_.is_current()) {
