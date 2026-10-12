@@ -35,7 +35,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     bool quality_seen = false;
     ++start;
     while (start <= item.size()) {
-        const auto end = http_find_unquoted_delimiter(item, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
         const auto parameter = http_trim_ows(item.substr(start, end - start));
         const auto equals = parameter.find('=');
         if (equals == std::string_view::npos) {

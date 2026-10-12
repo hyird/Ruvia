@@ -168,7 +168,7 @@ private:
     auto remaining = disposition->substr(parameters + 1);
     std::size_t start = 0;
     while (start <= remaining.size()) {
-        const auto end = http_find_unquoted_delimiter(remaining, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(remaining.substr(start), 0, ';');
         const auto parameter = http_trim_ows(remaining.substr(start, end - start));
         std::string_view key;
         std::string_view value;

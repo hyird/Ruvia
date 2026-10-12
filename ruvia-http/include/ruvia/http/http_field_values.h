@@ -15,8 +15,11 @@ namespace ruvia {
 // every list and parameter visitor below is built on it.
 [[nodiscard]] constexpr std::size_t http_find_unquoted_delimiter(
     std::string_view value, std::size_t start, char delimiter) noexcept {
+    if (start >= value.size()) {
+        return value.size();
+    }
     bool quoted = false;
-    for (std::size_t index = start; index < value.size(); ++index) {
+    for (std::size_t index = 0; index < value.size(); ++index) {
         const char ch = value[index];
         if (quoted) {
             if (ch == '\\' && index + 1 < value.size()) {
@@ -26,7 +29,7 @@ namespace ruvia {
             }
         } else if (ch == '"') {
             quoted = true;
-        } else if (ch == delimiter) {
+        } else if (ch == delimiter && index >= start) {
             return index;
         }
     }
@@ -58,7 +61,7 @@ inline void http_visit_comma_separated_quoted_field_items(
     std::string_view value, visitor_type&& visitor) {
     std::size_t start = 0;
     for (;;) {
-        const auto end = http_find_unquoted_delimiter(value, start, ',');
+        const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ',');
         if (!visitor(http_trim_ows(value.substr(start, end - start))) || end == value.size()) {
             return;
         }
@@ -76,7 +79,7 @@ inline void http_visit_semicolon_parameters_quoted_field(
     std::string_view value, visitor_type&& visitor) {
     std::size_t start = 0;
     for (;;) {
-        const auto end = http_find_unquoted_delimiter(value, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ';');
         if (!detail::http_emit_field_parameter(http_trim_ows(value.substr(start, end - start)), visitor) ||
             end == value.size()) {
             return;

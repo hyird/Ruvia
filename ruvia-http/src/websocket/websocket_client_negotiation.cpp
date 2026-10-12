@@ -29,7 +29,7 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     std::uint8_t seen = 0;
     for (auto start = first; start < text.size();) {
         ++start;
-        auto end = http_find_unquoted_delimiter(text, start, ';');
+        auto end = start + http_find_unquoted_delimiter(text.substr(start), 0, ';');
         auto part = http_trim_ows(text.substr(start, end - start));
         auto equals = part.find('=');
         auto name = http_trim_ows(part.substr(0, equals));

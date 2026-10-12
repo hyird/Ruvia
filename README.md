@@ -79,6 +79,9 @@ root tasks, cleanup, and timer cancellation then finish on the loop's thread.
 An attachment holds work on its context until it has retired, so keep running
 the context after `stop()` until `run()` returns; destroying the context while
 Ruvia work is still outstanding is a contract violation that terminates.
+Timers scheduled by an expiry callback for an already-past deadline run in the
+next dispatch round, after the other timers already due; other event-loop
+handlers can run between rounds.
 Closing a channel sender permits buffered input to drain; closing or destroying
 its receiver destroys the buffered input on that thread and prevents later
 receives from consuming any.
@@ -180,6 +183,9 @@ Moving an `http_client_response_head` leaves source metadata readable and fields
 empty; repeated `take_headers()` calls return empty vectors in its original PMR.
 HTTP/1 client request preparation permits metadata to borrow its output buffer;
 content must remain outside the emitted head.
+`append_cookie_request_pair` accepts names and values borrowing its output string,
+including its terminating NUL. `http_find_unquoted_delimiter` respects quotes and
+quoted-pairs before its starting index; list and parameter visitors scan linearly.
 File responses use native file transfer for plain TCP,
 and the blocking pool for TLS reads; disabling the pool makes those reads run
 on the worker. A file changed during transfer aborts the response. A

@@ -185,7 +185,7 @@ private:
     std::size_t start = first_semicolon;
     while (start < offer.size()) {
         ++start;
-        const auto end = http_find_unquoted_delimiter(offer, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(offer.substr(start), 0, ';');
         const auto parameter = http_trim_ows(offer.substr(start, end - start));
         if (parameter.empty()) {
             return std::nullopt;

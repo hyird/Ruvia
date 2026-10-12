@@ -1,8 +1,11 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -36,14 +39,48 @@ enum class cookie_attribute_policy : std::uint8_t {
 inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 
 // Cookie request pairs always include '=', including for an empty name.
+// Inputs may borrow header_value, including its terminating NUL.
 template <typename string>
 void append_cookie_request_pair(string& header_value, std::string_view name, std::string_view value) {
-    if (!header_value.empty()) {
+    const auto start = header_value.size();
+    const std::size_t separator_bytes = start == 0 ? 0 : 2;
+    const auto remaining = header_value.max_size() - start;
+    if (remaining < separator_bytes + 1 || name.size() > remaining - separator_bytes - 1 ||
+        value.size() > remaining - separator_bytes - 1 - name.size()) {
+        throw std::length_error("cookie request header length is not representable");
+    }
+    const auto borrowed_offset = [&](std::string_view input) -> std::optional<std::size_t> {
+        const auto* const first = header_value.data();
+        const std::less<const char*> before;
+        if (input.empty() || before(input.data(), first) || before(first + start, input.data())) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(input.data() - first);
+    };
+    const auto name_offset = borrowed_offset(name);
+    const auto value_offset = borrowed_offset(value);
+    header_value.reserve(start + separator_bytes + name.size() + 1 + value.size());
+    const auto append_input = [&](std::string_view input, std::optional<std::size_t> offset) {
+        const bool borrows_nul = offset && input.size() == start - *offset + 1;
+        if (offset) {
+            input = std::string_view(header_value.data() + *offset, input.size());
+        }
+        // Punctuation overwrites the old terminator; copy its original NUL
+        // explicitly, while every borrowed prefix remains unchanged.
+        const auto prefix_size = input.size() - static_cast<std::size_t>(borrows_nul);
+        if (prefix_size != 0) {
+            header_value.append(input.data(), prefix_size);
+        }
+        if (borrows_nul) {
+            header_value.push_back('\0');
+        }
+    };
+    if (separator_bytes != 0) {
         header_value.append("; ", 2);
     }
-    header_value.append(name.data(), name.size());
+    append_input(name, name_offset);
     header_value.push_back('=');
-    header_value.append(value.data(), value.size());
+    append_input(value, value_offset);
 }
 
 // Cookie octet validation and name-prefix parsing are protocol rules shared by

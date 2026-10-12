@@ -95,7 +95,7 @@ template <typename predicate_type>
     }
     ++start;
     while (start <= value.size()) {
-        const auto end = http_find_unquoted_delimiter(value, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ';');
         if (!predicate(http_trim_ows(value.substr(start, end - start)))) {
             return false;
         }

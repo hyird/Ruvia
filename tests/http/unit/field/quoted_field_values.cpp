@@ -57,6 +57,21 @@ RUVIA_TEST(public_quoted_string_cursor_validates_and_decodes) {
     RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(R"(a="x,\",y",b)", 0, ','), std::size_t{10});
 }
 
+RUVIA_TEST(public_unquoted_delimiter_preserves_quote_state_before_start) {
+    constexpr std::string_view field = R"(p="a;b";q=x)";
+    for (std::size_t start = 0; start <= 7; ++start) {
+        RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(field, start, ';'), std::size_t{7});
+    }
+    RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(field, 8, ';'), field.size());
+    RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(field, field.size() + 1, ';'), field.size());
+
+    constexpr std::string_view escaped = R"(p="a\";b";q=x)";
+    for (std::size_t start = 4; start <= 9; ++start) {
+        RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(escaped, start, ';'), std::size_t{9});
+    }
+    RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(R"(p="a;b)", 4, ';'), std::size_t{6});
+}
+
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
     using ruvia::http_accepts_encoding;
     RUVIA_CHECK(http_accepts_encoding("", "identity"));

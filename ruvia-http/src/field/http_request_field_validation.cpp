@@ -60,7 +60,7 @@ namespace {
     std::size_t start = parameters_start;
     while (start < item.size()) {
         ++start;
-        const auto end = http_find_unquoted_delimiter(item, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
         const auto parameter = http_trim_ows(item.substr(start, end - start));
         // RFC 9110 section 5.6.6: parameters = *( OWS ";" OWS [ parameter ] ).
         if (parameter.empty()) {

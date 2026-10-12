@@ -100,6 +100,12 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     if (impl_->timers_stopping_.load(std::memory_order_acquire)) {
         return worker_timer_schedule_status::worker_stopping;
     }
+    // New due entries belong to the next dispatch round. Place them after all
+    // entries due at this round's snapshot, even if their requested deadline
+    // is earlier, so the sequence gate cannot hide other pending expirations.
+    if (impl_->dispatching_timers_) {
+        deadline_value = std::max(deadline_value, impl_->timer_round_deadline_);
+    }
 
     std::size_t slot_index = impl_->free_timer_slot_;
     if (slot_index == no_timer_slot) {
@@ -293,6 +299,7 @@ void worker_dispatcher::fire_timers() {
     // outlasts its interval) waits for the re-armed wait, so I/O, deferred work,
     // and stop controls run between rounds instead of starving behind them.
     const auto now = std::chrono::steady_clock::now();
+    impl_->timer_round_deadline_ = now;
     const auto sequence_limit = impl_->next_timer_sequence_;
     try {
         while (!impl_->timers_.empty() && impl_->timers_.front().deadline_ <= now &&

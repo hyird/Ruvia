@@ -70,7 +70,7 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
     const auto parameters = content_type_value.substr(media_end + 1);
     std::size_t start = 0;
     while (start <= parameters.size()) {
-        const auto end = http_find_unquoted_delimiter(parameters, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(parameters.substr(start), 0, ';');
         const auto parameter = http_trim_ows(parameters.substr(start, end - start));
         if (!parameter.empty()) {
             std::string_view key;

@@ -69,7 +69,7 @@ namespace {
 void cache_control_field_parser::update(std::string_view value) noexcept {
     std::size_t pos = 0;
     while (pos < value.size()) {
-        const auto comma = http_find_unquoted_delimiter(value, pos, ',');
+        const auto comma = pos + http_find_unquoted_delimiter(value.substr(pos), 0, ',');
         auto token = value.substr(pos, comma - pos);
         pos = comma == value.size() ? value.size() : comma + 1;
 

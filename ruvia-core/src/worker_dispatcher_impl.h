@@ -130,6 +130,7 @@ struct worker_dispatcher::impl_type {
     std::chrono::steady_clock::time_point armed_deadline_{};
     bool timer_armed_{false};
     bool dispatching_timers_{false};
+    std::chrono::steady_clock::time_point timer_round_deadline_{};
     std::atomic_bool timers_stopping_{false};
     std::size_t stale_timer_count_{0};
 };

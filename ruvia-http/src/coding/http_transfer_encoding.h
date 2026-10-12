@@ -43,7 +43,7 @@ namespace ruvia::detail {
     auto start = first_semicolon;
     while (start < item.size()) {
         ++start;
-        const auto end = http_find_unquoted_delimiter(item, start, ';');
+        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
         const auto parameter = http_trim_ows(item.substr(start, end - start));
         const auto equals = parameter.find('=');
         if (equals == std::string_view::npos) {

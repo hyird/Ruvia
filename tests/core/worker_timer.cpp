@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -522,6 +523,41 @@ bool self_rescheduling_due_timer_yields_to_other_handlers() {
     return rounds_before_handler >= 1 && rounds_before_handler < round_limit;
 }
 
+bool self_rescheduling_due_timer_preserves_other_expirations() {
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    const auto worker = runtime.handle();
+    ruvia::worker_timer_registration repeating;
+    ruvia::worker_timer_registration other;
+    const auto earlier = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+    std::string order;
+    int rounds = 0;
+    std::function<void(ruvia::worker_timer_outcome)> tick;
+    tick = [&](ruvia::worker_timer_outcome outcome) {
+        if (outcome != ruvia::worker_timer_outcome::expired) {
+            return;
+        }
+        order += 'A';
+        if (++rounds < 3) {
+            static_cast<void>(worker.schedule_timer(repeating, earlier,
+                [&](ruvia::worker_timer_outcome next) { tick(next); }));
+        }
+    };
+    asio::post(io_context, [&] {
+        static_cast<void>(worker.schedule_timer(repeating, earlier,
+            [&](ruvia::worker_timer_outcome next) { tick(next); }));
+        static_cast<void>(worker.schedule_timer(other, earlier + std::chrono::seconds(1),
+            [&](ruvia::worker_timer_outcome outcome) {
+                if (outcome == ruvia::worker_timer_outcome::expired) {
+                    order += 'B';
+                }
+            }));
+    });
+    io_context.run();
+    runtime.detach();
+    return order == "ABAA";
+}
+
 int main() {
     if (!timer_immediate_shutdown_works() ||
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
@@ -529,7 +565,8 @@ int main() {
         !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||
         !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
         !timer_callback_failure_preserves_remaining_operations() ||
-        !self_rescheduling_due_timer_yields_to_other_handlers()) {
+        !self_rescheduling_due_timer_yields_to_other_handlers() ||
+        !self_rescheduling_due_timer_preserves_other_expirations()) {
         return 1;
     }
     asio::io_context io_context;
