@@ -660,10 +660,10 @@ RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) 
     scripted_head_peer peer(io, worker.handle_,
         {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\nSet-Cookie: sid=host; Path=/\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n"
-            "Set-Cookie: sid=domain; Domain=localhost; Path=/\r\n\r\n",
+            "Set-Cookie: sid=domain; Domain=127.0.0.1; Path=/\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
     auto config = local_http_client_config(peer.port());
-    config.host_ = "localhost";
+    // Match the IPv4 peer directly without DNS or IPv6 connection fallback.
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -676,6 +676,7 @@ RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) 
         co_await peer.wait();
         RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{3});
         if (peer.requests_.size() == 3) {
+            RUVIA_CHECK(peer.requests_[1].find("sid=host") != std::string::npos);
             RUVIA_CHECK(peer.requests_[2].find("sid=domain") != std::string::npos);
             RUVIA_CHECK(peer.requests_[2].find("sid=host") == std::string::npos);
         }
