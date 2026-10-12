@@ -127,23 +127,6 @@ void write_line(std::string_view context_value, std::string_view what, std::size
     write_text("\n");
 }
 
-struct failure_identity final {
-    const std::type_info* type_{nullptr};
-    const char* what_{nullptr};
-};
-
-// The exception object outlives this call: `exception` keeps it alive, so the
-// returned what() pointer stays valid while the caller holds the pointer.
-[[nodiscard]] failure_identity identify(const std::exception_ptr& exception) noexcept {
-    try {
-        std::rethrow_exception(exception);
-    } catch (const std::exception& error) {
-        return {&typeid(error), error.what()};
-    } catch (...) {
-        return {};
-    }
-}
-
 }  // namespace
 
 void report_unhandled_failure(
@@ -184,11 +167,23 @@ bool equivalent_failures(const std::exception_ptr& left, const std::exception_pt
     if (left == nullptr || right == nullptr) {
         return false;
     }
-    const auto left_identity = identify(left);
-    const auto right_identity = identify(right);
-    return left_identity.type_ != nullptr && right_identity.type_ != nullptr &&
-           *left_identity.type_ == *right_identity.type_ &&
-           std::string_view(left_identity.what_) == std::string_view(right_identity.what_);
+    // A caught exception may be a copy that dies with its catch block (MSVC's
+    // rethrow_exception copies), so both messages are compared while both
+    // handlers are still active; a what() pointer never leaves its catch.
+    bool equivalent = false;
+    try {
+        std::rethrow_exception(left);
+    } catch (const std::exception& left_error) {
+        try {
+            std::rethrow_exception(right);
+        } catch (const std::exception& right_error) {
+            equivalent = typeid(left_error) == typeid(right_error) &&
+                         std::string_view(left_error.what()) == std::string_view(right_error.what());
+        } catch (...) {
+        }
+    } catch (...) {
+    }
+    return equivalent;
 }
 
 }  // namespace ruvia

@@ -77,6 +77,7 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/bytes.cpp
         core/error_text.cpp
+        core/failure_report.cpp
         core/ip_address.cpp
         core/local_ring_queue.cpp
         core/memory_pool.cpp

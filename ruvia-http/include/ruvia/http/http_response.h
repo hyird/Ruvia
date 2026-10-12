@@ -288,11 +288,14 @@ private:
 
     http_response_headers(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
 
-    [[nodiscard]] iterator begin() & noexcept {
+    // Mutable iteration for the owning block and its friends. Named apart from
+    // the public const begin()/end() so a non-const block still iterates
+    // through the public overloads.
+    [[nodiscard]] iterator mutable_begin() & noexcept {
         return data();
     }
 
-    [[nodiscard]] iterator end() & noexcept {
+    [[nodiscard]] iterator mutable_end() & noexcept {
         return data() + size();
     }
 

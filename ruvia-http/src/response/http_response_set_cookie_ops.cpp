@@ -113,11 +113,11 @@ void http_response_headers::upsert_set_cookie_header_validated(std::string_view 
 http_response_header* http_response_headers::find_set_cookie_header(std::string_view wire_prefix,
     std::string_view cookie_name, bool has_path, std::string_view path,
     std::string_view domain, bool partitioned) noexcept {
-    for (auto& header : *this) {
-        if (detail::http_response_header_access::known_bit(header) == detail::response_header_set_cookie &&
+    for (auto* header = mutable_begin(); header != mutable_end(); ++header) {
+        if (detail::http_response_header_access::known_bit(*header) == detail::response_header_set_cookie &&
             set_cookie_value_matches_storage_key(
-                header.value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
-            return &header;
+                header->value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
+            return header;
         }
     }
     return nullptr;
@@ -129,7 +129,7 @@ void http_response_headers::erase_later_set_cookie_headers(http_response_header&
     // A response might already contain duplicates introduced through the raw
     // header API. Once an authoritative cookie path owns this storage key,
     // collapse every later occurrence so the final response has one value.
-    auto* const end_value = end();
+    auto* const end_value = mutable_end();
     auto* write = &retained + 1;
     for (auto* read = write; read != end_value; ++read) {
         if (detail::http_response_header_access::known_bit(*read) == detail::response_header_set_cookie &&

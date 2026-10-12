@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <iterator>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
@@ -278,4 +279,18 @@ RUVIA_TEST(response_header_transfer_failure_leaves_destination_unchanged) {
         RUVIA_CHECK_EQ(destination.header("X-Second").value_or(""), "2");
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(response_header_block_iterates_without_const_qualification) {
+    ruvia::http_response response({.resource_ = std::pmr::new_delete_resource()});
+    response.header("X-First", "1");
+    response.header("X-Second", "2");
+    auto staged = response.headers().clone();
+    std::size_t visited = 0;
+    for (const auto& field : staged) {
+        RUVIA_CHECK(!field.name().empty());
+        ++visited;
+    }
+    RUVIA_CHECK_EQ(visited, std::size_t{2});
+    RUVIA_CHECK(std::distance(staged.begin(), staged.end()) == 2);
 }
