@@ -17,7 +17,7 @@ namespace {
 constexpr std::size_t retained_inflate_capacity_bytes = 16 * 1024;
 }  // namespace
 
-ws_connection::ws_connection(std::pmr::string& input, protocol_byte_limit message_limit,
+ws_connection::ws_connection(http_io_buffer& input, protocol_byte_limit message_limit,
     websocket_compression compression, websocket_connection_role role, websocket_mask_key_generator_type mask_key_generator,
     void* mask_key_context, int compression_level)
     : input_(&input),
@@ -135,14 +135,8 @@ websocket_liveness_mode ws_connection::liveness_mode() const noexcept {
 }
 
 void ws_connection::release_consumed_input() noexcept {
-    if (input_offset_ == 0) {
-        return;
-    }
-    const auto remaining = input_->size() - input_offset_;
-    std::memmove(input_->data(), input_->data() + input_offset_, remaining);
-    input_->resize(remaining);
-    input_offset_ = 0;
-    pending_compact_until_ = 0;
+    // Keep the storage: the caller may append bytes that alias the released frame.
+    input_->consume(std::exchange(pending_consume_, 0));
 }
 
 void ws_connection::append_frame(
@@ -335,8 +329,8 @@ std::optional<websocket_event> ws_connection::poll_impl() & {
     };
 
     for (;;) {
-        const auto read = websocket_try_read_frame(*input_, input_offset_, pending_compact_until_,
-            message_limit_, deflate_.has_value(), role_ == websocket_connection_role::server);
+        const auto read = websocket_try_read_frame(*input_, pending_consume_, message_limit_,
+            deflate_.has_value(), role_ == websocket_connection_role::server);
         if (read.need_input() != nullptr) {
             return std::nullopt;
         }

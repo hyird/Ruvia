@@ -13,7 +13,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
     for (;;) {
         const auto source_value = !initial_body_and_pipeline_.empty()
                                       ? std::string_view(initial_body_and_pipeline_)
-                                      : std::string_view(buffer_);
+                                      : buffer_.view();
         const auto result_value = chunk_decoder_.decode(source_value.substr(read_cursor_));
         // Advancing the cursor keeps the returned chunk view intact; the bytes
         // behind it are reclaimed only by read_more().
@@ -48,16 +48,13 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
         co_return chunk;
     }
 
-    if (transfer_output_.empty()) {
-        http_resize_pmr_string_for_overwrite(transfer_output_, http_body_buffer_bytes);
-    }
+    const auto output_window = transfer_output();
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed
     // prefix. read_chunked() is called only after that view is empty, so its
     // compaction cannot invalidate decoder input across application reads.
     for (;;) {
-        const auto result_value =
-            transfer_decoder_->decode(transfer_input_, std::span<char>(transfer_output_));
+        const auto result_value = transfer_decoder_->decode(transfer_input_, output_window);
         transfer_input_.remove_prefix(std::min(transfer_input_.size(), result_value.consumed_bytes()));
         if (const auto* output = result_value.output()) {
             co_return ::ruvia::as_bytes(output->bytes());

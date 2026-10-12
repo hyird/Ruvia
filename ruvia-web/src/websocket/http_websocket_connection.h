@@ -18,7 +18,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/websocket_server_protocol.h"
 #include "ruvia/web/websocket.h"
 
@@ -45,11 +45,11 @@ public:
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
-          buffer_(pmr_resource_or_default(resource)),
+          buffer_(std::pmr::polymorphic_allocator<char>(pmr_resource_or_default(resource))),
           protocol_(buffer_, message_limit, websocket_server_protocol_options{compression, compression_level}),
           background_write_signal_(worker_value),
           reader_done_signal_(worker_value) {
-        buffer_.append(initial_bytes.data(), initial_bytes.size());
+        buffer_.append(initial_bytes);
         scanner_entry_.register_periodic_check(periodic_check_, this, &websocket_connection::heartbeat_tick_thunk,
             &websocket_connection::drain_thunk);
     }
@@ -293,7 +293,7 @@ private:
     const worker_handle* worker_;
     connection_scanner::entry_type& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};
-    std::pmr::string buffer_;
+    http_io_buffer buffer_;
     websocket_server_protocol protocol_;
     worker_signal background_write_signal_;
     worker_signal reader_done_signal_;

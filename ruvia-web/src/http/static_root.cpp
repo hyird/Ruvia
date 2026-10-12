@@ -274,6 +274,12 @@ void hash_value(std::uint64_t& hash, t_type value) noexcept {
 
 [[nodiscard]] std::uint64_t static_root_fingerprint(const detail::static_root_state& state_value) noexcept {
     std::uint64_t hash = detail::fnv1a_offset_basis;
+#if defined(__unix__)
+    // A root directory replaced by another one with an identical index is
+    // still a different snapshot: requests open entries relative to it.
+    hash_value(hash, state_value.root_identity_.device_);
+    hash_value(hash, state_value.root_identity_.inode_);
+#endif
     hash_value(hash, state_value.entries_.size());
     for (const auto& entry : state_value.entries_) {
         hash = detail::fnv1a_accumulate(hash, entry.relative_path_);
@@ -450,6 +456,26 @@ void detail::static_root_access::install_resident_bodies(
     }
 }
 
+http_response_file_handle detail::static_root_access::open_entry(
+    const static_root& root, const static_root_entry_view& entry) noexcept {
+#if defined(__unix__)
+    const auto& state_value = *root.state_;
+    if (state_value.root_directory_ < 0) {
+        return {};
+    }
+    // Every entry path is the canonical root joined with its relative path,
+    // so the relative part starts right after the root and its separator.
+    const auto& root_path = state_value.root_;
+    const auto prefix = root_path.size() + (root_path.ends_with('/') ? 0 : 1);
+    std::error_code ec;
+    return open_response_file_at(state_value.root_directory_, entry.file_path() + prefix, ec);
+#else
+    static_cast<void>(root);
+    static_cast<void>(entry);
+    return {};
+#endif
+}
+
 bool detail::static_root_access::same_snapshot(
     const static_root& left, const static_root& right) noexcept {
     const auto& lhs = *left.state_;
@@ -469,6 +495,11 @@ bool detail::static_root_access::same_snapshot(
         lhs.entries_.size() != rhs.entries_.size()) {
         return false;
     }
+#if defined(__unix__)
+    if (lhs.root_identity_ != rhs.root_identity_) {
+        return false;
+    }
+#endif
     for (std::size_t i = 0; i < lhs_config.mime_types_.size(); ++i) {
         if (lhs_config.mime_types_[i].extension_ != rhs_config.mime_types_[i].extension_ ||
             lhs_config.mime_types_[i].content_type_ != rhs_config.mime_types_[i].content_type_) {
@@ -486,6 +517,7 @@ bool detail::static_root_access::same_snapshot(
 struct static_root::prepared_construction_type final {
     std::filesystem::path canonical_root_;
     detail::static_root_config_storage config_;
+    detail::static_root_resident_options resident_{};
 };
 
 static_root::prepared_construction_type static_root::prepare_construction(
@@ -494,6 +526,8 @@ static_root::prepared_construction_type static_root::prepare_construction(
     return prepared_construction_type{
         .canonical_root_ = canonical_static_root_path(root),
         .config_ = detail::store_validated_static_root_config(options, process_resource()),
+        .resident_ = {.max_file_bytes_ = options.resident_max_bytes_,
+            .budget_bytes_ = options.resident_budget_bytes_},
     };
 }
 
@@ -556,6 +590,19 @@ static_root::static_root(prepared_construction_type prepared)
     std::error_code ec;
     auto& state_value = *state_;
     http_assign_native_path(state_value.root_, canonical_root);
+#if defined(__unix__)
+    {
+        auto root_directory = detail::open_native_directory(state_value.root_.c_str(), ec);
+        if (ec) {
+            throw std::filesystem::filesystem_error("open static file root", canonical_root, ec);
+        }
+        state_value.root_identity_ = detail::native_directory_handle_identity(root_directory.get(), ec);
+        if (ec) {
+            throw std::filesystem::filesystem_error("inspect static file root", canonical_root, ec);
+        }
+        state_value.root_directory_ = root_directory.release();
+    }
+#endif
 
     auto* const upstream = process_resource();
     const auto& config = state_value.config_;
@@ -652,10 +699,28 @@ static_root::static_root(prepared_construction_type prepared)
     std::ranges::sort(state_value.directories_);
     state_value.directories_.erase(
         std::ranges::unique(state_value.directories_).begin(), state_value.directories_.end());
+#if defined(__unix__)
+    // The walk resolved the root by path. Publish only when that path still
+    // names the retained directory, so requests open entries in the indexed
+    // directory rather than in one swapped in while the index was built.
+    if (detail::native_directory_path_identity(state_value.root_.c_str(), ec) != state_value.root_identity_ || ec) {
+        throw std::filesystem::filesystem_error("static file root changed while it was indexed", canonical_root,
+            ec ? ec : std::make_error_code(std::errc::state_not_recoverable));
+    }
+#endif
     state_value.fingerprint_ = static_root_fingerprint(state_value);
+    detail::static_root_access::install_resident_bodies(*this, nullptr, prepared.resident_);
 }
 
 static_root::~static_root() = default;
+
+detail::static_root_state::~static_root_state() {
+#if defined(__unix__)
+    if (root_directory_ >= 0) {
+        ::close(root_directory_);
+    }
+#endif
+}
 
 void static_root::state_deleter_type::operator()(detail::static_root_state* state_value) const noexcept {
     destroy_pmr_object(state_value, process_resource());

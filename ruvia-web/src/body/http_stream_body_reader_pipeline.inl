@@ -40,8 +40,8 @@ void stream_body_reader<stream_type>::materialize_initial_remainder() {
     if (initial_body_and_pipeline_.empty()) {
         return;
     }
-    buffer_.assign(
-        initial_body_and_pipeline_.data() + read_cursor_, initial_body_and_pipeline_.size() - read_cursor_);
+    buffer_.clear();
+    buffer_.append(initial_body_and_pipeline_.substr(read_cursor_));
     initial_body_and_pipeline_ = {};
     read_cursor_ = 0;
 }

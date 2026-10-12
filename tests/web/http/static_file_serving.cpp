@@ -264,11 +264,15 @@ RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_condi
                 RUVIA_CHECK_EQ(response->status(), item.status_);
                 RUVIA_CHECK_EQ(response->header("X-Context"), std::optional<std::string_view>{"preserved"});
                 RUVIA_CHECK(!response->header("Content-Range").has_value());
+                // A small context::file body is read at framing; an indexed
+                // file stays file-backed for the transport's identity check.
                 const auto file = response->file_body();
-                RUVIA_CHECK(file.has_value());
+                RUVIA_CHECK_EQ(file.has_value(), indexed);
                 if (file) {
                     RUVIA_CHECK_EQ(file->offset(), std::uint64_t{0});
                     RUVIA_CHECK_EQ(file->length(), std::uint64_t{10});
+                } else {
+                    RUVIA_CHECK_EQ(response->body_bytes().size(), std::size_t{10});
                 }
             }
         });
@@ -545,7 +549,9 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         RUVIA_CHECK(!direct.header("Vary").has_value());
         RUVIA_CHECK_EQ(direct.header("Content-Type").value_or(""),
             std::string_view("text/javascript; charset=utf-8"));
-        RUVIA_CHECK(direct.file_body().has_value());
+        // A small context::file body is read while framing and carried in memory.
+        RUVIA_CHECK(!direct.file_body().has_value());
+        RUVIA_CHECK_EQ(direct.body_bytes().size(), static_cast<std::size_t>(fs::file_size(file_path)));
 
         fs::remove_all(dir);
     });
@@ -650,12 +656,16 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
         }
         fs::last_write_time(path, base_time + fraction);
     };
+    // The bytes a response carries: in memory, or the file range it names.
+    const auto served_bytes = [](const ruvia::http_response& response) {
+        const auto file = response.file_body();
+        return file ? static_file_test::read_file_response_body(*file) : std::string(response.body_bytes());
+    };
     struct observation {
         ruvia::http_status_code status{ruvia::http_status::internal_server_error};
         std::string last_modified;
         std::string etag;
-        std::uint64_t offset;
-        std::uint64_t length;
+        std::string bytes;
     };
     for (const bool use_static : {false, true}) {
         std::optional<ruvia::static_root> root;
@@ -672,13 +682,11 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
                 const auto response = use_static
                                           ? context.static_file(*root, {.relative_path_ = "data.txt"})
                                           : context.file({.path_ = path});
-                const auto file = response.file_body();
                 result = observation{
                     response.status(),
                     std::string(response.header("Last-Modified").value_or("")),
                     std::string(response.header("ETag").value_or("")),
-                    file ? file->offset() : 0,
-                    file ? file->length() : 0,
+                    served_bytes(response),
                 };
                 co_return;
             });
@@ -701,13 +709,11 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
         RUVIA_CHECK(before.etag != after.etag);
         const auto date_range = serve(true, before.last_modified);
         RUVIA_CHECK_EQ(date_range.status, ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(date_range.offset, std::uint64_t{0});
-        RUVIA_CHECK_EQ(date_range.length, std::uint64_t{10});
+        RUVIA_CHECK_EQ(date_range.bytes, std::string("0123456789"));
         RUVIA_CHECK_EQ(serve(true, before.etag).status, ruvia::http_status::ok);
         const auto etag_range = serve(true, after.etag);
         RUVIA_CHECK_EQ(etag_range.status, ruvia::http_status::partial_content);
-        RUVIA_CHECK_EQ(etag_range.offset, std::uint64_t{4});
-        RUVIA_CHECK_EQ(etag_range.length, std::uint64_t{5});
+        RUVIA_CHECK_EQ(etag_range.bytes, std::string("45678"));
     }
     fs::remove_all(dir);
 }

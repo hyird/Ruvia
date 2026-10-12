@@ -105,7 +105,7 @@ http_response context::body(static_text body) const {
 
 http_response context::text(std::string_view body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/plain; charset=UTF-8");
+    response.content_type(http_content_type::text_plain_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
     return response;
@@ -113,7 +113,7 @@ http_response context::text(std::string_view body) const {
 
 http_response context::text(std::pmr::string&& body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/plain; charset=UTF-8");
+    response.content_type(http_content_type::text_plain_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
     return response;
@@ -121,7 +121,7 @@ http_response context::text(std::pmr::string&& body) const {
 
 http_response context::text(static_text body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/plain; charset=UTF-8");
+    response.content_type(http_content_type::text_plain_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
@@ -129,7 +129,7 @@ http_response context::text(static_text body) const {
 
 http_response context::json_serialized(std::pmr::string& body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "application/json");
+    response.content_type(http_content_type::application_json);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
     return response;
@@ -137,7 +137,7 @@ http_response context::json_serialized(std::pmr::string& body) const {
 
 http_response context::html(std::string_view body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/html; charset=UTF-8");
+    response.content_type(http_content_type::text_html_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
     return response;
@@ -145,7 +145,7 @@ http_response context::html(std::string_view body) const {
 
 http_response context::html(std::pmr::string&& body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/html; charset=UTF-8");
+    response.content_type(http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
     return response;
@@ -153,7 +153,7 @@ http_response context::html(std::pmr::string&& body) const {
 
 http_response context::html(static_text body) const {
     http_response response({.resource_ = arena()});
-    response.header("Content-Type", "text/html; charset=UTF-8");
+    response.content_type(http_content_type::text_html_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;

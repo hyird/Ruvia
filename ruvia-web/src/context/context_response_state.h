@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <memory_resource>
 #include <utility>
 #include <variant>
@@ -143,14 +144,15 @@ public:
         value_.template emplace<context_final_response>(std::move(response), resource_);
     }
 
-    [[nodiscard]] http_response take() {
-        if (pending() != nullptr) {
-            return http_response({.resource_ = resource_});
-        }
-        auto response = std::move(active_response());
-        value_.template emplace<context_pending_response>(resource_);
-        return response;
+    // Hands the final response to the dispatcher's return without an
+    // intermediate move. The context ends with that dispatch: it keeps only the
+    // moved-from response and must not answer again.
+    [[nodiscard]] http_response&& release_final() & noexcept {
+        auto* final_state = std::get_if<context_final_response>(&value_);
+        assert(final_state != nullptr);
+        return std::move(final_state->response());
     }
+    http_response&& release_final() && = delete;
 
 private:
     std::pmr::memory_resource* resource_;

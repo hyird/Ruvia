@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
@@ -25,11 +26,24 @@ template <std::size_t n>
         bytes_value, name_size, static_cast<std::uint32_t>(n - 1 - name_size), known_bit, false);
 }
 
+inline constexpr char text_plain_utf8_content_type[] = "Content-Typetext/plain; charset=UTF-8";
+inline constexpr char application_json_content_type[] = "Content-Typeapplication/json";
+inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; charset=UTF-8";
+
+[[nodiscard]] inline http_response_header static_content_type_header(http_content_type type) {
+    switch (type) {
+        case http_content_type::text_plain_utf8:
+            return static_response_header(text_plain_utf8_content_type, 12, response_header_content_type);
+        case http_content_type::text_html_utf8:
+            return static_response_header(text_html_utf8_content_type, 12, response_header_content_type);
+        case http_content_type::application_json:
+            return static_response_header(application_json_content_type, 12, response_header_content_type);
+    }
+    throw std::invalid_argument("invalid HTTP content type");
+}
+
 [[nodiscard]] inline std::optional<http_response_header> builtin_static_response_header(
     std::uint32_t known_bit, std::string_view value) noexcept {
-    static constexpr char text_content_type[] = "Content-Typetext/plain; charset=UTF-8";
-    static constexpr char json_content_type[] = "Content-Typeapplication/json";
-    static constexpr char html_content_type[] = "Content-Typetext/html; charset=UTF-8";
     static constexpr char lowercase_utf8_text_content_type[] = "Content-Typetext/plain; charset=utf-8";
     static constexpr char lowercase_utf8_json_content_type[] =
         "Content-Typeapplication/json; charset=utf-8";
@@ -58,13 +72,13 @@ template <std::size_t n>
     switch (known_bit) {
         case response_header_content_type:
             if (value == "text/plain; charset=UTF-8") {
-                return static_response_header(text_content_type, 12, response_header_content_type);
+                return static_content_type_header(http_content_type::text_plain_utf8);
             }
             if (value == "application/json") {
-                return static_response_header(json_content_type, 12, response_header_content_type);
+                return static_content_type_header(http_content_type::application_json);
             }
             if (value == "text/html; charset=UTF-8") {
-                return static_response_header(html_content_type, 12, response_header_content_type);
+                return static_content_type_header(http_content_type::text_html_utf8);
             }
             if (value == "text/plain; charset=utf-8") {
                 return static_response_header(lowercase_utf8_text_content_type, 12, response_header_content_type);

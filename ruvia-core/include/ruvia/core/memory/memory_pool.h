@@ -18,7 +18,8 @@ public:
     explicit worker_memory(const memory_pool_config& config = {});
     // Bind an upstream once at construction (for custom allocation/accounting).
     // It must outlive this pool and all of its borrowers. The default overload
-    // continues to use Ruvia's process resource, never the global PMR default.
+    // uses std::pmr::new_delete_resource() directly, never the global PMR
+    // default and never the lock-shared process resource.
     explicit worker_memory(std::pmr::memory_resource& upstream,
         const memory_pool_config& config = {});
     ~worker_memory();

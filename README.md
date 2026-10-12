@@ -153,6 +153,11 @@ HTTP/1 client request preparation permits metadata to borrow its output buffer;
 content must remain outside the emitted head.
 File responses use native file transfer for plain TCP,
 and the blocking pool for TLS reads; disabling the pool makes those reads run
-on the worker. A file changed during transfer aborts the response.
+on the worker. A file changed during transfer aborts the response. A
+`context::file` body up to 16 KiB is read when the response is framed and sent
+as those framed bytes. A standalone `static_root` fails closed on changed files
+unless `static_root_options::resident_max_bytes_` and `resident_budget_bytes_`
+opt in to serving small files' indexed bytes from memory; document roots use
+`document_root_config::resident_max_bytes_` instead.
 
 [MIT License](LICENSE).

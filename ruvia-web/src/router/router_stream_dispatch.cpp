@@ -124,7 +124,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
             std::rethrow_exception(context_exception);
         }
     } else if (detail::context_access::has_response(context_value)) {
-        co_return detail::context_access::take_response(context_value);
+        co_return detail::context_access::release_response(context_value);
     }
     if (handler_invoked || output_committed) {
         // The bound context is local to this coroutine. Finish a response stream

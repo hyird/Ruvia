@@ -227,7 +227,8 @@ struct document_root_config final {
     // ones the snapshot's validators describe, so an edit takes effect with the
     // next refresh like any other change; larger files are opened per request
     // and fail closed when they no longer match the snapshot. Zero disables it.
-    // A standalone static_root never keeps file bytes in memory.
+    // static_options_.resident_max_bytes_ / resident_budget_bytes_ must stay
+    // zero: these two fields are the document root's only resident policy.
     std::size_t resident_max_bytes_{std::size_t{64} * 1024};
     std::size_t resident_budget_bytes_{std::size_t{16} * 1024 * 1024};
 };

@@ -85,12 +85,9 @@ private:
     ruvia::task<void> websocket(ruvia::context& c) {
         auto& socket = c.get_websocket();
         while (auto message = co_await socket.read()) {
-            // Consume the borrowed payload before the next read replaces it.
-            if (message->text()) {
-                co_await socket.text(message->payload());
-            } else if (message->binary()) {
-                co_await socket.binary(message->payload());
-            }
+            // Borrow the payload for the echo; send() holds the read lane until
+            // the frame is written, so the next read cannot replace it early.
+            co_await socket.send(std::move(*message));
         }
     }
 };

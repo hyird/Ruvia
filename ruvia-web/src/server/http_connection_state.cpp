@@ -27,50 +27,32 @@ constexpr std::size_t retained_deferred_access_entries = 64;
 
 }  // namespace
 
-// The storage is sized to the initial capacity up front so an acquired work
+// The storage is reserved to the initial capacity up front so an acquired work
 // set is immediately usable; reset() trims it back on return.
 connection_read_buffer::connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator)
     : storage_(allocator) {
-    http_resize_pmr_string_for_overwrite(storage_, initial_read_buffer_bytes);
+    storage_.reserve(initial_read_buffer_bytes);
 }
 
 std::span<char> connection_read_buffer::prepare_read() {
-    if (begin_ != 0) {
-        // Only the incomplete tail moves, and only before a read: every byte
-        // moves at most once between two reads.
-        const auto pending_bytes = end_ - begin_;
-        if (pending_bytes > 0) {
-            std::memmove(storage_.data(), storage_.data() + begin_, pending_bytes);
-        }
-        begin_ = 0;
-        end_ = pending_bytes;
+    if (storage_.size() == storage_.capacity() && storage_.capacity() < max_http_header_bytes) {
+        storage_.reserve(std::min(std::max(storage_.capacity() * 2, initial_read_buffer_bytes), max_http_header_bytes));
     }
-    if (end_ == storage_.size() && storage_.size() < max_http_header_bytes) {
-        http_resize_pmr_string_for_overwrite(storage_, std::min(storage_.size() * 2, max_http_header_bytes));
-    }
-    return std::span<char>(storage_.data() + end_, storage_.size() - end_);
+    // The whole spare storage fits, so preparing it at most moves the
+    // incomplete tail to the front: every byte moves at most once per read.
+    return storage_.prepare(storage_.capacity() - storage_.size());
 }
 
 void connection_read_buffer::consume(std::size_t bytes) noexcept {
-    if (bytes > end_ - begin_) {
+    if (bytes > storage_.size()) {
         std::terminate();
     }
-    begin_ += bytes;
-    if (begin_ == end_) {
-        begin_ = 0;
-        end_ = 0;
-    }
+    storage_.consume(bytes);
 }
 
 void connection_read_buffer::assign(std::string_view bytes) {
-    if (bytes.size() > storage_.size()) {
-        http_resize_pmr_string_for_overwrite(storage_, bytes.size());
-    }
-    if (!bytes.empty()) {
-        std::memcpy(storage_.data(), bytes.data(), bytes.size());
-    }
-    begin_ = 0;
-    end_ = bytes.size();
+    storage_.clear();
+    storage_.append(bytes);
 }
 
 void connection_read_buffer::complete_request(const http1_request_buffer_completion& completion) {
@@ -88,33 +70,13 @@ void connection_read_buffer::complete_request(const http1_request_buffer_complet
 }
 
 void connection_read_buffer::trim() {
-    if (storage_.size() == initial_read_buffer_bytes && storage_.capacity() <= read_buffer_shrink_capacity_bytes) {
-        return;
+    if (storage_.capacity() > read_buffer_shrink_capacity_bytes && storage_.size() <= initial_read_buffer_bytes) {
+        storage_.shrink_to(initial_read_buffer_bytes);
     }
-    const auto pending_bytes = end_ - begin_;
-    if (pending_bytes > initial_read_buffer_bytes) {
-        return;
-    }
-    if (storage_.capacity() > read_buffer_shrink_capacity_bytes) {
-        std::pmr::string compact(storage_.get_allocator());
-        http_resize_pmr_string_for_overwrite(compact, initial_read_buffer_bytes);
-        if (pending_bytes > 0) {
-            std::memcpy(compact.data(), storage_.data() + begin_, pending_bytes);
-        }
-        storage_ = std::move(compact);
-    } else {
-        if (begin_ != 0 && pending_bytes > 0) {
-            std::memmove(storage_.data(), storage_.data() + begin_, pending_bytes);
-        }
-        http_resize_pmr_string_for_overwrite(storage_, initial_read_buffer_bytes);
-    }
-    begin_ = 0;
-    end_ = pending_bytes;
 }
 
 void connection_read_buffer::reset() {
-    begin_ = 0;
-    end_ = 0;
+    storage_.clear();
     trim();
 }
 

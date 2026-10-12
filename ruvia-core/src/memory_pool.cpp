@@ -168,8 +168,13 @@ void validate_memory_pool_config(const memory_pool_config& config) {
     }
 }
 
+// Workers draw chunks and oversized blocks straight from new/delete. Routing
+// them through process_resource() would serialize every worker on its shared
+// lock and second big-block table; that pool stays for startup and shutdown
+// metadata. new_delete_resource() is never destroyed, so it outlives every
+// worker pool and the pool object's own storage released at teardown.
 worker_memory::worker_memory(const memory_pool_config& config)
-    : worker_memory(*process_resource(), config) {}
+    : worker_memory(*std::pmr::new_delete_resource(), config) {}
 
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
     : impl_((validate_memory_pool_config(config), construct_pmr_object<impl_type>(&upstream, upstream))),

@@ -167,6 +167,10 @@ void http_response::header_stable_view(std::string_view key, std::string_view va
     headers_.header_stable_view(key, value);
 }
 
+void http_response::content_type(http_content_type type) {
+    headers_.content_type(type);
+}
+
 void http_response::allow_methods(
     std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     headers_.allow_methods(method_mask, extension_methods);

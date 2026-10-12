@@ -306,10 +306,17 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         std::string response;
         std::error_code error;
         asio::read(socket, asio::dynamic_buffer(response), error);
-        // The handle is checked before the head is sent, so the connection
-        // closes without committing a 200 that would carry the new bytes.
-        RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
+        // Bytes paired with the head are always the framed version: a small
+        // body was read from the framing handle before the rewrite and is
+        // sent as framed; a larger handle is checked before the head is sent,
+        // so the connection closes without committing a 200.
         RUVIA_CHECK(response.find(replacement.substr(0, 64)) == std::string::npos);
+        if (size == small_size) {
+            RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+            RUVIA_CHECK(response.ends_with(file_bytes(size, 'a')));
+        } else {
+            RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
+        }
     }
 
     server.finish();

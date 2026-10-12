@@ -2,14 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <memory_resource>
+#include <limits>
 #include <span>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 #include "websocket/http_websocket_frame_codec.h"
@@ -24,34 +23,16 @@ namespace ruvia::detail {
 // every message. Larger buffers are released so a burst stays unpinned.
 inline constexpr std::size_t websocket_retained_read_buffer_bytes = std::size_t{128} * 1024;
 
-// Drop the bytes a completed frame consumed, compacting the buffer only once the
-// dead prefix is worth the move.
-inline void compact_websocket_read_buffer(
-    std::pmr::string& buffer, std::size_t& offset, std::size_t& pending_compact_until) noexcept {
-    if (pending_compact_until == 0) {
+// Drop the bytes the previously returned frame occupied. Consuming never moves
+// bytes; the buffer moves the unread tail only when a later read needs room.
+inline void consume_websocket_read_frame(http_io_buffer& buffer, std::size_t& pending_consume) noexcept {
+    if (pending_consume == 0) {
         return;
     }
-
-    const auto consumed = std::exchange(pending_compact_until, 0);
-    if (consumed >= buffer.size()) {
-        buffer.clear();
-        if (buffer.capacity() > websocket_retained_read_buffer_bytes) {
-            std::pmr::string(buffer.get_allocator()).swap(buffer);
-        }
-        offset = 0;
-        return;
+    buffer.consume(std::exchange(pending_consume, 0));
+    if (buffer.empty()) {
+        buffer.clear_retaining_small(websocket_retained_read_buffer_bytes);
     }
-
-    offset = consumed;
-    constexpr std::size_t compact_threshold_bytes = 16 * 1024;
-    if (consumed < compact_threshold_bytes && consumed < buffer.size() - consumed) {
-        return;
-    }
-
-    const auto remaining = buffer.size() - consumed;
-    std::memmove(buffer.data(), buffer.data() + consumed, remaining);
-    buffer.resize(remaining);
-    offset = 0;
 }
 
 class websocket_frame_read_result;
@@ -99,7 +80,7 @@ public:
 
 private:
     friend websocket_frame_read_result websocket_try_read_frame(
-        std::pmr::string&, std::size_t&, std::size_t&, protocol_byte_limit, bool, bool);
+        http_io_buffer&, std::size_t&, protocol_byte_limit, bool, bool);
 
     using value_type =
         std::variant<websocket_frame_need_input, websocket_frame_view, websocket_frame_read_failure>;
@@ -129,17 +110,17 @@ private:
 // parsing, role-correct masking validation, control-frame and length-limit
 // validation, and in-place unmasking when the peer is a client.
 // It never performs I/O and never throws for peer bytes; callers append transport
-// input after need_input(), while failure() carries the Close reason.
-[[nodiscard]] inline websocket_frame_read_result websocket_try_read_frame(std::pmr::string& buffer,
-    std::size_t& offset, std::size_t& pending_compact_until, protocol_byte_limit message_limit,
-    bool permessage_deflate, bool expect_masked) {
-    compact_websocket_read_buffer(buffer, offset, pending_compact_until);
-    const auto available = buffer.size() - offset;
+// input after need_input(), while failure() carries the Close reason. A returned
+// frame stays in the buffer, counted by `pending_consume`, until the next call.
+[[nodiscard]] inline websocket_frame_read_result websocket_try_read_frame(http_io_buffer& buffer,
+    std::size_t& pending_consume, protocol_byte_limit message_limit, bool permessage_deflate, bool expect_masked) {
+    consume_websocket_read_frame(buffer, pending_consume);
+    const auto available = buffer.size();
     if (available < 2) {
         return websocket_frame_read_result::make_need_input();
     }
-    const auto first = static_cast<unsigned char>(buffer[offset]);
-    const auto second = static_cast<unsigned char>(buffer[offset + 1]);
+    const auto first = static_cast<unsigned char>(buffer.data()[0]);
+    const auto second = static_cast<unsigned char>(buffer.data()[1]);
     std::uint64_t length = second & 0x7FU;
     std::size_t header_size = 2;
 
@@ -152,7 +133,7 @@ private:
         if (available < header_size + 2) {
             return websocket_frame_read_result::make_need_input();
         }
-        length = read_websocket_uint16(buffer.data() + offset + header_size);
+        length = read_websocket_uint16(buffer.data() + header_size);
         header_size += 2;
         // RFC 6455 §5.2: the minimal number of length bytes MUST be used, so a
         // value <126 may not use the 16-bit form (e.g. 126,0,124 for a 124-byte
@@ -165,7 +146,7 @@ private:
             return websocket_frame_read_result::make_need_input();
         }
         const auto decoded_length = read_websocket_uint64(
-            std::span<const char, 8>(buffer.data() + offset + header_size, 8));
+            std::span<const char, 8>(buffer.data() + header_size, 8));
         if ((decoded_length.index() != 0)) {
             return websocket_frame_read_result::make_failure(std::get<1>(decoded_length));
         }
@@ -195,7 +176,7 @@ private:
         return websocket_frame_read_result::make_need_input();
     }
 
-    const auto mask_offset = offset + header_size;
+    const auto mask_offset = header_size;
     const auto payload_offset = mask_offset + mask_bytes;
     const auto payload_size = static_cast<std::size_t>(length);
     auto* payload_value = buffer.data() + payload_offset;
@@ -208,8 +189,7 @@ private:
             return websocket_frame_read_result::make_failure(*failure);
         }
     }
-    offset = payload_offset + payload_size;
-    pending_compact_until = offset;
+    pending_consume = total_frame_bytes;
     return websocket_frame_read_result::make_frame(*frame_start, payload_view);
 }
 }  // namespace ruvia::detail

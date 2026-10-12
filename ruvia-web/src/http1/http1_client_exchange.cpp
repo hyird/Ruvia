@@ -25,7 +25,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_body_decoding.h"
 
@@ -68,14 +67,14 @@ task<void> http1_client_exchange::write(std::string_view bytes_value, const oper
 }
 
 task<std::size_t> http1_client_exchange::read_append(
-    std::pmr::string& target, std::size_t max_bytes, const operation_timeout& timeout) {
-    const auto old_size = target.size();
-    http_resize_pmr_string_for_overwrite(target, old_size + max_bytes);
-    const auto read =
-        co_await connection_.transport_.read_some(std::span<char>(target.data() + old_size, max_bytes), timeout);
-    // close() may clear the target while the read is pending; never restore
-    // the bytes it discarded.
-    target.resize(std::min(target.size(), old_size + read.bytes_));
+    http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout) {
+    const auto read_space = target.prepare(max_bytes);
+    const auto read = co_await connection_.transport_.read_some(read_space, timeout);
+    // close() may clear the target while the read is pending; never publish
+    // bytes of a closed connection into it.
+    if (connection_.connected_) {
+        target.commit(read.bytes_);
+    }
     if (read.ok()) {
         co_return read.bytes_;
     }
@@ -173,7 +172,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     auto& read_buffer = connection_.read_buffer_;
     constexpr std::size_t read_chunk_bytes = 16384;
     for (;;) {
-        auto parse_result = parser.parse(read_buffer);
+        auto parse_result = parser.parse(read_buffer.view());
         if (parse_result.failure()) {
             throw http_client_error(http_client_error::code_type::protocol_error,
                 std::string(http1_client_response_parse_error_message(parse_result.failure()->error())));
@@ -203,7 +202,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             }
             const bool closes_exchange =
                 parsed_value->plan().informational()->persistence() == http1_close_policy::close_after_response;
-            read_buffer.erase(0, consumed_head);
+            read_buffer.consume(consumed_head);
             if (closes_exchange) {
                 connection_.close();
                 throw http_client_error(http_client_error::code_type::protocol_error,
@@ -225,7 +224,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // A received final head changes the jar before consumers can issue
         // another request, regardless of body completion or abandonment.
         pool_.policy().retain_response_cookies(request, state_value.headers_);
-        read_buffer.erase(0, consumed_head);
+        read_buffer.consume(consumed_head);
         if (request.is_tunnel() && (parsed_value->plan().connect_tunnel() != nullptr ||
                                        (request.udp_tunnel() &&
                                            parsed_value->plan().protocol_upgrade() != nullptr))) {
@@ -326,8 +325,8 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
                                       ? output.size()
                                       : std::min(output.size(), max_response_bytes - state_value.pending_.size());
             const auto scratch = std::span<char>(output).first(capacity);
-            const auto decoded =
-                eof ? body_decoder.finish_input(read_buffer, scratch) : body_decoder.decode(read_buffer, scratch);
+            const auto decoded = eof ? body_decoder.finish_input(read_buffer.view(), scratch)
+                                     : body_decoder.decode(read_buffer.view(), scratch);
             const auto consumed = decoded.consumed_bytes();
             if (const auto* body = decoded.output()) {
                 append_output(body->bytes());
@@ -340,7 +339,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
                 throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/1 response body decoder failed");
             }
             // Output/trailers have been owned before their source is compacted.
-            read_buffer.erase(0, consumed);
+            read_buffer.consume(consumed);
             if (const auto* complete = decoded.complete()) {
                 persistence = complete->persistence();
                 break;
@@ -458,7 +457,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             if (!read_buffer.empty()) {
                 const auto count = std::min(read_buffer.size(), room);
                 state_value.pending_.append(read_buffer.data(), count);
-                read_buffer.erase(0, count);
+                read_buffer.consume(count);
                 state_value.data_signal_.notify();
                 continue;
             }

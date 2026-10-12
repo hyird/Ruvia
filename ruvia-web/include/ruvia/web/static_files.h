@@ -55,6 +55,15 @@ struct static_root_options final {
     // root is never exposed. Enable it only for a root that intentionally
     // publishes hidden paths (for example .well-known/ for ACME).
     static_dotfile_policy dotfiles_{static_dotfile_policy::deny};
+    // Opt-in for a standalone static_root: keep the bytes of files up to
+    // resident_max_bytes_, at most resident_budget_bytes_ in total (in index
+    // order), and serve them from memory without touching the filesystem.
+    // Zero for either (the default) keeps every file on disk and fail-closed.
+    // A resident file is served as indexed even after it is rewritten on disk,
+    // because a standalone root is never refreshed. application::document_root
+    // rejects these; it takes document_root_config::resident_max_bytes_ instead.
+    std::size_t resident_max_bytes_{0};
+    std::size_t resident_budget_bytes_{0};
 };
 
 namespace detail {
@@ -93,8 +102,9 @@ struct static_root_state;
 // roots replace it after the next successful refresh (every second by default);
 // a standalone static_root does not. A document root may also keep small files'
 // bytes in its snapshot (document_root_config::resident_max_bytes_): those are
-// served as indexed until that refresh instead of failing closed.
-// Standalone static_root values never own refresh, compression or in-memory policy.
+// served as indexed until that refresh instead of failing closed. A standalone
+// static_root does the same only when static_root_options::resident_max_bytes_
+// and resident_budget_bytes_ opt in; it never owns refresh or compression.
 class static_root final {
 public:
     explicit static_root(const std::filesystem::path& root, static_root_options options = {});

@@ -107,7 +107,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 示例和测试按 target、协议层级归档；core 单测平铺。
 - 复用根 build 和现有配置，不无故清缓存或全量重编译。按可用 CPU 核心数并行构建（例如 `cmake --build build --config Debug -j <cores>`）。
 - 不修改父项目配置。Windows 使用 MSVC 和静态依赖/runtime。
-- 交付前 Windows（MSVC）与 Linux（GCC，`-Werror`，全功能配置）都必须构建并通过全部测试，并通过 CI 的 clang-format 检查。
+- 交付前与 CI 一致地验证：Windows（MSVC）与 Linux（GCC 13）都以 `-DCMAKE_COMPILE_WARNING_AS_ERROR=ON`、全功能配置构建并通过全部测试，并通过 clang-format 检查。
 - 源文件使用 LF 换行（见 .gitattributes）。提交前用 clang-format 21（与 CI 一致）格式化改动的 C++ 源码。
 - 性能测试不在开发机上运行，使用专用测试主机。
 - 单元测试只通过非 detail 公开 API 验证对外行为；不测试内部 API、私有实现或内部状态，不保留结构、安装或 API guard。

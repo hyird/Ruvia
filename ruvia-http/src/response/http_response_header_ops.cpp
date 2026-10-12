@@ -14,6 +14,7 @@
 
 #include "field/response_field_validation.h"
 #include "response/http_response_header_access.h"
+#include "response/http_response_static_headers.h"
 #include "response/response_header_index_cache.h"
 
 namespace ruvia {
@@ -101,8 +102,69 @@ void http_response_headers::commit(http_response_headers&& staged) noexcept {
     std::construct_at(this, std::move(staged));
 }
 
+bool http_response_headers::try_append_disjoint(
+    const http_response_headers& source, http_response_header_transfer mode) {
+    if (&source == this) {
+        return false;
+    }
+    const auto skips = [mode](std::uint32_t known_bit) noexcept {
+        return mode == http_response_header_transfer::assign && known_bit == detail::response_header_content_type;
+    };
+    // A source block already holds each field under its own rules: one line per
+    // single-valued field and key-unique cookies. When no source field names a
+    // field this block holds, every transfer mode keeps each source line as is.
+    for (const auto& header_value : source) {
+        const auto known_bit = detail::http_response_header_access::known_bit(header_value);
+        if (skips(known_bit)) {
+            continue;
+        }
+        if (known_bit != 0 ? (known_header_bits_ & known_bit) != 0
+                           : find_header_for_read(header_value.name(), 0) != nullptr) {
+            return false;
+        }
+    }
+
+    reserve(size() + source.size());
+    const auto first_index = size();
+    try {
+        for (const auto& header_value : source) {
+            const auto known_bit = header_value.known_bit_;
+            if (skips(known_bit)) {
+                continue;
+            }
+            // Static descriptors are shared; owning descriptors get an
+            // independent allocation, as in clone().
+            auto descriptor = header_value.owned_
+                                  ? make_owned_header(header_value.name(), header_value.value(), known_bit)
+                                  : header_value;
+            // Transferred cookies are appended occurrences, like the staged path.
+            descriptor.append_ = header_value.append_ || known_bit == detail::response_header_set_cookie;
+            (void)append_prepared_header(descriptor);
+        }
+    } catch (...) {
+        auto* const first = data() + first_index;
+        for (auto* cursor_value = first; cursor_value != end(); ++cursor_value) {
+            release_header(*cursor_value);
+        }
+        truncate(first);
+        throw;
+    }
+    const auto* const items = data();
+    for (auto index = first_index; index < size(); ++index) {
+        if (const auto known_bit = items[index].known_bit_; known_bit != 0) {
+            record_known_header_index(known_bit, index);
+        }
+    }
+    return true;
+}
+
 void http_response_headers::transfer_from(
     const http_response_headers& source, http_response_header_transfer mode) {
+    if (try_append_disjoint(source, mode)) {
+        return;
+    }
+    // Fields that meet existing ones are resolved on a staged copy, so a
+    // failure leaves this block unchanged.
     auto staged = clone(source.size());
     bool removed_cookies = false;
     for (const auto& header_value : source) {
@@ -220,6 +282,27 @@ void http_response_headers::rebuild_known_header_index() noexcept {
 
 void http_response_headers::header(std::string_view key, std::string_view value) {
     header(key, value, {});
+}
+
+void http_response_headers::content_type(http_content_type type) {
+    set_static_header(detail::static_content_type_header(type));
+}
+
+void http_response_headers::set_static_header(http_response_header header_value) {
+    const auto known_bit = header_value.known_bit_;
+    if (auto* const existing = find_header_for_update(header_value.name(), known_bit)) {
+        const bool was_appended = detail::http_response_header_access::append(*existing);
+        release_header(*existing);
+        *existing = header_value;
+        if (was_appended) {
+            (void)collapse_response_headers(*existing, known_bit);
+        }
+        return;
+    }
+
+    const auto index = size();
+    (void)append_header(header_value);
+    record_known_header_index(known_bit, index);
 }
 
 void http_response_headers::header(

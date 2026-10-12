@@ -54,6 +54,12 @@ struct opened_response_file final {
     response_file_snapshot snapshot_;
 };
 
+// A whole-body file range up to this size is read into memory rather than
+// handed to a kernel file transfer: for small files one positional read costs
+// less than a kernel transfer and its completion, and it never queues behind
+// TransmitFile's per-SKU concurrency limit.
+inline constexpr std::uint64_t inline_response_file_max_bytes = std::uint64_t{16} * 1024;
+
 inline constexpr std::uint64_t windows_to_unix_epoch100ns = UINT64_C(116444736000000000);
 inline constexpr std::uint64_t windows_file_time_ticks_per_second = UINT64_C(10000000);
 
@@ -190,6 +196,79 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
     return {http_response_file_handle(static_cast<http_response_file_handle::native_type>(input.release()),
                 &release_response_file_handle),
         snapshot};
+}
+
+#if defined(O_PATH)
+inline constexpr int native_directory_open_flags = O_PATH | O_DIRECTORY | O_CLOEXEC;
+#else
+inline constexpr int native_directory_open_flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC;
+#endif
+
+// A directory handle that later opens resolve entries against, so a request
+// walks only the path below it instead of the whole absolute path.
+[[nodiscard]] inline native_file_handle open_native_directory(
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+    native_file_handle directory(::open(path, native_directory_open_flags));
+    if (directory.get() < 0) {
+        ec = std::error_code(errno, std::system_category());
+        return native_file_handle();
+    }
+    ec = {};
+    return directory;
+}
+
+// The filesystem instance of a directory: device and inode.
+struct native_directory_identity final {
+    std::uint64_t device_{0};
+    std::uint64_t inode_{0};
+
+    friend bool operator==(const native_directory_identity&, const native_directory_identity&) = default;
+};
+
+[[nodiscard]] inline native_directory_identity native_directory_identity_of(
+    const struct stat& status, std::error_code& ec) noexcept {
+    if (!S_ISDIR(status.st_mode)) {
+        ec = std::make_error_code(std::errc::not_a_directory);
+        return {};
+    }
+    ec = {};
+    return {static_cast<std::uint64_t>(status.st_dev), static_cast<std::uint64_t>(status.st_ino)};
+}
+
+[[nodiscard]] inline native_directory_identity native_directory_handle_identity(
+    int directory, std::error_code& ec) noexcept {
+    struct stat status{};
+    if (::fstat(directory, &status) != 0) {
+        ec = std::error_code(errno, std::system_category());
+        return {};
+    }
+    return native_directory_identity_of(status, ec);
+}
+
+[[nodiscard]] inline native_directory_identity native_directory_path_identity(
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+    struct stat status{};
+    if (::stat(path, &status) != 0) {
+        ec = std::error_code(errno, std::system_category());
+        return {};
+    }
+    return native_directory_identity_of(status, ec);
+}
+
+// Opens `relative` below `directory` for a response body. The final component
+// must not be a symlink (an index never records one). The handle is not
+// validated here: the response carries its indexed identity, and every use
+// checks the handle against it before trusting its bytes.
+[[nodiscard]] inline http_response_file_handle open_response_file_at(
+    int directory, const http_native_path_char_type* relative, std::error_code& ec) noexcept {
+    const int input = ::openat(directory, relative, native_file_open_flags | O_NOFOLLOW);
+    if (input < 0) {
+        ec = std::error_code(errno, std::system_category());
+        return {};
+    }
+    ec = {};
+    return http_response_file_handle(
+        static_cast<http_response_file_handle::native_type>(input), &release_response_file_handle);
 }
 
 // Reads exactly `size` bytes at `offset` without moving the descriptor's file

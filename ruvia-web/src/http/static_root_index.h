@@ -19,6 +19,9 @@
 #include "ruvia/web/static_files.h"
 
 #include "http/static_root_config_storage.h"
+#if defined(__unix__)
+#include "server/http_native_file.h"
+#endif
 
 namespace ruvia::detail {
 
@@ -93,12 +96,26 @@ struct static_root_state final {
     std::pmr::vector<static_root_entry> entries_;
     std::pmr::vector<std::pmr::string> directories_;
     std::uint64_t fingerprint_{0};
+#if defined(__unix__)
+    // The indexed root, opened once: each request opens its entry relative to
+    // it. Owned by this state and closed with it.
+    int root_directory_{-1};
+    // The directory instance root_directory_ names; the index was built from
+    // the same one.
+    native_directory_identity root_identity_{};
+#endif
 
     static_root_state(std::pmr::memory_resource* resource, static_root_config_storage configured_policy)
         : root_(resource),
           config_(std::move(configured_policy)),
           entries_(resource),
           directories_(resource) {}
+    ~static_root_state();
+
+    static_root_state(const static_root_state&) = delete;
+    static_root_state& operator=(const static_root_state&) = delete;
+    static_root_state(static_root_state&&) = delete;
+    static_root_state& operator=(static_root_state&&) = delete;
 };
 
 class static_root_memory_variant_view final {
@@ -287,6 +304,12 @@ public:
     // as indexed stays file-backed and keeps its identity check.
     static void install_resident_bodies(static_root& root, const static_root* previous,
         const static_root_resident_options& options);
+    // Opens the entry's file relative to the root's directory handle, for a
+    // response whose identity check runs on that handle. Empty where no
+    // directory handle exists (Windows) or the open failed; the transport then
+    // opens the indexed path itself and fails closed exactly as before.
+    [[nodiscard]] static http_response_file_handle open_entry(
+        const static_root& root, const static_root_entry_view& entry) noexcept;
 
 private:
     [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> construct(

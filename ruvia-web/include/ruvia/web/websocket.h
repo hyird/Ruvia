@@ -157,6 +157,17 @@ public:
     scoped_operation<void> ping(std::pmr::string&& payload) &;
     scoped_operation<void> ping(std::pmr::string&&) && = delete;
 
+    /// Zero-copy send of a message returned by this connection's read(), with
+    /// the message's own opcode (for example an echo). The frame borrows the
+    /// payload from the connection's read storage, so this call claims the
+    /// read lane immediately and holds it until the operation completes or is
+    /// destroyed: read() and close() throw std::logic_error meanwhile, and this
+    /// call throws std::logic_error while a read is pending. A message built
+    /// with websocket_message::borrow over caller storage must keep that
+    /// storage alive and unchanged until the operation completes.
+    scoped_operation<void> send(websocket_message&& message, websocket_send_options options = {}) &;
+    scoped_operation<void> send(websocket_message&&, websocket_send_options = {}) && = delete;
+
     /// Started close cannot overlap a running read, close, or output operation.
     scoped_operation<void> close(websocket_close_options options = {}) &;
     scoped_operation<void> close(websocket_close_options = {}) && = delete;

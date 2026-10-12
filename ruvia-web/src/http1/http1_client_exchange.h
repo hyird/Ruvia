@@ -9,6 +9,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_io_buffer.h"
 
 namespace ruvia {
 class http1_client_response_parser;
@@ -50,7 +51,7 @@ private:
     // Appends at most `max_bytes` read from the transport to `target`; returns
     // 0 at the peer's end of stream.
     [[nodiscard]] task<std::size_t> read_append(
-        std::pmr::string& target, std::size_t max_bytes, const operation_timeout& timeout);
+        http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout);
 
     http_client_pool& pool_;
     http_client_connection& connection_;

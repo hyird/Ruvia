@@ -38,35 +38,41 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     }
 
     // Read the rest straight into the tail of `body`, never past the declared
-    // length, so no bytes of a pipelined request are taken. Capacity grows
-    // geometrically from what has actually arrived: a peer that sends only
-    // headers cannot make the declared Content-Length allocate up front.
+    // length, so no bytes of a pipelined request are taken. Capacity starts at
+    // min(declared length, known_length_min_read_bytes) and then grows
+    // geometrically from what has actually arrived, so a peer that sends only
+    // headers cannot make the declared Content-Length allocate past that floor.
+    // `body` is resized once per growth step and the reads fill the window up
+    // to its size, so each byte is initialized at most once before a read
+    // overwrites it; `filled` marks the bytes the socket has written.
     if (delivered_bytes_ < content_length) {
         scanner_entry_.set_phase(connection_scanner::phase_type::reading_payload);
     }
+    auto filled = body.size();
     while (delivered_bytes_ < content_length) {
         const auto remaining_body = content_length - delivered_bytes_;
-        const auto old_size = body.size();
-        const auto final_size = remaining_body > body.max_size() - old_size ? body.max_size() : old_size + remaining_body;
-        const auto doubled = old_size > body.max_size() / 2 ? body.max_size() : old_size * 2;
-        const auto target_capacity = std::min(final_size, std::max(doubled, known_length_min_read_bytes));
-        if (target_capacity > body.capacity()) {
-            body.reserve(target_capacity);
+        if (filled == body.size()) {
+            const auto final_size = remaining_body > body.max_size() - filled ? body.max_size() : filled + remaining_body;
+            const auto doubled = filled > body.max_size() / 2 ? body.max_size() : filled * 2;
+            const auto target_capacity = std::min(final_size, std::max(doubled, known_length_min_read_bytes));
+            if (target_capacity > body.capacity()) {
+                body.reserve(target_capacity);
+            }
+            body.resize(std::min(final_size, body.capacity()));
         }
-        const auto writable = std::min(remaining_body, body.capacity() - old_size);
-        http_resize_pmr_string_for_overwrite(body, old_size + writable);
+        const auto writable = std::min(remaining_body, body.size() - filled);
         auto read_completion =
-            co_await ruvia::async_asio<std::size_t>([this, &body, old_size, writable](auto handler) mutable {
-                stream_.async_read_some(asio::buffer(body.data() + old_size, writable), std::move(handler));
+            co_await ruvia::async_asio<std::size_t>([this, &body, filled, writable](auto handler) mutable {
+                stream_.async_read_some(asio::buffer(body.data() + filled, writable), std::move(handler));
             });
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();
-        // The writable tail never received bytes on failure; it must not
-        // survive as body.
-        body.resize(old_size + (ec ? 0 : bytes_read));
         if (ec || bytes_read == 0) {
+            // The unread window never received bytes; it must not survive as body.
+            body.resize(filled);
             throw_incomplete_request_body();
         }
+        filled += bytes_read;
         delivered_bytes_ += bytes_read;
         scanner_entry_.touch();
     }

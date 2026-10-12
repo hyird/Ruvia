@@ -11,6 +11,7 @@
 #include "ruvia/http/http_response_head_buffer.h"
 
 #include "server/connection_scanner.h"
+#include "server/http_native_file.h"
 
 namespace ruvia::detail {
 
@@ -19,12 +20,6 @@ namespace ruvia::detail {
 // read file bodies through response_file_source.
 #if defined(__linux__) || defined(_WIN32)
 inline constexpr bool native_response_file_write_available = true;
-
-// A whole-body file range up to this size is read into the head buffer behind
-// the serialized head and leaves in one buffered send: for small files one
-// positional read costs less than a kernel file transfer and its completion,
-// and it never queues behind TransmitFile's per-SKU concurrency limit.
-inline constexpr std::uint64_t inline_response_file_max_bytes = std::uint64_t{16} * 1024;
 
 struct http_response_file_write_result final {
     std::error_code error_;

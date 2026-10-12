@@ -39,11 +39,9 @@ private:
     ruvia::task<void> echo(ruvia::context& c) {
         auto& ws = c.get_websocket();
         while (auto message = co_await ws.read()) {
-            if (message->text()) {
-                co_await ws.text(message->payload());
-            } else if (message->binary()) {
-                co_await ws.binary(message->payload());
-            }
+            // Zero-copy echo: the frame borrows the read buffer and keeps the
+            // read lane until it is written, preserving the message opcode.
+            co_await ws.send(std::move(*message));
         }
     }
 
@@ -52,7 +50,7 @@ private:
         co_await ws.text("welcome");
         while (auto message = co_await ws.read()) {
             if (message->text()) {
-                co_await ws.text(message->payload());
+                co_await ws.send(std::move(*message));
             }
         }
         co_await ws.close({.code_ = 1000, .reason_ = "bye"});

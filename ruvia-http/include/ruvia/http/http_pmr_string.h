@@ -8,11 +8,6 @@ namespace ruvia {
 
 inline constexpr std::size_t http_retained_pmr_string_bytes = 4096;
 
-// Grow `target` to `size` bytes that the caller overwrites immediately.
-inline void http_resize_pmr_string_for_overwrite(std::pmr::string& target, std::size_t size) {
-    target.resize(size);
-}
-
 // Clear a temporary buffer, returning unusually large storage to its owner
 // while retaining small allocations for repeated worker-local operations.
 inline void http_clear_pmr_string_retaining_small(

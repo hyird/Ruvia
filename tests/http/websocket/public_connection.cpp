@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_server_protocol.h"
 
@@ -248,7 +249,7 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
 RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     mask_source mask;
     auto sender = client(mask);
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input);
 
     RUVIA_CHECK(sender.submit_frame(websocket_opcode::text, "hey") ==
@@ -279,7 +280,7 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
 
 RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
     counting_resource memory;
-    std::pmr::string input(&memory);
+    http_io_buffer input(&memory);
     input.reserve(1024);
     const auto bytes_before_protocol = memory.live_bytes_;
     {
@@ -336,17 +337,17 @@ RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
 }
 
 RUVIA_TEST(ws_public_server_protocol_reports_protocol_error_as_public_value) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input);
     // A server-side connection must reject an unmasked client frame.
-    input.append("\x81\x01x", 3);
+    input.append(std::string_view("\x81\x01x", 3));
     auto error = protocol.poll();
     RUVIA_CHECK(error && error->kind() == websocket_event_kind::protocol_error);
     RUVIA_CHECK(error && error->protocol_error() && error->protocol_error()->close_code() == 1002);
 }
 
 RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input, protocol_byte_limit::unlimited(),
         websocket_server_protocol_options{(websocket_compression{.enabled_ = true}), 6});
     const std::string payload_value(200, 'x');
@@ -371,7 +372,7 @@ RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
 }
 
 RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input);
     RUVIA_CHECK(protocol.submit_close(1000, "done") == websocket_close_submit_status::accepted);
     RUVIA_CHECK(protocol.output_plan().disposition() ==
@@ -390,7 +391,7 @@ RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
 }
 
 RUVIA_TEST(ws_public_server_eof_discards_pending_output_before_transport_end) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input);
     RUVIA_CHECK(protocol.submit_frame(websocket_opcode::text, "unsent") ==
                 websocket_frame_submit_status::accepted);
@@ -410,7 +411,7 @@ RUVIA_TEST(ws_public_server_eof_discards_pending_output_before_transport_end) {
 }
 
 RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input);
     RUVIA_CHECK(protocol.submit_close(1000, "done") ==
                 websocket_close_submit_status::accepted);
@@ -420,10 +421,10 @@ RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
                 websocket_output_consume_status::drained);
 
     // Masked client Ping("p") followed by an empty masked Close.
-    input.append(
+    input.append(std::string_view(
         "\x89\x81\x01\x02\x03\x04q"
         "\x88\x80\x05\x06\x07\x08",
-        13);
+        13));
     const auto ping = protocol.poll();
     RUVIA_CHECK(ping && ping->kind() == websocket_event_kind::ping);
     RUVIA_CHECK(ping && ping->ping() && ping->ping()->payload() == "p");
@@ -658,7 +659,7 @@ RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
     }));
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
     {
-        std::pmr::string input(&memory);
+        http_io_buffer input(&memory);
         const auto input_bytes = memory.live_bytes_;
         {
             websocket_server_protocol unused(input);
@@ -688,7 +689,7 @@ RUVIA_TEST(ws_server_protocol_reuses_drained_input_for_repeated_large_messages) 
     counting_resource memory;
     mask_source mask;
     auto sender = client(mask);
-    std::pmr::string input(&memory);
+    http_io_buffer input(&memory);
     websocket_server_protocol protocol(input);
     const auto deliver = [&](std::size_t payload_bytes) {
         const std::string payload_value(payload_bytes, 'x');
@@ -720,7 +721,8 @@ RUVIA_TEST(ws_default_message_limit_rejects_oversized_declared_frame_before_payl
     const auto event = connection.next_event();
     RUVIA_CHECK(event && event->protocol_error());
     RUVIA_CHECK_EQ(event->protocol_error()->close_code(), std::uint16_t{1009});
-    std::pmr::string input(header_value);
+    http_io_buffer input;
+    input.append(header_value);
     websocket_server_protocol protocol(input);
     const auto borrowed_event = protocol.poll();
     RUVIA_CHECK(borrowed_event && borrowed_event->protocol_error());
@@ -952,7 +954,7 @@ RUVIA_TEST(ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
 }
 
 RUVIA_TEST(ws_server_borrowed_frame_follows_pending_output_until_drained) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input, protocol_byte_limit::unlimited());
     const std::string payload_value(300, 'b');
     RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
@@ -1000,7 +1002,7 @@ RUVIA_TEST(ws_server_borrowed_frame_follows_pending_output_until_drained) {
 }
 
 RUVIA_TEST(ws_server_borrowed_frame_owns_compressed_output) {
-    std::pmr::string input;
+    http_io_buffer input;
     websocket_server_protocol protocol(input, protocol_byte_limit::unlimited(),
         websocket_compression{.enabled_ = true});
     const std::string payload_value(4096, 'x');

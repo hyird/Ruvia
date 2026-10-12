@@ -186,7 +186,7 @@ task<http_response> detail::route_table::respond_through_chain(
     chain.terminal_ = callback_access::bind<task<void>(context&)>(respond);
     co_await run_chain(chain, context_value);
     if (detail::context_access::has_response(context_value)) {
-        co_return detail::context_access::take_response(context_value);
+        co_return detail::context_access::release_response(context_value);
     }
     if (auto exception = context_value.exception()) {
         co_return co_await handle_exception(context_value, exception);

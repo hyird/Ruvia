@@ -12,7 +12,6 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_pmr_string.h"
 
 #include "http/http_stream_read_result.h"
 #include "http/tls_tunnel_output.h"
@@ -32,11 +31,14 @@ public:
             }
         }
     }
+    // Each read yields a freshly allocated owned string, so a plain resize of
+    // its bounded read window is the simplest correct growth.
     [[nodiscard]] task<http_stream_read_result> read_more(std::pmr::string& bytes_value) {
+        constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();
-        http_resize_pmr_string_for_overwrite(bytes_value, old_size + 4096);
+        bytes_value.resize(old_size + read_bytes);
         const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
-            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, 4096), std::move(handler));
+            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes), std::move(handler));
         });
         bytes_value.resize(old_size + result_value.result());
         // A TLS peer that closed TCP without close_notify ends the tunnel byte

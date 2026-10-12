@@ -8,6 +8,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
@@ -50,7 +51,7 @@ public:
     void throw_if_aborted() const;
 
     client_tcp_transport transport_;
-    std::pmr::string read_buffer_;
+    http_io_buffer read_buffer_;
     std::pmr::string write_buffer_;
     // Borrowed only while one serialized HTTP/1 exchange is active.
     http_client_response_state* http1_response_{nullptr};

@@ -10,6 +10,7 @@
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
@@ -37,30 +38,30 @@ inline constexpr std::size_t work_set_arena_bytes = request_arena_initial_bytes;
 // under high concurrency every active connection holds one.
 inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
 
-// A connection's buffered request input: storage plus the unconsumed window.
-// A served request is consumed by advancing the window start; the window moves
-// to the front only when a read needs room. A burst of pipelined requests
-// therefore costs one move of its incomplete tail per socket read, not one
-// shift of every remaining byte per request.
+// A connection's buffered request input: an http_io_buffer plus its growth and
+// trim policy. A served request is consumed by advancing the window start; the
+// window moves to the front only when a read needs room. A burst of pipelined
+// requests therefore costs one move of its incomplete tail per socket read,
+// not one shift of every remaining byte per request.
 class connection_read_buffer final {
 public:
     explicit connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator);
 
     // Unconsumed bytes, starting with the current request.
     [[nodiscard]] std::string_view pending() const noexcept {
-        return std::string_view(storage_.data() + begin_, end_ - begin_);
+        return storage_.view();
     }
     [[nodiscard]] bool empty() const noexcept {
-        return begin_ == end_;
+        return storage_.empty();
     }
 
-    // Room for the next socket read. Moves the window to the front and, when
-    // it fills the storage, doubles the storage up to max_http_header_bytes.
-    // Empty when the pending bytes already fill that limit.
+    // Room for the next socket read: all spare storage. When the pending bytes
+    // fill the storage, doubles it up to max_http_header_bytes. Empty when the
+    // pending bytes already fill that limit.
     [[nodiscard]] std::span<char> prepare_read();
     // Appends `bytes` read into the span prepare_read() returned.
     void commit_read(std::size_t bytes) noexcept {
-        end_ += bytes;
+        storage_.commit(bytes);
     }
 
     // Drops the first `bytes` pending bytes (a served request).
@@ -79,9 +80,7 @@ public:
     void reset();
 
 private:
-    std::pmr::string storage_;
-    std::size_t begin_{0};
-    std::size_t end_{0};
+    http_io_buffer storage_;
 };
 
 // Access-log fields of pipelined responses held back for a coalesced write.

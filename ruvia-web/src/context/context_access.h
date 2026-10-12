@@ -87,8 +87,10 @@ struct context_access final {
         return context_value.has_response();
     }
 
-    [[nodiscard]] static http_response take_response(context& context_value) {
-        return context_value.take_response();
+    // The final response, for the dispatcher to return; see
+    // context_response_state::release_final.
+    [[nodiscard]] static http_response&& release_response(context& context_value) noexcept {
+        return context_value.response_state().release_final();
     }
 
     [[nodiscard]] static http_response streaming_head(

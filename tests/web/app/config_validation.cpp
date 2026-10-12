@@ -1,5 +1,6 @@
 
 #include <chrono>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -94,6 +95,19 @@ RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
     disabled_refresh.runtime_.refresh_interval_ = std::chrono::milliseconds::zero();
     RUVIA_CHECK(throws_invalid(
         [&disabled_refresh] { ruvia::app().document_root(std::move(disabled_refresh)); }));
+}
+
+RUVIA_TEST(app_document_root_rejects_static_root_resident_options) {
+    // A document root's resident policy is document_root_config::resident_*;
+    // the standalone static_root opt-in must not be accepted and ignored.
+    for (const auto& [max_bytes, budget_bytes] : {std::pair<std::size_t, std::size_t>{1024, 0},
+             std::pair<std::size_t, std::size_t>{0, 1024}}) {
+        ruvia::document_root_config config;
+        config.root_ = "public";
+        config.static_options_.resident_max_bytes_ = max_bytes;
+        config.static_options_.resident_budget_bytes_ = budget_bytes;
+        RUVIA_CHECK(throws_invalid([&config] { ruvia::app().document_root(std::move(config)); }));
+    }
 }
 
 RUVIA_TEST(app_compression_rejects_invalid_thresholds_at_configuration) {

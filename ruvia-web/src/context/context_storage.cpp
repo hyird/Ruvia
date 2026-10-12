@@ -121,8 +121,4 @@ void context::respond(http_response&& response) {
     store_assigned_response(std::move(response));
 }
 
-http_response context::take_response() {
-    return response_state().take();
-}
-
 }  // namespace ruvia

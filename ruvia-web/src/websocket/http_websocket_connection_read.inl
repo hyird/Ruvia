@@ -86,16 +86,14 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
 template <typename stream_type>
 task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
     // Fill the spare capacity the buffer already owns, within bounds: growth
-    // past it follows the string's geometric policy, so a large frame needs
-    // far fewer reads than one per 4 KiB, while the cap keeps the per-read
-    // resize fill small when a large buffer is retained.
+    // past it is geometric, so a large frame needs far fewer reads than one
+    // per 4 KiB. The read space is never initialized before the socket fills it.
     constexpr std::size_t min_read_bytes = 4096;
     constexpr std::size_t max_read_bytes = 64 * 1024;
-    const auto old_size = buffer_.size();
-    const auto read_bytes = std::clamp(buffer_.capacity() - old_size, min_read_bytes, max_read_bytes);
-    http_resize_pmr_string_for_overwrite(buffer_, old_size + read_bytes);
-    auto read_completion = co_await ruvia::async_asio<std::size_t>([this, old_size](auto handler) mutable {
-        stream_.async_read_some(asio::buffer(buffer_.data() + old_size, buffer_.size() - old_size), std::move(handler));
+    const auto read_bytes = std::clamp(buffer_.capacity() - buffer_.size(), min_read_bytes, max_read_bytes);
+    const auto read_space = buffer_.prepare(read_bytes);
+    auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
+        stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
     });
     const auto ec = read_completion.error_code();
     const auto bytes_read = read_completion.result();
@@ -103,14 +101,12 @@ task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
     // that dropped TCP without close_notify both end the byte stream; the
     // websocket core maps a missing Close frame to an abnormal closure.
     if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
-        buffer_.resize(old_size);
         co_return http_stream_read_result::make_end();
     }
     if (ec) {
-        buffer_.resize(old_size);
         co_return http_stream_read_result::make_failure(ec);
     }
-    buffer_.resize(old_size + bytes_read);
+    buffer_.commit(bytes_read);
     co_return http_stream_read_result::make_data();
 }
 

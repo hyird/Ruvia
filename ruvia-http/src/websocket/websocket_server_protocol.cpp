@@ -7,7 +7,7 @@
 namespace ruvia {
 
 struct websocket_server_protocol::impl_type final {
-    explicit impl_type(std::pmr::string& input, protocol_byte_limit message_limit,
+    explicit impl_type(http_io_buffer& input, protocol_byte_limit message_limit,
         websocket_server_protocol_options options)
         : resource_(input.get_allocator().resource()),
           connection_(input, message_limit, options.compression_,
@@ -24,11 +24,11 @@ void websocket_server_protocol::impl_deleter_type::operator()(impl_type* value) 
     }
 }
 
-websocket_server_protocol::websocket_server_protocol(std::pmr::string& input,
+websocket_server_protocol::websocket_server_protocol(http_io_buffer& input,
     protocol_byte_limit message_limit, websocket_compression compression)
     : websocket_server_protocol(input, message_limit, websocket_server_protocol_options{compression, 6}) {}
 
-websocket_server_protocol::websocket_server_protocol(std::pmr::string& input,
+websocket_server_protocol::websocket_server_protocol(http_io_buffer& input,
     protocol_byte_limit message_limit, websocket_server_protocol_options options)
     : impl_(detail::construct_http_pmr_object<impl_type>(input.get_allocator().resource(), input, message_limit, options)) {}
 

@@ -115,20 +115,28 @@ task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::strin
     }
 }
 
+// The transfer decoder's output scratch: a fixed window sized once per reader.
+template <typename stream_type>
+std::span<char> stream_body_reader<stream_type>::transfer_output() {
+    if (transfer_output_.empty()) {
+        transfer_output_.resize(http_body_buffer_bytes);
+    }
+    return std::span<char>(transfer_output_);
+}
+
+// Decodes into the reused scratch and appends what the decoder produced, so
+// `target` only ever grows by written bytes.
 template <typename stream_type>
 void stream_body_reader<stream_type>::decode_transfer_append(
     std::string_view input, std::pmr::string& target) {
+    const auto output_window = transfer_output();
     for (;;) {
-        const auto old_size = target.size();
-        http_resize_pmr_string_for_overwrite(target, old_size + http_body_buffer_bytes);
-        const auto result_value = transfer_decoder_->decode(
-            input, std::span<char>(target.data() + old_size, http_body_buffer_bytes));
+        const auto result_value = transfer_decoder_->decode(input, output_window);
         input.remove_prefix(std::min(input.size(), result_value.consumed_bytes()));
         if (const auto* output = result_value.output()) {
-            target.resize(old_size + output->bytes().size());
+            target.append(output->bytes());
             continue;
         }
-        target.resize(old_size);
         require_transfer_coding_progress(result_value);
         return;
     }
@@ -158,7 +166,7 @@ task<void> stream_body_reader<stream_type>::read_more() {
     // unread framing suffix moves, once per socket read, instead of once per
     // returned chunk.
     if (read_cursor_ != 0) {
-        buffer_.erase(0, read_cursor_);
+        buffer_.consume(read_cursor_);
         read_cursor_ = 0;
     }
     const auto old_size = buffer_.size();
@@ -167,29 +175,24 @@ task<void> stream_body_reader<stream_type>::read_more() {
     if (old_size >= hard_limit) {
         throw_request_body_too_large();
     }
-    if (old_size == buffer_.capacity()) {
-        const auto next_capacity = std::min<std::size_t>(
-            std::max<std::size_t>(buffer_.capacity() * 2, old_size + http_body_buffer_bytes),
-            hard_limit);
-        buffer_.reserve(next_capacity);
-    }
     const auto writable = std::min<std::size_t>(http_body_buffer_bytes, hard_limit - old_size);
-    http_resize_pmr_string_for_overwrite(buffer_, old_size + writable);
+    if (buffer_.capacity() - old_size < writable) {
+        const auto doubled = buffer_.capacity() > hard_limit / 2 ? hard_limit : buffer_.capacity() * 2;
+        buffer_.reserve(std::min(std::max(doubled, old_size + writable), hard_limit));
+    }
+    const auto read_space = buffer_.prepare(writable);
 
     scanner_entry_.set_phase(connection_scanner::phase_type::reading_payload);
     auto read_completion =
-        co_await ruvia::async_asio<std::size_t>([this, old_size, writable](auto handler) mutable {
-            stream_.async_read_some(
-                asio::buffer(buffer_.data() + old_size, writable), std::move(handler));
+        co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
+            stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
         });
     const auto ec = read_completion.error_code();
     const auto bytes_read = read_completion.result();
-    // The writable tail never received bytes on failure; it must not survive
-    // as buffered input.
-    buffer_.resize(old_size + (ec ? 0 : bytes_read));
     if (ec || bytes_read == 0) {
         throw_incomplete_request_body();
     }
+    buffer_.commit(bytes_read);
     scanner_entry_.touch();
 }
 

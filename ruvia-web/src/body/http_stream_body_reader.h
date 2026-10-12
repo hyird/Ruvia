@@ -14,8 +14,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -77,12 +77,13 @@ private:
     task<std::optional<std::span<const std::byte>>> read_known_length(std::size_t content_length);
     task<std::optional<std::span<const std::byte>>> read_chunked();
     task<std::optional<std::span<const std::byte>>> read_transfer_decoded_chunked();
+    [[nodiscard]] std::span<char> transfer_output();
     void decode_transfer_append(std::string_view input, std::pmr::string& target);
     [[nodiscard]] bool exceeds_limit(std::size_t bytes) const noexcept;
     void mark_finished() noexcept;
 
     stream_type& stream_;
-    std::pmr::string buffer_;
+    http_io_buffer buffer_;
     std::pmr::string transfer_output_;
     std::unique_ptr<http_transfer_coding_stack_decoder, pmr_object_deleter<http_transfer_coding_stack_decoder>>
         transfer_decoder_;

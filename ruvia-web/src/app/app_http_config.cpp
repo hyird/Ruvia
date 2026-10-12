@@ -80,6 +80,10 @@ application& application::document_root(document_root_config config) {
             if (config.static_options_.index_file_.empty()) {
                 config.static_options_.index_file_ = "index.html";
             }
+            if (config.static_options_.resident_max_bytes_ != 0 || config.static_options_.resident_budget_bytes_ != 0) {
+                throw std::invalid_argument(
+                    "document root resident bytes are set by document_root_config::resident_max_bytes_");
+            }
             detail::validate_static_root_options(config.static_options_);
             const auto precompression = make_static_root_precompression_options(config);
 

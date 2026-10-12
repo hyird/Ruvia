@@ -3,11 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
-#include <string>
 #include <string_view>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol_types.h"
@@ -21,13 +20,15 @@ struct websocket_server_protocol_options final {
 
 // Sans-I/O websocket server protocol. The input buffer is borrowed and must
 // outlive this object; its memory resource must also outlive this object.
-// Event payload views remain valid until the next poll() or input mutation.
+// The caller reads transport bytes into it with prepare()/commit() or append().
+// poll() consumes the frames it parses. Event payload views remain valid until
+// the next poll() or input mutation.
 class websocket_server_protocol final {
 public:
-    explicit websocket_server_protocol(std::pmr::string& input,
+    explicit websocket_server_protocol(http_io_buffer& input,
         protocol_byte_limit message_limit = protocol_byte_limit::limited(default_max_websocket_message_bytes),
         websocket_compression compression = (websocket_compression{}));
-    websocket_server_protocol(std::pmr::string& input, protocol_byte_limit message_limit,
+    websocket_server_protocol(http_io_buffer& input, protocol_byte_limit message_limit,
         websocket_server_protocol_options options);
     ~websocket_server_protocol();
 

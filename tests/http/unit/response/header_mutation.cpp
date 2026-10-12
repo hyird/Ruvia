@@ -1,5 +1,7 @@
 #include <cstddef>
+#include <memory_resource>
 #include <new>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/http_response.h"
@@ -141,4 +143,139 @@ RUVIA_TEST(response_commit_headers_leaves_staged_response_independent) {
     RUVIA_CHECK_EQ(staged.header("Content-Type").value_or(""), "application/json");
     RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/plain");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+}
+
+RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocation) {
+    struct constant_case final {
+        ruvia::http_content_type type_;
+        std::string_view value_;
+    };
+    constexpr constant_case cases[]{
+        {ruvia::http_content_type::text_plain_utf8, "text/plain; charset=UTF-8"},
+        {ruvia::http_content_type::text_html_utf8, "text/html; charset=UTF-8"},
+        {ruvia::http_content_type::application_json, "application/json"},
+    };
+    for (const auto& constant : cases) {
+        // The fully validated setter accepts every constant the trusted one stores.
+        ruvia::http_response validated;
+        validated.header("Content-Type", constant.value_);
+        RUVIA_CHECK_EQ(validated.header("Content-Type").value_or(""), constant.value_);
+
+        failing_memory_resource resource;
+        {
+            ruvia::http_response response({.resource_ = &resource});
+            response.header("X-Before", "before");
+            response.header("content-type", "text/csv");
+            const auto live = resource.live_allocations();
+            response.content_type(constant.type_);
+            RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
+            RUVIA_CHECK_EQ(response.headers().begin()[1].name(), "Content-Type");
+            RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), constant.value_);
+            RUVIA_CHECK_EQ(resource.live_allocations(), live - 1);
+
+            resource.fail_after(0);
+            ruvia::http_response fresh({.resource_ = &resource});
+            fresh.content_type(constant.type_);
+            resource.allow_allocations();
+            RUVIA_CHECK_EQ(fresh.header("Content-Type").value_or(""), constant.value_);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+
+    ruvia::http_response response;
+    response.header("Content-Type", "text/csv");
+    bool rejected = false;
+    try {
+        response.content_type(static_cast<ruvia::http_content_type>(0xff));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/csv");
+}
+
+RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
+    auto* const resource = std::pmr::new_delete_resource();
+    const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
+    for (const auto mode : {ruvia::http_response_header_transfer::merge, ruvia::http_response_header_transfer::assign,
+             ruvia::http_response_header_transfer::apply}) {
+        ruvia::http_response source_value({.resource_ = resource});
+        source_value.header("X-Source", "one");
+        source_value.header("Vary", "Origin", append);
+        source_value.header("Vary", "Accept", append);
+        source_value.header("Set-Cookie", "a=1");
+        source_value.header("Set-Cookie", "b=2", append);
+        source_value.header("Content-Type", "text/csv");
+
+        ruvia::http_response destination({.resource_ = resource});
+        destination.header("X-Existing", "kept");
+        destination.transfer_headers_from(source_value, mode);
+
+        // Assignment keeps the destination's (absent) Content-Type.
+        const bool assign = mode == ruvia::http_response_header_transfer::assign;
+        RUVIA_CHECK_EQ(destination.headers().size(), std::size_t{assign ? 6U : 7U});
+        RUVIA_CHECK_EQ(destination.header("X-Existing").value_or(""), "kept");
+        RUVIA_CHECK_EQ(destination.header("x-source").value_or(""), "one");
+        RUVIA_CHECK_EQ(destination.header("Vary").value_or(""), "Origin");
+        RUVIA_CHECK_EQ(destination.headers().begin()[3].value(), "Accept");
+        RUVIA_CHECK_EQ(destination.header("Set-Cookie").value_or(""), "a=1");
+        RUVIA_CHECK_EQ(destination.headers().begin()[5].value(), "b=2");
+        RUVIA_CHECK_EQ(destination.header("Content-Type").value_or(""), assign ? "" : "text/csv");
+
+        // Transferred fields keep their rules: cookies still upsert by name, and
+        // a replacement collapses the appended field.
+        destination.header("Set-Cookie", "a=3", append);
+        RUVIA_CHECK_EQ(destination.headers().size(), std::size_t{assign ? 6U : 7U});
+        RUVIA_CHECK_EQ(destination.header("Set-Cookie").value_or(""), "a=3");
+        destination.header("Vary", "Cookie");
+        RUVIA_CHECK_EQ(destination.headers().size(), std::size_t{assign ? 5U : 6U});
+        RUVIA_CHECK_EQ(destination.header("Vary").value_or(""), "Cookie");
+        RUVIA_CHECK_EQ(source_value.headers().size(), std::size_t{6});
+    }
+
+    // A field the destination already holds resolves by mode.
+    ruvia::http_response source_value({.resource_ = resource});
+    source_value.header("Content-Type", "text/csv");
+    source_value.header("X-Added", "yes");
+    ruvia::http_response merged({.resource_ = resource});
+    merged.content_type(ruvia::http_content_type::application_json);
+    merged.transfer_headers_from(source_value, ruvia::http_response_header_transfer::merge);
+    RUVIA_CHECK_EQ(merged.header("Content-Type").value_or(""), "application/json");
+    RUVIA_CHECK_EQ(merged.header("X-Added").value_or(""), "yes");
+    ruvia::http_response applied({.resource_ = resource});
+    applied.content_type(ruvia::http_content_type::application_json);
+    applied.transfer_headers_from(source_value, ruvia::http_response_header_transfer::apply);
+    RUVIA_CHECK_EQ(applied.header("Content-Type").value_or(""), "text/csv");
+    RUVIA_CHECK_EQ(applied.headers().size(), std::size_t{2});
+}
+
+RUVIA_TEST(response_header_transfer_failure_leaves_destination_unchanged) {
+    failing_memory_resource resource;
+    {
+        ruvia::http_response source_value({.resource_ = std::pmr::new_delete_resource()});
+        source_value.header("X-First", "1");
+        source_value.header("X-Second", "2");
+
+        ruvia::http_response destination({.resource_ = &resource});
+        destination.header("X-Existing", "kept");
+        const auto live = resource.live_allocations();
+        resource.fail_after(1);
+        bool failed = false;
+        try {
+            destination.transfer_headers_from(source_value, ruvia::http_response_header_transfer::apply);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(resource.live_allocations(), live);
+        RUVIA_CHECK_EQ(destination.headers().size(), std::size_t{1});
+        RUVIA_CHECK(!destination.header("X-First").has_value());
+
+        resource.allow_allocations();
+        destination.transfer_headers_from(source_value, ruvia::http_response_header_transfer::apply);
+        RUVIA_CHECK_EQ(destination.headers().size(), std::size_t{3});
+        RUVIA_CHECK_EQ(destination.header("X-First").value_or(""), "1");
+        RUVIA_CHECK_EQ(destination.header("X-Second").value_or(""), "2");
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

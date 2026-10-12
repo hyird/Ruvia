@@ -2,7 +2,7 @@
 
 // websocket sans-I/O connection core shared by server and client runtimes.
 //
-// The caller owns one persistent PMR input buffer and appends transport bytes to
+// The caller owns one persistent http_io_buffer and appends transport bytes to
 // it. poll() parses that buffer (unmasking client-to-server frames in place),
 // emits at most one event,
 // and leaves its payload view valid until the next poll() call. This keeps the
@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol_types.h"
 
@@ -40,7 +41,7 @@ enum class ws_payload_storage : std::uint8_t {
 
 class ws_connection final {
 public:
-    explicit ws_connection(std::pmr::string& input,
+    explicit ws_connection(http_io_buffer& input,
         protocol_byte_limit message_limit = protocol_byte_limit::unlimited(),
         websocket_compression compression = (websocket_compression{}),
         websocket_connection_role role = websocket_connection_role::server,
@@ -62,10 +63,10 @@ public:
     [[nodiscard]] websocket_abort_disposition abort() noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
     [[nodiscard]] std::size_t pending_input_bytes() const noexcept {
-        return input_->size() - input_offset_;
+        return input_->size() - pending_consume_;
     }
-    // Drop already-parsed input bytes so they no longer count against an owner's
-    // input bound. Invalidates event payload views into the input buffer.
+    // Drop the last returned frame so it no longer counts against an owner's
+    // input bound. Its bytes stay in place until the buffer next needs room.
     void release_consumed_input() noexcept;
 
     // Submit one complete logical message/control payload. Role-correct masking,
@@ -99,10 +100,10 @@ private:
     void receive_peer_close() noexcept;
     [[nodiscard]] std::optional<websocket_event> poll_impl() &;
 
-    std::pmr::string* input_;
+    http_io_buffer* input_;
     protocol_byte_limit message_limit_;
-    std::size_t input_offset_{0};
-    std::size_t pending_compact_until_{0};
+    // Bytes of the last returned frame, consumed by the next poll().
+    std::size_t pending_consume_{0};
 
     std::pmr::string out_buffer_;
     std::size_t out_offset_{0};

@@ -482,7 +482,6 @@ private:
         error_ = std::move(exception);
     }
     [[nodiscard]] bool has_response() const noexcept;
-    [[nodiscard]] http_response take_response();
 
     request_memory& memory_;
     const http_request& request_;

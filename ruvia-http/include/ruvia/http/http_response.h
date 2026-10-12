@@ -156,6 +156,14 @@ enum class http_response_header_transfer : std::uint8_t {
     apply,
 };
 
+// Content-Type values whose field lines are constants of this library. Setting
+// one shares a static descriptor: no allocation and no grammar re-validation.
+enum class http_content_type : std::uint8_t {
+    text_plain_utf8,   // text/plain; charset=UTF-8
+    text_html_utf8,    // text/html; charset=UTF-8
+    application_json,  // application/json
+};
+
 struct http_response_header_options {
     http_response_header_mode mode_{http_response_header_mode::replace};
 };
@@ -251,6 +259,8 @@ public:
     // without copying. Keep their bytes valid and unchanged while this block or
     // any clone retains them.
     void header_stable_view(std::string_view key, std::string_view value);
+    // Replaces Content-Type with a library constant.
+    void content_type(http_content_type type);
     void remove_header(std::string_view key);
     // Replace cookies with the same name, Domain/Path scope, and Partitioned
     // state; partitioned and unpartitioned cookies may coexist.
@@ -290,6 +300,10 @@ private:
     // sharing this resource; it is left empty and independent.
     void commit(http_response_headers&& staged) noexcept;
     void transfer_from(const http_response_headers& source, http_response_header_transfer mode);
+    // Appends the source's fields in place when none can interact with an
+    // existing field. Returns false, leaving this block unchanged, otherwise.
+    [[nodiscard]] bool try_append_disjoint(const http_response_headers& source, http_response_header_transfer mode);
+    void set_static_header(http_response_header header);
 
     // Field rules and the known-header index.
     void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
@@ -395,6 +409,7 @@ public:
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
     void header_stable_view(std::string_view key, std::string_view value);
+    void content_type(http_content_type type);
     // Format Allow from known-method bits followed by extension method values.
     // Extension methods must be nonempty HTTP tokens and may borrow current headers.
     // The resulting field is owned by this response; refresh views after mutation.

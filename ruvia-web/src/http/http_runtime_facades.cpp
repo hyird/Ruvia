@@ -67,6 +67,18 @@ ruvia::task<void> write_websocket_payload(void* target,
     co_await write(target, opcode, payload_value, compress);
 }
 
+// The read lease is claimed by the caller before this task exists: the payload
+// borrows the connection's read storage, and no read may run, even one started
+// while this operation is still unstarted, until the frame has been written.
+ruvia::task<void> write_websocket_message(void* target,
+    ruvia::task<void> (*write)(void*, ruvia::websocket_opcode, std::string_view, bool),
+    ruvia::websocket_message message, ruvia::detail::operation_lane_lease read_lease, bool& write_active,
+    bool compress) {
+    auto held_read = std::move(read_lease);
+    auto lease = ruvia::detail::claim_operation_lane(write_active, "concurrent websocket output operations are not supported");
+    co_await write(target, message.opcode(), message.payload(), compress);
+}
+
 ruvia::task<void> close_websocket_with_reason(void* target,
     ruvia::task<void> (*close)(void*, ruvia::websocket_close_options),
     ruvia::websocket_close_options options, std::pmr::string reason,
@@ -248,6 +260,14 @@ scoped_operation<void> websocket::pong(std::pmr::string&& payload_value) & {
 
 scoped_operation<void> websocket::ping(std::pmr::string&& payload_value) & {
     return write(websocket_opcode::ping, std::move(payload_value));
+}
+
+scoped_operation<void> websocket::send(websocket_message&& message, websocket_send_options options) & {
+    require_active();
+    auto read_lease = detail::claim_operation_lane(read_active_, "websocket message send cannot overlap a read");
+    return ::ruvia::make_scoped_operation(operation_scope_,
+        write_websocket_message(target_, write_, message, std::move(read_lease), write_active_, options.compress_),
+        &require_websocket_worker, const_cast<worker_handle*>(worker_));
 }
 
 scoped_operation<void> websocket::close(websocket_close_options options) & {

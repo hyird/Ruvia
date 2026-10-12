@@ -13,7 +13,6 @@
 #include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http1_websocket_client_handshake.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
@@ -60,9 +59,9 @@ task<void> websocket_client_state::establish() {
         .compression_level_ = config_.compression_level_,
         .max_buffered_input_bytes_ = websocket_client_max_buffered_input_bytes(config_.max_message_bytes_)});
     feed_input(input_);
-    // From here input_ is the transport read buffer, sized once.
+    // From here input_ is the transport read buffer, sized once per connection.
     input_.clear();
-    http_resize_pmr_string_for_overwrite(input_, websocket_client_transport_buffer_bytes);
+    input_.resize(websocket_client_transport_buffer_bytes);
     last_active_ms_ = websocket_steady_now_ms();
     liveness_state_ = websocket_liveness_idle{};
     if (config_.heartbeat_.ping_interval_.has_value()) {
