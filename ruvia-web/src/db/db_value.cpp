@@ -14,7 +14,7 @@ db_value::db_value(const char* value)
 db_value::db_value(std::string_view value)
     : storage_(std::in_place_type<borrowed_text>, value) {}
 
-db_value::db_value(std::pmr::string value)
+db_value::db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value)
     : storage_(std::in_place_type<std::pmr::string>, std::move(value)) {}
 
 db_value::db_value(bool value)

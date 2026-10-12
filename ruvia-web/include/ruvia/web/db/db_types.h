@@ -209,7 +209,9 @@ public:
 private:
     friend struct detail::db_value_access;
 
-    explicit db_value(std::pmr::string value);
+    // Tagged so it never competes with the public borrowing constructors: a
+    // std::pmr::string lvalue argument still borrows through string_view.
+    db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value);
 
     [[nodiscard]] detail::db_value_type type() const noexcept;
     [[nodiscard]] std::string_view text() const& noexcept;

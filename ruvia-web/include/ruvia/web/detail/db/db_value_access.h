@@ -10,7 +10,7 @@ namespace ruvia::detail {
 
 struct db_value_access final {
     [[nodiscard]] static db_value owned_string(std::pmr::string value) {
-        return db_value(std::move(value));
+        return db_value(std::in_place_type<std::pmr::string>, std::move(value));
     }
 
     [[nodiscard]] static db_value_type type(const db_value& value) noexcept {

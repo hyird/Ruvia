@@ -165,6 +165,17 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     RUVIA_CHECK_EQ(maria_statement.sql(), "SELECT left(`name`, ?) FROM `items` WHERE (`ratio` > ?)");
 }
 
+RUVIA_TEST(db_value_borrows_pmr_string_lvalues) {
+    std::pmr::string name{"alice"};
+    const std::pmr::string fixed{"bob"};
+    const ruvia::db_value from_mutable(name);
+    const ruvia::db_value from_const(fixed);
+    db_query query;
+    query.select(query.value(from_mutable)).from("items").where(query.binary(query.column("name"), op_type::equal, query.value(from_const)));
+    const auto statement = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{2});
+}
+
 RUVIA_TEST(db_query_null_comparisons_and_empty_membership_have_defined_semantics) {
     db_query query;
     const auto id = query.column("id");
