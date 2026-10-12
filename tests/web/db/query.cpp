@@ -151,6 +151,13 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     reuse.select(reuse_projections).from("items");
     const auto reuse_statement = reuse.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK_EQ(reuse_statement.sql(), "SELECT ($1 || $2), CAST($3 AS DECIMAL), (- $3) FROM \"items\"");
+    // Unsigned values span beyond bigint, so their category is numeric:
+    // COALESCE over UINT64_MAX must not narrow it to int8.
+    db_query wide;
+    wide.select(wide.coalesce({wide.value(std::numeric_limits<std::uint64_t>::max()), wide.value(std::uint64_t{1})}))
+        .from("items");
+    const auto wide_statement = wide.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(wide_statement.sql(), "SELECT COALESCE($1::numeric, $2::numeric) FROM \"items\"");
     // MariaDB placeholders carry no casts.
     db_query maria;
     maria.select(maria.call("left", {maria.column("name"), maria.value(3)})).from("items").where(maria.binary(maria.column("ratio"), op_type::greater, maria.value(0.25)));

@@ -37,8 +37,8 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
 enum class pg_parameter_cast : std::uint8_t {
     // The surrounding SQL types the value.
     context,
-    // Nothing types the value: integers render ::int8, doubles ::float8,
-    // booleans ::bool and text ::text.
+    // Nothing types the value: signed integers render ::int8, unsigned
+    // integers ::numeric, doubles ::float8, booleans ::bool and text ::text.
     value_category,
     // The PostgreSQL signature at this position accepts only int4; other
     // values stay untyped.
@@ -259,8 +259,12 @@ private:
         }
         switch (type) {
             case db_value_type::signed_value:
-            case db_value_type::unsigned_value:
                 sql_ += "::int8";
+                break;
+            case db_value_type::unsigned_value:
+                // The whole uint64 range exceeds bigint; numeric holds every
+                // value exactly, independent of the bound value.
+                sql_ += "::numeric";
                 break;
             case db_value_type::double_value:
                 sql_ += "::float8";

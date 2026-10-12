@@ -300,11 +300,12 @@ public:
     // type: the other operand, the target column, the selected function or
     // operator overload, a Boolean context (AND/OR/NOT, IS TRUE...), an
     // explicit cast(). Where PostgreSQL cannot type it ("any"/polymorphic
-    // arguments such as json_build_object, concat or array_agg; arithmetic or
-    // || with two bound operands; unary minus or ~; IS [NOT] NULL; GREATEST and
-    // friends over bound values only) it carries its C++ category: $n::int8,
-    // ::float8, ::bool or ::text. Integers in int4-only built-in arguments
-    // (left(), round(x, n), jsonb -> n) render as $n::int4.
+    // arguments such as json_build_object, concat or array_agg; arithmetic with
+    // two bound operands; unary minus or ~; IS [NOT] NULL; GREATEST and friends
+    // over bound values only) it carries its C++ category: signed integers
+    // $n::int8, unsigned integers $n::numeric (the full uint64 range), doubles
+    // ::float8, booleans ::bool, text ::text. Integers in int4-only built-in
+    // arguments (left(), round(x, n), jsonb -> n) render as $n::int4.
     expr_type value(const db_value& value);
     template <detail::db_parameter value_type>
         requires(!std::same_as<std::remove_cvref_t<value_type>, db_value>)
