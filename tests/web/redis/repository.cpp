@@ -19,6 +19,7 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/read.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 #include <openssl/evp.h>
@@ -97,11 +98,11 @@ class redis_command_server final {
 public:
     struct stalled_tag final {};
 
-    explicit redis_command_server(std::vector<std::string> replies)
-        : redis_command_server(std::move(replies), false) {}
+    explicit redis_command_server(std::vector<std::string> replies, std::chrono::milliseconds reply_delay = {})
+        : redis_command_server(std::move(replies), false, reply_delay) {}
 
     explicit redis_command_server(stalled_tag)
-        : redis_command_server({}, true) {}
+        : redis_command_server({}, true, {}) {}
 
     ~redis_command_server() noexcept(false) {
         finish();
@@ -141,8 +142,9 @@ public:
     }
 
 private:
-    redis_command_server(std::vector<std::string> replies, bool stalled)
+    redis_command_server(std::vector<std::string> replies, bool stalled, std::chrono::milliseconds reply_delay)
         : replies_(std::move(replies)),
+          reply_delay_(reply_delay),
           gate_(io_context_),
           acceptor_(io_context_, {asio::ip::tcp::v4(), 0}),
           socket_(io_context_),
@@ -210,6 +212,10 @@ private:
             } else {
                 for (const auto& reply : replies_) {
                     co_await read_command();
+                    if (reply_delay_.count() > 0) {
+                        gate_.expires_after(reply_delay_);
+                        co_await gate_.async_wait(asio::use_awaitable);
+                    }
                     co_await asio::async_write(socket_, asio::buffer(reply), asio::use_awaitable);
                 }
                 commands_read_.set_value();
@@ -238,6 +244,7 @@ private:
     }
 
     std::vector<std::string> replies_;
+    std::chrono::milliseconds reply_delay_;
     asio::io_context io_context_;
     asio::steady_timer gate_;
     asio::ip::tcp::acceptor acceptor_;
@@ -433,6 +440,51 @@ RUVIA_TEST(redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
         }
         // Insert and delete are distinct scripts.
         RUVIA_CHECK(commands[0][1] != commands[stride][1]);
+    }
+}
+
+RUVIA_TEST(redis_repository_script_reload_shares_the_operation_timeout) {
+    using namespace ruvia;
+    using namespace std::chrono_literals;
+    // Each reply fits a fresh one-second budget, but their combined delay
+    // exceeds it. Both commands must have reached the peer before timeout.
+    for (const bool remove : {false, true}) {
+        redis_command_server server({"-NOSCRIPT No matching script. Please use EVAL.\r\n", ":1\r\n"}, 650ms);
+        auto& io_context = test::new_test_io_context();
+        redis_test_worker worker(io_context);
+        auto config = server_config(server);
+        config.command_timeout_ = std::nullopt;
+        bool timed_out = false;
+        {
+            redis_client client(worker.loop(), config);
+            auto exercise = [&](redis_client& connected) -> task<void> {
+                const auto repository = connected.handle().with_options({.timeout_ = 1s}).get_repository<test_redis_user>(test_redis_repository_config);
+                const auto user = make_user(std::pmr::get_default_resource());
+                try {
+                    if (remove) {
+                        (void)co_await repository.remove(user);
+                    } else {
+                        (void)co_await repository.insert(user);
+                    }
+                } catch (const redis_error& error) {
+                    timed_out = error.code() == redis_error::code_type::timeout;
+                }
+            };
+            auto root = worker.loop().start(test::exercise_backend_client(client, exercise));
+            std::jthread runner([&worker] { worker.run(); });
+            root.wait();
+            worker.stop();
+            runner.join();
+            server.finish();
+            root.get();
+        }
+        RUVIA_CHECK(timed_out);
+        const auto& commands = server.commands();
+        RUVIA_CHECK_EQ(commands.size(), std::size_t{2});
+        if (commands.size() == 2) {
+            RUVIA_CHECK(commands[0][0] == "EVALSHA");
+            RUVIA_CHECK(commands[1][0] == "EVAL");
+        }
     }
 }
 

@@ -56,18 +56,21 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout) {
-    return execute_with_timeout_impl(std::move(args), std::move(options), reply_timeout, resource);
+    return execute_with_timeout_impl(std::move(args), std::move(options), reply_timeout, resource, std::nullopt);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
-    std::pmr::memory_resource* resource, operation_options options) {
-    return execute_with_timeout_impl(args, std::move(options), std::nullopt, resource);
+    std::pmr::memory_resource* resource, operation_options options, operation_timeout deadline) {
+    return execute_with_timeout_impl(args, std::move(options), std::nullopt, resource, deadline);
 }
 
 template <typename arg_source_type>
 task<redis_value> redis_pool::execute_with_timeout_impl(arg_source_type args, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
-    const ruvia::operation_timeout operation_timeout_value(options.timeout_);
+    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
+    std::optional<operation_timeout> deadline) {
+    // Ordinary commands start their budget here; an ORM retry retains the
+    // deadline established when its enclosing operation started.
+    const operation_timeout operation_timeout_value = deadline ? *deadline : operation_timeout(options.timeout_);
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);

@@ -54,6 +54,10 @@ public:
         reaccept,
     };
 
+    enum class postgres_copy_direction { none,
+        input,
+        output };
+
     struct postgres_reply final {
         std::string column_{"v"};
         std::uint32_t type_{25};
@@ -65,9 +69,8 @@ public:
         // this message and sql_state_ instead of a result.
         std::string error_;
         std::string sql_state_{"42601"};
-        // The statement is answered with CopyOutResponse: the connection stays
-        // in COPY state and no ReadyForQuery follows.
-        bool copy_out_{false};
+        // COPY keeps the connection in transfer state; no ReadyForQuery follows.
+        postgres_copy_direction copy_{postgres_copy_direction::none};
     };
 
     // One extended-protocol Parse message: the statement text and the
@@ -343,7 +346,7 @@ private:
                 fields.push_back('\0');
                 message(response, 'E', fields);
                 message(response, 'Z', std::string_view(&reply.status_, 1));
-            } else if (reply.copy_out_) {
+            } else if (reply.copy_ != postgres_copy_direction::none) {
                 // Text format, one column in text format.
                 std::string copy;
                 copy.push_back('\0');
@@ -351,7 +354,7 @@ private:
                 append_short(copy, 0);
                 message(response, '1', {});
                 message(response, '2', {});
-                message(response, 'H', copy);
+                message(response, reply.copy_ == postgres_copy_direction::input ? 'G' : 'H', copy);
             } else {
                 postgres_result(response, reply);
                 std::string command(reply.command_);

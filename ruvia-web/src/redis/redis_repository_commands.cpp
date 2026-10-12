@@ -122,7 +122,8 @@ redis_orm_arguments_type redis_orm_delete_arguments(std::string_view key, std::p
 
 task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
     redis_orm_arguments_type args, operation_options options, std::pmr::memory_resource* resource) {
-    auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options);
+    const operation_timeout deadline(options.timeout_);
+    auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);
     if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {
         co_return reply;
     }
@@ -130,7 +131,7 @@ task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_scr
     // EVAL runs the body and caches it under the same digest for later calls.
     args[0].assign("EVAL");
     args[1].assign(script.body_);
-    co_return co_await pool.execute_borrowed(redis_command_args_view{args}, resource, std::move(options));
+    co_return co_await pool.execute_borrowed(redis_command_args_view{args}, resource, std::move(options), deadline);
 }
 
 redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource*) {

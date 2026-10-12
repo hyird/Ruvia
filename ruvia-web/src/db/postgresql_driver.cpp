@@ -210,13 +210,6 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     }
 }
 
-// Only a result the server rejected (or one libpq could not parse) is
-// followed by ReadyForQuery; a COPY result keeps the connection in COPY state
-// and PQgetResult() returns a fresh COPY result on every call.
-[[nodiscard]] bool rejected_result_status(ExecStatusType status) noexcept {
-    return status == PGRES_FATAL_ERROR || status == PGRES_NONFATAL_ERROR || status == PGRES_BAD_RESPONSE;
-}
-
 // Builds the error for a failed result. A statement the server rejected is
 // followed by ReadyForQuery, so the rest of the command is read here and the
 // connection is idle again when the pool keeps it; a transport failure is
@@ -232,9 +225,11 @@ task<db_error> postgresql_statement_failure(postgresql_pool& pool, std::size_t i
     if (error.code() != db_error::code_type::statement_failed) {
         co_return error;
     }
-    if (!rejected_result_status(status)) {
+    // Only a server error has the normal ReadyForQuery boundary. COPY needs
+    // its own transfer protocol, and a bad response cannot prove that boundary.
+    if (status != PGRES_FATAL_ERROR) {
         co_return db_error(db_error::code_type::protocol_error, db_driver::postgresql,
-            "PostgreSQL COPY results are not supported");
+            "PostgreSQL statement returned an unsupported result status");
     }
     while (true) {
         co_await wait_until_result_ready(pool, index, deadline_value);

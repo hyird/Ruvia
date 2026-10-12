@@ -115,9 +115,10 @@ public:
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
-    // The caller keeps `args` alive until the operation completes.
+    // The caller keeps `args` alive until the operation completes. `deadline`
+    // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
-        operation_options options);
+        operation_options options, operation_timeout deadline);
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::span<const redis_owned_command> commands, operation_options options,
         std::pmr::memory_resource* resource);
@@ -176,7 +177,8 @@ private:
         std::pmr::memory_resource* resource);
     template <typename arg_source_type>
     task<redis_value> execute_with_timeout_impl(arg_source_type args, operation_options options,
-        std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource);
+        std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
+        std::optional<operation_timeout> deadline);
     template <typename command_source_type>
     task<std::pmr::vector<redis_value>> execute_pipeline_impl(
         command_source_type commands, operation_options options, std::pmr::memory_resource* resource);

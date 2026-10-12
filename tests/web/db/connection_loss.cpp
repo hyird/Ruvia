@@ -145,26 +145,36 @@ RUVIA_TEST(db_rejected_transaction_statement_rolls_back_on_the_kept_connection) 
 // next statement runs on a fresh connection.
 RUVIA_TEST(db_copy_result_fails_the_statement_and_closes_the_connection) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::reaccept, {{.copy_out_ = true}, {.rows_ = {"fresh"}}});
-    auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
-    db_client client(attachment.loop(), peer.config());
-    std::optional<db_error::code_type> code;
-    std::string fresh;
-    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
-        try {
-            (void)co_await handle.query("COPY records TO STDOUT");
-        } catch (const db_error& error) {
-            code = error.code();
+    using direction = test::backend_startup_peer::postgres_copy_direction;
+    for (const auto copy : {direction::input, direction::output}) {
+        for (const auto kind : {statement_kind::query, statement_kind::execute}) {
+            test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+                test::backend_startup_peer::after_startup::reaccept, {{.copy_ = copy}, {.rows_ = {"fresh"}}});
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), peer.config());
+            std::optional<db_error::code_type> code;
+            std::string fresh;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                auto handle = connected.handle();
+                const auto sql = copy == direction::input ? "COPY records FROM STDIN" : "COPY records TO STDOUT";
+                try {
+                    if (kind == statement_kind::query) {
+                        (void)co_await handle.query(sql);
+                    } else {
+                        (void)co_await handle.execute(sql);
+                    }
+                } catch (const db_error& error) {
+                    code = error.code();
+                }
+                const auto rows = co_await handle.query("SELECT v FROM records");
+                fresh = rows.front()["v"].as<std::string_view>().value_or("");
+            });
+            RUVIA_CHECK(code == db_error::code_type::protocol_error);
+            RUVIA_CHECK(fresh == "fresh");
+            RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+            RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{2});
         }
-        const auto rows = co_await handle.query("SELECT v FROM records");
-        fresh = rows.front()["v"].as<std::string_view>().value_or("");
-    });
-    RUVIA_CHECK(code == db_error::code_type::protocol_error);
-    RUVIA_CHECK(fresh == "fresh");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
-    RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{2});
+    }
 }
 #endif
