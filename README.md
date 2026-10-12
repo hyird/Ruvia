@@ -12,7 +12,8 @@ middleware, streaming, WebSocket, and optional SQL, Redis, and JWT support.
 Requires CMake 3.28+, a C++20 compiler, and a bootstrapped vcpkg checkout
 (`VCPKG_ROOT`). Windows builds require MSVC and use static dependencies and runtime
 with the `x64-windows-static` triplet. The three libraries are static archives;
-Linux executables also link their runtime libraries statically.
+Linux executables link libstdc++ and libgcc statically, but use shared glibc and
+its dynamic loader; deployment requires a compatible system glibc.
 
 Dependencies are selected from [vcpkg.json](vcpkg.json): Asio for Core; zlib,
 Brotli, and Zstandard for HTTP; OpenSSL 3.0+ for Web. The manifest has no version

@@ -346,6 +346,8 @@ static void check_stop_drains_in_flight_request(
 
 RUVIA_TEST(app_stop_drains_in_flight_requests) {
     check_stop_drains_in_flight_request(ruvia_ctx, 10s);
+    // A large nonsaturated deadline must also allow the worker to notify completion.
+    check_stop_drains_in_flight_request(ruvia_ctx, std::chrono::hours(24 * 365 * 250));
     // The largest configurable drain window saturates instead of overflowing
     // into a deadline that has already passed.
     check_stop_drains_in_flight_request(ruvia_ctx, std::chrono::milliseconds::max());

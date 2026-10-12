@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -7,6 +8,8 @@
 #include <cstdint>
 #include <exception>
 #include <mutex>
+
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia::detail {
 
@@ -75,7 +78,19 @@ public:
     // that never started serving has nothing to drain.
     [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline) {
         std::unique_lock lock(mutex_);
-        return changed_.wait_until(lock, deadline, [this] { return phase_ != phase_type::open; });
+        while (phase_ == phase_type::open) {
+            // Some standard libraries convert steady deadlines to system time.
+            // Bound that conversion instead of passing a saturated deadline.
+            const auto bounded_deadline = std::min(
+                deadline, worker_timer_deadline_after(std::chrono::hours(1)));
+            if (changed_.wait_until(lock, bounded_deadline, [this] { return phase_ != phase_type::open; })) {
+                return true;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+        }
+        return true;
     }
 
 private:
