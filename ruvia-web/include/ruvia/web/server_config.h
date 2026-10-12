@@ -72,12 +72,20 @@ struct server_config final {
     // Cumulative request cap for each connection.
     std::optional<std::size_t> max_requests_per_connection_{1000};
     std::size_t max_buffered_body_bytes_{default_max_buffered_body_bytes};
-    // Live inbound buffer allocations across HTTP bodies and websocket sessions.
-    // Includes capacity and reallocation overlap; the limits cannot be disabled.
+    // Live inbound buffer allocations across buffered and streamed HTTP request
+    // bodies, CONNECT tunnel reads (including chunks a handler still holds) and
+    // websocket sessions. Includes capacity and reallocation overlap; the
+    // limits cannot be disabled. An allocation past either limit fails with
+    // std::bad_alloc, which an unhandled request answers with 503.
     std::size_t max_inbound_buffer_bytes_per_worker_{256 * 1024 * 1024};
     std::size_t max_inbound_buffer_bytes_per_connection_{64 * 1024 * 1024};
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_websocket_message_bytes_{default_max_websocket_message_bytes};
+    // Each worker's memory. retained_block_bytes_ bounds the freed 16 KiB-1 MiB
+    // blocks a worker keeps for reuse. A worker returns them, with its cached
+    // coroutine frames, at the first connection scan that follows a whole
+    // connection_scan_interval_ with no request exchange in progress and no
+    // connection activity.
     memory_pool_config memory_pool_{};
     // Shared by all registered outbound HTTP client aliases on each worker.
     http_client_result_budget_config http_client_result_budget_{};

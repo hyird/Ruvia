@@ -14,8 +14,9 @@ public:
         : resource_(memory),
           input_(std::pmr::polymorphic_allocator<char>(memory)),
           max_buffered_input_bytes_(options.max_buffered_input_bytes_),
-          connection_(input_, options.message_limit_, options.compression_,
-              options.role_, options.mask_key_generator_, options.mask_key_context_, options.compression_level_) {}
+          connection_(input_, options.message_limit_, options.compression_, options.role_,
+              options.mask_key_generator_, options.mask_key_context_, options.compression_level_,
+              options.mem_level_, options.shared_deflate_) {}
     std::pmr::memory_resource* resource_;
     http_io_buffer input_;
     const std::size_t max_buffered_input_bytes_;

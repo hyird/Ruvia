@@ -2,8 +2,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -29,6 +31,8 @@ namespace ruvia::detail {
 using tcp_socket_type = asio::ip::tcp::socket;
 class accepted_connection_lease;
 class context_services;
+template <typename stream_type>
+struct http1_connection_session;
 class route_table;
 class worker_capabilities;
 
@@ -63,8 +67,14 @@ private:
     void configure_tls(http_server_session_config& session);
     void accept_socket(std::size_t index, tcp_socket_type socket);
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
+    task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection);
+    void report_session_failure(
+        tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
     task<http_connection_close> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
+    template <typename stream_type>
+    task<std::optional<http_connection_close>> serve_requests(
+        http1_connection_session<stream_type>& session, connection_work_set& work_set);
     asio::io_context& io_;
     const worker_handle& worker_;
     worker_memory& memory_;

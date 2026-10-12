@@ -45,11 +45,16 @@ zlib_inflate_stream::~zlib_inflate_stream() {
     }
 }
 
+bool zlib_inflate_stream::reset() noexcept {
+    allocation_.clear_allocation_failure();
+    return initialized() && inflateReset(&stream_) == Z_OK;
+}
+
 zlib_deflate_stream::zlib_deflate_stream(
-    std::pmr::memory_resource* resource, int level, int window_bits, int strategy)
+    std::pmr::memory_resource* resource, int level, int window_bits, int mem_level, int strategy)
     : allocation_(resource),
       stream_(make_zlib_stream(allocation_)) {
-    if (deflateInit2(&stream_, level, Z_DEFLATED, window_bits, 8, strategy) != Z_OK) {
+    if (deflateInit2(&stream_, level, Z_DEFLATED, window_bits, mem_level, strategy) != Z_OK) {
         allocation_.rethrow_allocation_failure();
     }
 }
@@ -58,6 +63,11 @@ zlib_deflate_stream::~zlib_deflate_stream() {
     if (initialized()) {
         (void)deflateEnd(&stream_);
     }
+}
+
+bool zlib_deflate_stream::reset() noexcept {
+    allocation_.clear_allocation_failure();
+    return initialized() && deflateReset(&stream_) == Z_OK;
 }
 
 }  // namespace ruvia::detail

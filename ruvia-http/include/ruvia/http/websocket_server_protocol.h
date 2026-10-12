@@ -9,6 +9,7 @@
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/http/websocket_protocol_types.h"
 
 namespace ruvia {
@@ -16,6 +17,14 @@ namespace ruvia {
 struct websocket_server_protocol_options final {
     websocket_compression compression_{(websocket_compression{})};
     int compression_level_{6};
+    // zlib memLevel (1-9) of a private deflater; see websocket_deflate_config.
+    int mem_level_{8};
+    // Borrowed codecs for every permessage-deflate direction negotiated without
+    // context takeover, typically one set per worker; they must outlive the
+    // protocol and are used only synchronously inside its calls. nullptr gives
+    // such a direction a private codec too. Private codecs are created on the
+    // direction's first compressed message from the input buffer's resource.
+    websocket_deflate_codecs* shared_deflate_{nullptr};
 };
 
 // Sans-I/O websocket server protocol. The input buffer is borrowed and must
@@ -39,6 +48,11 @@ public:
 
     [[nodiscard]] std::optional<websocket_event> poll() &;
     std::optional<websocket_event> poll() && = delete;
+    // Input bytes the frame that poll() last waited for still lacks, so a
+    // reader can size its next read for the whole frame. 0 when that poll()
+    // returned an event or the frame header was incomplete. The frame length
+    // is already within the message limit.
+    [[nodiscard]] std::size_t needed_input_bytes() const noexcept;
     [[nodiscard]] websocket_output_plan output_plan() const& noexcept;
     websocket_output_plan output_plan() const&& = delete;
     [[nodiscard]] websocket_output_consume_status consume_output(std::size_t n) noexcept;

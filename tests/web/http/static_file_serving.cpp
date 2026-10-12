@@ -557,6 +557,66 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     });
 }
 
+static_assert(std::is_constructible_v<ruvia::borrowed_file_path, const std::filesystem::path&>);
+static_assert(std::is_constructible_v<ruvia::borrowed_file_path, const std::string&>);
+static_assert(std::is_constructible_v<ruvia::borrowed_file_path, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_file_path, std::filesystem::path>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_file_path, std::string>);
+
+RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
+    namespace fs = std::filesystem;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_context_file_text_path_dir";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // A non-ASCII name: Windows must widen the UTF-8 text, not read it in the
+    // ANSI code page.
+    const auto file_path = dir / fs::path(u8"caf\u00e9.txt");
+    {
+        std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
+        out << "borrowed";
+    }
+    const auto utf8 = file_path.u8string();
+    const std::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    // A view that is not NUL-terminated: the bytes after it must not be read.
+    const std::string padded = text + "-not-part-of-the-path";
+
+    static_file_test_request request;
+    request.set_method("GET");
+    with_static_context(request, [&](ruvia::context& context_value) {
+        const auto status_of = [&](ruvia::borrowed_file_path path) {
+            try {
+                return context_value.file({.path_ = path}).status();
+            } catch (const ruvia::http_error& error) {
+                return error.info().status();
+            }
+        };
+
+        const auto from_text = context_value.file({.path_ = text});
+        RUVIA_CHECK_EQ(from_text.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(from_text.body_bytes(), std::string_view("borrowed"));
+        RUVIA_CHECK_EQ(from_text.header("Content-Type").value_or(""),
+            std::string_view("text/plain; charset=utf-8"));
+
+        const auto from_view = context_value.file({.path_ = std::string_view(padded).substr(0, text.size())});
+        RUVIA_CHECK_EQ(from_view.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(from_view.body_bytes(), std::string_view("borrowed"));
+
+        const auto from_path = context_value.file({.path_ = file_path});
+        RUVIA_CHECK_EQ(from_path.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(from_path.body_bytes(), std::string_view("borrowed"));
+
+        // Text that cannot name the file is a miss, not a truncated lookup.
+        const std::string with_nul = text + std::string(1, '\0') + "x";
+        RUVIA_CHECK_EQ(status_of(with_nul), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(status_of(""), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
+        const std::string invalid_utf8 = text + "\xff";
+        RUVIA_CHECK_EQ(status_of(invalid_utf8), ruvia::http_status::not_found);
+    });
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
     namespace fs = std::filesystem;
     using ruvia::static_root;

@@ -52,4 +52,9 @@ zstd_encoder_stream::~zstd_encoder_stream() {
     }
 }
 
+bool zstd_encoder_stream::reset() noexcept {
+    allocation_.clear_allocation_failure();
+    return context_ != nullptr && ZSTD_isError(ZSTD_CCtx_reset(context_, ZSTD_reset_session_only)) == 0;
+}
+
 }  // namespace ruvia::detail

@@ -7,7 +7,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
@@ -32,8 +31,10 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
     std::exception_ptr exception;
     std::optional<body_reader_binding<stream_body_reader<stream_type>>> body_reader;
     try {
-        body_reader.emplace(d.stream_, d.memory_.template allocator<char>(), body_and_pipeline,
-            d.parsed_.body_plan_, body_limit, d.scanner_entry_);
+        // The reader's buffers are inbound memory: they count against the
+        // connection's and the worker's inbound budgets.
+        body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(d.inbound_buffer_pool_),
+            body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_);
         d.response_ = co_await d.routes_.dispatch(d.parsed_.request_, route_resolution_value, d.request_memory_,
             d.base_route_services_.with_streaming_request_body(body_reader->facade()).with_request_trailers(body_reader->reader().trailers()));
     } catch (...) {

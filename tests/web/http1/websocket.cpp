@@ -4,6 +4,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -19,6 +21,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -59,12 +62,27 @@ class http1_websocket_routes final {
         .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds::max()}}};
     const auto required_subprotocol =
         ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
+    const auto takeover_deflate =
+        ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .mem_level_ = 4}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
     RUVIA_GET_WS("/http1-websocket-upstream-reset", fail_on_upstream_reset);
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
+    RUVIA_GET_WS("/http1-websocket-deflate-echo", echo_all);
+    RUVIA_GET_WS_OPTIONS("/http1-websocket-deflate-takeover", echo_all, takeover_deflate);
     RUVIA_ROUTES_END
+
+    ruvia::task<void> echo_all(ruvia::context& context_value) {
+        auto& websocket_value = context_value.get_websocket();
+        for (;;) {
+            auto message = co_await websocket_value.read();
+            if (!message.has_value()) {
+                co_return;
+            }
+            co_await websocket_value.send(std::move(*message));
+        }
+    }
 
     ruvia::task<void> accept_only(ruvia::context&) {
         co_return;
@@ -196,6 +214,35 @@ class http1_websocket_routes final {
         }
     }
 };
+
+bool zero_mask(void*, ruvia::websocket_mask_key_type& key) noexcept {
+    key = {};
+    return true;
+}
+
+// Compressible text that is not a single repeated byte.
+std::string sample_message(std::size_t size, unsigned seed) {
+    std::string message(size, '\0');
+    unsigned state_value = seed * 2654435761U + 7U;
+    for (std::size_t i = 0; i < size; ++i) {
+        state_value = state_value * 1103515245U + 12345U;
+        message[i] = static_cast<char>('a' + ((state_value >> 16U) % 5U) + ((i / 32U) % 4U));
+    }
+    return message;
+}
+
+// Bytes DEFLATE cannot shrink.
+std::string noise_message(std::size_t size) {
+    std::string message(size, '\0');
+    std::uint32_t state_value = 1234567;
+    for (auto& byte : message) {
+        state_value ^= state_value << 13;
+        state_value ^= state_value >> 17;
+        state_value ^= state_value << 5;
+        byte = static_cast<char>(state_value);
+    }
+    return message;
+}
 }  // namespace http1_websocket_test
 
 using http1_websocket_test::stalled_payload_size;
@@ -562,4 +609,86 @@ RUVIA_TEST(http1_websocket_handler_failure_is_reported_and_a_close_reset_is_not)
     }
     server.finish();
     RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
+}
+
+// Server permessage-deflate echoes messages of every size. Without context
+// takeover the connection borrows the worker's shared codecs, so a repeated
+// message compresses to the same frame; with opt-in takeover each direction
+// keeps its own dictionary, so the repeat shrinks.
+RUVIA_TEST(http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
+    using http1_websocket_test::noise_message;
+    using http1_websocket_test::sample_message;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const bool takeover : {false, true}) {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string upgrade = std::string("GET ") +
+                                    (takeover ? "/http1-websocket-deflate-takeover" : "/http1-websocket-deflate-echo") +
+                                    " HTTP/1.1\r\n"
+                                    "Host: 127.0.0.1\r\n"
+                                    "Connection: Upgrade\r\n"
+                                    "Upgrade: websocket\r\n"
+                                    "Sec-WebSocket-Version: 13\r\n"
+                                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                    "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
+        asio::write(client, asio::buffer(upgrade));
+        std::string head;
+        char byte{};
+        while (!head.ends_with("\r\n\r\n")) {
+            asio::read(client, asio::buffer(&byte, 1));
+            head.push_back(byte);
+        }
+        RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
+        RUVIA_CHECK(head.find("permessage-deflate") != std::string::npos);
+        RUVIA_CHECK((head.find("server_no_context_takeover") == std::string::npos) == takeover);
+        ruvia::websocket_connection peer({.message_limit_ = ruvia::protocol_byte_limit::unlimited(),
+            .compression_ = {.enabled_ = true,
+                .server_no_context_takeover_ = !takeover,
+                .client_no_context_takeover_ = !takeover},
+            .role_ = ruvia::websocket_connection_role::client,
+            .mask_key_generator_ = &http1_websocket_test::zero_mask});
+        const auto flush = [&] {
+            const std::string bytes_value(peer.output_plan().bytes());
+            asio::write(client, asio::buffer(bytes_value));
+            RUVIA_CHECK(peer.consume_output(bytes_value.size()) == ruvia::websocket_output_consume_status::drained);
+        };
+        // Returns the wire bytes of the echoed frame.
+        const auto echo = [&](const std::string& payload) {
+            RUVIA_CHECK(peer.submit_frame(ruvia::websocket_opcode::binary, payload) == ruvia::websocket_frame_submit_status::accepted);
+            flush();
+            std::size_t wire_bytes = 0;
+            std::array<char, 16384> input{};
+            for (;;) {
+                if (const auto event = peer.next_event()) {
+                    if (const auto* message = event->message()) {
+                        RUVIA_CHECK(message->payload() == payload);
+                        return wire_bytes;
+                    }
+                    // A heartbeat Ping queues its Pong.
+                    flush();
+                    continue;
+                }
+                const auto read = client.read_some(asio::buffer(input));
+                wire_bytes += read;
+                RUVIA_CHECK(peer.feed(std::string_view(input.data(), read)) == ruvia::websocket_feed_status::accepted);
+            }
+        };
+        // Small, mid-size, past 64 KiB, incompressible, then small again.
+        for (const auto& payload : {sample_message(32, 1), sample_message(4096, 2), sample_message(70'000, 3),
+                 noise_message(70'000), sample_message(32, 4)}) {
+            static_cast<void>(echo(payload));
+        }
+        const auto repeated = sample_message(2000, 5);
+        const auto first = echo(repeated);
+        const auto second = echo(repeated);
+        RUVIA_CHECK(takeover ? second < first : second == first);
+        client.shutdown(asio::ip::tcp::socket::shutdown_send);
+        std::array<char, 256> rest{};
+        asio::error_code end;
+        while (!end) {
+            static_cast<void>(client.read_some(asio::buffer(rest), end));
+        }
+    }
+    server.finish();
 }

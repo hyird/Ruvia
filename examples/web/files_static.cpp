@@ -28,6 +28,13 @@ std::filesystem::path examples_root() {
     return std::filesystem::path(RUVIA_EXAMPLES_SOURCE_DIR);
 }
 
+// c.file() borrows its path: build it once, not per request. UTF-8 text such
+// as a std::string or a literal works too.
+const std::filesystem::path& download_path() {
+    static const std::filesystem::path path = examples_root() / "public" / "hello.txt";
+    return path;
+}
+
 }  // namespace
 
 class files_controller final {
@@ -41,8 +48,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> download(ruvia::context& c) {
-        co_return c.file({.path_ = examples_root() / "public" / "hello.txt",
-            .content_type_ = "text/plain; charset=utf-8"});
+        co_return c.file({.path_ = download_path(), .content_type_ = "text/plain; charset=utf-8"});
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {

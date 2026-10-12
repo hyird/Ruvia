@@ -197,6 +197,9 @@ public:
         if (options.deflate_.compression_level_ < 0 || options.deflate_.compression_level_ > 9) {
             throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
         }
+        if (options.deflate_.mem_level_ < 1 || options.deflate_.mem_level_ > 9) {
+            throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
+        }
         options.lifecycle_.heartbeat_ =
             normalize_websocket_heartbeat_config(options.lifecycle_.heartbeat_);
         ruvia::websocket_subprotocol_set subprotocols;

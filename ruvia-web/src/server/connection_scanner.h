@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -12,6 +13,10 @@
 
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
+
+namespace ruvia {
+class worker_memory;
+}
 
 namespace ruvia::detail {
 
@@ -27,6 +32,10 @@ struct connection_scanner_options final {
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<std::chrono::milliseconds> initial_read_completion_timeout_{};
     std::optional<std::chrono::milliseconds> payload_read_completion_timeout_{};
+    // When set, a tick that follows a whole scan interval in which no entry
+    // carried a request exchange and none had activity (I/O, registration or
+    // retirement) trims this memory on the worker. Must belong to the worker.
+    worker_memory* trim_when_idle_{nullptr};
 };
 
 // Worker-affine connection timeout owner. Its implementation is allocated once
@@ -217,8 +226,11 @@ struct connection_scanner::impl_type final {
     void periodic_check_removed() noexcept;
     [[nodiscard]] bool has_scanning_work() const noexcept;
     void schedule();
-    void scan() noexcept;
+    // Visits every entry; returns whether none was in a request exchange or
+    // active since `interval_start`.
+    [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
     [[nodiscard]] bool is_timed_out(const entry_type& entry, std::int64_t now) const noexcept;
+    [[nodiscard]] static bool active_since(const entry_type& entry, std::int64_t interval_start) noexcept;
 
     struct timer_state_type final {
         explicit timer_state_type(impl_type* owner_value) noexcept
@@ -233,6 +245,8 @@ struct connection_scanner::impl_type final {
     std::shared_ptr<timer_state_type> timer_state_;
     connection_scanner_options options_;
     std::int64_t cached_now_ms_{0};
+    // Latest activity of an entry that has since been unregistered.
+    std::int64_t retired_activity_ms_{(std::numeric_limits<std::int64_t>::min)()};
     entry_type sentinel_{};
     entry_type* scan_current_{nullptr};
     entry_type* scan_next_{nullptr};

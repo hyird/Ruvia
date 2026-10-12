@@ -95,6 +95,14 @@ RUVIA_MODEL(http_error_response_model,
 
 }  // namespace
 
+// http_error keeps the process resource. An exception object may escape the
+// worker that handles it: one thrown by a run_blocking callable is built on a
+// blocking-pool thread and rethrown on the worker, a task stores it in an
+// exception_ptr, application::run rethrows it to its caller, and a handler may
+// hand it to another thread. The thread that frees its text is unknown when it
+// is built, which rules out the worker's unsynchronized pool. Short codes and
+// messages (most framework errors) fit the strings' inline buffers and
+// allocate nothing.
 http_error::http_error(http_error_info_options options)
     : status_(options.status_),
       status_text_(options.status_text_.view(), process_resource()),

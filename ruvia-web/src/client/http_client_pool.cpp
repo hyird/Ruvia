@@ -60,7 +60,7 @@ void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_a
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
     http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain,
-    std::pmr::memory_resource* resource)
+    std::pmr::memory_resource* resource, http_client_response_storage response_storage)
     : io_context_(io_context),
       worker_(worker_value),
       resource_(pmr_resource_or_default(resource)),
@@ -80,7 +80,9 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
     for (std::size_t index = 0; index < config_.connection_count_; ++index) {
         connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this, index));
     }
-    response_memory_ = http_client_response_memory_domain::create(worker_, result_budget_domain_);
+    response_memory_ = response_storage == http_client_response_storage::worker_resource
+                           ? http_client_response_memory_domain::create(worker_, result_budget_domain_, *resource_)
+                           : http_client_response_memory_domain::create_response_owned(worker_, result_budget_domain_);
 }
 
 http_client_pool::~http_client_pool() {

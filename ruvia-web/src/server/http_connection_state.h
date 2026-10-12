@@ -25,18 +25,21 @@ namespace ruvia::detail {
 class http1_request_buffer_completion;
 struct access_log_sink;
 
-// Initial bump block for the per-request arena, carried inside a work set. The
-// request monotonic_buffer_resource bump-allocates from here before spilling to
-// the worker resource, so a typical small request touches no heap at all. Sized
-// to request_arena_initial_bytes (see memory_pool_config.h).
-inline constexpr std::size_t work_set_arena_bytes = request_arena_initial_bytes;
-
 // Fresh size of a work set's read buffer; reset() restores it before the work
-// set is pooled, so a borrower always starts from this capacity. 4 KB holds a
-// typical request head with room to spare, and prepare_read() doubles on demand
-// up to max_http_header_bytes; keeping the fresh size small matters because
-// under high concurrency every active connection holds one.
+// set is pooled, so a borrower always starts from this capacity and the pool
+// retains at most this much read storage per work set. 4 KB holds a typical
+// request head with room to spare, and prepare_read() doubles on demand up to
+// max_http_header_bytes; keeping the fresh size small matters because under
+// high concurrency every active connection holds one.
 inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
+
+// Bytes of the connection-resident buffer an idle connection reads into while
+// it holds no work set. Sized so a typical request line arrives in one read;
+// longer heads finish in the regular read loop after the work set is
+// re-acquired. It lives in every connection's frame, so growing it to cover
+// whole browser heads (400-800 bytes with cookies) costs that much per idle
+// connection to save one immediately-completing read per such request.
+inline constexpr std::size_t idle_resident_read_bytes = 256;
 
 // A connection's buffered request input: an http_io_buffer plus its growth and
 // trim policy. A served request is consumed by advancing the window start; the
@@ -74,9 +77,12 @@ public:
     // may allocate.
     void complete_request(const http1_request_buffer_completion& completion);
 
-    // Gives grown storage back once the pending bytes fit the initial size.
+    // Gives storage that a handed-over pipeline grew past max_http_header_bytes
+    // back once the pending bytes fit the initial size.
     void trim();
-    // Empties the buffer and trims it for the next borrower.
+    // Empties the buffer for the next borrower. Storage that grew past the
+    // initial size is replaced with a fresh initial-capacity block, so the
+    // grown block goes back to the worker resource.
     void reset();
 
 private:
@@ -125,8 +131,13 @@ private:
 // in-flight request concurrency rather than connection count. The
 // connection's small resident identity (socket, scanner entry, keep-alive
 // counters) stays in the session coroutine frame.
+//
+// The pool allocates a work set and its request arena block together; the
+// block follows the work set and is the worker's configured
+// request_initial_buffer_bytes() long, so a typical request bump-allocates
+// from it and touches no heap at all.
 struct connection_work_set final {
-    explicit connection_work_set(worker_memory& memory);
+    connection_work_set(worker_memory& memory, std::span<std::byte> arena_block);
 
     connection_read_buffer read_buffer_;
     // Serialized response output not yet written: the current response's head
@@ -137,11 +148,12 @@ struct connection_work_set final {
     http1_server_request_parser parser_;
     http1_server_request_parse_state parsed_;
     route_resolution route_resolution_;
-    alignas(std::max_align_t) std::byte arena_block_[work_set_arena_bytes];
+    // Initial block of the per-request arena (see above).
+    std::span<std::byte> arena_block_;
     connection_work_set* pool_next_{nullptr};
 
-    // Return the work set to a clean borrowable state: trim grown read storage
-    // back to the initial size and clear per-request scratch.
+    // Return the work set to a clean borrowable state: replace grown read
+    // storage with an initial-size block and clear per-request scratch.
     void reset_for_reuse();
 };
 
@@ -161,7 +173,12 @@ public:
     void release(connection_work_set* work_set) noexcept;
 
 private:
+    void destroy(connection_work_set* work_set) noexcept;
+
     worker_memory* memory_;
+    // One allocation: the work set followed by its arena block.
+    std::size_t arena_bytes_;
+    std::size_t allocation_bytes_;
     connection_work_set* free_head_{nullptr};
     std::size_t free_count_{0};
 };

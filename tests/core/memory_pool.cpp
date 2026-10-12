@@ -3,13 +3,23 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory_resource>
 #include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
+
+#include "ruvia/core/detail/task/task_promise.h"
+#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_runtime.h"
 
 #include "test_harness.h"
 
@@ -82,18 +92,227 @@ private:
 }  // namespace
 
 RUVIA_TEST(worker_memory_returns_bulk_blocks_upstream) {
-    constexpr std::size_t bulk_bytes = std::size_t{1} << 20;
+    for (const std::size_t bulk_bytes : {std::size_t{1} << 20, std::size_t{4} << 20}) {
+        counting_resource upstream;
+        // Without retention every freed bulk block goes straight back; a block
+        // above the cache's size limit goes back whatever the budget.
+        const std::size_t retained = bulk_bytes > (std::size_t{1} << 20) ? ruvia::default_retained_block_bytes : 0;
+        ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = retained});
+        auto* const resource = worker_value.resource();
+        const auto baseline = upstream.live_bytes_;
+        auto* const block = resource->allocate(bulk_bytes);
+        RUVIA_CHECK(upstream.live_bytes_ - baseline >= bulk_bytes);
+        // A pooled bulk block would stay reserved, with spares, for the worker's
+        // life; only the pool's own small bookkeeping may remain upstream.
+        RUVIA_CHECK(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
+        resource->deallocate(block, bulk_bytes);
+        RUVIA_CHECK(upstream.live_bytes_ - baseline < bulk_bytes / 16);
+    }
+}
+
+RUVIA_TEST(worker_memory_reuses_freed_large_blocks_by_exact_size_class) {
+    constexpr std::size_t first_bytes = 40000;
+    // Rounds to the same 4 KiB class as first_bytes.
+    constexpr std::size_t same_class_bytes = 38000;
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker_value(upstream);
+        auto* const resource = worker_value.resource();
+        auto* const first = static_cast<std::byte*>(resource->allocate(first_bytes));
+        std::fill_n(first, first_bytes, std::byte{0x11});
+        resource->deallocate(first, first_bytes);
+        const auto allocations_after_free = upstream.allocations_;
+        const auto live_after_free = upstream.live_bytes_;
+        RUVIA_CHECK(live_after_free >= first_bytes);
+
+        auto* const second = static_cast<std::byte*>(resource->allocate(same_class_bytes));
+        RUVIA_CHECK(second == first);
+        std::fill_n(second, same_class_bytes, std::byte{0x22});
+        RUVIA_CHECK_EQ(upstream.allocations_, allocations_after_free);
+        RUVIA_CHECK_EQ(upstream.live_bytes_, live_after_free);
+        resource->deallocate(second, same_class_bytes);
+
+        // A different class misses the cache and takes a fresh block.
+        auto* const other = static_cast<std::byte*>(resource->allocate(first_bytes * 2));
+        RUVIA_CHECK(other != first);
+        RUVIA_CHECK(upstream.live_bytes_ > live_after_free);
+        resource->deallocate(other, first_bytes * 2);
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
+    RUVIA_CHECK(upstream.matched_returns_);
+}
+
+RUVIA_TEST(worker_memory_releases_large_blocks_freed_beyond_the_retention_budget) {
+    constexpr std::size_t block_bytes = 30000;
+    constexpr std::size_t class_bytes = 32 * 1024;
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = 2 * class_bytes});
+        auto* const resource = worker_value.resource();
+        std::array<void*, 3> blocks{};
+        for (auto*& block : blocks) {
+            block = resource->allocate(block_bytes);
+        }
+        const auto live_with_blocks = upstream.live_bytes_;
+        for (auto* block : blocks) {
+            resource->deallocate(block, block_bytes);
+        }
+        // Two blocks fit the budget; the third goes back at once.
+        RUVIA_CHECK_EQ(upstream.live_bytes_, live_with_blocks - class_bytes);
+        const auto allocations_before_reuse = upstream.allocations_;
+        for (auto*& block : blocks) {
+            block = resource->allocate(block_bytes);
+        }
+        RUVIA_CHECK_EQ(upstream.allocations_, allocations_before_reuse + 1);
+        for (auto* block : blocks) {
+            resource->deallocate(block, block_bytes);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
+    RUVIA_CHECK(upstream.matched_returns_);
+}
+
+RUVIA_TEST(worker_memory_with_zero_retention_caches_nothing) {
+    constexpr std::size_t block_bytes = 30000;
+    counting_resource upstream;
+    ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = 0});
+    auto* const resource = worker_value.resource();
+    auto* const warm = resource->allocate(block_bytes);
+    resource->deallocate(warm, block_bytes);
+    const auto live_after_free = upstream.live_bytes_;
+    const auto allocations_after_free = upstream.allocations_;
+    auto* const block = resource->allocate(block_bytes);
+    RUVIA_CHECK_EQ(upstream.allocations_, allocations_after_free + 1);
+    resource->deallocate(block, block_bytes);
+    RUVIA_CHECK_EQ(upstream.live_bytes_, live_after_free);
+}
+
+RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
+    constexpr std::size_t block_bytes = 30000;
+    constexpr std::size_t class_bytes = 32 * 1024;
     counting_resource upstream;
     ruvia::worker_memory worker_value(upstream);
+    // Default upstream (new/delete): cached and pass-through sizes.
+    ruvia::worker_memory default_memory;
     auto* const resource = worker_value.resource();
-    const auto baseline = upstream.live_bytes_;
-    auto* const block = resource->allocate(bulk_bytes);
-    RUVIA_CHECK(upstream.live_bytes_ - baseline >= bulk_bytes);
-    // A pooled bulk block would stay reserved, with spares, for the worker's
-    // life; only the pool's own small bookkeeping may remain upstream.
-    RUVIA_CHECK(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
-    resource->deallocate(block, bulk_bytes);
-    RUVIA_CHECK(upstream.live_bytes_ - baseline < bulk_bytes / 16);
+    auto* const block = static_cast<std::byte*>(resource->allocate(block_bytes));
+    std::fill_n(block, block_bytes, std::byte{0x33});
+    auto* const live_block = static_cast<std::byte*>(resource->allocate(block_bytes));
+    std::fill_n(live_block, block_bytes, std::byte{0x44});
+    resource->deallocate(block, block_bytes);
+    const auto live_cached = upstream.live_bytes_;
+    for (const std::size_t bytes_value :
+        {std::size_t{20000}, std::size_t{65552}, std::size_t{1} << 20, std::size_t{3} << 20}) {
+        auto* const bytes = static_cast<std::byte*>(default_memory.resource()->allocate(bytes_value));
+        std::fill_n(bytes, bytes_value, std::byte{0x55});
+        RUVIA_CHECK(bytes[bytes_value - 1] == std::byte{0x55});
+        default_memory.resource()->deallocate(bytes, bytes_value);
+    }
+
+    ruvia::worker_runtime runtime;
+    const auto owner = runtime.context().handle();
+    // Off its owner thread, or with no owner at all, trim is rejected and
+    // releases nothing.
+    bool rejected = false;
+    try {
+        worker_value.trim(owner);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { worker_value.trim(ruvia::worker_handle{}); }));
+    RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached);
+
+    bool trimmed = false;
+    bool frames_cached = false;
+    bool frames_drained = false;
+    RUVIA_CHECK(owner
+            .post([&] {
+                // A freed frame stays in this thread's frame cache until trim.
+                void* const frame = ruvia::detail::task_frame_allocate(4096);
+                ruvia::detail::task_frame_deallocate_sized(frame, 4096);
+                frames_cached = ruvia::detail::task_frame_cached_bytes() >= 4096;
+                worker_value.trim(owner);
+                default_memory.trim(owner);
+                frames_drained = ruvia::detail::task_frame_cached_bytes() == 0;
+                trimmed = true;
+            })
+            .accepted());
+    runtime.join();
+    RUVIA_CHECK(trimmed);
+    RUVIA_CHECK(frames_cached);
+    RUVIA_CHECK(frames_drained);
+    RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached - class_bytes);
+    RUVIA_CHECK(live_block[0] == std::byte{0x44} && live_block[block_bytes - 1] == std::byte{0x44});
+    resource->deallocate(live_block, block_bytes);
+}
+
+RUVIA_TEST(worker_memory_passes_over_aligned_large_blocks_through) {
+    constexpr std::size_t block_bytes = 30000;
+    constexpr std::size_t alignment = 128;
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker_value(upstream);
+        auto* const resource = worker_value.resource();
+        // The first round may also grow the pool's own oversized-block
+        // bookkeeping, which it keeps; later rounds must round-trip exactly.
+        resource->deallocate(resource->allocate(block_bytes, alignment), block_bytes, alignment);
+        for (unsigned iteration = 0; iteration < 2; ++iteration) {
+            const auto live_before = upstream.live_bytes_;
+            const auto allocations_before = upstream.allocations_;
+            auto* const block = resource->allocate(block_bytes, alignment);
+            RUVIA_CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
+            // Not served from the cache: each allocation reaches upstream
+            // (the pool may add its own header), and each free returns it.
+            RUVIA_CHECK(upstream.allocations_ > allocations_before);
+            RUVIA_CHECK(upstream.live_bytes_ >= live_before + block_bytes);
+            resource->deallocate(block, block_bytes, alignment);
+            RUVIA_CHECK_EQ(upstream.live_bytes_, live_before);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+    RUVIA_CHECK(upstream.matched_returns_);
+}
+
+RUVIA_TEST(worker_memory_validates_retained_block_bytes) {
+    counting_resource upstream;
+    const ruvia::memory_pool_config config{.retained_block_bytes_ = ruvia::max_retained_block_bytes + 1};
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::validate_memory_pool_config(config); }));
+    bool rejected = false;
+    try {
+        ruvia::worker_memory worker_value(upstream, config);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(upstream.allocations_, std::size_t{0});
+    ruvia::validate_memory_pool_config({.retained_block_bytes_ = 0});
+    ruvia::validate_memory_pool_config({.retained_block_bytes_ = ruvia::max_retained_block_bytes});
+}
+
+RUVIA_TEST(core_sources_use_no_platform_page_mapping) {
+    const auto source_dir = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
+                            "ruvia-core" / "src";
+    RUVIA_CHECK(std::filesystem::is_directory(source_dir));
+    constexpr std::array<std::string_view, 4> forbidden{"mmap", "VirtualAlloc", "sys/mman", "windows.h"};
+    // error_text.cpp formats Windows system messages; it maps no memory.
+    constexpr std::string_view allowed_windows_file = "error_text.cpp";
+    std::size_t scanned = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
+        std::ifstream input(entry.path(), std::ios::binary);
+        const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        ++scanned;
+        const bool windows_allowed = entry.path().filename() == allowed_windows_file;
+        for (const auto token : forbidden) {
+            if (windows_allowed && token == "windows.h") {
+                continue;
+            }
+            RUVIA_CHECK(text.find(token) == std::string::npos);
+        }
+    }
+    RUVIA_CHECK(scanned > 0);
 }
 
 RUVIA_TEST(worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {

@@ -37,7 +37,7 @@ template <typename stream_type>
         case http_content_coding::gzip:
         case http_content_coding::deflate:
             return encoder_stream(std::in_place_type<detail::zlib_deflate_stream>, resource, Z_DEFAULT_COMPRESSION,
-                coding == http_content_coding::gzip ? 15 + 16 : 15, Z_DEFAULT_STRATEGY);
+                coding == http_content_coding::gzip ? 15 + 16 : 15, detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY);
         case http_content_coding::brotli:
             return encoder_stream(std::in_place_type<detail::brotli_encoder_stream>, resource);
         case http_content_coding::zstd:

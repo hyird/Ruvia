@@ -96,17 +96,23 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
     }
 }
 
-static http_content_encode_result encode_zlib_content(std::string_view input,
-    std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
-    zlib_deflate_stream deflater(
-        output.get_allocator().resource(), Z_DEFAULT_COMPRESSION, window_bits, Z_DEFAULT_STRATEGY);
-    if (!deflater.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
-    }
+http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+    std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto& stream = deflater.native();
+    struct clear_borrows final {
+        z_stream& stream_;
+        ~clear_borrows() {
+            stream_.next_in = nullptr;
+            stream_.avail_in = 0;
+            stream_.next_out = nullptr;
+            stream_.avail_out = 0;
+        }
+    } clear{stream};
 
     std::size_t supplied = 0;
+    // Uninitialized scratch: only the bytes zlib produced are copied out.
+    char buffer[8192];
     for (;;) {
         refill_gzip_input(stream, input, supplied);
         if (output.size() == max_encoded_bytes) {
@@ -128,14 +134,12 @@ static http_content_encode_result encode_zlib_content(std::string_view input,
             return http_content_encode_result_access::failure(http_content_encode_error::encoded_size_exceeded);
         }
         const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(8192, max_encoded_bytes - offset);
+        const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
         const auto before_input = stream.avail_in;
-        int status = Z_OK;
-        output.resize(offset + writable);
-        stream.next_out = reinterpret_cast<Bytef*>(output.data() + offset);
+        stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = static_cast<uInt>(writable);
-        status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
-        output.resize(offset + (writable - stream.avail_out));
+        const int status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
+        output.append(buffer, writable - stream.avail_out);
         if (status != Z_OK && status != Z_STREAM_END) {
             deflater.rethrow_allocation_failure();
         }
@@ -151,24 +155,39 @@ static http_content_encode_result encode_zlib_content(std::string_view input,
     }
 }
 
+namespace {
+
+[[nodiscard]] http_content_encode_result encode_zlib_content(std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
+    auto* const state_resource = http_pmr_resource_or_default(resource);
+    zlib_deflate_stream deflater(
+        state_resource, Z_DEFAULT_COMPRESSION, window_bits, zlib_default_mem_level, Z_DEFAULT_STRATEGY);
+    if (!deflater.initialized()) {
+        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+    }
+    return encode_zlib_content(deflater, input, max_encoded_bytes, state_resource);
+}
+
+}  // namespace
+
 http_content_decode_result decode_gzip_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    return decode_zlib_content(input, max_decoded_bytes, resource, 15 + 16, true);
+    return decode_zlib_content(input, max_decoded_bytes, resource, zlib_gzip_window_bits, true);
 }
 
 http_content_decode_result decode_deflate_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    return decode_zlib_content(input, max_decoded_bytes, resource, 15, false);
+    return decode_zlib_content(input, max_decoded_bytes, resource, zlib_deflate_window_bits, false);
 }
 
 http_content_encode_result encode_gzip_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
-    return encode_zlib_content(input, max_encoded_bytes, resource, 15 + 16);
+    return encode_zlib_content(input, max_encoded_bytes, resource, zlib_gzip_window_bits);
 }
 
 http_content_encode_result encode_deflate_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
-    return encode_zlib_content(input, max_encoded_bytes, resource, 15);
+    return encode_zlib_content(input, max_encoded_bytes, resource, zlib_deflate_window_bits);
 }
 
 }  // namespace ruvia::detail

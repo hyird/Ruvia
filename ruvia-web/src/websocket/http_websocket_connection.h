@@ -19,6 +19,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/websocket_server_protocol.h"
 #include "ruvia/web/websocket.h"
 
@@ -38,15 +39,13 @@ public:
     websocket_connection(stream_type& stream, const worker_handle& worker_value,
         connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource,
-        std::string_view initial_bytes = {},
-        websocket_compression compression = (websocket_compression{}),
-        int compression_level = 6)
+        std::string_view initial_bytes = {}, websocket_server_protocol_options protocol_options = {})
         : stream_(stream),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
           buffer_(std::pmr::polymorphic_allocator<char>(pmr_resource_or_default(resource))),
-          protocol_(buffer_, message_limit, websocket_server_protocol_options{compression, compression_level}),
+          protocol_(buffer_, message_limit, protocol_options),
           background_write_signal_(worker_value),
           reader_done_signal_(worker_value) {
         buffer_.append(initial_bytes);
@@ -56,7 +55,7 @@ public:
 
     websocket_connection(stream_type&, worker_handle&&, connection_scanner::entry_type&,
         websocket_lifecycle_options, protocol_byte_limit, std::pmr::memory_resource*,
-        std::string_view = {}, websocket_compression = (websocket_compression{}), int = 6) = delete;
+        std::string_view = {}, websocket_server_protocol_options = {}) = delete;
 
     ~websocket_connection() = default;
 
@@ -278,6 +277,8 @@ private:
     bool accept_submitted_frame(websocket_frame_submit_status status);
     task<void> flush_protocol_output_exclusive();
     task<void> flush_protocol_output_now();
+    // Reads more transport bytes into buffer_. Between frames the read is
+    // sized by recent traffic, so an idle connection holds little read storage.
     task<http_stream_read_result> read_more();
     auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
@@ -304,6 +305,10 @@ private:
     bool going_away_pending_{false};
     std::exception_ptr background_failure_;
     std::uint64_t heartbeat_sequence_{0};
+    // Whether the last read between frames received less than
+    // websocket_idle_read_bytes: the next such read then waits in a buffer of
+    // that size.
+    bool small_frames_{true};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
     connection_scanner::periodic_check_registration_type periodic_check_;

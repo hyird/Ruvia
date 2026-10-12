@@ -25,7 +25,9 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/conn_info.h"
@@ -110,8 +112,51 @@ struct static_file_response_options final {
     borrowed_text content_type_{};
 };
 
+// The file context::file() serves, borrowed for that call: UTF-8 text, or a
+// std::filesystem::path lvalue whose native string is used as is. Neither form
+// builds a std::filesystem::path per request; text is NUL-terminated (and
+// widened to UTF-16 on Windows) in the request arena. Like borrowed_text, it
+// refuses owning temporaries, so a path assembled per request has to be named
+// by the caller -- hoist it out of the handler when it is fixed.
+class borrowed_file_path final {
+public:
+    constexpr borrowed_file_path() noexcept = default;
+
+    constexpr borrowed_file_path(std::string_view utf8) noexcept
+        : text_(utf8) {}
+
+    constexpr borrowed_file_path(const char* utf8) noexcept
+        : text_(detail::http_borrowed_c_string_view(utf8)) {}
+
+    template <typename traits_type, typename allocator_type>
+    constexpr borrowed_file_path(const std::basic_string<char, traits_type, allocator_type>& utf8) noexcept
+        : text_(utf8) {}
+
+    borrowed_file_path(const std::filesystem::path& path) noexcept
+        : native_(path.native()) {}
+
+    template <detail::http_temporary_owning_char_string string>
+    borrowed_file_path(string&&) = delete;
+    borrowed_file_path(std::filesystem::path&&) = delete;
+
+    // The UTF-8 text form; empty when a std::filesystem::path is borrowed.
+    [[nodiscard]] constexpr std::string_view text() const noexcept {
+        return text_;
+    }
+
+    // A borrowed std::filesystem::path's NUL-terminated native string; empty
+    // for the text form.
+    [[nodiscard]] constexpr http_native_path_view_type native() const noexcept {
+        return native_;
+    }
+
+private:
+    std::string_view text_{};
+    http_native_path_view_type native_{};
+};
+
 struct file_response_options final {
-    std::filesystem::path path_{};
+    borrowed_file_path path_{};
     borrowed_text content_type_{};
 };
 

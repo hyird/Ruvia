@@ -12,6 +12,8 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/server_config.h"
 
+#include "server/worker_codecs.h"
+
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool response_has_header_name(
@@ -173,13 +175,16 @@ struct http_buffered_compression_step final {
 // size bounds, and encoding up to sync_bytes_ (through max_bytes_ when
 // `offload_available` is false, i.e. no blocking pool is configured). Only an
 // offload result requires compress_response_offloaded(), so identity and
-// ineligible responses never create a coroutine frame.
+// ineligible responses never create a coroutine frame. The inline encoder is
+// the worker's reusable one: its state stays in worker memory, and only the
+// encoded body comes from the response's resource.
 [[nodiscard]] http_buffered_compression_step apply_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, const compression_config& options, bool offload_available);
+    http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available);
 
 // Encodes the body flagged by apply_response_compression() on the bounded
-// blocking pool. Rejection by the pool is an intentional identity fallback;
+// blocking pool with a codec of its own, since worker codecs never leave the
+// worker. Rejection by the pool is an intentional identity fallback;
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
 [[nodiscard]] task<http_response_compression_result> compress_response_offloaded(http_content_coding coding,

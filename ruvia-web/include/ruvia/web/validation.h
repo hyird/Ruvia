@@ -53,6 +53,10 @@ struct validation_error_options final {
     borrowed_text message_{"request validation failed"};
 };
 
+// Like http_error, an exception that may be rethrown and destroyed on a thread
+// other than the one that built it, so its diagnostics live in the process
+// resource rather than a worker's unsynchronized pool. A validator is a plain
+// value and uses the resource it is given.
 class validation_error final : public std::exception {
 public:
     using issue_list_type = std::pmr::vector<validation_issue>;

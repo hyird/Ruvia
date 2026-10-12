@@ -31,7 +31,8 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
       finalize_signal_(worker_runtime_.handle()),
       routes_(routes_value),
       memory_(validated_options.memory_config_),
-      inbound_buffers_(memory_.resource(), validated_options.max_inbound_buffer_bytes_per_worker_),
+      inbound_budget_(*memory_.resource(), validated_options.max_inbound_buffer_bytes_per_worker_),
+      codecs_(memory_.resource()),
       background_tasks_(worker_runtime_.handle(), {.resource_ = memory_.resource()}),
       options_(std::move(validated_options)),
       static_roots_(options_, worker_runtime_.handle(), worker_state_, memory_.resource()),
@@ -52,7 +53,8 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
       connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners),
       web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
           runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
-    options_.inbound_buffer_pool_ = &inbound_buffers_;
+    options_.inbound_budget_ = &inbound_budget_;
+    options_.codecs_ = &codecs_;
     runtime_.configure({
         .startup_ = [this] {
             worker_state_ = http_server_worker_state::running;

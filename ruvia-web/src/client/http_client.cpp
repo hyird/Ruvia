@@ -17,7 +17,8 @@ http_client_state::http_client_state(event_loop loop, const http_client_config& 
     : loop_(client_lifecycle<http_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      clients_(loop_.io_context(), worker_, memory_.resource(), config,
+      // Responses may outlive this client and its memory_; they own theirs.
+      clients_(loop_.io_context(), worker_, memory_.resource(), http_client_response_storage::response_owned, config,
           std::make_shared<http_client_result_budget_domain>(result_budget)),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 

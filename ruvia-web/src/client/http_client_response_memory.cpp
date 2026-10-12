@@ -7,7 +7,6 @@
 #include <stdexcept>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/process_resource.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
@@ -37,13 +36,13 @@ void http_client_response_memory_domain::receive_resource::do_deallocate(
 
 http_client_response_memory_domain::http_client_response_memory_domain(const worker_handle& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
-    std::pmr::memory_resource& upstream)
-    : memory_(upstream),
+    std::pmr::memory_resource* worker_resource, std::pmr::memory_resource& storage)
+    : storage_(storage),
       worker_(worker_value),
       result_budget_domain_(result_budget_domain),
-      receive_resource_(*memory_.resource(), *result_budget_domain_) {
-    if (!worker_.valid() || !result_budget_domain_) {
-        throw std::invalid_argument("HTTP client response memory requires worker and result budget");
+      receive_resource_(response_upstream(owned_memory_, worker_resource), *result_budget_domain_) {
+    if (!worker_.valid()) {
+        throw std::invalid_argument("HTTP client response memory requires a worker");
     }
 }
 
@@ -56,31 +55,54 @@ http_client_response_memory_domain::~http_client_response_memory_domain() {
     }
 }
 
-http_client_response_memory_domain::owner http_client_response_memory_domain::create(
-    const worker_handle& worker_value,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    return create(worker_value, result_budget_domain, *process_resource());
+std::pmr::memory_resource& http_client_response_memory_domain::response_upstream(
+    std::optional<worker_memory>& owned_memory, std::pmr::memory_resource* worker_resource) {
+    if (worker_resource != nullptr) {
+        return *worker_resource;
+    }
+    return *owned_memory.emplace().resource();
 }
 
 http_client_response_memory_domain::owner http_client_response_memory_domain::create(
     const worker_handle& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
-    std::pmr::memory_resource& upstream) {
+    std::pmr::memory_resource& worker_resource) {
+    return allocate(worker_value, result_budget_domain, &worker_resource, worker_resource);
+}
+
+http_client_response_memory_domain::owner http_client_response_memory_domain::create_response_owned(
+    const worker_handle& worker_value,
+    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
+    // The object cannot live in the memory it owns; new_delete is the only
+    // other worker-free choice (the process resource is lock-shared).
+    return allocate(worker_value, result_budget_domain, nullptr, *std::pmr::new_delete_resource());
+}
+
+http_client_response_memory_domain::owner http_client_response_memory_domain::allocate(
+    const worker_handle& worker_value,
+    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
+    std::pmr::memory_resource* worker_resource, std::pmr::memory_resource& storage) {
     if (!result_budget_domain) {
         throw std::invalid_argument("HTTP client response memory requires a result budget");
     }
-    auto* const resource = process_resource();
-    auto* const storage = resource->allocate(sizeof(http_client_response_memory_domain),
+    auto* const object = storage.allocate(sizeof(http_client_response_memory_domain),
         alignof(http_client_response_memory_domain));
     try {
-        return owner(::new (storage) http_client_response_memory_domain(
-                         worker_value, result_budget_domain, upstream),
+        return owner(::new (object) http_client_response_memory_domain(
+                         worker_value, result_budget_domain, worker_resource, storage),
             deleter_type{});
     } catch (...) {
-        resource->deallocate(storage, sizeof(http_client_response_memory_domain),
+        storage.deallocate(object, sizeof(http_client_response_memory_domain),
             alignof(http_client_response_memory_domain));
         throw;
     }
+}
+
+void http_client_response_memory_domain::destroy() noexcept {
+    auto& storage = storage_;
+    this->~http_client_response_memory_domain();
+    storage.deallocate(this, sizeof(http_client_response_memory_domain),
+        alignof(http_client_response_memory_domain));
 }
 
 void http_client_response_memory_domain::deleter_type::operator()(
@@ -110,10 +132,7 @@ void http_client_response_memory_domain::release() noexcept {
         std::terminate();
     }
     if (--references_ == 0) {
-        auto* const resource = process_resource();
-        this->~http_client_response_memory_domain();
-        resource->deallocate(this, sizeof(http_client_response_memory_domain),
-            alignof(http_client_response_memory_domain));
+        destroy();
     }
 }
 
@@ -125,10 +144,7 @@ void http_client_response_memory_domain::release_root() noexcept {
             std::terminate();
         }
         references_ = 0;
-        auto* const resource = process_resource();
-        this->~http_client_response_memory_domain();
-        resource->deallocate(this, sizeof(http_client_response_memory_domain),
-            alignof(http_client_response_memory_domain));
+        destroy();
         return;
     }
     // Active storage is retired explicitly by the pool on its owning worker;

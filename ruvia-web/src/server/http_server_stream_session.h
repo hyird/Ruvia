@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <optional>
@@ -21,7 +22,6 @@
 #include "server/http_server_auto_https.h"
 #include "server/http_server_body_route_completion.h"
 #include "server/http_server_connection_guards.h"
-#include "server/http_server_idle_work_set.h"
 #include "server/http_server_request_state.h"
 #include "server/http_server_response_state.h"
 #include "server/http_server_response_stream_route.h"
@@ -29,7 +29,6 @@
 #include "server/http_server_tunnel_route.h"
 #include "server/http_server_websocket_route.h"
 #include "server/request_deadline.h"
-#include "server/request_memory_arena.h"
 #include "server/response_file_source.h"
 #include "server/worker_connections.h"
 
@@ -57,32 +56,21 @@ namespace ruvia::detail {
     return buffered != nullptr && buffered->request_body_mode() == request_body_mode::buffered;
 }
 
+// What every request of one connection shares: the resident state run_stream
+// keeps for the connection's whole life. serve_requests borrows it while the
+// connection is active.
 template <typename stream_type>
-task<http_connection_close> worker_connections::run_stream(http_server_session_config& listener_value, stream_type& stream,
-    tcp_socket_type& socket, context_services base_route_services) {
-    // Resident connection identity (held for the whole connection): the scanner
-    // entry, the keep-alive request sequence, the remote address, and the count
-    // of buffered bytes. The heavy per-request working set (read buffer, request arena,
-    // parse result, response head) is borrowed from a per-worker
-    // pool only while the connection is actively serving and returned the moment
-    // it goes idle, so an idle keep-alive connection holds none of it.
-    connection_scanner::entry_type scanner_entry;
-    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
-    const auto& routes_value = routes_;
-    const auto remote_address = base_route_services.get_conn_info().remote().address();
-    const auto admission_policy = http_request_admission_policy::server(options_);
-    const response_file_io file_output{.pool_ = options_.blocking_pool_, .worker_ = worker_, .stop_ = stop_token_};
-    inbound_buffer_resource connection_buffers(
-        options_.inbound_buffer_pool_ != nullptr ? options_.inbound_buffer_pool_ : memory_.resource(),
-        options_.max_inbound_buffer_bytes_per_connection_);
-    base_route_services = base_route_services.with_inbound_buffer_pool(connection_buffers);
-    http1_request_sequence request_sequence(options_.max_requests_per_connection_, state_);
-    connection_work_set* work_set = nullptr;
-    work_set_return work_set_return(work_sets_, work_set);
-    // Connection-resident landing pad for the first bytes of a request that
-    // arrives while the connection holds no work set (see the idle wait below).
-    std::array<char, idle_resident_read_bytes> idle_read_buffer;
-    std::size_t idle_read_bytes = 0;
+struct http1_connection_session final {
+    http_server_session_config& listener_;
+    stream_type& stream_;
+    connection_scanner::entry_type& scanner_entry_;
+    // The connection's route services, bound to its inbound buffer budget.
+    const context_services& route_services_;
+    inbound_buffer_resource& inbound_buffers_;
+    http1_request_sequence& request_sequence_;
+    const http_request_admission_policy& admission_policy_;
+    const response_file_io& file_output_;
+    std::string_view remote_address_;
     // nginx-aligned wait semantics. The first request on a connection, and any
     // partially-received request header, are bounded by request_header_timeout
     // (reading_initial). The idle wait for the *next* request on a reused
@@ -90,78 +78,128 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // idle_timeout (idle), matching nginx keepalive_timeout. Flips true
     // once a request has been served so later idle waits use the keepalive
     // deadline instead of the header deadline.
-    bool served_keepalive_request = false;
+    bool served_keepalive_request_{false};
+};
 
-    constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>;
-    if constexpr (plain_tcp) {
+template <typename stream_type>
+task<http_connection_close> worker_connections::run_stream(http_server_session_config& listener_value, stream_type& stream,
+    tcp_socket_type& socket, context_services base_route_services) {
+    // Resident connection identity (held for the whole connection): the scanner
+    // entry, the keep-alive request sequence, the remote address, and the
+    // inbound buffer budget. Everything a request needs beyond that is held
+    // only while the connection is actively serving and given back the moment
+    // it goes idle, so an idle keep-alive connection holds none of it: the
+    // heavy working set (read buffer, request arena, parse result, response
+    // head) is borrowed from a per-worker pool, and the request state lives in
+    // the frame of serve_requests.
+    connection_scanner::entry_type scanner_entry;
+    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
+    const auto admission_policy = http_request_admission_policy::server(options_);
+    const response_file_io file_output{.pool_ = options_.blocking_pool_, .worker_ = worker_, .stop_ = stop_token_};
+    inbound_buffer_resource connection_buffers(*options_.inbound_budget_, options_.max_inbound_buffer_bytes_per_connection_);
+    base_route_services = base_route_services.with_inbound_buffer_pool(connection_buffers);
+    http1_request_sequence request_sequence(options_.max_requests_per_connection_, state_);
+    http1_connection_session<stream_type> session{
+        .listener_ = listener_value,
+        .stream_ = stream,
+        .scanner_entry_ = scanner_entry,
+        .route_services_ = base_route_services,
+        .inbound_buffers_ = connection_buffers,
+        .request_sequence_ = request_sequence,
+        .admission_policy_ = admission_policy,
+        .file_output_ = file_output,
+        .remote_address_ = base_route_services.get_conn_info().remote().address(),
+    };
+    connection_work_set* work_set = nullptr;
+    work_set_return work_set_return(work_sets_, work_set);
+    // Connection-resident landing pad for the first bytes of a request that
+    // arrives while the connection holds no work set (see the idle wait below).
+    std::array<char, idle_resident_read_bytes> idle_read_buffer;
+
+    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>) {
         enable_plain_tcp_sync_write(socket);
     }
     for (;;) {
         scanner_entry.set_phase(connection_scanner::phase_type::idle);
 
-        // Borrow-on-use / return-on-idle for the whole work set: when the
-        // connection has no buffered bytes, return the work set to the
-        // per-worker pool and read the next request's first bytes into the
-        // small connection-resident buffer instead, so an idle keep-alive
-        // connection occupies no work set (memory scales with in-flight
-        // requests, not total connections). Reading directly -- rather than a
-        // bufferless readiness wait -- costs no extra reactor pass when data
-        // is already queued. A pipelined burst (buffered input left) keeps its work
-        // set and skips this. Plain TCP only: a TLS engine may buffer a
-        // decrypted record that raw socket readiness cannot see, so an idle
-        // wait there could stall; TLS holds across the connection.
-        if constexpr (plain_tcp) {
-            if (plain_tcp_should_wait_for_next_request(work_set)) {
-                // A draining worker admits no further request.
-                if (!http_server_worker_running(state_)) {
-                    co_return http_connection_close::abort;
-                }
-                release_idle_work_set(work_sets_, work_set);
-                // Idle wait for the next keep-alive request uses idle_timeout;
-                // the connection's first request uses request_header_timeout.
-                scanner_entry.read_request_head(served_keepalive_request
-                                                    ? connection_scanner::phase_type::idle
-                                                    : connection_scanner::phase_type::reading_initial);
-                auto idle_completion = co_await ruvia::async_asio<std::size_t>(
-                    [&socket, &idle_read_buffer](auto handler) mutable {
-                        socket.async_read_some(
-                            asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()),
-                            std::move(handler));
-                    });
-                const auto idle_ec = idle_completion.error_code();
-                const auto idle_bytes = idle_completion.result();
-                // Draining closed this connection while it awaited the request.
-                if (idle_ec || !http_server_worker_running(state_)) {
-                    co_return http_connection_close::abort;
-                }
-                idle_read_bytes = idle_bytes;
-            }
+        // Borrow-on-use / return-on-idle for the whole work set: the
+        // connection holds none while it waits for its next request, and reads
+        // that request's first bytes into the small connection-resident buffer
+        // instead, so an idle keep-alive connection occupies no work set
+        // (memory scales with in-flight requests, not total connections).
+        // Reading directly -- rather than a bufferless readiness wait -- costs
+        // no extra reactor pass when data is already queued. serve_requests
+        // returns only once no input is buffered: a pipelined burst stays in
+        // it. TLS reads through the stream as well, so plaintext the engine
+        // already decrypted completes the read at once; whatever exceeds the
+        // landing pad stays in the engine for the next read.
+        //
+        // A draining worker admits no further request.
+        if (!http_server_worker_running(state_)) {
+            co_return http_connection_close::abort;
         }
-        if (work_set == nullptr) {
-            work_set = work_sets_.acquire();
+        // Idle wait for the next keep-alive request uses idle_timeout;
+        // the connection's first request uses request_header_timeout.
+        scanner_entry.read_request_head(session.served_keepalive_request_
+                                            ? connection_scanner::phase_type::idle
+                                            : connection_scanner::phase_type::reading_initial);
+        auto idle_completion = co_await ruvia::async_asio<std::size_t>(
+            [&stream, &idle_read_buffer](auto handler) mutable {
+                stream.async_read_some(
+                    asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()), std::move(handler));
+            });
+        const auto idle_ec = idle_completion.error_code();
+        // A clean peer end is answered as in the request read loop.
+        if (idle_ec) {
+            co_return idle_ec == asio::error::eof && !stop_token_.stop_requested()
+                ? http_connection_close::peer_finished
+                : http_connection_close::abort;
         }
-        auto& read_buffer = work_set->read_buffer_;
-        auto& parser = work_set->parser_;
-        auto& parsed_value = work_set->parsed_;
-        auto& response_head = work_set->response_head_;
-        auto& route_resolution_value = work_set->route_resolution_;
+        // Draining closed this connection while it awaited the request.
+        if (!http_server_worker_running(state_)) {
+            co_return http_connection_close::abort;
+        }
+        work_set = work_sets_.acquire();
+        static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
+        work_set->read_buffer_.assign(std::string_view(idle_read_buffer.data(), idle_completion.result()));
+        scanner_entry.touch();
+        if (const auto close_mode = co_await serve_requests(session, *work_set)) {
+            co_return *close_mode;
+        }
+        work_sets_.release(std::exchange(work_set, nullptr));
+    }
+}
 
-        if constexpr (plain_tcp) {
-            if (idle_read_bytes > 0) {
-                static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
-                read_buffer.assign(std::string_view(idle_read_buffer.data(), idle_read_bytes));
-                idle_read_bytes = 0;
-                scanner_entry.touch();
-            }
-        }
+// Serves the connection's requests while it has input, and returns nullopt
+// once it holds no buffered bytes (run_stream then returns the work set and
+// waits for the next request), or how the connection closes. One frame per
+// active period: a pipelined burst stays in it.
+template <typename stream_type>
+task<std::optional<http_connection_close>> worker_connections::serve_requests(
+    http1_connection_session<stream_type>& session, connection_work_set& work_set) {
+    auto& stream = session.stream_;
+    auto& listener_value = session.listener_;
+    auto& scanner_entry = session.scanner_entry_;
+    auto& connection_buffers = session.inbound_buffers_;
+    auto& request_sequence = session.request_sequence_;
+    const auto& routes_value = routes_;
+    const auto& base_route_services = session.route_services_;
+    const auto& admission_policy = session.admission_policy_;
+    const auto& file_output = session.file_output_;
+    const auto remote_address = session.remote_address_;
+    constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>;
+    auto& read_buffer = work_set.read_buffer_;
+    auto& parser = work_set.parser_;
+    auto& parsed_value = work_set.parsed_;
+    auto& response_head = work_set.response_head_;
+    auto& route_resolution_value = work_set.route_resolution_;
+    for (;;) {
         // Pipelined responses held back for one coalesced write. Bound to the
         // work set, which keeps any held output until it is written.
         http1_response_output<stream_type> response_output(
-            stream, response_head, work_set->deferred_access_, options_.access_log_, scanner_entry);
+            stream, response_head, work_set.deferred_access_, options_.access_log_, scanner_entry);
 
-        std::optional<request_memory> request_memory_storage;
-        auto& request_memory_value = emplace_request_memory(request_memory_storage, memory_,
-            std::span<std::byte>(work_set->arena_block_, sizeof(work_set->arena_block_)));
+        request_memory request_memory_value(memory_, work_set.arena_block_);
         // Work-set storage outlives this arena. Release its descriptor block
         // on every exit (including exceptions/cancellation) before the arena dies.
         struct request_header_lifetime final {
@@ -189,11 +227,11 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         // site after the read loop: every co_await expression in a coroutine
         // reserves its own frame slots for the call's temporaries (GCC does
         // not overlap them), so inlining handle_error at each rejection site
-        // costs ~660 resident bytes per site in every connection's frame.
+        // costs ~660 resident bytes per site in every active connection's frame.
         std::optional<http_request_rejection> closing_rejection;
         std::size_t header_search_offset = 0;
-        // Request timing starts with the request's first bytes. Plain TCP has
-        // them already (the idle wait above); TLS waits for them below.
+        // Request timing starts with the request's first bytes: the idle wait
+        // above already has them; a pipelined request's arrived earlier.
         auto request_start = std::chrono::steady_clock::now();
         for (;;) {
             const auto buffer_view = read_buffer.pending();
@@ -419,7 +457,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             if (!http_server_worker_running(state_)) {
                 co_return http_connection_close::abort;
             }
-            scanner_entry.read_request_head(read_buffer.empty() && served_keepalive_request
+            scanner_entry.read_request_head(read_buffer.empty() && session.served_keepalive_request_
                                                 ? connection_scanner::phase_type::idle
                                                 : connection_scanner::phase_type::reading_initial);
             const auto read_space = read_buffer.prepare_read();
@@ -512,7 +550,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                 next_request_buffered ? pipelined_output_batch_bytes : 0);
             if (write_start.held_) {
                 // Logged once the write that carries its head commits it.
-                tail.defer_access(options_.access_log_, work_set->deferred_access_, write_start.head_bytes_,
+                tail.defer_access(options_.access_log_, work_set.deferred_access_, write_start.head_bytes_,
                     response_plan.response_status());
                 scanner_entry.set_phase(connection_scanner::phase_type::idle);
             } else {
@@ -557,7 +595,11 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         read_buffer.trim();
         // A request completed and the connection is being reused: the next
         // wait with no buffered bytes is a keepalive idle wait.
-        served_keepalive_request = true;
+        session.served_keepalive_request_ = true;
+        if (read_buffer.empty()) {
+            co_return std::nullopt;
+        }
+        scanner_entry.set_phase(connection_scanner::phase_type::idle);
     }
 }
 

@@ -49,16 +49,14 @@ http_content_decode_result decode_zstd_content(
     }
 }
 
-http_content_encode_result encode_zstd_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
-    zstd_encoder_stream encoder(output.get_allocator().resource());
-    if (!encoder.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
-    }
+http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+    std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto* context_value = encoder.native();
 
     ZSTD_inBuffer in{input.data(), input.size(), 0};
+    // Uninitialized scratch: only the bytes zstd produced are copied out.
+    char buffer[8192];
     for (;;) {
         if (output.size() == max_encoded_bytes) {
             char probe_value{};
@@ -75,13 +73,11 @@ http_content_encode_result encode_zstd_content(
         }
 
         const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(8192, max_encoded_bytes - offset);
+        const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
         const auto before_input = in.pos;
-        std::size_t result_value = 0;
-        output.resize(offset + writable);
-        ZSTD_outBuffer out{output.data() + offset, writable, 0};
-        result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
-        output.resize(offset + out.pos);
+        ZSTD_outBuffer out{buffer, writable, 0};
+        const auto result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
+        output.append(buffer, out.pos);
         if (ZSTD_isError(result_value) != 0) {
             encoder.rethrow_allocation_failure();
             return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
@@ -93,6 +89,16 @@ http_content_encode_result encode_zstd_content(
             return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
         }
     }
+}
+
+http_content_encode_result encode_zstd_content(
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+    auto* const state_resource = http_pmr_resource_or_default(resource);
+    zstd_encoder_stream encoder(state_resource);
+    if (!encoder.initialized()) {
+        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+    }
+    return encode_zstd_content(encoder, input, max_encoded_bytes, state_resource);
 }
 
 }  // namespace ruvia::detail

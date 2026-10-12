@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -15,178 +16,107 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/http/websocket_protocol.h"
 
 #include "coding/http_zlib_stream.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_handshake_fields.h"
+#include "websocket/websocket_deflate_message.h"
 
 namespace ruvia::detail {
 
-enum class websocket_inflate_result : std::uint8_t {
-    ok,
-    error,
-    too_large,
-};
-
-// RFC 7692 codec owned by one connection. context reuse must match the negotiated
-// wire mode. zlib working memory, including both LZ77 windows, comes from the
-// connection's memory resource; destruction releases both dictionaries.
+// RFC 7692 codec state of one connection. A direction negotiated without
+// context takeover starts every message from an empty dictionary, so it uses
+// the borrowed shared codec set when the owner supplies one and then holds no
+// codec memory. Every other direction owns a private zlib stream from the
+// connection's resource, created on its first compressed message and kept,
+// with its dictionary, until the connection ends. The owner validates the
+// level (0-9), memLevel (1-9) and windows (8-15).
 class websocket_deflate final {
 public:
-    websocket_deflate(std::pmr::memory_resource* resource, int compression_level, bool send_takeover,
-        bool receive_takeover, int send_window, int receive_window)
-        : deflate_(resource, validated_compression_level(compression_level, send_window, receive_window),
-              -std::max(send_window, 9), send_window == 8 ? Z_HUFFMAN_ONLY : Z_DEFAULT_STRATEGY),
-          inflate_(resource, -receive_window),
+    websocket_deflate(std::pmr::memory_resource* resource, websocket_deflate_codecs* shared, int compression_level,
+        int mem_level, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept
+        : resource_(resource),
+          shared_(shared),
+          compression_level_(compression_level),
+          mem_level_(mem_level),
+          send_window_(send_window),
+          receive_window_(receive_window),
           send_takeover_(send_takeover),
-          receive_takeover_(receive_takeover) {
-        if (!deflate_.initialized()) {
-            throw std::runtime_error("failed to initialize WebSocket deflate encoder");
-        }
-        if (!inflate_.initialized()) {
-            throw std::runtime_error("failed to initialize WebSocket deflate decoder");
-        }
-    }
+          receive_takeover_(receive_takeover) {}
 
     websocket_deflate(const websocket_deflate&) = delete;
     websocket_deflate& operator=(const websocket_deflate&) = delete;
 
-    // Compresses a whole message, appending the raw-DEFLATE block to `out` with
-    // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
+    // Appends the compressed message to `out`. false reports a codec failure;
+    // allocation exceptions propagate.
     bool compress(std::string_view input, std::pmr::string& out) {
-        auto& stream = deflate_.native();
-        if (!send_takeover_ && deflateReset(&stream) != Z_OK) {
-            deflate_.rethrow_allocation_failure();
-            return false;
+        if (!send_takeover_ && shared_ != nullptr) {
+            // Reset after every call, including failures and exceptions.
+            return shared_->deflate_message(input, out, compression_level_, send_window_);
         }
-        // Messages can exceed zlib's 32-bit avail_in, so supply the input in
-        // windows instead of truncating the size.
-        stream.avail_in = 0;
-        std::size_t supplied = 0;
-        char buffer[4096];
-        for (;;) {
-            if (stream.avail_in == 0 && supplied < input.size()) {
-                const auto count = static_cast<uInt>(std::min<std::size_t>(
-                    input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-                stream.next_in =
-                    reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-                stream.avail_in = count;
-                supplied += count;
-            }
-            stream.next_out = reinterpret_cast<Bytef*>(buffer);
-            stream.avail_out = sizeof(buffer);
-            const int status =
-                deflate(&stream, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
-            if (status != Z_OK && status != Z_BUF_ERROR) {
-                deflate_.rethrow_allocation_failure();
+        if (deflater_ == nullptr) {
+            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_, compression_level_,
+                websocket_deflate_zlib_window_bits(send_window_), mem_level_,
+                websocket_deflate_zlib_strategy(send_window_));
+            if (!deflater_->initialized()) {
+                deflater_.reset();
                 return false;
             }
-            out.append(buffer, sizeof(buffer) - stream.avail_out);
-            if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == input.size()) {
-                break;
-            }
+        } else if (!send_takeover_ && deflateReset(&deflater_->native()) != Z_OK) {
+            deflater_->rethrow_allocation_failure();
+            return false;
         }
-        if (out.size() >= 4) {
-            out.resize(out.size() - 4);
-        }
-        if (out.empty()) {
-            out.push_back('\0');
-        }
-        return true;
+        return websocket_deflate_message(*deflater_, input, out);
     }
 
-    // Decompresses a whole message: appends the 0x00 0x00 0xFF 0xFF marker that
-    // the sender stripped, then raw-inflates into `out`, bounded by one explicit
-    // message limit to defuse decompression bombs (RFC 7692 §7.2.2).
     websocket_inflate_result decompress(
         std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit) {
-        if (!receive_takeover_ && inflateReset(&inflate_.native()) != Z_OK) {
-            inflate_.rethrow_allocation_failure();
+        if (!receive_takeover_ && shared_ != nullptr) {
+            // The shared inflater has a 15-bit window, which also inflates
+            // every smaller negotiated window.
+            return shared_->inflate_message(input, out, message_limit);
+        }
+        if (inflater_ == nullptr) {
+            inflater_ = make_http_pmr_object<zlib_inflate_stream>(resource_, resource_, -receive_window_);
+            if (!inflater_->initialized()) {
+                inflater_.reset();
+                return websocket_inflate_result::error;
+            }
+        } else if (!receive_takeover_ && inflateReset(&inflater_->native()) != Z_OK) {
+            inflater_->rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
-        static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
-        if (const auto r = inflate_chunk(input.data(), input.size(), out, message_limit);
-            r != websocket_inflate_result::ok) {
-            return r;
-        }
-        if (const auto r = inflate_chunk(
-                reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, message_limit);
-            r != websocket_inflate_result::ok) {
-            return r;
-        }
-        // zlib reports bit 128 only at a complete DEFLATE block boundary.
-        // Consuming every input byte alone does not detect a truncated block.
-        return (inflate_.native().data_type & 128) != 0 ? websocket_inflate_result::ok : websocket_inflate_result::error;
+        return websocket_inflate_message(*inflater_, input, out, message_limit);
     }
 
     // A trial that is not sent must not enter the peer's future dictionary.
     // Starting the next compressed message with an empty sender dictionary is
     // legal even when the receiver retains its prior dictionary (RFC 7692).
+    // The shared codecs already reset after every message.
     void discard_compression() {
-        if (deflateReset(&deflate_.native()) != Z_OK) {
-            deflate_.rethrow_allocation_failure();
+        if (deflater_ != nullptr && deflateReset(&deflater_->native()) != Z_OK) {
+            deflater_->rethrow_allocation_failure();
             throw std::runtime_error("failed to reset discarded WebSocket compression");
         }
     }
 
 private:
-    [[nodiscard]] static int validated_compression_level(int compression_level, int send_window, int receive_window) {
-        if (send_window < 8 || send_window > 15 || receive_window < 8 || receive_window > 15) {
-            throw std::invalid_argument("invalid WebSocket DEFLATE window");
-        }
-        if (compression_level < 0 || compression_level > 9) {
-            throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
-        }
-        return compression_level;
-    }
+    template <typename stream_type>
+    using private_stream_type = std::unique_ptr<stream_type, http_pmr_object_deleter<stream_type>>;
 
-    websocket_inflate_result inflate_chunk(
-        const char* data, std::size_t size, std::pmr::string& out, protocol_byte_limit message_limit) {
-        auto& stream = inflate_.native();
-        // Messages can exceed zlib's 32-bit avail_in, so supply the input in
-        // windows instead of truncating the size.
-        stream.avail_in = 0;
-        std::size_t supplied = 0;
-        char buffer[8192];
-        for (;;) {
-            if (stream.avail_in == 0 && supplied < size) {
-                const auto count = static_cast<uInt>(
-                    std::min<std::size_t>(size - supplied, (std::numeric_limits<uInt>::max)()));
-                stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + supplied));
-                stream.avail_in = count;
-                supplied += count;
-            }
-            stream.next_out = reinterpret_cast<Bytef*>(buffer);
-            stream.avail_out = sizeof(buffer);
-            const int status = inflate(&stream, Z_NO_FLUSH);
-            if (status != Z_STREAM_END && status != Z_OK && status != Z_BUF_ERROR) {
-                inflate_.rethrow_allocation_failure();
-                return websocket_inflate_result::error;
-            }
-            const auto produced = sizeof(buffer) - stream.avail_out;
-            if (message_limit.addition_exceeds(out.size(), produced)) {
-                return websocket_inflate_result::too_large;
-            }
-            out.append(buffer, produced);
-            // RFC 7692 permits BFINAL=1 followed by another DEFLATE stream.
-            // Preserve the LZ77 window across streams, including takeover
-            // history, while discarding the terminated stream's padding bits.
-            if (status == Z_STREAM_END && inflateResetKeep(&stream) != Z_OK) {
-                inflate_.rethrow_allocation_failure();
-                return websocket_inflate_result::error;
-            }
-            if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {
-                break;
-            }
-        }
-        return websocket_inflate_result::ok;
-    }
-
-    zlib_deflate_stream deflate_;
-    zlib_inflate_stream inflate_;
+    std::pmr::memory_resource* resource_;
+    websocket_deflate_codecs* shared_;
+    private_stream_type<zlib_deflate_stream> deflater_;
+    private_stream_type<zlib_inflate_stream> inflater_;
+    int compression_level_;
+    int mem_level_;
+    int send_window_;
+    int receive_window_;
     bool send_takeover_;
     bool receive_takeover_;
 };
@@ -328,6 +258,9 @@ private:
     const http_request& request, websocket_deflate_config config = {}) {
     if (config.compression_level_ < 0 || config.compression_level_ > 9) {
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+    }
+    if (config.mem_level_ < 1 || config.mem_level_ > 9) {
+        throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
     }
     if (!config.enabled_ || !websocket_extension_offers_valid(request)) {
         return (websocket_compression{});

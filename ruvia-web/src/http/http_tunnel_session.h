@@ -21,15 +21,19 @@
 #include "server/inbound_transport_error.h"
 namespace ruvia::detail {
 // The tunnel over the HTTP/1 connection's byte stream (plain TCP socket or TLS
-// stream); a TLS stream writes its ciphertext through tls_output.
+// stream); a TLS stream writes its ciphertext through tls_output. Received
+// bytes live in `inbound`, the connection's inbound buffer budget: one reused
+// read window, and each chunk handed to the handler, sized to the bytes read.
+// `resource` holds what the handler sends and the facade's own state.
 template <typename stream_type>
 class http_tunnel_session final {
 public:
     http_tunnel_session(stream_type& stream, tls_tunnel_output* tls_output, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::string_view pending = {})
+        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
         : transport_(stream, tls_output),
-          resource_(resource),
-          pending_(pending, &resource),
+          inbound_(inbound),
+          pending_(pending, &inbound),
+          read_buffer_(&inbound),
           facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
@@ -52,8 +56,7 @@ public:
     }
     [[nodiscard]] task<void> drain() {
         while (!receive_ended_) {
-            std::pmr::string discarded(&resource_);
-            const auto read = co_await transport_.read_more(discarded);
+            const auto read = co_await read_some();
             if (const auto* failed = read.failure()) {
                 throw inbound_transport_error(failed->error_code(), "HTTP tunnel drain");
             }
@@ -70,13 +73,18 @@ public:
     }
 
 private:
+    // Reads into the reused window, whose capacity is allocated by the first
+    // read only; the next read overwrites it.
+    [[nodiscard]] task<http_stream_read_result> read_some() {
+        read_buffer_.clear();
+        return transport_.read_more(read_buffer_);
+    }
     static task<std::optional<std::pmr::string>> read_thunk(void* raw) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
         if (!owner_value.pending_.empty()) {
-            co_return std::pmr::string(std::move(owner_value.pending_), &owner_value.resource_);
+            co_return std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_));
         }
-        std::pmr::string bytes_value(&owner_value.resource_);
-        const auto result_value = co_await owner_value.transport_.read_more(bytes_value);
+        const auto result_value = co_await owner_value.read_some();
         if (const auto* failed = result_value.failure()) {
             throw inbound_transport_error(failed->error_code(), "HTTP tunnel read");
         }
@@ -84,7 +92,7 @@ private:
             owner_value.receive_ended_ = true;
             co_return std::nullopt;
         }
-        co_return std::move(bytes_value);
+        co_return std::pmr::string(owner_value.read_buffer_, &owner_value.inbound_);
     }
     static task<void> write_thunk(void* raw, std::string_view bytes_value) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
@@ -103,8 +111,9 @@ private:
         static_cast<http_tunnel_session*>(raw)->abort();
     }
     http_socket_tunnel_transport<stream_type> transport_;
-    std::pmr::memory_resource& resource_;
+    std::pmr::memory_resource& inbound_;
     std::pmr::string pending_;
+    std::pmr::string read_buffer_;
     bool ended_{false};
     bool receive_ended_{false};
     bool aborted_{false};

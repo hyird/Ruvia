@@ -31,9 +31,11 @@ namespace {
 }  // namespace
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource, const http_client_config& default_config,
+    std::pmr::memory_resource* resource, http_client_response_storage response_storage,
+    const http_client_config& default_config,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
     : resource_(validated_http_client_resource(resource, result_budget_domain)),
+      response_storage_(response_storage),
       pools_(resource_),
       alias_index_(resource_) {
     alias_index_.build({default_capability_alias});
@@ -42,9 +44,11 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
 }
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource, std::span<const http_client_definition_type> definitions,
+    std::pmr::memory_resource* resource, http_client_response_storage response_storage,
+    std::span<const http_client_definition_type> definitions,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
     : resource_(validated_http_client_resource(resource, definitions, result_budget_domain)),
+      response_storage_(response_storage),
       pools_(resource_),
       alias_index_(resource_) {
     alias_index_.build(definitions);
@@ -58,8 +62,8 @@ http_client_registry::~http_client_registry() = default;
 
 void http_client_registry::add(asio::io_context& io_context, const worker_handle& worker_value,
     http_client_config_storage config, const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    auto pool = make_pmr_object<http_client_pool>(
-        resource_, io_context, worker_value, std::move(config), result_budget_domain, resource_);
+    auto pool = make_pmr_object<http_client_pool>(resource_, io_context, worker_value, std::move(config),
+        result_budget_domain, resource_, response_storage_);
     pools_.push_back(std::move(pool));
 }
 

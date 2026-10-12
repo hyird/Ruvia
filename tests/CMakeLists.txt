@@ -132,6 +132,14 @@ if(RUVIA_BUILD_WEB)
     # it cannot share the process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_response_policy_tests 60
         web/http1/response_policy.cpp)
+    # Owns an application with an app-wide compression policy, which would
+    # otherwise encode the bodies other server suites compare.
+    ruvia_add_web_standalone_test(ruvia_response_compression_tests 60
+        web/http1/response_compression.cpp)
+    # Owns an application with small inbound budgets and replaces the global
+    # aligned operator new/delete to observe the worker's idle trim.
+    ruvia_add_web_standalone_test(ruvia_inbound_memory_tests 60
+        web/http1/inbound_memory.cpp)
     # Owns a TLS application with a short write timeout, which must not time
     # the handler cases of the other server suites.
     ruvia_add_web_standalone_test(ruvia_interim_phase_timeout_tests 30

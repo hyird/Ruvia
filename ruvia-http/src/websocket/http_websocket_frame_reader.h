@@ -17,30 +17,37 @@
 
 namespace ruvia::detail {
 
-// A drained read buffer keeps up to this much capacity, so a connection that
-// streams messages up to 64 KiB reuses one allocation instead of regrowing it
-// (and, with the allocator trimming the freed block, refaulting its pages) for
-// every message. Larger buffers are released so a burst stays unpinned.
-inline constexpr std::size_t websocket_retained_read_buffer_bytes = std::size_t{128} * 1024;
-
 // Drop the bytes the previously returned frame occupied. Consuming never moves
 // bytes; the buffer moves the unread tail only when a later read needs room.
+// A drained buffer keeps at most websocket_retained_buffer_bytes, so a burst
+// of large messages does not stay pinned to the connection.
 inline void consume_websocket_read_frame(http_io_buffer& buffer, std::size_t& pending_consume) noexcept {
     if (pending_consume == 0) {
         return;
     }
     buffer.consume(std::exchange(pending_consume, 0));
     if (buffer.empty()) {
-        buffer.clear_retaining_small(websocket_retained_read_buffer_bytes);
+        buffer.clear_retaining_small(websocket_retained_buffer_bytes);
     }
 }
 
 class websocket_frame_read_result;
 
 class websocket_frame_need_input final {
+public:
+    // Bytes the frame still lacks once its header is complete; 0 while the
+    // header itself is incomplete. The header length is already within the
+    // message limit.
+    [[nodiscard]] constexpr std::size_t missing_bytes() const noexcept {
+        return missing_bytes_;
+    }
+
 private:
     friend class websocket_frame_read_result;
-    constexpr websocket_frame_need_input() noexcept = default;
+    explicit constexpr websocket_frame_need_input(std::size_t missing_bytes) noexcept
+        : missing_bytes_(missing_bytes) {}
+
+    std::size_t missing_bytes_;
 };
 
 class websocket_frame_read_failure final {
@@ -59,8 +66,9 @@ private:
 };
 
 // Parsing either needs more input, exposes one complete borrowed frame, or reports
-// one typed protocol failure. No default frame, byte-count hint, EOF boolean, or
-// wire-format exception can coexist with another outcome.
+// one typed protocol failure. No default frame, EOF boolean, or wire-format
+// exception can coexist with another outcome; only need_input() carries a
+// byte count.
 class websocket_frame_read_result final {
 public:
     [[nodiscard]] constexpr const websocket_frame_need_input* need_input() const& noexcept {
@@ -89,8 +97,9 @@ private:
     explicit constexpr websocket_frame_read_result(alternative_type alternative) noexcept
         : value_(alternative) {}
 
-    [[nodiscard]] static constexpr websocket_frame_read_result make_need_input() noexcept {
-        return websocket_frame_read_result(websocket_frame_need_input());
+    [[nodiscard]] static constexpr websocket_frame_read_result make_need_input(
+        std::size_t missing_bytes = 0) noexcept {
+        return websocket_frame_read_result(websocket_frame_need_input(missing_bytes));
     }
 
     [[nodiscard]] static constexpr websocket_frame_read_result make_frame(
@@ -173,7 +182,7 @@ private:
     }
     const auto total_frame_bytes = header_size + mask_bytes + static_cast<std::size_t>(length);
     if (available < total_frame_bytes) {
-        return websocket_frame_read_result::make_need_input();
+        return websocket_frame_read_result::make_need_input(total_frame_bytes - available);
     }
 
     const auto mask_offset = header_size;

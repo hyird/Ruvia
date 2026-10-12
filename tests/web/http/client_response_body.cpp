@@ -39,6 +39,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/http_client.h"
@@ -1037,6 +1038,42 @@ RUVIA_TEST(client_response_cold_collection_survives_client_and_expires_with_resp
         }
         RUVIA_CHECK(rejected);
         co_await server.wait();
+    };
+    run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http_client_sends_heads_beyond_the_retained_buffer_and_rejects_oversized_heads) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    loopback_response_server server(io, worker.handle_, {"large-head", "small-head"});
+    server.start();
+
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(server.port()));
+        const auto body_text = [](const ruvia::http_client_response_bytes& bytes_value) {
+            return std::string(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.bytes().size());
+        };
+        // Larger than the head buffer a connection retains, within the limit.
+        const std::string large_value(20 * 1024, 'v');
+        const std::array large_headers{ruvia::http_header_view{"X-Large", large_value}};
+        auto large = co_await client.handle().send({.target_ = "/large", .headers_ = large_headers});
+        RUVIA_CHECK(large.status() == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(body_text(co_await large.body().read_all()), std::string("large-head"));
+        auto small = co_await client.handle().send({.target_ = "/small"});
+        RUVIA_CHECK(small.status() == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(body_text(co_await small.body().read_all()), std::string("small-head"));
+        co_await server.wait();
+
+        const std::string oversized_value(ruvia::max_http_header_bytes + 2048, 'o');
+        const std::array oversized_headers{ruvia::http_header_view{"X-Oversized", oversized_value}};
+        std::optional<ruvia::http_client_error::code_type> rejected;
+        try {
+            (void)co_await client.handle().send({.target_ = "/oversized", .headers_ = oversized_headers});
+        } catch (const ruvia::http_client_error& error) {
+            rejected = error.code();
+        }
+        RUVIA_CHECK(rejected == ruvia::http_client_error::code_type::invalid_request);
+        co_await client.shutdown();
     };
     run_operation(worker, io, operation);
 }

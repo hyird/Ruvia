@@ -10,8 +10,8 @@ struct websocket_server_protocol::impl_type final {
     explicit impl_type(http_io_buffer& input, protocol_byte_limit message_limit,
         websocket_server_protocol_options options)
         : resource_(input.get_allocator().resource()),
-          connection_(input, message_limit, options.compression_,
-              websocket_connection_role::server, nullptr, nullptr, options.compression_level_) {}
+          connection_(input, message_limit, options.compression_, websocket_connection_role::server, nullptr,
+              nullptr, options.compression_level_, options.mem_level_, options.shared_deflate_) {}
 
     std::pmr::memory_resource* resource_;
     detail::ws_connection connection_;
@@ -26,7 +26,7 @@ void websocket_server_protocol::impl_deleter_type::operator()(impl_type* value) 
 
 websocket_server_protocol::websocket_server_protocol(http_io_buffer& input,
     protocol_byte_limit message_limit, websocket_compression compression)
-    : websocket_server_protocol(input, message_limit, websocket_server_protocol_options{compression, 6}) {}
+    : websocket_server_protocol(input, message_limit, websocket_server_protocol_options{.compression_ = compression}) {}
 
 websocket_server_protocol::websocket_server_protocol(http_io_buffer& input,
     protocol_byte_limit message_limit, websocket_server_protocol_options options)
@@ -36,6 +36,10 @@ websocket_server_protocol::~websocket_server_protocol() = default;
 
 std::optional<websocket_event> websocket_server_protocol::poll() & {
     return impl_->connection_.poll();
+}
+
+std::size_t websocket_server_protocol::needed_input_bytes() const noexcept {
+    return impl_->connection_.needed_input_bytes();
 }
 
 websocket_output_plan websocket_server_protocol::output_plan() const& noexcept {

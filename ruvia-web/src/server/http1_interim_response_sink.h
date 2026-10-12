@@ -1,17 +1,17 @@
 #pragma once
 
 #include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <system_error>
-#include <vector>
 
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/http/http1_interim_response_writer.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response_head_buffer.h"
 
 #include "context/http_interim_response_output.h"
 #include "server/http1_response_output.h"
@@ -38,8 +38,18 @@ public:
 private:
     static task<void> write(void* raw, const http_interim_response_head& response) {
         auto& self = *static_cast<http1_interim_response_sink*>(raw);
-        std::pmr::vector<char> scratch(max_http_header_bytes + 1024, self.resource_);
-        const auto encoded = http1_interim_response_writer{}.prepare(response, scratch);
+        // A typical interim head fits the head buffer's inline storage; a
+        // larger one is encoded again into heap storage of exactly its size.
+        http_response_head_buffer head(self.resource_);
+        const http1_interim_response_writer writer;
+        auto encoded = writer.prepare(
+            response, std::span<char>(head.stack_cursor(response_head_stack_bytes), response_head_stack_bytes));
+        if (const auto* too_small = encoded.buffer_too_small()) {
+            const auto head_bytes = too_small->required_head_bytes();
+            head.append_generated(head_bytes, [&](char* out) noexcept {
+                encoded = writer.prepare(response, std::span<char>(out, head_bytes));
+            });
+        }
         const auto* prepared = encoded.prepared();
         if (prepared == nullptr) {
             throw std::invalid_argument("invalid or oversized interim response head");

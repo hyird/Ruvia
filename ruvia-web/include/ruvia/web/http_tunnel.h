@@ -23,8 +23,11 @@ class http_tunnel_session;
 }
 
 // An established CONNECT byte stream. The session owns this facade and its
-// allocator; received chunks own their storage until destruction and must be
-// destroyed before that session's memory owner retires.
+// allocator. Received chunks own their storage until destruction; it counts
+// against the connection's and the worker's inbound buffer budgets
+// (server_config::max_inbound_buffer_bytes_per_connection_ / _per_worker_), so
+// destroy chunks before the tunnel handler returns. A read that would exceed
+// a budget throws std::bad_alloc.
 class http_tunnel final {
 public:
     http_tunnel(const http_tunnel&) = delete;

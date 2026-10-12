@@ -50,11 +50,14 @@ struct http_client_slot_policy final {
 // connection to one HTTP/1 exchange, with shared cookie policy and statistics.
 class http_client_pool final {
 public:
+    // `resource` is the owner's worker resource for all pool storage;
+    // `response_storage` states whether it also outlives every response.
     http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
         http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain,
-        std::pmr::memory_resource* resource);
+        std::pmr::memory_resource* resource, http_client_response_storage response_storage);
     http_client_pool(asio::io_context&, worker_handle&&, http_client_config_storage,
-        std::shared_ptr<http_client_result_budget_domain>, std::pmr::memory_resource*) = delete;
+        std::shared_ptr<http_client_result_budget_domain>, std::pmr::memory_resource*,
+        http_client_response_storage) = delete;
     ~http_client_pool();
     http_client_pool(const http_client_pool&) = delete;
     http_client_pool& operator=(const http_client_pool&) = delete;

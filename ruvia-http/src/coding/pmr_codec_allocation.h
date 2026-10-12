@@ -24,6 +24,11 @@ public:
     }
     void capture_current_exception() noexcept;
     void rethrow_allocation_failure() const;
+    // A reusable codec forgets a failure that was already reported once its
+    // native state has been reset for the next unit of work.
+    void clear_allocation_failure() noexcept {
+        failure_ = nullptr;
+    }
 
 private:
     std::pmr::memory_resource* resource_;

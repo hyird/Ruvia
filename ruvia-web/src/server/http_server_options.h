@@ -25,6 +25,8 @@ class env;
 namespace ruvia::detail {
 
 class document_root_publisher;
+class inbound_buffer_budget;
+class worker_codecs;
 
 struct access_log_sink final {
     access_log_callback_ref_type callback_;
@@ -159,12 +161,14 @@ struct http_server_options final {
     // Buffered routes materialize body data; the same cap applies again after
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t max_buffered_body_bytes_{server_config_defaults().max_buffered_body_bytes_};
-    // Live inbound buffer allocations across HTTP bodies and websocket sessions.
-    // Includes capacity and reallocation overlap; the limits cannot be disabled.
+    // Live inbound buffer allocations across HTTP bodies, streamed request
+    // bodies, CONNECT tunnel reads and websocket sessions. Includes capacity and
+    // reallocation overlap; the limits cannot be disabled.
     std::size_t max_inbound_buffer_bytes_per_worker_{server_config_defaults().max_inbound_buffer_bytes_per_worker_};
     std::size_t max_inbound_buffer_bytes_per_connection_{server_config_defaults().max_inbound_buffer_bytes_per_connection_};
-    // Borrowed from the worker runtime, whose shutdown joins every user.
-    std::pmr::memory_resource* inbound_buffer_pool_{};
+    // Borrowed from the worker runtime, whose shutdown joins every connection;
+    // each connection charges its inbound_buffer_resource against it.
+    inbound_buffer_budget* inbound_budget_{nullptr};
     // Stream routes are explicit; absence disables the stream body limit.
     std::optional<std::size_t> max_stream_body_bytes_{server_config_defaults().max_stream_body_bytes_};
     // websocket messages are assembled before delivery; this must be greater than 0.
@@ -172,6 +176,11 @@ struct http_server_options final {
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<compression_config> compression_{};
+    // Borrowed from the worker runtime, which always sets it and outlives every
+    // request and connection. Inline response compression and server WebSocket
+    // connections (shared no-context-takeover deflate) borrow it; worker-thread
+    // synchronous use only.
+    worker_codecs* codecs_{nullptr};
     std::optional<cors_options> cors_{};
     document_root_type document_root_{};
     // Peers whose forwarding headers may be believed. Empty by default, so an

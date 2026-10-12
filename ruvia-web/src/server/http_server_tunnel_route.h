@@ -80,7 +80,7 @@ template <typename stream_type>
             tls_output->start();
         }
         tunnel.emplace(d.stream_, tls_output ? &*tls_output : nullptr, d.base_route_services_.worker(),
-            *d.memory_.resource(), pending);
+            *d.memory_.resource(), *d.inbound_buffer_pool_, pending);
         co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, resolved.stream_handler(), context_value);
     };
     auto finish = [&](session_type& session_value, std::exception_ptr failure) {

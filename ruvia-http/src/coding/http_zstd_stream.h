@@ -39,7 +39,9 @@ private:
     ZSTD_DStream* stream_;
 };
 
-// Encoder at the default compression level.
+// Encoder at the default compression level. reset() ends any frame in progress
+// and keeps both the parameters and the working memory, so the next frame is
+// identical to one from a new encoder. false means the owner must destroy it.
 class zstd_encoder_stream final {
 public:
     explicit zstd_encoder_stream(std::pmr::memory_resource* resource);
@@ -56,6 +58,7 @@ public:
     void rethrow_allocation_failure() const {
         allocation_.rethrow_allocation_failure();
     }
+    [[nodiscard]] bool reset() noexcept;
 
 private:
     pmr_codec_allocation_context allocation_;

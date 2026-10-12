@@ -255,6 +255,52 @@ bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::end
            (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
 }
 
+[[nodiscard]] std::size_t count_occurrences(std::string_view text, std::string_view marker) {
+    std::size_t count = 0;
+    for (auto position = text.find(marker); position != std::string_view::npos;
+        position = text.find(marker, position + marker.size())) {
+        ++count;
+    }
+    return count;
+}
+
+// An idle TLS connection waits for its next request like a plain one. Two
+// heads larger than that wait's first read arrive in one TLS record, so most
+// of their plaintext is already decrypted inside the engine; both are still
+// answered, and so is a request sent after the connection went idle.
+bool tls_keep_alive_serves_decrypted_and_later_requests(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    const auto request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nX-Padding: " + std::string(1024, 'p') + "\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(request + request), error);
+    }
+    std::string received;
+    std::array<char, 4096> buffer;
+    while (!error && count_occurrences(received, "HTTP/1.1 404 ") < 2) {
+        const auto size = stream.read_some(asio::buffer(buffer), error);
+        received.append(buffer.data(), size);
+    }
+    if (error) {
+        return false;
+    }
+    std::this_thread::sleep_for(20ms);
+    constexpr std::string_view last = "GET /missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    asio::write(stream, asio::buffer(last), error);
+    if (error) {
+        return false;
+    }
+    const auto end = read_to_end(stream, received);
+    return end == asio::error::eof && count_occurrences(received, "HTTP/1.1 404 ") == 3;
+}
+
 // RFC 9112 §9.6: a response sent before the request content was read (413)
 // is followed by a staged close, so the client can finish sending and still
 // read the complete response instead of a connection reset.
@@ -511,6 +557,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             // succeeds whichever of the two workers accepts it.
             RUVIA_CHECK(resume_tls_session(io, tls_endpoint));
             RUVIA_CHECK(tls_close_sends_close_notify(io, tls_endpoint));
+            RUVIA_CHECK(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
             RUVIA_CHECK(rejected_upload_reads_complete_response(io, endpoint));
             RUVIA_CHECK(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
             app.stop();

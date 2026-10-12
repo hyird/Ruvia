@@ -699,15 +699,19 @@ RUVIA_TEST(ws_server_protocol_reuses_drained_input_for_repeated_large_messages) 
         RUVIA_CHECK(event && event->message() && event->message()->payload() == payload_value);
         RUVIA_CHECK(!protocol.poll().has_value());
     };
-    // Steady 64 KiB traffic allocates input storage once, not once per message.
-    deliver(64 * 1024);
+    // Steady traffic within the retention bound allocates input storage
+    // once, not once per message.
+    const auto retained_payload_bytes = websocket_retained_buffer_bytes - 16;
+    deliver(retained_payload_bytes);
     const auto allocations = memory.allocations_;
     const auto steady_live_bytes = memory.live_bytes_;
     for (int round = 0; round < 8; ++round) {
-        deliver(64 * 1024);
+        deliver(retained_payload_bytes);
     }
     RUVIA_CHECK_EQ(memory.allocations_, allocations);
-    // A drained burst does not stay pinned to the connection.
+    // A drained larger message does not stay pinned to the connection.
+    deliver(64 * 1024);
+    RUVIA_CHECK(memory.live_bytes_ <= steady_live_bytes);
     deliver(1024 * 1024);
     RUVIA_CHECK(memory.live_bytes_ <= steady_live_bytes);
 }

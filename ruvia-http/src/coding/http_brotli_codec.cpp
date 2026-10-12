@@ -81,13 +81,9 @@ http_content_decode_result decode_brotli_content(
     }
 }
 
-http_content_encode_result encode_brotli_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
-    brotli_encoder_stream encoder(output.get_allocator().resource());
-    if (!encoder.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
-    }
+http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+    std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto* state_value = encoder.native();
 
     std::size_t available_input = input.size();
@@ -118,6 +114,16 @@ http_content_encode_result encode_brotli_content(
             return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
         }
     }
+}
+
+http_content_encode_result encode_brotli_content(
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+    auto* const state_resource = http_pmr_resource_or_default(resource);
+    brotli_encoder_stream encoder(state_resource);
+    if (!encoder.initialized()) {
+        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+    }
+    return encode_brotli_content(encoder, input, max_encoded_bytes, state_resource);
 }
 
 }  // namespace ruvia::detail

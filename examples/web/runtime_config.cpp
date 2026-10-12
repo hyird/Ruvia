@@ -108,6 +108,9 @@ int main() {
             .memory_pool_ =
                 {
                     .request_initial_buffer_bytes_ = 4096,
+                    // Freed 16 KiB-1 MiB blocks each worker keeps for reuse
+                    // until it has been idle for a connection scan interval.
+                    .retained_block_bytes_ = 8 * 1024 * 1024,
                 },
         });
         if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {

@@ -12,7 +12,9 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http1_websocket_client_handshake.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
@@ -83,9 +85,22 @@ task<void> websocket_client_state::perform_handshake() {
                                                    .deflate_ = config_.deflate_},
         memory_.resource());
 
-    std::array<char, max_http_header_bytes + websocket_client_handshake_request_buffer_extra_bytes>
-        request_buffer{};
-    auto prepared_result = handshake.prepare_request(config_.origin_, config_.target_, request_buffer);
+    // Uninitialized worker storage, released when the handshake ends: the
+    // frame stays small and no buffer is zero-filled. A head larger than the
+    // shared retention size asks for exactly its size once, up to the limit.
+    constexpr std::size_t max_request_head_bytes =
+        max_http_header_bytes + websocket_client_handshake_request_buffer_extra_bytes;
+    http_io_buffer request_buffer(memory_.resource());
+    auto prepared_result = [&] {
+        auto first = handshake.prepare_request(
+            config_.origin_, config_.target_, request_buffer.prepare(http_retained_pmr_string_bytes));
+        const auto* too_small = first.buffer_too_small();
+        if (too_small == nullptr || too_small->required_head_bytes() > max_request_head_bytes) {
+            return first;
+        }
+        return handshake.prepare_request(
+            config_.origin_, config_.target_, request_buffer.prepare(too_small->required_head_bytes()));
+    }();
     const auto* prepared = prepared_result.prepared();
     if (prepared == nullptr) {
         const auto message = prepared_result.failure()
@@ -97,7 +112,9 @@ task<void> websocket_client_state::perform_handshake() {
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = memory_.resource()});
     co_await write_transport(prepared->head(), config_.write_timeout_);
 
-    std::array<char, websocket_client_transport_buffer_bytes> bytes_value{};
+    // The response head is read into the request buffer's storage.
+    request_buffer.clear();
+    const auto bytes_value = request_buffer.prepare(websocket_client_transport_buffer_bytes);
     for (;;) {
         auto result_value = parser.parse(input_);
         if (const auto* failure = result_value.failure()) {

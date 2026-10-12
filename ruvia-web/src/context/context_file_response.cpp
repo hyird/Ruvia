@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <filesystem>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -30,6 +30,40 @@
 
 namespace ruvia {
 namespace {
+
+// The NUL-terminated native form of a borrowed file path, or an empty view
+// when the path cannot name a file (empty, an embedded NUL, or text that is
+// not UTF-8 on Windows). A borrowed std::filesystem::path already is one; text
+// is terminated, and on Windows widened, into `storage`.
+[[nodiscard]] http_native_path_view_type native_file_path(
+    borrowed_file_path path, http_native_path_string_type& storage) {
+    if (const auto native = path.native(); !native.empty()) {
+        return native;
+    }
+    const auto text = path.text();
+    if (text.empty() || text.find('\0') != std::string_view::npos) {
+        return {};
+    }
+#if defined(_WIN32)
+    if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+    const auto text_length = static_cast<int>(text.size());
+    const auto wide_length =
+        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, nullptr, 0);
+    if (wide_length <= 0) {
+        return {};
+    }
+    storage.resize(static_cast<std::size_t>(wide_length));
+    if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, storage.data(),
+            wide_length) != wide_length) {
+        return {};
+    }
+#else
+    storage.assign(text.data(), text.size());
+#endif
+    return storage;
+}
 
 inline constexpr std::size_t file_response_header_reserve = 7;
 
@@ -166,6 +200,12 @@ public:
         if (offset > bytes_value.size() || length > bytes_value.size() - offset) {
             throw std::logic_error("static memory response slice is out of range");
         }
+        // Copied, not borrowed: the snapshot is not guaranteed to outlive the
+        // response. A document-root lease ends when dispatch returns, before
+        // the transport writes the body, and a caller's static_root carries no
+        // lease at all. Borrowing would need a per-response reference on the
+        // snapshot (shared ownership on the hot path) or a lease release hook
+        // inside http_response.
         std::pmr::string owned(
             bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)),
             resource);
@@ -420,6 +460,18 @@ template <typename apply_response_state_type>
 }  // namespace
 
 http_response context::file(file_response_options options) const {
+    const auto not_found = [] {
+        return http_error({.status_ = ruvia::http_status::not_found,
+            .code_ = "not_found",
+            .message_ = "file not found"});
+    };
+    // Text paths are terminated (and widened) in the arena; it outlives the
+    // response construction below, and the response copies its path.
+    http_native_path_string_type text_path(arena());
+    const auto native_path = native_file_path(options.path_, text_path);
+    if (native_path.empty()) {
+        throw not_found();
+    }
     // Open once: the response is framed from this handle's metadata, and the
     // body comes from the same handle, so no path is resolved twice. A small
     // body is read right away and the handle closed; HEAD sends no bytes.
@@ -427,11 +479,9 @@ http_response context::file(file_response_options options) const {
                                  ? file_response_path::inline_read::transport
                                  : file_response_path::inline_read::framing_snapshot;
     std::error_code ec;
-    auto opened = detail::open_response_file(options.path_.c_str(), ec);
+    auto opened = detail::open_response_file(native_path.data(), ec);
     if (ec) {
-        throw http_error({.status_ = ruvia::http_status::not_found,
-            .code_ = "not_found",
-            .message_ = "file not found"});
+        throw not_found();
     }
     const auto& snapshot = opened.snapshot_;
 
@@ -442,8 +492,8 @@ http_response context::file(file_response_options options) const {
     };
     return make_file_response(*this, request_, response_state().metadata().status(),
         file_response_source{
-            .body_ = file_response_body_source::file(file_response_path(http_native_path_view(options.path_),
-                snapshot.identity_, std::move(opened.handle_), read_policy)),
+            .body_ = file_response_body_source::file(file_response_path(
+                native_path, snapshot.identity_, std::move(opened.handle_), read_policy)),
             .size_ = snapshot.size_,
             .modified_token_ = snapshot.modified_token_,
             .modified_seconds_ = snapshot.modified_seconds_,

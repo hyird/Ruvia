@@ -1,7 +1,9 @@
 #include "server/worker_connections.h"
 
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -54,15 +56,28 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     return SSL_TLSEXT_ERR_OK;
 }
 
+// The scanner also trims the worker's memory after an idle interval.
 [[nodiscard]] connection_scanner_options make_connection_scanner_options(
-    const http_server_options& options) noexcept {
+    const http_server_options& options, worker_memory& memory) noexcept {
     return connection_scanner_options{.scan_interval_ = options.scan_interval_,
         .idle_timeout_ = options.idle_timeout_,
         .initial_read_timeout_ = options.request_header_timeout_,
         .payload_read_timeout_ = options.request_body_timeout_,
         .write_timeout_ = options.write_timeout_,
         .initial_read_completion_timeout_ = options.header_completion_timeout_,
-        .payload_read_completion_timeout_ = options.body_completion_timeout_};
+        .payload_read_completion_timeout_ = options.body_completion_timeout_,
+        .trim_when_idle_ = &memory};
+}
+
+// Names the peer for the session's services and its failure report. Both stay
+// empty when the socket no longer knows its peer.
+void resolve_remote_endpoint(tcp_socket_type& socket, std::pmr::string& address, std::uint16_t& port) {
+    std::error_code remote_ec;
+    const auto remote_endpoint = socket.remote_endpoint(remote_ec);
+    if (!remote_ec) {
+        ruvia::assign_remote_address(address, remote_endpoint.address());
+        port = remote_endpoint.port();
+    }
 }
 
 }  // namespace
@@ -81,7 +96,7 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       state_(state_value),
       tasks_(tasks),
       listeners_(memory.resource()),
-      scanner_(worker_value, make_connection_scanner_options(options)),
+      scanner_(worker_value, make_connection_scanner_options(options, memory)),
       work_sets_(memory) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
@@ -173,79 +188,88 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
     }
 }
 
+// Plain and TLS sessions are separate coroutines so a plain connection's frame
+// carries none of the TLS stream, handshake and certificate state. Both keep
+// the remote address outside their try so the failure report can name the
+// peer; it stays empty if the failure happened before the address was resolved.
 task<void> worker_connections::run_session(
     http_server_session_config& listener_value, accepted_connection_lease connection) {
     auto& socket = connection.socket();
-    // Declared outside the try so the failure report below can name the peer.
-    // It stays empty if the failure happened before the address was resolved.
     std::pmr::string remote_address(memory_.allocator<char>());
     std::uint16_t remote_port = 0;
     try {
-        std::error_code remote_ec;
-        const auto remote_endpoint = socket.remote_endpoint(remote_ec);
-        if (!remote_ec) {
-            ruvia::assign_remote_address(remote_address, remote_endpoint.address());
-            remote_port = remote_endpoint.port();
-        }
-        context_services base_services = capabilities_.make_context_services(stop_token_);
-        if (listener_value.tls() != nullptr) {
-            // A draining worker admits no new request, and a handshake leads only to one.
-            if (!http_server_worker_running(state_)) {
-                co_return;
-            }
-            asio::ssl::stream<tcp_socket_type&> tls_stream(socket, *listener_value.tls_context_);
-            {
-                // The TLS handshake has its own initial-read deadline. It must be
-                // released the moment the handshake resolves and before the
-                // session is dispatched: the session installs and continuously
-                // refreshes its own scanner entry, but this handshake entry stays
-                // pinned at reading_initial with a frozen last-active time. Left
-                // registered across the session, the scanner would close an active
-                // connection's socket one request_header_timeout after the handshake
-                // regardless of session activity -- severing long-lived TLS
-                // sessions (websocket, keep-alive, slow uploads, streaming).
-                connection_scanner::entry_type handshake_entry;
-                connection_scanner::guard_type handshake_guard(scanner_, handshake_entry, socket);
-                handshake_entry.read_request_head(connection_scanner::phase_type::reading_initial);
-                const auto handshake_completion =
-                    co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
-                if (handshake_completion.error_code()) {
-                    ruvia::close_socket(socket);
-                    co_return;
-                }
-            }
-            std::pmr::string client_certificate(memory_.allocator<char>());
-            extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
-            const auto tls_services = base_services.with_tls_transport(
-                remote_address, client_certificate, remote_port);
-            const auto close_mode = co_await run_stream(listener_value, tls_stream, socket, tls_services);
-            // A worker stop keeps the immediate close; scanner close_all reaches a
-            // graceful close that is already running.
-            if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
-                co_await close_http_connection_gracefully(tls_stream, scanner_, worker_, close_mode);
-            }
-            ruvia::close_socket(socket);
-            co_return;
-        }
-        const auto close_mode = co_await run_stream(
-            listener_value, socket, socket, base_services.with_plain_transport(remote_address, remote_port));
+        resolve_remote_endpoint(socket, remote_address, remote_port);
+        const auto close_mode = co_await run_stream(listener_value, socket, socket,
+            capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
         if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
             co_await close_http_connection_gracefully(socket, scanner_, worker_, close_mode);
         }
     } catch (...) {
-        // Last-resort safety net: any exception that escapes the session
-        // body (including bad_alloc, error-handler failures, or framework
-        // bugs) must not propagate into asio::detached, which terminates.
-        // Socket state may be partially written or completely fine; we
-        // cannot safely emit anything new, so just drop the connection.
-        //
-        // Dropping the connection must not also drop the reason: this is the
-        // only place that reason exists, so it goes to the connection-failure
-        // sink before the frame unwinds.
-        const auto failure = std::current_exception();
-        ruvia::close_socket(socket);
-        options_.connection_failure_.invoke(remote_address, failure);
+        report_session_failure(socket, remote_address, std::current_exception());
     }
+}
+
+task<void> worker_connections::run_tls_session(
+    http_server_session_config& listener_value, accepted_connection_lease connection) {
+    auto& socket = connection.socket();
+    std::pmr::string remote_address(memory_.allocator<char>());
+    std::uint16_t remote_port = 0;
+    try {
+        resolve_remote_endpoint(socket, remote_address, remote_port);
+        // A draining worker admits no new request, and a handshake leads only to one.
+        if (!http_server_worker_running(state_)) {
+            co_return;
+        }
+        asio::ssl::stream<tcp_socket_type&> tls_stream(socket, *listener_value.tls_context_);
+        {
+            // The TLS handshake has its own initial-read deadline. It must be
+            // released the moment the handshake resolves and before the
+            // session is dispatched: the session installs and continuously
+            // refreshes its own scanner entry, but this handshake entry stays
+            // pinned at reading_initial with a frozen last-active time. Left
+            // registered across the session, the scanner would close an active
+            // connection's socket one request_header_timeout after the handshake
+            // regardless of session activity -- severing long-lived TLS
+            // sessions (websocket, keep-alive, slow uploads, streaming).
+            connection_scanner::entry_type handshake_entry;
+            connection_scanner::guard_type handshake_guard(scanner_, handshake_entry, socket);
+            handshake_entry.read_request_head(connection_scanner::phase_type::reading_initial);
+            const auto handshake_completion =
+                co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
+            if (handshake_completion.error_code()) {
+                ruvia::close_socket(socket);
+                co_return;
+            }
+        }
+        std::pmr::string client_certificate(memory_.allocator<char>());
+        extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
+        const auto close_mode = co_await run_stream(listener_value, tls_stream, socket,
+            capabilities_.make_context_services(stop_token_)
+                .with_tls_transport(remote_address, client_certificate, remote_port));
+        // A worker stop keeps the immediate close; scanner close_all reaches a
+        // graceful close that is already running.
+        if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
+            co_await close_http_connection_gracefully(tls_stream, scanner_, worker_, close_mode);
+        }
+        ruvia::close_socket(socket);
+    } catch (...) {
+        report_session_failure(socket, remote_address, std::current_exception());
+    }
+}
+
+void worker_connections::report_session_failure(
+    tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {
+    // Last-resort safety net: any exception that escapes the session
+    // body (including bad_alloc, error-handler failures, or framework
+    // bugs) must not propagate into asio::detached, which terminates.
+    // Socket state may be partially written or completely fine; we
+    // cannot safely emit anything new, so just drop the connection.
+    //
+    // Dropping the connection must not also drop the reason: this is the
+    // only place that reason exists, so it goes to the connection-failure
+    // sink before the frame unwinds.
+    ruvia::close_socket(socket);
+    options_.connection_failure_.invoke(remote_address, std::move(failure));
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
@@ -257,7 +281,9 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
     try {
         ruvia::configure_accepted_socket(socket);
         accepted_connection_lease connection(std::move(socket), drain_);
-        tasks_.spawn(run_session(*listeners_[listener_index], std::move(connection)));
+        auto& listener_value = *listeners_[listener_index];
+        tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection))
+                                                     : run_session(listener_value, std::move(connection)));
     } catch (...) {
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
         options_.connection_failure_.invoke({}, std::current_exception());

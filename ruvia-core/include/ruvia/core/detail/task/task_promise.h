@@ -22,6 +22,9 @@ namespace detail {
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
 void task_frame_deallocate(void* pointer) noexcept;
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
+// This thread's cached frame bytes, and the drain worker_memory::trim() uses.
+[[nodiscard]] std::size_t task_frame_cached_bytes() noexcept;
+void task_frame_cache_release() noexcept;
 
 template <std::size_t t_alignment>
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value) {

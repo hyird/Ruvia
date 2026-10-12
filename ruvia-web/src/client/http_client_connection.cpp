@@ -9,7 +9,9 @@
 namespace ruvia::detail {
 namespace {
 
-constexpr std::size_t connection_read_buffer_initial_bytes = std::size_t{16} * 1024;
+// One transport read: what an idle keep-alive connection keeps for the next
+// response. Larger growth (long heads, a busy tunnel) goes back to the worker.
+constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 1024;
 
 [[nodiscard]] client_tcp_endpoint http_client_endpoint(const http_client_config_storage& config) noexcept {
     return {.host_ = config.host_,
@@ -27,9 +29,7 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
       read_buffer_(pool.resource()),
       write_buffer_(pool.resource()),
       pool_(pool),
-      index_(index) {
-    read_buffer_.reserve(connection_read_buffer_initial_bytes);
-}
+      index_(index) {}
 
 http_client_connection::~http_client_connection() = default;
 
@@ -55,6 +55,14 @@ void http_client_connection::close() noexcept {
     connected_ = false;
     read_buffer_.clear();
     write_buffer_.clear();
+}
+
+void http_client_connection::retain_idle_buffers() noexcept {
+    // Unread bytes belong to the transport; only an empty buffer is trimmed.
+    if (read_buffer_.empty()) {
+        read_buffer_.clear_retaining_small(connection_read_buffer_retained_bytes);
+    }
+    write_buffer_.clear_retaining_small();
 }
 
 void http_client_connection::shutdown() noexcept {

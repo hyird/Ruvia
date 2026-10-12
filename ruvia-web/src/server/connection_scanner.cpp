@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/socket.h"
 
 namespace ruvia::detail {
@@ -285,6 +286,9 @@ void connection_scanner::impl_type::unregister_entry(entry_type& entry_value) no
     if (entry_value.scanner_ != owner_ || !entry_value.linked()) {
         return;
     }
+    if (entry_value.last_active_ms_ > retired_activity_ms_) {
+        retired_activity_ms_ = entry_value.last_active_ms_;
+    }
     if (scan_current_ == &entry_value) {
         scan_current_ = nullptr;
     }
@@ -329,7 +333,7 @@ bool connection_scanner::impl_type::has_scanning_work() const noexcept {
            options_.payload_read_timeout_.has_value() || options_.write_timeout_.has_value() ||
            options_.initial_read_completion_timeout_.has_value() ||
            options_.payload_read_completion_timeout_.has_value() ||
-           periodic_check_count_ != 0;
+           options_.trim_when_idle_ != nullptr || periodic_check_count_ != 0;
 }
 void connection_scanner::impl_type::schedule() {
     if (!running_) {
@@ -352,15 +356,23 @@ void connection_scanner::impl_type::schedule() {
         scanner->timer_.cancel();
         // Every tick advances the coarse clock, even without timeouts or
         // checks: an entry registered later must not be stamped with a stale time.
+        // Activity during the interval that just ended was stamped with the
+        // previous tick's time.
+        const auto interval_start = scanner->cached_now_ms_;
         scanner->cached_now_ms_ = steady_now_ms();
         if (scanner->has_scanning_work()) {
             scanner->scanning_ = true;
-            scanner->scan();
+            const bool idle = scanner->scan(interval_start);
             scanner->scanning_ = false;
             if (scanner->release_after_scan_) {
                 // A callback destroyed the scanner; its teardown already ran.
                 delete scanner;
                 return;
+            }
+            // Never during an exchange or a burst: only after a whole interval
+            // without either. The timer runs on the worker that owns the memory.
+            if (idle && scanner->retired_activity_ms_ < interval_start && scanner->options_.trim_when_idle_ != nullptr) {
+                scanner->options_.trim_when_idle_->trim(scanner->worker_);
             }
         }
         if (!scanner->timer_.registered()) {
@@ -368,12 +380,15 @@ void connection_scanner::impl_type::schedule() {
         }
     });
 }
-void connection_scanner::impl_type::scan() noexcept {
+bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
     const auto now = cached_now_ms_;
+    bool idle = true;
     scan_next_ = sentinel_.next_;
     while (scan_next_ != &sentinel_) {
         scan_current_ = scan_next_;
         scan_next_ = scan_current_->next_;
+        // Checked before this entry's callbacks, which may touch it at the new time.
+        idle = idle && !active_since(*scan_current_, interval_start);
         scan_current_->periodic_scan_next_ = scan_current_->periodic_checks_;
         // A callback can retire the current entry or a later one. Unregistration
         // updates both scanner-owned cursors before the entry can be destroyed.
@@ -388,6 +403,14 @@ void connection_scanner::impl_type::scan() noexcept {
         scan_current_ = nullptr;
     }
     scan_next_ = nullptr;
+    return idle;
+}
+bool connection_scanner::impl_type::active_since(const entry_type& entry_value, std::int64_t interval_start) noexcept {
+    // A connection waiting for, or still reading, a request head has no
+    // exchange; neither has an upgraded one between messages. Anything else
+    // (a handshake, an admitted request, a response) is an exchange.
+    return entry_value.last_active_ms_ >= interval_start ||
+           (!entry_value.reading_request_head_ && entry_value.phase_ != phase_type::long_lived);
 }
 bool connection_scanner::impl_type::is_timed_out(const entry_type& entry_value, std::int64_t now) const noexcept {
     // Stamps come from the coarse clock, which lags the activity it records by

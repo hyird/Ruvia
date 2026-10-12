@@ -10,6 +10,7 @@
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/http/websocket_protocol_types.h"
 
 namespace ruvia {
@@ -28,6 +29,14 @@ struct websocket_connection_options final {
     websocket_mask_key_generator_type mask_key_generator_{nullptr};
     void* mask_key_context_{nullptr};
     int compression_level_{6};
+    // zlib memLevel (1-9) of a private deflater; see websocket_deflate_config.
+    int mem_level_{8};
+    // Borrowed codecs for every permessage-deflate direction negotiated without
+    // context takeover; they must outlive the connection and are used only
+    // synchronously inside its calls. nullptr gives such a direction a private
+    // codec too. Private codecs are created on the direction's first
+    // compressed message from `resource_`.
+    websocket_deflate_codecs* shared_deflate_{nullptr};
     // Independent bound for feed() bytes awaiting next_event(). A rejected feed
     // consumes nothing; drain events or provide smaller chunks before retrying.
     std::size_t max_buffered_input_bytes_{default_max_websocket_message_bytes + 14};

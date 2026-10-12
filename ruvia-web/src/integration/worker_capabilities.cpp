@@ -27,8 +27,10 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
       databases_(io_context, worker_, resource, definitions.databases_, &redis_),
       http_client_result_budget_domain_(
           std::make_shared<http_client_result_budget_domain>(options.http_client_result_budget_)),
-      http_clients_(io_context, worker_, resource, definitions.http_clients_,
-          http_client_result_budget_domain_),
+      // The worker resource outlives every request and worker state, so it
+      // backs client responses directly.
+      http_clients_(io_context, worker_, resource, http_client_response_storage::worker_resource,
+          definitions.http_clients_, http_client_result_budget_domain_),
       worker_states_(resource, definitions.worker_states_),
       rate_limiter_(
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),

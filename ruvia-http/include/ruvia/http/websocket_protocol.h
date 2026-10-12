@@ -37,6 +37,14 @@ struct websocket_deflate_config final {
     // Opt-in: never mix secrets and attacker-controlled content in one dictionary.
     // A peer requesting no-context-takeover still receives independent messages.
     bool context_takeover_{false};
+    // zlib memLevel (1-9) of a connection's private deflater. Only a direction
+    // negotiated with context takeover keeps one, created on its first
+    // compressed message: directions without takeover (the default) share the
+    // worker's codecs and allocate no codec state per connection. memLevel
+    // sizes the hash heads plus pending buffer at 2^(memLevel + 9) bytes on
+    // top of the 128 KiB window and history of a 15-bit window: 128 KiB at 8,
+    // 8 KiB at 4, so 4 saves 120 KiB per takeover connection at a lower ratio.
+    int mem_level_{8};
 };
 
 namespace detail {

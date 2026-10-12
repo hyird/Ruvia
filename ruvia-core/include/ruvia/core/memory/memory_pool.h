@@ -9,23 +9,40 @@
 
 namespace ruvia {
 
+class worker_handle;
+
 // Explicit worker-local owner, not thread_local storage. All allocations and
 // deallocations are worker-affine; this pool has no internal synchronization.
-// Individual deallocations become reusable pool storage. The pool can retain
-// cached blocks until destruction and must outlive every object using it.
+//
+// Two tiers: objects up to 16 KiB come from a small-object pool whose freed
+// storage stays reusable for the worker's life. Larger blocks come from a
+// bounded block cache: freed blocks up to 1 MiB (alignment up to 64) are kept,
+// in 4 KiB-rounded exact-size bins, for reuse while the cached total stays
+// within memory_pool_config::retained_block_bytes_; the excess goes back
+// upstream at once, and trim() returns every cached block. Larger or
+// over-aligned blocks pass straight through. Whether returned memory reaches
+// the OS is up to the C allocator. The pool must outlive every object using it.
 class worker_memory final {
 public:
+    // Uses std::pmr::new_delete_resource() directly, never the global PMR
+    // default and never the lock-shared process resource.
     explicit worker_memory(const memory_pool_config& config = {});
     // Bind an upstream once at construction (for custom allocation/accounting).
-    // It must outlive this pool and all of its borrowers. The default overload
-    // uses std::pmr::new_delete_resource() directly, never the global PMR
-    // default and never the lock-shared process resource.
+    // It must outlive this pool and all of its borrowers, and receives every
+    // block, including the pool object's own storage.
     explicit worker_memory(std::pmr::memory_resource& upstream,
         const memory_pool_config& config = {});
     ~worker_memory();
 
     worker_memory(const worker_memory&) = delete;
     worker_memory& operator=(const worker_memory&) = delete;
+
+    // Returns every cached large block upstream and drains the calling
+    // thread's coroutine frame cache; live allocations and the small-object
+    // pool are untouched. Owner thread only: `owner` is the worker this memory
+    // serves, and the call throws std::logic_error unless it runs on that
+    // worker.
+    void trim(const worker_handle& owner);
 
     template <typename t_type = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() & noexcept {

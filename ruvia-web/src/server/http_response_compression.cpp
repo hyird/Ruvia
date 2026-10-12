@@ -142,7 +142,7 @@ http_response_compression_decision prepare_response_compression(
 
 http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection,
     http_known_method request_method, http_response& response, const compression_config& options,
-    bool offload_available) {
+    worker_codecs& codecs, bool offload_available) {
     constexpr http_buffered_compression_step not_applicable{
         http_response_compression_result::make_not_applicable(), false};
     const auto body = response.body_bytes();
@@ -164,8 +164,8 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     const auto max_encoded_bytes = body.empty() ? 0 : body.size() - 1;
     std::optional<http_content_encode_result> encoding;
     try {
-        encoding.emplace(encode_http_content(coding, body,
-            {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()}));
+        encoding.emplace(codecs.encoder(coding).encode(
+            body, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()}));
     } catch (...) {
         return {http_response_compression_result::make_failed(), false};
     }

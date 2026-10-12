@@ -18,6 +18,15 @@
 
 namespace ruvia::detail {
 
+class brotli_encoder_stream;
+class zlib_deflate_stream;
+class zstd_encoder_stream;
+
+// zlib window parameters of the gzip (RFC 1952) and deflate (RFC 9110 zlib
+// wrapper) content codings.
+inline constexpr int zlib_gzip_window_bits = 15 + 16;
+inline constexpr int zlib_deflate_window_bits = 15;
+
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.
 [[nodiscard]] inline bool append_decoded_bytes(
@@ -46,5 +55,16 @@ namespace ruvia::detail {
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
 [[nodiscard]] http_content_encode_result encode_zstd_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
+
+// The single whole-buffer encode loop of each library, over caller-owned codec
+// state that is freshly initialized or reset. Output comes from
+// `output_resource`. Every path leaves the state consumed (finished or
+// mid-stream), so an owner that reuses it resets it afterwards.
+[[nodiscard]] http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater,
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
+[[nodiscard]] http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder,
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
+[[nodiscard]] http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder,
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
 
 }  // namespace ruvia::detail

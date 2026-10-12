@@ -37,11 +37,14 @@ namespace fs = std::filesystem;
     return path;
 }
 
+inline constexpr std::size_t long_hint_value_bytes = 2000;
+
 class pipelining_routes final {
     RUVIA_ROUTES_BEGIN(pipelining_routes)
     RUVIA_GET("/pipelining/item/:id", item);
     RUVIA_GET("/pipelining/large", large);
     RUVIA_GET("/pipelining/hint", hint);
+    RUVIA_GET("/pipelining/long-hint", long_hint);
     RUVIA_GET("/pipelining/file", file);
     RUVIA_POST("/pipelining/echo", echo);
     RUVIA_GET_STREAM("/pipelining/stream", stream);
@@ -62,6 +65,15 @@ class pipelining_routes final {
     ruvia::task<ruvia::http_response> hint(ruvia::context& c) {
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
         co_return c.text("hinted");
+    }
+
+    ruvia::task<ruvia::http_response> long_hint(ruvia::context& c) {
+        // Longer than an interim head usually is, so it does not fit the
+        // head buffer's inline storage.
+        const std::string value(long_hint_value_bytes, 'h');
+        const ruvia::http_header_view headers[] = {{"X-Hint", value}};
+        co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, headers));
+        co_return c.text("long-hinted");
     }
 
     ruvia::task<ruvia::http_response> file(ruvia::context& c) {
@@ -202,6 +214,22 @@ RUVIA_TEST(a_long_pipelined_burst_is_answered_completely_and_in_order) {
     }
     RUVIA_CHECK(ordered);
     RUVIA_CHECK_EQ(position, output.size());
+}
+
+RUVIA_TEST(a_long_interim_head_is_sent_whole_between_pipelined_responses) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = exchange_pipelined(server.endpoint(),
+        get("/pipelining/item/before") + get("/pipelining/long-hint") +
+            get("/pipelining/item/after", "Connection: close\r\n"));
+    server.finish();
+
+    RUVIA_CHECK(response.has_value());
+    const auto output = response.value_or("");
+    const auto hint_field = "X-Hint: " + std::string(long_hint_value_bytes, 'h') + "\r\n";
+    RUVIA_CHECK(appear_in_order(
+        output, {"item-before", "HTTP/1.1 103 ", hint_field, "\r\n\r\n", "long-hinted", "item-after"}));
+    RUVIA_CHECK_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{4});
 }
 
 RUVIA_TEST(held_pipelined_responses_are_sent_before_waiting_for_more_input) {

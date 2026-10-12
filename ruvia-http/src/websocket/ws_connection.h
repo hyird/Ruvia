@@ -24,6 +24,7 @@
 
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/http/websocket_protocol_types.h"
 
 #include "websocket/http_websocket_inbound_assembler.h"
@@ -41,12 +42,13 @@ enum class ws_payload_storage : std::uint8_t {
 
 class ws_connection final {
 public:
-    explicit ws_connection(http_io_buffer& input,
-        protocol_byte_limit message_limit = protocol_byte_limit::unlimited(),
-        websocket_compression compression = (websocket_compression{}),
-        websocket_connection_role role = websocket_connection_role::server,
-        websocket_mask_key_generator_type mask_key_generator = nullptr, void* mask_key_context = nullptr,
-        int compression_level = 6);
+    // Validates every parameter, deflate ones included even when compression
+    // is not negotiated. `shared_deflate` serves the directions negotiated
+    // without context takeover (see websocket_deflate); it must outlive this
+    // connection. No codec state is allocated here.
+    ws_connection(http_io_buffer& input, protocol_byte_limit message_limit, websocket_compression compression,
+        websocket_connection_role role, websocket_mask_key_generator_type mask_key_generator, void* mask_key_context,
+        int compression_level, int mem_level, websocket_deflate_codecs* shared_deflate);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
@@ -54,6 +56,11 @@ public:
     // but not delivered while the peer Close is awaited.
     [[nodiscard]] std::optional<websocket_event> poll() &;
     [[nodiscard]] std::optional<websocket_event> poll() && = delete;
+    // Bytes the frame the last poll() waited for still lacks; 0 when it
+    // returned an event or the frame header was incomplete.
+    [[nodiscard]] std::size_t needed_input_bytes() const noexcept {
+        return needed_input_bytes_;
+    }
 
     [[nodiscard]] websocket_output_plan output_plan() const& noexcept;
     [[nodiscard]] websocket_output_plan output_plan() const&& = delete;
@@ -104,6 +111,7 @@ private:
     protocol_byte_limit message_limit_;
     // Bytes of the last returned frame, consumed by the next poll().
     std::size_t pending_consume_{0};
+    std::size_t needed_input_bytes_{0};
 
     std::pmr::string out_buffer_;
     std::size_t out_offset_{0};

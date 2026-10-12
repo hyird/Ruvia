@@ -19,6 +19,7 @@
 #include "server/http_server_options.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
+#include "server/worker_codecs.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_handshake.h"
 #include "websocket/http_websocket_session.h"
@@ -61,11 +62,17 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
             co_return;
         }
         tail.record_access(d.options_.access_log_, http_status::switching_protocols);
+        const auto& deflate_config = websocket_endpoint.deflate();
+        // Directions without context takeover borrow the worker's codecs, which
+        // outlive every connection, so they allocate no codec state here.
         websocket_connection.emplace(d.stream_,
             d.base_route_services_.worker(), d.scanner_entry_, websocket_endpoint.lifecycle(),
             protocol_byte_limit::limited(d.options_.max_websocket_message_bytes_),
-            d.inbound_buffer_pool_ != nullptr ? d.inbound_buffer_pool_ : d.memory_.resource(),
-            pending_frames, handshake.compression(), websocket_endpoint.deflate().compression_level_);
+            d.inbound_buffer_pool_ != nullptr ? d.inbound_buffer_pool_ : d.memory_.resource(), pending_frames,
+            websocket_server_protocol_options{.compression_ = handshake.compression(),
+                .compression_level_ = deflate_config.compression_level_,
+                .mem_level_ = deflate_config.mem_level_,
+                .shared_deflate_ = &d.options_.codecs_->websocket_deflate()});
         co_await invoke_websocket_handler(
             *websocket_connection, d.scanner_entry_, resolved.stream_handler(), context_value);
     };

@@ -1,7 +1,6 @@
 #include "http1/http1_client_exchange.h"
 
 #include <algorithm>
-#include <array>
 #include <exception>
 #include <optional>
 #include <span>
@@ -23,8 +22,10 @@
 #include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_body_decoding.h"
 
@@ -38,6 +39,13 @@
 #include "http/tls_tunnel_output.h"
 
 namespace ruvia::detail {
+namespace {
+
+// The largest request head the client sends: the header limit plus the
+// request line and generated fields.
+constexpr std::size_t max_client_request_head_bytes = max_http_header_bytes + 1024;
+
+}  // namespace
 
 task<void> http1_client_exchange::run(const http_client_request_storage& request, const operation_timeout& timeout,
     stop_token stop_token_value, http_client_response_state& state_value) {
@@ -93,8 +101,6 @@ task<void> http1_client_exchange::exchange(
     pool_.policy().append_headers(request, headers, cookie_header);
     source_value.headers_ = std::span<const http_header_view>(headers);
 
-    auto& write_buffer = connection_.write_buffer_;
-    write_buffer.resize(max_http_header_bytes + 1024);
     auto origin = pool_.origin();
     const bool connect_udp = request.is_tunnel() && request.udp_tunnel();
     if (connect_udp) {
@@ -108,18 +114,31 @@ task<void> http1_client_exchange::exchange(
     }
 
     http1_client_request_writer writer({.resource_ = response_resource});
-    const auto buffer = std::span<char>(write_buffer);
-    auto prepared_result =
-        connect_udp           ? writer.prepare_connect_udp(origin, source_value.target_, headers, buffer)
-        : request.is_tunnel() ? writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer)
-        : request.upload() != nullptr
-            ? writer.prepare_streaming(origin,
-                  {.method_ = source_value.method_,
-                      .target_ = source_value.target_,
-                      .headers_ = headers,
-                      .content_length_ = request.upload()->config_.content_length_},
-                  buffer, {.expectation_ = request.upload()->config_.expectation_})
-            : writer.prepare(origin, source_value, buffer);
+    const auto prepare_head = [&](std::span<char> buffer) {
+        return connect_udp           ? writer.prepare_connect_udp(origin, source_value.target_, headers, buffer)
+               : request.is_tunnel() ? writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer)
+               : request.upload() != nullptr
+                   ? writer.prepare_streaming(origin,
+                         {.method_ = source_value.method_,
+                             .target_ = source_value.target_,
+                             .headers_ = headers,
+                             .content_length_ = request.upload()->config_.content_length_},
+                         buffer, {.expectation_ = request.upload()->config_.expectation_})
+                   : writer.prepare(origin, source_value, buffer);
+    };
+    // The head is written into the connection's retained, uninitialized
+    // buffer; a larger head asks for exactly its size once, up to the limit.
+    auto& write_buffer = connection_.write_buffer_;
+    write_buffer.clear();
+    auto prepared_result = [&] {
+        auto first =
+            prepare_head(write_buffer.prepare((std::max)(write_buffer.capacity(), http_retained_pmr_string_bytes)));
+        const auto* too_small = first.buffer_too_small();
+        if (too_small == nullptr || too_small->required_head_bytes() > max_client_request_head_bytes) {
+            return first;
+        }
+        return prepare_head(write_buffer.prepare(too_small->required_head_bytes()));
+    }();
     const auto* prepared = prepared_result.prepared();
     if (!prepared) {
         throw http_client_error(http_client_error::code_type::invalid_request,
@@ -129,6 +148,8 @@ task<void> http1_client_exchange::exchange(
     }
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = response_resource});
     co_await write(prepared->head(), timeout);
+    // The head is on the wire; the content plan borrows only request storage.
+    write_buffer.clear_retaining_small();
     if (const auto* content = prepared->content_plan().immediate()) {
         co_await write(content->bytes(), timeout);
         if (!content->bytes().empty() &&
@@ -312,7 +333,11 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             }
         };
 
-        std::array<char, http_body_buffer_bytes> output;
+        // Decoder output scratch, borrowed from the worker for this body only:
+        // the frame stays small enough for the frame cache, and nothing is
+        // zero-filled.
+        http_io_buffer output_storage(pool_.resource());
+        const auto output = output_storage.prepare(http_body_buffer_bytes);
         bool eof = false;
         http1_close_policy persistence = http1_close_policy::close_after_response;
         for (;;) {
@@ -324,7 +349,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             const auto capacity = state_value.collect_all_
                                       ? output.size()
                                       : std::min(output.size(), max_response_bytes - state_value.pending_.size());
-            const auto scratch = std::span<char>(output).first(capacity);
+            const auto scratch = output.first(capacity);
             const auto decoded = eof ? body_decoder.finish_input(read_buffer.view(), scratch)
                                      : body_decoder.decode(read_buffer.view(), scratch);
             const auto consumed = decoded.consumed_bytes();
@@ -368,6 +393,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         if (persistence == http1_close_policy::close_after_response) {
             connection_.close();
         }
+        connection_.retain_idle_buffers();
         co_return;
     }
 }
@@ -480,6 +506,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     }
     lifetime_timer.cancel();
     connection.close();
+    connection.retain_idle_buffers();
     if (writer_failure) {
         std::rethrow_exception(writer_failure);
     }
@@ -543,8 +570,9 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             for (const auto& field : upload.trailers_) {
                 trailers.emplace_back(field.name(), field.value());
             }
-            std::pmr::vector<char> scratch(max_http_header_bytes + 1024, state_value.resource_);
-            const auto ending = writer.plan_finish(scratch, trailers);
+            // Uninitialized: plan_finish writes only the bytes it returns.
+            http_io_buffer scratch(state_value.resource_);
+            const auto ending = writer.plan_finish(scratch.prepare(max_client_request_head_bytes), trailers);
             if (ending.index() != 0) {
                 throw http_client_error(
                     http_client_error::code_type::invalid_request, "HTTP upload trailer or final length rejected");

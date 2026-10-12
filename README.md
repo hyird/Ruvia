@@ -86,6 +86,23 @@ sources; combining more, for example by merging `ruvia::operation_options`,
 throws `std::length_error`. A `ruvia::stop_source` keeps its shared stop state
 in Ruvia's process memory pool rather than the global heap.
 
+Each worker's `ruvia::worker_memory` pools objects up to 16 KiB for the
+worker's life and keeps freed blocks between 16 KiB and 1 MiB (sizes rounded
+to 4 KiB) for exact-size reuse, up to `memory_pool_config::retained_block_bytes_`
+(8 MiB by default; 0 disables the cache). Blocks freed beyond that budget go
+back to the C allocator at once, and `worker_memory::trim(owner)` returns every
+cached block and the thread's cached coroutine frames; it must run on the
+owning worker and throws `std::logic_error` elsewhere. Live allocations are
+never released. Whether returned memory reaches the OS depends on the C
+allocator: on glibc hosts that care about resident memory after load peaks,
+set `GLIBC_TUNABLES=glibc.malloc.mmap_threshold=65536` so returned large
+blocks are unmapped; calling `malloc_trim(0)` from the host, or linking
+jemalloc or mimalloc, are other host-side options. An application configures
+its workers' memory through `server_config::memory_pool_`; each server worker
+trims its own memory at the first connection scan
+(`server_config::connection_scan_interval_`) that follows a whole interval with
+no request exchange in progress and no connection activity.
+
 The server and outbound client support HTTP/1 over TCP and TLS. Server TLS
 certificates, private keys, and client CA bundles are loaded once by
 `application::listen()`, which throws for unreadable files or a wrong key
@@ -155,7 +172,9 @@ File responses use native file transfer for plain TCP,
 and the blocking pool for TLS reads; disabling the pool makes those reads run
 on the worker. A file changed during transfer aborts the response. A
 `context::file` body up to 16 KiB is read when the response is framed and sent
-as those framed bytes. A standalone `static_root` fails closed on changed files
+as those framed bytes. `file_response_options::path_` borrows its path for the
+call: UTF-8 text, or a `std::filesystem::path` lvalue, never an owning
+temporary. A standalone `static_root` fails closed on changed files
 unless `static_root_options::resident_max_bytes_` and `resident_budget_bytes_`
 opt in to serving small files' indexed bytes from memory; document roots use
 `document_root_config::resident_max_bytes_` instead.

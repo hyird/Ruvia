@@ -26,6 +26,7 @@
 #include "server/inbound_buffer_resource.h"
 #include "server/native_accepted_socket_ticket.h"
 #include "server/static_root_runtime.h"
+#include "server/worker_codecs.h"
 #include "server/worker_connections.h"
 
 namespace ruvia::detail {
@@ -91,7 +92,11 @@ private:
     stop_token stop_token_{stop_source_.token()};
     const route_table& routes_;
     worker_memory memory_;
-    inbound_buffer_resource inbound_buffers_;
+    // Every connection's inbound buffers charge this worker-wide budget.
+    inbound_buffer_budget inbound_budget_;
+    // Allocates from memory_ and is borrowed through options_.codecs_ by
+    // requests and connections, which all end before it is destroyed.
+    worker_codecs codecs_;
     task_scope background_tasks_;
     http_server_worker_state worker_state_{http_server_worker_state::fresh};
     http_server_options options_;

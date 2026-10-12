@@ -5,21 +5,17 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "ruvia/http/http_pmr_string.h"
+
 #include "util/http_text_overlap.h"
 #include "websocket/http_websocket_close_payload.h"
 #include "websocket/http_websocket_frame_reader.h"
 
 namespace ruvia::detail {
-namespace {
-// Inflated messages up to this size reuse one allocation across messages.
-// Larger buffers are released: their size is peer-controlled up to the message
-// limit and should not stay pinned to an idle connection.
-constexpr std::size_t retained_inflate_capacity_bytes = 16 * 1024;
-}  // namespace
 
 ws_connection::ws_connection(http_io_buffer& input, protocol_byte_limit message_limit,
     websocket_compression compression, websocket_connection_role role, websocket_mask_key_generator_type mask_key_generator,
-    void* mask_key_context, int compression_level)
+    void* mask_key_context, int compression_level, int mem_level, websocket_deflate_codecs* shared_deflate)
     : input_(&input),
       message_limit_(message_limit),
       out_buffer_(input.get_allocator().resource()),
@@ -42,13 +38,17 @@ ws_connection::ws_connection(http_io_buffer& input, protocol_byte_limit message_
     if (compression_level < 0 || compression_level > 9) {
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
     }
+    if (mem_level < 1 || mem_level > 9) {
+        throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
+    }
     if (websocket_deflate_negotiated(compression)) {
         const bool server = role_ == websocket_connection_role::server;
         const bool send_takeover = !(server ? compression.server_no_context_takeover_ : compression.client_no_context_takeover_);
         const bool receive_takeover = !(server ? compression.client_no_context_takeover_ : compression.server_no_context_takeover_);
         const int send_window = (server ? compression.server_max_window_bits_ : compression.client_max_window_bits_).value_or(15);
         const int receive_window = (server ? compression.client_max_window_bits_ : compression.server_max_window_bits_).value_or(15);
-        deflate_.emplace(input.get_allocator().resource(), compression_level, send_takeover, receive_takeover, send_window, receive_window);
+        deflate_.emplace(input.get_allocator().resource(), shared_deflate, compression_level, mem_level, send_takeover,
+            receive_takeover, send_window, receive_window);
     }
 }
 
@@ -83,7 +83,9 @@ websocket_output_consume_status ws_connection::consume_output(std::size_t n) noe
         out_offset_ += n;
         return websocket_output_consume_status::pending;
     }
-    out_buffer_.clear();
+    // The transport has written every owned byte, so a large frame's storage
+    // can go back to the resource instead of staying with the connection.
+    http_clear_pmr_string_retaining_small(out_buffer_, websocket_retained_buffer_bytes);
     out_offset_ = 0;
     if (n - owned < borrowed_output_.size()) {
         borrowed_output_.remove_prefix(n - owned);
@@ -254,6 +256,7 @@ websocket_frame_submit_status ws_connection::submit_frame(
         append_frame(opcode, payload_value, rsv1, rsv1 ? ws_payload_storage::copy : storage);
     } catch (...) {
         if (compression_attempted) {
+            http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
             // The peer never received this trial. Do not let a later message
             // refer to its dictionary, including after output allocation or
             // mask generation fails. A reset failure makes reuse unsafe.
@@ -265,6 +268,10 @@ websocket_frame_submit_status ws_connection::submit_frame(
             }
         }
         throw;
+    }
+    if (compression_attempted) {
+        // The frame owns a copy now; keep only a bounded scratch.
+        http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
     }
     return websocket_frame_submit_status::accepted;
 }
@@ -313,10 +320,10 @@ std::optional<websocket_event> ws_connection::poll() & {
 
 std::optional<websocket_event> ws_connection::poll_impl() & {
     assembler_.release_completed();
-    inbound_inflated_.clear();
-    if (inbound_inflated_.capacity() > retained_inflate_capacity_bytes) {
-        std::pmr::string(inbound_inflated_.get_allocator()).swap(inbound_inflated_);
-    }
+    // The last delivered message expires now. Its size is peer-controlled up
+    // to the message limit, so only a bounded buffer stays for the next one.
+    http_clear_pmr_string_retaining_small(inbound_inflated_, websocket_retained_buffer_bytes);
+    needed_input_bytes_ = 0;
     if (close_phase_ == close_phase_type::final_output_queued ||
         close_phase_ == close_phase_type::transport_end_ready || close_phase_ == close_phase_type::closed) {
         return websocket_event::make_transport_end();
@@ -331,7 +338,8 @@ std::optional<websocket_event> ws_connection::poll_impl() & {
     for (;;) {
         const auto read = websocket_try_read_frame(*input_, pending_consume_, message_limit_,
             deflate_.has_value(), role_ == websocket_connection_role::server);
-        if (read.need_input() != nullptr) {
+        if (const auto* need_input = read.need_input()) {
+            needed_input_bytes_ = need_input->missing_bytes();
             return std::nullopt;
         }
         if (const auto* failure = read.failure()) {

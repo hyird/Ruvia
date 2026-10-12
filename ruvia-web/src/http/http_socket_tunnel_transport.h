@@ -31,8 +31,9 @@ public:
             }
         }
     }
-    // Each read yields a freshly allocated owned string, so a plain resize of
-    // its bounded read window is the simplest correct growth.
+    // Appends up to 4096 bytes read from the stream to `bytes_value`. A caller
+    // that clears and reuses one string reads without allocating after its
+    // first read.
     [[nodiscard]] task<http_stream_read_result> read_more(std::pmr::string& bytes_value) {
         constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();

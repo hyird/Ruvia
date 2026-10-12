@@ -2,8 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
-#include <string>
 
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
@@ -37,8 +35,12 @@ public:
     // and replaces one the peer retired while it was idle.
     [[nodiscard]] task<void> ensure_connected(
         const operation_timeout& timeout, stop_token stop_token_value);
-    // Close the current transport and discard its buffered wire bytes.
+    // Close the current transport and discard its buffered wire bytes. Storage
+    // is kept: a cancelled read or write may still target it.
     void close() noexcept;
+    // Applies the retention policy to both buffers. Only between exchanges,
+    // when no transport operation borrows their storage.
+    void retain_idle_buffers() noexcept;
     // Pool shutdown: refuse new connects and HTTP/1 exchanges, then close.
     void shutdown() noexcept;
     // Cancels the connect or HTTP/1 exchange of `generation`.
@@ -51,8 +53,10 @@ public:
     void throw_if_aborted() const;
 
     client_tcp_transport transport_;
+    // Both buffers allocate on first use and never initialize the bytes a
+    // read or the request head writer is about to overwrite.
     http_io_buffer read_buffer_;
-    std::pmr::string write_buffer_;
+    http_io_buffer write_buffer_;
     // Borrowed only while one serialized HTTP/1 exchange is active.
     http_client_response_state* http1_response_{nullptr};
     // Bumped around every connect and HTTP/1 exchange so stale cancellations
