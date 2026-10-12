@@ -10,8 +10,7 @@
 
 namespace ruvia::detail {
 
-enum class model_input_kind : std::uint8_t { json,
-    form,
+enum class model_input_kind : std::uint8_t { form,
     form_fields };
 
 // Internal borrowed input for schema materialization, never a dynamic public model.
@@ -52,10 +51,6 @@ private:
     model_string_storage string_storage_{model_string_storage::borrowed};
 };
 
-[[nodiscard]] inline model_input make_json_model_input(std::string_view body,
-    std::pmr::memory_resource* resource, model_string_storage storage = model_string_storage::borrowed) noexcept {
-    return model_input(model_input_kind::json, body, resource, storage);
-}
 [[nodiscard]] inline model_input make_form_model_input(std::string_view body,
     std::pmr::memory_resource* resource, model_string_storage storage = model_string_storage::borrowed) noexcept {
     return model_input(model_input_kind::form, body, resource, storage);

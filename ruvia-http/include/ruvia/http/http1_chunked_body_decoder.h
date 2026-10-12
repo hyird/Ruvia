@@ -142,8 +142,9 @@ struct http1_chunked_body_decoder_config final {
 // An over-long size line or unterminated trailer section
 // reports framing_limit_exceeded; a complete oversized trailer section is
 // invalid_framing.
-// Request trailers must also fit max_http_header_fields and the normalized
-// section byte limit (name.size() + value.size() + 4 per field).
+// Trailer sections of either role must also fit max_http_header_fields and the
+// http_field_section_budget byte rule (name.size() + value.size() + 4 per field,
+// plus 2 for the terminating empty line; see http_trailer_section_budget()).
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});

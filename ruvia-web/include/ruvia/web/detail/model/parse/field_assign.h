@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -50,6 +51,13 @@ void assign_field_value(
         }
         target.emplace(std::move(field));
     } else {
+        if constexpr (!std::is_lvalue_reference_v<value_t_type&&> &&
+                      !std::is_const_v<std::remove_reference_t<value_t_type>>) {
+            // Consuming a source that owns this field would destroy the destination.
+            if (model_value_rebind_access::owns(value, std::addressof(target))) {
+                throw_model_move_source_owns_destination();
+            }
+        }
         target.emplace(detail::rebind_model_value(std::forward<value_t_type>(value), resource));
     }
 }

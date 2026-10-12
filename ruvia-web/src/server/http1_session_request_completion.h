@@ -8,6 +8,7 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_request_connection_plan.h"
+#include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia::detail {
@@ -39,12 +40,12 @@ private:
     std::size_t consumed_bytes_;
 };
 
-// A request-body runtime handed its pipelined suffix over instead of writing it
-// into the connection read buffer, whose bytes still back every view in the
-// request being completed. The session installs these bytes at its single
-// buffer-cleanup point, once the response is written and the access log is
-// recorded. The view borrows request-scoped storage that outlives the
-// completion.
+// A request-body runtime over-read the next pipelined request into its own
+// buffer, which dies with the route, and handed those bytes over in
+// request-scoped storage that outlives the completion. The session installs
+// them at its single buffer-cleanup point, once the response is written and
+// the access log is recorded. A suffix still in the read buffer is a
+// compaction instead.
 class http1_request_buffer_pipeline_restore final {
 public:
     [[nodiscard]] constexpr std::string_view pipeline() const noexcept {
@@ -117,6 +118,24 @@ private:
     http_status_code status_;
 };
 
+// A route's buffered response broke the HTTP/1 final-response rules, so it
+// cannot be committed. The session replaces it through the exception handler
+// on a closing connection before preparing the response for the wire.
+class http1_rejected_final_response final {
+public:
+    [[nodiscard]] http1_final_response_commit_error exception() const noexcept {
+        return failure_.exception();
+    }
+
+private:
+    friend class http1_session_request_completion;
+
+    explicit http1_rejected_final_response(::ruvia::http1_final_response_commit_failure failure) noexcept
+        : failure_(failure) {}
+
+    ::ruvia::http1_final_response_commit_failure failure_;
+};
+
 // One terminal result for a dispatched HTTP/1 request. Wire ownership,
 // connection reuse, and read-buffer cleanup are committed together so the
 // session never reconstructs them from an optional status plus scalar flags.
@@ -153,6 +172,12 @@ public:
             unshifted_buffer_completion(connection_plan, consumed_bytes));
     }
 
+    [[nodiscard]] static http1_session_request_completion make_rejected_final_response(
+        http1_request_connection_plan connection_plan, ::ruvia::http1_final_response_commit_failure failure) noexcept {
+        return http1_session_request_completion(http1_rejected_final_response(failure),
+            connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
+    }
+
     [[nodiscard]] constexpr const http1_buffered_response_ready* buffered_response() const& noexcept {
         return std::get_if<http1_buffered_response_ready>(&value_);
     }
@@ -162,6 +187,11 @@ public:
         return std::get_if<http1_committed_stream_response>(&value_);
     }
     [[nodiscard]] constexpr const http1_committed_stream_response* committed_stream() const&& = delete;
+
+    [[nodiscard]] constexpr const http1_rejected_final_response* rejected_final_response() const& noexcept {
+        return std::get_if<http1_rejected_final_response>(&value_);
+    }
+    [[nodiscard]] constexpr const http1_rejected_final_response* rejected_final_response() const&& = delete;
 
     [[nodiscard]] constexpr http1_request_connection_plan connection_plan() const noexcept {
         return connection_plan_;
@@ -178,7 +208,7 @@ public:
     // cleanup alternative already established by request-body dispatch.
     [[nodiscard]] http1_session_request_completion with_buffered_connection_plan(
         http1_request_connection_plan connection_plan) const& noexcept {
-        if (std::get_if<http1_committed_stream_response>(&value_) != nullptr) {
+        if (std::get_if<http1_buffered_response_ready>(&value_) == nullptr) {
             std::terminate();
         }
         if (buffer_completion_.discarded() != nullptr) {
@@ -197,7 +227,8 @@ public:
     }
 
 private:
-    using value_type = std::variant<http1_buffered_response_ready, http1_committed_stream_response>;
+    using value_type = std::variant<http1_buffered_response_ready, http1_committed_stream_response,
+        http1_rejected_final_response>;
 
     [[nodiscard]] static http1_request_buffer_completion unshifted_buffer_completion(
         http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {

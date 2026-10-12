@@ -26,7 +26,7 @@ public:
         auto status = http_content_length_parse_status::ok;
         bool saw_value = false;
         auto parsed_value = value_;
-        http_visit_comma_separated_quoted_items(field_value, [&parsed_value, &status, &saw_value](
+        http_visit_comma_separated_quoted_field_items(field_value, [&parsed_value, &status, &saw_value](
                                                                  std::string_view item) noexcept {
             status = accumulate(item, parsed_value);
             saw_value = true;

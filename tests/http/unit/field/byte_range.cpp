@@ -184,23 +184,64 @@ RUVIA_TEST(byte_range_set_huge_decimal_numerals_preserve_semantics) {
     RUVIA_CHECK(is_ignored_range("bytes=184467440737095516160-184467440737095516159", 1000));
 }
 
-RUVIA_TEST(byte_range_set_preserves_order_and_merges_only_adjacent_neighbors) {
-    const auto ranges = resolve_http_byte_range_set("bytes=20-29,0-9,10-19,18-22,90-", 100);
-    RUVIA_CHECK(!ranges.ignored());
-    RUVIA_CHECK(!ranges.unsatisfiable());
-    RUVIA_CHECK_EQ(ranges.size(), std::size_t{3});
-    if (ranges.size() == 3) {
-        RUVIA_CHECK_EQ(ranges[0].offset_, std::uint64_t{20});
-        RUVIA_CHECK_EQ(ranges[0].length_, std::uint64_t{10});
+RUVIA_TEST(byte_range_set_preserves_disjoint_order_and_coalesces_touching_ranges) {
+    const auto ranges = resolve_http_byte_range_set("bytes=50-59,0-9,20-29,90-", 100);
+    RUVIA_CHECK_EQ(ranges.size(), std::size_t{4});
+    if (ranges.size() == 4) {
+        RUVIA_CHECK_EQ(ranges[0].offset_, std::uint64_t{50});
         RUVIA_CHECK_EQ(ranges[1].offset_, std::uint64_t{0});
-        RUVIA_CHECK_EQ(ranges[1].length_, std::uint64_t{23});
-        RUVIA_CHECK_EQ(ranges[2].offset_, std::uint64_t{90});
-        RUVIA_CHECK_EQ(ranges[2].length_, std::uint64_t{10});
+        RUVIA_CHECK_EQ(ranges[2].offset_, std::uint64_t{20});
+        RUVIA_CHECK_EQ(ranges[3].offset_, std::uint64_t{90});
+    }
+    // A coalesced part takes the place of its earliest member, whatever order
+    // its members were received in.
+    const auto coalesced = resolve_http_byte_range_set("bytes=20-29,0-9,10-19,18-22,90-", 100);
+    RUVIA_CHECK(!coalesced.ignored());
+    RUVIA_CHECK(!coalesced.unsatisfiable());
+    RUVIA_CHECK_EQ(coalesced.size(), std::size_t{2});
+    if (coalesced.size() == 2) {
+        RUVIA_CHECK_EQ(coalesced[0].offset_, std::uint64_t{0});
+        RUVIA_CHECK_EQ(coalesced[0].length_, std::uint64_t{30});
+        RUVIA_CHECK_EQ(coalesced[1].offset_, std::uint64_t{90});
+        RUVIA_CHECK_EQ(coalesced[1].length_, std::uint64_t{10});
     }
     const auto partial = resolve_http_byte_range_set("bytes=0-1,900-", 100);
     RUVIA_CHECK_EQ(partial.size(), std::size_t{1});
     const auto none = resolve_http_byte_range_set("bytes=100-,200-", 100);
     RUVIA_CHECK(none.unsatisfiable());
+}
+
+RUVIA_TEST(byte_range_set_never_repeats_representation_bytes) {
+    // Descending open-ended and suffix ranges each overlap every earlier one;
+    // as separate parts they would multiply the response size.
+    std::string open_ended = "bytes=";
+    std::string suffixes = "bytes=";
+    for (std::size_t index = 0; index < http_byte_range_set::capacity; ++index) {
+        if (index != 0) {
+            open_ended.push_back(',');
+            suffixes.push_back(',');
+        }
+        open_ended.append(std::to_string(http_byte_range_set::capacity - 1 - index) + "-");
+        suffixes.append("-" + std::to_string(1000 - index));
+    }
+    for (const auto& field : {open_ended, suffixes}) {
+        const auto ranges = resolve_http_byte_range_set(field, 1000);
+        RUVIA_CHECK_EQ(ranges.size(), std::size_t{1});
+        if (ranges.size() == 1) {
+            RUVIA_CHECK_EQ(ranges[0].offset_, std::uint64_t{0});
+            RUVIA_CHECK_EQ(ranges[0].length_, std::uint64_t{1000});
+        }
+    }
+
+    // Ranges that only touch once a later range bridges them become one part.
+    const auto bridged = resolve_http_byte_range_set("bytes=30-39,0-9,50-59,5-35", 100);
+    RUVIA_CHECK_EQ(bridged.size(), std::size_t{2});
+    if (bridged.size() == 2) {
+        RUVIA_CHECK_EQ(bridged[0].offset_, std::uint64_t{0});
+        RUVIA_CHECK_EQ(bridged[0].length_, std::uint64_t{40});
+        RUVIA_CHECK_EQ(bridged[1].offset_, std::uint64_t{50});
+        RUVIA_CHECK_EQ(bridged[1].length_, std::uint64_t{10});
+    }
 }
 
 RUVIA_TEST(byte_range_set_tolerates_bounded_empty_members) {

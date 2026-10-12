@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <span>
@@ -32,6 +33,10 @@ enum class http_content_coding : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view http_content_coding_token(http_content_coding coding) noexcept;
+
+// Parsing is bounded to prevent attacker-controlled unbounded decode stages: a
+// longer Content-Encoding stack is reported as unsupported.
+inline constexpr std::size_t max_content_codings = 8;
 
 // RFC 9110 section 8.4.1.3 treats x-gzip as gzip. The token is already trimmed.
 [[nodiscard]] inline bool http_is_gzip_coding_token(std::string_view token) noexcept {

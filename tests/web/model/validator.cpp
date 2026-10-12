@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -57,10 +59,10 @@ RUVIA_MODEL(character_class_rules,
     RUVIA_OPTIONAL_FIELD(regex_lower, ruvia::string, RUVIA_REGEX("invalid class", R"(^[\--0]$)")),
     RUVIA_OPTIONAL_FIELD(pattern_not_lower, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[^\--0]$)")),
     RUVIA_OPTIONAL_FIELD(regex_not_lower, ruvia::string, RUVIA_REGEX("invalid class", R"(^[^\--0]$)")),
-    RUVIA_OPTIONAL_FIELD(pattern_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[a-\z]$)")),
-    RUVIA_OPTIONAL_FIELD(regex_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[a-\z]$)")),
-    RUVIA_OPTIONAL_FIELD(pattern_not_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[^a-\z]$)")),
-    RUVIA_OPTIONAL_FIELD(regex_not_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[^a-\z]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[A-\]]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[A-\]]$)")),
+    RUVIA_OPTIONAL_FIELD(pattern_not_upper, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[^A-\]]$)")),
+    RUVIA_OPTIONAL_FIELD(regex_not_upper, ruvia::string, RUVIA_REGEX("invalid class", R"(^[^A-\]]$)")),
     RUVIA_OPTIONAL_FIELD(pattern_digits, ruvia::string, RUVIA_PATTERN("invalid class", R"(^[\d]$)")),
     RUVIA_OPTIONAL_FIELD(regex_digits, ruvia::string, RUVIA_REGEX("invalid class", R"(^[\d]$)")),
     RUVIA_OPTIONAL_FIELD(pattern_tail, ruvia::string, RUVIA_PATTERN("invalid class", "^[a-]$")),
@@ -352,8 +354,8 @@ RUVIA_TEST(model_pattern_rules_match_escaped_character_ranges) {
         check_character_class_rule<"regex_not_lower">(ruvia_ctx, value, !matches, "regex");
     }
     for (const auto& [value, matches] : {
-             std::pair{"a", true}, std::pair{"b", true}, std::pair{"m", true}, std::pair{"z", true},
-             std::pair{"`", false}, std::pair{"{", false}, std::pair{"0", false}}) {
+             std::pair{"A", true}, std::pair{"Z", true}, std::pair{"\\", true}, std::pair{"]", true},
+             std::pair{"@", false}, std::pair{"^", false}, std::pair{"a", false}}) {
         check_character_class_rule<"pattern_upper">(ruvia_ctx, value, matches, "pattern");
         check_character_class_rule<"regex_upper">(ruvia_ctx, value, matches, "regex");
         check_character_class_rule<"pattern_not_upper">(ruvia_ctx, value, !matches, "pattern");
@@ -587,4 +589,277 @@ RUVIA_TEST(validation_diagnostic_text_preserves_complete_utf8_within_limit) {
     validator.add("field", "code", message);
     RUVIA_CHECK_EQ(validator.issues()[0].message().size(), ruvia::max_validation_text_bytes - 1);
     RUVIA_CHECK_EQ(validator.issues()[0].message(), std::string_view(message).substr(0, ruvia::max_validation_text_bytes - 1));
+}
+
+namespace validator_ownership_test {
+
+void add_owned_issues(ruvia::validator& value) {
+    value.add(std::string(128, 'f'), std::string(96, 'c'), std::string(256, 'm'));
+    value.add("secondary", "invalid", "second issue");
+}
+
+void check_owned_issues(ruvia::testing::test_context& ruvia_ctx, const ruvia::validator& value,
+    std::pmr::memory_resource* resource, std::size_t count = 2) {
+    RUVIA_CHECK(value.resource() == resource);
+    RUVIA_CHECK(value.issues().get_allocator().resource() == resource);
+    RUVIA_CHECK_EQ(value.issues().size(), count);
+    RUVIA_CHECK(!value.ok());
+    if (value.issues().size() >= 2) {
+        RUVIA_CHECK_EQ(value.issues()[0].field(), std::string_view(std::string(128, 'f')));
+        RUVIA_CHECK_EQ(value.issues()[0].code(), std::string_view(std::string(96, 'c')));
+        RUVIA_CHECK_EQ(value.issues()[0].message(), std::string_view(std::string(256, 'm')));
+        RUVIA_CHECK_EQ(value.issues()[1].field(), std::string_view("secondary"));
+        RUVIA_CHECK_EQ(value.issues()[1].code(), std::string_view("invalid"));
+        RUVIA_CHECK_EQ(value.issues()[1].message(), std::string_view("second issue"));
+    }
+}
+
+void check_owned_error(ruvia::testing::test_context& ruvia_ctx, const ruvia::validator& value,
+    std::size_t count = 2) {
+    bool rejected = false;
+    try {
+        value.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content,
+            .code_ = "invalid_payload",
+            .message_ = "payload failed validation"});
+    } catch (const ruvia::validation_error& error) {
+        rejected = true;
+        RUVIA_CHECK_EQ(error.info().status(), ruvia::http_status::unprocessable_content);
+        RUVIA_CHECK_EQ(error.info().code(), std::string_view("invalid_payload"));
+        RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("payload failed validation"));
+        RUVIA_CHECK_EQ(error.issues().size(), count);
+        if (error.issues().size() >= 2) {
+            RUVIA_CHECK_EQ(error.issues()[0].field(), std::string_view(std::string(128, 'f')));
+            RUVIA_CHECK_EQ(error.issues()[0].message(), std::string_view(std::string(256, 'm')));
+            RUVIA_CHECK_EQ(error.issues()[1].field(), std::string_view("secondary"));
+        }
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(validator_copy_constructor_preserves_resource_and_owns_diagnostics) {
+    ruvia::test::counting_memory_resource upstream;
+    {
+        ruvia::test::equivalent_tracking_resource resource(upstream);
+        ruvia::test::equivalent_tracking_resource temporary_default(upstream);
+        std::optional<ruvia::validator> copy;
+        {
+            ruvia::validator input({.resource_ = &resource});
+            add_owned_issues(input);
+            const ruvia::test::default_resource_guard default_resource(temporary_default);
+            copy.emplace(input);
+            check_owned_issues(ruvia_ctx, input, &resource);
+            check_owned_issues(ruvia_ctx, *copy, &resource);
+        }
+        temporary_default.retire();
+        check_owned_issues(ruvia_ctx, *copy, &resource);
+        copy->add("later", "required", std::string(200, 'a'));
+        check_owned_issues(ruvia_ctx, *copy, &resource, 3);
+        RUVIA_CHECK_EQ(copy->issues().back().message(), std::string_view(std::string(200, 'a')));
+        check_owned_error(ruvia_ctx, *copy, 3);
+        copy.reset();
+        RUVIA_CHECK_EQ(temporary_default.callbacks_after_retirement(), std::size_t{0});
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}
+
+RUVIA_TEST(validator_assignment_retains_destination_resource_after_source_retirement) {
+    for (const bool move : {false, true}) {
+        ruvia::test::counting_memory_resource upstream;
+        {
+            ruvia::test::equivalent_tracking_resource source(upstream);
+            ruvia::test::equivalent_tracking_resource target(upstream);
+            RUVIA_CHECK(source.is_equal(target));
+            std::optional<ruvia::validator> destination(std::in_place, ruvia::validator::options_type{.resource_ = &target});
+            destination->add("seed", "old", std::string(180, 's'));
+            {
+                ruvia::validator input({.resource_ = &source});
+                add_owned_issues(input);
+                const ruvia::test::default_resource_guard default_resource(source);
+                if (move) {
+                    *destination = std::move(input);
+                    RUVIA_CHECK(input.ok());
+                    RUVIA_CHECK(input.resource() == &source);
+                    RUVIA_CHECK(input.issues().get_allocator().resource() == &source);
+                    input.add("reused", "required", std::string(190, 'r'));
+                    RUVIA_CHECK_EQ(input.issues().size(), std::size_t{1});
+                    RUVIA_CHECK_EQ(input.issues()[0].message(), std::string_view(std::string(190, 'r')));
+                } else {
+                    *destination = input;
+                    check_owned_issues(ruvia_ctx, input, &source);
+                }
+                check_owned_issues(ruvia_ctx, *destination, &target);
+            }
+            // Keep the retired resource alive so stale callbacks are observable
+            // without invoking a destroyed allocator object in the red run.
+            source.retire();
+            check_owned_issues(ruvia_ctx, *destination, &target);
+            destination->add("later", "required", std::string(200, 'a'));
+            check_owned_issues(ruvia_ctx, *destination, &target, 3);
+            RUVIA_CHECK_EQ(destination->issues().back().message(), std::string_view(std::string(200, 'a')));
+            check_owned_error(ruvia_ctx, *destination, 3);
+            destination.reset();
+            RUVIA_CHECK_EQ(source.callbacks_after_retirement(), std::size_t{0});
+        }
+        RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+    }
+}
+
+RUVIA_TEST(validator_copy_and_rebinding_failure_preserve_diagnostics_and_resources) {
+    for (const bool move : {false, true}) {
+        for (const auto allowance : {std::size_t{0}, std::size_t{1}, std::size_t{3}}) {
+            ruvia::test::counting_memory_resource upstream;
+            {
+                ruvia::test::equivalent_tracking_resource source(upstream);
+                ruvia::test::equivalent_tracking_resource target(upstream);
+                ruvia::validator input({.resource_ = &source});
+                add_owned_issues(input);
+                ruvia::validator destination({.resource_ = &target});
+                destination.add("seed", "old", std::string(180, 's'));
+                const auto live = upstream.live_allocations();
+                target.reject_allocations_after(allowance);
+                bool rejected = false;
+                try {
+                    if (move) {
+                        destination = std::move(input);
+                    } else {
+                        destination = input;
+                    }
+                } catch (const std::bad_alloc&) {
+                    rejected = true;
+                }
+                target.allow_allocations();
+                RUVIA_CHECK(rejected);
+                RUVIA_CHECK_EQ(upstream.live_allocations(), live);
+                check_owned_issues(ruvia_ctx, input, &source);
+                RUVIA_CHECK(destination.resource() == &target);
+                RUVIA_CHECK(destination.issues().get_allocator().resource() == &target);
+                RUVIA_CHECK_EQ(destination.issues().size(), std::size_t{1});
+                if (!destination.issues().empty()) {
+                    RUVIA_CHECK_EQ(destination.issues()[0].field(), std::string_view("seed"));
+                    RUVIA_CHECK_EQ(destination.issues()[0].code(), std::string_view("old"));
+                    RUVIA_CHECK_EQ(destination.issues()[0].message(), std::string_view(std::string(180, 's')));
+                }
+                source.reject_allocations_after(allowance);
+                rejected = false;
+                try {
+                    const ruvia::validator copied(input);
+                    check_owned_issues(ruvia_ctx, copied, &source);
+                } catch (const std::bad_alloc&) {
+                    rejected = true;
+                }
+                source.allow_allocations();
+                RUVIA_CHECK(rejected);
+                RUVIA_CHECK_EQ(upstream.live_allocations(), live);
+                check_owned_issues(ruvia_ctx, input, &source);
+                input.add("source remains usable", "required", std::string(200, 'a'));
+                destination.add("target remains usable", "required", std::string(200, 'b'));
+                RUVIA_CHECK_EQ(input.issues().size(), std::size_t{3});
+                RUVIA_CHECK_EQ(destination.issues().size(), std::size_t{2});
+                RUVIA_CHECK_EQ(input.issues().back().message(), std::string_view(std::string(200, 'a')));
+                RUVIA_CHECK_EQ(destination.issues().back().message(), std::string_view(std::string(200, 'b')));
+            }
+            RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+        }
+    }
+}
+
+RUVIA_TEST(validator_same_resource_moves_and_self_assignment_do_not_allocate) {
+    ruvia::test::counting_memory_resource upstream;
+    {
+        ruvia::test::equivalent_tracking_resource resource(upstream);
+        ruvia::validator input({.resource_ = &resource});
+        add_owned_issues(input);
+        ruvia::validator destination({.resource_ = &resource});
+        destination.add("seed", "old", std::string(180, 's'));
+        std::optional<ruvia::validator> moved;
+        const auto attempts = resource.allocation_attempts();
+        resource.reject_allocations_after(0);
+        bool rejected = false;
+        try {
+            moved.emplace(std::move(input));
+            check_owned_issues(ruvia_ctx, *moved, &resource);
+            destination = std::move(*moved);
+            auto* alias = std::addressof(destination);
+            destination = *alias;
+            destination = std::move(*alias);
+        } catch (const std::bad_alloc&) {
+            rejected = true;
+        }
+        resource.allow_allocations();
+        RUVIA_CHECK(!rejected);
+        RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        check_owned_issues(ruvia_ctx, destination, &resource);
+        RUVIA_CHECK(input.ok());
+        RUVIA_CHECK(input.resource() == &resource);
+        RUVIA_CHECK(input.issues().get_allocator().resource() == &resource);
+        if (moved) {
+            RUVIA_CHECK(moved->ok());
+            RUVIA_CHECK(moved->resource() == &resource);
+            RUVIA_CHECK(moved->issues().get_allocator().resource() == &resource);
+            moved->add("reused after assignment", "required", std::string(200, 'b'));
+            RUVIA_CHECK_EQ(moved->issues().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(moved->issues()[0].message(), std::string_view(std::string(200, 'b')));
+        }
+        input.add("reused after construction", "required", std::string(200, 'a'));
+        RUVIA_CHECK_EQ(input.issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(input.issues()[0].message(), std::string_view(std::string(200, 'a')));
+        check_owned_error(ruvia_ctx, destination);
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}
+
+}  // namespace validator_ownership_test
+
+namespace {
+
+RUVIA_MODEL(lazy_path_item, RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_MIN(0, "must not be negative")));
+
+RUVIA_MODEL(lazy_path_envelope,
+    RUVIA_REQUIRED_FIELD_NAME("field_name_longer_than_small_string_storage", label, ruvia::string,
+        RUVIA_MIN(1, "must not be empty")),
+    RUVIA_OPTIONAL_FIELD(items, ruvia::array<lazy_path_item>),
+    RUVIA_OPTIONAL_FIELD(boxed, ruvia::boxed_array<lazy_path_item>));
+
+}  // namespace
+
+RUVIA_TEST(validator_model_paths_are_built_only_for_emitted_issues) {
+    std::string body = R"({"field_name_longer_than_small_string_storage":"x","items":[)";
+    for (std::size_t index = 0; index != 1024; ++index) {
+        body.append(index == 0 ? R"({"value":1})" : R"(,{"value":1})");
+    }
+    body.append(R"(],"boxed":[{"value":1},{"value":2}]})");
+    auto model = ruvia::from_json<lazy_path_envelope>(body);
+    RUVIA_CHECK(model.has_value());
+    if (!model) {
+        return;
+    }
+
+    ruvia::json_body<lazy_path_envelope> rules;
+    counting_memory_resource resource;
+    {
+        validator result({.resource_ = &resource});
+        const auto baseline = resource.allocation_count();
+        rules.validate(*model, result);
+        RUVIA_CHECK(result.ok());
+        RUVIA_CHECK_EQ(resource.allocation_count(), baseline);
+
+        model->set<"label">("");
+        model->ensure<"items">()[700].set<"value">(-1);
+        model->ensure<"boxed">()[1].set<"value">(-2);
+        rules.validate(*model, result);
+        RUVIA_CHECK_EQ(result.issues().size(), std::size_t{3});
+        if (result.issues().size() == 3) {
+            RUVIA_CHECK_EQ(result.issues()[0].field(), std::string_view("field_name_longer_than_small_string_storage"));
+            RUVIA_CHECK_EQ(result.issues()[1].field(), std::string_view("items[700].value"));
+            RUVIA_CHECK_EQ(result.issues()[2].field(), std::string_view("boxed[1].value"));
+            for (const auto& issue : result.issues()) {
+                RUVIA_CHECK_EQ(issue.code(), std::string_view("too_small"));
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

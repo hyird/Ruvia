@@ -47,10 +47,10 @@ RUVIA_MODEL(cached_user_response,
 RUVIA_MODEL(cached_users_response,
     RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
 
-class cached_user_controller final : public ruvia::controller<cached_user_controller> {
+class cached_user_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/users")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(cached_user_controller)
     RUVIA_POST("", create, ruvia::json_body<create_cached_user>);
     RUVIA_GET("", adults);
     RUVIA_GET("/:id", find);
@@ -104,52 +104,57 @@ private:
 };
 
 int main(int argc, char** argv) {
-    const bool create_index = argc == 2 && std::string_view(argv[1]) == "--create-index";
-    bool failed = false;
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    ruvia::redis_config config;
-    config.tls_ = example::backend_tls("RUVIA_REDIS", env_value);
-    config.host_ = env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
-    config.port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
-    config.username_ = env_value.get("RUVIA_REDIS_USER").value_or("");
-    config.password_ = env_value.get("RUVIA_REDIS_PASSWORD").value_or("");
-    app.redis({.config_ = config})
-        .listen({.address_ = "127.0.0.1", .http_ = 8091})
-        .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .on_start([create_index, &failed] {
-            if (!create_index) {
-                return;
-            }
-            const auto workers = ruvia::app().workers();
-            std::promise<void> completion;
-            auto result_value = completion.get_future();
-            const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
-                try {
-                    co_await worker_value.redis().get_repository<cached_user>(user_redis_config).create_index();
-                    completion.set_value();
-                } catch (...) {
-                    completion.set_exception(std::current_exception());
+    try {
+        const bool create_index = argc == 2 && std::string_view(argv[1]) == "--create-index";
+        bool failed = false;
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        ruvia::redis_config config;
+        config.tls_ = example::backend_tls("RUVIA_REDIS", env_value);
+        config.host_ = env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
+        config.port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
+        config.username_ = env_value.get("RUVIA_REDIS_USER").value_or("");
+        config.password_ = env_value.get("RUVIA_REDIS_PASSWORD").value_or("");
+        app.redis({.config_ = config})
+            .listen({.address_ = "127.0.0.1", .http_ = 8091})
+            .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .on_start([create_index, &failed] {
+                if (!create_index) {
+                    return;
                 }
-            });
-            if (posted != ruvia::post_status::accepted) {
-                failed = true;
-            } else {
-                // Only the lifecycle caller blocks. Workers are ready before
-                // on_start; request admission stays closed until this returns.
-                // Abandoning an unstarted job destroys its promise and wakes get().
-                try {
-                    result_value.get();
-                    std::cout << "Redis user index created.\n";
-                } catch (const std::exception& error) {
-                    std::cerr << error.what() << '\n';
+                const auto workers = ruvia::app().workers();
+                std::promise<void> completion;
+                auto result_value = completion.get_future();
+                const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
+                    try {
+                        co_await worker_value.redis().get_repository<cached_user>(user_redis_config).create_index();
+                        completion.set_value();
+                    } catch (...) {
+                        completion.set_exception(std::current_exception());
+                    }
+                });
+                if (posted != ruvia::post_status::accepted) {
                     failed = true;
+                } else {
+                    // Only the lifecycle caller blocks. Workers are ready before
+                    // on_start; request admission stays closed until this returns.
+                    // Abandoning an unstarted job destroys its promise and wakes get().
+                    try {
+                        result_value.get();
+                        std::cout << "Redis user index created.\n";
+                    } catch (const std::exception& error) {
+                        std::cerr << error.what() << '\n';
+                        failed = true;
+                    }
                 }
-            }
-            // --create-index is a one-shot operation, never a serving mode.
-            ruvia::app().stop();
-        })
-        .run();
-    return failed ? 1 : 0;
+                // --create-index is a one-shot operation, never a serving mode.
+                ruvia::app().stop();
+            })
+            .run();
+        return failed ? 1 : 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

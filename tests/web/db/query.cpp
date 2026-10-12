@@ -86,6 +86,79 @@ RUVIA_TEST(db_query_nested_ctes_are_owned_and_use_one_parameter_sequence) {
     RUVIA_CHECK_EQ(statement.params().size(), std::size_t{4});
 }
 
+RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them) {
+    db_query query;
+    const auto name = query.column("name");
+    const auto payload = query.column("payload");
+    const std::array<db_query::expr_type, 20> projections{
+        // "any" arguments give an untyped parameter nothing to resolve against.
+        query.call("json_build_object", {query.value("k"), query.value(5), query.value("on"), query.value(true)}),
+        query.call("concat", {name, query.value("-"), query.value(1.5)}),
+        // int4-only signatures are typed int4 explicitly.
+        query.call("left", {name, query.value(3)}),
+        query.call("pg_catalog.round", {query.column("price"), query.value(2)}),
+        // Other arguments keep the type of their context (uuid, json, timestamp...).
+        query.call("date_trunc", {query.value("day"), query.column("created_at")}),
+        // Arithmetic over two bound operands selects no overload; one typed
+        // operand types the other. unknown || unknown resolves to text.
+        query.binary(query.value("a"), op_type::concat, query.value("b")),
+        query.binary(name, op_type::concat, query.value("b")),
+        query.binary(query.column("created_on"), op_type::add, query.value(1)),
+        query.binary(query.value(2), op_type::multiply, query.value(3)),
+        // An integer jsonb subscript is an array index, never a text key.
+        query.binary(payload, op_type::json_get, query.value(0)),
+        query.binary(payload, op_type::json_get_text, query.value("key")),
+        // A typed function overload resolves its untyped argument; negation
+        // and GREATEST over bound values have nothing to resolve against.
+        query.call("abs", {query.value(-3)}),
+        query.unary(db_unary_operator::negate, query.value(4)),
+        query.greatest({query.value(1), query.value(2)}),
+        // The timestamp overload types the stop and step arguments.
+        query.call("generate_series", {query.column("start_at"), query.value("2026-01-02 00:00:00"), query.value("1 day")}),
+        // A separator is text; the "any" arguments after it are not.
+        query.call("concat_ws", {query.value(","), query.value(1)}),
+        // Boolean predicates and logical operators type their operands.
+        query.unary(db_unary_operator::is_true, query.value("true")),
+        query.binary(query.value(true), op_type::and_value, query.value(false)),
+        // The null predicates accept every type, so nothing types the operand.
+        query.unary(db_unary_operator::is_null, query.value(7)),
+        // Comparing two bound values resolves as text.
+        query.binary(query.value("x"), op_type::equal, query.value("y")),
+    };
+    query.select(projections).from("items").where(query.binary(query.column("ratio"), op_type::greater, query.value(0.25)));
+    const auto statement = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(statement.sql(),
+        "SELECT \"json_build_object\"($1::text, $2::int8, $3::text, $4::bool), \"concat\"(\"name\", $5::text, $6::float8), "
+        "\"left\"(\"name\", $7::int4), \"pg_catalog\".\"round\"(\"price\", $8::int4), \"date_trunc\"($9, \"created_at\"), "
+        "($10 || $11), (\"name\" || $12), (\"created_on\" + $13), ($14::int8 * $15::int8), "
+        "(\"payload\" -> $16::int4), (\"payload\" ->> $17), \"abs\"($18), (- $19::int8), GREATEST($20::int8, $21::int8), "
+        "\"generate_series\"(\"start_at\", $22, $23), \"concat_ws\"($24, $25::int8), ($26 IS TRUE), ($27 AND $28), "
+        "($29::int8 IS NULL), ($30 = $31) "
+        "FROM \"items\" WHERE (\"ratio\" > $32)");
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{32});
+    // An explicit cast names the type, so the placeholder stays untyped.
+    db_query cast;
+    cast.select(cast.cast(cast.value(7), db_type_definition{.custom_name_ = "app_code"})).from("items");
+    const auto cast_statement = cast.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(cast_statement.sql(), "SELECT CAST($1 AS \"app_code\") FROM \"items\"");
+    // Concatenation never forces a category (int8 || int8 does not exist), and
+    // a reused string parameter keeps the numeric type its first use gave it.
+    db_query reuse;
+    const auto amount = reuse.value("1.5");
+    const std::array reuse_projections{reuse.binary(reuse.value(1), op_type::concat, reuse.value(2)),
+        reuse.cast(amount, db_type_definition{.data_type_ = db_data_type::numeric}),
+        reuse.unary(db_unary_operator::negate, amount)};
+    reuse.select(reuse_projections).from("items");
+    const auto reuse_statement = reuse.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(reuse_statement.sql(), "SELECT ($1 || $2), CAST($3 AS DECIMAL), (- $3) FROM \"items\"");
+    // MariaDB placeholders carry no casts.
+    db_query maria;
+    maria.select(maria.call("left", {maria.column("name"), maria.value(3)})).from("items").where(
+        maria.binary(maria.column("ratio"), op_type::greater, maria.value(0.25)));
+    const auto maria_statement = maria.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK_EQ(maria_statement.sql(), "SELECT left(`name`, ?) FROM `items` WHERE (`ratio` > ?)");
+}
+
 RUVIA_TEST(db_query_null_comparisons_and_empty_membership_have_defined_semantics) {
     db_query query;
     const auto id = query.column("id");

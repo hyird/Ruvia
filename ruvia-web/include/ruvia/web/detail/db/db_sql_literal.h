@@ -28,7 +28,8 @@ struct db_sql_parameter_count {
         if (sql[index] == '\0') {
             return {0, false};
         }
-        const auto next_value = driver == db_driver::mariadb ? skip_sql_atom(sql, index) : skip_postgresql_sql_atom(sql, index);
+        const auto next_value =
+            driver == db_driver::mariadb ? skip_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
         if (next_value != index + 1) {
             index = next_value;
             continue;

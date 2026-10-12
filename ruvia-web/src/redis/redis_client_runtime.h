@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <memory_resource>
-#include <optional>
 
 #include <asio/ssl/context.hpp>
 
@@ -41,9 +40,9 @@ public:
 private:
     redis_config_storage config_;
     std::pmr::memory_resource* resource_;
-    // One client TLS context per alias, borrowed by both pools; absent for
-    // plaintext.
-    std::optional<asio::ssl::context> tls_context_;
+    // One client TLS context per alias, borrowed by every connection of both
+    // pools; configured only when TLS is enabled.
+    asio::ssl::context tls_context_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> general_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> blocking_;
 };

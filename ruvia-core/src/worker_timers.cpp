@@ -23,18 +23,18 @@ void worker_timer_cancellation::cancel() const noexcept {
 }
 
 worker_timer_registration::~worker_timer_registration() {
-    cancel(false);
+    unregister(false);
 }
 
 void worker_timer_registration::cancel() noexcept {
-    cancel(true);
+    unregister(false);
 }
 
-void worker_timer_registration::cancel_quietly() noexcept {
-    cancel(false);
+void worker_timer_registration::cancel_and_notify() noexcept {
+    unregister(true);
 }
 
-void worker_timer_registration::cancel(bool notify) noexcept {
+void worker_timer_registration::unregister(bool notify) noexcept {
     auto* dispatcher = std::exchange(dispatcher_, nullptr);
     slot_state_ = nullptr;
     const auto slot = std::exchange(slot_, 0);
@@ -141,24 +141,23 @@ void worker_dispatcher::request_timer_cancellation(
     if (generation == 0) {
         return;
     }
-    if (current_worker_dispatcher() == this) {
-        cancel_timer(slot, generation, notify);
-        return;
-    }
-    bool current = false;
-    {
+    if (current_worker_dispatcher() != this) {
         std::lock_guard lock(impl_->mutex_);
         if (impl_->timers_stopping_.load(std::memory_order_acquire) || !impl_->context_attached_) {
             return;
         }
-        current = io_context_.get_executor().running_in_this_thread();
-        if (!current) {
+        if (!io_context_.get_executor().running_in_this_thread()) {
             try {
                 // A stopped io_context can be restarted; queue the cancellation
                 // so a destroyed registration cannot leave a live slot that
-                // expires after that restart.
+                // expires after that restart. The handler already runs fresh on
+                // the worker, exactly like fire_timers(), so it delivers the
+                // completion inline instead of posting a second hop.
                 asio::post(io_context_, [self = shared_from_this(), slot, generation, notify] {
-                    self->cancel_timer(slot, generation, notify);
+                    auto completion = self->take_timer(slot, generation);
+                    if (notify && completion) {
+                        completion(worker_timer_outcome::cancelled);
+                    }
                 });
             } catch (...) {
                 std::terminate();
@@ -166,13 +165,20 @@ void worker_dispatcher::request_timer_cancellation(
             return;
         }
     }
-    cancel_timer(slot, generation, notify);
+    // The caller is running synchronously on the worker; delivering its own
+    // completion here would re-enter it, so the completion is posted.
+    auto completion = take_timer(slot, generation);
+    if (notify && completion) {
+        defer_or_terminate([completion = std::move(completion)]() mutable {
+            completion(worker_timer_outcome::cancelled);
+        });
+    }
 }
 
-void worker_dispatcher::cancel_timer(
-    std::size_t slot_index, std::uint64_t generation, bool notify) noexcept {
+move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
+    std::size_t slot_index, std::uint64_t generation) noexcept {
     if (!has_timer(slot_index, generation)) {
-        return;
+        return {};
     }
     auto completion = release_timer_slot(slot_index);
     ++impl_->stale_timer_count_;
@@ -194,11 +200,7 @@ void worker_dispatcher::cancel_timer(
     }
     // Otherwise the armed wait stays: it fires no later than any live entry,
     // and fire_timers() skips the stale one.
-    if (notify && completion) {
-        defer_or_terminate([completion = std::move(completion)]() mutable {
-            completion(worker_timer_outcome::cancelled);
-        });
-    }
+    return completion;
 }
 
 void worker_dispatcher::stop_timers() noexcept {
@@ -271,9 +273,15 @@ void worker_dispatcher::arm_timer() {
 void worker_dispatcher::fire_timers() {
     std::exception_ptr failure;
     impl_->dispatching_timers_ = true;
+    // One pass fires only what was due when it began. A completion that
+    // schedules a deadline already in the past (a periodic timer whose work
+    // outlasts its interval) waits for the re-armed wait, so I/O, deferred work,
+    // and stop controls run between rounds instead of starving behind them.
+    const auto now = std::chrono::steady_clock::now();
+    const auto sequence_limit = impl_->next_timer_sequence_;
     try {
-        while (!impl_->timers_.empty() &&
-               impl_->timers_.front().deadline_ <= std::chrono::steady_clock::now()) {
+        while (!impl_->timers_.empty() && impl_->timers_.front().deadline_ <= now &&
+               impl_->timers_.front().sequence_ < sequence_limit) {
             std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
             auto entry_value = std::move(impl_->timers_.back());
             impl_->timers_.pop_back();

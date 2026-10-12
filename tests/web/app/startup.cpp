@@ -69,9 +69,9 @@ struct worker_state final {
     std::shared_ptr<startup_state> state_;
 };
 
-class startup_controller final : public ruvia::controller<startup_controller> {
+class startup_controller final {
 public:
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(startup_controller)
     RUVIA_GET("/ready", ready);
     RUVIA_GET("/connection", connection);
     RUVIA_POST("/limited", limited, ruvia::body_limit<16>);
@@ -462,6 +462,8 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             // A stop request that cancels worker startup is not a startup
             // failure: run() returns normally and leaves no partial service.
             std::this_thread::sleep_for(25ms);
+            // No worker handle escapes before every worker is ready.
+            RUVIA_CHECK(app.workers().empty());
             app.stop();
             state_value->release_hook_.release();
             run.join();
@@ -535,6 +537,44 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         } else {
             RUVIA_CHECK(run.failure_ == nullptr);
         }
+    }
+
+    // A stop() that wins the race against run() is kept for that run, which
+    // returns without starting; the latch is consumed, so the next run starts.
+    {
+        state_value->outcome_ = startup_outcome::serve;
+        const auto second_hooks = state_value->second_hooks_;
+        const auto stop_hooks = state_value->stop_hooks_;
+        asio::io_context io;
+        asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
+        const auto endpoint = reservation.local_endpoint();
+        reservation.close();
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+        app.stop();
+        auto latched = std::async(std::launch::async, [&app] { app.run(); });
+        const bool returned = latched.wait_for(3s) == std::future_status::ready;
+        RUVIA_CHECK(returned);
+        if (!returned) {
+            app.stop();
+            state_value->release_hook_.release();
+        }
+        latched.get();
+        RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
+        RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 1);
+        RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
+
+        app_run run(app, *state_value);
+        const bool entered = state_value->hook_entered_.try_acquire_for(3s);
+        RUVIA_CHECK(entered);
+        if (!entered) {
+            return;
+        }
+        app.stop();
+        state_value->release_hook_.release();
+        run.join();
+        RUVIA_CHECK(run.failure_ == nullptr);
+        RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
+        RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 2);
     }
     app.trusted_proxies(nullptr);
 }

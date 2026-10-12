@@ -48,10 +48,8 @@ namespace {
 
     // Unlike a field value, reason-phrase can legitimately begin or end with
     // SP/HTAB. Validate bytes directly instead of applying OWS trimming rules.
-    for (const auto ch : status_line.substr(separator + 5)) {
-        if (!is_http_field_value_char(static_cast<unsigned char>(ch))) {
-            return http1_client_response_parse_error::invalid_reason_phrase;
-        }
+    if (!is_valid_http_field_value_bytes(status_line.substr(separator + 5))) {
+        return http1_client_response_parse_error::invalid_reason_phrase;
     }
 
     return http1_client_parsed_status_line{.status_code_ = *parsed_status,
@@ -80,8 +78,7 @@ namespace {
 }  // namespace
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource) {
+    std::string_view head_section, const http1_client_exchange_state& exchange_state) {
     const auto first_line_end = head_section.find("\r\n");
     const auto first_line =
         first_line_end == std::string_view::npos ? head_section : head_section.substr(0, first_line_end);
@@ -89,7 +86,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     if ((status_line.index() != 0)) {
         return std::get<1>(status_line);
     }
-    http1_client_parsed_response_head output(std::get<0>(status_line), resource);
+    http1_client_parsed_response_head output(std::get<0>(status_line));
 
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);

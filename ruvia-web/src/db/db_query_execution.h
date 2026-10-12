@@ -39,6 +39,8 @@ struct db_query_backend final {
     // failure has already retired the transaction's lease.
     bool* backend_failed_{nullptr};
 #ifdef RUVIA_ENABLE_REDIS
+    // Pooled backends only: a transaction's reads may include its own
+    // uncommitted writes, which the shared cache must never see or replace.
     db_query_cache_state* cache_{nullptr};
 #endif
 };

@@ -1,16 +1,17 @@
 #pragma once
 
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory_resource>
 #include <string>
 #include <string_view>
-#include <system_error>
 
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response_file.h"
+#include "ruvia/web/detail/util/fnv1a.h"
 
 namespace ruvia::detail {
 
@@ -127,28 +128,28 @@ template <typename char_value_type>
         std::basic_string_view<std::filesystem::path::value_type>(path.native()));
 }
 
-inline void append_static_file_unsigned(std::pmr::string& output, std::uint64_t value) {
-    std::array<char, 32> buffer;
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec == std::errc{}) {
-        output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
-    }
-}
-
+// Strong validator for one file snapshot: a quoted 64-bit FNV-1a digest of the
+// size, modification token, file identity and (for a stored non-identity
+// representation) content coding, so any change to one of them yields a new
+// ETag. Hashing keeps the field short and does not disclose the volume and
+// file index the identity words carry.
 [[nodiscard]] inline std::pmr::string make_static_file_snapshot_etag(
     std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modified_token,
-    http_response_file_identity identity) {
-    std::pmr::string output(resource);
-    output.reserve(128);
-    output.push_back('"');
-    append_static_file_unsigned(output, size);
-    output.push_back('-');
-    append_static_file_unsigned(output, modified_token);
+    http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
+    auto hash = fnv1a_accumulate_integer(fnv1a_offset_basis, size);
+    hash = fnv1a_accumulate_integer(hash, modified_token);
     for (const auto word : identity.words()) {
-        output.push_back('-');
-        append_static_file_unsigned(output, word);
+        hash = fnv1a_accumulate_integer(hash, word);
     }
-    output.push_back('"');
+    if (coding != http_content_coding::identity) {
+        hash = fnv1a_accumulate(hash, http_content_coding_token(coding));
+    }
+    std::array<unsigned char, sizeof(hash)> digest{};
+    for (std::size_t i = 0; i < digest.size(); ++i) {
+        digest[i] = static_cast<unsigned char>(hash >> ((digest.size() - 1 - i) * 8U));
+    }
+    std::pmr::string output(2 + 2 * digest.size(), '"', resource);
+    http_encode_lower_hex(output.data() + 1, digest);
     return output;
 }
 

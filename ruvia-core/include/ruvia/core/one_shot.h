@@ -67,11 +67,6 @@ public:
     t_type* rejected() && = delete;
     const t_type* rejected() const&& = delete;
 
-    [[nodiscard]] std::optional<t_type> take_rejected() && noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) {
-        return std::move(rejected_);
-    }
-
 private:
     friend class one_shot_completion<t_type>;
 
@@ -109,7 +104,7 @@ struct one_shot_worker_stopping final {};
 struct one_shot_ready final {};
 
 template <typename t_type>
-struct one_shot_state final : worker_shutdown_listener {
+struct one_shot_state final {
     explicit one_shot_state(worker_handle target)
         : worker_(std::move(target)) {
         if (!worker_.valid()) {
@@ -117,12 +112,14 @@ struct one_shot_state final : worker_shutdown_listener {
         }
     }
 
-    void worker_stopping() noexcept override;
+    void worker_stopping() noexcept;
 
     [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
         return std::unique_lock(mutex_);
     }
 
+    // First member: unlinks from the worker registry after every other member is gone.
+    worker_shutdown_hook shutdown_hook_;
     worker_handle worker_;
     std::mutex mutex_;
     using lifecycle_type = std::variant<one_shot_pending, one_shot_ready, one_shot_consumed,
@@ -131,9 +128,7 @@ struct one_shot_state final : worker_shutdown_listener {
     // After publishing consumed/closed, the thread that claimed ready owns this
     // stable slot until its value has been moved or destroyed outside mutex_.
     std::optional<t_type> ready_value_;
-    worker_single_wait_awaiter<t_type, one_shot_state<t_type>>* waiter_{nullptr};
-    std::uint64_t waiter_generation_{0};
-    std::uint64_t next_waiter_generation_{0};
+    worker_wait_slot<t_type, one_shot_state<t_type>> wait_slot_;
 };
 
 template <typename t_type>
@@ -179,7 +174,7 @@ struct one_shot_awaiter final {
             (void)wait_.complete_status(worker_wait_status::timed_out);
             return true;
         }
-        if (owner_value.waiter_ != nullptr) {
+        if (owner_value.wait_slot_.occupied()) {
             throw std::logic_error("one-shot supports one pending receiver");
         }
         wait_.publish();
@@ -213,7 +208,7 @@ void one_shot_state<t_type>::worker_stopping() noexcept {
     if (!std::holds_alternative<one_shot_ready>(lifecycle_)) {
         lifecycle_.template emplace<one_shot_worker_stopping>();
     }
-    complete_worker_single_wait(*this, worker_wait_status::worker_stopping);
+    wait_slot_.complete(worker_wait_status::worker_stopping);
 }
 
 }  // namespace detail
@@ -240,19 +235,9 @@ public:
                 rejection = one_shot_complete_status::receiver_closed;
             } else if (!state_->worker_.accepting()) {
                 rejection = one_shot_complete_status::worker_stopping;
-            } else if (auto* waiter = state_->waiter_) {
-                const bool wake =
-                    waiter->complete_result(detail::worker_wait_result_access::value(std::move(value)));
+            } else if (state_->wait_slot_.occupied()) {
+                state_->wait_slot_.complete(detail::worker_wait_result_access::value(std::move(value)));
                 state_->lifecycle_.template emplace<detail::one_shot_consumed>();
-                state_->waiter_ = nullptr;
-                state_->waiter_generation_ = 0;
-                // Wake the receiver while still holding the mutex. Once it is
-                // released, an already-in-flight timer expiry can resume the
-                // receiver on its worker and destroy this awaiter, so reading
-                // its timer registration afterward would be a use-after-free.
-                if (wake) {
-                    waiter->wake();
-                }
             } else {
                 assert(std::holds_alternative<detail::one_shot_pending>(state_->lifecycle_));
                 state_->ready_value_.emplace(std::move(value));
@@ -344,7 +329,7 @@ public:
                 return;
             }
             state->lifecycle_.template emplace<detail::one_shot_receiver_closed>();
-            detail::complete_worker_single_wait(*state, worker_wait_status::closed);
+            state->wait_slot_.complete(worker_wait_status::closed);
         }
         if (discard) {
             state->ready_value_.reset();
@@ -367,7 +352,8 @@ template <typename t_type>
     auto* resolved = pmr_resource_or_default(options.resource_);
     std::pmr::polymorphic_allocator<detail::one_shot_state<t_type>> allocator(resolved);
     auto state_value = std::allocate_shared<detail::one_shot_state<t_type>>(allocator, std::move(worker_value));
-    detail::worker_handle_access::register_shutdown_listener(state_value->worker_, state_value);
+    detail::worker_handle_access::register_shutdown_hook(
+        state_value->worker_, state_value, &detail::one_shot_state<t_type>::shutdown_hook_);
     return std::pair(one_shot_completion<t_type>(state_value), one_shot_receiver<t_type>(state_value));
 }
 

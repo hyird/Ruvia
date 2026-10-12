@@ -25,8 +25,10 @@ enum class http_response_stream_kind : std::uint8_t { generic,
 
 // A trailer section is terminal message metadata, not an independently queued
 // side channel. The caller declares whether this head commit is reserving a
-// terminal trailer section. An unavailable representation is rejected before
-// emitting the response head.
+// terminal trailer section. Trailers are optional metadata a recipient may
+// discard (RFC 9110 6.5), so framing that cannot carry them (HTTP/1.0
+// close-delimited, known length, or a suppressed body) drops them; only a
+// status that can never carry content rejects the intent before the head.
 enum class http_response_trailer_intent : std::uint8_t { none,
     present };
 
@@ -65,11 +67,16 @@ public:
         return head_disposition_;
     }
 
+    // A status that can never carry content (1xx/204/304) has no message body
+    // to terminate with a trailer section; asking for one is a handler error.
+    // Every other unavailable framing discards the trailers instead.
+    [[nodiscard]] bool status_permits_trailers() const noexcept {
+        return !response_status().is_informational() && response_status() != http_status::no_content &&
+               response_status() != http_status::not_modified;
+    }
+
     [[nodiscard]] bool trailer_intent_allowed() const noexcept {
-        return !trailer_intent_present_ ||
-               (trailers_available() && !response_status().is_informational() &&
-                   response_status() != http_status::no_content &&
-                   response_status() != http_status::not_modified);
+        return !trailer_intent_present_ || status_permits_trailers();
     }
 
 private:

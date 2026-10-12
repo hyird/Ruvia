@@ -33,13 +33,19 @@ struct websocket_heartbeat_config final {
 struct websocket_lifecycle_options final {
     websocket_heartbeat_config heartbeat_{};
     // A locally initiated Close waits for the peer Close before the underlying
-    // transport is ended. nullopt disables this guard.
+    // transport is ended. The timeout starts when the Close is submitted, so it
+    // also bounds writing the Close frame. nullopt disables this guard.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{std::chrono::seconds(5)};
 };
 
 struct websocket_route_config final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::vector<std::string> subprotocols_{};
+    // By default a client offering none of subprotocols_ is still accepted,
+    // with no Sec-WebSocket-Protocol response field (RFC 6455 4.2.2). When
+    // set, such an upgrade is refused with 400 before any middleware or
+    // handler runs; subprotocols_ must then be nonempty.
+    bool require_subprotocol_{false};
     websocket_lifecycle_options lifecycle_{};
     websocket_deflate_config deflate_{};
 };
@@ -54,8 +60,11 @@ struct websocket_close_options final {
     ::ruvia::borrowed_text reason_{};
 };
 
+class websocket;
+
 namespace detail {
-struct websocket_access;
+template <typename connection_type>
+[[nodiscard]] websocket make_websocket_facade(connection_type& connection, std::pmr::memory_resource& resource) noexcept;
 }  // namespace detail
 
 class websocket final {
@@ -154,7 +163,9 @@ public:
     void abort() noexcept;
 
 private:
-    friend struct detail::websocket_access;
+    template <typename connection_type>
+    friend websocket detail::make_websocket_facade(
+        connection_type& connection, std::pmr::memory_resource& resource) noexcept;
 
     using read_type = task<std::optional<websocket_message>> (*)(void*);
     using write_type = task<void> (*)(void*, websocket_opcode, std::string_view, bool);

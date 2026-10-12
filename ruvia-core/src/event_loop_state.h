@@ -170,8 +170,7 @@ struct attached_context final {
 // Both stop through stop(): it seals the retirement gate on the stopping
 // thread and requests the worker stop chain, whose owner-thread stop control
 // re-enters stop(); the drained gate finalizes the chain on the owner.
-struct event_loop_state final : worker_shutdown_listener,
-                                std::enable_shared_from_this<event_loop_state> {
+struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     using context_ownership_type = std::variant<worker_runtime, attached_context>;
 
     explicit event_loop_state(std::size_t queue_capacity);
@@ -185,10 +184,9 @@ struct event_loop_state final : worker_shutdown_listener,
     // context service, which retires it at the latest when the context shuts
     // down (event_loop_attachment.cpp).
     void attach(const std::shared_ptr<event_loop_state>& self);
-    void install_lifecycle_listener();
+    void install_shutdown_hook();
 
-    void worker_stopping() noexcept override {}
-    void worker_stopping_complete() noexcept override;
+    void worker_stopping_complete() noexcept;
 
     void report_failure(std::exception_ptr failure) noexcept;
     void report_attached_failure(std::exception_ptr failure) noexcept;
@@ -200,6 +198,8 @@ struct event_loop_state final : worker_shutdown_listener,
     // the context destroys its scheduler (event_loop_attachment.cpp).
     void shutdown_external_context() noexcept;
 
+    // First member: unlinks from the worker registry after every other member is gone.
+    worker_shutdown_hook shutdown_hook_;
     context_ownership_type context_ownership_;
     asio::io_context* const io_context_;
     asio::io_context::executor_type executor_;

@@ -13,6 +13,7 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/detail/router/route_modes.h"
@@ -109,6 +110,10 @@ public:
         return subprotocols_;
     }
 
+    [[nodiscard]] websocket_handshake_validation_options handshake_validation() const noexcept {
+        return {.supported_subprotocols_ = subprotocols_, .require_subprotocol_ = require_subprotocol_};
+    }
+
     [[nodiscard]] const websocket_lifecycle_options& lifecycle() const noexcept {
         return lifecycle_;
     }
@@ -125,6 +130,7 @@ private:
         : invoke_(invoke),
           subprotocol_storage_(resource),
           subprotocols_(resource),
+          require_subprotocol_(options.require_subprotocol_),
           lifecycle_(options.lifecycle_),
           deflate_(options.deflate_) {
         subprotocol_storage_.reserve(options.subprotocols_.size());
@@ -140,6 +146,7 @@ private:
     route_stream_handler_type::invoke_type invoke_;
     std::pmr::vector<std::pmr::string> subprotocol_storage_;
     std::pmr::vector<std::string_view> subprotocols_;
+    bool require_subprotocol_;
     websocket_lifecycle_options lifecycle_;
     websocket_deflate_config deflate_;
 };
@@ -198,6 +205,9 @@ public:
                 throw std::invalid_argument(
                     "websocket subprotocols must contain at most 64 unique HTTP tokens");
             }
+        }
+        if (options.require_subprotocol_ && options.subprotocols_.empty()) {
+            throw std::invalid_argument("a websocket route requiring a subprotocol must list subprotocols");
         }
         return route_endpoint(
             websocket_route_endpoint(pmr_resource_or_default(resource), invoke, options));

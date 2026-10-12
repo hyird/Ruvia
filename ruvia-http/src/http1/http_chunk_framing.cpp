@@ -4,11 +4,11 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
-
-#include "parser/http_chunk_parser.h"
 
 namespace ruvia::detail {
 
@@ -21,17 +21,25 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
     for (;;) {
         switch (std::get<0>(state_)) {
             case progress::size_line: {
-                const auto line_end = available.find("\r\n", cursor_value);
-                if (line_end == std::string_view::npos) {
-                    // A future CRLF can begin at most one byte before the end.
-                    if (available.size() - cursor_value >= max_http_header_bytes) {
+                // Every LF must end a CRLF (RFC 9112 section 7.1), so a bare LF is
+                // rejected as soon as it arrives instead of waiting for a CRLF.
+                const auto line_feed = available.find('\n', cursor_value + size_line_search_offset_);
+                if (line_feed == std::string_view::npos) {
+                    const auto line_bytes = available.size() - cursor_value;
+                    if (line_bytes >= max_http_header_bytes) {
                         return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                     }
+                    size_line_search_offset_ = line_bytes;
                     return chunk_framing_need_more{cursor_value};
                 }
-                if (line_end - cursor_value + 2 > max_http_header_bytes) {
+                if (line_feed == cursor_value || available[line_feed - 1] != '\r') {
+                    return fail(cursor_value, chunk_framing_error::invalid_crlf);
+                }
+                if (line_feed - cursor_value + 1 > max_http_header_bytes) {
                     return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                 }
+                size_line_search_offset_ = 0;
+                const auto line_end = line_feed - 1;
                 std::size_t chunk_size = 0;
                 switch (parse_http_chunk_size_line(available.substr(cursor_value, line_end - cursor_value), chunk_size)) {
                     case chunk_size_line_status::ok:
@@ -94,13 +102,24 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
                     state_ = progress::complete;
                     return chunk_framing_complete{cursor_value + 2, {}};
                 }
-                const auto trailer_end = trailers.find("\r\n\r\n", trailer_search_offset_);
+                // Scan only bytes not examined by an earlier call. Each LF must be
+                // preceded by CR; an LF directly after a CRLF ends the section.
+                auto trailer_end = std::string_view::npos;
+                for (auto line_feed = trailers.find('\n', trailer_search_offset_);
+                     line_feed != std::string_view::npos; line_feed = trailers.find('\n', line_feed + 1)) {
+                    if (line_feed == 0 || trailers[line_feed - 1] != '\r') {
+                        return fail(cursor_value, chunk_framing_error::invalid_crlf);
+                    }
+                    if (line_feed >= 3 && trailers[line_feed - 2] == '\n') {
+                        trailer_end = line_feed - 3;
+                        break;
+                    }
+                }
                 if (trailer_end == std::string_view::npos) {
-                    // Keep the final three bytes as a possible delimiter prefix.
                     if (trailers.size() >= max_http_header_bytes) {
                         return fail(cursor_value, chunk_framing_error::framing_limit_exceeded);
                     }
-                    trailer_search_offset_ = trailers.size() > 3 ? trailers.size() - 3 : 0;
+                    trailer_search_offset_ = trailers.size();
                     return chunk_framing_need_more{cursor_value};
                 }
                 const auto trailer_bytes = trailer_end + 4;
@@ -127,17 +146,22 @@ std::optional<chunk_framing_error> http_chunk_framing::consume_delimiter(std::st
 }
 
 std::optional<chunk_framing_error> http_chunk_framing::validate_trailers(std::string_view trailers) const noexcept {
-    if (config_.trailer_role_ == chunk_trailer_role::response) {
-        return http_response_trailer_block_valid(trailers)
-                   ? std::nullopt
-                   : std::optional(chunk_framing_error::invalid_trailer);
+    const auto accept = [](std::string_view, std::string_view) noexcept { return true; };
+    auto budget = http_trailer_section_budget();
+    const auto status = config_.trailer_role_ == chunk_trailer_role::response
+                            ? visit_http1_trailer_block(trailers, is_forbidden_response_trailer_name, budget, 0, accept)
+                            : visit_http1_trailer_block(trailers, is_forbidden_http_request_trailer_name, budget, 0, accept);
+    switch (status) {
+        case http_trailer_block_status::ok:
+            return std::nullopt;
+        case http_trailer_block_status::section_too_large:
+            return chunk_framing_error::trailer_limit_exceeded;
+        case http_trailer_block_status::invalid_field:
+        case http_trailer_block_status::forbidden_field:
+        case http_trailer_block_status::visitor_stopped:
+            break;
     }
-    if (const auto error = validate_http_chunk_trailers(trailers)) {
-        return *error == http_chunk_scan_error::too_large
-                   ? chunk_framing_error::trailer_limit_exceeded
-                   : chunk_framing_error::invalid_trailer;
-    }
-    return std::nullopt;
+    return chunk_framing_error::invalid_trailer;
 }
 
 chunk_framing_result http_chunk_framing::fail(std::size_t consumed_bytes, chunk_framing_error error) noexcept {

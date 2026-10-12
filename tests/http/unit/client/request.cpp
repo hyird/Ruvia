@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -555,6 +557,243 @@ RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_
     if (prepared.prepared() != nullptr && too_small.buffer_too_small() != nullptr) {
         RUVIA_CHECK_EQ(
             too_small.buffer_too_small()->required_head_bytes(), prepared.prepared()->head().size());
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_preserves_metadata_borrowed_from_output) {
+    enum class alias_kind { field_name,
+        field_value,
+        method,
+        target,
+        host };
+    for (const bool streaming : {false, true}) {
+        for (const auto kind : {alias_kind::field_name, alias_kind::field_value,
+                 alias_kind::method, alias_kind::target, alias_kind::host}) {
+            std::array<char, 128> buffer;
+            buffer.fill('#');
+            const auto store = [&](std::size_t offset, std::string_view text) {
+                std::copy(text.begin(), text.end(), buffer.begin() + static_cast<std::ptrdiff_t>(offset));
+                return std::string_view(buffer.data() + offset, text.size());
+            };
+            std::string_view method = "HEAD";
+            std::string_view target = "/";
+            std::string_view host = "example.test";
+            std::array fields{ruvia::http_header_view{"X-Test", "retained"}};
+            switch (kind) {
+                case alias_kind::field_name:
+                    fields[0] = {store(0, "X-Test"), "retained"};
+                    break;
+                case alias_kind::field_value:
+                    fields[0] = {"X-Test", store(0, "retained")};
+                    break;
+                case alias_kind::method:
+                    // The method is read before Host overwrites these bytes;
+                    // the exchange must still retain HEAD response semantics.
+                    method = store(24, "HEAD");
+                    break;
+                case alias_kind::target:
+                    target = store(0, "/");
+                    break;
+                case alias_kind::host:
+                    host = store(0, "example.test");
+                    break;
+            }
+            const auto original = buffer;
+            const auto origin = http_origin_view::http({.host_ = host});
+            rejecting_character_storage_resource resource;
+            const http1_client_request_writer writer({.resource_ = &resource});
+            const auto prepare = [&](std::span<char> output) {
+                return streaming
+                           ? writer.prepare_streaming(origin,
+                                 {.method_ = method, .target_ = target, .headers_ = fields, .content_length_ = 0}, output)
+                           : writer.prepare(origin,
+                                 {.method_ = method, .target_ = target, .headers_ = fields}, output);
+            };
+            std::string expected = "HEAD / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
+            if (streaming) {
+                expected += "Content-Length: 0\r\n";
+            }
+            expected += "\r\n";
+            const auto too_small = prepare(std::span(buffer).first(expected.size() - 1));
+            RUVIA_CHECK(too_small.buffer_too_small() != nullptr);
+            if (too_small.buffer_too_small() != nullptr) {
+                RUVIA_CHECK_EQ(too_small.buffer_too_small()->required_head_bytes(), expected.size());
+            }
+            RUVIA_CHECK(buffer == original);
+
+            const auto result = prepare(buffer);
+            const auto* prepared = result.prepared();
+            RUVIA_CHECK(prepared != nullptr);
+            if (prepared != nullptr) {
+                RUVIA_CHECK_EQ(prepared->head(), std::string_view(expected));
+                auto parser = ruvia::http1_client_response_parser(prepared->exchange_state());
+                const auto response = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n");
+                RUVIA_CHECK(response.parsed() != nullptr);
+                if (response.parsed() != nullptr) {
+                    RUVIA_CHECK(response.parsed()->plan().without_content() != nullptr);
+                }
+            }
+            RUVIA_CHECK(std::equal(buffer.begin() + static_cast<std::ptrdiff_t>(expected.size()), buffer.end(),
+                original.begin() + static_cast<std::ptrdiff_t>(expected.size())));
+        }
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_preserves_borrowed_fields_at_head_size_limits) {
+    for (const bool streaming : {false, true}) {
+        for (const auto head_bytes : {ruvia::max_http_header_bytes - 1, ruvia::max_http_header_bytes,
+                 ruvia::max_http_header_bytes + 1}) {
+            constexpr std::string_view prefix = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Test: ";
+            const std::string_view suffix = streaming ? "\r\nContent-Length: 0\r\n\r\n" : "\r\n\r\n";
+            const std::string value(head_bytes - prefix.size() - suffix.size(), 'v');
+            const std::string expected = std::string(prefix) + value + std::string(suffix);
+            std::array<char, ruvia::max_http_header_bytes + 8> buffer;
+            buffer.fill('#');
+            constexpr std::string_view field_name = "X-Test";
+            std::copy(field_name.begin(), field_name.end(), buffer.begin());
+            const auto original = buffer;
+            const std::array fields{ruvia::http_header_view{
+                std::string_view(buffer.data(), field_name.size()), value}};
+            const auto origin = http_origin_view::http({.host_ = "example.test"});
+            rejecting_character_storage_resource resource;
+            const http1_client_request_writer writer({.resource_ = &resource});
+            const auto prepare = [&](std::span<char> output) {
+                return streaming
+                           ? writer.prepare_streaming(origin, {.headers_ = fields, .content_length_ = 0}, output)
+                           : writer.prepare(origin, {.headers_ = fields}, output);
+            };
+            if (head_bytes > ruvia::max_http_header_bytes) {
+                const auto invalid = prepare(buffer);
+                RUVIA_CHECK(invalid.failure() != nullptr);
+                if (invalid.failure() != nullptr) {
+                    RUVIA_CHECK(invalid.failure()->error() == http1_client_request_prepare_error::header_too_large);
+                }
+                RUVIA_CHECK(buffer == original);
+                continue;
+            }
+            const auto too_small = prepare(std::span(buffer).first(head_bytes - 1));
+            RUVIA_CHECK(too_small.buffer_too_small() != nullptr);
+            if (too_small.buffer_too_small() != nullptr) {
+                RUVIA_CHECK_EQ(too_small.buffer_too_small()->required_head_bytes(), head_bytes);
+            }
+            RUVIA_CHECK(buffer == original);
+            const auto result = prepare(buffer);
+            RUVIA_CHECK(result.prepared() != nullptr);
+            if (result.prepared() != nullptr) {
+                RUVIA_CHECK_EQ(result.prepared()->head(), std::string_view(expected));
+            }
+            RUVIA_CHECK(std::equal(buffer.begin() + static_cast<std::ptrdiff_t>(head_bytes), buffer.end(),
+                original.begin() + static_cast<std::ptrdiff_t>(head_bytes)));
+        }
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_consumes_header_descriptors_before_overwriting_output) {
+    for (const bool streaming : {false, true}) {
+        for (const auto offset : {std::size_t{0}, sizeof(ruvia::http_header_view), std::size_t{192}}) {
+            alignas(ruvia::http_header_view) std::array<char, 256> buffer;
+            buffer.fill('#');
+            auto* const field = ::new (static_cast<void*>(buffer.data() + offset)) ruvia::http_header_view{"X-Test", "retained"};
+            const auto original = buffer;
+            const std::span<const ruvia::http_header_view> fields(field, 1);
+            const auto origin = http_origin_view::http({.host_ = "example.test"});
+            rejecting_character_storage_resource resource;
+            const http1_client_request_writer writer({.resource_ = &resource});
+            const auto prepare = [&](std::span<char> output) {
+                return streaming
+                           ? writer.prepare_streaming(origin, {.headers_ = fields, .content_length_ = 0}, output)
+                           : writer.prepare(origin, {.headers_ = fields}, output);
+            };
+            std::string expected = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
+            if (streaming) {
+                expected += "Content-Length: 0\r\n";
+            }
+            expected += "\r\n";
+            const auto too_small = prepare(std::span(buffer).first(expected.size() - 1));
+            RUVIA_CHECK(too_small.buffer_too_small() != nullptr);
+            RUVIA_CHECK(buffer == original);
+            const auto result = prepare(buffer);
+            RUVIA_CHECK(result.prepared() != nullptr);
+            if (result.prepared() != nullptr) {
+                RUVIA_CHECK_EQ(result.prepared()->head(), std::string_view(expected));
+            }
+            RUVIA_CHECK(std::equal(buffer.begin() + static_cast<std::ptrdiff_t>(expected.size()), buffer.end(),
+                original.begin() + static_cast<std::ptrdiff_t>(expected.size())));
+            std::destroy_at(field);
+        }
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_preserves_borrowed_content_beyond_emitted_head) {
+    for (const auto expectation : {ruvia::http_client_request_expectation::none,
+             ruvia::http_client_request_expectation::continue_value}) {
+        std::array<char, 512> buffer;
+        buffer.fill('#');
+        constexpr std::string_view value = "retained";
+        constexpr std::string_view content = "body";
+        std::copy(value.begin(), value.end(), buffer.begin());
+        std::copy(content.begin(), content.end(), buffer.begin() + 256);
+        const auto original = buffer;
+        const std::array fields{ruvia::http_header_view{"X-Test", std::string_view(buffer.data(), value.size())}};
+        const auto bytes = std::string_view(buffer.data() + 256, content.size());
+        const http_client_request_view request{.method_ = "POST", .headers_ = fields, .content_ = http_client_request_content_view::bytes(bytes)};
+        rejecting_character_storage_resource resource;
+        const http1_client_request_writer writer({.resource_ = &resource});
+        const auto result = writer.prepare(http_origin_view::http({.host_ = "example.test"}), request, buffer,
+            {.expectation_ = expectation});
+        const auto* prepared = result.prepared();
+        RUVIA_CHECK(prepared != nullptr);
+        if (prepared == nullptr) {
+            continue;
+        }
+        std::string expected = "POST / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\nContent-Length: 4\r\n";
+        if (expectation == ruvia::http_client_request_expectation::continue_value) {
+            expected += "Expect: 100-continue\r\n";
+            const auto* gated = prepared->content_plan().continue_gated();
+            RUVIA_CHECK(gated != nullptr);
+            if (gated != nullptr) {
+                RUVIA_CHECK_EQ(gated->bytes(), content);
+                RUVIA_CHECK(gated->bytes().data() == bytes.data());
+            }
+        } else {
+            const auto* immediate = prepared->content_plan().immediate();
+            RUVIA_CHECK(immediate != nullptr);
+            if (immediate != nullptr) {
+                RUVIA_CHECK_EQ(immediate->bytes(), content);
+                RUVIA_CHECK(immediate->bytes().data() == bytes.data());
+            }
+        }
+        expected += "\r\n";
+        RUVIA_CHECK_EQ(prepared->head(), std::string_view(expected));
+        RUVIA_CHECK(std::equal(buffer.begin() + static_cast<std::ptrdiff_t>(expected.size()), buffer.end(),
+            original.begin() + static_cast<std::ptrdiff_t>(expected.size())));
+    }
+}
+
+RUVIA_TEST(http1_client_upgrade_allocation_failure_preserves_metadata_borrowed_from_output) {
+    for (const bool streaming : {false, true}) {
+        constexpr std::string_view protocol = "a-valid-protocol-token-that-exceeds-small-string-storage";
+        std::array<char, 512> buffer;
+        buffer.fill('#');
+        std::copy(protocol.begin(), protocol.end(), buffer.begin());
+        const auto original = buffer;
+        const std::array fields{ruvia::http_header_view{"Connection", "Upgrade"},
+            ruvia::http_header_view{"Upgrade", std::string_view(buffer.data(), protocol.size())}};
+        const auto origin = http_origin_view::http({.host_ = "example.test"});
+        rejecting_character_storage_resource resource;
+        const http1_client_request_writer writer({.resource_ = &resource});
+        bool failed = false;
+        try {
+            if (streaming) {
+                (void)writer.prepare_streaming(origin, {.headers_ = fields, .content_length_ = 0}, buffer);
+            } else {
+                (void)writer.prepare(origin, {.headers_ = fields}, buffer);
+            }
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK(buffer == original);
     }
 }
 

@@ -70,7 +70,7 @@ private:
           port_(source_value.port_.value_or(default_db_port(source_value.driver_))),
           username_(source_value.username_, resource),
           password_(source_value.password_, resource),
-          tls_(source_value.tls_, resource),
+          tls_(source_value.tls_, client_tls_files::keep_paths, resource),
           database_(source_value.database_, resource),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),

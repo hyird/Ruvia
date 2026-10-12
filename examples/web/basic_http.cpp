@@ -11,6 +11,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -21,7 +23,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/integer.h"
 
-class request_id_middleware final : public ruvia::middleware {
+class request_id_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -29,7 +31,7 @@ public:
     }
 };
 
-class admin_auth_middleware final : public ruvia::middleware {
+class admin_auth_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
@@ -71,11 +73,11 @@ ruvia::task<ruvia::http_response> api_error(ruvia::context& c, ruvia::http_error
         .status_text_ = error.status_text()});
 }
 
-class basic_http_controller final : public ruvia::controller<basic_http_controller> {
+class basic_http_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/api", request_id_middleware)
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(basic_http_controller)
     RUVIA_GET("/hello", hello);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/files/*", wildcard);
@@ -192,24 +194,29 @@ private:
 };
 
 int main() {
-    ruvia::memory_pool_config memory;
-    memory.request_initial_buffer_bytes_ = 4096;
+    try {
+        ruvia::memory_pool_config memory;
+        memory.request_initial_buffer_bytes_ = 4096;
 
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8080})
-        .server({
-            .worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-            .idle_timeout_ = std::chrono::seconds(75),
-            .request_header_timeout_ = std::chrono::seconds(60),
-            .request_body_timeout_ = std::chrono::seconds(60),
-            .write_timeout_ = std::chrono::seconds(60),
-            .max_connections_per_worker_ = 10000,
-            .max_requests_per_connection_ = 1000,
-            .memory_pool_ = memory,
-        })
-        .on_error(&example_error_handler)
-        .on_error({.prefix_ = "/api", .handler_ = &api_error})
-        .on_not_found({.prefix_ = "/api", .handler_ = &api_not_found})
-        .run();
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8080})
+            .server({
+                .worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .idle_timeout_ = std::chrono::seconds(75),
+                .request_header_timeout_ = std::chrono::seconds(60),
+                .request_body_timeout_ = std::chrono::seconds(60),
+                .write_timeout_ = std::chrono::seconds(60),
+                .max_connections_per_worker_ = 10000,
+                .max_requests_per_connection_ = 1000,
+                .memory_pool_ = memory,
+            })
+            .on_error(&example_error_handler)
+            .on_error({.prefix_ = "/api", .handler_ = &api_error})
+            .on_not_found({.prefix_ = "/api", .handler_ = &api_not_found})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

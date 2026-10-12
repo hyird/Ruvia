@@ -90,11 +90,19 @@ void web_worker_runtime::accept_transferred_connection(native_accepted_socket_ti
     connections_.accept(std::move(ticket));
 }
 
+void web_worker_runtime::request_drain() noexcept {
+    // A refused control means the worker is already stopping, which completes
+    // its drain barrier itself.
+    (void)runtime_.post_control([this] { drain_on_context(); });
+}
+
+bool web_worker_runtime::wait_until_drained(std::chrono::steady_clock::time_point deadline) {
+    return connections_.wait_until_drained(deadline);
+}
+
 http_server_stats web_worker_runtime::stats() const noexcept {
     auto stats = connections_.stats();
     stats.worker_failures_ = worker_failures_.load(std::memory_order_relaxed);
-    stats.document_root_refresh_failures_ =
-        static_roots_.failures();
     return stats;
 }
 
@@ -103,21 +111,28 @@ web_worker_handle web_worker_runtime::web_worker() const {
 }
 
 void web_worker_runtime::serve_on_context() {
-    if (options_.document_root_.refresh_options() != nullptr) {
+    if (static_roots_.enabled()) {
         background_tasks_.spawn(static_roots_.refresh());
     }
     connections_.open_admission();
 }
 
+void web_worker_runtime::drain_on_context() noexcept {
+    if (!http_server_worker_running(worker_state_)) {
+        return;
+    }
+    worker_state_ = http_server_worker_state::draining;
+    connections_.drain();
+}
+
 void web_worker_runtime::stop_admission_on_context() noexcept {
-    connections_.close_admission();
+    worker_state_ = http_server_worker_state::stopped;
     stop_source_.request_stop();
     connections_.stop();
 }
 
 void web_worker_runtime::finalize_on_context() noexcept {
     capabilities_.close_now();
-    worker_state_ = http_server_worker_state::stopped;
     finalize_signal_.notify();
 }
 
@@ -132,7 +147,11 @@ task<void> web_worker_runtime::run_worker() {
             runtime_.mark_ready();
         }
     } catch (...) {
-        (void)runtime_.fail(std::current_exception());
+        // A stop during startup closes the capabilities whose connect is still
+        // pending; that abort is the requested cancellation, not a failure.
+        if (!stop_token_.stop_requested()) {
+            (void)runtime_.fail(std::current_exception());
+        }
     }
     // Retain worker-local state until the lifecycle caller has joined ingress
     // and finalized this worker.

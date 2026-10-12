@@ -9,6 +9,7 @@
 #include <system_error>
 #include <type_traits>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/model/model_binary.h"
 #include "ruvia/web/detail/model/model_schema.h"
@@ -82,15 +83,17 @@ void append_json_value(std::pmr::string& output, const value_t_type& value) {
         append_json_value(output, value.value_);
     } else if constexpr (std::is_same_v<t_type, bool>) {
         output.append(value ? "true" : "false");
-    } else if constexpr (std::is_integral_v<t_type> || std::is_floating_point_v<t_type>) {
-        if constexpr (std::is_floating_point_v<t_type>) {
-            // JSON (RFC 8259) has no representation for infinity or NaN, and
-            // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
-            // Serialize non-finite values as null, matching JSON.stringify.
-            if (!std::isfinite(value)) {
-                output.append("null");
-                return;
-            }
+    } else if constexpr (std::is_unsigned_v<t_type>) {
+        http_append_unsigned(output, value);
+    } else if constexpr (std::is_integral_v<t_type>) {
+        http_append_formatted_number(output, value, "JSON integer formatting failed");
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        // JSON (RFC 8259) has no representation for infinity or NaN, and
+        // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
+        // Serialize non-finite values as null, matching JSON.stringify.
+        if (!std::isfinite(value)) {
+            output.append("null");
+            return;
         }
         char buffer[64];
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);

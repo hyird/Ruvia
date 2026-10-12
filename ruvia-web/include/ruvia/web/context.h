@@ -138,7 +138,7 @@ private:
         detail::static_file_selection_mode mode) const;
 
 public:
-    using header_options_type = http_response::header_options_type;
+    using header_options_type = http_response_header_options;
 
     // Sends a bodyless 1xx head before the final response. Fields are copied
     // before return; the operation and its storage retire on the owning worker.
@@ -306,9 +306,12 @@ public:
     // Builds a request path from a registered route pattern; the pattern is
     // the route's identity: c.url_for("/users/:id", {"42"}) -> "/users/42".
     // ":name" values are percent-encoded path segments and must be non-empty;
-    // the value for a trailing "*" keeps its slashes and may be empty. Throws
-    // std::invalid_argument for an unregistered pattern or a value-count
-    // mismatch, and std::logic_error when the context carries no route table
+    // the value for a trailing "*" keeps its slashes and may be empty. The
+    // result never starts with "//" (a root "*" value's leading slash becomes
+    // "%2F") and never carries a "." or ".." segment. Throws
+    // std::invalid_argument for an unregistered pattern, a value-count
+    // mismatch, a "."/".." segment, or a pattern starting with an empty
+    // segment, and std::logic_error when the context carries no route table
     // (for example a hand-built test context).
     [[nodiscard]] std::pmr::string url_for(
         std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
@@ -339,6 +342,10 @@ public:
 
     // Route handlers construct one final response, so context accepts only
     // 200..599. Informational heads belong to a dedicated protocol submit path.
+    // Status, headers and cookies set before a final response exists are the
+    // metadata every response built from this context starts from. Set after a
+    // final response exists (for example after next()), they post-process that
+    // response and also become the metadata of a response that replaces it.
     void status(http_status_code status_code);
 
     void header(std::string_view name, std::string_view value) {
@@ -366,7 +373,9 @@ public:
     // End middleware dispatch with an explicitly constructed response. Calling
     // next() after respond() is a control-flow error and becomes a 500 response;
     // a middleware may still call respond() after next() to replace an
-    // uncommitted downstream response.
+    // uncommitted downstream response. A replacement -- and an error raised
+    // after next() -- carries none of the replaced response's status or headers,
+    // only the context metadata set after that response became final.
     void respond(http_response&& response);
 
     // Body builders copy their input into response-owned storage, except
@@ -450,7 +459,6 @@ private:
     [[nodiscard]] bool request_content_type_matches(std::string_view expected) const noexcept;
 
     context& set_stable_response_header(std::string_view name, std::string_view value);
-    context& remove_response_header(std::string_view name);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code) const;
 
     [[nodiscard]] http_response json_serialized(std::pmr::string& body) const;

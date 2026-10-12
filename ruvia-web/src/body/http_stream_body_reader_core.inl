@@ -37,63 +37,82 @@ http1_request_body_consumption stream_body_reader<stream_type>::consumption() co
 }
 
 template <typename stream_type>
-void stream_body_reader<stream_type>::take_pipeline(std::pmr::string& stash) {
-    compact_pending();
-    // The remainder is split across at most two places: the bytes still sitting
-    // in the connection read buffer behind the body, and the bytes this reader
-    // over-read from the socket into its own buffer. Neither aliases `stash`.
+body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(std::pmr::string& stash) {
+    // The reader fills its own buffer only after the borrowed initial segment
+    // is exhausted as body (or materialized into that buffer), so the suffix
+    // is either the tail of the connection read buffer or entirely over-read
+    // bytes. Only the latter must outlive this reader.
     const auto initial_pipeline = initial_pipeline_remainder();
     const auto buffered_pipeline = buffered_pipeline_remainder();
-    stash.clear();
-    stash.reserve(initial_pipeline.size() + buffered_pipeline.size());
-    stash.append(initial_pipeline);
-    stash.append(buffered_pipeline);
+    body_pipeline_handover handover;
+    if (buffered_pipeline.empty()) {
+        handover.read_buffer_suffix_bytes_ = initial_pipeline.size();
+    } else {
+        stash.clear();
+        stash.reserve(initial_pipeline.size() + buffered_pipeline.size());
+        stash.append(initial_pipeline);
+        stash.append(buffered_pipeline);
+        handover.stashed_ = stash;
+    }
     reset_pipeline_state();
+    return handover;
 }
 
 template <typename stream_type>
 task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>::read() {
-    if (body_plan_.chunked() != nullptr) {
-        co_await ensure_continue();
-        co_return co_await read_transfer_decoded_chunked();
-    }
-    const auto* known_length = body_plan_.known_length();
-    if (known_length == nullptr) {
-        co_return std::nullopt;
-    }
-    if (exceeds_limit(known_length->content_length())) {
-        throw_request_body_too_large();
-    }
+    require_not_failed();
+    try {
+        if (body_plan_.chunked() != nullptr) {
+            co_await ensure_continue();
+            co_return co_await read_transfer_decoded_chunked();
+        }
+        const auto* known_length = body_plan_.known_length();
+        if (known_length == nullptr) {
+            co_return std::nullopt;
+        }
+        if (exceeds_limit(known_length->content_length())) {
+            throw_request_body_too_large();
+        }
 
-    co_await ensure_continue();
-    co_return co_await read_known_length(known_length->content_length());
+        co_await ensure_continue();
+        co_return co_await read_known_length(known_length->content_length());
+    } catch (...) {
+        failed_ = true;
+        throw;
+    }
 }
 
 template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::string& body) {
-    if (const auto* known_length = body_plan_.known_length()) {
-        co_return co_await read_known_length_all(body, known_length->content_length());
-    }
-    if (body_plan_.without_body() != nullptr) {
-        co_return std::string_view(body);
-    }
-
-    co_await ensure_continue();
-    while (auto chunk = co_await read_chunked()) {
-        if (transfer_decoder_ != nullptr) {
-            decode_transfer_append(::ruvia::as_chars(*chunk), body);
-        } else {
-            if (body_limit_.addition_exceeds(body.size(), chunk->size())) {
-                throw_request_body_too_large();
-            }
-            body.append(::ruvia::as_chars(*chunk));
+    require_not_failed();
+    try {
+        if (const auto* known_length = body_plan_.known_length()) {
+            co_return co_await read_known_length_all(body, known_length->content_length());
         }
+        if (body_plan_.without_body() != nullptr) {
+            co_return std::string_view(body);
+        }
+
+        co_await ensure_continue();
+        while (auto chunk = co_await read_chunked()) {
+            if (transfer_decoder_ != nullptr) {
+                decode_transfer_append(::ruvia::as_chars(*chunk), body);
+            } else {
+                if (body_limit_.addition_exceeds(body.size(), chunk->size())) {
+                    throw_request_body_too_large();
+                }
+                body.append(::ruvia::as_chars(*chunk));
+            }
+        }
+        if (transfer_decoder_ != nullptr) {
+            require_complete_transfer_coding(*transfer_decoder_);
+        }
+        mark_finished();
+        co_return std::string_view(body);
+    } catch (...) {
+        failed_ = true;
+        throw;
     }
-    if (transfer_decoder_ != nullptr) {
-        require_complete_transfer_coding(*transfer_decoder_);
-    }
-    mark_finished();
-    co_return std::string_view(body);
 }
 
 template <typename stream_type>
@@ -126,8 +145,22 @@ task<void> stream_body_reader<stream_type>::ensure_continue() {
 }
 
 template <typename stream_type>
+void stream_body_reader<stream_type>::require_not_failed() const {
+    if (failed_) {
+        throw std::logic_error("request body consumption previously failed");
+    }
+}
+
+template <typename stream_type>
 task<void> stream_body_reader<stream_type>::read_more() {
-    compact_pending();
+    // Every view handed out by an earlier read is dead once more input is
+    // needed, so this is where the consumed prefix is finally dropped. Only the
+    // unread framing suffix moves, once per socket read, instead of once per
+    // returned chunk.
+    if (read_cursor_ != 0) {
+        buffer_.erase(0, read_cursor_);
+        read_cursor_ = 0;
+    }
     const auto old_size = buffer_.size();
     const auto hard_limit =
         body_plan_.chunked() != nullptr ? chunked_encoded_buffer_bytes : body_limit_.read_ceiling();
@@ -151,11 +184,12 @@ task<void> stream_body_reader<stream_type>::read_more() {
         });
     const auto ec = read_completion.error_code();
     const auto bytes_read = read_completion.result();
+    // The writable tail never received bytes on failure; it must not survive
+    // as buffered input.
+    buffer_.resize(old_size + (ec ? 0 : bytes_read));
     if (ec || bytes_read == 0) {
         throw_incomplete_request_body();
     }
-
-    buffer_.resize(old_size + bytes_read);
     scanner_entry_.touch();
 }
 

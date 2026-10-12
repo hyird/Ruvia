@@ -56,11 +56,7 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
         // Hex text is independent of NO_BACKSLASH_ESCAPES and ANSI_QUOTES.
         // It also avoids allowing connection SQL modes to change DDL values.
         output += "CONVERT(X'";
-        for (const auto ch : value) {
-            const auto byte = static_cast<unsigned char>(ch);
-            output.push_back(http_lower_hex_digit(byte >> 4));
-            output.push_back(http_lower_hex_digit(byte));
-        }
+        http_append_lower_hex(output, value);
         output += "' USING utf8mb4)";
         return;
     }

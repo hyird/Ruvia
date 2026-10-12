@@ -1595,6 +1595,22 @@ bool test_external_attachment_handles_context_destruction() {
            !loop.valid();
 }
 
+bool test_stopped_attachment_with_queued_post_handles_context_destruction() {
+    auto marker = std::make_shared<int>(0);
+    const std::weak_ptr<int> observed = marker;
+    {
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context);
+        // A plain post holds no retirement lease, so stop() parks its idle
+        // finalization behind it; destroying the unrun context abandons both.
+        if (attachment.loop().post([marker = std::move(marker)] {}) != ruvia::post_status::accepted) {
+            return false;
+        }
+        attachment.stop();
+    }
+    return observed.expired();
+}
+
 bool test_join_stops_running_pool() {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
@@ -2164,6 +2180,8 @@ int main() {
                        test_external_attachment_retains_state_until_context_cleanup) &&
                    run("external_attachment_handles_context_destruction",
                        test_external_attachment_handles_context_destruction) &&
+                   run("stopped_attachment_with_queued_post_handles_context_destruction",
+                       test_stopped_attachment_with_queued_post_handles_context_destruction) &&
                    run("join_stops_running_pool", test_join_stops_running_pool) &&
                    run("failure_propagation", test_failure_propagation) &&
                    run("join_before_start_drains_on_owners", test_join_before_start_drains_on_owners) &&

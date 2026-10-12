@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <stdexcept>

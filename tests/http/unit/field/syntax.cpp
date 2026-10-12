@@ -15,12 +15,11 @@ using ruvia::http_parse_protocol_error;
 using ruvia::is_valid_http_header_name;
 using ruvia::is_valid_http_header_value;
 using ruvia::is_valid_http_method_token;
-using ruvia::is_valid_http_status_text;
 using ruvia::known_http_method_token;
 
 }  // namespace
 
-// What bytes a field name, field value or reason phrase may carry.
+// What bytes a field name or field value (including a reason phrase) may carry.
 
 RUVIA_TEST(http_header_name_validation) {
     RUVIA_CHECK(is_valid_http_header_name("Content-Type"));
@@ -47,17 +46,6 @@ RUVIA_TEST(http_header_value_rejects_injection) {
     RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\nb", 3)));
     RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\r\nInjected: x", 14)));
     RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\0b", 3)));
-}
-
-RUVIA_TEST(http_status_text_validation) {
-    // The status reason phrase is validated by the header-value rules, so
-    // response-splitting bytes on the status line are rejected.
-    RUVIA_CHECK(is_valid_http_status_text("OK"));
-    RUVIA_CHECK(is_valid_http_status_text("Not Found"));  // space is allowed
-    RUVIA_CHECK(is_valid_http_status_text(""));           // an empty reason phrase is valid
-    RUVIA_CHECK(!is_valid_http_status_text(std::string_view("a\r\nb", 4)));
-    RUVIA_CHECK(!is_valid_http_status_text(std::string_view("a\nb", 3)));
-    RUVIA_CHECK(!is_valid_http_status_text(std::string_view("a\0b", 3)));
 }
 
 RUVIA_TEST(http_parse_error_messages) {

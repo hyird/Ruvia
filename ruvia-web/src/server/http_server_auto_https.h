@@ -1,16 +1,13 @@
 #pragma once
 
-#include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
@@ -22,15 +19,8 @@ inline void append_https_port(std::pmr::string& location, std::uint16_t https_po
         return;
     }
 
-    std::array<char, 5> port_buffer{};
-    const auto [end, ec] =
-        std::to_chars(port_buffer.data(), port_buffer.data() + port_buffer.size(), https_port);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format HTTPS redirect port");
-    }
-
     location.push_back(':');
-    location.append(port_buffer.data(), static_cast<std::size_t>(end - port_buffer.data()));
+    http_append_unsigned(location, https_port);
 }
 
 inline http_response make_auto_https_redirect_response(

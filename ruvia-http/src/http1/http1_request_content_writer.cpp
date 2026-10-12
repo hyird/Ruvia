@@ -1,47 +1,25 @@
 #include "ruvia/http/http1_request_content_writer.h"
 
 #include <algorithm>
-#include <array>
-#include <cstring>
 #include <limits>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http1_chunked_framing.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 
-#include "util/http_text_overlap.h"
+#include "util/http_wire_sink.h"
 
 namespace ruvia {
 namespace {
 
 void write_chunked_trailers(char* output, std::span<const http_header_view> trailers) noexcept {
-    const auto append = [&output](std::string_view value) {
-        if (!value.empty()) {
-            std::memcpy(output, value.data(), value.size());
-            output += value.size();
-        }
-    };
-    append(http1_last_chunk_prefix);
+    detail::http_raw_wire_sink sink(output);
+    sink.append(http1_last_chunk_prefix);
     for (const auto& field : trailers) {
-        append(field.name());
-        append(": ");
-        append(field.value());
-        append("\r\n");
+        detail::emit_http1_field_line(sink, field.name(), field.value());
     }
-    append(http1_trailer_section_terminator);
-}
-
-// Keep the bounded scratch storage off the ordinary non-overlapping call path.
-#if defined(_MSC_VER)
-__declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-void write_overlapping_chunked_trailers(
-    std::span<char> output, std::span<const http_header_view> trailers) noexcept {
-    std::array<char, max_http_header_bytes> scratch;
-    write_chunked_trailers(scratch.data(), trailers);
-    std::memcpy(output.data(), scratch.data(), output.size());
+    sink.append(http1_trailer_section_terminator);
 }
 
 }  // namespace
@@ -120,37 +98,27 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     if (trailers.size() > max_http_header_fields) {
         return error_type::trailer_limit;
     }
-    std::size_t required = length_ ? 0 : 5;
+    // The last-chunk line shares the section budget, which keeps the whole
+    // encoded ending within the bounded wire snapshot.
+    auto section = http_trailer_section_budget();
+    (void)section.add(http1_last_chunk_prefix.size());
     for (const auto& field : trailers) {
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value()) || detail::is_forbidden_http_request_trailer_name(field.name())) {
             return error_type::invalid_trailer;
         }
-        if (required > max_http_header_bytes || field.name().size() > max_http_header_bytes - required ||
-            field.value().size() > max_http_header_bytes - required - field.name().size() ||
-            max_http_header_bytes - required - field.name().size() - field.value().size() < 4) {
+        if (!section.add_field(field.name(), field.value())) {
             return error_type::trailer_limit;
         }
-        required += field.name().size() + field.value().size() + 4;
     }
+    const auto required = length_ ? std::size_t{0} : section.bytes();
     if (buffer.size() < required) {
         return error_type::output_too_small;
     }
     if (!length_) {
         const auto output = buffer.first(required);
-        const auto output_view = std::string_view(output.data(), output.size());
-        bool overlaps = false;
-        for (const auto& field : trailers) {
-            if (detail::http_text_overlaps(field.name(), output_view) ||
-                detail::http_text_overlaps(field.value(), output_view)) {
-                overlaps = true;
-                break;
-            }
-        }
-        if (overlaps) {
-            write_overlapping_chunked_trailers(output, trailers);
-        } else {
-            write_chunked_trailers(output.data(), trailers);
-        }
+        detail::write_http_wire(output,
+            detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), trailers),
+            [trailers](char* destination) noexcept { write_chunked_trailers(destination, trailers); });
     }
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};

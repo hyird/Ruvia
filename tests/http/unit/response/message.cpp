@@ -19,6 +19,7 @@
 namespace {
 
 using ruvia::http_response;
+using ruvia::http_response_header_options;
 
 http_response make_response() {
     return http_response({.resource_ = std::pmr::new_delete_resource()});
@@ -134,7 +135,7 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     // like Set-Cookie).
     response.header("Set-Cookie", "a=1");
     response.header("Set-Cookie", "b=2",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     std::size_t set_cookie_count = 0;
     for (const auto& header : response.headers()) {
         if (header.name() == std::string_view("Set-Cookie")) {
@@ -152,7 +153,7 @@ RUVIA_TEST(response_header_rejects_invalid_write_mode) {
     auto response = make_response();
     RUVIA_CHECK(throws_invalid([&] {
         response.header("X-Test", "value",
-            http_response::header_options_type{.mode_ = static_cast<ruvia::http_response_header_mode>(255)});
+            http_response_header_options{.mode_ = static_cast<ruvia::http_response_header_mode>(255)});
     }));
     RUVIA_CHECK(response.headers().empty());
 }
@@ -161,11 +162,11 @@ RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
     auto response = make_response();
     response.header("Set-Cookie", "session=old; Path=/");
     response.header("Set-Cookie", "theme=dark; Path=/",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "session=new; Path=/",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "Session=upper; Path=/",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
 
     std::size_t count = 0;
     bool has_old = false;
@@ -193,13 +194,13 @@ RUVIA_TEST(response_set_cookie_append_preserves_same_name_different_scope) {
     auto response = make_response();
     response.header("Set-Cookie", "session=root-old; Path=/");
     response.header("Set-Cookie", "session=admin; Path=/admin",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "session=domain-old; Path=/; Domain=.Example.COM",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "session=root-new; Path=/",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "session=domain-new; Domain=example.com; Path=/",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
 
     std::size_t count = 0;
     bool has_root_old = false;
@@ -231,9 +232,9 @@ RUVIA_TEST(response_set_cookie_append_preserves_same_name_different_scope) {
 RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
     auto response = make_response();
     response.header("Link", "</a>",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("link", "</b>",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("LINK", "</final>");
 
     std::size_t link_count = 0;
@@ -247,7 +248,7 @@ RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
 
     response.header("Set-Cookie", "a=1");
     response.header("Set-Cookie", "b=2",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     response.header("Set-Cookie", "c=3");
     std::size_t cookie_count = 0;
     for (const auto& header : response.headers()) {
@@ -268,7 +269,7 @@ RUVIA_TEST(response_header_append_failure_preserves_existing_header_for_retry) {
     bool failed = false;
     try {
         response.header("Link", "</b>; rel=preload",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     } catch (const std::bad_alloc&) {
         failed = true;
     }
@@ -276,7 +277,7 @@ RUVIA_TEST(response_header_append_failure_preserves_existing_header_for_retry) {
     RUVIA_CHECK(failed);
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
     response.header("Link", "</b>; rel=preload",
-        http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
 }
 
@@ -351,21 +352,21 @@ RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
 
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Content-Length", "5",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Transfer-Encoding", "chunked",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Location", "/next",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
     RUVIA_CHECK(!throws_invalid([&] { response.header("Content-Length", "5"); }));
     RUVIA_CHECK(!throws_invalid([&] {
         response.header("Set-Cookie", "a=1",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
@@ -374,32 +375,32 @@ RUVIA_TEST(response_header_append_rejects_single_value_headers) {
 
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Content-Type", "text/plain",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("ETag", "\"abc\"",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Access-Control-Allow-Origin", "https://example.com",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("Server", "ruvia",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
     RUVIA_CHECK(!throws_invalid([&] {
         response.header("Vary", "Origin",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(!throws_invalid([&] {
         response.header("Cache-Control", "no-store",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
     RUVIA_CHECK(!throws_invalid([&] {
         response.header("Set-Cookie", "a=1",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
@@ -437,7 +438,7 @@ RUVIA_TEST(response_header_rejects_invalid_trailer_field_names) {
         RUVIA_CHECK(throws_invalid([&] { response.header("Trailer", invalid); }));
         RUVIA_CHECK(throws_invalid([&] {
             response.header("Trailer", invalid,
-                http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         }));
     }
 
@@ -446,7 +447,7 @@ RUVIA_TEST(response_header_rejects_invalid_trailer_field_names) {
 
     RUVIA_CHECK(!throws_invalid([&] {
         response.header("Trailer", "Server-Timing",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
@@ -469,7 +470,7 @@ RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     // The append path funnels through the same validation, not just replace.
     RUVIA_CHECK(throws_invalid([&] {
         response.header("X-Foo", std::string_view("a\r\nb", 4),
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
     // A clean header is accepted.
@@ -492,7 +493,7 @@ RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
     RUVIA_CHECK(throws_invalid([&] { response.header("TE", "trailers"); }));
     RUVIA_CHECK(throws_invalid([&] {
         response.header("TE", "trailers",
-            http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
     RUVIA_CHECK(!throws_invalid([&] {

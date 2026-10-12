@@ -75,7 +75,8 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
         co_await expect_timeout(bounded.command("BLPOP", "queue", "1"));
 
         for (auto args : {std::initializer_list<std::string_view>{"SELECT", "1"},
-                 {"CLIENT", "REPLY", "OFF"}, {"HELLO", "3"}, {"ASKING"}}) {
+                 {"CLIENT", "REPLY", "OFF"}, {"HELLO", "3"}, {"ASKING"}, {"unsubscribe", "a", "b"},
+                 {"PUNSUBSCRIBE", "a"}, {"SUNSUBSCRIBE", "a"}}) {
             bool rejected = false;
             try {
                 (void)co_await redis.command(std::span<const std::string_view>(args.begin(), args.size()));
@@ -134,18 +135,19 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
         }
         {
             auto transaction = handle.transaction();
-            transaction.watch(std::string(128, 'w')).unwatch().set(std::string(128, 'k'), std::string(128, 'v'));
+            transaction.set(std::string(128, 'k'), std::string(128, 'v'));
             std::optional moved(std::move(transaction));
-            RUVIA_CHECK(throws_logic_error([&] { transaction.watch("moved"); }));
+            RUVIA_CHECK(throws_logic_error([&] { transaction.get("moved"); }));
             auto cold = std::move(*moved).exec();
-            RUVIA_CHECK(throws_logic_error([&] { moved->unwatch(); }));
+            RUVIA_CHECK(throws_logic_error([&] { moved->incr_by("used", 1); }));
             RUVIA_CHECK(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
             moved.reset();
         }
         {
             auto pipeline = handle.pipeline();
             auto transaction = handle.transaction();
-            for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "BLPOP"}) {
+            for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "SYNC", "PSYNC", "REPLCONF", "BLPOP",
+                     "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE"}) {
                 RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
                 RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "key"); }));
             }

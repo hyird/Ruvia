@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -15,68 +16,35 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/server_config.h"
 
-#include "server/http_server_tls_credential.h"
+#include "tls/tls_credential.h"
 #include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
 
 struct http_server_listener_definition final {
-    struct tls_identity_type final {
-        explicit tls_identity_type(std::pmr::memory_resource* resource = nullptr)
-            : tls_identity_type(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
-
-        tls_identity_type(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-            : certificate_chain_file_(resource),
-              private_key_file_(resource),
-              private_key_password_(resource) {}
-
-        std::pmr::string certificate_chain_file_;
-        std::pmr::string private_key_file_;
-        std::pmr::string private_key_password_;
-        // Parsed once by server configuration validation; every worker
-        // context installs this instead of re-reading the files.
-        std::optional<http_server_tls_certificate> certificate_;
-    };
-
+    // Every TLS member is loaded when the listener is configured: no file name
+    // or private-key password survives in a definition or its clones.
     struct tls_client_certificate_policy_type final {
-        explicit tls_client_certificate_policy_type(std::pmr::memory_resource* resource = nullptr,
-            tls_client_certificate_requirement configured_requirement =
-                tls_client_certificate_requirement::optional)
-            : tls_client_certificate_policy_type(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource),
-                  configured_requirement) {}
-
-        tls_client_certificate_policy_type(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
-            tls_client_certificate_requirement configured_requirement)
-            : verify_file_(resource),
-              requirement_(configured_requirement) {}
-
-        std::pmr::string verify_file_;
         tls_client_certificate_requirement requirement_{tls_client_certificate_requirement::optional};
-        // Loaded once by server configuration validation.
-        std::optional<http_server_tls_client_ca> client_ca_;
+        tls_trust_store client_ca_;
     };
 
     struct tls_type final {
         struct sni_identity_type final {
-            explicit sni_identity_type(std::pmr::memory_resource* resource = nullptr)
-                : sni_identity_type(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
-
-            sni_identity_type(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-                : host_(resource),
-                  identity_(resolved_pmr_resource_tag{}, resource) {}
+            sni_identity_type(std::string_view host, tls_certificate certificate,
+                std::pmr::memory_resource* resource)
+                : host_(host, pmr_resource_or_default(resource)),
+                  certificate_(std::move(certificate)) {}
 
             std::pmr::string host_;
-            tls_identity_type identity_;
+            tls_certificate certificate_;
         };
 
-        explicit tls_type(std::pmr::memory_resource* resource = nullptr)
-            : tls_type(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
+        tls_type(tls_certificate certificate, std::pmr::memory_resource* resource)
+            : certificate_(std::move(certificate)),
+              sni_identities_(pmr_resource_or_default(resource)) {}
 
-        tls_type(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-            : identity_(resolved_pmr_resource_tag{}, resource),
-              sni_identities_(resource) {}
-
-        tls_identity_type identity_;
+        tls_certificate certificate_;
         std::optional<tls_client_certificate_policy_type> client_certificates_;
         std::pmr::vector<sni_identity_type> sni_identities_;
         // Generated once by server configuration validation and shared

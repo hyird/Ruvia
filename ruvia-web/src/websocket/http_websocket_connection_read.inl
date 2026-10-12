@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "ruvia/http/websocket_protocol.h"
 
 #include "server/inbound_buffer_resource.h"
@@ -80,8 +82,15 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
 
 template <typename stream_type>
 task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
+    // Fill the spare capacity the buffer already owns, within bounds: growth
+    // past it follows the string's geometric policy, so a large frame needs
+    // far fewer reads than one per 4 KiB, while the cap keeps the per-read
+    // resize fill small when a large buffer is retained.
+    constexpr std::size_t min_read_bytes = 4096;
+    constexpr std::size_t max_read_bytes = 64 * 1024;
     const auto old_size = buffer_.size();
-    http_resize_pmr_string_for_overwrite(buffer_, old_size + 4096);
+    const auto read_bytes = std::clamp(buffer_.capacity() - old_size, min_read_bytes, max_read_bytes);
+    http_resize_pmr_string_for_overwrite(buffer_, old_size + read_bytes);
     auto read_completion = co_await ruvia::async_asio<std::size_t>([this, old_size](auto handler) mutable {
         stream_.async_read_some(asio::buffer(buffer_.data() + old_size, buffer_.size() - old_size), std::move(handler));
     });

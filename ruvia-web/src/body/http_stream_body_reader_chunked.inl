@@ -6,7 +6,6 @@ namespace ruvia::detail {
 
 template <typename stream_type>
 task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>::read_chunked() {
-    compact_pending();
     if (finished_) {
         co_return std::nullopt;
     }
@@ -16,9 +15,9 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
                                       ? std::string_view(initial_body_and_pipeline_)
                                       : std::string_view(buffer_);
         const auto result_value = chunk_decoder_.decode(source_value.substr(read_cursor_));
-        if (result_value.consumed_bytes() != 0) {
-            pending_compact_until_ = read_cursor_ + result_value.consumed_bytes();
-        }
+        // Advancing the cursor keeps the returned chunk view intact; the bytes
+        // behind it are reclaimed only by read_more().
+        read_cursor_ += result_value.consumed_bytes();
         if (const auto* body_chunk = result_value.body_chunk()) {
             co_return ::ruvia::as_bytes(body_chunk->bytes());
         }
@@ -26,7 +25,6 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
             if ((trailers_.append_http1(complete->trailers()).index() != 0)) {
                 throw std::logic_error("HTTP/1 decoder published invalid request trailers");
             }
-            compact_pending();
             co_return std::nullopt;
         }
         if (const auto* failure = result_value.failure()) {
@@ -35,7 +33,6 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
         if (result_value.need_more() == nullptr) {
             throw std::logic_error("unexpected HTTP/1 chunk decode result");
         }
-        compact_pending();
         materialize_initial_remainder();
         co_await read_more();
     }

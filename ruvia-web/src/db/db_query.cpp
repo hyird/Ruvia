@@ -242,6 +242,7 @@ db_query::storage_owner_type db_query::copy_storage(const detail::db_query_stora
     target.cache_enabled_ = source_value.cache_enabled_;
     target.cache_duration_ = source_value.cache_duration_;
     target.cache_id_ = source_value.cache_id_;
+    target.cache_shape_ = source_value.cache_shape_;
     target.kind_ = source_value.kind_;
     target.target_ = source_value.target_;
     target.target_alias_ = source_value.target_alias_;
@@ -305,14 +306,15 @@ std::optional<std::chrono::milliseconds> db_query::cache_duration() const {
 std::string_view db_query::cache_id() const {
     return storage().cache_id_;
 }
-void db_query::copy_cache(const db_query& source_value, std::string_view suffix) {
+detail::db_cache_shape db_query::cache_shape() const {
+    return storage().cache_shape_;
+}
+void db_query::copy_cache(const db_query& source_value, detail::db_cache_shape shape) {
     auto& s = storage();
     s.cache_enabled_ = source_value.cache_enabled();
     s.cache_duration_ = source_value.cache_duration();
     s.cache_id_ = source_value.cache_id();
-    if (!s.cache_id_.empty()) {
-        s.cache_id_.append(suffix);
-    }
+    s.cache_shape_ = shape;
 }
 db_query& db_query::cache(const db_cache_setting_type& setting) {
     return std::visit([&](const auto& value) -> db_query& {

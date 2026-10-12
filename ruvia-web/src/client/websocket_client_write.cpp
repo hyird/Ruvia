@@ -20,13 +20,30 @@ void websocket_client_state::finish_write(write_phase_type phase) noexcept {
     write_signal_.notify();
 }
 
-task<void> websocket_client_state::wait_for_write_idle() {
-    for (;;) {
-        throw_if_aborted();
-        if (write_phase_ == write_phase_type::idle) {
-            co_return;
+task<void> websocket_client_state::wait_for_write_idle(write_wait_type type) {
+    const bool reader = type == write_wait_type::reader;
+    try {
+        for (;;) {
+            throw_if_aborted();
+            if (write_phase_ == write_phase_type::idle && (reader || !reader_waiting_)) {
+                if (reader) {
+                    // The caller claims the lane before any writer resumes.
+                    reader_waiting_ = false;
+                }
+                co_return;
+            }
+            if (reader) {
+                reader_waiting_ = true;
+            }
+            co_await write_signal_.wait();
         }
-        co_await write_signal_.wait();
+    } catch (...) {
+        if (reader) {
+            // Writers held back for this reader re-check the idle lane.
+            reader_waiting_ = false;
+            write_signal_.notify();
+        }
+        throw;
     }
 }
 
@@ -35,20 +52,15 @@ task<void> websocket_client_state::write_transport(
     if (bytes_value.empty()) {
         co_return;
     }
-    arm(write_timer_, configured_timeout, client_abort_reason::timeout);
-    try {
-        const operation_timeout unbounded(std::nullopt);
-        const auto result_value = co_await transport_.write(bytes_value, unbounded);
-        if (!result_value.ok()) {
-            throw_transport_failure(result_value);
-        }
-        disarm(write_timer_);
-        throw_if_aborted();
-        touch_activity();
-    } catch (...) {
-        disarm(write_timer_);
-        throw;
+    // The transport write lane owns the deadline. Its timeout result retires
+    // the whole connection like any other transport failure.
+    const operation_timeout timeout(configured_timeout);
+    const auto result_value = co_await transport_.write(bytes_value, timeout);
+    if (!result_value.ok()) {
+        throw_transport_failure(result_value);
     }
+    throw_if_aborted();
+    touch_activity();
 }
 
 task<void> websocket_client_state::flush_output() {
@@ -71,7 +83,7 @@ task<void> websocket_client_state::flush_output() {
 }
 
 task<void> websocket_client_state::throw_protocol_error_after_flush(std::string_view message) {
-    co_await wait_for_write_idle();
+    co_await wait_for_write_idle(write_wait_type::reader);
     try {
         write_guard_type write_guard(*this, write_phase_type::application);
         co_await flush_output();
@@ -99,7 +111,7 @@ task<void> websocket_client_state::run_write(websocket_opcode opcode, std::pmr::
     lifecycle_.require_ready();
     auto activity = claim_activity(write_active_, "concurrent WebSocket client writes are not supported");
     operation_guard_type operation(*this, options);
-    co_await wait_for_write_idle();
+    co_await wait_for_write_idle(write_wait_type::writer);
     lifecycle_.require_ready();
     write_guard_type write_guard(*this, write_phase_type::application);
     const auto submitted = require_protocol().submit_frame(opcode, payload_value, send_options.compress_);

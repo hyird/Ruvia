@@ -100,6 +100,14 @@ struct security_headers_policy final {
     };
 }
 
+[[nodiscard]] http_header_view custom_header_view(const security_header& header) noexcept {
+    return {header.name_, header.value_};
+}
+
+[[nodiscard]] http_header_view custom_header_view(const http_header& header) noexcept {
+    return {header.name(), header.value()};
+}
+
 template <typename target_type, typename header_range_type>
 void apply_security_headers_to(target_type& target, const security_headers_policy& policy,
     const header_range_type& custom_headers, bool secure_transport) {
@@ -143,16 +151,12 @@ void apply_security_headers_to(target_type& target, const security_headers_polic
     set_header("Permissions-Policy", policy.permissions_policy_, true);
 
     for (const auto& header : custom_headers) {
-        set_secure_transport_header(header.name_, header.value_, false);
+        const auto field = custom_header_view(header);
+        set_secure_transport_header(field.name(), field.value(), false);
     }
 }
 
 }  // namespace
-
-security_headers_middleware::stored_header_type::stored_header_type(
-    std::string_view header_name, std::string_view header_value, std::pmr::memory_resource* resource)
-    : name_(header_name, resource),
-      value_(header_value, resource) {}
 
 security_headers_middleware::config_storage_type::validated_config_type
 security_headers_middleware::config_storage_type::validate(const security_headers_config& source_value) {
@@ -184,7 +188,7 @@ security_headers_middleware::config_storage_type::config_storage_type(
       custom_headers_(resource) {
     custom_headers_.reserve(validated.source_->custom_headers_.size());
     for (const auto& header : validated.source_->custom_headers_) {
-        custom_headers_.emplace_back(header.name_, header.value_, resource);
+        custom_headers_.push_back(http_header::copy_of(header.name_, header.value_, resource));
     }
 }
 

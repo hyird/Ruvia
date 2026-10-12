@@ -19,6 +19,7 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/detail/util/fnv1a.h"
 
 namespace ruvia::detail {
 
@@ -85,11 +86,21 @@ enum class route_rate_limit_presence : std::uint8_t {
     present,
 };
 
+// The counter family a decision consumes: the route a rule guards and the rule
+// declaration itself, so stacked rules on one route each keep their own count
+// and window.
+struct rate_limit_scope final {
+    std::uintptr_t route_{0};
+    std::uintptr_t rule_{0};
+
+    friend constexpr bool operator==(const rate_limit_scope&, const rate_limit_scope&) noexcept = default;
+};
+
 // One fixed-window table owned and accessed by exactly one web_worker_runtime
 // worker. Startup allocates every slot from worker_memory; request-path lookup
 // mutates ordinary worker-local state and performs no allocation, locking,
-// atomics, or cross-thread coordination. Keys are (route scope, normalized
-// remote address).
+// atomics, or cross-thread coordination. Keys are (route scope, rule
+// declaration, normalized remote address).
 template <typename clock_type>
 class rate_limiter final {
 public:
@@ -122,9 +133,13 @@ public:
                    : rate_limit_decision::allow();
     }
 
-    [[nodiscard]] rate_limit_decision allow_route(std::uintptr_t route_scope,
+    // `rule_declaration` identifies the rule's declaration (its worker-local
+    // middleware instance), distinct for every declaration on the route.
+    [[nodiscard]] rate_limit_decision allow_route(std::uintptr_t route_scope, const void* rule_declaration,
         std::string_view remote_address, const rate_limit_rule& rule) noexcept {
-        return allow(route_scope == 0 ? fallback_route_scope : route_scope, remote_address, rule);
+        return allow({.route_ = route_scope == 0 ? fallback_route_scope : route_scope,
+                         .rule_ = reinterpret_cast<std::uintptr_t>(rule_declaration)},
+            remote_address, rule);
     }
 
 private:
@@ -132,11 +147,11 @@ private:
     // accommodates canonical peer strings carrying an IPv6 scope identifier.
     static constexpr std::size_t max_key_bytes = 64;
     static constexpr std::uint64_t empty_hash = 0;
-    static constexpr std::uintptr_t default_scope = 1;
+    static constexpr rate_limit_scope default_scope{.route_ = 1};
     static constexpr std::uintptr_t fallback_route_scope = 2;
 
     struct slot_type final {
-        std::uintptr_t scope_{0};
+        rate_limit_scope scope_{};
         std::uint64_t key_hash_{empty_hash};
         std::uint64_t reset_at_ms_{0};
         std::size_t count_{0};
@@ -146,19 +161,10 @@ private:
     static_assert(sizeof(slot_type) <= 112, "worker rate-limit slots must stay compact");
 
     [[nodiscard]] static std::uint64_t key_hash(
-        std::uintptr_t scope, std::string_view key) noexcept {
-        std::uint64_t hash = 1469598103934665603ULL;
-        auto mix = [&hash](std::uint64_t value) noexcept {
-            for (std::size_t i = 0; i < sizeof(value); ++i) {
-                hash ^= static_cast<unsigned char>((value >> (i * 8U)) & 0xffU);
-                hash *= 1099511628211ULL;
-            }
-        };
-        mix(static_cast<std::uint64_t>(scope));
-        for (const unsigned char byte : key) {
-            hash ^= byte;
-            hash *= 1099511628211ULL;
-        }
+        rate_limit_scope scope, std::string_view key) noexcept {
+        auto hash = detail::fnv1a_accumulate_integer(detail::fnv1a_offset_basis, static_cast<std::uint64_t>(scope.route_));
+        hash = detail::fnv1a_accumulate_integer(hash, static_cast<std::uint64_t>(scope.rule_));
+        hash = detail::fnv1a_accumulate(hash, key);
         return hash == empty_hash ? 1 : hash;
     }
 
@@ -187,7 +193,7 @@ private:
     }
 
     [[nodiscard]] static bool key_equals(
-        const slot_type& slot, std::uintptr_t scope, std::string_view key, std::uint64_t hash) noexcept {
+        const slot_type& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash) noexcept {
         return slot.key_hash_ == hash && slot.scope_ == scope && slot.key_size_ == key.size() &&
                std::ranges::equal(key, std::span(slot.key_).first(slot.key_size_));
     }
@@ -196,7 +202,7 @@ private:
         return slot.key_hash_ != empty_hash && slot.reset_at_ms_ <= now_ms;
     }
 
-    static void install(slot_type& slot, std::uintptr_t scope, std::string_view key, std::uint64_t hash,
+    static void install(slot_type& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash,
         std::uint64_t reset_at_ms) noexcept {
         slot.scope_ = scope;
         slot.key_hash_ = hash;
@@ -223,7 +229,7 @@ private:
     }
 
     [[nodiscard]] rate_limit_decision allow(
-        std::uintptr_t scope, std::string_view key, const rate_limit_rule& rule) noexcept {
+        rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule) noexcept {
         const bool allow_on_overflow = rule.overflow_policy_ == rate_limit_overflow_policy::allow;
         if (slots_.empty()) {
             return allow_on_overflow ? rate_limit_decision::allow()

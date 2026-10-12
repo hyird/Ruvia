@@ -345,6 +345,22 @@ RUVIA_TEST(http1_parse_message_preserves_expect_extensions_as_semantics) {
     }
 }
 
+RUVIA_TEST(http1_parse_accepts_empty_expect_parameter_slots) {
+    // RFC 9110 section 5.6.6 permits empty parameter slots after an expectation value.
+    const auto result_value = http1_server_request_parser().parse_message(
+        "POST /extensions HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Expect: custom=value;, other=\"x\"; ; a=b\r\n"
+        "Content-Length: 1\r\n\r\nx");
+
+    RUVIA_CHECK(result_value.message_ready() != nullptr);
+    RUVIA_CHECK(result_value.failure() == nullptr);
+    if (result_value.message_ready() != nullptr) {
+        RUVIA_CHECK(!result_value.body_plan_.expectations().has_continue());
+        RUVIA_CHECK(result_value.body_plan_.expectations().has_unsupported());
+    }
+}
+
 RUVIA_TEST(http1_parse_rejects_malformed_expect_field) {
     const auto result_value = http1_server_request_parser().parse_message(
         "POST /extensions HTTP/1.1\r\n"
@@ -551,12 +567,12 @@ RUVIA_TEST(http1_parse_upgrade_requires_connection_option) {
     }
 }
 
-RUVIA_TEST(http1_parse_te_requires_connection_option) {
+RUVIA_TEST(http1_parse_te_without_connection_option_is_ignored) {
     {
         http1_server_request_parser parser;
         const auto result_value =
-            parser.parse_message("GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\n\r\n");
-        RUVIA_CHECK(is_failure(result_value, http_parse_error::invalid_connection));
+            parser.parse_message("GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\nConnection: close\r\n\r\n");
+        RUVIA_CHECK(result_value.message_ready());
     }
     {
         http1_server_request_parser parser;
@@ -703,6 +719,27 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
 }
 
+RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
+    // A connection keeps its parse state across requests while each request
+    // head is parsed from storage that dies with that request.
+    http1_server_request_parser parser;
+    http1_server_request_parse_state state;
+    {
+        failing_memory_resource request_resource;
+        parser.parse_head(
+            "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", state, 0, &request_resource);
+        RUVIA_CHECK(state.head_ready() != nullptr);
+        const auto& chunked = require_chunked(state.body_plan_);
+        RUVIA_CHECK_EQ(chunked.transfer_codings().values_.size(), std::size_t{1});
+        state.request_.reset();
+        RUVIA_CHECK_EQ(request_resource.live_allocations(), std::size_t{0});
+    }
+    failing_memory_resource next_resource;
+    parser.parse_head("GET / HTTP/1.1\r\nHost: x\r\n\r\n", state, 0, &next_resource);
+    RUVIA_CHECK(state.head_ready() != nullptr);
+    RUVIA_CHECK(state.body_plan_.chunked() == nullptr);
+}
+
 RUVIA_TEST(http1_parse_unsupported_version_rejected) {
     for (const auto wire : {"GET / HTTP/2.0\r\nHost: x\r\n\r\n", "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"}) {
         http1_server_request_parser parser;
@@ -790,6 +827,25 @@ RUVIA_TEST(http1_parse_failure_preserves_accepted_http10_version) {
         invalid_framing.connection_plan_.disposition() == http1_close_policy::close_after_response);
 }
 
+RUVIA_TEST(http1_parse_head_failures_close_persistent_connections) {
+    // Each request would otherwise be reusable; the rejected head leaves its
+    // message boundary unknown.
+    http1_server_request_parser parser;
+    for (const auto wire : {
+             "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
+             "TRACE / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+             "POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n",
+             "POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx",
+         }) {
+        const auto result_value = parser.parse_message(wire);
+        RUVIA_CHECK(result_value.failure() != nullptr);
+        RUVIA_CHECK(result_value.connection_plan_.disposition() == http1_close_policy::close_after_response);
+    }
+    const auto http10 =
+        parser.parse_message("POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(http10.connection_plan_.protocol_version() == http_protocol_version::http10);
+}
+
 RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
     // RFC 9112 section 3.2.2 requires an origin server to accept absolute-form,
     // ignore Host, and use the request-target authority. The parsed request must
@@ -812,24 +868,28 @@ RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
     }
 }
 
-RUVIA_TEST(http1_parse_absolute_uri_accepts_generic_schemes_and_empty_host) {
+RUVIA_TEST(http1_parse_absolute_uri_rejects_non_http_schemes_and_empty_authority) {
+    // An origin server routes only http(s) resources. Any other scheme, or an
+    // http(s) URI without a non-empty authority, is a 400 and never rewrites
+    // Host to an empty value.
     http1_server_request_parser parser;
+    for (const std::string_view message : {
+             "GET ftp://archive.example/pub/file HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET javascript:/features/safe HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET x:/features/safe HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET urn:example:animal:ferret:nose HTTP/1.1\r\nHost:\r\n\r\n",
+             "GET file:///path HTTP/1.1\r\nHost:\r\n\r\n",
+             "GET x:80 HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET http:/path HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET http:///path HTTP/1.1\r\nHost: x\r\n\r\n",
+             "GET https://user@a.example/ HTTP/1.1\r\nHost: x\r\n\r\n"}) {
+        RUVIA_CHECK(is_failure(parser.parse_message(message), http_parse_error::invalid_request_target));
+    }
 
-    const auto hierarchical = parser.parse_message(
-        "GET ftp://archive.example/pub/file HTTP/1.1\r\n"
-        "Host: stale.example\r\n\r\n");
-    RUVIA_CHECK(hierarchical.message_ready());
-    RUVIA_CHECK_EQ(hierarchical.request_.path(), std::string_view("/pub/file"));
-    RUVIA_CHECK_EQ(hierarchical.request_.header("Host").value_or(std::string_view{}),
-        std::string_view("archive.example"));
-
-    const auto without_authority = parser.parse_message(
-        "GET urn:example:animal:ferret:nose HTTP/1.1\r\n"
-        "Host:\r\n\r\n");
-    RUVIA_CHECK(without_authority.message_ready());
-    RUVIA_CHECK_EQ(without_authority.request_.path(), std::string_view("example:animal:ferret:nose"));
-    RUVIA_CHECK(without_authority.request_.header("Host").has_value());
-    RUVIA_CHECK(without_authority.request_.header("Host")->empty());
+    const auto upper_case = parser.parse_message("GET HTTPS://a.example/p HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(upper_case.message_ready());
+    RUVIA_CHECK_EQ(upper_case.request_.path(), std::string_view("/p"));
+    RUVIA_CHECK_EQ(upper_case.request_.header("Host").value_or(std::string_view{}), std::string_view("a.example"));
 }
 
 RUVIA_TEST(http1_parse_absolute_options_empty_path_is_server_wide) {

@@ -295,7 +295,16 @@ public:
     }
     expr_type column(std::string_view name, std::string_view table = {});
     expr_type star(std::string_view table = {});
-    // Owns the value in this query's resource before returning.
+    // Owns the value in this query's resource before returning. Compiled for
+    // PostgreSQL, a bound value is untyped wherever the SQL around it gives it a
+    // type: the other operand, the target column, the selected function or
+    // operator overload, a Boolean context (AND/OR/NOT, IS TRUE...), an
+    // explicit cast(). Where PostgreSQL cannot type it ("any"/polymorphic
+    // arguments such as json_build_object, concat or array_agg; arithmetic or
+    // || with two bound operands; unary minus or ~; IS [NOT] NULL; GREATEST and
+    // friends over bound values only) it carries its C++ category: $n::int8,
+    // ::float8, ::bool or ::text. Integers in int4-only built-in arguments
+    // (left(), round(x, n), jsonb -> n) render as $n::int4.
     expr_type value(const db_value& value);
     template <detail::db_parameter value_type>
         requires(!std::same_as<std::remove_cvref_t<value_type>, db_value>)
@@ -444,7 +453,8 @@ private:
     [[nodiscard]] std::optional<bool> cache_enabled() const;
     [[nodiscard]] std::optional<std::chrono::milliseconds> cache_duration() const;
     [[nodiscard]] std::string_view cache_id() const;
-    void copy_cache(const db_query& source, std::string_view suffix = {});
+    [[nodiscard]] detail::db_cache_shape cache_shape() const;
+    void copy_cache(const db_query& source, detail::db_cache_shape shape);
     struct storage_deleter_type final {
         std::pmr::memory_resource* resource_{nullptr};
         void operator()(detail::db_query_storage* storage) const noexcept;

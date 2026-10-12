@@ -59,7 +59,7 @@ application& application::compression(std::nullptr_t) {
 application& application::cors(cors_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change CORS config while app is running", [&config](detail::app_state& state_value) {
-            state_value.options_.cors_ = detail::make_cors_options(config, detail::app_resource());
+            state_value.options_.cors_ = detail::make_cors_options(config, process_resource());
         });
 }
 
@@ -84,8 +84,8 @@ application& application::document_root(document_root_config config) {
             const auto precompression = make_static_root_precompression_options(config);
 
             detail::app_document_root_config replacement(
-                detail::app_resource(), detail::store_validated_static_root_config(
-                                            config.static_options_, detail::app_resource()));
+                process_resource(), detail::store_validated_static_root_config(
+                                        config.static_options_, process_resource()));
             http_assign_native_path(replacement.root_, config.root_);
             replacement.runtime_ = config.runtime_;
             replacement.precompression_ = precompression;
@@ -100,10 +100,12 @@ application& application::document_root(std::nullptr_t) {
         [](detail::app_state& state_value) { state_value.document_root_config_.reset(); });
 }
 
-application& application::use_middleware(detail::controller_middleware_descriptor descriptor) {
+application& application::use_middleware(detail::owned_middleware_descriptor descriptor) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot add app middleware while app is running",
-        [descriptor](detail::app_state& state_value) { state_value.configuration_.add_middleware(descriptor); });
+        [&descriptor](detail::app_state& state_value) {
+            state_value.configuration_.add_middleware(std::move(descriptor));
+        });
 }
 
 application& application::get_blocking_pool(blocking_pool_options config) {

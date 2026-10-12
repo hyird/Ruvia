@@ -13,8 +13,8 @@
 #include "router/route_limits.h"
 
 // Lightweight, self-contained route-resolution result types. A materialized
-// resolution is exactly one of resolved, method-not-allowed, or not-found; the
-// payload for another alternative is not observable.
+// resolution is exactly one of resolved, method-not-allowed, not-found, or
+// rejected; the payload for another alternative is not observable.
 
 namespace ruvia::detail {
 
@@ -59,6 +59,14 @@ private:
     constexpr route_not_found() noexcept = default;
 };
 
+// A target that names no resource at all (rootless or dot-segment path): no
+// route and no document-root file may answer it, only the not-found path.
+class route_rejected final {
+private:
+    friend class route_resolution;
+    constexpr route_rejected() noexcept = default;
+};
+
 class route_method_not_allowed final {
 public:
     [[nodiscard]] constexpr std::uint32_t allowed_methods() const noexcept {
@@ -97,7 +105,7 @@ public:
 private:
     friend class route_resolution;
 
-    resolved_route(const route_entry& route, void* handler_target, route_match match) noexcept
+    resolved_route(const route_entry& route, void* handler_target, const route_match& match) noexcept
         : route_(&route),
           handler_target_(handler_target),
           match_(match) {}
@@ -113,7 +121,7 @@ public:
         : value_(route_not_found{}) {}
 
     [[nodiscard]] static route_resolution resolved(
-        const route_entry& route, void* handler_target, route_match match = {}) noexcept {
+        const route_entry& route, void* handler_target, const route_match& match = {}) noexcept {
         return route_resolution(resolved_route(route, handler_target, match));
     }
 
@@ -127,6 +135,10 @@ public:
             return route_resolution();
         }
         return route_resolution(route_method_not_allowed(allowed_methods));
+    }
+
+    [[nodiscard]] static route_resolution reject() noexcept {
+        return route_resolution(route_rejected{});
     }
 
     [[nodiscard]] const resolved_route* resolved() const& noexcept {
@@ -144,8 +156,13 @@ public:
     }
     [[nodiscard]] const route_not_found* not_found() const&& = delete;
 
+    [[nodiscard]] const route_rejected* rejected() const& noexcept {
+        return std::get_if<route_rejected>(&value_);
+    }
+    [[nodiscard]] const route_rejected* rejected() const&& = delete;
+
 private:
-    using value_type = std::variant<route_not_found, route_method_not_allowed, resolved_route>;
+    using value_type = std::variant<route_not_found, route_method_not_allowed, resolved_route, route_rejected>;
 
     template <typename alternative_type>
     explicit route_resolution(alternative_type alternative) noexcept

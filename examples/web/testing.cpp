@@ -22,7 +22,7 @@ struct note_counter final {
     int stored_{0};
 };
 
-class audit_middleware final : public ruvia::middleware {
+class audit_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -30,10 +30,10 @@ public:
     }
 };
 
-class notes_controller final : public ruvia::controller<notes_controller> {
+class notes_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/notes")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(notes_controller)
     RUVIA_GET("/:id", note);
     RUVIA_POST("/", create, ruvia::json_body<note_request>);
     RUVIA_GET("/", stats);

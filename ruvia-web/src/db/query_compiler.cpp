@@ -25,6 +25,142 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
     });
 }
 
+// How a bound PostgreSQL parameter is typed in compiled SQL. By default it is
+// sent untyped and PostgreSQL infers its type from the surrounding SQL: the
+// other operand, the target column, the parameter type of the selected
+// function or operator overload, a Boolean context, an explicit cast. A value
+// carries its C++ value category only where PostgreSQL provably cannot type an
+// unknown parameter: "any" and polymorphic-only function arguments, numeric
+// and boolean operands of arithmetic operators whose operands are all bound
+// values, the null predicates, and COALESCE, NULLIF, GREATEST and LEAST over
+// bound values only, which PostgreSQL would otherwise resolve as text.
+enum class pg_parameter_cast : std::uint8_t {
+    // The surrounding SQL types the value.
+    context,
+    // Nothing types the value: integers render ::int8, doubles ::float8,
+    // booleans ::bool and text ::text.
+    value_category,
+    // The PostgreSQL signature at this position accepts only int4; other
+    // values stay untyped.
+    int4,
+};
+
+struct pg_function_parameter_casts final {
+    std::string_view name_;
+    // Bit i selects argument i.
+    std::uint32_t value_category_positions_;
+    std::uint32_t int4_positions_;
+};
+
+constexpr std::uint32_t pg_every_argument = ~std::uint32_t{0};
+// Every argument after a leading text one (a separator or format string).
+constexpr std::uint32_t pg_after_first_argument = ~std::uint32_t{1};
+
+// Built-in functions whose arguments at these positions are declared only as
+// "any", anyelement or anycompatible, so an untyped argument cannot be
+// resolved, and int4-only arguments, where an integer is typed int4 explicitly.
+// Every other function argument keeps the type of its selected overload.
+// Function names are emitted quoted, so the match is exact.
+constexpr std::array pg_function_parameter_cast_table{
+    pg_function_parameter_casts{"array_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"array_length", 0, 0b10},
+    pg_function_parameter_casts{"array_lower", 0, 0b10},
+    pg_function_parameter_casts{"array_upper", 0, 0b10},
+    pg_function_parameter_casts{"chr", 0, 0b1},
+    pg_function_parameter_casts{"concat", pg_every_argument, 0},
+    pg_function_parameter_casts{"concat_ws", pg_after_first_argument, 0},
+    pg_function_parameter_casts{"format", pg_after_first_argument, 0},
+    pg_function_parameter_casts{"json_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_build_array", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_build_object", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_object_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_build_array", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_build_object", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_object_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"lag", 0, 0b10},
+    pg_function_parameter_casts{"lead", 0, 0b10},
+    pg_function_parameter_casts{"left", 0, 0b10},
+    pg_function_parameter_casts{"lpad", 0, 0b10},
+    pg_function_parameter_casts{"make_date", 0, 0b111},
+    pg_function_parameter_casts{"make_interval", 0, 0b111111},
+    pg_function_parameter_casts{"make_time", 0, 0b11},
+    pg_function_parameter_casts{"make_timestamp", 0, 0b11111},
+    pg_function_parameter_casts{"make_timestamptz", 0, 0b11111},
+    pg_function_parameter_casts{"nth_value", 0, 0b10},
+    pg_function_parameter_casts{"ntile", 0, 0b1},
+    pg_function_parameter_casts{"num_nonnulls", pg_every_argument, 0},
+    pg_function_parameter_casts{"num_nulls", pg_every_argument, 0},
+    pg_function_parameter_casts{"repeat", 0, 0b10},
+    pg_function_parameter_casts{"right", 0, 0b10},
+    pg_function_parameter_casts{"round", 0, 0b10},
+    pg_function_parameter_casts{"rpad", 0, 0b10},
+    pg_function_parameter_casts{"split_part", 0, 0b100},
+    pg_function_parameter_casts{"substr", 0, 0b110},
+    pg_function_parameter_casts{"substring", 0, 0b110},
+    pg_function_parameter_casts{"to_json", pg_every_argument, 0},
+    pg_function_parameter_casts{"to_jsonb", pg_every_argument, 0},
+    pg_function_parameter_casts{"trim_array", 0, 0b10},
+    pg_function_parameter_casts{"trunc", 0, 0b10},
+    pg_function_parameter_casts{"width_bucket", 0, 0b1000},
+};
+
+// The cast for argument `position` of `function`, unqualified or in pg_catalog.
+[[nodiscard]] pg_parameter_cast pg_function_parameter_cast(std::string_view function, std::size_t position) noexcept {
+    constexpr std::string_view catalog = "pg_catalog.";
+    if (function.starts_with(catalog)) {
+        function.remove_prefix(catalog.size());
+    }
+    if (position >= 32) {
+        return pg_parameter_cast::context;
+    }
+    for (const auto& entry : pg_function_parameter_cast_table) {
+        if (entry.name_ == function) {
+            if ((entry.int4_positions_ >> position) & 1U) {
+                return pg_parameter_cast::int4;
+            }
+            if ((entry.value_category_positions_ >> position) & 1U) {
+                return pg_parameter_cast::value_category;
+            }
+            return pg_parameter_cast::context;
+        }
+    }
+    return pg_parameter_cast::context;
+}
+
+// Arithmetic (including bitwise) operators are overloaded across numeric
+// types, so two unknown operands select no overload. Concatenation is not
+// listed: unknown || unknown resolves to text || text.
+[[nodiscard]] bool pg_operator_needs_typed_operands(db_binary_operator value) noexcept {
+    switch (value) {
+        case db_binary_operator::add:
+        case db_binary_operator::subtract:
+        case db_binary_operator::multiply:
+        case db_binary_operator::divide:
+        case db_binary_operator::modulo:
+        case db_binary_operator::bit_and:
+        case db_binary_operator::bit_or:
+        case db_binary_operator::bit_xor:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// A bound non-NULL value: it has no SQL type until a cast or its context gives one.
+[[nodiscard]] bool is_untyped_value(const db_query_node& node) noexcept {
+    return node.kind_ == db_node_kind::value && db_value_access::type(node.value_) != db_value_type::null;
+}
+
+// An operand of an arithmetic operator: numeric and boolean values carry their
+// category, but a string stays untyped. No arithmetic operator accepts text, and
+// a reused parameter may already be typed numeric by an earlier reference.
+[[nodiscard]] pg_parameter_cast pg_arithmetic_operand_cast(const db_query_node& node) noexcept {
+    return is_untyped_value(node) && db_value_access::type(node.value_) != db_value_type::string
+               ? pg_parameter_cast::value_category
+               : pg_parameter_cast::context;
+}
+
 class query_sql_writer final {
 public:
     query_sql_writer(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
@@ -72,15 +208,17 @@ public:
         }
     }
 
-    void bound(const db_value& value, const db_query_node* node = nullptr) {
+    // `cast` refines PostgreSQL parameter typing for the position the value
+    // fills; it has no effect on MariaDB or literal output.
+    void bound(const db_value& value, const db_query_node* node = nullptr,
+        pg_parameter_cast cast = pg_parameter_cast::context) {
         if (mode_ == db_parameter_mode::literal || db_value_access::type(value) == db_value_type::null) {
             append_db_literal(sql_, value, driver_);
             return;
         }
         if (pg() && node != nullptr) {
             if (const auto found = parameter_positions_.find(node); found != parameter_positions_.end()) {
-                sql_ += '$';
-                append_db_number(sql_, static_cast<std::uint64_t>(found->second));
+                pg_parameter(found->second, value, cast);
                 return;
             }
         }
@@ -89,8 +227,7 @@ public:
             parameter_positions_.emplace(node, params_.size());
         }
         if (pg()) {
-            sql_ += '$';
-            append_db_number(sql_, static_cast<std::uint64_t>(params_.size()));
+            pg_parameter(params_.size(), value, cast);
         } else {
             sql_ += '?';
         }
@@ -106,6 +243,39 @@ public:
     }
 
 private:
+    void pg_parameter(std::size_t position, const db_value& value, pg_parameter_cast cast) {
+        sql_ += '$';
+        append_db_number(sql_, static_cast<std::uint64_t>(position));
+        const auto type = db_value_access::type(value);
+        const bool integer = type == db_value_type::signed_value || type == db_value_type::unsigned_value;
+        if (cast == pg_parameter_cast::int4) {
+            if (integer) {
+                sql_ += "::int4";
+            }
+            return;
+        }
+        if (cast == pg_parameter_cast::context) {
+            return;
+        }
+        switch (type) {
+            case db_value_type::signed_value:
+            case db_value_type::unsigned_value:
+                sql_ += "::int8";
+                break;
+            case db_value_type::double_value:
+                sql_ += "::float8";
+                break;
+            case db_value_type::bool_value:
+                sql_ += "::bool";
+                break;
+            case db_value_type::string:
+                sql_ += "::text";
+                break;
+            case db_value_type::null:
+                break;
+        }
+    }
+
     db_driver driver_;
     db_parameter_mode mode_;
     std::pmr::unordered_map<const db_query_node*, std::size_t> parameter_positions_;
@@ -426,7 +596,9 @@ private:
         }
         return index;
     }
-    void expr(const db_query_storage& s, std::size_t index, std::size_t depth, bool aliases = false) {
+    // `cast` applies when the expression is a bound value; see pg_parameter_cast.
+    void expr(const db_query_storage& s, std::size_t index, std::size_t depth, bool aliases = false,
+        pg_parameter_cast cast = pg_parameter_cast::context) {
         require_depth(depth);
         if (output_.pg() && !s.groups_.empty()) {
             index = group_expression(s, index);
@@ -456,7 +628,7 @@ private:
                 }
                 break;
             case db_node_kind::value:
-                output_.bound(n.value_, &n);
+                output_.bound(n.value_, &n, cast);
                 break;
             case db_node_kind::default_value:
                 output_.sql_ += "DEFAULT";
@@ -498,7 +670,24 @@ private:
                 if (n.kind_ == db_node_kind::aggregate && n.flag_) {
                     output_.sql_ += "DISTINCT ";
                 }
-                expressions(s, n.args_, depth + 1);
+                // COALESCE, NULLIF, GREATEST and LEAST take their type from
+                // their arguments; with only bound values there is none.
+                const bool only_values = std::ranges::all_of(
+                    n.args_, [&](std::size_t arg) { return s.nodes_.at(arg).kind_ == db_node_kind::value; });
+                for (std::size_t position = 0; position < n.args_.size(); ++position) {
+                    if (position != 0) {
+                        output_.sql_ += ", ";
+                    }
+                    auto argument_cast = pg_parameter_cast::context;
+                    if (output_.pg()) {
+                        if (n.kind_ == db_node_kind::function || n.kind_ == db_node_kind::aggregate) {
+                            argument_cast = pg_function_parameter_cast(n.text_, position);
+                        } else if (only_values) {
+                            argument_cast = pg_parameter_cast::value_category;
+                        }
+                    }
+                    expr(s, n.args_[position], depth + 1, false, argument_cast);
+                }
                 if (!n.named_.empty()) {
                     output_.require_pg("named function arguments");
                     if (!n.args_.empty()) {
@@ -518,6 +707,21 @@ private:
                 binary(s, n, depth + 1);
                 break;
             case db_node_kind::unary: {
+                // Negation and bitwise NOT are numeric operators: a bound
+                // operand carries its category unless it is a string. The null
+                // predicates accept any type, so their bound operand is cast
+                // by category. NOT and IS TRUE/FALSE coerce theirs to boolean.
+                const auto& operand = s.nodes_.at(n.left_);
+                auto operand_cast = pg_parameter_cast::context;
+                if (output_.pg()) {
+                    if (n.unary_ == db_unary_operator::negate || n.unary_ == db_unary_operator::bit_not) {
+                        operand_cast = pg_arithmetic_operand_cast(operand);
+                    } else if ((n.unary_ == db_unary_operator::is_null ||
+                                   n.unary_ == db_unary_operator::is_not_null) &&
+                               is_untyped_value(operand)) {
+                        operand_cast = pg_parameter_cast::value_category;
+                    }
+                }
                 output_.sql_ += '(';
                 switch (n.unary_) {
                     case db_unary_operator::not_value:
@@ -530,14 +734,14 @@ private:
                         // PostgreSQL lexes as a line comment, and "~-5", which
                         // it lexes as the single operator "~-".
                         output_.sql_ += "- ";
-                        child_value(n.left_);
+                        expr(s, n.left_, depth + 1, false, operand_cast);
                         break;
                     case db_unary_operator::bit_not:
                         output_.sql_ += "~ ";
-                        child_value(n.left_);
+                        expr(s, n.left_, depth + 1, false, operand_cast);
                         break;
                     default:
-                        child_value(n.left_);
+                        expr(s, n.left_, depth + 1, false, operand_cast);
                         switch (n.unary_) {
                             case db_unary_operator::is_null:
                                 output_.sql_ += " IS NULL";
@@ -782,7 +986,24 @@ private:
         if (maria_distinct) {
             output_.sql_ += "NOT (";
         }
-        expr(s, n.left_, depth);
+        auto left_cast = pg_parameter_cast::context;
+        auto right_cast = pg_parameter_cast::context;
+        if (output_.pg()) {
+            // A bound value takes its type from the other operand or from the
+            // operator's signature. Only arithmetic over two bound values
+            // selects no overload.
+            if (pg_operator_needs_typed_operands(n.binary_) && is_untyped_value(left) && is_untyped_value(right)) {
+                left_cast = pg_arithmetic_operand_cast(left);
+                right_cast = pg_arithmetic_operand_cast(right);
+            }
+            // jsonb -> n, ->> n and - n index arrays with int4 only; untyped,
+            // an integer would be read as a text key.
+            if (n.binary_ == db_binary_operator::json_get || n.binary_ == db_binary_operator::json_get_text ||
+                n.binary_ == db_binary_operator::json_delete) {
+                right_cast = pg_parameter_cast::int4;
+            }
+        }
+        expr(s, n.left_, depth, false, left_cast);
         std::string_view token;
         switch (n.binary_) {
             case db_binary_operator::equal:
@@ -935,7 +1156,7 @@ private:
         output_.sql_ += ' ';
         output_.sql_ += token;
         output_.sql_ += ' ';
-        expr(s, n.right_, depth);
+        expr(s, n.right_, depth, false, right_cast);
         if (maria_distinct) {
             output_.sql_ += ')';
         }

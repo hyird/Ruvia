@@ -8,6 +8,7 @@
 
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
+#include "context/http_interim_response_output.h"
 #include "http/static_file_variant.h"
 
 namespace ruvia::detail {
@@ -64,8 +65,13 @@ struct context_access final {
     }
 
     // Called by a driver right before it hands the upgrade/CONNECT handshake
-    // head to the transport: from here on no HTTP response can follow.
-    static void commit_upgrade(context& context_value) noexcept {
+    // head to the transport: from here on no HTTP response can follow, and no
+    // 1xx head either -- the stream now carries the upgraded protocol. Throws,
+    // before anything is written, while an interim head is still being written.
+    static void commit_upgrade(context& context_value) {
+        if (auto* interim = context_value.services().interim_output()) {
+            interim->commit_final();
+        }
         context_value.response_output() = context_response_output::upgraded();
     }
 

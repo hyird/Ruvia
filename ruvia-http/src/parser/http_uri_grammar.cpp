@@ -7,6 +7,7 @@
 #include <system_error>
 
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/url_encoding.h"
 
 namespace ruvia::detail {
 
@@ -59,8 +60,7 @@ template <typename is_allowed_type>
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
-            if (index + 2 >= value.size() || http_decode_hex_nibble(value[index + 1]) < 0 ||
-                http_decode_hex_nibble(value[index + 2]) < 0) {
+            if (!http_try_decode_percent_byte(value, index)) {
                 return false;
             }
             index += 2;
@@ -100,16 +100,6 @@ std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) 
     return is_valid_percent_encoded(value, [allow_slash, allow_question](unsigned char byte) noexcept {
         return is_uri_pchar(byte) || (allow_slash && byte == '/') || (allow_question && byte == '?');
     });
-}
-
-[[nodiscard]] bool is_valid_uri_userinfo(std::string_view value) noexcept {
-    return is_valid_percent_encoded(value, [](unsigned char byte) noexcept {
-        return is_uri_userinfo_literal(byte);
-    });
-}
-
-[[nodiscard]] bool is_valid_uri_port(std::string_view value) noexcept {
-    return std::ranges::all_of(value, is_decimal_digit);
 }
 
 [[nodiscard]] bool parse_ipv4_address(std::string_view value) noexcept {

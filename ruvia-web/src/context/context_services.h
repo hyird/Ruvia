@@ -13,7 +13,6 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/conn_info.h"
-#include "ruvia/web/error_handlers.h"
 
 #include "context/context_capabilities.h"
 #include "integration/worker_client_registry_view.h"
@@ -47,7 +46,6 @@ struct context_worker_services final {
     const ruvia::env* env_{};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
     std::pmr::memory_resource* inbound_buffer_pool_{};
-    http_not_found_handler_ref_type not_found_handler_{nullptr};
     const route_table* routes_{};
     const worker_state_registry* states_{};
     blocking_pool* blocking_pool_{};
@@ -69,6 +67,8 @@ struct context_request_services final {
     context_response_output response_output_{};
     const request_deadline* deadline_{};
     std::size_t dispatch_depth_{};
+    // The matched route's declared body_limit; 0 when it declares none.
+    std::size_t route_body_limit_{};
 };
 
 class context_services final {
@@ -111,6 +111,23 @@ public:
         return worker_services_.max_decoded_body_bytes_;
     }
 
+    // Ceiling for this request's decoded Content-Encoding representation. A
+    // route's body_limit bounds what the route reads, not only the wire
+    // bytes: a small compressed body must not inflate past it up to the
+    // worker-wide bound.
+    [[nodiscard]] constexpr std::size_t max_decoded_request_body_bytes() const noexcept {
+        const auto route_limit = request_services_.route_body_limit_;
+        return route_limit != 0 && route_limit < worker_services_.max_decoded_body_bytes_
+                   ? route_limit
+                   : worker_services_.max_decoded_body_bytes_;
+    }
+
+    [[nodiscard]] context_services with_route_body_limit(std::size_t limit) const noexcept {
+        auto services = *this;
+        services.request_services_.route_body_limit_ = limit;
+        return services;
+    }
+
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_services_.worker_.get();
     }
@@ -119,25 +136,20 @@ public:
         return request_services_.stop_token_.get();
     }
 
-    [[nodiscard]] http_not_found_handler_ref_type not_found_handler() const noexcept {
-        return worker_services_.not_found_handler_;
-    }
-
     [[nodiscard]] const route_table* routes() const noexcept {
         return worker_services_.routes_;
     }
 
-    // Every dispatch path hands the context the table it may re-enter and the
-    // not-found handler that applies at this scope. The route table is
-    // server-owned and outlives every dispatched request.
-    [[nodiscard]] context_services with_route_handlers(
-        const route_table& routes_value, http_not_found_handler_ref_type not_found_handler) const noexcept {
+    // Every dispatch path hands the context the table it may re-enter, which
+    // also selects the not-found handler for the request path when the
+    // handler asks for one. The route table is server-owned and outlives every
+    // dispatched request.
+    [[nodiscard]] context_services with_routes(const route_table& routes_value) const noexcept {
         auto services = *this;
         services.worker_services_.routes_ = &routes_value;
-        services.worker_services_.not_found_handler_ = not_found_handler;
         return services;
     }
-    context_services with_route_handlers(route_table&&, http_not_found_handler_ref_type) const = delete;
+    context_services with_routes(route_table&&) const = delete;
 
     [[nodiscard]] constexpr context_request_body_source& request_body_source() noexcept {
         return request_services_.body_source_;

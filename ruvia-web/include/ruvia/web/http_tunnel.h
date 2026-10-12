@@ -18,7 +18,8 @@
 
 namespace ruvia {
 namespace detail {
-struct http_tunnel_access;
+template <typename stream_type>
+class http_tunnel_session;
 }
 
 // An established CONNECT byte stream. The session owns this facade and its
@@ -60,7 +61,8 @@ public:
     http_capsule_stream capsules(http_capsule_config = {}) && = delete;
 
 private:
-    friend struct detail::http_tunnel_access;
+    template <typename stream_type>
+    friend class detail::http_tunnel_session;
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     using read_type = task<std::optional<std::pmr::string>> (*)(void*);

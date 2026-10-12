@@ -34,9 +34,6 @@ template <typename entity_type, typename executor_type>
 class db_query_builder;
 
 namespace detail {
-#ifdef RUVIA_ENABLE_REDIS
-class db_query_cache_state;
-#endif
 struct db_query_backend;
 struct db_query_plan;
 }  // namespace detail
@@ -193,9 +190,6 @@ private:
     template <bool with_count>
     static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(
         detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
-#ifdef RUVIA_ENABLE_REDIS
-    detail::db_query_cache_state* cache_{nullptr};
-#endif
     state_owner_type state_;
     scoped_capability_registration registration_;
 };

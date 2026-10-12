@@ -16,6 +16,7 @@
 #include "http/unsupported_request_content_coding.h"
 #include "router/route_table.h"
 #include "server/inbound_buffer_resource.h"
+#include "util/error_code_text.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
@@ -34,6 +35,8 @@ struct owned_http_error_info final {
     std::pmr::string code_;
     std::pmr::string message_;
     std::pmr::vector<validation_issue> validation_issues_;
+    // Not an HTTP-mapped failure: answered with a generic 500.
+    bool unexpected_{false};
 
     explicit owned_http_error_info(http_error_info source_value, std::pmr::memory_resource* resource)
         : status_text_(resource),
@@ -104,10 +107,22 @@ void assign_exception_error(owned_http_error_info& error_info, const std::except
         // internal detail -- table names, query fragments, file paths. Do NOT echo
         // what() to the client: an info without a message renders the generic
         // "Internal Server Error" body. The exception_ptr is still set on the context, so an on_error
-        // handler can log or inspect the full detail server-side.
+        // handler can log or inspect the full detail server-side; without one it
+        // is reported to stderr (report_unexpected_failure).
         error_info.assign(http_error_info({.status_ = ruvia::http_status::internal_server_error}));
+        error_info.unexpected_ = true;
     } catch (...) {
         error_info.assign(http_error_info({.status_ = ruvia::http_status::internal_server_error}));
+        error_info.unexpected_ = true;
+    }
+}
+
+// An unexpected exception answered without an application error handler would
+// otherwise leave no server-side trace at all.
+void report_unexpected_failure(const owned_http_error_info& error_info, const std::exception_ptr& exception,
+    detail::http_error_handler_ref_type error_handler) noexcept {
+    if (error_info.unexpected_ && error_handler == nullptr) {
+        detail::report_unhandled_web_failure("request handler", exception);
     }
 }
 
@@ -142,8 +157,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(
-        memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
+    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
     auto terminal = [this, error, error_handler](context& terminal_context) -> task<http_response> {
         if (error_handler == nullptr) {
             co_return make_default_error_response(terminal_context.arena(), error);
@@ -169,13 +183,13 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
     request_memory& memory, std::exception_ptr exception, context_services services) const {
     if (error_handler_for(request.path()) == nullptr) {
         owned_http_error_info error_info(memory.resource(), exception);
+        report_unexpected_failure(error_info, exception, nullptr);
         auto response = make_default_error_response(memory.resource(), error_info.info_);
         apply_exception_response_metadata(response, exception);
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(
-        memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
+    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
     co_return co_await handle_exception(context_value, exception);
 }
 
@@ -194,8 +208,7 @@ task<http_response> detail::route_table::handle_not_found(
         co_return response;
     }
 
-    auto context_value =
-        detail::context_access::make(memory, request, services.with_route_handlers(*this, not_found_handler));
+    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
 
     // The handler's own failure keeps going through handle_exception, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
@@ -222,6 +235,8 @@ task<http_response> detail::route_table::handle_exception(
     context& context_value, std::exception_ptr exception) const {
     detail::context_access::set_error(context_value, exception);
     owned_http_error_info error_info(context_value.arena(), exception);
+    report_unexpected_failure(
+        error_info, exception, error_handler_for(detail::context_access::request(context_value).path()));
 
     auto response = co_await handle_error(context_value, error_info.info_);
     apply_exception_response_metadata(response, exception);

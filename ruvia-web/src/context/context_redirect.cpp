@@ -1,7 +1,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 
 // A redirect target the application supplies may contain bytes that are not
@@ -17,11 +17,6 @@ struct redirect_authority_span {
     std::size_t end_ = 0;
     bool present_ = false;
 };
-
-[[nodiscard]] bool is_valid_percent_escape(std::string_view value, std::size_t index) noexcept {
-    return index + 2 < value.size() && http_decode_hex_nibble(value[index + 1]) >= 0 &&
-           http_decode_hex_nibble(value[index + 2]) >= 0;
-}
 
 [[nodiscard]] bool is_uri_scheme_first(unsigned char ch) noexcept {
     return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
@@ -112,7 +107,7 @@ struct redirect_authority_span {
     for (std::size_t i = 0; i < location.size(); ++i) {
         const auto ch = static_cast<unsigned char>(location[i]);
         if (ch == '%') {
-            if (!is_valid_percent_escape(location, i)) {
+            if (!http_try_decode_percent_byte(location, i)) {
                 return true;
             }
             i += 2;
@@ -166,12 +161,6 @@ struct redirect_authority_span {
     }
 }
 
-void append_percent_encoded_byte(std::pmr::string& output, unsigned char ch) {
-    output.push_back('%');
-    output.push_back(http_upper_hex_digit(ch >> 4));
-    output.push_back(http_upper_hex_digit(ch & 0x0F));
-}
-
 [[nodiscard]] std::pmr::string encode_redirect_location(
     std::string_view location, std::pmr::memory_resource* resource) {
     std::pmr::string encoded(resource);
@@ -188,7 +177,7 @@ void append_percent_encoded_byte(std::pmr::string& output, unsigned char ch) {
         // RFC 3986 2.4 forbids encoding the same string more than once; the caller
         // means a valid target, not a literal percent. A lone or malformed '%' is
         // not a valid escape and is percent-encoded like any other octet below.
-        if (ch == '%' && is_valid_percent_escape(location, i)) {
+        if (ch == '%' && http_try_decode_percent_byte(location, i)) {
             encoded.push_back('%');
             encoded.push_back(location[i + 1]);
             encoded.push_back(location[i + 2]);
@@ -199,7 +188,7 @@ void append_percent_encoded_byte(std::pmr::string& output, unsigned char ch) {
             encoded.push_back(static_cast<char>(ch));
             continue;
         }
-        append_percent_encoded_byte(encoded, ch);
+        http_append_percent_byte(encoded, ch);
     }
     return encoded;
 }

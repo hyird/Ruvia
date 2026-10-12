@@ -41,7 +41,7 @@ private:
 
 enum class worker_timer_outcome : std::uint8_t {
     expired,
-    // Explicit cancel(), a worker_timer_cancellation, or worker shutdown
+    // cancel_and_notify(), a worker_timer_cancellation, or worker shutdown
     // (stop_timers) ended the pending timer.
     cancelled,
 };
@@ -123,7 +123,7 @@ template <typename rep_type, typename period_type>
 
 // Borrowed timer token. A registration is bound to the worker of its most
 // recent schedule_timer() until that timer expires, is cancelled, or is
-// released by cancel()/cancel_quietly(). Rescheduling while the timer is still
+// released by cancel()/cancel_and_notify(). Rescheduling while the timer is still
 // pending (on any worker) throws std::logic_error. Once it has expired or been
 // cancelled the registration may be scheduled again, including on another
 // worker; that worker observes the release with acquire/release ordering, so a
@@ -138,10 +138,14 @@ public:
     worker_timer_registration(worker_timer_registration&&) = delete;
     worker_timer_registration& operator=(worker_timer_registration&&) = delete;
 
+    // Removes the registration without delivering its completion: the owner
+    // that cancels has stopped observing the outcome (a finished operation,
+    // a re-arm, setup rollback). Destruction does the same.
     void cancel() noexcept;
-    // Removes the registration without delivering completion; used only while
-    // rolling back setup before publishing an awaiter continuation.
-    void cancel_quietly() noexcept;
+    // Removes the registration and delivers worker_timer_outcome::cancelled,
+    // for a completion that must run to resume or release its waiter. On the
+    // worker's own thread the completion is posted rather than re-entered.
+    void cancel_and_notify() noexcept;
     [[nodiscard]] worker_timer_cancellation cancellation() const&;
     worker_timer_cancellation cancellation() const&& = delete;
     // Expiry consumes the queue entry without writing through this borrowed
@@ -149,7 +153,7 @@ public:
     [[nodiscard]] bool registered() const noexcept;
 
 private:
-    void cancel(bool notify) noexcept;
+    void unregister(bool notify) noexcept;
     void bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation,
         const detail::timer_slot& slot_state) noexcept;
     void release() noexcept;

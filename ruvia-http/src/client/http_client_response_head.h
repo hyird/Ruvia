@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <string_view>
 #include <variant>
 
@@ -28,11 +27,9 @@ struct http1_client_parsed_status_line final {
 };
 
 struct http1_client_parsed_response_head final {
-    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
-        std::pmr::memory_resource* resource)
+    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept
         : status_code_(status_line.status_code_),
-          protocol_version_(status_line.protocol_version_),
-          transfer_encoding_(resource) {}
+          protocol_version_(status_line.protocol_version_) {}
 
     std::array<http_header_view, max_http_header_fields> headers_;
     std::size_t header_count_{0};
@@ -56,8 +53,7 @@ using http1_client_response_planning_result_type =
 
 // Parse the status line and header fields of one complete head section.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource);
+    std::string_view head_section, const http1_client_exchange_state& exchange_state);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(

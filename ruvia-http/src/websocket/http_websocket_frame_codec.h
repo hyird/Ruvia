@@ -63,8 +63,6 @@ public:
 
 private:
     friend std::optional<websocket_frame_start> decode_websocket_frame_start(
-        unsigned char, unsigned char, bool) noexcept;
-    friend std::optional<websocket_frame_start> decode_websocket_frame_start(
         unsigned char, unsigned char, bool, bool) noexcept;
 
     constexpr websocket_frame_start(websocket_frame_kind kind, bool final, bool compressed) noexcept
@@ -101,11 +99,6 @@ private:
     }
     return websocket_frame_start(
         static_cast<websocket_frame_kind>(raw_opcode), (first & 0x80U) != 0, rsv1);
-}
-
-[[nodiscard]] inline std::optional<websocket_frame_start> decode_websocket_frame_start(
-    unsigned char first, unsigned char second, bool allow_rsv1) noexcept {
-    return decode_websocket_frame_start(first, second, allow_rsv1, true);
 }
 
 [[nodiscard]] inline bool is_invalid_websocket_control_frame(

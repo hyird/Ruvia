@@ -145,10 +145,12 @@ std::pmr::string interpolate_sql(st_mysql& connection, std::string_view sql,
     // Only a '?' at statement level is a placeholder. One inside a literal, a
     // quoted identifier or a comment is data the statement wants to keep, and
     // substituting it there would push every later parameter one slot along --
-    // valid SQL that reads and writes the wrong rows.
+    // valid SQL that reads and writes the wrong rows. The literal rules follow
+    // the same server flag mysql_real_escape_string() escapes values by.
+    const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t offset = 0;
     for (const auto& param : params) {
-        const auto placeholder = find_sql_syntax_byte(sql, '?', offset);
+        const auto placeholder = find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
         if (placeholder == std::string_view::npos) {
             throw std::invalid_argument("SQL parameter count does not match placeholders");
         }
@@ -157,7 +159,7 @@ std::pmr::string interpolate_sql(st_mysql& connection, std::string_view sql,
         offset = placeholder + 1;
     }
 
-    if (find_sql_syntax_byte(sql, '?', offset) != std::string_view::npos) {
+    if (find_sql_syntax_byte(sql, '?', backslash_escapes, offset) != std::string_view::npos) {
         throw std::invalid_argument("SQL parameter count does not match placeholders");
     }
 

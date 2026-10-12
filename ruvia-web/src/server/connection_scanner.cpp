@@ -62,12 +62,30 @@ void connection_scanner::entry_type::set_phase(phase_type next_phase) noexcept {
         phase_started_ms_ = *now_ms_;
     }
     phase_ = next_phase;
+    reading_request_head_ = false;
+}
+void connection_scanner::entry_type::read_request_head(phase_type timeout_phase) noexcept {
+    set_phase(timeout_phase);
+    reading_request_head_ = now_ms_ != nullptr;
+}
+bool connection_scanner::entry_type::enter_long_lived() noexcept {
+    const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
+    if (draining && !has_drain_check()) {
+        close_socket(*socket_);
+        return false;
+    }
+    set_phase(phase_type::long_lived);
+    if (draining) {
+        notify_drain();
+        return false;
+    }
+    return true;
 }
 std::int64_t connection_scanner::entry_type::last_active_ms() const noexcept {
     return last_active_ms_;
 }
-void connection_scanner::entry_type::register_periodic_check(
-    periodic_check_registration_type& registration, void* target, periodic_check_type tick) noexcept {
+void connection_scanner::entry_type::register_periodic_check(periodic_check_registration_type& registration,
+    void* target, periodic_check_type tick, drain_check_type drain) noexcept {
     registration.reset();
     if (target == nullptr || tick == nullptr) {
         return;
@@ -75,6 +93,7 @@ void connection_scanner::entry_type::register_periodic_check(
     registration.entry_ = this;
     registration.target_ = target;
     registration.tick_ = tick;
+    registration.drain_ = drain;
     registration.next_ = periodic_checks_;
     if (periodic_checks_ != nullptr) {
         periodic_checks_->prev_ = &registration;
@@ -107,6 +126,7 @@ void connection_scanner::entry_type::remove_periodic_check(
     registration.prev_ = registration.next_ = nullptr;
     registration.target_ = nullptr;
     registration.tick_ = nullptr;
+    registration.drain_ = nullptr;
 }
 void connection_scanner::entry_type::detach_periodic_checks() noexcept {
     periodic_scan_next_ = nullptr;
@@ -116,6 +136,24 @@ void connection_scanner::entry_type::detach_periodic_checks() noexcept {
 }
 bool connection_scanner::entry_type::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
+}
+bool connection_scanner::entry_type::has_drain_check() const noexcept {
+    for (const auto* registration = periodic_checks_; registration != nullptr; registration = registration->next_) {
+        if (registration->drain_ != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+void connection_scanner::entry_type::notify_drain() noexcept {
+    // A callback may detach its own registration; read the successor first.
+    for (auto* registration = periodic_checks_; registration != nullptr;) {
+        auto* const next = registration->next_;
+        if (registration->drain_ != nullptr) {
+            registration->drain_(registration->target_);
+        }
+        registration = next;
+    }
 }
 connection_scanner::guard_type::guard_type(
     connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket)
@@ -183,6 +221,9 @@ void connection_scanner::stop() noexcept {
 void connection_scanner::close_all() noexcept {
     impl_->close_all();
 }
+void connection_scanner::drain() noexcept {
+    impl_->drain();
+}
 void connection_scanner::detach_entry(entry_type& entry_value) noexcept {
     if (entry_value.scanner_ != nullptr) {
         entry_value.scanner_->impl_->unregister_entry(entry_value);
@@ -200,6 +241,7 @@ void connection_scanner::impl_type::start() {
         return;
     }
     running_ = true;
+    cached_now_ms_ = steady_now_ms();
     try {
         schedule();
     } catch (...) {
@@ -253,6 +295,18 @@ void connection_scanner::impl_type::close_all() noexcept {
         close_socket(*current->socket_);
     }
 }
+void connection_scanner::impl_type::drain() noexcept {
+    draining_ = true;
+    for (auto* current = sentinel_.next_; current != &sentinel_;) {
+        auto* const next = current->next_;
+        if (current->reading_request_head_) {
+            close_socket(*current->socket_);
+        } else if (current->phase_ == phase_type::long_lived) {
+            current->notify_drain();
+        }
+        current = next;
+    }
+}
 void connection_scanner::impl_type::periodic_check_added() noexcept {
     ++periodic_check_count_;
 }
@@ -286,7 +340,10 @@ void connection_scanner::impl_type::schedule() {
         }
         // Expiry has consumed this timer. Release its token before callbacks,
         // which may stop, restart, or destroy the scanner.
-        scanner->timer_.cancel_quietly();
+        scanner->timer_.cancel();
+        // Every tick advances the coarse clock, even without timeouts or
+        // checks: an entry registered later must not be stamped with a stale time.
+        scanner->cached_now_ms_ = steady_now_ms();
         if (scanner->has_scanning_work()) {
             scanner->scanning_ = true;
             scanner->scan();
@@ -303,8 +360,7 @@ void connection_scanner::impl_type::schedule() {
     });
 }
 void connection_scanner::impl_type::scan() noexcept {
-    const auto now = steady_now_ms();
-    cached_now_ms_ = now;
+    const auto now = cached_now_ms_;
     scan_next_ = sentinel_.next_;
     while (scan_next_ != &sentinel_) {
         scan_current_ = scan_next_;
@@ -325,14 +381,19 @@ void connection_scanner::impl_type::scan() noexcept {
     scan_next_ = nullptr;
 }
 bool connection_scanner::impl_type::is_timed_out(const entry_type& entry_value, std::int64_t now) const noexcept {
-    const auto inactive_ms = now - entry_value.last_active_ms_;
+    // Stamps come from the coarse clock, which lags the activity it records by
+    // up to one scan interval. Discounting that lag keeps every timeout from
+    // firing before the configured time has really elapsed.
+    const auto resolution_ms = options_.scan_interval_.count();
+    const auto inactive_ms = now - entry_value.last_active_ms_ - resolution_ms;
+    const auto phase_elapsed_ms = now - entry_value.phase_started_ms_ - resolution_ms;
     switch (entry_value.phase_) {
         case phase_type::reading_initial:
             return timeout_expired(options_.initial_read_timeout_, inactive_ms) ||
-                   timeout_expired(options_.initial_read_completion_timeout_, now - entry_value.phase_started_ms_);
+                   timeout_expired(options_.initial_read_completion_timeout_, phase_elapsed_ms);
         case phase_type::reading_payload:
             return timeout_expired(options_.payload_read_timeout_, inactive_ms) ||
-                   timeout_expired(options_.payload_read_completion_timeout_, now - entry_value.phase_started_ms_);
+                   timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
         case phase_type::writing:
             return timeout_expired(options_.write_timeout_, inactive_ms);
         case phase_type::long_lived:

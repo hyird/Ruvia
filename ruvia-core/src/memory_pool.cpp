@@ -9,6 +9,17 @@
 
 namespace ruvia {
 
+namespace {
+
+// Pool small reusable objects, but return bulk arrays directly upstream. An
+// implementation's default can pool any size: MSVC's 0 default means "pool
+// everything", and each pool's first chunk holds several blocks, so a single
+// multi-megabyte buffer would reserve several equally large spare blocks and
+// retain them for the resource's life.
+constexpr std::pmr::pool_options bounded_pool_options{.largest_required_pool_block = 64 * 1024};
+
+}  // namespace
+
 std::pmr::memory_resource* process_resource() noexcept {
     // Explicit process-lifetime storage for startup metadata and shutdown
     // cross-thread completions. It is never installed as std::pmr's default
@@ -22,12 +33,8 @@ std::pmr::memory_resource* process_resource() noexcept {
     // teardown before those detached threads necessarily finish.
     // Bind the upstream explicitly: first use may occur while an embedding
     // application has temporarily replaced the global PMR default resource.
-    // Pool small reusable objects, but return bulk arrays directly upstream.
-    // An implementation's default can pool even multi-megabyte arrays, reserving
-    // several equally large spare blocks and retaining them for process life.
-    static auto* const resource = new std::pmr::synchronized_pool_resource(
-        std::pmr::pool_options{.largest_required_pool_block = 64 * 1024},
-        std::pmr::new_delete_resource());
+    static auto* const resource =
+        new std::pmr::synchronized_pool_resource(bounded_pool_options, std::pmr::new_delete_resource());
     return resource;
 }
 
@@ -143,7 +150,7 @@ void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcep
 class worker_memory::impl_type final {
 public:
     explicit impl_type(std::pmr::memory_resource& upstream)
-        : pool_(&upstream) {}
+        : pool_(bounded_pool_options, &upstream) {}
 
     std::pmr::unsynchronized_pool_resource pool_;
 };

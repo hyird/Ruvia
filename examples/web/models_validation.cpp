@@ -10,6 +10,8 @@
 
 #include <charconv>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <span>
 #include <string_view>
 
@@ -81,11 +83,11 @@ RUVIA_MODEL(preferences_cookie,
 RUVIA_MODEL(category, RUVIA_OPTIONAL_FIELD(name, ruvia::string),
     RUVIA_OPTIONAL_FIELD(children, ruvia::boxed_array<category>));
 
-class model_controller final : public ruvia::controller<model_controller> {
+class model_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/models")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(model_controller)
     RUVIA_POST("/register", register_user, ruvia::json_body<register_request>);
     RUVIA_PATCH("/profile", patch_profile, ruvia::json_body<profile_changes>);
     RUVIA_POST("/contact", contact, ruvia::form_body<contact_form>);
@@ -222,9 +224,14 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8081})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8081})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

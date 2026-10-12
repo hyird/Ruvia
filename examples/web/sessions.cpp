@@ -10,6 +10,8 @@
 // for local plaintext Redis. Optional USER/PASSWORD/DATABASE select its account.
 
 #include <chrono>
+#include <exception>
+#include <iostream>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
@@ -21,12 +23,12 @@
 
 namespace {
 
-class session_controller final : public ruvia::controller<session_controller> {
+class session_controller final {
 public:
     // session_middleware loads Redis data before entering the route. CSRF uses
     // a separate readable cookie, while the session ID cookie is HttpOnly.
     RUVIA_CONTROLLER_GROUP("/session", ruvia::session_middleware, ruvia::csrf_protection)
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(session_controller)
     RUVIA_GET("/", read);
     RUVIA_POST("/", write, ruvia::body_limit<1024>);
     RUVIA_POST("/rotate", rotate);
@@ -64,18 +66,23 @@ private:
 }  // namespace
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .listen({.address_ = "127.0.0.1", .http_ = 8092})
-        .redis({.config_ = {
-                    .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
-                    .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-                    .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
-                    .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
-                    .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
-                    .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
-                }})
-        .run();
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .listen({.address_ = "127.0.0.1", .http_ = 8092})
+            .redis({.config_ = {
+                        .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
+                        .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
+                        .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
+                        .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
+                        .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
+                        .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
+                    }})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

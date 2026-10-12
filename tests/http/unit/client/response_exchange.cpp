@@ -243,6 +243,9 @@ RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
     if (final_response.parsed() != nullptr) {
         RUVIA_CHECK(final_response.parsed()->plan().request_content_signal() ==
                     http_client_request_content_signal::exchange_complete);
+        // The head committed Content-Length framing for content never sent.
+        RUVIA_CHECK(require_known_length(final_response.parsed()->plan()).persistence() ==
+                    http1_close_policy::close_after_response);
     }
 
     http1_client_response_parser completed_parser(prepared.prepared()->exchange_state());
@@ -253,6 +256,8 @@ RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
     RUVIA_CHECK(completed_final.parsed() != nullptr);
     if (completed_final.parsed() != nullptr) {
         RUVIA_CHECK(!completed_final.parsed()->plan().request_content_signal());
+        RUVIA_CHECK(require_known_length(completed_final.parsed()->plan()).persistence() ==
+                    http1_close_policy::allow_reuse);
     }
 }
 

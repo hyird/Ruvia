@@ -91,6 +91,8 @@ private:
 class redis_command_server final {
 public:
     enum class response { integer,
+        // An FT.SEARCH page that reports more matches than it returns.
+        partial_search,
         stalled };
 
     explicit redis_command_server(response selected)
@@ -198,7 +200,7 @@ private:
                 co_await read_command();
                 command_read_.set_value();
                 command_ready = true;
-                constexpr std::string_view reply = ":1\r\n";
+                const std::string_view reply = selected == response::partial_search ? "*1\r\n:150\r\n" : ":1\r\n";
                 co_await asio::async_write(socket_, asio::buffer(reply), asio::use_awaitable);
                 std::array<char, 64> buffer{};
                 for (;;) {
@@ -345,6 +347,61 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
         RUVIA_CHECK(contains_name);
         RUVIA_CHECK_EQ(affected_entities, std::uint64_t{1});
         RUVIA_CHECK(!input_resource.deallocated_after_release());
+    }
+}
+
+RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
+    for (const bool paged : {false, true}) {
+        redis_command_server server(redis_command_server::response::partial_search);
+        auto& io_context = ruvia::test::new_test_io_context();
+        redis_test_worker worker(io_context);
+        ruvia::redis_config config;
+        config.host_ = "127.0.0.1";
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        config.port_ = server.port();
+        config.pool_size_per_worker_ = 1;
+        bool truncated = false;
+        std::size_t returned_rows = 1;
+        {
+            ruvia::redis_client client(worker.loop(), config);
+            auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+                const auto repository =
+                    connected.handle().get_repository<test_redis_user>(test_redis_repository_config);
+                ruvia::redis_find_options options;
+                if (paged) {
+                    options.take_ = ruvia::redis_find_default_take;
+                }
+                try {
+                    returned_rows = (co_await repository.find(options)).size();
+                } catch (const ruvia::redis_error& error) {
+                    truncated = error.code() == ruvia::redis_error::code_type::command_error;
+                }
+            };
+            auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
+            std::jthread runner([&worker] { worker.run(); });
+            std::exception_ptr peer_failure;
+            try {
+                server.wait_until_command_read();
+            } catch (...) {
+                peer_failure = std::current_exception();
+                client.close();
+            }
+            root.wait();
+            worker.stop();
+            runner.join();
+            server.finish();
+            root.get();
+            if (peer_failure) {
+                std::rethrow_exception(peer_failure);
+            }
+        }
+        // 150 matches with one page of 100 must never read as a complete result;
+        // an explicit page accepts the same reply.
+        RUVIA_CHECK(truncated != paged);
+        RUVIA_CHECK_EQ(returned_rows, std::size_t{paged ? 0U : 1U});
+        const auto& args = server.arguments();
+        RUVIA_CHECK(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
+                    args[5] == "100");
     }
 }
 

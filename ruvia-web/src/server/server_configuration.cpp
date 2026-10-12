@@ -1,7 +1,6 @@
 #include "ruvia/core/memory/process_resource.h"
 
 #include "server/http_server_options_validation.h"
-#include "server/http_server_tls_identity.h"
 
 namespace ruvia::detail {
 
@@ -14,10 +13,9 @@ validated_http_server_configuration::validated_http_server_configuration(
         auto& validated = listeners_.emplace_back(listener.clone(listeners_.get_allocator().resource()));
         // One ticket key set per TLS listener for this configuration, so TLS
         // resumption does not depend on which worker accepts the connection.
-        // Credentials are parsed here once; every worker installs them.
+        // Credentials were loaded once by listen(); every worker installs them.
         if (auto* tls = std::get_if<http_server_listener_definition::tls_type>(&validated.transport_)) {
             tls->session_ticket_keys_ = tls_session_ticket_keys::generate();
-            load_http_server_tls_credentials(*tls);
         }
     }
 }
@@ -32,6 +30,9 @@ http_server_options normalize_server_options(const server_config& config, http_s
     if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
         config.process_signal_handlers_ != process_signal_handler_policy::install) {
         throw std::invalid_argument("process signal handler policy is invalid");
+    }
+    if (config.drain_timeout_.count() < 0) {
+        throw std::invalid_argument("drain timeout must not be negative");
     }
     options.worker_queue_capacity_ = config.worker_queue_capacity_;
     options.idle_timeout_ = config.idle_timeout_;
@@ -54,26 +55,12 @@ http_server_options normalize_server_options(const server_config& config, http_s
     return options;
 }
 
+// Interval and precompression thresholds are validated when the document root
+// is configured; only the blocking-pool dependency is known at run time.
 void validate_document_root_runtime_config(const http_server_options& options) {
-    const auto* refresh = options.document_root_.refresh_options();
-    if (refresh == nullptr) {
-        return;
-    }
-    detail::ensure_positive_duration(
-        refresh->refresh_interval_, "document root refresh interval must be greater than zero");
-    if (options.blocking_pool_ == nullptr) {
+    if (options.document_root_.publisher() != nullptr && options.blocking_pool_ == nullptr) {
         throw std::invalid_argument(
             "document root refresh cannot run while the blocking pool is disabled");
-    }
-    const auto* precompression = options.document_root_.precompression_options();
-    if (precompression == nullptr) {
-        return;
-    }
-    detail::ensure_positive_size(precompression->min_bytes_,
-        "document root precompression minimum size must be greater than zero");
-    if (precompression->max_bytes_ < precompression->min_bytes_) {
-        throw std::invalid_argument(
-            "document root precompression maximum size must not be smaller than the minimum size");
     }
 }
 
@@ -132,27 +119,7 @@ void validate_http_server_options(const http_server_options& options) {
     validate_document_root_runtime_config(options);
 }
 
-void validate_http_server_tls_options(const http_server_listener_definition::tls_type& tls) {
-    validate_http_server_tls_identity(tls.identity_);
-    if (tls.client_certificates_.has_value()) {
-        validate_http_server_tls_client_certificate_policy(*tls.client_certificates_);
-    }
-    for (std::size_t i = 0; i < tls.sni_identities_.size(); ++i) {
-        const auto& sni = tls.sni_identities_[i];
-        ensure_sni_host(sni.host_, "SNI host must not be empty", "SNI host is invalid");
-        validate_http_server_tls_identity(sni.identity_);
-        for (std::size_t j = 0; j < i; ++j) {
-            if (http_ascii_equals_ignore_case(tls.sni_identities_[j].host_, sni.host_)) {
-                throw std::invalid_argument("SNI hosts must be unique");
-            }
-        }
-    }
-}
-
 void validate_http_server_listener(const http_server_listener_definition& listener_value) {
-    if (const auto* tls = std::get_if<http_server_listener_definition::tls_type>(&listener_value.transport_)) {
-        validate_http_server_tls_options(*tls);
-    }
     if (const auto* redirect =
             std::get_if<http_server_listener_definition::redirect_http_to_https_type>(&listener_value.transport_)) {
         detail::ensure_non_zero_port(

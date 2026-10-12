@@ -1,13 +1,12 @@
 #include "ruvia/http/http_connect_udp.h"
 
-#include <array>
-#include <charconv>
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
@@ -67,15 +66,11 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
         if (detail::is_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
         } else {
-            result_value.push_back('%');
-            result_value.push_back(http_upper_hex_digit(c >> 4));
-            result_value.push_back(http_upper_hex_digit(c));
+            http_append_percent_byte(result_value, c);
         }
     }
-    std::array<char, 5> port{};
-    const auto number = std::to_chars(port.data(), port.data() + port.size(), target.port_);
     result_value.push_back('/');
-    result_value.append(port.data(), number.ptr);
+    http_append_unsigned(result_value, target.port_);
     result_value.push_back('/');
     return result_value;
 }

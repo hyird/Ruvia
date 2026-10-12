@@ -1,17 +1,8 @@
 #include "client/http1_client_request_headers.h"
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/http_limits.h"
 
 namespace ruvia {
-
-bool add_head_bytes(std::size_t& total, std::size_t bytes_value) noexcept {
-    if (bytes_value > max_http_header_bytes - total) {
-        return false;
-    }
-    total += bytes_value;
-    return true;
-}
 
 bool analyze_headers(std::span<const http_header_view> headers, request_header_facts& facts,
     http1_client_request_prepare_error& error) noexcept {
@@ -69,9 +60,7 @@ bool analyze_headers(std::span<const http_header_view> headers, request_header_f
             facts.has_te_ = true;
         }
 
-        if (!add_head_bytes(facts.wire_bytes_, name.size()) || !add_head_bytes(facts.wire_bytes_, 2) ||
-            !add_head_bytes(facts.wire_bytes_, value.size()) ||
-            !add_head_bytes(facts.wire_bytes_, crlf.size())) {
+        if (!facts.section_.add_field(name, value)) {
             error = http1_client_request_prepare_error::header_too_large;
             return false;
         }

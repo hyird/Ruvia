@@ -146,14 +146,18 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
         "MULTI",
         "PSUBSCRIBE",
         "PUNSUBSCRIBE",
+        "PSYNC",
         "QUIT",
         "READONLY",
         "READWRITE",
+        "REPLCONF",
         "RESET",
         "SELECT",
         "SSUBSCRIBE",
         "SUBSCRIBE",
         "SUNSUBSCRIBE",
+        "SYNC",
+        "UNSUBSCRIBE",
         "UNWATCH",
         "WATCH",
     };
@@ -214,18 +218,7 @@ task<std::int64_t> redis_integer_command(redis_command_executor executor,
 task<std::pmr::vector<std::pmr::string>> redis_string_array_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    throw_if_redis_error(value);
-    const auto items = redis_value_array(value);
-    std::pmr::vector<std::pmr::string> output(resource);
-    output.reserve(items.size());
-    for (const auto& item : items) {
-        throw_if_redis_error(item);
-        if (!item.null()) {
-            const auto text = redis_value_string(item);
-            emplace_redis_string(output, text);
-        }
-    }
-    co_return output;
+    co_return parse_redis_string_array(value, resource);
 }
 
 task<std::pmr::vector<bool>> redis_bool_array_command(redis_command_executor executor,

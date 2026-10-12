@@ -10,6 +10,8 @@
 
 #include <array>
 #include <chrono>
+#include <exception>
+#include <iostream>
 #include <string>
 
 #include "ruvia/core/timer.h"
@@ -26,7 +28,7 @@ struct request_label final {
     std::string_view name_;
 };
 
-class label_middleware final : public ruvia::middleware {
+class label_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         // The binding borrows this local value until next() finishes. Neither
@@ -37,10 +39,10 @@ public:
     }
 };
 
-class policy_controller final : public ruvia::controller<policy_controller> {
+class policy_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/policies", label_middleware)
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(policy_controller)
     RUVIA_POST("/small", small, ruvia::body_limit<16>);
     RUVIA_GET("/slow", slow, ruvia::deadline<100>);
     RUVIA_GET("/label", label);
@@ -104,10 +106,15 @@ private:
 }  // namespace
 
 int main() {
-    ruvia::app()
-        .server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-            .max_buffered_body_bytes_ = 1024})
-        .listen({.address_ = "127.0.0.1", .http_ = 8091})
-        .deadline({.handler_ = std::chrono::seconds(2)})
-        .run();
+    try {
+        ruvia::app()
+            .server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .max_buffered_body_bytes_ = 1024})
+            .listen({.address_ = "127.0.0.1", .http_ = 8091})
+            .deadline({.handler_ = std::chrono::seconds(2)})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

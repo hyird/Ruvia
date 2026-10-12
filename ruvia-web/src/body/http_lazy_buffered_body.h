@@ -24,8 +24,8 @@ public:
         return reader_.trailers();
     }
 
-    void take_pipeline(std::pmr::string& stash) {
-        reader_.take_pipeline(stash);
+    [[nodiscard]] body_pipeline_handover take_pipeline(std::pmr::string& stash) {
+        return reader_.take_pipeline(stash);
     }
 
     [[nodiscard]] task<std::string_view> read_all() {

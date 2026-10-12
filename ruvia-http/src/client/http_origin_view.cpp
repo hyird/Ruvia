@@ -1,12 +1,10 @@
 #include "client/http_origin_view.h"
 
-#include <array>
-#include <charconv>
 #include <stdexcept>
-#include <system_error>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_number_format.h"
 
 #include "parser/http_request_target.h"
 
@@ -52,13 +50,8 @@ std::pmr::string make_http_origin_authority(const http_origin_view& origin,
     authority.reserve(host.size() + (include_port ? 6 : 0));
     authority.append(host);
     if (include_port) {
-        std::array<char, 5> port_buffer;
-        const auto [end, error] = std::to_chars(port_buffer.data(), port_buffer.data() + port_buffer.size(), origin.port());
-        if (error != std::errc{}) {
-            throw std::logic_error("HTTP origin port formatting failed");
-        }
         authority.push_back(':');
-        authority.append(port_buffer.data(), static_cast<std::size_t>(end - port_buffer.data()));
+        http_append_unsigned(authority, origin.port());
     }
     return authority;
 }

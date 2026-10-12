@@ -11,11 +11,13 @@
 #include <vector>
 
 #include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/use_future.hpp>
@@ -50,11 +52,10 @@ public:
         reject_then_ping,
         batch_echo,
         transaction_success,
-        transaction_aborted,
         transaction_exec_error,
         transaction_wrong_exec,
         transaction_queue_error,
-        transaction_watch_error };
+        slow_blocking_connect };
 
     explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr)
         : mode_(mode),
@@ -71,6 +72,7 @@ public:
             std::error_code ignored;
             acceptor_.close(ignored);
             socket_.close(ignored);
+            blocking_socket_.close(ignored);
             work_.reset();
         });
         thread_.join();
@@ -100,11 +102,19 @@ public:
         return batch_commands_.get_future().get();
     }
 
+    std::vector<std::string> authentication_command() const {
+        return authentication_;
+    }
+
 private:
+    // Longer than the blocking wait in the test plus its one-second reply
+    // grace, and shorter than the configured connect timeout.
+    static constexpr auto slow_select_delay = std::chrono::milliseconds(1500);
+
     template <typename stream_type>
-    asio::awaitable<std::string> line(stream_type& stream) {
-        co_await asio::async_read_until(stream, buffer_, "\r\n", asio::use_awaitable);
-        std::istream input(&buffer_);
+    asio::awaitable<std::string> line(stream_type& stream, asio::streambuf& buffer) {
+        co_await asio::async_read_until(stream, buffer, "\r\n", asio::use_awaitable);
+        std::istream input(&buffer);
         std::string value;
         std::getline(input, value);
         value.pop_back();
@@ -113,6 +123,14 @@ private:
 
     asio::awaitable<void> serve() {
         co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+        if (mode_ == mode_type::slow_blocking_connect) {
+            // The ordinary pool keeps the first connection; the lazy blocking
+            // pool opens the second, whose SELECT reply is delayed.
+            asio::co_spawn(io_, serve_connection(socket_, buffer_, false), asio::detached);
+            co_await acceptor_.async_accept(blocking_socket_, asio::use_awaitable);
+            co_await serve_connection(blocking_socket_, blocking_buffer_, true);
+            co_return;
+        }
         try {
             co_await serve_transport();
         } catch (const std::system_error&) {
@@ -132,62 +150,56 @@ private:
         if (tls_context_ != nullptr) {
             asio::ssl::stream<asio::ip::tcp::socket&> stream(socket_, *tls_context_);
             co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
-            co_await serve_connection(stream);
+            co_await serve_connection(stream, buffer_, false);
         } else {
-            co_await serve_connection(socket_);
+            co_await serve_connection(socket_, buffer_, false);
         }
     }
 
     template <typename stream_type>
-    asio::awaitable<void> serve_connection(stream_type& stream) {
+    asio::awaitable<void> serve_connection(stream_type& stream, asio::streambuf& buffer, bool slow_select) {
         bool in_transaction = false;
         std::vector<std::vector<std::string>> transaction_commands;
         std::vector<std::string> queued_replies;
         for (;;) {
-            const auto header_value = co_await line(stream);
+            const auto header_value = co_await line(stream, buffer);
             const auto count = std::stoi(header_value.substr(1));
             std::vector<std::string> args;
             for (int index = 0; index < count; ++index) {
-                const auto bulk = co_await line(stream);
+                const auto bulk = co_await line(stream, buffer);
                 const auto size = static_cast<std::size_t>(std::stoul(bulk.substr(1)));
-                if (buffer_.size() < size + 2) {
-                    co_await asio::async_read(stream, buffer_,
-                        asio::transfer_exactly(size + 2 - buffer_.size()), asio::use_awaitable);
+                if (buffer.size() < size + 2) {
+                    co_await asio::async_read(stream, buffer,
+                        asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
                 }
                 std::string arg(size, '\0');
-                std::istream input(&buffer_);
+                std::istream input(&buffer);
                 input.read(arg.data(), static_cast<std::streamsize>(size));
                 input.ignore(2);
                 args.push_back(std::move(arg));
             }
             if (args.front() == "STALL" || args.front() == "AUTH") {
+                if (args.front() == "AUTH") {
+                    authentication_ = args;
+                }
                 blocked_.set_value();
                 // Read again without replying; client cancellation closes this socket.
                 continue;
             }
             std::string reply;
             const bool transaction_mode = mode_ == mode_type::transaction_success ||
-                                          mode_ == mode_type::transaction_aborted ||
                                           mode_ == mode_type::transaction_exec_error ||
                                           mode_ == mode_type::transaction_wrong_exec ||
-                                          mode_ == mode_type::transaction_queue_error ||
-                                          mode_ == mode_type::transaction_watch_error;
-            if (transaction_mode &&
-                (in_transaction || args.front() == "WATCH" || args.front() == "UNWATCH" || args.front() == "MULTI")) {
+                                          mode_ == mode_type::transaction_queue_error;
+            if (transaction_mode && (in_transaction || args.front() == "MULTI")) {
                 transaction_commands.push_back(args);
-                if (args.front() == "WATCH") {
-                    reply = mode_ == mode_type::transaction_watch_error ? "-ERR watch failed\r\n" : "+OK\r\n";
-                } else if (args.front() == "UNWATCH") {
-                    reply = "+OK\r\n";
-                } else if (args.front() == "MULTI") {
+                if (args.front() == "MULTI") {
                     in_transaction = true;
                     reply = "+OK\r\n";
                 } else if (args.front() == "EXEC") {
                     in_transaction = false;
                     batch_commands_.set_value(transaction_commands);
-                    if (mode_ == mode_type::transaction_aborted) {
-                        reply = "*-1\r\n";
-                    } else if (mode_ == mode_type::transaction_exec_error) {
+                    if (mode_ == mode_type::transaction_exec_error) {
                         reply = "-EXECABORT discarded\r\n";
                     } else if (mode_ == mode_type::transaction_wrong_exec) {
                         reply = "+OK\r\n";
@@ -205,8 +217,8 @@ private:
                 reply = "$" + std::to_string(args.back().size()) + "\r\n" + args.back() + "\r\n";
             } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays) &&
                        args.front() == "PING") {
-                if (co_await line(stream) != "*1" || co_await line(stream) != "$4" ||
-                    co_await line(stream) != "PING") {
+                if (co_await line(stream, buffer) != "*1" || co_await line(stream, buffer) != "$4" ||
+                    co_await line(stream, buffer) != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
                 reply = mode_ == mode_type::coalesced_arrays
@@ -238,6 +250,15 @@ private:
                 reply = ":1\r\n";
             } else if (args.front() == "HGETALL") {
                 reply = "*6\r\n$14\r\n__ruvia_entity\r\n$1\r\n1\r\n$2\r\nid\r\n$1\r\n1\r\n$4\r\nname\r\n$128\r\n" + std::string(128, 'n') + "\r\n";
+            } else if (args.front() == "SELECT") {
+                if (slow_select) {
+                    asio::steady_timer delay(io_, slow_select_delay);
+                    co_await delay.async_wait(asio::use_awaitable);
+                }
+                reply = "+OK\r\n";
+            } else if (args.front() == "BLPOP") {
+                // An empty list: the server-side wait elapsed without an element.
+                reply = "*-1\r\n";
             } else {
                 reply = "-ERR test error\r\n";
             }
@@ -251,9 +272,13 @@ private:
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
+    asio::ip::tcp::socket blocking_socket_{io_};
     std::uint16_t port_;
     asio::streambuf buffer_;
+    asio::streambuf blocking_buffer_;
     std::promise<void> blocked_;
+    // Written before blocked_ is satisfied; read after wait_for_blocked_command().
+    std::vector<std::string> authentication_;
     std::promise<std::vector<std::string>> expiration_;
     std::promise<std::vector<std::vector<std::string>>> batch_commands_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
@@ -310,6 +335,22 @@ ruvia::task<void> check_commands(ruvia::redis_client& client, ruvia::testing::te
     }
     RUVIA_CHECK(expired);
     RUVIA_CHECK(*retained == std::string_view(std::string(128, 'v')));
+}
+
+ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& client,
+    ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto redis = client.handle();
+    const std::array<std::string_view, 1> keys{"queue"};
+    const auto wait = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(100));
+    // The lazy blocking connection spends longer in SELECT than the wait plus
+    // its reply grace; that time must not count against the server-side wait.
+    const auto first = co_await redis.blpop(keys, wait);
+    RUVIA_CHECK(!first.has_value());
+    // The connection stayed healthy: the peer accepts no third connection.
+    const auto second = co_await redis.blpop(keys, wait);
+    RUVIA_CHECK(!second.has_value());
+    co_await client.shutdown();
 }
 
 ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
@@ -372,7 +413,7 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
         auto transaction = client.handle().transaction();
         auto key = binary_key;
         auto value = binary_value;
-        transaction.watch(key, "second").unwatch().watch(key).set(key, value).get(key);
+        transaction.set(key, value).get(key);
         key.assign(128, 'x');
         value.assign(128, 'y');
         return std::move(transaction).exec();
@@ -389,17 +430,11 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
         RUVIA_CHECK(retained[0].string() == std::string_view(binary_value));
         accepted = true;
     } catch (const ruvia::redis_error& error) {
-        const auto expected_code = mode == redis_peer::mode_type::transaction_aborted
-                                       ? ruvia::redis_error::code_type::transaction_aborted
-                                       : ruvia::redis_error::code_type::command_error;
         RUVIA_CHECK(mode != redis_peer::mode_type::transaction_success);
-        RUVIA_CHECK(error.code() == expected_code);
+        RUVIA_CHECK(error.code() == ruvia::redis_error::code_type::command_error);
         if (mode == redis_peer::mode_type::transaction_queue_error) {
-            RUVIA_CHECK((std::string_view(error.what()).find("reply 4") != std::string_view::npos));
+            RUVIA_CHECK((std::string_view(error.what()).find("reply 1") != std::string_view::npos));
             RUVIA_CHECK((std::string_view(error.what()).find("queue failed") != std::string_view::npos));
-        } else if (mode == redis_peer::mode_type::transaction_watch_error) {
-            RUVIA_CHECK((std::string_view(error.what()).find("reply 0") != std::string_view::npos));
-            RUVIA_CHECK((std::string_view(error.what()).find("watch failed") != std::string_view::npos));
         } else if (mode == redis_peer::mode_type::transaction_exec_error) {
             RUVIA_CHECK((std::string_view(error.what()).find("EXECABORT") != std::string_view::npos));
         }
@@ -581,6 +616,17 @@ RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
     pool.join();
 }
 
+RUVIA_TEST(redis_blocking_wait_is_not_consumed_by_a_slow_lazy_connect) {
+    redis_peer peer(redis_peer::mode_type::slow_blocking_connect);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    auto config = peer.config();
+    config.database_ = 1;
+    ruvia::redis_client client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(check_blocking_wait_starts_at_write(client, ruvia_ctx)).get();
+    pool.join();
+}
+
 RUVIA_TEST(redis_pipeline_owns_binary_input_and_retains_ordered_replies) {
     redis_peer peer(redis_peer::mode_type::batch_echo);
     ruvia::event_loop_pool pool({.loop_count_ = 1});
@@ -591,10 +637,8 @@ RUVIA_TEST(redis_pipeline_owns_binary_input_and_retains_ordered_replies) {
 }
 
 RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
-    for (const auto mode : {redis_peer::mode_type::transaction_success,
-             redis_peer::mode_type::transaction_aborted, redis_peer::mode_type::transaction_exec_error,
-             redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error,
-             redis_peer::mode_type::transaction_watch_error}) {
+    for (const auto mode : {redis_peer::mode_type::transaction_success, redis_peer::mode_type::transaction_exec_error,
+             redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error}) {
         redis_peer peer(mode);
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), peer.config());
@@ -604,9 +648,6 @@ RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
         const std::string key("key\0binary", 10);
         const std::string value("value\0binary", 12);
         const std::vector<std::vector<std::string>> expected{
-            {"WATCH", key, "second"},
-            {"UNWATCH"},
-            {"WATCH", key},
             {"MULTI"},
             {"SET", key, value},
             {"GET", key},
@@ -798,6 +839,31 @@ RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {
         duplicate_rejected = true;
     }
     RUVIA_CHECK(duplicate_rejected);
+    auto closing = pool.loop(0).start(client.shutdown());
+    bool cancelled = false;
+    try {
+        connecting.get();
+    } catch (const ruvia::redis_error&) {
+        cancelled = true;
+    }
+    closing.get();
+    pool.join();
+    RUVIA_CHECK(cancelled);
+}
+
+// An ACL username must reach the server even without a password; otherwise the
+// connection silently runs as the default user.
+RUVIA_TEST(redis_client_authenticates_a_username_without_password) {
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    auto config = peer.config();
+    config.username_ = "app";
+    ruvia::redis_client client(pool.loop(0), config);
+    pool.start();
+    auto connecting = pool.loop(0).start(client.connect());
+    peer.wait_for_blocked_command();
+    const std::vector<std::string> expected{"AUTH", "app", ""};
+    RUVIA_CHECK(peer.authentication_command() == expected);
     auto closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {

@@ -11,9 +11,7 @@
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 
-namespace ruvia {
-
-namespace detail {
+namespace ruvia::detail {
 
 template <typename member_t_type>
 struct context_task_result {
@@ -26,18 +24,6 @@ struct context_task_result<task<result_t_type> (controller_t_type::*)(context&)>
     static constexpr bool ok = true;
     using type = result_t_type;
 };
-
-}  // namespace detail
-
-template <typename controller_t_type>
-class controller {
-public:
-    using ruvia_controller_type = controller_t_type;
-    constexpr controller() noexcept = default;
-    ~controller() = default;
-};
-
-namespace detail {
 
 template <typename controller_t_type>
 class controller_registration_access final {
@@ -128,7 +114,7 @@ class controller_registration_access final {
         return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
     }
 
-    template <typename... middleware_ts_type>
+    template <middleware... middleware_ts_type>
     [[nodiscard]] static middleware_list_type make_middlewares() {
         middleware_list_type middlewares(registration_resource());
         if constexpr (sizeof...(middleware_ts_type) > 0) {
@@ -166,8 +152,6 @@ void register_controller_routes(void* controller_value, router& router_value) {
 
 template <typename controller_t_type>
 [[nodiscard]] bool register_controller() {
-    static_assert(std::is_base_of_v<controller<controller_t_type>, controller_t_type>,
-        "controller must derive from ruvia::controller<controller_type>");
     static_assert(std::is_final_v<controller_t_type>, "controller must be final");
     static_assert(
         std::is_default_constructible_v<controller_t_type>, "controller must be default constructible");
@@ -176,6 +160,4 @@ template <typename controller_t_type>
         {.create_ = &create_controller<controller_t_type>, .register_routes_ = &register_controller_routes<controller_t_type>});
 }
 
-}  // namespace detail
-
-}  // namespace ruvia
+}  // namespace ruvia::detail

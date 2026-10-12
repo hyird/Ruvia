@@ -1,9 +1,7 @@
-#include <array>
 #include <exception>
 #include <optional>
 #include <utility>
 
-#include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 
 namespace ruvia::detail {
@@ -53,8 +51,6 @@ void websocket_client_state::close_now() noexcept {
     transport_.abort(abort_reason_);
     transport_.close();
     disarm(connect_timer_);
-    disarm(read_timer_);
-    disarm(write_timer_);
     disarm(heartbeat_timer_);
     disarm(close_handshake_timer_);
     write_signal_.notify();
@@ -85,7 +81,7 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
     auto close_activity = claim_activity(close_active_, "WebSocket client close is already in progress");
     operation_guard_type operation(*this, operation_options_value);
     {
-        co_await wait_for_write_idle();
+        co_await wait_for_write_idle(write_wait_type::writer);
         lifecycle_.require_ready();
         write_guard_type write_guard(*this, write_phase_type::application);
         const auto submitted = require_protocol().submit_close(options.code_, reason);
@@ -99,11 +95,10 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
     // Keep it on its own timer so peer traffic and control-frame responses cannot
     // restart the deadline for the next transport read.
     arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::timeout);
-    std::array<char, websocket_client_close_handshake_buffer_bytes> bytes_value{};
     for (;;) {
         std::optional<websocket_event> event;
         {
-            co_await wait_for_write_idle();
+            co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             event = require_protocol().next_event();
             if (event.has_value() && event->ping() != nullptr) {
@@ -111,14 +106,14 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
             }
         }
         if (!event.has_value()) {
-            const auto count = co_await read_transport(bytes_value, std::nullopt);
+            const auto count = co_await read_transport(input_, std::nullopt);
             if (count == 0) {
                 require_protocol().notify_transport_eof();
                 fail_transport();
                 throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                     "WebSocket transport ended before peer Close");
             }
-            feed_input(std::string_view(bytes_value.data(), count));
+            feed_input(std::string_view(input_.data(), count));
             continue;
         }
         if (event->protocol_error() != nullptr) {
@@ -126,7 +121,7 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
             std::terminate();
         }
         if (event->close() != nullptr || event->transport_end() != nullptr) {
-            co_await wait_for_write_idle();
+            co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             co_await flush_output();
             // The close handshake is complete: retire the connection.

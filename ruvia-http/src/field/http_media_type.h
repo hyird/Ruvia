@@ -44,30 +44,26 @@ struct http_media_type_parts final {
 // registrations define any value-specific case folding.
 [[nodiscard]] inline bool http_media_parameter_value_equals(
     std::string_view left, std::string_view right, bool ascii_case_insensitive = false) noexcept {
+    // Token values are read verbatim; quoted values decode through the shared
+    // quoted-string cursor, which must close exactly at the end of the value.
     struct cursor final {
         std::string_view value_;
+        http_quoted_string_cursor quoted_cursor_;
         std::size_t position_{0};
-        std::size_t end_{0};
         bool quoted_{false};
         bool valid_{true};
 
         explicit cursor(std::string_view input) noexcept
-            : value_(http_trim_ows(input)) {
+            : value_(http_trim_ows(input)),
+              quoted_cursor_(value_) {
             if (value_.empty()) {
                 valid_ = false;
                 return;
             }
             if (value_.front() == '"') {
-                if (value_.size() < 2 || value_.back() != '"') {
-                    valid_ = false;
-                    return;
-                }
                 quoted_ = true;
-                position_ = 1;
-                end_ = value_.size() - 1;
                 return;
             }
-            end_ = value_.size();
             for (const auto ch : value_) {
                 if (!is_http_token_char(static_cast<unsigned char>(ch))) {
                     valid_ = false;
@@ -77,27 +73,20 @@ struct http_media_type_parts final {
         }
 
         [[nodiscard]] bool next(unsigned char& out) noexcept {
-            if (!valid_ || position_ >= end_) {
+            if (!valid_) {
                 return false;
             }
-            auto ch = static_cast<unsigned char>(value_[position_++]);
             if (quoted_) {
-                if (ch == '\\') {
-                    if (position_ >= end_) {
-                        valid_ = false;
-                        return false;
-                    }
-                    ch = static_cast<unsigned char>(value_[position_++]);
-                } else if (ch == '"' || !is_http_field_value_char(ch)) {
-                    valid_ = false;
-                    return false;
+                if (quoted_cursor_.next(out)) {
+                    return true;
                 }
-                if (!is_http_field_value_char(ch)) {
-                    valid_ = false;
-                    return false;
-                }
+                valid_ = quoted_cursor_.closed() && quoted_cursor_.consumed() == value_.size();
+                return false;
             }
-            out = ch;
+            if (position_ == value_.size()) {
+                return false;
+            }
+            out = static_cast<unsigned char>(value_[position_++]);
             return true;
         }
     };
@@ -180,7 +169,7 @@ template <typename visitor_type>
 [[nodiscard]] inline bool http_offered_media_type_has_parameter(std::string_view offered,
     std::string_view expected_name, std::string_view expected_value) noexcept {
     bool found = false;
-    http_visit_semicolon_parameters_quoted(offered,
+    http_visit_semicolon_parameters_quoted_field(offered,
         [expected_name, expected_value, &found](
             std::string_view name, std::string_view value) noexcept {
             if (!http_ascii_equals_ignore_case(name, expected_name)) {

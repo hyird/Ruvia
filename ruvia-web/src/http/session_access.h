@@ -54,18 +54,18 @@ inline constexpr std::string_view session_rotation_script =
     return true;
 }
 
-inline void append_session_set_cookie(http_response& response, std::pmr::memory_resource* resource,
+inline void append_session_set_cookie(http_response_headers& headers, std::pmr::memory_resource* resource,
     std::string_view cookie_name, std::string_view value, const cookie_options& options) {
     const set_cookie_plan plan(cookie_name, value, options);
     std::pmr::string set_cookie(resource);
     set_cookie.resize(plan.size());
     plan.write(set_cookie.data());
-    response.header("Set-Cookie", set_cookie, {.mode_ = ruvia::http_response_header_mode::append});
+    headers.header("Set-Cookie", set_cookie, {.mode_ = ruvia::http_response_header_mode::append});
 }
 
-inline void append_session_cookie_header(http_response& response, std::pmr::memory_resource* resource,
+inline void append_session_cookie_header(http_response_headers& headers, std::pmr::memory_resource* resource,
     std::string_view cookie_name, std::string_view id, bool secure) {
-    append_session_set_cookie(response, resource, cookie_name, id,
+    append_session_set_cookie(headers, resource, cookie_name, id,
         {
             .same_site_ = cookie_same_site::lax,
             .http_only_ = cookie_attribute_policy::emit,
@@ -73,9 +73,9 @@ inline void append_session_cookie_header(http_response& response, std::pmr::memo
         });
 }
 
-inline void append_expired_session_cookie_header(http_response& response,
+inline void append_expired_session_cookie_header(http_response_headers& headers,
     std::pmr::memory_resource* resource, std::string_view cookie_name, bool secure) {
-    append_session_set_cookie(response, resource, cookie_name, "",
+    append_session_set_cookie(headers, resource, cookie_name, "",
         {
             .same_site_ = cookie_same_site::lax,
             .max_age_ = std::chrono::seconds(0),

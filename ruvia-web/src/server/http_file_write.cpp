@@ -23,7 +23,8 @@
 namespace ruvia::detail {
 
 #if defined(__linux__) || defined(_WIN32)
-task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, http_response_file_view file) {
+task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, http_response_file_view file,
+    connection_scanner::entry_type& progress) {
 #if defined(__linux__)
     std::error_code error;
     auto input = open_native_file_for_read(file, error);
@@ -38,6 +39,7 @@ task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, ht
         const auto sent = ::sendfile(socket.native_handle(), input.get(), &offset, next_send);
         if (sent > 0) {
             remaining -= static_cast<std::uint64_t>(sent);
+            progress.touch();
             continue;
         }
         if (sent == 0) {
@@ -65,12 +67,14 @@ task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, ht
     if (error) {
         co_return error;
     }
-    // TransmitFile rejects counts above 2,147,483,646 bytes. A null OVERLAPPED
-    // would make every call synchronous until the peer drained the whole
-    // range, blocking this worker's event loop behind one slow reader; the
-    // overlapped call completes through the socket's IOCP instead and carries
-    // its file offset explicitly.
-    constexpr std::uint64_t max_transmit_file_bytes = UINT64_C(2147483646);
+    // A null OVERLAPPED would make every TransmitFile call synchronous until
+    // the peer drained the whole range, blocking this worker's event loop
+    // behind one slow reader; the overlapped call completes through the
+    // socket's IOCP instead and carries its file offset explicitly. Progress
+    // is only observable when a call completes, so each call sends a bounded
+    // slice (well below TransmitFile's 2,147,483,646-byte limit): write_timeout
+    // then measures inactivity over one slice rather than the whole range.
+    constexpr std::uint64_t max_transmit_file_bytes = UINT64_C(256) * 1024;
     std::uint64_t offset = file.offset();
     std::uint64_t remaining = file.length();
     while (remaining > 0) {
@@ -98,6 +102,7 @@ task<std::error_code> write_http_response_file(asio::ip::tcp::socket& socket, ht
         }
         offset += sent;
         remaining -= sent;
+        progress.touch();
     }
     co_return std::error_code{};
 #endif

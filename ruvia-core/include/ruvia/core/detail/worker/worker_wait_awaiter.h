@@ -21,17 +21,97 @@ namespace ruvia::detail {
 template <typename t_type>
 using worker_wait_await_state_type = suspend_race_state<worker_wait_result<t_type>>;
 
-template <typename state_type>
-void complete_worker_single_wait(state_type& state_value, worker_wait_status status) noexcept;
+template <typename t_type, typename state_type>
+class worker_single_wait_awaiter;
 
-template <typename state_type>
-void cancel_worker_single_wait(const std::shared_ptr<state_type>& state_value, std::uint64_t generation) noexcept;
+// The single pending-waiter attachment of a domain state. The state owns it by
+// value next to its domain fields and guards it with its own lock; every
+// member is called with that lock held. Every terminal source completes the
+// waiter through this one transition, so detachment, generation invalidation,
+// result publication, and wake ordering cannot drift between owners.
+template <typename t_type, typename state_type>
+class worker_wait_slot final {
+public:
+    using awaiter_type = worker_single_wait_awaiter<t_type, state_type>;
+
+    [[nodiscard]] bool occupied() const noexcept {
+        return waiter_ != nullptr;
+    }
+
+    // Transfers result_value to the attached waiter. A throwing payload move
+    // leaves the waiter attached and pending. The wake runs before the caller
+    // releases its lock: afterwards an already-in-flight timer expiry can
+    // resume the receiver and destroy the awaiter, so reading its timer
+    // registration later would be a use-after-free.
+    void complete(worker_wait_result<t_type>&& result_value) {
+        auto* waiter = waiter_;
+        const bool wake = waiter->complete_result(std::move(result_value));
+        detach_all();
+        if (wake) {
+            waiter->wake();
+        }
+    }
+
+    // Completes the attached waiter, if any, with a terminal status.
+    void complete(worker_wait_status status) noexcept {
+        auto* waiter = std::exchange(waiter_, nullptr);
+        generation_ = 0;
+        if (waiter != nullptr && waiter->complete_status(status)) {
+            waiter->wake();
+        }
+    }
+
+private:
+    friend awaiter_type;
+
+    [[nodiscard]] std::uint64_t reserve_generation() noexcept {
+        if (++next_generation_ == 0) {
+            ++next_generation_;
+        }
+        return next_generation_;
+    }
+
+    void publish(awaiter_type& waiter, std::uint64_t generation) noexcept {
+        waiter_ = &waiter;
+        generation_ = generation;
+    }
+
+    [[nodiscard]] bool holds(const awaiter_type* waiter) const noexcept {
+        return waiter_ == waiter;
+    }
+
+    // Detaches waiter without completing it; returns false when it was no
+    // longer attached.
+    [[nodiscard]] bool detach(const awaiter_type* waiter) noexcept {
+        if (waiter_ != waiter) {
+            return false;
+        }
+        detach_all();
+        return true;
+    }
+
+    // A stale generation belongs to a wait that already completed.
+    void cancel(std::uint64_t generation) noexcept {
+        if (waiter_ != nullptr && generation_ == generation) {
+            complete(worker_wait_status::cancelled);
+        }
+    }
+
+    void detach_all() noexcept {
+        waiter_ = nullptr;
+        generation_ = 0;
+    }
+
+    awaiter_type* waiter_{nullptr};
+    std::uint64_t generation_{0};
+    std::uint64_t next_generation_{0};
+};
 
 // Shared storage and transition machinery for one worker-bound waiter. Domain
 // awaiters own this component by value and publish its typed address directly,
 // without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
-// State must expose worker_, lock_state() (the lock guarding the waiter
-// fields), waiter_, waiter_generation_, and next_waiter_generation_.
+// State must expose worker_, lock_state() (the lock guarding wait_slot_), and
+// wait_slot_ (a worker_wait_slot<t_type, state_type>).
 template <typename t_type, typename state_type>
 class worker_single_wait_awaiter final {
 public:
@@ -69,21 +149,21 @@ public:
         return completion_.complete(worker_wait_result_access::outcome<t_type>(status));
     }
 
+    // Called with the state's lock held.
     void publish() noexcept {
-        auto& owner_value = state();
-        owner_value.waiter_ = this;
-        owner_value.waiter_generation_ = generation_;
+        state().wait_slot_.publish(*this, generation_);
     }
 
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
         auto& owner_value = state();
         auto* waiter = this;
         auto lock = owner_value.lock_state();
+        auto& slot = owner_value.wait_slot_;
         // Arm the deadline before publishing the continuation: the timer only
         // fires on this worker after suspension, and a stopped timer queue can
         // still complete the wait synchronously. A published waiter that is no
         // longer attached has already completed and needs no deadline.
-        if (timeout_ && owner_value.waiter_ == waiter) {
+        if (timeout_ && slot.holds(waiter)) {
             auto status = worker_timer_schedule_status::worker_stopping;
             try {
                 status = owner_value.worker_.schedule_timer(timer_,
@@ -91,11 +171,9 @@ public:
                     [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
                         {
                             auto state_lock = owner_value.lock_state();
-                            if (owner_value.waiter_ == waiter) {
-                                // Still pending: a cancellation reaching a
-                                // pending wait comes only from stop_timers().
-                                owner_value.waiter_ = nullptr;
-                                owner_value.waiter_generation_ = 0;
+                            // Still pending: a cancellation reaching a pending
+                            // wait comes only from stop_timers().
+                            if (owner_value.wait_slot_.detach(waiter)) {
                                 (void)completion->complete(worker_wait_result_access::outcome<t_type>(
                                     outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
                                                                              : worker_wait_status::worker_stopping));
@@ -104,13 +182,11 @@ public:
                         completion->continuation().resume();
                     });
             } catch (...) {
-                owner_value.waiter_ = nullptr;
-                owner_value.waiter_generation_ = 0;
+                (void)slot.detach(waiter);
                 throw;
             }
             if (status == worker_timer_schedule_status::worker_stopping) {
-                owner_value.waiter_ = nullptr;
-                owner_value.waiter_generation_ = 0;
+                (void)slot.detach(waiter);
                 (void)completion_.complete(
                     worker_wait_result_access::outcome<t_type>(worker_wait_status::worker_stopping));
             }
@@ -122,13 +198,16 @@ public:
         return completion_.take_value();
     }
 
+private:
+    friend class worker_wait_slot<t_type, state_type>;
+
     // Completion has already detached the intrusive waiter before wake() runs.
     // A failed continuation dispatch is therefore unrecoverable and shares the
     // same explicit terminate boundary as worker_signal and timer cancellation.
     // A wake on the worker's own thread posts the resume directly.
     void wake() noexcept {
         if (timer_.registered()) {
-            timer_.cancel();
+            timer_.cancel_and_notify();
             return;
         }
         auto* waiter = this;
@@ -140,13 +219,9 @@ public:
         completion_.continuation().resume();
     }
 
-private:
     [[nodiscard]] static std::uint64_t reserve_generation(state_type& state_value) noexcept {
         auto lock = state_value.lock_state();
-        if (++state_value.next_waiter_generation_ == 0) {
-            ++state_value.next_waiter_generation_;
-        }
-        return state_value.next_waiter_generation_;
+        return state_value.wait_slot_.reserve_generation();
     }
 
     [[nodiscard]] static stop_registration register_cancellation(
@@ -155,8 +230,10 @@ private:
             return {};
         }
         return token.register_callback([state_value, generation] {
-            (void)worker_handle_access::defer_if_attached(
-                state_value->worker_, [state_value, generation] { cancel_worker_single_wait(state_value, generation); });
+            (void)worker_handle_access::defer_if_attached(state_value->worker_, [state_value, generation] {
+                auto lock = state_value->lock_state();
+                state_value->wait_slot_.cancel(generation);
+            });
         });
     }
 
@@ -170,27 +247,5 @@ private:
     // borrowed dispatcher begin destruction.
     stop_registration stop_registration_;
 };
-
-// Called with the state's lock held. Every terminal source uses this one transition,
-// so detachment, generation invalidation, result publication, and wake ordering
-// cannot drift between channel and one_shot.
-template <typename state_type>
-void complete_worker_single_wait(state_type& state_value, worker_wait_status status) noexcept {
-    auto* waiter = std::exchange(state_value.waiter_, nullptr);
-    state_value.waiter_generation_ = 0;
-    if (waiter != nullptr && waiter->complete_status(status)) {
-        waiter->wake();
-    }
-}
-
-template <typename state_type>
-void cancel_worker_single_wait(
-    const std::shared_ptr<state_type>& state_value, std::uint64_t generation) noexcept {
-    auto lock = state_value->lock_state();
-    if (state_value->waiter_ == nullptr || state_value->waiter_generation_ != generation) {
-        return;
-    }
-    complete_worker_single_wait(*state_value, worker_wait_status::cancelled);
-}
 
 }  // namespace ruvia::detail

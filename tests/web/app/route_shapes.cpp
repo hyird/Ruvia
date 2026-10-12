@@ -18,7 +18,7 @@
 namespace {
 
 // Stamps a header so a response shows whether this middleware ran at all.
-class route_shapes_scope final : public ruvia::middleware {
+class route_shapes_scope final {
 public:
     explicit route_shapes_scope(std::string_view tag) noexcept
         : tag_(tag) {}
@@ -32,7 +32,7 @@ private:
     std::string_view tag_;
 };
 
-class route_shapes_trace final : public ruvia::middleware {
+class route_shapes_trace final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -42,7 +42,7 @@ public:
 
 // Violates the single-shot next() contract, so a response shows whether a
 // conditionally scoped frame really ran under the same chain rules.
-class route_shapes_double_next final : public ruvia::middleware {
+class route_shapes_double_next final {
 public:
     ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
         co_await next_value();
@@ -52,7 +52,7 @@ public:
 
 // Wraps unmatched requests but neither responds nor awaits next(): a chain
 // that never finalizes the request.
-class route_shapes_unfinished final : public ruvia::middleware {
+class route_shapes_unfinished final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
@@ -61,9 +61,9 @@ public:
     }
 };
 
-class route_shapes_controller final : public ruvia::controller<route_shapes_controller> {
+class route_shapes_controller final {
 public:
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(route_shapes_controller)
     RUVIA_GET("/shapes/a/*", a_wildcard);
     RUVIA_GET("/shapes/:x/:y", pair);
     RUVIA_GET("/shapes/b/:z", b_param);
@@ -198,6 +198,31 @@ RUVIA_TEST(route_shapes_scoped_middleware_checks_wildcard_captures) {
     RUVIA_CHECK_EQ(scope_of(app, "/assets/private/key"), std::string("none"));
     RUVIA_CHECK_EQ(scope_of(app, "/assets/publicity"), std::string("none"));
     RUVIA_CHECK_EQ(scope_of(app, "/assets"), std::string("none"));
+}
+
+RUVIA_TEST(route_shapes_non_http_absolute_target_is_rejected) {
+    // A generic-scheme absolute-form target would carry a path no front proxy
+    // routes like this server; it is a 400 before any route or scope runs.
+    ruvia::test_app app;
+    app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
+    RUVIA_CHECK_EQ(app.request(ruvia::test_request::get("x:admin/panel")).status(),
+        ruvia::http_status::bad_request);
+    RUVIA_CHECK_EQ(app.request(ruvia::test_request::get("x:/admin/panel")).status(),
+        ruvia::http_status::bad_request);
+}
+
+RUVIA_TEST(route_shapes_dot_segments_match_no_route) {
+    // "/assets/public/../private/key" resolves to a resource under
+    // "/assets/private" although its raw segments sit outside that scope.
+    ruvia::test_app app;
+    app.use_at<route_shapes_scope>({.prefix_ = "/assets/private"}, "private");
+    for (const std::string_view path : {"/assets/public/../private/key", "/assets/public/%2E%2E/private/key",
+             "/assets/./private/key", "/admin/panel/.", "/assets/%2e"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
+    }
+    // Dots inside a segment are ordinary names.
+    RUVIA_CHECK_EQ(body_of(app, "/assets/..key/.env"), std::string("asset:..key/.env"));
+    RUVIA_CHECK_EQ(scope_of(app, "/assets/private/key"), std::string("private"));
 }
 
 RUVIA_TEST(route_shapes_conditional_frames_keep_chain_order_and_neighbours) {

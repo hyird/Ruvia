@@ -10,10 +10,8 @@
 
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
-
-namespace ruvia::detail {
-struct http_header_access;
-}
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia {
 
@@ -68,6 +66,18 @@ public:
             resource != nullptr ? resource : std::pmr::get_default_resource());
     }
 
+    // Owning boundaries that normalize field names lower-case them while
+    // copying, so the field still costs one allocation.
+    [[nodiscard]] static http_header copy_with_lowercase_name(std::string_view name,
+        std::string_view value, std::pmr::memory_resource* resource) {
+        auto result = copy_of(name, value, resource);
+        for (std::size_t index = 0; index < result.name_size_; ++index) {
+            result.bytes_[index] =
+                static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(result.bytes_[index])));
+        }
+        return result;
+    }
+
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_size_ != 0 ? std::string_view(bytes_, name_size_) : std::string_view{};
     }
@@ -78,7 +88,6 @@ public:
     std::string_view value() const&& = delete;
 
 private:
-    friend struct detail::http_header_access;
     http_header(std::string_view name, std::string_view value,
         std::pmr::memory_resource* resource)
         : resource_(resource),
@@ -145,9 +154,5 @@ private:
     std::string_view name_;
     std::string_view value_;
 };
-
-[[nodiscard]] bool is_valid_http_header_name(std::string_view name) noexcept;
-[[nodiscard]] bool is_valid_http_header_value(std::string_view value) noexcept;
-[[nodiscard]] bool is_valid_http_status_text(std::string_view value) noexcept;
 
 }  // namespace ruvia

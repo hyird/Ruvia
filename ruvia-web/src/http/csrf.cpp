@@ -24,10 +24,7 @@ secure_token_result generate_secure_token(std::span<char> buffer) noexcept {
     if (RAND_bytes_ex(nullptr, raw, random_bytes, 0) != 1) {
         return secure_token_result::make_failure();
     }
-    for (std::size_t i = 0; i < random_bytes; ++i) {
-        buffer[i * 2] = http_lower_hex_digit(raw[i] >> 4);
-        buffer[i * 2 + 1] = http_lower_hex_digit(raw[i]);
-    }
+    http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));
     return secure_token_result::make_ready(std::string_view(buffer.data(), random_bytes * 2));
 }
 

@@ -329,6 +329,9 @@ public:
     std::optional<bool> cache_enabled_{};
     std::optional<std::chrono::milliseconds> cache_duration_{};
     std::pmr::string cache_id_;
+    // The result shape a repository builder derived this query as; with
+    // cache_id_ it names the id-keyed entry.
+    db_cache_shape cache_shape_{db_cache_shape::rows};
 
     [[nodiscard]] bool returns_rows() const noexcept {
         return kind_ == db_query_kind::select || kind_ == db_query_kind::values || !returning_.empty();

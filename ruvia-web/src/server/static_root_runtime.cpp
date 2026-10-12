@@ -1,201 +1,197 @@
 #include "server/static_root_runtime.h"
 
-#include <filesystem>
-#include <optional>
+#include <cstddef>
+#include <exception>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/memory/process_resource.h"
 #include "ruvia/core/timer.h"
 
-#include "http/static_root_index.h"
 #include "server/http_server_options.h"
 
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] static_root_precompression_options precompression_options(
-    const http_server_options& options) noexcept {
-    const auto* configured = options.document_root_.precompression_options();
-    if (configured == nullptr || !options.compression_.has_value()) {
-        return {};
-    }
-    return *configured;
+using snapshot_owner = std::unique_ptr<static_root, pmr_object_deleter<static_root>>;
+
+// Snapshots are released by whichever thread drops the last reference, so the
+// control block and the root both come from the process resource.
+[[nodiscard]] document_root_snapshot share_snapshot(snapshot_owner owner) {
+    const auto deleter = owner.get_deleter();
+    // The constructor invokes the deleter itself if its allocation fails.
+    return document_root_snapshot(
+        owner.release(), deleter, std::pmr::polymorphic_allocator<std::byte>(process_resource()));
 }
 
 }  // namespace
 
+document_root_publisher::document_root_publisher(const std::filesystem::path& root,
+    const static_root_config_storage& config, std::chrono::milliseconds interval,
+    static_root_precompression_options precompression)
+    : interval_(interval),
+      precompression_(precompression) {
+    auto initial = static_root_access::make(process_resource(), root, config);
+    static_root_access::install_precompressed_variants(*initial, nullptr, precompression_);
+    current_ = share_snapshot(std::move(initial));
+}
+
+document_root_publisher::~document_root_publisher() = default;
+
+bool document_root_publisher::claim_refresh() noexcept {
+    return !std::exchange(refresh_claimed_, true);
+}
+
+document_root_snapshot document_root_publisher::published_unless(const static_root* adopted) const {
+    std::lock_guard lock(mutex_);
+    if (current_.get() == adopted) {
+        return nullptr;
+    }
+    return current_;
+}
+
+void document_root_publisher::publish(document_root_snapshot snapshot) {
+    {
+        std::lock_guard lock(mutex_);
+        current_.swap(snapshot);
+    }
+    // The superseded snapshot is released outside the lock; workers that
+    // still lease it keep their own reference.
+}
+
+task<void> document_root_publisher::refresh(
+    blocking_pool& pool, const worker_handle& worker, const http_server_worker_state& state) {
+    // Shared ownership lets the blocking jobs read the previous snapshot while
+    // workers keep serving it, and lets precompression reuse its unchanged
+    // encoded bytes.
+    const auto previous = current_;
+    snapshot_owner candidate(nullptr, pmr_object_deleter<static_root>{process_resource()});
+    try {
+        auto rebuilt = co_await ruvia::try_run_blocking(pool, worker, [previous] {
+            return static_root_access::make(process_resource(), previous->path(),
+                static_root_access::copy_config(*previous, process_resource()));
+        });
+        if (!rebuilt.completed()) {
+            // A refresh is transactional: keep serving the last complete
+            // index, but expose filesystem/permission failures to metrics
+            // instead of silently turning them into stale content. A rejected
+            // offload (pool stopping) is not a refresh failure.
+            if (rebuilt.failed()) {
+                record_failure();
+            }
+            co_return;
+        }
+        candidate = std::move(rebuilt).value();
+    } catch (...) {
+        // The offload wrapper reports pool shutdown as a status, but creating
+        // its one-shot channel or transporting a result can still throw.
+        record_failure();
+        co_return;
+    }
+
+    if (!http_server_worker_running(state)) {
+        co_return;
+    }
+    if (static_root_access::fingerprint(*candidate) == static_root_access::fingerprint(*previous) &&
+        static_root_access::same_snapshot(*candidate, *previous)) {
+        co_return;
+    }
+
+    if (precompression_.enabled()) {
+        try {
+            auto prepared = co_await ruvia::try_run_blocking(pool, worker,
+                [candidate = std::move(candidate), previous, precompression = precompression_]() mutable {
+                    static_root_access::install_precompressed_variants(
+                        *candidate, previous.get(), precompression);
+                    return std::move(candidate);
+                });
+            if (!prepared.completed()) {
+                if (prepared.failed()) {
+                    record_failure();
+                }
+                co_return;
+            }
+            candidate = std::move(prepared).value();
+        } catch (...) {
+            record_failure();
+            co_return;
+        }
+        if (!http_server_worker_running(state)) {
+            co_return;
+        }
+    }
+
+    try {
+        publish(share_snapshot(std::move(candidate)));
+    } catch (...) {
+        record_failure();
+    }
+}
+
 static_root_runtime::static_root_runtime(http_server_options& options, const worker_handle& worker_value,
     const http_server_worker_state& state_value, std::pmr::memory_resource* resource)
     : options_(options),
+      publisher_(options.document_root_.publisher()),
       worker_(worker_value),
       state_(state_value),
-      current_(nullptr, pmr_object_deleter<static_root>{process_resource()}),
-      retired_(resource) {
-    if (options_.document_root_.refresh_options() != nullptr) {
-        const auto* configured_root = options_.document_root_.root();
-        if (configured_root == nullptr) {
-            std::terminate();
-        }
-        current_ = static_root_access::clone(process_resource(), *configured_root);
-        const auto precompression = precompression_options(options_);
-        if (precompression.enabled()) {
-            static_root_access::install_precompressed_variants(
-                *current_, configured_root, precompression);
-        }
+      resource_(resource),
+      current_(nullptr, pmr_object_deleter<document_root_generation>{resource}),
+      retired_(resource),
+      refreshes_(publisher_ != nullptr && publisher_->claim_refresh()) {
+    if (publisher_ != nullptr) {
+        current_ = make_pmr_object<document_root_generation>(resource_, publisher_->published_unless(nullptr));
         options_.document_root_.publish(*current_);
     }
 }
 
 static_root_runtime::~static_root_runtime() = default;
 
+void static_root_runtime::adopt_published() {
+    auto published = publisher_->published_unless(current_->root());
+    if (published == nullptr) {
+        return;
+    }
+    auto next = make_pmr_object<document_root_generation>(resource_, std::move(published));
+    if (current_->leased()) {
+        // Vector growth is the only fallible step. If it is rejected the
+        // worker keeps its current generation and retries next interval.
+        retired_.push_back(std::move(current_));
+    }
+    current_ = std::move(next);
+    options_.document_root_.publish(*current_);
+}
+
 task<void> static_root_runtime::refresh() {
-    const auto* refresh_options = options_.document_root_.refresh_options();
-    if (refresh_options == nullptr) {
+    if (publisher_ == nullptr) {
         std::terminate();
     }
-    const auto interval = refresh_options->refresh_interval_;
-    const auto reclaim_retired_roots = [this]() noexcept {
-        std::erase_if(retired_, [](const snapshot_owner& root) {
-            return root == nullptr || !static_root_access::has_active_bindings(*root);
-        });
-    };
+    const auto interval = publisher_->interval();
     for (;;) {
         if (!http_server_worker_running(state_)) {
             co_return;
         }
-        if (co_await sleep_for(worker_, interval) ==
-            timer_sleep_result::stop_requested) {
+        if (co_await sleep_for(worker_, interval) == timer_sleep_result::stop_requested) {
             co_return;
         }
         if (!http_server_worker_running(state_)) {
             co_return;
         }
 
-        // Lease counts belong to the snapshot they protect. Reclaim old
-        // generations independently; a long request on an older generation
-        // must not pin every newer generation published by polling.
-        reclaim_retired_roots();
+        std::erase_if(retired_, [](const generation_owner& generation) { return !generation->leased(); });
 
-        const auto* current_root = options_.document_root_.root();
-        if (current_root == nullptr) {
-            // The validated document-root configuration owns this invariant. Keep
-            // the loop defensive anyway: a broken runtime binding must not
-            // turn a background task into a null dereference on the worker.
-            failures_.fetch_add(1, std::memory_order_relaxed);
-            co_return;
-        }
-
-        std::filesystem::path root_path;
-        std::optional<static_root_config_storage> root_config;
-        try {
-            // Both operations copy PMR-backed configuration. They are outside
-            // try_run_blocking because the source snapshot is worker-owned, but a
-            // transient allocation failure here is still a refresh failure,
-            // not a reason to terminate the listener and discard its last
-            // complete index.
-            root_path = current_root->path();
-            root_config.emplace(static_root_access::copy_config(*current_root, process_resource()));
-        } catch (...) {
-            failures_.fetch_add(1, std::memory_order_relaxed);
-            continue;
-        }
-        snapshot_owner candidate_value(nullptr, pmr_object_deleter<static_root>{process_resource()});
-        try {
-            auto rebuilt = co_await ruvia::try_run_blocking(*options_.blocking_pool_,
-                worker_,
-                [root_path = std::move(root_path), root_config = std::move(*root_config)]() mutable {
-                    return static_root_access::make(
-                        process_resource(), root_path, std::move(root_config));
-                });
-            if (!rebuilt.completed()) {
-                if (rebuilt.failed()) {
-                    // A refresh is transactional: keep serving the last complete
-                    // index, but expose repeated filesystem/permission failures to
-                    // metrics instead of silently turning them into stale content.
-                    failures_.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!http_server_worker_running(state_)) {
-                    co_return;
-                }
-                continue;
-            }
-
-            candidate_value = std::move(rebuilt).value();
-        } catch (...) {
-            // The offload wrapper reports queue/pool shutdown as a status, but
-            // creating its one-shot channel or transporting a result can still
-            // fail with an allocation/runtime exception. Refresh is best effort:
-            // retain the last complete snapshot and keep the listener alive.
-            failures_.fetch_add(1, std::memory_order_relaxed);
-            if (!http_server_worker_running(state_)) {
-                co_return;
-            }
-            continue;
-        }
-
-        if (!http_server_worker_running(state_)) {
-            co_return;
-        }
-        if (static_root_access::fingerprint(*candidate_value) ==
-                static_root_access::fingerprint(*current_root) &&
-            static_root_access::same_snapshot(*candidate_value, *current_root)) {
-            continue;
-        }
-
-        const auto precompression = precompression_options(options_);
-        if (precompression.enabled()) {
-            try {
-                auto prepared =
-                    co_await ruvia::try_run_blocking(*options_.blocking_pool_, worker_,
-                        [candidate_value = std::move(candidate_value), precompression]() mutable {
-                            static_root_access::install_precompressed_variants(
-                                *candidate_value, nullptr, precompression);
-                            return std::move(candidate_value);
-                        });
-                if (!prepared.completed()) {
-                    if (prepared.failed()) {
-                        failures_.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    if (!http_server_worker_running(state_)) {
-                        co_return;
-                    }
-                    continue;
-                }
-                candidate_value = std::move(prepared).value();
-            } catch (...) {
-                failures_.fetch_add(1, std::memory_order_relaxed);
-                if (!http_server_worker_running(state_)) {
-                    co_return;
-                }
-                continue;
-            }
+        if (refreshes_) {
+            co_await publisher_->refresh(*options_.blocking_pool_, worker_, state_);
             if (!http_server_worker_running(state_)) {
                 co_return;
             }
         }
-
-        // A binding is a request-scoped lease. If no request can still hold
-        // the current index, replacing it may destroy the old root directly;
-        // otherwise retain the old immutable snapshot until every in-flight
-        // dispatch releases its move-only binding. Publishing a raw pointer
-        // without this retirement step leaves a suspended coroutine with a
-        // dangling static_root after the next poll.
         try {
-            if (current_ != nullptr &&
-                static_root_access::has_active_bindings(*current_)) {
-                // A vector growth is the only fallible part of publication.
-                // The old pointer remains owned by this server if growth is
-                // rejected, so the candidate can be discarded and the next
-                // poll can retry without exposing a half-published root.
-                retired_.push_back(std::move(current_));
-            }
+            adopt_published();
         } catch (...) {
-            failures_.fetch_add(1, std::memory_order_relaxed);
-            continue;
+            // This worker keeps serving its last generation; the snapshot it
+            // missed is still published and is retried next interval.
+            publisher_->record_failure();
         }
-        current_ = std::move(candidate_value);
-        options_.document_root_.publish(*current_);
     }
 }
 

@@ -45,6 +45,10 @@ public:
         if (this == &other) {
             return *this;
         }
+        // Consuming a source that owns this model would destroy the destination.
+        if (other.owns(this)) {
+            ::ruvia::detail::throw_model_move_source_owns_destination();
+        }
 
         auto rebound = rebind_fields(other.fields_, resource_);
         reset_moved_fields(other.fields_);
@@ -127,6 +131,13 @@ public:
         auto rebound = std::as_const(*this).rebind(resource);
         reset_moved_fields(fields_);
         return rebound;
+    }
+
+    // Whether `address` lies in storage owned by these fields beyond their
+    // inline tuple.
+    [[nodiscard]] bool owns(const void* address) const noexcept {
+        return std::apply(
+            [address](const auto&... field) { return (field.owns(address) || ... || false); }, fields_);
     }
 
 private:

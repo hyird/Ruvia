@@ -6,19 +6,18 @@
 #include <string>
 #include <vector>
 
+#include "ruvia/core/memory/process_resource.h"
 #include "ruvia/web/dotenv.h"
-
-#include "app/app_resource.h"
 
 namespace ruvia::detail {
 
 struct env_variable final {
-    std::pmr::string name_{app_resource()};
-    std::pmr::string value_{app_resource()};
+    std::pmr::string name_{process_resource()};
+    std::pmr::string value_{process_resource()};
 };
 
 struct env_state final {
-    std::pmr::vector<env_variable> variables_{app_resource()};
+    std::pmr::vector<env_variable> variables_{process_resource()};
     bool loaded_{false};
 };
 
@@ -47,13 +46,12 @@ struct dotenv_result_access final {
 };
 
 struct dotenv_entry final {
-    std::pmr::string name_{app_resource()};
-    std::pmr::string value_{app_resource()};
+    std::pmr::string name_{process_resource()};
+    std::pmr::string value_{process_resource()};
 };
 
 [[nodiscard]] std::pmr::vector<dotenv_entry> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path);
-[[nodiscard]] std::pmr::vector<dotenv_entry> read_dotenv_entries(const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenv_executable_directory();
 dotenv_result load_env_from_executable_directory(env& env_value, dotenv_options options);
 dotenv_result load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options);

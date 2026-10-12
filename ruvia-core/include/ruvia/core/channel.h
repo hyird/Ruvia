@@ -108,7 +108,7 @@ struct channel_closed final {};
 struct channel_worker_stopping final {};
 
 template <typename t_type>
-struct channel_state final : worker_shutdown_listener {
+struct channel_state final {
     channel_state(
         worker_handle target, std::size_t requested_capacity, std::pmr::memory_resource* resource)
         : worker_(std::move(target)),
@@ -118,23 +118,26 @@ struct channel_state final : worker_shutdown_listener {
         }
     }
 
-    // The queue lock also guards the lifecycle, receiver, and waiter fields, so checking
+    // The queue lock also guards the lifecycle, receiver, and wait slot, so checking
     // admission and publishing a value stay one critical section.
     [[nodiscard]] typename mpsc_ring_queue<t_type>::locked_access lock_state() {
         return queue_.lock();
     }
 
+    // First member: unlinks from the worker registry after every other member is gone.
+    worker_shutdown_hook shutdown_hook_;
     worker_handle worker_;
     mpsc_ring_queue<t_type> queue_;
     using lifecycle_type = std::variant<channel_open, channel_closed, channel_worker_stopping>;
     lifecycle_type lifecycle_;
     bool receiver_closed_{false};
-    worker_single_wait_awaiter<t_type, channel_state<t_type>>* waiter_{nullptr};
-    std::uint64_t waiter_generation_{0};
-    std::uint64_t next_waiter_generation_{0};
+    worker_wait_slot<t_type, channel_state<t_type>> wait_slot_;
 
     void close(bool retire_receiver);
-    void worker_stopping() noexcept override;
+    void worker_stopping() noexcept;
+
+private:
+    void discard_buffered();
 };
 
 template <typename t_type>
@@ -177,7 +180,7 @@ struct channel_receive_awaiter final {
             (void)wait_.complete_status(worker_wait_status::timed_out);
             return true;
         }
-        if (owner_value.waiter_ != nullptr) {
+        if (owner_value.wait_slot_.occupied()) {
             throw std::logic_error("channel supports one pending receiver");
         }
         wait_.publish();
@@ -207,20 +210,45 @@ template <typename t_type>
 
 template <typename t_type>
 void channel_state<t_type>::close(bool retire_receiver) {
-    auto lock = lock_state();
-    receiver_closed_ = receiver_closed_ || retire_receiver;
-    if (!std::holds_alternative<channel_open>(lifecycle_)) {
-        return;
+    {
+        auto lock = lock_state();
+        receiver_closed_ = receiver_closed_ || retire_receiver;
+        if (std::holds_alternative<channel_open>(lifecycle_)) {
+            lifecycle_.template emplace<channel_closed>();
+            wait_slot_.complete(worker_wait_status::closed);
+        }
     }
-    lifecycle_.template emplace<channel_closed>();
-    complete_worker_single_wait(*this, worker_wait_status::closed);
+    if (retire_receiver) {
+        discard_buffered();
+    }
+}
+
+// Retirement leaves the lifecycle closed or stopping, so no sender can publish
+// again and the queue only shrinks here. Buffered values die now, on the
+// retiring thread, rather than with the last sender wherever it drops. Each
+// value is unpublished under the lock but destroyed in its slot after the lock
+// is released, so its destructor may close this channel or drop its endpoints;
+// the caller keeps the state alive until the drain returns.
+template <typename t_type>
+void channel_state<t_type>::discard_buffered() {
+    for (;;) {
+        std::optional<t_type>* retired = nullptr;
+        {
+            auto queue = lock_state();
+            if (queue.front() == nullptr) {
+                return;
+            }
+            retired = &queue.detach_front();
+        }
+        retired->reset();
+    }
 }
 
 template <typename t_type>
 void channel_state<t_type>::worker_stopping() noexcept {
     auto lock = lock_state();
     lifecycle_.template emplace<channel_worker_stopping>();
-    complete_worker_single_wait(*this, worker_wait_status::worker_stopping);
+    wait_slot_.complete(worker_wait_status::worker_stopping);
 }
 
 }  // namespace detail
@@ -243,18 +271,8 @@ public:
                 rejection = channel_send_status::worker_stopping;
             } else if (!state_->worker_.accepting()) {
                 rejection = channel_send_status::worker_stopping;
-            } else if (auto* waiter = state_->waiter_) {
-                const bool wake =
-                    waiter->complete_result(detail::worker_wait_result_access::value(std::move(value)));
-                state_->waiter_ = nullptr;
-                state_->waiter_generation_ = 0;
-                // Wake the receiver while still holding the mutex. Once it is
-                // released, an already-in-flight timer expiry can resume the
-                // receiver on its worker and destroy this awaiter, so reading
-                // its timer registration afterward would be a use-after-free.
-                if (wake) {
-                    waiter->wake();
-                }
+            } else if (state_->wait_slot_.occupied()) {
+                state_->wait_slot_.complete(detail::worker_wait_result_access::value(std::move(value)));
             } else {
                 assert(std::holds_alternative<detail::channel_open>(state_->lifecycle_));
                 if (!queue.try_push(std::move(value))) {
@@ -343,12 +361,16 @@ public:
     }
     const worker_handle& worker() const&& = delete;
 
-    // Retire the receive side so buffered input is no longer returned. Worker shutdown keeps
-    // its worker_stopping outcome. Storage lives until all endpoints and tasks
-    // owning the shared state retire.
+    // Retire the receive side: buffered values are destroyed on the calling
+    // thread and later receives report closed. Worker shutdown keeps its
+    // worker_stopping outcome. The shared state itself lives until all
+    // endpoints and tasks owning it retire.
     void close() const {
         if (state_) {
-            state_->close(true);
+            // A buffered payload destructor may destroy this receiver and the
+            // last sender, so the drain runs on its own owner of the state.
+            const auto pinned = state_;
+            pinned->close(true);
         }
     }
 
@@ -370,7 +392,8 @@ template <typename t_type>
     std::pmr::polymorphic_allocator<detail::channel_state<t_type>> allocator(resolved);
     auto state_value = std::allocate_shared<detail::channel_state<t_type>>(
         allocator, std::move(worker_value), options.capacity_, resolved);
-    detail::worker_handle_access::register_shutdown_listener(state_value->worker_, state_value);
+    detail::worker_handle_access::register_shutdown_hook(
+        state_value->worker_, state_value, &detail::channel_state<t_type>::shutdown_hook_);
     return std::pair(channel_sender<t_type>(state_value), channel_receiver<t_type>(state_value));
 }
 

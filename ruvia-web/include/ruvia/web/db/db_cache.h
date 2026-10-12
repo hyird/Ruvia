@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
@@ -31,5 +32,19 @@ struct db_cache_options final {
 };
 
 using db_cache_setting_type = std::variant<std::monostate, bool, std::chrono::milliseconds, db_cache_options>;
+
+namespace detail {
+
+// The result shapes a repository builder derives from one query. An id-keyed
+// cache entry ignores the SQL, so its key holds the caller's cache id and the
+// shape as separate parts, and removing that id removes every shape.
+enum class db_cache_shape : std::uint8_t {
+    rows,
+    one,
+    exists,
+    count,
+};
+
+}  // namespace detail
 
 }  // namespace ruvia

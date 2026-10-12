@@ -66,7 +66,7 @@ http1_websocket_client_handshake::http1_websocket_client_handshake(
     key_.assign(encoded.data(), 24);
     headers_.reserve(options.headers_.size());
     for (auto header : options.headers_) {
-        headers_.emplace_back(header.name(), header.value(), resource_);
+        headers_.push_back(http_header::copy_of(header.name(), header.value(), resource_));
     }
 }
 
@@ -75,7 +75,7 @@ http1_client_request_prepare_result http1_websocket_client_handshake::prepare_re
     std::pmr::vector<http_header_view> headers(resource_);
     headers.reserve(headers_.size() + 6);
     for (const auto& header : headers_) {
-        headers.emplace_back(header.name_, header.value_);
+        headers.emplace_back(header.name(), header.value());
     }
     headers.emplace_back("Upgrade", "websocket");
     headers.emplace_back("Connection", "Upgrade");

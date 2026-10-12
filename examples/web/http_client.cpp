@@ -8,8 +8,11 @@
 
 #include <array>
 #include <chrono>
+#include <exception>
+#include <iostream>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
@@ -19,11 +22,31 @@
 
 #include "environment.h"
 
-class gateway_controller final : public ruvia::controller<gateway_controller> {
+namespace {
+
+struct upstream_failure final {
+    ruvia::http_status_code status_;
+    std::string_view message_;
+};
+
+// Transport errors can name the upstream host, port, TLS details or OS text,
+// so they stay in the server log and clients get a fixed message. Production
+// code should enqueue the record to a bounded logger instead of blocking here.
+upstream_failure report_upstream_failure(const ruvia::http_client_error& error) {
+    std::cerr << "upstream request failed: " << error.what() << '\n';
+    if (error.code() == ruvia::http_client_error::code_type::timeout) {
+        return {.status_ = ruvia::http_status::gateway_timeout, .message_ = "upstream timeout"};
+    }
+    return {.status_ = ruvia::http_status::bad_gateway, .message_ = "upstream unavailable"};
+}
+
+}  // namespace
+
+class gateway_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/api")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(gateway_controller)
     RUVIA_POST("/forward", forward);
     RUVIA_GET_STREAM("/forward-stream", forward_stream);
     RUVIA_ROUTES_END
@@ -63,11 +86,9 @@ private:
             auto body = co_await response.body().read_all();
             co_return c.body(body.bytes());
         } catch (const ruvia::http_client_error& error) {
-            const auto status = error.code() == ruvia::http_client_error::code_type::timeout
-                                    ? ruvia::http_status::gateway_timeout
-                                    : ruvia::http_status::bad_gateway;
+            const auto failure = report_upstream_failure(error);
             co_return c.error(
-                {.status_ = status, .code_ = "upstream_error", .message_ = error.what()});
+                {.status_ = failure.status_, .code_ = "upstream_error", .message_ = failure.message_});
         }
     }
 
@@ -78,7 +99,7 @@ private:
         if (const auto authorization = c.req().header("authorization")) {
             headers[header_count++] = {"authorization", *authorization};
         }
-        std::string error_body;
+        std::string_view error_body;
         try {
             auto response = co_await client.send({
                 .target_ = "/features/download",
@@ -90,10 +111,9 @@ private:
             }
             co_await response.body().pipe_to(c.stream());
         } catch (const ruvia::http_client_error& error) {
-            c.status(error.code() == ruvia::http_client_error::code_type::timeout
-                         ? ruvia::http_status::gateway_timeout
-                         : ruvia::http_status::bad_gateway);
-            error_body = error.what();
+            const auto failure = report_upstream_failure(error);
+            c.status(failure.status_);
+            error_body = failure.message_;
         }
         if (!error_body.empty()) {
             co_await c.stream_text().write(error_body);
@@ -102,21 +122,26 @@ private:
 };
 
 int main() {
-    const example::environment env;
-    const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8080})
-        .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .get_http_client({
-            .config_ =
-                {
-                    .scheme_ = tls ? ruvia::http_scheme::https : ruvia::http_scheme::http,
-                    .host_ = std::string(env.get("RUVIA_UPSTREAM_HOST").value_or("localhost")),
-                    .port_ = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
-                    .connection_count_ = 4,
-                    .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
-                    .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
-                },
-        })
-        .run();
+    try {
+        const example::environment env;
+        const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8080})
+            .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .get_http_client({
+                .config_ =
+                    {
+                        .scheme_ = tls ? ruvia::http_scheme::https : ruvia::http_scheme::http,
+                        .host_ = std::string(env.get("RUVIA_UPSTREAM_HOST").value_or("localhost")),
+                        .port_ = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
+                        .connection_count_ = 4,
+                        .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
+                        .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
+                    },
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

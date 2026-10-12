@@ -19,12 +19,12 @@ namespace ruvia::detail {
 // identifiers, "--"/"#" line comments and block comments -- and steps over each
 // one atomically. Anything else advances a single byte.
 //
-// Backslash escapes are honoured inside quoted runs. Under the server's
-// NO_BACKSLASH_ESCAPES mode a trailing backslash is data instead, so a literal
-// ending in one is over-consumed here; that direction only ever loses a
-// placeholder, which the caller reports as a count mismatch. The opposite
-// choice would end the literal early and bind a parameter into the middle of a
-// string, which is the failure worth ruling out.
+// MariaDB honours backslash escapes inside '...' and "..." runs unless the
+// session runs with NO_BACKSLASH_ESCAPES, where a backslash is data and only a
+// doubled quote escapes. The two modes disagree on where a literal ending in a
+// backslash closes, and scanning with the wrong one can bind a parameter into
+// the middle of a later literal, so the parameter binder passes the mode its
+// connection reports. Checks without a connection assume the default mode.
 
 [[nodiscard]] inline constexpr bool is_sql_whitespace(char character) noexcept {
     return character == ' ' || character == '\t' || character == '\r' || character == '\n';
@@ -119,7 +119,8 @@ namespace ruvia::detail {
 // The index just past the construct starting at `index`. For an ordinary byte
 // that is `index + 1`; for a literal, identifier or comment it is the first
 // index after its terminator, or `sql.size()` when the construct is unclosed.
-[[nodiscard]] constexpr std::size_t skip_sql_atom(std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skip_sql_atom(
+    std::string_view sql, std::size_t index, bool backslash_escapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -128,7 +129,7 @@ namespace ruvia::detail {
     switch (sql[index]) {
         case '\'':
         case '"':
-            return skip_sql_quoted_run(sql, index, sql[index], true);
+            return skip_sql_quoted_run(sql, index, sql[index], backslash_escapes);
         case '`':
             return skip_sql_quoted_run(sql, index, '`', false);
         case '#':
@@ -266,9 +267,9 @@ namespace ruvia::detail {
 // skipped whole. A byte that opens one of those constructs is that construct
 // and is never reported as syntax.
 [[nodiscard]] constexpr std::size_t find_sql_syntax_byte(
-    std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+    std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
-        const auto next_value = skip_sql_atom(sql, index);
+        const auto next_value = skip_sql_atom(sql, index, backslash_escapes);
         if (next_value == index + 1 && sql[index] == wanted) {
             return index;
         }

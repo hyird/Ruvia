@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -23,11 +22,14 @@
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_number_format.h"
+#include "ruvia/web/detail/util/fnv1a.h"
 
 #include "http/static_file_metadata.h"
 #include "http/static_file_types.h"
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
+#include "server/http_file_open.h"
 #include "server/http_native_file.h"
 
 // A document root indexed once at construction: the directory is walked, every
@@ -150,46 +152,6 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
     }
 }
 
-[[nodiscard]] std::string_view static_precompression_etag_token(http_content_coding coding) noexcept {
-    switch (coding) {
-        case http_content_coding::gzip:
-            return "gzip";
-        case http_content_coding::brotli:
-            return "br";
-        case http_content_coding::zstd:
-            return "zstd";
-        default:
-            return "identity";
-    }
-}
-
-[[nodiscard]] std::pmr::string make_static_file_encoded_snapshot_etag(
-    std::pmr::memory_resource* resource, std::uint64_t encoded_size, std::uint64_t modified_token,
-    http_response_file_identity identity, http_content_coding coding) {
-    std::pmr::string output(resource);
-    output.reserve(144);
-    output.push_back('"');
-    detail::append_static_file_unsigned(output, encoded_size);
-    output.push_back('-');
-    detail::append_static_file_unsigned(output, modified_token);
-    for (const auto word : identity.words()) {
-        output.push_back('-');
-        detail::append_static_file_unsigned(output, word);
-    }
-    output.push_back('-');
-    const auto token = static_precompression_etag_token(coding);
-    output.append(token.data(), token.size());
-    output.push_back('"');
-    return output;
-}
-
-[[nodiscard]] bool same_static_root_file_snapshot(
-    const detail::static_root_entry& entry_value, const detail::response_file_snapshot& snapshot) noexcept {
-    return entry_value.size_ == snapshot.size_ && entry_value.identity_ == snapshot.identity_ &&
-           entry_value.modified_token_ == snapshot.modified_token_ &&
-           entry_value.modified_seconds_ == snapshot.modified_seconds_;
-}
-
 [[nodiscard]] bool same_static_root_entry_metadata(
     const detail::static_root_entry& left, const detail::static_root_entry& right) noexcept {
     return left.relative_path_ == right.relative_path_ && left.file_path_ == right.file_path_ &&
@@ -236,7 +198,9 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
     return nullptr;
 }
 
-void copy_memory_variant(detail::static_root_entry& entry_value,
+// Reuses an unchanged file's encoded bytes from the previous snapshot. The
+// buffer is immutable, so the new snapshot shares it instead of copying it.
+void share_memory_variant(detail::static_root_entry& entry_value,
     const detail::static_root_memory_variant& source_value, std::pmr::memory_resource* resource) {
     auto& stored = entry_value.memory_variants_.emplace_back(resource);
     stored.content_coding_ = source_value.content_coding_;
@@ -255,21 +219,14 @@ void copy_memory_variant(detail::static_root_entry& entry_value,
     const auto size = static_cast<std::size_t>(entry_value.size_);
     std::pmr::string bytes(resource);
     bytes.resize(size);
-    const std::filesystem::path path(entry_value.file_path_.c_str());
-    std::ifstream input(path, std::ios::binary);
+    // Read and revalidate through one handle: the bytes compressed are exactly
+    // those of the indexed snapshot, with no path re-resolution in between.
+    detail::response_file_input input(http_response_file_view(
+        entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
     if (!input) {
-        throw std::filesystem::filesystem_error("open static file for precompression", path,
-            std::make_error_code(std::errc::no_such_file_or_directory));
+        throw std::runtime_error("open static file for precompression failed");
     }
-    if (size != 0) {
-        input.read(bytes.data(), static_cast<std::streamsize>(size));
-        if (input.gcount() != static_cast<std::streamsize>(size)) {
-            throw std::runtime_error("static file changed while it was being precompressed");
-        }
-    }
-    std::error_code ec;
-    const auto after = detail::snapshot_response_file(entry_value.file_path_.c_str(), ec);
-    if (ec || !same_static_root_file_snapshot(entry_value, after)) {
+    if (!detail::read_exact(input, bytes.data(), size) || !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
         throw std::runtime_error("static file changed while it was being precompressed");
     }
     return bytes;
@@ -277,36 +234,31 @@ void copy_memory_variant(detail::static_root_entry& entry_value,
 
 void store_precompressed_variant(detail::static_root_entry& entry_value, http_content_coding coding,
     std::pmr::string encoded, bool emit_response_validators, std::pmr::memory_resource* resource) {
+    auto bytes = std::allocate_shared<std::pmr::string>(
+        std::pmr::polymorphic_allocator<std::pmr::string>(resource), std::move(encoded));
     auto& variant = entry_value.memory_variants_.emplace_back(resource);
     variant.content_coding_ = coding;
     variant.modified_token_ = entry_value.modified_token_;
     variant.modified_seconds_ = entry_value.modified_seconds_;
-    variant.bytes_ = std::move(encoded);
+    variant.bytes_ = std::move(bytes);
     if (emit_response_validators) {
-        variant.etag_ = make_static_file_encoded_snapshot_etag(
-            resource, variant.bytes_.size(), entry_value.modified_token_, entry_value.identity_, coding);
+        variant.etag_ = detail::make_static_file_snapshot_etag(
+            resource, variant.bytes_->size(), entry_value.modified_token_, entry_value.identity_, coding);
         variant.last_modified_ = entry_value.last_modified_;
     }
 }
 
-void hash_bytes(std::uint64_t& hash, const char* bytes_value, std::size_t size) noexcept {
-    for (std::size_t i = 0; i < size; ++i) {
-        hash ^= static_cast<std::uint8_t>(bytes_value[i]);
-        hash *= UINT64_C(1099511628211);
-    }
-}
-
 template <typename t_type>
-void hash_value(std::uint64_t& hash, const t_type& value) noexcept {
-    static_assert(std::is_trivially_copyable_v<t_type>);
-    hash_bytes(hash, reinterpret_cast<const char*>(&value), sizeof(value));
+void hash_value(std::uint64_t& hash, t_type value) noexcept {
+    static_assert(std::is_integral_v<t_type>);
+    hash = detail::fnv1a_accumulate_integer(hash, static_cast<std::uint64_t>(value));
 }
 
 [[nodiscard]] std::uint64_t static_root_fingerprint(const detail::static_root_state& state_value) noexcept {
-    std::uint64_t hash = UINT64_C(1469598103934665603);
+    std::uint64_t hash = detail::fnv1a_offset_basis;
     hash_value(hash, state_value.entries_.size());
     for (const auto& entry : state_value.entries_) {
-        hash_bytes(hash, entry.relative_path_.data(), entry.relative_path_.size());
+        hash = detail::fnv1a_accumulate(hash, entry.relative_path_);
         hash_value(hash, entry.size_);
         hash_value(hash, entry.modified_token_);
         hash_value(hash, entry.modified_seconds_);
@@ -374,21 +326,6 @@ std::uint64_t detail::static_root_access::fingerprint(const static_root& root) n
     return root.state_->fingerprint_;
 }
 
-void detail::static_root_access::acquire_binding(const static_root& root) noexcept {
-    ++root.state_->active_bindings_;
-}
-
-void detail::static_root_access::release_binding(const static_root& root) noexcept {
-    if (root.state_->active_bindings_ == 0) {
-        std::terminate();
-    }
-    --root.state_->active_bindings_;
-}
-
-bool detail::static_root_access::has_active_bindings(const static_root& root) noexcept {
-    return root.state_->active_bindings_ != 0;
-}
-
 void detail::static_root_access::install_precompressed_variants(
     static_root& root, const static_root* previous, const static_root_precompression_options& options) {
     if (!options.enabled()) {
@@ -441,7 +378,7 @@ void detail::static_root_access::install_precompressed_variants(
             if (previous_entry != nullptr) {
                 if (const auto* previous_variant = find_memory_variant(*previous_entry, coding);
                     previous_variant != nullptr) {
-                    copy_memory_variant(entry, *previous_variant, resource);
+                    share_memory_variant(entry, *previous_variant, resource);
                     continue;
                 }
             }
@@ -558,11 +495,6 @@ std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_roo
     return construct(object_resource, static_root::prepare_construction(root, std::move(config)));
 }
 
-std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::clone(
-    std::pmr::memory_resource* object_resource, const static_root& source_value) {
-    return make(object_resource, source_value.path(), source_value.state_->config_);
-}
-
 static_root::static_root(const std::filesystem::path& root, static_root_options options)
     : static_root(prepare_construction(root, std::move(options))) {}
 
@@ -674,13 +606,6 @@ static_root::static_root(prepared_construction_type prepared)
 static_root::~static_root() = default;
 
 void static_root::state_deleter_type::operator()(detail::static_root_state* state_value) const noexcept {
-    if (state_value->active_bindings_ != 0) {
-        // A configured binding is the lifetime lease for this immutable
-        // snapshot. Destroying the state first would leave its move-only
-        // binding with a dangling pointer and make the eventual release
-        // undefined behavior.
-        std::terminate();
-    }
     destroy_pmr_object(state_value, process_resource());
 }
 

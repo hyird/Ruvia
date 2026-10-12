@@ -22,66 +22,20 @@
 namespace ruvia::detail {
 namespace {
 
+// A Sec-WebSocket-Key is the canonical padded base64 of a 16-byte nonce
+// (RFC 6455 section 4.1), so exactly 24 characters.
 [[nodiscard]] std::optional<std::array<std::uint8_t, 16>> decode_websocket_key(
     std::string_view key) noexcept {
     key = http_trim_ows(key);
+    std::array<std::uint8_t, 16> nonce{};
     if (key.size() != 24) {
         return std::nullopt;
     }
-
-    std::array<std::uint8_t, 16> nonce{};
-    std::size_t out = 0;
-    const auto emit = [&nonce, &out](std::uint8_t byte) noexcept {
-        if (out < nonce.size()) {
-            nonce[out] = byte;
-        }
-        ++out;
-    };
-    for (std::size_t i = 0; i < key.size(); i += 4) {
-        std::array<std::uint8_t, 4> values{};
-        std::size_t padding = 0;
-        for (std::size_t j = 0; j < 4; ++j) {
-            const auto ch = key[i + j];
-            if (ch == '=') {
-                values[j] = 0;
-                ++padding;
-                continue;
-            }
-            if (padding != 0) {
-                return std::nullopt;
-            }
-            const auto value = http_base64_decode_char(ch);
-            if (value < 0) {
-                return std::nullopt;
-            }
-            values[j] = static_cast<std::uint8_t>(value);
-        }
-        if (padding > 2 || (padding != 0 && i + 4 != key.size())) {
-            return std::nullopt;
-        }
-        // RFC 4648 requires unused bits in the final base64 quantum to be
-        // zero.  Without this check, multiple non-canonical strings decode
-        // to the same nonce and are incorrectly accepted as websocket keys.
-        if ((padding == 2 && (values[1] & 0x0FU) != 0) ||
-            (padding == 1 && (values[2] & 0x03U) != 0)) {
-            return std::nullopt;
-        }
-        const auto triple = (static_cast<std::uint32_t>(values[0]) << 18) |
-                            (static_cast<std::uint32_t>(values[1]) << 12) |
-                            (static_cast<std::uint32_t>(values[2]) << 6) |
-                            static_cast<std::uint32_t>(values[3]);
-        emit(static_cast<std::uint8_t>((triple >> 16) & 0xFF));
-        if (padding < 2) {
-            emit(static_cast<std::uint8_t>((triple >> 8) & 0xFF));
-        }
-        if (padding < 1) {
-            emit(static_cast<std::uint8_t>(triple & 0xFF));
-        }
-    }
-    if (out != 16) {
+    const auto decoded =
+        http_base64_decode(key, nonce, http_base64_charset::standard, http_base64_padding::required);
+    if (!decoded || *decoded != nonce.size()) {
         return std::nullopt;
     }
-
     return nonce;
 }
 
@@ -100,6 +54,8 @@ http_protocol_error websocket_handshake_failure::protocol_error() const noexcept
             // in its example. 426 would instead require HTTP Upgrade fields.
             return http_protocol_error(
                 http_status::bad_request, "unsupported WebSocket version");
+        case kind_type::unsupported_subprotocol:
+            return http_protocol_error(http_status::bad_request, "no supported WebSocket subprotocol offered");
     }
     return http_protocol_error(http_status::bad_request, "invalid WebSocket handshake");
 }
@@ -110,8 +66,8 @@ void websocket_handshake_failure::apply_required_response_headers(http_response&
     }
 }
 
-websocket_handshake_validation_result validate_websocket_handshake(
-    const http_request& request, const http1_request_body_plan& body_plan) noexcept {
+websocket_handshake_validation_result validate_websocket_handshake(const http_request& request,
+    const http1_request_body_plan& body_plan, websocket_handshake_validation_options options) noexcept {
     detail::http_connection_options connection_options;
     detail::http_upgrade_protocols upgrade_protocols;
     std::string_view key;
@@ -165,6 +121,10 @@ websocket_handshake_validation_result validate_websocket_handshake(
     }
     if (!http_ascii_equals_ignore_case(http_trim_ows(version), "13")) {
         return websocket_handshake_validation_result::make_unsupported_version();
+    }
+    if (options.require_subprotocol_ &&
+        detail::choose_websocket_subprotocol(request, options.supported_subprotocols_).empty()) {
+        return websocket_handshake_validation_result::make_unsupported_subprotocol();
     }
     return websocket_handshake_validation_result::make_accepted();
 }

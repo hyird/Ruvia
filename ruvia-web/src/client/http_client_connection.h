@@ -32,7 +32,8 @@ public:
         return index_;
     }
 
-    // Called while the pool slot is exclusively leased; reuses a live connection.
+    // Called while the pool slot is exclusively leased; reuses a live connection
+    // and replaces one the peer retired while it was idle.
     [[nodiscard]] task<void> ensure_connected(
         const operation_timeout& timeout, stop_token stop_token_value);
     // Close the current transport and discard its buffered wire bytes.

@@ -49,8 +49,8 @@ constexpr auto phase_timeout = std::chrono::milliseconds(200);
     return true;
 }();
 
-class admission_routes final : public ruvia::controller<admission_routes> {
-    RUVIA_ROUTES_BEGIN
+class admission_routes final {
+    RUVIA_ROUTES_BEGIN(admission_routes)
     RUVIA_GET("/plain", plain);
     RUVIA_POST("/upload", upload);
     RUVIA_GET_STREAM("/events", events);

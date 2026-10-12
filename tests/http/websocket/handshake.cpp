@@ -174,6 +174,46 @@ RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
     RUVIA_CHECK(rejects_request(with_protocols(too_many)));
 }
 
+RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
+    const auto with_protocols = [](std::string_view fields_value) {
+        std::string request(valid_handshake());
+        request.insert(request.size() - 2, fields_value);
+        return request;
+    };
+    constexpr std::array<std::string_view, 2> supported{"chat.v2", "chat.v1"};
+    const auto validate = [&](std::string_view raw_request, bool required) {
+        http1_server_request_parser parser;
+        const auto parsed_value = parser.parse_message(raw_request);
+        return validate_websocket_handshake(parsed_value.request_, parsed_value.body_plan_,
+            {.supported_subprotocols_ = supported, .require_subprotocol_ = required});
+    };
+    const auto accepts = [&](std::string_view raw_request, bool required) {
+        const auto result_value = validate(raw_request, required);
+        return result_value.accepted() != nullptr;
+    };
+
+    // Not required: an offer sharing nothing is still a valid handshake.
+    RUVIA_CHECK(accepts(valid_handshake(), false));
+    RUVIA_CHECK(accepts(with_protocols("Sec-WebSocket-Protocol: other\r\n"), false));
+
+    RUVIA_CHECK(accepts(with_protocols("Sec-WebSocket-Protocol: other, chat.v1\r\n"), true));
+    for (const std::string_view raw_request :
+        {valid_handshake(), std::string_view("GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
+                                             "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+                                             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                             "Sec-WebSocket-Protocol: other, Chat.v1\r\n\r\n")}) {
+        const auto result_value = validate(raw_request, true);
+        const auto* failure = result_value.failure();
+        RUVIA_CHECK(failure != nullptr);
+        if (failure != nullptr) {
+            RUVIA_CHECK(failure->protocol_error().status() == ruvia::http_status::bad_request);
+            ruvia::http_response response;
+            failure->apply_required_response_headers(response);
+            RUVIA_CHECK(!response.header("Sec-WebSocket-Version").has_value());
+        }
+    }
+}
+
 RUVIA_TEST(ws_extension_offers_must_match_the_rfc6455_abnf) {
     const auto with_extensions = [](std::string_view fields_value) {
         std::string request(valid_handshake());
@@ -386,6 +426,30 @@ RUVIA_TEST(ws_handshake_bounds_application_header_count_and_size) {
         size_rejected = true;
     }
     RUVIA_CHECK(size_rejected);
+}
+
+RUVIA_TEST(ws_handshake_budget_covers_status_line_and_final_empty_line) {
+    const auto request = parse_request(valid_handshake());
+    const auto serialize = [](const ruvia::websocket_server_handshake& handshake) {
+        std::string response;
+        handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
+        return response;
+    };
+    const auto base_size = serialize(ruvia::make_websocket_server_handshake(request, {})).size();
+    // "x: " + value + CRLF fills the head to exactly max_http_header_bytes.
+    const std::string largest(ruvia::max_http_header_bytes - base_size - 5, 'a');
+    const std::array fitting{ruvia::http_header_view("x", largest)};
+    RUVIA_CHECK_EQ(serialize(ruvia::make_websocket_server_handshake(request, {.response_headers_ = fitting})).size(),
+        ruvia::max_http_header_bytes);
+    const std::string oversized = largest + 'a';
+    const std::array too_large{ruvia::http_header_view("x", oversized)};
+    bool rejected = false;
+    try {
+        (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = too_large});
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {

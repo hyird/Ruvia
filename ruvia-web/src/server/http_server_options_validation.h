@@ -4,12 +4,8 @@
 #include <span>
 #include <vector>
 
-#include "ruvia/http/http_ascii.h"
-
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
-#include "server/http_server_tls_identity.h"
-#include "tls/tls_host.h"
 #include "util/config_validation.h"
 
 namespace ruvia::detail {
@@ -23,8 +19,6 @@ void validate_server_limits(const http_server_options& options);
 [[nodiscard]] http_server_options normalize_server_options(const server_config& config, http_server_options options);
 
 void validate_http_server_options(const http_server_options& options);
-
-void validate_http_server_tls_options(const http_server_listener_definition::tls_type& tls);
 
 void validate_http_server_listener(const http_server_listener_definition& listener_value);
 

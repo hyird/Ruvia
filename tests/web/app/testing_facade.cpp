@@ -22,6 +22,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/deadline.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/security_headers.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/testing.h"
@@ -45,8 +46,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-class testing_facade_throwing_middleware final
-    : public ruvia::middleware {
+class testing_facade_throwing_middleware final {
 public:
     explicit testing_facade_throwing_middleware(int* attempts) {
         ++*attempts;
@@ -58,7 +58,7 @@ public:
     }
 };
 
-class testing_facade_stamp final : public ruvia::middleware {
+class testing_facade_stamp final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -70,7 +70,7 @@ public:
 // Registered with constructor arguments rather than default constructed, so it
 // is deliberately not default constructible: the descriptor must carry the
 // registration arguments to every instance the router builds.
-class testing_facade_configured_stamp final : public ruvia::middleware {
+class testing_facade_configured_stamp final {
 public:
     testing_facade_configured_stamp(std::string_view name, int level) noexcept
         : name_(name),
@@ -95,7 +95,7 @@ struct testing_facade_user final {
 // The pattern request-scoped bindings exist for: a middleware computes a value,
 // owns it in its own coroutine frame, and publishes it to everything downstream
 // of its next() for exactly that scope.
-class testing_facade_auth final : public ruvia::middleware {
+class testing_facade_auth final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         const testing_facade_user user_value{
@@ -106,7 +106,7 @@ public:
 };
 
 // Stamps a header so a response shows whether this middleware ran at all.
-class testing_facade_scoped final : public ruvia::middleware {
+class testing_facade_scoped final {
 public:
     explicit testing_facade_scoped(std::string_view tag) noexcept
         : tag_(tag) {}
@@ -122,13 +122,52 @@ private:
 
 // Declares itself meaningful on a request that matched no route, the way
 // security_headers_middleware does.
-class testing_facade_always final : public ruvia::middleware {
+class testing_facade_always final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.header("X-Test-Always", "on");
+    }
+};
+
+// Each replaces a complete downstream response after next(): one by failing,
+// one by responding.
+class testing_facade_deny_after final {
+public:
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+        co_await next_value();
+        throw ruvia::http_error({.status_ = ruvia::http_status::forbidden});
+    }
+};
+
+class testing_facade_replace_after final {
+public:
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        co_await next_value();
+        c.respond(c.text("denied"));
+    }
+};
+
+// Replaces a downstream response through context metadata assigned after next().
+class testing_facade_forbid_after final {
+public:
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        co_await next_value();
+        c.status(ruvia::http_status::forbidden);
+        c.header("X-Test-Denied", "after");
+        c.respond(c.text("denied"));
+    }
+};
+
+// Post-processes a downstream response after next(), then fails.
+class testing_facade_stamp_then_fail final {
+public:
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        co_await next_value();
+        c.header("X-Test-After", "1");
+        throw ruvia::http_error({.status_ = ruvia::http_status::conflict});
     }
 };
 
@@ -145,10 +184,10 @@ std::string_view counted_on_path() {
     return "/counted-on";
 }
 
-class testing_facade_controller final : public ruvia::controller<testing_facade_controller> {
+class testing_facade_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/t")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(testing_facade_controller)
     RUVIA_GET("/hello", hello);
     RUVIA_GET("/a/:id/", slash_test);
     RUVIA_ALL(counted_all_path(), hello);
@@ -160,6 +199,8 @@ public:
     RUVIA_GET("/literal/", hello);
     RUVIA_GET("/tail/:id//", user);
     RUVIA_GET("/trailing-links", trailing_links);
+    RUVIA_GET("/tree/*", tree);
+    RUVIA_GET("/dot-links", dot_links);
     RUVIA_GET("/head/:id", head_metadata, testing_facade_stamp);
     RUVIA_GET("/greet", greet);
     RUVIA_GET("/link", link);
@@ -172,6 +213,7 @@ public:
     RUVIA_GET("/large", large);
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/deadline", deadline, ruvia::deadline<20>);
+    RUVIA_GET("/partial", partial);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
     RUVIA_METHOD("PROPFIND", "/dav-only", dav_only);
@@ -191,6 +233,16 @@ private:
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& c) {
         co_return c.text("hello");
+    }
+
+    // A representation-specific answer whose metadata describes only its own body.
+    ruvia::task<ruvia::http_response> partial(ruvia::context& c) {
+        c.status(ruvia::http_status::partial_content);
+        c.header("Content-Range", "bytes 0-3/10");
+        c.header("ETag", "\"v1\"");
+        c.header("Cache-Control", "public, max-age=60");
+        c.header("Content-Type", "application/octet-stream");
+        co_return c.body("abcd");
     }
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
@@ -320,6 +372,31 @@ private:
         reply.append(c.url_for("/t/literal/"));
         reply.push_back(' ');
         reply.append(c.url_for("/t/tail/:id//", {"789"}));
+        co_return c.body(std::move(reply));
+    }
+
+    ruvia::task<ruvia::http_response> tree(ruvia::context& c) {
+        co_return c.body(c.req().param("*").value_or("?"));
+    }
+
+    ruvia::task<ruvia::http_response> dot_links(ruvia::context& c) {
+        const auto rejects = [&c](std::string_view pattern, std::string_view value) {
+            try {
+                (void)c.url_for(pattern, {value});
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        };
+        static constexpr std::string_view cases[][2] = {{"/t/users/:id", "."}, {"/t/users/:id", ".."},
+            {"/t/tree/*", "."}, {"/t/tree/*", ".."}, {"/t/tree/*", "./a"}, {"/t/tree/*", "a/../b"},
+            {"/t/tree/*", "a/."}};
+        std::pmr::string reply(c.arena());
+        for (const auto& entry : cases) {
+            reply.push_back(rejects(entry[0], entry[1]) ? 'x' : '-');
+        }
+        reply.push_back(' ');
+        reply.append(c.url_for("/t/tree/*", {"a.b/..c/.d"}));
         co_return c.body(std::move(reply));
     }
 };
@@ -815,6 +892,107 @@ RUVIA_TEST(testing_facade_unmatched_middleware_also_wraps_405_and_501) {
     RUVIA_CHECK(unknown_method.header("X-Test-Always").has_value());
 }
 
+RUVIA_TEST(testing_facade_replacement_responses_do_not_inherit_the_discarded_one) {
+    // An error raised after next() describes itself, not the 206 it replaces:
+    // no range, validator or cache policy of the discarded representation.
+    {
+        ruvia::test_app app;
+        app.use_at<testing_facade_deny_after>({.prefix_ = "/t/partial"});
+        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(denied.status(), ruvia::http_status::forbidden);
+        RUVIA_CHECK_EQ(denied.header("Content-Type").value_or(std::string_view{}),
+            std::string_view("application/problem+json"));
+        RUVIA_CHECK(!denied.header("Content-Range").has_value());
+        RUVIA_CHECK(!denied.header("ETag").has_value());
+        RUVIA_CHECK(!denied.header("Cache-Control").has_value());
+    }
+    // Likewise a response built and sent in its place.
+    {
+        ruvia::test_app app;
+        app.use_at<testing_facade_replace_after>({.prefix_ = "/t/partial"});
+        const auto replaced = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(replaced.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(replaced.body(), std::string_view("denied"));
+        RUVIA_CHECK_EQ(replaced.header("Content-Type").value_or(std::string_view{}),
+            std::string_view("text/plain; charset=UTF-8"));
+        RUVIA_CHECK(!replaced.header("Content-Range").has_value());
+        RUVIA_CHECK(!replaced.header("ETag").has_value());
+        RUVIA_CHECK(!replaced.header("Cache-Control").has_value());
+    }
+}
+
+RUVIA_TEST(testing_facade_metadata_set_after_a_final_response_is_kept) {
+    // After next() context metadata post-processes the final response itself.
+    {
+        ruvia::test_app app;
+        app.use_at<testing_facade_scoped>({.prefix_ = "/t/partial"}, "after");
+        const auto stamped = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(stamped.status(), ruvia::http_status::partial_content);
+        RUVIA_CHECK_EQ(stamped.body(), std::string_view("abcd"));
+        RUVIA_CHECK_EQ(stamped.header("X-Test-Scope").value_or(std::string_view{}), std::string_view("after"));
+        RUVIA_CHECK(stamped.header("Content-Range").has_value());
+    }
+    // A replacement built afterwards starts from that metadata, not from the
+    // discarded response.
+    {
+        ruvia::test_app app;
+        app.use_at<testing_facade_forbid_after>({.prefix_ = "/t/partial"});
+        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(denied.status(), ruvia::http_status::forbidden);
+        RUVIA_CHECK_EQ(denied.body(), std::string_view("denied"));
+        RUVIA_CHECK_EQ(denied.header("X-Test-Denied").value_or(std::string_view{}), std::string_view("after"));
+        RUVIA_CHECK_EQ(denied.header("Content-Type").value_or(std::string_view{}),
+            std::string_view("text/plain; charset=UTF-8"));
+        RUVIA_CHECK(!denied.header("Content-Range").has_value());
+        RUVIA_CHECK(!denied.header("ETag").has_value());
+        RUVIA_CHECK(!denied.header("Cache-Control").has_value());
+    }
+    // A custom error handler answering a failure raised after next() keeps the
+    // status it assigns through the context.
+    {
+        ruvia::test_app app;
+        app.on_error(&facade_error);
+        app.use_at<testing_facade_deny_after>({.prefix_ = "/t/partial"});
+        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(denied.status(), ruvia::http_status::forbidden);
+        RUVIA_CHECK_EQ(denied.body(), std::string_view("custom-error"));
+        RUVIA_CHECK(!denied.header("Content-Range").has_value());
+        RUVIA_CHECK(!denied.header("ETag").has_value());
+        RUVIA_CHECK(!denied.header("Cache-Control").has_value());
+    }
+    // Metadata assigned after next() and before the failure reaches the error
+    // handler's context-built response; the discarded representation does not.
+    {
+        ruvia::test_app app;
+        app.on_error(&facade_error);
+        app.use_at<testing_facade_stamp_then_fail>({.prefix_ = "/t/partial"});
+        const auto failed = app.request(ruvia::test_request::get("/t/partial"));
+        RUVIA_CHECK_EQ(failed.status(), ruvia::http_status::conflict);
+        RUVIA_CHECK_EQ(failed.body(), std::string_view("custom-error"));
+        RUVIA_CHECK_EQ(failed.header("X-Test-After").value_or(std::string_view{}), std::string_view("1"));
+        RUVIA_CHECK(!failed.header("Content-Range").has_value());
+        RUVIA_CHECK(!failed.header("ETag").has_value());
+    }
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_wraps_automatic_options_answers) {
+    ruvia::test_app app;
+    app.use<testing_facade_always>();
+
+    // The per-resource OPTIONS answer and the server-wide OPTIONS * one are
+    // unmatched answers too, so the same response layer covers them.
+    const auto resource = app.request(ruvia::test_request::options("/t/hello"));
+    RUVIA_CHECK_EQ(resource.status(), ruvia::http_status::no_content);
+    RUVIA_CHECK(resource.header("Allow").has_value());
+    RUVIA_CHECK(resource.header("X-Test-Always").has_value());
+
+    const auto server = app.request(ruvia::test_request::options("*"));
+    RUVIA_CHECK_EQ(server.status(), ruvia::http_status::no_content);
+    // Methods differ per resource, so the server-wide answer carries no Allow.
+    RUVIA_CHECK(!server.header("Allow").has_value());
+    RUVIA_CHECK(server.header("X-Test-Always").has_value());
+}
+
 RUVIA_TEST(testing_facade_unmatched_middleware_runs_with_a_custom_not_found_handler) {
     ruvia::test_app app;
     app.use<testing_facade_always>();
@@ -1034,4 +1212,18 @@ RUVIA_TEST(testing_facade_reverse_routes_preserve_trailing_segments) {
     const auto tail = app.request(ruvia::test_request::get(links.body().substr(separator + 1)));
     RUVIA_CHECK_EQ(tail.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(tail.body(), "789");
+}
+
+RUVIA_TEST(testing_facade_reverse_routes_reject_dot_segments) {
+    // RFC 3986 5.2.4 resolvers rewrite "." and ".." segments to a different
+    // resource, so url_for refuses to emit them; dots inside a segment stay.
+    ruvia::test_app app;
+
+    const auto links = app.request(ruvia::test_request::get("/t/dot-links"));
+    RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(links.body(), "xxxxxxx /t/tree/a.b/..c/.d");
+
+    const auto tree = app.request(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
+    RUVIA_CHECK_EQ(tree.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(tree.body(), "a.b/..c/.d");
 }

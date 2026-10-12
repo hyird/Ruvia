@@ -206,11 +206,4 @@ private:
     pending_compact_until = offset;
     return websocket_frame_read_result::make_frame(*frame_start, payload_view);
 }
-
-[[nodiscard]] inline websocket_frame_read_result websocket_try_read_frame(std::pmr::string& buffer,
-    std::size_t& offset, std::size_t& pending_compact_until, protocol_byte_limit message_limit,
-    bool permessage_deflate) {
-    return websocket_try_read_frame(
-        buffer, offset, pending_compact_until, message_limit, permessage_deflate, true);
-}
 }  // namespace ruvia::detail

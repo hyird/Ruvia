@@ -10,7 +10,7 @@
 
 namespace ruvia {
 
-class http_response;
+class http_response_headers;
 
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
@@ -53,7 +53,7 @@ public:
     void write(char* output) const;
 
 private:
-    friend class http_response;
+    friend class http_response_headers;
     struct written_fields final {
         std::string_view wire_name_;
         std::string_view path_;
@@ -70,7 +70,6 @@ private:
     std::string_view same_site_text_;
     std::uint64_t max_age_value_{0};
     std::size_t expires_size_{0};
-    std::size_t max_age_size_{0};
     std::size_t size_{0};
     bool has_max_age_{false};
     bool http_only_{false};

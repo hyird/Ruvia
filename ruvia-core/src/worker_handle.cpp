@@ -52,15 +52,6 @@ bool detail::worker_handle_access::defer_if_attached(
     return dispatcher && dispatcher->defer_if_attached(std::move(task_value));
 }
 
-void detail::worker_handle_access::register_shutdown_listener(
-    const worker_handle& worker_value, const std::shared_ptr<worker_shutdown_listener>& listener_value) {
-    const auto& dispatcher = worker_value.dispatcher_;
-    if (!dispatcher) {
-        throw std::runtime_error("cannot register state on a stopped worker");
-    }
-    dispatcher->register_shutdown_listener(listener_value);
-}
-
 void detail::worker_handle_access::when_shutdown_notifications_complete(
     const worker_handle& worker_value, move_only_function<void()> callback_value) {
     const auto& dispatcher = worker_value.dispatcher_;

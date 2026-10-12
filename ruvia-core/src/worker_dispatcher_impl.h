@@ -115,11 +115,11 @@ struct worker_dispatcher::impl_type {
     bool abandon_drain_{false};
     bool shutdown_notification_active_{false};
     idle_callbacks_type shutdown_notification_waiters_{process_resource()};
-    // Registered shutdown listeners in registration order. A separate mutex
-    // keeps registration and unlinking off the admission lock.
-    std::mutex listeners_mutex_;
-    worker_shutdown_listener* listeners_head_{nullptr};
-    worker_shutdown_listener* listeners_tail_{nullptr};
+    // Registered shutdown hooks in registration order. A separate mutex keeps
+    // registration and unlinking off the admission lock.
+    std::mutex hooks_mutex_;
+    worker_shutdown_hook* hooks_head_{nullptr};
+    worker_shutdown_hook* hooks_tail_{nullptr};
     std::pmr::vector<timer_entry> timers_;
     std::pmr::deque<timer_slot> timer_slots_;
     std::size_t free_timer_slot_{no_timer_slot};

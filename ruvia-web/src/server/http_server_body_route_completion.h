@@ -44,8 +44,8 @@ struct http_lazy_buffered_body_route_state final {
         return body_->loader().consumption();
     }
 
-    void take_pipeline(std::pmr::string& stash) {
-        body_->loader().take_pipeline(stash);
+    [[nodiscard]] body_pipeline_handover take_pipeline(std::pmr::string& stash) {
+        return body_->loader().take_pipeline(stash);
     }
 };
 
@@ -64,7 +64,7 @@ inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_
     return std::string_view(read_buffer.data() + header_bytes, used_bytes - header_bytes);
 }
 
-inline task<http1_session_request_completion> complete_failed_http_body_route(
+inline task<http1_session_request_completion> complete_failed_http_route(
     connection_scanner::entry_type& scanner_entry, std::exception_ptr exception,
     const http1_server_request_parse_state& parsed_value, const route_table& routes_value,
     request_memory& request_memory_value, context_services exception_services, http_response& response) {
@@ -77,26 +77,37 @@ inline task<http1_session_request_completion> complete_failed_http_body_route(
     co_return http1_session_request_completion::make_buffered_closing(connection_plan);
 }
 
-// `pipeline_stash` must be request-scoped storage that outlives the returned
-// completion: it carries the next pipelined request until the session installs
-// it. The read buffer is not touched here -- the response has not been written
-// and the access log not recorded yet, and both still read views that borrow it.
+// `read_buffer_used_bytes` is the connection read buffer's used bytes at
+// dispatch, the suffix included. A suffix still in that buffer becomes an
+// in-place compaction; only bytes the body reader over-read go through
+// `pipeline_stash`, request-scoped storage that outlives the returned
+// completion. The read buffer is not touched here -- the response has not been
+// written and the access log not recorded yet, and both still read views that
+// borrow it.
 template <typename take_pipeline_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
     connection_scanner::entry_type& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
-    http1_request_body_consumption body_consumption, std::pmr::string& pipeline_stash,
-    take_pipeline_type take_pipeline) {
-    connection_plan =
-        finalize_body_route_response(response, connection_plan, request_sequence, body_consumption);
-    if (connection_plan.disposition() == http1_close_policy::allow_reuse) {
-        take_pipeline(pipeline_stash);
-        scanner_entry.touch();
-        return http1_session_request_completion::make_buffered_pipeline_restore(
-            connection_plan, std::string_view(pipeline_stash));
-    }
+    http1_request_body_consumption body_consumption, std::size_t read_buffer_used_bytes,
+    std::pmr::string& pipeline_stash, take_pipeline_type take_pipeline) {
+    connection_plan = apply_request_body_consumption(connection_plan, body_consumption);
+    connection_plan = request_sequence.complete_uncommitted_response(connection_plan);
+    // Fix borrowed response views before callers restore pipeline bytes.
+    response.materialize_body();
     scanner_entry.touch();
-    return http1_session_request_completion::make_buffered_closing(connection_plan);
+    return commit_http1_route_response(response, connection_plan,
+        [&](http1_request_connection_plan committed) {
+            if (committed.disposition() == http1_close_policy::allow_reuse) {
+                const auto pipeline = take_pipeline(pipeline_stash);
+                if (!pipeline.stashed_.empty()) {
+                    return http1_session_request_completion::make_buffered_pipeline_restore(
+                        committed, pipeline.stashed_);
+                }
+                return http1_session_request_completion::make_buffered_unrestored(
+                    committed, read_buffer_used_bytes - pipeline.read_buffer_suffix_bytes_);
+            }
+            return http1_session_request_completion::make_buffered_closing(committed);
+        });
 }
 
 }  // namespace ruvia::detail

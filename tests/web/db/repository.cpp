@@ -589,6 +589,33 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
 }  // namespace db_repository_test
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_postgresql_raw_parameters_stay_untyped_and_compiled_values_carry_casts) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle, {{.rows_ = {"raw"}}, {.rows_ = {"compiled"}}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.handle();
+        const std::array<db_value, 4> params{db_value{5}, db_value{1.5}, db_value{true}, db_value{"text"}};
+        (void)co_await handle.query("SELECT $1, $2, $3, $4", std::span<const db_value>(params));
+        // Untyped, json_build_object's variadic "any" arguments cannot be resolved.
+        db_query query;
+        query.select(query.call("json_build_object", {query.value("k"), query.value(5)})).from("records");
+        (void)co_await handle.query(query);
+    });
+    const auto statements = peer.postgres_parses();
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{2});
+    if (statements.size() == 2) {
+        // The user's SQL decides parameter types; libpq declares none.
+        RUVIA_CHECK(statements[0].sql_ == "SELECT $1, $2, $3, $4");
+        RUVIA_CHECK(statements[0].parameter_types_.empty());
+        RUVIA_CHECK(statements[1].sql_ == "SELECT \"json_build_object\"($1::text, $2::int8) FROM \"records\"");
+        RUVIA_CHECK(statements[1].parameter_types_.empty());
+    }
+}
+
 namespace db_repository_array_test {
 
 using array_entity = ruvia::db_entity<"array_records", ruvia::db_column<"values", std::pmr::vector<int>>>;

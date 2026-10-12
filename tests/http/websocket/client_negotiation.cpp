@@ -66,7 +66,9 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         std::vector<ruvia::http_header> head;
 
         add(head, "sec-websocket-extensions", "permessage-deflate");
-        RUVIA_CHECK((require_client_no_takeover.validate_fields(head).index() == 0));
+        auto accepted = require_client_no_takeover.validate_fields(head);
+        RUVIA_CHECK((accepted.index() == 0));
+        RUVIA_CHECK(std::get<0>(accepted).compression_.client_no_context_takeover_);
     }
     std::vector<ruvia::http_header> head;
 

@@ -1,3 +1,5 @@
+#include "ruvia/core/memory/process_resource.h"
+
 #include "app/app_config_mutation.h"
 #include "integration/named_capability.h"
 
@@ -13,7 +15,7 @@ namespace ruvia {
 application& application::database(db_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure database while app is running", [&](detail::app_state& state_value) {
-            auto* resource = detail::app_resource();
+            auto* resource = process_resource();
             detail::validate_capability_alias(config.alias_, "database alias must not be empty");
             detail::db_definition replacement{std::pmr::string(config.alias_, resource),
                 detail::db_config_storage(config.config_, resource)};
@@ -22,13 +24,7 @@ application& application::database(db_registration_config config) {
                 replacement.query_cache_.emplace(*config.query_cache_, resource);
             }
 #endif
-            for (auto& definition : state_value.databases_) {
-                if (std::string_view(definition.alias_) == std::string_view(config.alias_)) {
-                    definition = std::move(replacement);
-                    return;
-                }
-            }
-            state_value.databases_.push_back(std::move(replacement));
+            detail::upsert_named_capability_definition(state_value.databases_, std::move(replacement));
         });
 }
 
@@ -44,7 +40,7 @@ application& application::redis(redis_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
         [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(state_value.redis_, config.alias_, config.config_,
-                "redis alias must not be empty", detail::app_resource());
+                "redis alias must not be empty", process_resource());
         });
 }
 
@@ -58,7 +54,7 @@ application& application::get_http_client(http_client_registration_config config
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_, config.config_,
-                "HTTP client alias must not be empty", detail::app_resource());
+                "HTTP client alias must not be empty", process_resource());
         });
 }
 

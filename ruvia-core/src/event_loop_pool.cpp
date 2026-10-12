@@ -77,6 +77,10 @@ public:
         return lifecycle_.start();
     }
 
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return lifecycle_.state() != runtime_lifecycle::state_type::running;
+    }
+
     void complete_stop() noexcept {
         lifecycle_.complete_stop();
     }
@@ -116,7 +120,7 @@ struct event_loop_pool::impl_type {
         loops_.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             loops_.push_back(std::make_shared<detail::event_loop_state>(options.queue_capacity_));
-            loops_.back()->install_lifecycle_listener();
+            loops_.back()->install_shutdown_hook();
             owner_->add_loop(loops_.back());
             loops_.back()->failure_sink_ = [stable_owner = owner_](std::exception_ptr failure) {
                 stable_owner->report_failure(std::move(failure));
@@ -139,6 +143,24 @@ struct event_loop_pool::impl_type {
 
     void stop() noexcept {
         owner_->stop();
+    }
+
+    // A pool stop (requested directly or by a failing loop) closes the owner
+    // lifecycle before it stops any loop, and can win a cold loop's launch
+    // transition. Launching then ends; join() reports the stop's outcome.
+    [[nodiscard]] bool launch(worker_runtime& runtime) {
+        if (owner_->stop_requested()) {
+            return false;
+        }
+        try {
+            runtime.start();
+        } catch (const std::logic_error&) {
+            if (owner_->stop_requested() && runtime.state() != runtime_lifecycle::state_type::running) {
+                return false;
+            }
+            throw;
+        }
+        return true;
     }
 
     void join_loops() {
@@ -174,7 +196,9 @@ void event_loop_pool::start() {
     }
     try {
         for (const auto& loop : impl_->loops_) {
-            loop->owned_runtime().start();
+            if (!impl_->launch(loop->owned_runtime())) {
+                return;
+            }
         }
     } catch (...) {
         const auto launch_failure = std::current_exception();

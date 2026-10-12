@@ -80,7 +80,7 @@ bool is_valid_http_method_token(std::string_view method) noexcept {
         return false;
     }
     return std::ranges::all_of(method,
-        [](char ch) noexcept { return detail::is_http_token_char(static_cast<unsigned char>(ch)); });
+        [](char ch) noexcept { return is_http_token_char(static_cast<unsigned char>(ch)); });
 }
 
 bool is_http_method_safe(std::string_view method) noexcept {

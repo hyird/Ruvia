@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -13,29 +12,111 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/tcp_socket_options.h"
-#include "ruvia/http/http_request_target.h"
 
-#include "tls/tls_file_paths.h"
-#include "tls/tls_password_scope.h"
-#include "util/config_validation.h"
-#include "util/dns_host.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-}  // namespace
 
-bool is_client_ip_address(std::string_view host) noexcept {
-    return ::ruvia::is_valid_http_ipv4_literal(host) || ::ruvia::is_valid_http_ipv6_literal(host);
+[[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
+    X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
+    if (ip_address) {
+        return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 &&
+               X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
+    }
+    return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 &&
+           X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
 
-std::string_view format_client_port(std::uint16_t port, client_port_text_buffer_type& buffer) noexcept {
-    const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), port);
-    if (error != std::errc{}) {
-        std::terminate();
+[[nodiscard]] client_tls_setup_error prepare_client_tls_session(
+    SSL& ssl, std::string_view host, client_tls_mode mode) noexcept {
+    const bool is_ip_address = is_client_ip_address(host);
+    if (!is_ip_address && host.ends_with('.')) {
+        host.remove_suffix(1);
     }
-    return {buffer.data(), static_cast<std::size_t>(end - buffer.data())};
+    std::array<char, 256> tls_host_buffer;
+    if (host.size() >= tls_host_buffer.size()) {
+        return client_tls_setup_error::sni_failed;
+    }
+    std::ranges::copy(host, tls_host_buffer.begin());
+    tls_host_buffer[host.size()] = '\0';
+    // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6 literal.
+    // Host verification still receives IP literals so OpenSSL can validate IP
+    // subjectAltName entries.
+    if (!is_ip_address && SSL_set_tlsext_host_name(&ssl, tls_host_buffer.data()) != 1) {
+        return client_tls_setup_error::sni_failed;
+    }
+    if (mode == client_tls_mode::verify_identity &&
+        !configure_client_tls_peer_identity(ssl, tls_host_buffer.data(), is_ip_address)) {
+        return client_tls_setup_error::peer_identity_failed;
+    }
+    return client_tls_setup_error::none;
+}
+
+[[nodiscard]] std::string_view client_tls_setup_error_message(client_tls_setup_error error) noexcept {
+    switch (error) {
+        case client_tls_setup_error::none:
+            return {};
+        case client_tls_setup_error::reset_failed:
+            return "failed to reset TLS stream";
+        case client_tls_setup_error::sni_failed:
+            return "failed to set TLS SNI host";
+        case client_tls_setup_error::alpn_failed:
+            return "failed to configure TLS ALPN";
+        case client_tls_setup_error::peer_identity_failed:
+            return "failed to configure TLS peer identity";
+    }
+    std::terminate();
+}
+
+class client_tls_setup_category_type final : public std::error_category {
+public:
+    [[nodiscard]] const char* name() const noexcept override {
+        return "client TLS setup";
+    }
+    [[nodiscard]] std::string message(int value) const override {
+        return std::string(client_tls_setup_error_message(static_cast<client_tls_setup_error>(value)));
+    }
+};
+
+[[noreturn]] void throw_client_tls_credential_error(std::string_view message, const tls_credential_error& error) {
+    std::string text(message);
+    text.append(" (").append(error.operation_).append("): ").append(error_code_text(error.error_));
+    throw std::runtime_error(text);
+}
+
+}  // namespace
+
+client_tls_config_storage::client_tls_config_storage(
+    const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
+    : mode_(source_value.mode_),
+      ca_file_(source_value.ca_file_, pmr_resource_or_default(resource)),
+      certificate_chain_file_(source_value.certificate_chain_file_, pmr_resource_or_default(resource)),
+      private_key_file_(source_value.private_key_file_, pmr_resource_or_default(resource)),
+      private_key_password_(source_value.private_key_password_, pmr_resource_or_default(resource)) {
+    if (source_value.server_name_.has_value()) {
+        server_name_.emplace(*source_value.server_name_, pmr_resource_or_default(resource));
+    }
+    if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
+        return;
+    }
+    tls_credential_error error;
+    if (mode_ == client_tls_mode::verify_identity) {
+        trust_store_ = ca_file_.empty() ? tls_trust_store::load_default(error)
+                                        : tls_trust_store::load_file(ca_file_.c_str(), error);
+        if (!trust_store_) {
+            throw_client_tls_credential_error("failed to load client TLS trust store", error);
+        }
+    }
+    if (!certificate_chain_file_.empty()) {
+        certificate_ = tls_certificate::load(
+            certificate_chain_file_.c_str(), private_key_file_.c_str(), private_key_password_, error);
+        if (!certificate_) {
+            throw_client_tls_credential_error("failed to load client TLS certificate", error);
+        }
+    }
 }
 
 std::string_view selected_client_alpn(SSL* ssl) noexcept {
@@ -43,17 +124,6 @@ std::string_view selected_client_alpn(SSL* ssl) noexcept {
     unsigned int size = 0;
     SSL_get0_alpn_selected(ssl, &selected, &size);
     return {reinterpret_cast<const char*>(selected), size};
-}
-
-void validate_client_origin_host(
-    std::string_view host, const char* empty_message, const char* invalid_message) {
-    detail::ensure_config_host(host, empty_message, invalid_message, detail::separated_port_host_rules);
-    if (is_client_ip_address(host)) {
-        return;
-    }
-    if (!detail::is_valid_dns_host(host)) {
-        throw std::invalid_argument(invalid_message);
-    }
 }
 
 std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resource* resource) {
@@ -80,62 +150,24 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     const bool verify = config.mode_ == client_tls_mode::verify_identity;
     SSL_CTX_set_verify(&context_value, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
     if (verify) {
-        const int loaded = config.ca_file_.empty()
-                               ? SSL_CTX_set_default_verify_paths(&context_value)
-                               : SSL_CTX_load_verify_file(&context_value, std::pmr::string(config.ca_file_, process_resource()).c_str());
-        if (loaded != 1) {
-            throw std::runtime_error("failed to load client TLS trust store");
+        if (!config.trust_store_.has_value()) {
+            throw std::logic_error("client TLS trust store was not parsed");
         }
+        config.trust_store_->install(context_value);
     }
     if (config.certificate_chain_file_.empty()) {
         return;
     }
-    const tls_password_scope password_scope(context_value, config.private_key_password_);
-    if (SSL_CTX_use_certificate_chain_file(&context_value, std::pmr::string(config.certificate_chain_file_, process_resource()).c_str()) != 1) {
-        throw std::runtime_error("failed to load client TLS certificate chain");
+    if (!config.certificate_.has_value()) {
+        throw std::logic_error("client TLS certificate was not parsed");
     }
-    if (SSL_CTX_use_PrivateKey_file(&context_value, std::pmr::string(config.private_key_file_, process_resource()).c_str(), SSL_FILETYPE_PEM) != 1 ||
-        SSL_CTX_check_private_key(&context_value) != 1) {
-        throw std::runtime_error("failed to load or match client TLS private key");
+    if (tls_credential_error error; !config.certificate_->install(context_value, error)) {
+        throw_client_tls_credential_error("failed to install client TLS certificate", error);
     }
-}
-
-bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
-    X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
-    if (ip_address) {
-        return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 &&
-               X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
-    }
-    return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 &&
-           X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
-}
-
-client_tls_setup_error prepare_client_tls_session(SSL& ssl, std::string_view host, client_tls_mode mode) noexcept {
-    const bool is_ip_address = is_client_ip_address(host);
-    if (!is_ip_address && host.ends_with('.')) {
-        host.remove_suffix(1);
-    }
-    std::array<char, 256> tls_host_buffer;
-    if (host.size() >= tls_host_buffer.size()) {
-        return client_tls_setup_error::sni_failed;
-    }
-    std::ranges::copy(host, tls_host_buffer.begin());
-    tls_host_buffer[host.size()] = '\0';
-    // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6 literal.
-    // Host verification still receives IP literals so OpenSSL can validate IP
-    // subjectAltName entries.
-    if (!is_ip_address && SSL_set_tlsext_host_name(&ssl, tls_host_buffer.data()) != 1) {
-        return client_tls_setup_error::sni_failed;
-    }
-    if (mode == client_tls_mode::verify_identity &&
-        !configure_client_tls_peer_identity(ssl, tls_host_buffer.data(), is_ip_address)) {
-        return client_tls_setup_error::peer_identity_failed;
-    }
-    return client_tls_setup_error::none;
 }
 
 client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
-    std::string_view host, client_tls_mode mode) {
+    std::string_view host, client_tls_mode mode, client_alpn alpn) {
     if (SSL_clear(stream.native_handle()) != 1) {
         return client_tls_setup_error::reset_failed;
     }
@@ -143,43 +175,13 @@ client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp
         prepared != client_tls_setup_error::none) {
         return prepared;
     }
-    const auto& protocols = http11_alpn;
-    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
-            static_cast<unsigned int>(protocols.size())) != 0) {
+    if (alpn == client_alpn::http11 &&
+        SSL_set_alpn_protos(stream.native_handle(), http11_alpn.data(), static_cast<unsigned int>(http11_alpn.size())) !=
+            0) {
         return client_tls_setup_error::alpn_failed;
     }
     return client_tls_setup_error::none;
 }
-
-std::string_view client_tls_setup_error_message(client_tls_setup_error error) noexcept {
-    switch (error) {
-        case client_tls_setup_error::none:
-            return {};
-        case client_tls_setup_error::reset_failed:
-            return "failed to reset TLS stream";
-        case client_tls_setup_error::sni_failed:
-            return "failed to set TLS SNI host";
-        case client_tls_setup_error::alpn_failed:
-            return "failed to configure TLS ALPN";
-        case client_tls_setup_error::peer_identity_failed:
-            return "failed to configure TLS peer identity";
-    }
-    std::terminate();
-}
-
-namespace {
-
-class client_tls_setup_category_type final : public std::error_category {
-public:
-    [[nodiscard]] const char* name() const noexcept override {
-        return "client TLS setup";
-    }
-    [[nodiscard]] std::string message(int value) const override {
-        return std::string(client_tls_setup_error_message(static_cast<client_tls_setup_error>(value)));
-    }
-};
-
-}  // namespace
 
 std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept {
     static const client_tls_setup_category_type category;

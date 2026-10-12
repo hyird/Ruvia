@@ -64,10 +64,10 @@ public:
     // Registers per-worker middleware instances in order before the matched
     // route's controller and route middleware. Arguments are retained at
     // registration; route model validators must be declared on their route.
-    template <typename middleware_type, typename... args_types>
+    template <middleware middleware_type, typename... args_types>
     application& use(args_types&&... args) {
         return use_middleware(
-            detail::make_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
+            detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
 
     // Runs the middleware exactly on requests whose path is under the prefix:
@@ -79,7 +79,7 @@ public:
     // that serves paths both inside and outside the scope checks the request
     // path at dispatch. Middleware constructor arguments cannot be confused
     // with the separately named scope.
-    template <typename middleware_type, typename... args_types>
+    template <middleware middleware_type, typename... args_types>
     application& use_at(const middleware_scope_options& options, args_types&&... args) {
         return use_middleware(
             detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
@@ -102,6 +102,10 @@ public:
     application& load_dotenv(dotenv_options options = {});
     application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {});
     application& server(server_config config);
+    // Loads every TLS certificate, private key and client CA bundle of
+    // config.tls_ once, here: unreadable files or a wrong key password throw
+    // from listen(). The application keeps only the parsed credentials; this
+    // call's copy of each private-key password is cleansed before it returns.
     application& listen(listen_config config);
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere arms nothing per
@@ -166,14 +170,17 @@ public:
     // Observes connections lost to an exception that escaped their session --
     // the failures on_error cannot answer because the response is already
     // committed or the error handler itself failed. Without a listener these
-    // are reported to stderr; they are never silently dropped.
+    // are reported to stderr; they are never silently dropped. A peer reset
+    // or close, or I/O this server cancelled (stop, drain, timeouts), is a
+    // normal end of connection: it is neither delivered here nor counted.
     application& on_connection_failure(connection_failure_callback_type callback);
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
     application& on_start(app_hook_type hook);
-    // Runs on the run() caller after admission closes, before runtime join.
-    // Also runs when published startup is cancelled or a start hook fails.
+    // Runs on the run() caller after admission closes and in-flight requests
+    // have drained (or server_config::drain_timeout_ passed), before runtime
+    // join. Also runs when published startup is cancelled or a start hook fails.
     application& on_stop(app_hook_type hook);
 #ifdef RUVIA_ENABLE_DATABASE
     application& database(db_registration_config config);
@@ -185,7 +192,22 @@ public:
 #endif
     application& get_http_client(http_client_registration_config config);
     application& get_http_client(std::nullptr_t);
+    // Serves until stop(); returns after every worker retired. May run again
+    // after it returns. The first preparation, startup, or worker failure is
+    // rethrown to the caller, who is responsible for printing it; run() does
+    // not report it. Failures it supersedes are reported to stderr, with
+    // equivalent worker failures collapsed into one line with their count.
     void run();
+    // Safe from any thread. A stop() issued while the app is not running is
+    // kept for the next run(), which then returns without serving. A stop
+    // during startup rolls it back at once. A serving app stops gracefully:
+    // listeners close; connections without an admitted request (idle, or still
+    // receiving a request head) close; each WebSocket session starts its close
+    // handshake with 1001 Going Away, bounded by its close_handshake_timeout_;
+    // admitted requests and tunnels may finish, each request closing its
+    // connection after the response. Once server_config::drain_timeout_
+    // passes, every remaining connection is closed and handlers observe their
+    // stop token. A worker failure skips the drain.
     void stop();
     // HTTP serving counters summed across every worker. All zero before run()
     // starts them and after it returns. Safe from any thread, including from a
@@ -195,6 +217,8 @@ public:
     // the app is not running. Queue depth and the rejected count are what a
     // deployment sizes thread_count/queue_capacity from. Safe from any thread.
     [[nodiscard]] blocking_pool_stats get_blocking_pool_stats() const;
+    // Worker handles, published once every worker is ready (before on_start
+    // hooks run) and until run() returns. Empty or invalid otherwise.
     [[nodiscard]] std::vector<web_worker_handle> workers() const;
     [[nodiscard]] web_worker_handle worker_for(std::uint64_t key) const;
     [[nodiscard]] web_worker_handle worker_for(std::string_view key) const;
@@ -202,7 +226,7 @@ public:
 private:
     friend application& app();
 
-    application& use_middleware(detail::controller_middleware_descriptor descriptor);
+    application& use_middleware(detail::owned_middleware_descriptor descriptor);
     application& use_worker_state_definition(detail::worker_state_definition definition);
 
     struct state_deleter_type {

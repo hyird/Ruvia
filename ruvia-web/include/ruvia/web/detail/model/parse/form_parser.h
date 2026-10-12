@@ -21,14 +21,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool has_form_encoding(std::string_view value) noexcept {
-    return ruvia::has_url_encoding(value, url_decode_mode::form);
-}
-
-[[nodiscard]] inline bool validate_form_encoding(std::string_view body) noexcept {
-    return ruvia::validate_url_encoding(body);
-}
-
 enum class form_value_encoding : std::uint8_t { url_encoded,
     decoded };
 
@@ -81,7 +73,7 @@ template <typename t_type>
 
     std::optional<std::pmr::string> decoded_storage;
     auto decoded = input;
-    if (encoding == form_value_encoding::url_encoded && has_form_encoding(input)) {
+    if (encoding == form_value_encoding::url_encoded && ruvia::has_url_encoding(input, url_decode_mode::form)) {
         decoded_storage =
             ruvia::decode_url_component(input, {.mode_ = url_decode_mode::form, .resource_ = resource});
         if (!decoded_storage.has_value()) {

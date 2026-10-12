@@ -137,9 +137,6 @@ namespace {
                 block.non_empty_trailer_header_present_ = true;
             }
             break;
-        case request_header_kind::te:
-            block.te_header_present_ = true;
-            break;
         default:
             break;
     }

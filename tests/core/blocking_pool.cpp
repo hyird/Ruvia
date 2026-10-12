@@ -400,6 +400,29 @@ task<void> exercise_stopped_worker(
     success = result_value.status() == blocking_status::worker_stopping;
 }
 
+// Outcomes the wait would decide without the callable are decided before
+// submission, so the callable never occupies a pool thread for them.
+task<void> exercise_settled_before_submit(blocking_pool& pool, worker_handle worker_value,
+    worker_handle other_worker, std::atomic_bool& ran, bool& success) {
+    ruvia::stop_source stopped;
+    stopped.request_stop();
+    auto cancelled = co_await ruvia::try_run_blocking(pool, worker_value, stopped.token(), [flag = &ran] {
+        flag->store(true);
+    });
+    auto expired = co_await ruvia::try_run_blocking(
+        pool, worker_value, std::chrono::milliseconds(0), [flag = &ran] { flag->store(true); });
+    bool misplaced = false;
+    try {
+        static_cast<void>(co_await ruvia::try_run_blocking(pool, other_worker, [flag = &ran] {
+            flag->store(true);
+        }));
+    } catch (const std::logic_error&) {
+        misplaced = true;
+    }
+    success = cancelled.status() == blocking_status::cancelled && expired.status() == blocking_status::timed_out &&
+              misplaced;
+}
+
 bool test_destruction_does_not_join_running_callable() {
     auto started_promise = std::make_shared<std::promise<void>>();
     auto started = started_promise->get_future();
@@ -637,6 +660,24 @@ int main() {
             stopped_worker && !stopped_worker_task_ran.load() && pool.stats().completed_ == 0;
     }
 
+    bool settled_before_submit = false;
+    std::atomic_bool settled_task_ran{false};
+    {
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        asio::io_context io_context;
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        asio::io_context other_context;
+        ruvia::worker_runtime_context other_runtime(other_context, 8);
+        const auto worker_value = runtime.handle();
+        ruvia::test::run_worker_tasks(runtime, exercise_settled_before_submit(pool, worker_value,
+                                                   other_runtime.handle(), settled_task_ran, settled_before_submit));
+        pool.join();
+        runtime.detach();
+        other_runtime.detach();
+        settled_before_submit =
+            settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
+    }
+
     bool rejects_empty_task = false;
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
@@ -660,7 +701,7 @@ int main() {
     const bool stop_during_move = test_callable_move_can_stop_pool_before_publication();
     const bool all_passed = default_sizing && results && worker_stays_free &&
                             cancelled && timeout && saturating_timeout && stopped_pool && queue_full &&
-                            worker_stopping && stopped_worker && rejects_empty_task &&
+                            worker_stopping && stopped_worker && settled_before_submit && rejects_empty_task &&
                             destruction_does_not_join && join_stops_and_waits && join_rejects_pool_thread &&
                             stop_drains_without_running && callable_reentry && stop_during_move;
     return all_passed ? 0 : 1;

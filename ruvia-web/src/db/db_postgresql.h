@@ -19,6 +19,8 @@ namespace ruvia::detail {
 [[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type code, const pg_result* result = nullptr);
 
+// Parameters are sent untyped in text format: the SQL decides their types,
+// and compiled SQL casts each placeholder from its value category.
 struct postgresql_params final {
     explicit postgresql_params(std::pmr::memory_resource* resource);
 

@@ -6,7 +6,6 @@
 #include <exception>
 #include <memory_resource>
 #include <optional>
-#include <variant>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
@@ -16,7 +15,6 @@
 #include "ruvia/web/server_config.h"
 
 #include "http/cors_options.h"
-#include "http/static_root_index.h"
 #include "server/document_root_binding.h"
 #include "server/trusted_proxies.h"
 
@@ -25,6 +23,8 @@ class env;
 }
 
 namespace ruvia::detail {
+
+class document_root_publisher;
 
 struct access_log_sink final {
     access_log_callback_ref_type callback_;
@@ -44,6 +44,12 @@ struct connection_failure_record_access final {
 // The connection level's failure outlet. An unset callback still reports: the
 // failure goes to the shared last-resort reporter rather than being dropped
 // with the connection that produced it.
+//
+// A connection that ends because the peer reset or closed it, or because this
+// server cancelled its I/O (stop, drain, or a timeout that closes the socket),
+// is a normal end of connection rather than a failure: browsers close SSE
+// tabs with a reset, and drain aborts pending reads. Such endings are neither
+// reported nor counted, so the sink stays reserved for real faults.
 struct connection_failure_sink final {
     connection_failure_callback_ref_type callback_;
     // Owned by the web_worker_runtime this sink was configured for; null before one
@@ -51,19 +57,7 @@ struct connection_failure_sink final {
     // count and the callback from drifting apart as new sites are added.
     std::atomic<std::size_t>* counter_{nullptr};
 
-    void invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept {
-        if (exception == nullptr) {
-            return;
-        }
-        if (counter_ != nullptr) {
-            counter_->fetch_add(1, std::memory_order_relaxed);
-        }
-        if (callback_) {
-            callback_(connection_failure_record_access::make(remote_address, std::move(exception)));
-            return;
-        }
-        ruvia::report_unhandled_failure("web connection", std::move(exception));
-    }
+    void invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept;
 };
 
 struct worker_failure_sink final {
@@ -84,77 +78,42 @@ struct worker_failure_sink final {
 [[nodiscard]] const server_config& server_config_defaults() noexcept;
 
 struct http_server_options final {
+    // The application's document root: one app-scoped publisher shared by
+    // every worker, plus this worker's current generation. Validated
+    // configuration carries only the publisher; each worker's
+    // static_root_runtime publishes its own generation before serving.
     class document_root_type final {
-        struct standalone_type final {
-            const static_root* root_;
-        };
-        struct refreshing_type final {
-            const static_root* root_;
-            document_root_runtime_config config_;
-            static_root_precompression_options precompression_;
-        };
-
     public:
         document_root_type() noexcept = default;
 
-        [[nodiscard]] static document_root_type standalone(const static_root& root) noexcept {
-            return document_root_type(standalone_type{&root});
+        [[nodiscard]] static document_root_type refreshing(document_root_publisher& publisher) noexcept {
+            return document_root_type(&publisher);
         }
 
-        [[nodiscard]] static document_root_type refreshing(const static_root& root,
-            document_root_runtime_config config = {},
-            static_root_precompression_options precompression = {}) noexcept {
-            return document_root_type(refreshing_type{&root, config, precompression});
+        [[nodiscard]] document_root_publisher* publisher() const noexcept {
+            return publisher_;
         }
 
-        [[nodiscard]] const static_root* root() const noexcept {
-            if (const auto* standalone = std::get_if<standalone_type>(&state_)) {
-                return standalone->root_;
-            }
-            if (const auto* refreshing = std::get_if<refreshing_type>(&state_)) {
-                return refreshing->root_;
-            }
-            return nullptr;
-        }
-
-        [[nodiscard]] const document_root_runtime_config* refresh_options() const noexcept {
-            const auto* refreshing = std::get_if<refreshing_type>(&state_);
-            return refreshing == nullptr ? nullptr : &refreshing->config_;
-        }
-
-        [[nodiscard]] const static_root_precompression_options* precompression_options()
-            const noexcept {
-            const auto* refreshing = std::get_if<refreshing_type>(&state_);
-            return refreshing == nullptr ? nullptr : &refreshing->precompression_;
-        }
-
-        // Publishes the next immutable snapshot without changing the ownership
-        // state. Calling this on a non-refreshing root is an invariant breach.
-        void publish(const static_root& root) noexcept {
-            auto* refreshing = std::get_if<refreshing_type>(&state_);
-            if (refreshing == nullptr) {
+        // Points new request bindings at the worker's adopted generation. Only
+        // the owning worker calls this; earlier bindings keep their own lease.
+        void publish(document_root_generation& generation) noexcept {
+            if (publisher_ == nullptr) {
                 std::terminate();
             }
-            refreshing->root_ = &root;
+            current_ = &generation;
         }
 
         [[nodiscard]] document_root_binding binding() const noexcept {
-            if (const auto* standalone = std::get_if<standalone_type>(&state_)) {
-                return document_root_binding::standalone(*standalone->root_);
-            }
-            if (const auto* refreshing = std::get_if<refreshing_type>(&state_)) {
-                return document_root_binding::configured(*refreshing->root_);
-            }
-            return document_root_binding::none();
+            return current_ == nullptr ? document_root_binding::none()
+                                       : document_root_binding::configured(*current_);
         }
 
     private:
-        explicit document_root_type(standalone_type state_value) noexcept
-            : state_(state_value) {}
-        explicit document_root_type(refreshing_type state_value) noexcept
-            : state_(state_value) {}
+        explicit document_root_type(document_root_publisher* publisher) noexcept
+            : publisher_(publisher) {}
 
-        std::variant<std::monostate, standalone_type, refreshing_type> state_;
+        document_root_publisher* publisher_{nullptr};
+        document_root_generation* current_{nullptr};
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;

@@ -11,6 +11,8 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <exception>
+#include <iostream>
 #include <system_error>
 
 #include "ruvia/core/timer.h"
@@ -19,11 +21,11 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/multipart_reader.h"
 
-class streaming_controller final : public ruvia::controller<streaming_controller> {
+class streaming_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/streaming")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(streaming_controller)
     RUVIA_POST_STREAM("/upload/raw", upload_raw);
     RUVIA_POST_STREAM("/upload/multipart", upload_multipart);
     RUVIA_GET_STREAM("/chunks", chunks);
@@ -104,13 +106,18 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8082})
-        .server({
-            .worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-            .max_buffered_body_bytes_ = 16 * 1024 * 1024,
-            .max_stream_body_bytes_ = std::nullopt,
-        })
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8082})
+            .server({
+                .worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .max_buffered_body_bytes_ = 16 * 1024 * 1024,
+                .max_stream_body_bytes_ = std::nullopt,
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

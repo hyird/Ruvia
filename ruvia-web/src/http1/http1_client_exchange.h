@@ -2,7 +2,8 @@
 
 #include <cstddef>
 #include <exception>
-#include <span>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 
 #include "ruvia/core/operation_timeout.h"
@@ -46,8 +47,10 @@ private:
     [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
         http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
     [[nodiscard]] task<void> write(std::string_view bytes, const operation_timeout& timeout);
-    // Returns 0 at the peer's end of stream only when `allow_eof` is set.
-    [[nodiscard]] task<std::size_t> read_some(std::span<char> bytes, const operation_timeout& timeout, bool allow_eof);
+    // Appends at most `max_bytes` read from the transport to `target`; returns
+    // 0 at the peer's end of stream.
+    [[nodiscard]] task<std::size_t> read_append(
+        std::pmr::string& target, std::size_t max_bytes, const operation_timeout& timeout);
 
     http_client_pool& pool_;
     http_client_connection& connection_;

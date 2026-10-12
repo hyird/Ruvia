@@ -94,7 +94,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     }
 
     bool valid = true;
-    http_visit_comma_separated_quoted_items(
+    http_visit_comma_separated_quoted_field_items(
         value, [&valid, mode](std::string_view item) noexcept {
             // RFC 9110 section 5.6.1 requires recipients to ignore empty list members.
             if (item.empty() && mode == http_te_field_validation_mode::recipient) {

@@ -8,7 +8,6 @@
 #include "ruvia/web/detail/model/parse/parser.h"
 #include "ruvia/web/detail/model/rule/rules.h"
 #include "ruvia/web/detail/model/traits.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/next.h"
 #include "ruvia/web/validation.h"
@@ -85,9 +84,12 @@ template <validation_target target, typename body_t_type>
 // One validating middleware per request source: parses the model from `target`,
 // runs its declared rules, binds it for the handler, then continues the chain.
 template <validation_target target, typename body_t_type>
-class model_validation_middleware final : public middleware {
+class model_validation_middleware final {
 public:
     static_assert(is_model<body_t_type>, "request validation middleware requires a RUVIA_MODEL");
+    static_assert(target != validation_target::header ||
+                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_t_type>()),
+        "header_model field names must be unique ignoring ASCII case");
     using ruvia_validation_body_type = body_t_type;
 
     void validate(const body_t_type& body, validator& validator_value) const {

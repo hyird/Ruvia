@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include <asio/io_context.hpp>
@@ -90,6 +91,16 @@ ruvia::task<void> exercise_worker_bound_acquire_timeout(
     ruvia::pool_lease_scheduler& scheduler, bool& success) {
     const auto result_value = co_await scheduler.acquire(std::chrono::milliseconds(1));
     success = result_value.timed_out() != nullptr;
+}
+
+ruvia::task<void> exercise_workerless_timed_acquire_rejected(ruvia::pool_lease_scheduler& scheduler, bool& success) {
+    // Without a worker no deadline can be armed, so a timeout is rejected
+    // instead of silently waiting without one.
+    try {
+        static_cast<void>(co_await scheduler.acquire(std::chrono::milliseconds(1)));
+    } catch (const std::logic_error&) {
+        success = true;
+    }
 }
 
 ruvia::task<void> exercise_saturated_acquire_timeout(
@@ -259,22 +270,25 @@ int main() {
     ruvia::worker_runtime_context runtime(io_context, 8);
     const auto worker_value = runtime.handle();
     ruvia::pool_lease_scheduler lease_scheduler(1);
+    ruvia::pool_lease_scheduler workerless_timeout_scheduler(1);
     ruvia::pool_lease_scheduler saturated_timeout_scheduler(0, worker_value);
     ruvia::pool_lease_scheduler worker_timeout_scheduler(0, worker_value);
     ruvia::pool_lease_scheduler cancellation_scheduler(0, worker_value);
     bool lease_success = false;
+    bool workerless_timeout_success = false;
     bool worker_timeout_success = false;
     bool saturated_timeout_success = false;
     bool cancellation_success = false;
     bool pmr_lifecycle_success = false;
     ruvia::test::run_worker_tasks(runtime,
         exercise_lease_and_close(lease_scheduler, io_context, lease_success),
+        exercise_workerless_timed_acquire_rejected(workerless_timeout_scheduler, workerless_timeout_success),
         exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success),
         exercise_saturated_acquire_timeout(saturated_timeout_scheduler, io_context, saturated_timeout_success),
         exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success),
         exercise_pmr_test(io_context, worker_value, pmr_lifecycle_success));
     runtime.detach();
-    return lease_success && worker_timeout_success && saturated_timeout_success &&
+    return lease_success && workerless_timeout_success && worker_timeout_success && saturated_timeout_success &&
                    cancellation_success && pmr_lifecycle_success &&
                    test_scheduler_owns_timeout_for_lazy_acquires() &&
                    test_scheduler_retains_worker_binding_for_lazy_acquires()

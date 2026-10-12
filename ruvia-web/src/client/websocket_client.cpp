@@ -12,6 +12,7 @@
 
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 
@@ -31,7 +32,8 @@ websocket_client_state::websocket_client_state(event_loop loop, const websocket_
           client_tcp_endpoint{.host_ = config_.host_,
               .port_ = config_.port_,
               .tls_ = config_.scheme_ == websocket_scheme::wss ? &config_.tls_ : nullptr,
-              .tcp_ = config_.tcp_},
+              .tcp_ = config_.tcp_,
+              .alpn_ = client_alpn::http11},
           wire_counters_),
       write_signal_(worker_),
       input_([&] {
@@ -141,7 +143,7 @@ websocket_client_error websocket_client_state::transport_error(const client_tran
     if (result.status_ == client_transport_status::eof) {
         return websocket_client_error(code, "WebSocket transport ended");
     }
-    return websocket_client_error(code, result.error_.message());
+    return websocket_client_error(code, error_code_text(result.error_));
 }
 
 void websocket_client_state::throw_transport_failure(const client_transport_result& result) {

@@ -1,5 +1,6 @@
 #include "server/acceptor.h"
 
+#include <cerrno>
 #include <chrono>
 #include <stdexcept>
 #include <system_error>
@@ -11,11 +12,43 @@
 namespace ruvia::detail {
 namespace {
 
+// Errors that concern only the connection being accepted or a transient
+// resource shortage. accept(2) reports network errors already pending on the
+// new connection and requires callers to treat them like EAGAIN; none of these
+// invalidate the listener, so accepting resumes after a short backoff.
 bool recoverable_accept_error(const asio::error_code& error) noexcept {
-    return error == asio::error::connection_aborted || error == asio::error::connection_reset ||
-           error == asio::error::eof || error == asio::error::try_again ||
-           error == asio::error::would_block || error == asio::error::no_descriptors ||
-           error == asio::error::no_buffer_space;
+    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
+        error == asio::error::eof || error == asio::error::try_again || error == asio::error::would_block ||
+        error == asio::error::interrupted || error == asio::error::no_descriptors ||
+        error == asio::error::no_buffer_space || error == asio::error::no_memory ||
+        error == std::errc::too_many_files_open_in_system || error == std::errc::protocol_error ||
+        error == asio::error::network_down || error == asio::error::network_unreachable ||
+        error == asio::error::host_unreachable || error == asio::error::no_protocol_option ||
+        error == asio::error::operation_not_supported || error == asio::error::no_permission ||
+        error == asio::error::timed_out) {
+        return true;
+    }
+#if defined(EHOSTDOWN) && defined(ENONET)
+    return error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET);
+#else
+    return false;
+#endif
+}
+
+// Bind the listener exclusively. Windows SO_REUSEADDR (asio's reuse_address)
+// lets another socket bind a port that is already listening, so Windows uses
+// SO_EXCLUSIVEADDRUSE; elsewhere SO_REUSEADDR only permits rebinding over
+// TIME_WAIT connections.
+void set_listener_address_option(asio::ip::tcp::acceptor& socket, asio::error_code& error) noexcept {
+#if defined(_WIN32)
+    const BOOL exclusive = TRUE;
+    if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+            reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
+        error = asio::error_code(::WSAGetLastError(), asio::system_category());
+    }
+#else
+    socket.set_option(asio::socket_base::reuse_address(true), error);
+#endif
 }
 
 }  // namespace
@@ -72,7 +105,7 @@ void acceptor::prepare() {
         asio::error_code error;
         socket.open(configured->endpoint_.protocol(), error);
         if (!error) {
-            socket.set_option(asio::socket_base::reuse_address(true), error);
+            set_listener_address_option(socket, error);
         }
         if (!error) {
             socket.bind(configured->endpoint_, error);
@@ -90,13 +123,26 @@ void acceptor::prepare() {
     }
 }
 
+void acceptor::close_admission() noexcept {
+    // A refused control means stopping has already closed the listeners.
+    (void)runtime_.post_control([this] {
+        admitting_ = false;
+        close_listeners();
+    });
+}
+
+bool acceptor::admitting() const noexcept {
+    return admitting_ && runtime_.state() == runtime_lifecycle::state_type::running;
+}
+
 void acceptor::stop_on_owner() noexcept {
+    admitting_ = false;
     close_listeners();
     runtime_.finalize();
 }
 
 void acceptor::begin_accept(std::size_t index) noexcept {
-    if (runtime_.state() != runtime_lifecycle::state_type::running || targets_.empty()) {
+    if (!admitting() || targets_.empty()) {
         return;
     }
     auto& socket = listeners_[index]->socket_;
@@ -115,7 +161,7 @@ void acceptor::begin_accept(std::size_t index) noexcept {
 void acceptor::accepted(std::size_t index, const asio::error_code& error,
     asio::ip::tcp::socket socket) noexcept {
     if (error) {
-        if (error == asio::error::operation_aborted && runtime_.state() != runtime_lifecycle::state_type::running) {
+        if (error == asio::error::operation_aborted && !admitting()) {
             return;
         }
         if (!recoverable_accept_error(error)) {
@@ -140,7 +186,7 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         return;
     }
     native_accepted_socket_ticket ticket(listeners_[index]->endpoint_.protocol(), index, native);
-    if (runtime_.state() != runtime_lifecycle::state_type::running || targets_.empty()) {
+    if (!admitting() || targets_.empty()) {
         return;
     }
     auto selected = targets_.size();
@@ -174,13 +220,13 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         (void)runtime_.fail(std::current_exception());
         return;
     }
-    if (runtime_.state() == runtime_lifecycle::state_type::running) {
+    if (admitting()) {
         begin_accept(index);
     }
 }
 
 void acceptor::schedule_retry(std::size_t index) noexcept {
-    if (runtime_.state() != runtime_lifecycle::state_type::running) {
+    if (!admitting()) {
         return;
     }
     try {

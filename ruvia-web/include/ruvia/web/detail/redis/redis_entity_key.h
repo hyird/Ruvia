@@ -18,10 +18,7 @@ namespace ruvia::detail {
     constexpr std::string_view root = "ruvia:orm:";
     std::pmr::string result(root, resource);
     result.reserve(root.size() + prefix.size() * 2U + 1U);
-    for (const unsigned char byte : prefix) {
-        result.push_back(http_lower_hex_digit(byte >> 4U));
-        result.push_back(http_lower_hex_digit(byte));
-    }
+    http_append_lower_hex(result, prefix);
     result.push_back(':');
     return result;
 }

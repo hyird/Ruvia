@@ -50,7 +50,9 @@ template <std::size_t capacity>
             return false;
         }
         const char escaped = pattern[++cursor_value];
-        atom.kind_ = pattern_escape_kind(escaped);
+        if (!decode_pattern_escape(escaped, atom.kind_)) {
+            return false;
+        }
         atom.literal_ = escaped;
         ++cursor_value;
         plan.atoms_[plan.count_++] = atom;
@@ -117,6 +119,7 @@ struct compiled_pattern_plan final {
     static constexpr auto value = compile_pattern_plan<capacity>(pattern.view());
     static_assert(value.valid_,
         "RUVIA_PATTERN supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
+        "Escaped letters and digits other than \\d, \\w, \\s (such as \\n or \\D) are unsupported. "
         "Ranges require ordered single-character endpoints. RUVIA_REGEX uses the same syntax; use RUVIA_CUSTOM for other matching logic.");
 };
 

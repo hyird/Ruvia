@@ -24,10 +24,6 @@ public:
         }
     }
 
-    void record_worker_stopping() noexcept {
-        worker_stopping_.fetch_add(1, std::memory_order_relaxed);
-    }
-
     [[nodiscard]] std::uint64_t accepted() const noexcept {
         return accepted_.load(std::memory_order_relaxed);
     }

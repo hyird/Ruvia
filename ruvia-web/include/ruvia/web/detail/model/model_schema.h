@@ -137,6 +137,38 @@ template <typename... descriptor_ts_type>
     return true;
 }
 
+[[nodiscard]] constexpr bool model_wire_names_equal_ignore_ascii_case(
+    std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    const auto fold = [](char value) noexcept {
+        return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
+    };
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (fold(left[index]) != fold(right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Case-insensitive sources (HTTP headers) bind at most one field per name, so
+// their schemas must not declare ASCII-case-equivalent wire names.
+template <typename... descriptor_ts_type>
+[[nodiscard]] consteval bool unique_model_wire_names_ignore_ascii_case(model_schema<descriptor_ts_type...>) {
+    constexpr std::array<std::string_view, sizeof...(descriptor_ts_type)> names{
+        descriptor_ts_type::wire_name.view()...};
+    for (std::size_t left = 0; left < names.size(); ++left) {
+        for (std::size_t right = left + 1; right < names.size(); ++right) {
+            if (model_wire_names_equal_ignore_ascii_case(names[left], names[right])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 template <typename model_t_type, typename... descriptor_ts_type, typename visitor_t_type, std::size_t... indices>
 constexpr void visit_model_fields_impl(model_t_type& model, model_schema<descriptor_ts_type...>, visitor_t_type&& visitor,
     std::index_sequence<indices...>) {
@@ -177,12 +209,6 @@ template <typename model_t_type, typename... descriptor_ts_type, typename visito
         return visit_model_field_by_wire_name_impl<0, descriptor_ts_type...>(
             model, wire_hash, wire_name, visit_result, visitor_ref);
     }
-}
-
-template <fixed_string field, typename model_t_type, typename... descriptor_ts_type>
-[[nodiscard]] model_field_state model_field_state(const model_t_type& model, model_schema<descriptor_ts_type...>) {
-    constexpr auto index = model_field_index<field, descriptor_ts_type...>();
-    return model_access::slot<index>(model).state();
 }
 
 template <typename model_type>

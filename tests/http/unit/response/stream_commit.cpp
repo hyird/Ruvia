@@ -16,7 +16,7 @@ using ruvia::http_response_trailer_intent;
 
 }  // namespace
 
-RUVIA_TEST(response_stream_commit_rejects_trailers_without_wire_framing) {
+RUVIA_TEST(response_stream_commit_discards_trailers_without_wire_framing) {
     constexpr std::array framings{
         http_response_stream_framing::http1_known_length,
         http_response_stream_framing::http1_close_delimited,
@@ -28,17 +28,14 @@ RUVIA_TEST(response_stream_commit_rejects_trailers_without_wire_framing) {
                 continue;
             }
             http_response response;
+            response.header("Trailer", "X-Checksum");
             const auto plan = ruvia::plan_http_response_stream_commit(
                 framing, method, response.status(), http_response_trailer_intent::present);
-            RUVIA_CHECK(!plan.trailer_intent_allowed());
-            bool rejected = false;
-            try {
-                (void)ruvia::prepare_http_response_stream_head(
-                    std::move(response), http_response_stream_kind::generic, plan);
-            } catch (const std::invalid_argument&) {
-                rejected = true;
-            }
-            RUVIA_CHECK(rejected);
+            RUVIA_CHECK(plan.trailer_intent_allowed());
+            RUVIA_CHECK(!plan.trailers_available());
+            const auto prepared = ruvia::prepare_http_response_stream_head(
+                std::move(response), http_response_stream_kind::generic, plan);
+            RUVIA_CHECK(!prepared.response().header("Trailer").has_value());
         }
     }
 }

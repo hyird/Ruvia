@@ -8,15 +8,14 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
 
-#include "http_header_access.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_accept_key.h"
 #include "websocket/http_websocket_permessage_deflate.h"
@@ -30,29 +29,31 @@ namespace {
     if (headers.size() > max_http_header_fields - 5) {
         throw std::length_error("too many WebSocket handshake response headers");
     }
-    // Account for generated fields as well as the application field section.
-    http_header_section_size size;
-    (void)size.add("upgrade", "websocket");
-    (void)size.add("connection", "Upgrade");
-    (void)size.add("sec-websocket-accept", "0000000000000000000000000000");
-    if (!subprotocol.empty() && !size.add("sec-websocket-protocol", subprotocol)) {
+    // Account for the whole emitted head: the 101 status line, the generated
+    // fields, the application field section, and the terminating empty line.
+    http_field_section_budget size;
+    constexpr auto status = http_status_code_token(http_status::switching_protocols);
+    (void)size.add(std::string_view("HTTP/1.1 ").size() + status.size() + 1 +
+                   http_reason_phrase(http_status::switching_protocols).size() + 2);
+    (void)size.add(2);
+    (void)size.add_field("upgrade", "websocket");
+    (void)size.add_field("connection", "Upgrade");
+    (void)size.add_field("sec-websocket-accept", "0000000000000000000000000000");
+    if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
     const auto extension = get_websocket_compression_extension(compression);
-    if (!extension.empty() && !size.add("sec-websocket-extensions", extension.view())) {
+    if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension.view())) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
     std::pmr::vector<http_header> result(resource);
     result.reserve(headers.size());
     for (const auto& header : headers) {
-        if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value()) ||
-            http_trim_ows(header.value()).size() != header.value().size()) {
+        if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
             throw std::invalid_argument("invalid WebSocket handshake response header");
         }
-        std::pmr::string name(header.name(), resource);
-        for (char& ch : name) {
-            ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
-        }
+        auto field = http_header::copy_with_lowercase_name(header.name(), header.value(), resource);
+        const auto name = field.name();
         // Every Sec-WebSocket-* name is handshake-owned, including ones this
         // implementation does not know yet.
         const auto kind = classify_request_header(name);
@@ -61,10 +62,10 @@ namespace {
             kind == request_header_kind::te || name.starts_with("sec-websocket-")) {
             throw std::invalid_argument("WebSocket handshake controls this response header");
         }
-        if (!size.add(name, header.value())) {
+        if (!size.add_field(name, header.value())) {
             throw std::length_error("WebSocket handshake response headers are too large");
         }
-        result.push_back(http_header_access::make(std::move(name), std::pmr::string(header.value(), resource)));
+        result.push_back(std::move(field));
     }
     return result;
 }
@@ -83,14 +84,6 @@ namespace {
         }
     }
     return true;
-}
-
-[[nodiscard]] bool websocket_protocol_token_valid(std::string_view protocol) noexcept {
-    if (protocol.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(
-        protocol, [](char ch) noexcept { return is_http_token_char(static_cast<unsigned char>(ch)); });
 }
 
 void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_value) noexcept {
@@ -220,16 +213,6 @@ bool websocket_subprotocol_offers_valid(const http_request& request) noexcept {
 
 bool websocket_extension_offers_valid(const http_request& request) noexcept {
     return websocket_extension_header_offers_valid(request);
-}
-
-bool websocket_protocol_offered(const http_request& request, std::string_view protocol) noexcept {
-    if (!websocket_protocol_token_valid(protocol)) {
-        return false;
-    }
-    websocket_subprotocol_set protocols;
-    bool present = false;
-    return append_websocket_subprotocol_offers(request, protocols, present) && present &&
-           !protocols.empty() && protocols.contains(protocol);
 }
 
 std::string_view choose_websocket_subprotocol(

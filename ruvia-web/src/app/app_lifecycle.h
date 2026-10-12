@@ -14,12 +14,15 @@ enum class app_lifecycle_state : std::uint8_t {
 
 enum class app_stop_request : std::uint8_t {
     ignored,
-    requested,
+    // Startup was in progress: the runtime stops at once, rolling it back.
+    startup,
+    // The app was serving: the run() owner drains before stopping the runtime.
+    serving,
 };
 
 // application owns the mutex protecting this state machine. application::run() is the sole
 // lifecycle owner; other threads may only request the monotonic transition to
-// stopping.
+// stopping. A stop requested while stopped is latched and consumed by the next run.
 class app_lifecycle final {
 public:
     [[nodiscard]] app_lifecycle_state state() const noexcept {
@@ -38,7 +41,8 @@ public:
         if (state_ != app_lifecycle_state::stopped) {
             return false;
         }
-        state_ = app_lifecycle_state::preparing;
+        state_ = stop_pending_ ? app_lifecycle_state::stopping : app_lifecycle_state::preparing;
+        stop_pending_ = false;
         return true;
     }
 
@@ -62,10 +66,14 @@ public:
         switch (state_) {
             case app_lifecycle_state::preparing:
             case app_lifecycle_state::starting:
+                state_ = app_lifecycle_state::stopping;
+                return app_stop_request::startup;
             case app_lifecycle_state::running:
                 state_ = app_lifecycle_state::stopping;
-                return app_stop_request::requested;
+                return app_stop_request::serving;
             case app_lifecycle_state::stopped:
+                stop_pending_ = true;
+                return app_stop_request::ignored;
             case app_lifecycle_state::stopping:
                 return app_stop_request::ignored;
         }
@@ -78,6 +86,7 @@ public:
 
 private:
     app_lifecycle_state state_{app_lifecycle_state::stopped};
+    bool stop_pending_{};
 };
 
 }  // namespace ruvia::detail

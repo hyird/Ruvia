@@ -12,11 +12,10 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] std::optional<asio::ssl::context> make_redis_tls_context(const client_tls_config_storage& config) {
-    std::optional<asio::ssl::context> context_value;
+[[nodiscard]] asio::ssl::context make_redis_tls_context(const client_tls_config_storage& config) {
+    asio::ssl::context context_value(asio::ssl::context::tls_client);
     if (config.mode_ != client_tls_mode::disabled) {
-        context_value.emplace(asio::ssl::context::tls_client);
-        configure_client_tls_context(*context_value->native_handle(), config);
+        configure_client_tls_context(*context_value.native_handle(), config);
     }
     return context_value;
 }
@@ -28,12 +27,12 @@ redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const w
     : config_(std::move(config)),
       resource_(resource),
       tls_context_(make_redis_tls_context(config_.tls_)),
-      general_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_ ? &*tls_context_ : nullptr,
-          config_.command_timeout_, config_.pool_size_per_worker_, worker_value, resource_)),
+      general_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_, config_.command_timeout_,
+          config_.pool_size_per_worker_, worker_value, resource_)),
       // Blocking waits have their own deadlines; ordinary command timeouts
       // must not interrupt a finite long wait or an explicitly cancelled wait.
-      blocking_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_ ? &*tls_context_ : nullptr,
-          std::nullopt, config_.blocking_pool_size_per_worker_, worker_value, resource_)) {}
+      blocking_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_, std::nullopt,
+          config_.blocking_pool_size_per_worker_, worker_value, resource_)) {}
 
 redis_client_runtime::~redis_client_runtime() = default;
 

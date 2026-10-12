@@ -13,6 +13,7 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_set_cookie.h"
 
@@ -49,11 +50,7 @@ bool cookie_path_matches(std::string_view request_path, std::string_view cookie_
 }
 
 bool is_valid_received_cookie_request_value(std::string_view value) noexcept {
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-        value.remove_prefix(1);
-        value.remove_suffix(1);
-    }
-    return ::ruvia::is_valid_cookie_value(value);
+    return ::ruvia::is_valid_cookie_value(::ruvia::http_trim_quoted_field_value(value));
 }
 
 bool can_serialize_received_cookie(std::string_view name, std::string_view value) noexcept {
@@ -93,8 +90,8 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
     : config_(config),
       resource_(resource),
       cookies_(resource) {
-    for (const auto& [name, value] : config.cookies_) {
-        add_cookie(name, value);
+    for (const auto& cookie : config.cookies_) {
+        add_cookie(cookie.name(), cookie.value());
     }
 }
 

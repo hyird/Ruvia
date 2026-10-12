@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia {
@@ -19,8 +20,9 @@ enum class http_request_trailer_error : unsigned char { invalid_field,
 // Owns decoded terminal request fields, separately from the initial head.
 // Drivers populate this object before reporting successful body completion.
 // resource must outlive this object and every borrowed field view.
-// At most max_http_header_fields fields and max_http_header_bytes normalized
-// bytes (name.size() + value.size() + 4 per field) can be retained.
+// At most max_http_header_fields fields can be retained, and the section must
+// fit the http_field_section_budget byte rule, starting from
+// http_trailer_section_budget().
 class http_request_trailers final {
 public:
     explicit http_request_trailers(std::pmr::memory_resource* resource);
@@ -29,7 +31,7 @@ public:
     [[nodiscard]] std::variant<std::monostate, http_request_trailer_error> append(std::string_view name, std::string_view value);
     [[nodiscard]] std::variant<std::monostate, http_request_trailer_error> append_http1(std::string_view block);
     [[nodiscard]] std::pmr::vector<http_header> take_fields() && noexcept {
-        bytes_ = 0;
+        budget_ = http_trailer_section_budget();
         return std::move(fields_);
     }
     [[nodiscard]] std::span<const http_header> fields() const& noexcept {
@@ -41,6 +43,6 @@ public:
 
 private:
     std::pmr::vector<http_header> fields_;
-    std::size_t bytes_{};
+    http_field_section_budget budget_{http_trailer_section_budget()};
 };
 }  // namespace ruvia

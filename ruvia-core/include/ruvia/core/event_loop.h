@@ -21,7 +21,7 @@ namespace ruvia {
 
 namespace detail {
 struct event_loop_state;
-class worker_shutdown_listener;
+class event_loop_stop_listener;
 }  // namespace detail
 
 class event_loop_stop_registration final {
@@ -39,9 +39,9 @@ public:
 
 private:
     explicit event_loop_stop_registration(
-        std::shared_ptr<detail::worker_shutdown_listener> listener_value) noexcept;
+        std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept;
 
-    std::shared_ptr<detail::worker_shutdown_listener> listener_;
+    std::shared_ptr<detail::event_loop_stop_listener> listener_;
     friend class event_loop;
 };
 

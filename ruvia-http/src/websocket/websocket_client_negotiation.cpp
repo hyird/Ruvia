@@ -7,10 +7,10 @@
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
 
-#include "http_header_access.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 namespace ruvia {
@@ -37,15 +37,16 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     if (!offer.enabled_) {
         return {};
     }
-    auto first = detail::http_find_unquoted_delimiter(text, 0, ';');
+    auto first = http_find_unquoted_delimiter(text, 0, ';');
     if (!http_ascii_equals_ignore_case(http_trim_ows(text.substr(0, first)), "permessage-deflate")) {
         return {};
     }
-    websocket_compression result_value{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false};
+    // The client's own takeover opt-out binds its deflater even when the server does not echo it.
+    websocket_compression result_value{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = offer.client_no_context_takeover_};
     std::uint8_t seen = 0;
     for (auto start = first; start < text.size();) {
         ++start;
-        auto end = detail::http_find_unquoted_delimiter(text, start, ';');
+        auto end = http_find_unquoted_delimiter(text, start, ';');
         auto part = http_trim_ows(text.substr(start, end - start));
         auto equals = part.find('=');
         auto name = http_trim_ows(part.substr(0, equals));
@@ -155,14 +156,11 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
         joined_bytes += protocol_view.size();
         protocol(protocol_view);
     }
-    std::size_t header_bytes = 0;
+    http_field_section_budget budget;
     auto append = [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
-        if (header_bytes > max_http_header_bytes || max_http_header_bytes - header_bytes < 4 ||
-            name.size() > max_http_header_bytes - header_bytes - 4 ||
-            value_bytes > max_http_header_bytes - header_bytes - 4 - name.size()) {
+        if (!budget.add_field(name.size(), value_bytes)) {
             throw std::invalid_argument("WebSocket client fields too large");
         }
-        header_bytes += name.size() + value_bytes + 4;
         field(name, value, value_bytes);
     };
     if (config.headers_.size() > max_http_header_fields - 3) {
@@ -209,18 +207,15 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
                 joined.append(", ");
             }
             joined.append(protocol_view); }, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
-            std::pmr::string materialized(value, resource_);
             if (name == "Sec-WebSocket-Protocol") {
-                materialized = std::move(joined);
+                fields_.push_back(http_header::copy_with_lowercase_name(name, joined, resource_));
             } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
-                materialized.append("; client_max_window_bits");
-            }
-            std::pmr::string normalized_name(name, resource_);
-            for (char& character : normalized_name) {
-                character = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(character)));
-            }
-            fields_.push_back(detail::http_header_access::make(
-                std::move(normalized_name), std::move(materialized))); });
+                std::pmr::string offer(value, resource_);
+                offer.append("; client_max_window_bits");
+                fields_.push_back(http_header::copy_with_lowercase_name(name, offer, resource_));
+            } else {
+                fields_.push_back(http_header::copy_with_lowercase_name(name, value, resource_));
+            } });
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
     return validate(fields_value, protocols_, deflate_);

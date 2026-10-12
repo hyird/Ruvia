@@ -12,7 +12,7 @@
 namespace context_request_test {
 
 template <typename callback_type>
-class context_callback final : public ruvia::middleware {
+class context_callback final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 

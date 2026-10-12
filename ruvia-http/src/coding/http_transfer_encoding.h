@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -24,27 +23,7 @@ namespace ruvia::detail {
         return std::ranges::all_of(value,
             [](char byte) noexcept { return is_http_token_char(static_cast<unsigned char>(byte)); });
     }
-    if (value.size() < 2 || value.back() != '"') {
-        return false;
-    }
-    const auto end = value.size() - 1;
-    for (std::size_t cursor_value = 1; cursor_value < end; ++cursor_value) {
-        auto byte = static_cast<unsigned char>(value[cursor_value]);
-        if (byte == '\\') {
-            if (++cursor_value == end) {
-                return false;
-            }
-            byte = static_cast<unsigned char>(value[cursor_value]);
-            if (byte != '\t' && byte != ' ' && (byte < 0x21 || byte > 0x7e) && byte < 0x80) {
-                return false;
-            }
-        } else if (byte == '"' ||
-                   (byte != '\t' && byte != ' ' && byte != 0x21 && (byte < 0x23 || byte > 0x5b) &&
-                       (byte < 0x5d || byte > 0x7e) && byte < 0x80)) {
-            return false;
-        }
-    }
-    return true;
+    return http_is_quoted_string(value);
 }
 
 [[nodiscard]] inline bool http_parse_transfer_coding_syntax(
@@ -167,13 +146,9 @@ static_assert(std::is_nothrow_move_constructible_v<http_transfer_encoding_value>
 // are remembered while later items/fields are still checked for malformed syntax.
 class http_transfer_encoding_state final {
 public:
-    explicit http_transfer_encoding_state(
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
-
     [[nodiscard]] http_transfer_encoding_parse_status parse_field(std::string_view field_value) {
         // The published value is the sole owner of the committed coding list.
-        http_transfer_codings next_codings(resource_);
+        http_transfer_codings next_codings;
         bool final_chunked = false;
         if (value_) {
             if (const auto* chunked = value_->final_chunked()) {
@@ -186,7 +161,7 @@ public:
         bool unsupported = unsupported_;
         bool saw_item = false;
         bool malformed = false;
-        http_visit_comma_separated_quoted_items(field_value,
+        http_visit_comma_separated_quoted_field_items(field_value,
             [&next_codings, &final_chunked, &unsupported, &saw_item, &malformed](
                 std::string_view item) {
                 saw_item = true;
@@ -227,8 +202,7 @@ public:
         }
         auto next_value = final_chunked ? http_transfer_encoding_value::make_final_chunked(std::move(next_codings))
                                         : http_transfer_encoding_value::make_non_chunked(std::move(next_codings));
-        // All allocations precede publication. Sequence move construction only
-        // transfers its PMR buffer, including with MSVC iterator debugging.
+        // The coding list is inline, so publication cannot fail.
         value_.emplace(std::move(next_value));
         unsupported_ = unsupported;
         return unsupported_ ? http_transfer_encoding_parse_status::unsupported
@@ -241,12 +215,8 @@ public:
     [[nodiscard]] bool unsupported() const noexcept {
         return unsupported_;
     }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
 
 private:
-    std::pmr::memory_resource* resource_;
     std::optional<http_transfer_encoding_value> value_;
     bool unsupported_{false};
 };

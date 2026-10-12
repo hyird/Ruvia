@@ -1,5 +1,6 @@
 #include "websocket/ws_connection.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -9,6 +10,12 @@
 #include "websocket/http_websocket_frame_reader.h"
 
 namespace ruvia::detail {
+namespace {
+// Inflated messages up to this size reuse one allocation across messages.
+// Larger buffers are released: their size is peer-controlled up to the message
+// limit and should not stay pinned to an idle connection.
+constexpr std::size_t retained_inflate_capacity_bytes = 16 * 1024;
+}  // namespace
 
 ws_connection::ws_connection(std::pmr::string& input, protocol_byte_limit message_limit,
     websocket_compression compression, websocket_connection_role role, websocket_mask_key_generator_type mask_key_generator,
@@ -294,7 +301,10 @@ std::optional<websocket_event> ws_connection::poll() & {
 
 std::optional<websocket_event> ws_connection::poll_impl() & {
     assembler_.release_completed();
-    std::pmr::string(inbound_inflated_.get_allocator()).swap(inbound_inflated_);
+    inbound_inflated_.clear();
+    if (inbound_inflated_.capacity() > retained_inflate_capacity_bytes) {
+        std::pmr::string(inbound_inflated_.get_allocator()).swap(inbound_inflated_);
+    }
     if (close_phase_ == close_phase_type::final_output_queued ||
         close_phase_ == close_phase_type::transport_end_ready || close_phase_ == close_phase_type::closed) {
         return websocket_event::make_transport_end();

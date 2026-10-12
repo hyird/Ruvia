@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -247,27 +248,32 @@ template <typename apply_response_state_type>
         }
     }
 
-    auto add_file_headers = [&](http_response& response) {
+    // RFC 9110 15.4.5: a 304 carries the validators and cache-guiding fields a
+    // 200 would, but no other representation metadata. Last-Modified guides the
+    // cache update only when no ETag is sent.
+    auto add_file_headers = [&](http_response& response, bool not_modified = false) {
         response.reserve_headers(file_response_header_reserve);
-        if (source_value.content_type_.empty()) {
-            response.header("Content-Type", source_value.body_.guessed_content_type());
-        } else {
-            response.header("Content-Type", source_value.content_type_);
+        if (!not_modified) {
+            if (source_value.content_type_.empty()) {
+                response.header("Content-Type", source_value.body_.guessed_content_type());
+            } else {
+                response.header("Content-Type", source_value.content_type_);
+            }
         }
         if (!source_value.cache_control_.empty()) {
             response.header("Cache-Control", source_value.cache_control_);
         }
         // A precompressed variant carries the original Content-Type with the
         // encoding declared here.
-        if (source_value.content_coding_ != http_content_coding::identity) {
+        if (!not_modified && source_value.content_coding_ != http_content_coding::identity) {
             response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
         }
-        if (honor_range_requests) {
+        if (!not_modified && honor_range_requests) {
             response.header("Accept-Ranges", "bytes");
         }
         if (emit_response_validators) {
             response.header("ETag", etag);
-            if (!last_modified.empty()) {
+            if (!not_modified && !last_modified.empty()) {
                 response.header("Last-Modified", last_modified);
             }
         }
@@ -299,10 +305,10 @@ template <typename apply_response_state_type>
             indexed_file_validated = true;
         }
     };
-    auto make_header_only_response = [&](std::optional<http_status_code> status_code) {
+    auto make_not_modified_response = [&](http_status_code status_code) {
         validate_indexed_file_for_bodyless_response();
         http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response);
+        add_file_headers(response, true);
         apply_file_response_state(response, status_code);
         return response;
     };
@@ -366,7 +372,7 @@ template <typename apply_response_state_type>
             .message_ = "file precondition failed"});
     }
     if (plan.not_modified()) {
-        return make_header_only_response(plan.status());
+        return make_not_modified_response(plan.status());
     }
     if (plan.range_unsatisfiable()) {
         validate_indexed_file_for_bodyless_response();
@@ -406,7 +412,7 @@ http_response context::file(file_response_options options) const {
                                  http_response& response, std::optional<http_status_code> status_code) {
         apply_response_state(response, status_code);
     };
-    return make_file_response(*this, request_, response_state().active_response().status(),
+    return make_file_response(*this, request_, response_state().metadata().status(),
         file_response_source{
             .body_ = file_response_body_source::file(
                 file_response_path::copying(std::move(options.path_), snapshot.identity_)),
@@ -444,6 +450,9 @@ http_response context::static_file(const static_root& root, static_file_response
     // never joins the client path onto the filesystem, so the worst case is a miss
     // (404). A "%00" would inject a NUL that cannot occur in a filename, so reject
     // it; a malformed escape falls back to the raw bytes (which simply miss).
+    // An encoded '/' or '\' would split one request path segment into several
+    // file path segments, so the file served would differ from the path every
+    // route and path-scoped middleware matched; reject it like the NUL.
     std::optional<std::pmr::string> decoded_path;
     if (has_url_encoding(relative_path, url_decode_mode::percent)) {
         decoded_path = decode_url_component(
@@ -451,7 +460,11 @@ http_response context::static_file(const static_root& root, static_file_response
     }
     const std::string_view lookup_path =
         decoded_path.has_value() ? std::string_view(*decoded_path) : relative_path;
-    if ((lookup_path.find('\0') != std::string_view::npos)) {
+    const auto separator_count = [](std::string_view path) noexcept {
+        return std::ranges::count_if(path, [](char c) noexcept { return c == '/' || c == '\\'; });
+    };
+    if ((lookup_path.find('\0') != std::string_view::npos) ||
+        (decoded_path.has_value() && separator_count(lookup_path) != separator_count(relative_path))) {
         throw http_error({.status_ = ruvia::http_status::forbidden,
             .code_ = "forbidden",
             .message_ = "invalid static file path"});
@@ -505,7 +518,7 @@ http_response context::static_file(const static_root& root, static_file_response
                                  http_response& response, std::optional<http_status_code> status_code) {
         apply_response_state(response, status_code);
     };
-    return make_file_response(*this, request_, response_state().active_response().status(),
+    return make_file_response(*this, request_, response_state().metadata().status(),
         file_response_source{
             .body_ = memory_variant == nullptr
                          ? file_response_body_source::file(file_response_path::copying_native(

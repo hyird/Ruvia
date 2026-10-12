@@ -175,16 +175,38 @@ std::exception_ptr worker_group::join() noexcept {
         }
         begin = end;
     }
-    for (const auto& member : members_) {
-        auto failure = member.runtime_->failure();
+    // The first failure in tier order is returned; the rest are reported here.
+    // Workers commonly fail for one shared cause (an unreachable dependency),
+    // so equivalent failures collapse into a single line with their count.
+    std::size_t first_secondary = members_.size();
+    for (std::size_t index = 0; index != members_.size(); ++index) {
+        if (auto failure = members_[index].runtime_->failure(); failure != nullptr) {
+            if (join_failure_ == nullptr) {
+                join_failure_ = std::move(failure);
+            } else if (first_secondary == members_.size()) {
+                first_secondary = index;
+            }
+        }
+    }
+    for (auto index = first_secondary; index < members_.size(); ++index) {
+        const auto failure = members_[index].runtime_->failure();
         if (failure == nullptr) {
             continue;
         }
-        if (join_failure_ == nullptr) {
-            join_failure_ = std::move(failure);
-        } else {
-            report_unhandled_failure("additional worker failure", std::move(failure));
+        bool reported = false;
+        for (auto earlier = first_secondary; earlier != index && !reported; ++earlier) {
+            reported = equivalent_failures(members_[earlier].runtime_->failure(), failure);
         }
+        if (reported) {
+            continue;
+        }
+        std::size_t occurrences = 1;
+        for (auto later = index + 1; later != members_.size(); ++later) {
+            if (equivalent_failures(members_[later].runtime_->failure(), failure)) {
+                ++occurrences;
+            }
+        }
+        report_unhandled_failure("additional worker", failure, occurrences);
     }
     joined_ = true;
     return join_failure_;

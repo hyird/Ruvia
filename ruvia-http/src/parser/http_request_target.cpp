@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "parser/http_uri_grammar.h"
 
@@ -30,11 +31,9 @@ struct normalized_host_unit final {
 
     auto byte = static_cast<unsigned char>(value[cursor_value++]);
     bool encoded_reserved = false;
-    if (byte == '%' && cursor_value + 1 < value.size()) {
-        const auto high = http_decode_hex_nibble(value[cursor_value]);
-        const auto low = http_decode_hex_nibble(value[cursor_value + 1]);
-        if (high >= 0 && low >= 0) {
-            byte = static_cast<unsigned char>((high << 4) | low);
+    if (byte == '%') {
+        if (const auto decoded = http_try_decode_percent_byte(value, cursor_value - 1)) {
+            byte = *decoded;
             cursor_value += 2;
             // RFC 3986 sections 2.2, 2.3, and 6.2.2.2: percent-encoded
             // unreserved octets are equivalent to their decoded spelling,
@@ -61,6 +60,18 @@ struct normalized_host_unit final {
     return *authority->port() != 0;
 }
 
+// Splits origin-form = absolute-path [ "?" query ] and validates both parts.
+[[nodiscard]] bool split_origin_form_target(
+    std::string_view target, std::string_view& path, std::string_view& query) noexcept {
+    if (target.empty() || target.front() != '/') {
+        return false;
+    }
+    const auto separator = target.find('?');
+    path = separator == std::string_view::npos ? target : target.substr(0, separator);
+    query = separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
+    return is_valid_uri_component(path, true, false) && is_valid_uri_component(query, true, true);
+}
+
 }  // namespace
 
 bool is_valid_request_target_bytes(std::string_view target) noexcept {
@@ -70,8 +81,7 @@ bool is_valid_request_target_bytes(std::string_view target) noexcept {
     for (std::size_t i = 0; i < target.size(); ++i) {
         const auto byte = static_cast<unsigned char>(target[i]);
         if (byte == '%') {
-            if (i + 2 >= target.size() || http_decode_hex_nibble(target[i + 1]) < 0 ||
-                http_decode_hex_nibble(target[i + 2]) < 0) {
+            if (!http_try_decode_percent_byte(target, i)) {
                 return false;
             }
             i += 2;
@@ -90,18 +100,9 @@ bool is_valid_request_target_bytes(std::string_view target) noexcept {
 }
 
 bool is_valid_origin_form_target(std::string_view target) noexcept {
-    if (target.empty() || target.front() != '/') {
-        return false;
-    }
-    const auto separator = target.find('?');
-    const auto path = separator == std::string_view::npos ? target : target.substr(0, separator);
-    const auto query =
-        separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
-    return is_valid_uri_component(path, true, false) && is_valid_uri_component(query, true, true);
-}
-
-bool is_valid_origin_or_asterisk_form_target(std::string_view target) noexcept {
-    return target == "*" || is_valid_origin_form_target(target);
+    std::string_view path;
+    std::string_view query;
+    return split_origin_form_target(target, path, query);
 }
 
 bool is_valid_origin_or_asterisk_form_target(http_known_method method, std::string_view target) noexcept {
@@ -148,48 +149,6 @@ bool is_valid_host_header(std::string_view value) noexcept {
     return value.empty() || parse_http_authority(value).has_value();
 }
 
-bool is_valid_uri_authority(std::string_view value) noexcept {
-    auto host_and_port = value;
-    if (const auto delimiter = value.find('@'); delimiter != std::string_view::npos) {
-        if (!is_valid_uri_userinfo(value.substr(0, delimiter)) ||
-            value.find('@', delimiter + 1) != std::string_view::npos) {
-            return false;
-        }
-        host_and_port = value.substr(delimiter + 1);
-    }
-
-    std::string_view host;
-    std::string_view port;
-    bool has_port = false;
-    if (!host_and_port.empty() && host_and_port.front() == '[') {
-        const auto close = host_and_port.find(']');
-        if (close == std::string_view::npos) {
-            return false;
-        }
-        host = host_and_port.substr(0, close + 1);
-        const auto remainder = host_and_port.substr(close + 1);
-        if (!remainder.empty()) {
-            if (remainder.front() != ':') {
-                return false;
-            }
-            has_port = true;
-            port = remainder.substr(1);
-        }
-    } else {
-        const auto delimiter = host_and_port.find(':');
-        host = delimiter == std::string_view::npos ? host_and_port : host_and_port.substr(0, delimiter);
-        if (delimiter != std::string_view::npos) {
-            has_port = true;
-            port = host_and_port.substr(delimiter + 1);
-            if ((port.find(':') != std::string_view::npos)) {
-                return false;
-            }
-        }
-    }
-
-    return (host.empty() || is_valid_http_host(host)) && (!has_port || is_valid_uri_port(port));
-}
-
 bool is_valid_uri_scheme(std::string_view value) noexcept {
     const auto is_alpha = [](unsigned char byte) noexcept {
         return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
@@ -207,31 +166,24 @@ bool is_valid_uri_scheme(std::string_view value) noexcept {
     return true;
 }
 
-std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
-    if (http_ascii_equals_ignore_case(scheme, "http")) {
-        return 80;
-    }
-    if (http_ascii_equals_ignore_case(scheme, "https")) {
-        return 443;
-    }
-    return 0;
-}
-
 namespace {
 
 [[nodiscard]] bool parse_absolute_target(
     http_known_method method, std::string_view target, request_target_view& output) noexcept {
-    // RFC 9112 section 3.2.2 defines absolute-form as the complete RFC 3986
-    // absolute-URI grammar. Restricting this to HTTP(S) rejects valid proxy
-    // requests such as ftp:// targets and every authority-less scheme.
+    // RFC 9112 section 3.2.2 defines absolute-form as an absolute-URI, but
+    // every caller is an origin server (or builds one of its requests). An
+    // origin only serves http(s) resources (RFC 9110 sections 4.2.1-4.2.2),
+    // and accepting other schemes would let a front proxy that recognises
+    // only http(s) URIs see a different target than the one routed here.
     const auto scheme_end = target.find(':');
-    if (scheme_end == std::string_view::npos || !is_valid_uri_scheme(target.substr(0, scheme_end))) {
+    if (scheme_end == std::string_view::npos) {
+        return false;
+    }
+    const auto scheme = target.substr(0, scheme_end);
+    if (!http_ascii_equals_ignore_case(scheme, "http") && !http_ascii_equals_ignore_case(scheme, "https")) {
         return false;
     }
 
-    const auto scheme = target.substr(0, scheme_end);
-    const bool http_scheme_value =
-        http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
     const auto remainder = target.substr(scheme_end + 1);
     const auto query_separator = remainder.find('?');
     const auto hierarchy =
@@ -239,48 +191,23 @@ namespace {
     const auto query = query_separator == std::string_view::npos
                            ? std::string_view{}
                            : remainder.substr(query_separator + 1);
-    if (!is_valid_uri_component(query, true, true)) {
+    // HTTP(S) URIs have a mandatory "//" authority.
+    if (!hierarchy.starts_with("//") || !is_valid_uri_component(query, true, true)) {
         return false;
     }
 
-    std::string_view authority;
-    std::string_view path;
-    if (hierarchy.starts_with("//")) {
-        const auto authority_and_path = hierarchy.substr(2);
-        const auto path_separator = authority_and_path.find('/');
-        const auto uri_authority = path_separator == std::string_view::npos
-                                       ? authority_and_path
-                                       : authority_and_path.substr(0, path_separator);
-        path = path_separator == std::string_view::npos ? std::string_view{}
-                                                        : authority_and_path.substr(path_separator);
-        if (!is_valid_uri_authority(uri_authority) || !is_valid_uri_component(path, true, false)) {
-            return false;
-        }
-
-        const auto userinfo_delimiter = uri_authority.find('@');
-        authority = userinfo_delimiter == std::string_view::npos
-                        ? uri_authority
-                        : uri_authority.substr(userinfo_delimiter + 1);
-        // Host is the public, authoritative routing value installed by the
-        // HTTP/1 parser. It therefore still has to fit the validated HTTP
-        // authority representation even when the URI scheme is generic.
-        if (!is_valid_host_header(authority)) {
-            return false;
-        }
-
-        // HTTP(S) URI syntax has a mandatory, non-empty authority. Userinfo in
-        // an HTTP URI is rejected at this trust boundary (RFC 9110 section
-        // 4.2.4) instead of being silently stripped into a routing identity.
-        if (http_scheme_value && (authority.empty() || userinfo_delimiter != std::string_view::npos)) {
-            return false;
-        }
-    } else {
-        // RFC 9110 defines HTTP(S) URI with "//" authority. Other registered
-        // schemes may use path-absolute, path-rootless, or path-empty.
-        if (http_scheme_value || !is_valid_uri_component(hierarchy, true, false)) {
-            return false;
-        }
-        path = hierarchy;
+    const auto authority_and_path = hierarchy.substr(2);
+    const auto path_separator = authority_and_path.find('/');
+    const auto authority = path_separator == std::string_view::npos
+                               ? authority_and_path
+                               : authority_and_path.substr(0, path_separator);
+    const auto path = path_separator == std::string_view::npos ? std::string_view{}
+                                                               : authority_and_path.substr(path_separator);
+    // The authority becomes the authoritative Host value, so it must be a
+    // non-empty HTTP Host. Userinfo is rejected at this trust boundary (RFC
+    // 9110 section 4.2.4) instead of being silently stripped.
+    if (authority.empty() || !is_valid_host_header(authority) || !is_valid_uri_component(path, true, false)) {
+        return false;
     }
 
     if (path.empty() && method == http_known_method::options && query_separator == std::string_view::npos) {
@@ -289,10 +216,9 @@ namespace {
         // must use asterisk-form. Expose that route semantic directly even
         // when this parser itself is the origin-facing recipient.
         output.path_ = "*";
-    } else if (path.empty() && http_scheme_value) {
-        // RFC 9110 section 4.2.3 permits this normalization only for HTTP(S)
-        // targets. Generic schemes retain their exact empty path, while an
-        // OPTIONS target with a query remains distinct from server-wide "*".
+    } else if (path.empty()) {
+        // RFC 9110 section 4.2.3; an OPTIONS target with a query remains
+        // distinct from server-wide "*".
         output.path_ = "/";
     } else {
         output.path_ = path;
@@ -300,7 +226,6 @@ namespace {
     output.scheme_ = scheme;
     output.query_ = query;
     output.authority_ = authority;
-    output.default_port_ = http_uri_scheme_default_port(scheme);
     output.form_ = http_request_target_form::absolute;
     return true;
 }
@@ -339,7 +264,6 @@ bool parse_request_target(
         output.scheme_ = {};
         output.query_ = {};
         output.authority_ = {};
-        output.default_port_ = 0;
         output.form_ = http_request_target_form::asterisk;
         return true;
     }
@@ -351,7 +275,6 @@ bool parse_request_target(
         output.scheme_ = {};
         output.query_ = {};
         output.authority_ = target;
-        output.default_port_ = 0;
         output.form_ = http_request_target_form::authority;
         return true;
     }
@@ -359,19 +282,17 @@ bool parse_request_target(
         return false;
     }
     if (target.front() == '/') {
-        if (!is_valid_origin_form_target(target)) {
+        std::string_view path;
+        std::string_view query;
+        if (!split_origin_form_target(target, path, query)) {
             return false;
         }
-        const auto query_separator = target.find('?');
         output.scheme_ = {};
-        output.path_ =
-            query_separator == std::string_view::npos ? target : target.substr(0, query_separator);
-        output.query_ = query_separator == std::string_view::npos ? std::string_view{}
-                                                                  : target.substr(query_separator + 1);
+        output.path_ = path;
+        output.query_ = query;
         output.authority_ = {};
-        output.default_port_ = 0;
         output.form_ = http_request_target_form::origin;
-        return !output.path_.empty();
+        return true;
     }
     if (!is_valid_request_target_bytes(target)) {
         return false;

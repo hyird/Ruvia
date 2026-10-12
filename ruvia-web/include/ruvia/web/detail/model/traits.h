@@ -124,35 +124,30 @@ inline constexpr bool is_model =
     requires { typename std::remove_cvref_t<t_type>::ruvia_model_schema_type; };
 
 template <typename t_type>
-struct ruvia_model_field_traits
-    : std::bool_constant<is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> ||
-                         is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>> {};
+inline constexpr bool model_field_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> ||
+                                          is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>;
 
 template <typename value_t_type>
-struct ruvia_model_field_traits<array<value_t_type>>
-    : ruvia_model_field_traits<std::remove_cvref_t<value_t_type>> {};
+inline constexpr bool model_field_value<array<value_t_type>> = model_field_value<std::remove_cvref_t<value_t_type>>;
 
 template <typename value_t_type>
-struct ruvia_model_field_traits<boxed_array<value_t_type>>
-    : ruvia_model_field_traits<std::remove_cvref_t<value_t_type>> {};
+inline constexpr bool model_field_value<boxed_array<value_t_type>> = model_field_value<std::remove_cvref_t<value_t_type>>;
 
 template <typename t_type>
-inline constexpr bool is_model_field = ruvia_model_field_traits<std::remove_cvref_t<t_type>>::value;
+inline constexpr bool is_model_field = model_field_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-struct model_json_value_traits
-    : std::bool_constant<is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>> {};
+inline constexpr bool model_json_value =
+    is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>;
 
 template <typename value_t_type>
-struct model_json_value_traits<array<value_t_type>> : model_json_value_traits<std::remove_cvref_t<value_t_type>> {};
+inline constexpr bool model_json_value<array<value_t_type>> = model_json_value<std::remove_cvref_t<value_t_type>>;
 
 template <typename value_t_type>
-struct model_json_value_traits<boxed_array<value_t_type>>
-    : model_json_value_traits<std::remove_cvref_t<value_t_type>> {};
+inline constexpr bool model_json_value<boxed_array<value_t_type>> = model_json_value<std::remove_cvref_t<value_t_type>>;
 
 template <typename t_type>
-inline constexpr bool is_model_json_value =
-    model_json_value_traits<std::remove_cvref_t<t_type>>::value;
+inline constexpr bool is_model_json_value = model_json_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
 [[nodiscard]] t_type make_request_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource) {

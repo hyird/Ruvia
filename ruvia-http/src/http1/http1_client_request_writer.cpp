@@ -1,10 +1,6 @@
 #include "ruvia/http/http1_client_request_writer.h"
 
-#include <array>
-#include <charconv>
 #include <cstdint>
-#include <cstring>
-#include <system_error>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -12,12 +8,15 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
 #include "field/http_expect_token.h"
 #include "parser/http_request_target.h"
+#include "util/http_wire_sink.h"
 
 namespace ruvia::detail {
 
@@ -81,44 +80,66 @@ constexpr std::string_view host_prefix = "Host: ";
 constexpr std::string_view content_length_prefix = "Content-Length: ";
 constexpr std::string_view expect_prefix = "Expect: ";
 constexpr std::string_view connection_close = "Connection: close\r\n";
+constexpr std::string_view chunked_header = "Transfer-Encoding: chunked\r\n";
 
 [[nodiscard]] std::size_t authority_length(const http_origin_view& origin, bool force_port) noexcept {
     return origin.host().size() + ((force_port || !detail::http_origin_uses_default_port(origin))
-                                          ? 1 + decimal_digits(origin.port())
+                                          ? 1 + http_unsigned_decimal_size(origin.port())
                                           : 0);
 }
 
-void append_view(char*& cursor_value, std::string_view value) noexcept {
-    if (!value.empty()) {
-        std::memcpy(cursor_value, value.data(), value.size());
-        cursor_value += value.size();
-    }
-}
-
-void append_unsigned(char*& cursor_value, std::uint64_t value) noexcept {
-    std::array<char, 32> digits;
-    const auto [end, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), value);
-    if (ec == std::errc{}) {
-        append_view(
-            cursor_value, std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
-    }
-}
-
-void append_authority(char*& cursor_value, const http_origin_view& origin, bool force_port) noexcept {
-    append_view(cursor_value, origin.host());
+void append_authority(detail::http_raw_wire_sink& sink, const http_origin_view& origin, bool force_port) noexcept {
+    sink.append(origin.host());
     if (force_port || !detail::http_origin_uses_default_port(origin)) {
-        *cursor_value++ = ':';
-        append_unsigned(cursor_value, origin.port());
+        sink.append(':');
+        sink.append_unsigned(origin.port());
     }
 }
 
-void append_headers(char*& cursor_value, std::span<const http_header_view> headers) noexcept {
-    for (const auto& header : headers) {
-        append_view(cursor_value, header.name());
-        append_view(cursor_value, ": ");
-        append_view(cursor_value, header.value());
-        append_view(cursor_value, crlf);
+struct request_head_write_plan final {
+    http_origin_view origin_;
+    std::string_view method_;
+    std::string_view target_;
+    std::span<const http_header_view> headers_;
+    std::optional<std::uint64_t> length_;
+    bool connect_;
+    bool explicit_content_;
+    bool expect_continue_;
+    bool generate_connection_close_;
+};
+
+void write_request_head(char* output, const request_head_write_plan& plan) noexcept {
+    detail::http_raw_wire_sink sink(output);
+    sink.append(plan.method_);
+    sink.append(' ');
+    if (plan.connect_) {
+        append_authority(sink, plan.origin_, true);
+    } else {
+        sink.append(plan.target_);
     }
+    sink.append(http11_request_line_suffix);
+    sink.append(host_prefix);
+    append_authority(sink, plan.origin_, plan.connect_);
+    sink.append(crlf);
+    for (const auto& header : plan.headers_) {
+        detail::emit_http1_field_line(sink, header.name(), header.value());
+    }
+    if (plan.explicit_content_ && !plan.length_) {
+        sink.append(chunked_header);
+    } else if (plan.explicit_content_) {
+        sink.append(content_length_prefix);
+        sink.append_unsigned(*plan.length_);
+        sink.append(crlf);
+    }
+    if (plan.expect_continue_) {
+        sink.append(expect_prefix);
+        sink.append(detail::http_continue_expectation_token);
+        sink.append(crlf);
+    }
+    if (plan.generate_connection_close_) {
+        sink.append(connection_close);
+    }
+    sink.append(crlf);
 }
 
 [[nodiscard]] bool is_valid_http1_close_policy(http1_close_policy policy) noexcept {
@@ -198,7 +219,6 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
         header_facts.connection_options_.close() || generate_connection_close
             ? http1_close_policy::close_after_response
             : http1_close_policy::allow_reuse;
-    constexpr std::string_view chunked_header = "Transfer-Encoding: chunked\r\n";
     const std::size_t generated_fields = 1 + (explicit_content ? 1 : 0) + (expect_continue ? 1 : 0) +
                                          (generate_connection_close ? 1 : 0);
     if (headers.size() > max_http_header_fields - generated_fields) {
@@ -207,27 +227,26 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
     }
 
     const std::size_t target_bytes = connect ? authority_length(origin, true) : target.size();
-    std::size_t head_bytes = 0;
-    if (!add_head_bytes(head_bytes, method.size()) || !add_head_bytes(head_bytes, 1) ||
-        !add_head_bytes(head_bytes, target_bytes) ||
-        !add_head_bytes(head_bytes, http11_request_line_suffix.size()) ||
-        !add_head_bytes(head_bytes, host_prefix.size()) ||
-        !add_head_bytes(head_bytes, authority_length(origin, connect)) ||
-        !add_head_bytes(head_bytes, crlf.size()) || !add_head_bytes(head_bytes, header_facts.wire_bytes_) ||
-        (chunked && !add_head_bytes(head_bytes, chunked_header.size())) ||
+    // The caller's fields are already charged; add the request line and the
+    // generated fields to the same section budget.
+    auto head_budget = header_facts.section_;
+    if (!head_budget.add(method.size()) || !head_budget.add(1) || !head_budget.add(target_bytes) ||
+        !head_budget.add(http11_request_line_suffix.size()) ||
+        !head_budget.add(host_prefix.size()) || !head_budget.add(authority_length(origin, connect)) ||
+        !head_budget.add(crlf.size()) || (chunked && !head_budget.add(chunked_header.size())) ||
         (explicit_content && !chunked &&
-            (!add_head_bytes(head_bytes, content_length_prefix.size()) ||
-                !add_head_bytes(head_bytes, decimal_digits(*length)) ||
-                !add_head_bytes(head_bytes, crlf.size()))) ||
+            (!head_budget.add(content_length_prefix.size()) ||
+                !head_budget.add(http_unsigned_decimal_size(*length)) || !head_budget.add(crlf.size()))) ||
         (expect_continue &&
-            (!add_head_bytes(head_bytes, expect_prefix.size()) ||
-                !add_head_bytes(head_bytes, detail::http_continue_expectation_token.size()) ||
-                !add_head_bytes(head_bytes, crlf.size()))) ||
-        (generate_connection_close && !add_head_bytes(head_bytes, connection_close.size())) ||
-        !add_head_bytes(head_bytes, crlf.size())) {
+            (!head_budget.add(expect_prefix.size()) ||
+                !head_budget.add(detail::http_continue_expectation_token.size()) ||
+                !head_budget.add(crlf.size()))) ||
+        (generate_connection_close && !head_budget.add(connection_close.size())) ||
+        !head_budget.add(crlf.size())) {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::header_too_large);
     }
+    const auto head_bytes = head_budget.bytes();
     if (head_buffer.size() < head_bytes) {
         return detail::http1_client_request_prepare_result_access::buffer_too_small(head_bytes);
     }
@@ -239,36 +258,6 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
                                          ? own_offered_upgrade_protocols(headers, resource)
                                          : std::pmr::string(resource);
 
-    char* cursor_value = head_buffer.data();
-    append_view(cursor_value, method);
-    *cursor_value++ = ' ';
-    if (connect) {
-        append_authority(cursor_value, origin, true);
-    } else {
-        append_view(cursor_value, target);
-    }
-    append_view(cursor_value, http11_request_line_suffix);
-    append_view(cursor_value, host_prefix);
-    append_authority(cursor_value, origin, connect);
-    append_view(cursor_value, crlf);
-    append_headers(cursor_value, headers);
-    if (chunked) {
-        append_view(cursor_value, chunked_header);
-    } else if (explicit_content) {
-        append_view(cursor_value, content_length_prefix);
-        append_unsigned(cursor_value, *length);
-        append_view(cursor_value, crlf);
-    }
-    if (expect_continue) {
-        append_view(cursor_value, expect_prefix);
-        append_view(cursor_value, detail::http_continue_expectation_token);
-        append_view(cursor_value, crlf);
-    }
-    if (generate_connection_close) {
-        append_view(cursor_value, connection_close);
-    }
-    append_view(cursor_value, crlf);
-
     const auto content_state = expect_continue
                                    ? detail::http1_client_initial_content_state::awaiting_continue
                                    : (explicit_content && (!length || *length != 0)
@@ -278,6 +267,15 @@ void append_headers(char*& cursor_value, std::span<const http_header_view> heade
         connect ? http_known_method::connect : classify_http_method(method),
         header_facts.connection_options_, effective_close_policy, content_state,
         std::move(offered_upgrade_protocols));
+    const request_head_write_plan write_plan{origin, method, target, headers, length,
+        connect, explicit_content, expect_continue, generate_connection_close};
+    const auto output = head_buffer.first(head_bytes);
+    // Descriptors and every borrowed string are consumed before the output is
+    // overwritten when the caller's request storage aliases the head buffer.
+    detail::write_http_wire(output,
+        detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), headers,
+            {method, target, origin.host()}),
+        [&write_plan](char* destination) noexcept { write_request_head(destination, write_plan); });
     const auto head = std::string_view(head_buffer.data(), head_bytes);
     if (streaming) {
         return detail::http1_client_request_prepare_result_access::prepared_streaming_content(head, length, expect_continue, std::move(exchange_state));

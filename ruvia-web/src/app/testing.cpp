@@ -142,9 +142,9 @@ test_app& test_app::on_not_found(scoped_not_found_handler_options options) {
     return *this;
 }
 
-test_app& test_app::use_middleware(detail::controller_middleware_descriptor descriptor) {
+test_app& test_app::use_middleware(detail::owned_middleware_descriptor descriptor) {
     impl_->require_configurable();
-    impl_->configuration_.add_middleware(descriptor);
+    impl_->configuration_.add_middleware(std::move(descriptor));
     return *this;
 }
 
@@ -217,8 +217,12 @@ test_response test_app::request(const test_request& request) {
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,
                                           detail::http_response_coding_policy::disabled(), {}, request_start);
-        const auto prepared =
-            co_await tail.prepare(response, options, routes_value, request_memory_value, request_services);
+        const auto preparation = tail.prepare(response, options);
+        const auto prepared = preparation.ready() != nullptr
+                                  ? *preparation.ready()
+                                  : co_await tail.finish_prepare(
+                                        preparation, response, options, routes_value, request_memory_value,
+                                        request_services);
         tail.record_access(options.access_log_, response.status());
 
         // Copy everything out while the request arena is still alive.

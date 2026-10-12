@@ -28,6 +28,19 @@ namespace ruvia::detail {
 
 inline constexpr std::size_t chunked_encoded_buffer_bytes = max_http_header_bytes;
 
+// Where a body reader leaves the pipelined suffix -- the bytes of the next
+// request that arrived together with this one. The suffix normally still sits
+// at the tail of the connection read buffer, where the session compacts it in
+// place once the views borrowing that buffer are dead. Only bytes the reader
+// over-read into its own buffer, which dies with the route, are copied into
+// request-scoped storage.
+struct body_pipeline_handover final {
+    // Length of the suffix still at the tail of the connection read buffer;
+    // zero when `stashed_` holds the pipeline.
+    std::size_t read_buffer_suffix_bytes_{};
+    std::string_view stashed_;
+};
+
 template <typename stream_type>
 class stream_body_reader final {
 public:
@@ -43,19 +56,18 @@ public:
     [[nodiscard]] const http_request_trailers& trailers() const& noexcept {
         return trailers_;
     }
-    // Hands the pipelined suffix -- the bytes of the next request that arrived
-    // in the same segment -- to `stash`, and drops this reader's claim on them.
-    // The connection read buffer is deliberately untouched: every view in the
-    // request being served still borrows it, so the session installs these bytes
-    // itself once those views are dead.
-    void take_pipeline(std::pmr::string& stash);
+    // Hands the pipelined suffix over and drops this reader's claim on it. The
+    // connection read buffer is deliberately untouched: every view in the
+    // request being served still borrows it. `stash` receives bytes only when
+    // the suffix lives in this reader's own buffer.
+    [[nodiscard]] body_pipeline_handover take_pipeline(std::pmr::string& stash);
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read();
     task<std::string_view> read_all(std::pmr::string& body);
 
 private:
     task<void> ensure_continue();
-    void compact_pending();
+    void require_not_failed() const;
     [[nodiscard]] std::string_view initial_pipeline_remainder() const noexcept;
     [[nodiscard]] std::string_view buffered_pipeline_remainder() const noexcept;
     void reset_pipeline_state() noexcept;
@@ -81,10 +93,15 @@ private:
     http1_chunked_body_decoder chunk_decoder_;
     http_request_trailers trailers_;
     connection_scanner::entry_type& scanner_entry_;
+    // Offset of the first unconsumed byte in the active source: the borrowed
+    // initial view while it is set, buffer_ otherwise. Consumed buffer_ bytes are
+    // dropped only when read_more() needs room for socket input.
     std::size_t read_cursor_{0};
-    std::size_t pending_compact_until_{0};
     std::size_t delivered_bytes_{0};
     bool finished_{false};
+    // Set once a read fails: the framing position is unknown, so the body can
+    // never be consumed further and must stay incomplete.
+    bool failed_{false};
     bool continue_sent_{false};
 };
 

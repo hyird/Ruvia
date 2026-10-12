@@ -10,6 +10,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -30,7 +32,7 @@ struct worker_stats final {
 // Stand-in for a genuinely blocking call (sync SDK, file crypto, ...).
 std::uint64_t slow_checksum(std::string_view input) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    std::uint64_t sum = 1469598103934665603ull;
+    std::uint64_t sum = 14695981039346656037ull;
     for (const char byte : input) {
         sum = (sum ^ static_cast<unsigned char>(byte)) * 1099511628211ull;
     }
@@ -39,10 +41,10 @@ std::uint64_t slow_checksum(std::string_view input) {
 
 }  // namespace
 
-class worker_tools_controller final : public ruvia::controller<worker_tools_controller> {
+class worker_tools_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/workers")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(worker_tools_controller)
     RUVIA_GET("/stats", stats);
     RUVIA_GET("/offload", offload);
     RUVIA_GET("/offload-or-shed", offload_or_shed);
@@ -121,20 +123,25 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8090})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        // Each worker builds its own worker_stats before serving; the factory
-        // form (use_worker_state<T>(fn)) covers non-default-constructible types.
-        .use_worker_state<worker_stats>()
-        // One pool for the whole process, shared by every worker. application provides
-        // a bounded pool by default; this overrides its size for the example.
-        // application::get_blocking_pool_stats() reports queue depth and rejections for
-        // production tuning.
-        .get_blocking_pool({
-            .thread_count_ = 4,
-            .queue_capacity_ = 128,
-        })
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8090})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            // Each worker builds its own worker_stats before serving; the factory
+            // form (use_worker_state<T>(fn)) covers non-default-constructible types.
+            .use_worker_state<worker_stats>()
+            // One pool for the whole process, shared by every worker. application provides
+            // a bounded pool by default; this overrides its size for the example.
+            // application::get_blocking_pool_stats() reports queue depth and rejections for
+            // production tuning.
+            .get_blocking_pool({
+                .thread_count_ = 4,
+                .queue_capacity_ = 128,
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

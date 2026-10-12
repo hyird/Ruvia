@@ -1,4 +1,3 @@
-#include <array>
 #include <chrono>
 #include <exception>
 #include <optional>
@@ -7,7 +6,6 @@
 
 #include "ruvia/core/operation_timeout.h"
 
-#include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 #include "websocket/http_websocket_liveness.h"
 
@@ -25,11 +23,11 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
     lifecycle_.require_ready();
     auto activity = claim_activity(read_active_, "concurrent WebSocket client reads are not supported");
     operation_guard_type operation(*this, options);
-    std::array<char, websocket_client_transport_buffer_bytes> bytes_value{};
+    resume_pong_deadline();
     for (;;) {
         std::optional<websocket_event> event;
         {
-            co_await wait_for_write_idle();
+            co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             event = require_protocol().next_event();
             if (event.has_value() && event->ping() != nullptr) {
@@ -37,14 +35,14 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
             }
         }
         if (!event.has_value()) {
-            const auto count = co_await read_transport(bytes_value, config_.read_timeout_);
+            const auto count = co_await read_transport(input_, config_.read_timeout_);
             if (count == 0) {
                 require_protocol().notify_transport_eof();
                 fail_transport();
                 throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                     "WebSocket transport ended before peer Close");
             }
-            feed_input(std::string_view(bytes_value.data(), count));
+            feed_input(std::string_view(input_.data(), count));
             continue;
         }
         if (const auto* message = event->message()) {
@@ -62,7 +60,7 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
             std::terminate();
         }
         if (event->close() != nullptr || event->transport_end() != nullptr) {
-            co_await wait_for_write_idle();
+            co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             co_await flush_output();
             co_return std::nullopt;
@@ -72,29 +70,22 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
 
 task<std::size_t> websocket_client_state::read_transport(
     std::span<char> output, std::optional<std::chrono::milliseconds> configured_timeout) {
-    // One deadline mechanism for every protocol: the timer retires the whole
-    // connection, which aborts the transport with the timeout reason.
-    arm(read_timer_, configured_timeout, client_abort_reason::timeout);
-    try {
-        std::size_t count = 0;
-        const operation_timeout unbounded(std::nullopt);
-        const auto result_value = co_await transport_.read_some(output, unbounded);
-        if (result_value.status_ != client_transport_status::eof) {
-            if (!result_value.ok()) {
-                throw_transport_failure(result_value);
-            }
-            count = result_value.bytes_;
+    // The transport read lane owns the deadline. Its timeout result retires
+    // the whole connection like any other transport failure.
+    const operation_timeout timeout(configured_timeout);
+    const auto result_value = co_await transport_.read_some(output, timeout);
+    std::size_t count = 0;
+    if (result_value.status_ != client_transport_status::eof) {
+        if (!result_value.ok()) {
+            throw_transport_failure(result_value);
         }
-        disarm(read_timer_);
-        throw_if_aborted();
-        if (count != 0) {
-            touch_activity();
-        }
-        co_return count;
-    } catch (...) {
-        disarm(read_timer_);
-        throw;
+        count = result_value.bytes_;
     }
+    throw_if_aborted();
+    if (count != 0) {
+        touch_activity();
+    }
+    co_return count;
 }
 
 void websocket_client_state::feed_input(std::string_view bytes_value) {

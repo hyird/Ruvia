@@ -398,7 +398,7 @@ task<std::string_view> context::request_body() const {
         co_return raw;
     }
     auto decode_result = decode_http_request_content(codings, raw,
-        {.max_decoded_bytes_ = services().max_decoded_body_bytes(), .resource_ = decode_resource});
+        {.max_decoded_bytes_ = services().max_decoded_request_body_bytes(), .resource_ = decode_resource});
     auto* decoded_content = decode_result.decoded();
     if (decoded_content == nullptr) {
         if (const auto* failure = decode_result.protocol_failure()) {

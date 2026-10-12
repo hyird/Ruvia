@@ -29,7 +29,7 @@ std::filesystem::path dotenv_executable_directory() {
         buffer.resize(buffer.size() * 2);
     }
 #else
-    std::pmr::vector<char> buffer(1024, app_resource());
+    std::pmr::vector<char> buffer(1024, process_resource());
     for (;;) {
         const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
         if (length < 0) {

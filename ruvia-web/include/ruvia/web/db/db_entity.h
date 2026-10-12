@@ -235,7 +235,10 @@ struct db_entity_type_traits<string> {
     static constexpr db_data_type data_type = db_data_type::text;
 };
 template <typename t_type>
-struct db_entity_type_traits<std::optional<t_type>> : db_entity_type_traits<t_type> {};
+struct db_entity_type_traits<std::optional<t_type>> {
+    using value_type = typename db_entity_type_traits<t_type>::value_type;
+    static constexpr db_data_type data_type = db_entity_type_traits<t_type>::data_type;
+};
 template <typename t_type>
 struct db_entity_type_traits<std::pmr::vector<t_type>> {
     using value_type = std::pmr::vector<t_type>;

@@ -40,6 +40,18 @@ public:
             slot->reset();
             owner_.storage_.pop();
         }
+        // Unpublish the front value but leave it constructed in its slot, so the
+        // caller can destroy it after releasing the lock. The owner must have
+        // stopped every producer first: a later push that wraps onto the slot
+        // would race with that out-of-lock destruction.
+        [[nodiscard]] std::optional<value_type>& detach_front() noexcept {
+            auto* slot = owner_.storage_.front();
+            if (!slot) {
+                std::terminate();
+            }
+            owner_.storage_.pop();
+            return *slot;
+        }
         template <typename... argument_types>
             requires std::constructible_from<value_type, argument_types...>
         [[nodiscard]] bool try_emplace(argument_types&&... arguments) {

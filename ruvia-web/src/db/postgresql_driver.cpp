@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -15,6 +16,7 @@
 
 #include "db/db_pool.h"
 #include "db/db_postgresql.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {
@@ -164,7 +166,7 @@ task<void> wait_for_postgresql(postgresql_pool& pool, std::size_t index, db_sock
     }
     if (wait_result.error_) {
         throw db_error(db_error::code_type::io_error, db_driver::postgresql,
-            std::system_error(wait_result.error_, "PostgreSQL socket wait failed").what(), wait_result.error_.value());
+            std::string("PostgreSQL socket wait failed: ").append(error_code_text(wait_result.error_)), wait_result.error_.value());
     }
 }
 
@@ -265,7 +267,11 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         throw postgresql_error(*slot.connection_, "PQconnectStartParams", db_error::code_type::connect_failed);
     }
 
-    auto status = PQconnectPoll(slot.connection_);
+    // PQconnectStartParams() has already polled once and left the socket
+    // connect pending, so the first PQconnectPoll() must wait for writability;
+    // polling earlier reads no socket error yet and loses the fallback to the
+    // next resolved address when that connect fails.
+    auto status = PGRES_POLLING_WRITING;
     while (status == PGRES_POLLING_READING || status == PGRES_POLLING_WRITING || status == PGRES_POLLING_ACTIVE) {
         if (status != PGRES_POLLING_ACTIVE) {
             co_await wait_for_postgresql(pool, index,

@@ -127,9 +127,14 @@ private:
         static_cast<std::time_t>(modified_seconds)};
 }
 
+// O_NONBLOCK keeps a FIFO (or another special file swapped in for a regular
+// one) from blocking the worker in open() before the same-handle fstat rejects
+// it; it has no effect on reads from a regular file.
+inline constexpr int native_file_open_flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
+
 [[nodiscard]] inline response_file_snapshot snapshot_response_file(
     const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    native_file_handle input(::open(path, O_RDONLY | O_CLOEXEC));
+    native_file_handle input(::open(path, native_file_open_flags));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
         return {};
@@ -139,7 +144,7 @@ private:
 
 [[nodiscard]] inline native_file_handle open_native_file_for_read(
     http_response_file_view file, std::error_code& ec, native_file_open_options = {}) noexcept {
-    native_file_handle input(::open(file.native_path_c_str(), O_RDONLY | O_CLOEXEC));
+    native_file_handle input(::open(file.native_path_c_str(), native_file_open_flags));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
         return native_file_handle();

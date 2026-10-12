@@ -151,7 +151,8 @@ task<void> demonstrate_cache(db_client& db) {
     auto query = devices.create_query_builder();
     query.cache(std::chrono::seconds(5));
     std::cout << "cached count=" << co_await query.get_count() << '\n';
-    const std::array<std::string_view, 2> ids{"device-page", "device-page-count"};
+    // The id covers the page and the count find_and_count derived from it.
+    const std::array<std::string_view, 1> ids{"device-page"};
     co_await handle.query_result_cache().remove(ids);
 }
 #endif

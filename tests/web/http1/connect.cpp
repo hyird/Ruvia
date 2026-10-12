@@ -40,8 +40,8 @@ const auto observed = std::make_shared<observation>();
     return true;
 }();
 
-class http1_tunnel_routes final : public ruvia::controller<http1_tunnel_routes> {
-    RUVIA_ROUTES_BEGIN
+class http1_tunnel_routes final {
+    RUVIA_ROUTES_BEGIN(http1_tunnel_routes)
     RUVIA_CONNECT("http1-target.test:443", tunnel);
     RUVIA_ROUTES_END
 
@@ -155,8 +155,8 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     }
 }
 
-class http1_interim_routes final : public ruvia::controller<http1_interim_routes> {
-    RUVIA_ROUTES_BEGIN
+class http1_interim_routes final {
+    RUVIA_ROUTES_BEGIN(http1_interim_routes)
     RUVIA_GET("/http1-early-hints", hints);
     RUVIA_GET_STREAM("/http1-cold-hints", cold_hints);
     RUVIA_ROUTES_END

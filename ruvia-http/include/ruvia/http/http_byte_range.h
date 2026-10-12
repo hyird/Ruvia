@@ -113,6 +113,37 @@ private:
         }
         return error == std::errc{};
     };
+    // RFC 9110 sections 14.2 and 15.3.7.2 let a server coalesce overlapping or
+    // adjacent ranges regardless of their received order. Doing so for every
+    // pair keeps parts disjoint, so a response never repeats representation
+    // bytes. Disjoint parts keep their received order (RFC 9110 section
+    // 14.1.2); a coalesced part takes the place of its earliest member.
+    const auto add_range = [&result](std::uint64_t offset, std::uint64_t length) noexcept {
+        auto start = offset;
+        auto end = offset + length;
+        auto target = result.count_;
+        std::size_t kept = 0;
+        for (std::size_t index = 0; index < result.count_; ++index) {
+            const auto current = result.ranges_[index];
+            const auto current_end = current.offset_ + current.length_;
+            if (current.offset_ <= end && start <= current_end) {
+                // Existing parts never touch each other, so one pass reaches
+                // every part the growing union can touch.
+                start = std::min(start, current.offset_);
+                end = std::max(end, current_end);
+                if (target == result.count_) {
+                    target = kept++;
+                }
+                continue;
+            }
+            result.ranges_[kept++] = current;
+        }
+        if (target == result.count_) {
+            target = kept++;
+        }
+        result.ranges_[target] = http_byte_range_set::range{start, end - start};
+        result.count_ = kept;
+    };
     auto specs = http_trim_ows(field_value.substr(unit.size() + 1));
     if (specs.empty()) {
         return result;
@@ -155,17 +186,7 @@ private:
                 continue;
             }
             const auto length = std::min(suffix, representation_length);
-            const auto resolved = http_byte_range_set::range{representation_length - length, length};
-            if (result.count_ != 0) {
-                auto& previous = result.ranges_[result.count_ - 1];
-                const auto previous_end = previous.offset_ + previous.length_;
-                if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
-                    previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
-                                       previous.offset_;
-                    continue;
-                }
-            }
-            result.ranges_[result.count_++] = resolved;
+            add_range(representation_length - length, length);
             continue;
         }
         if (!parse_number(first, start) || (!last.empty() && !parse_number(last, end))) {
@@ -190,19 +211,7 @@ private:
         }
         const auto clamped_end = last.empty() ? representation_length - 1
                                               : std::min(end, representation_length - 1);
-        const http_byte_range_set::range resolved{start, clamped_end - start + 1};
-        // Preserve received part order (RFC 9110 §14.1.2). Coalesce only
-        // ascending adjacent/overlapping neighbors; never reorder disjoint parts.
-        if (result.count_ != 0) {
-            auto& previous = result.ranges_[result.count_ - 1];
-            const auto previous_end = previous.offset_ + previous.length_;
-            if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
-                previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
-                                   previous.offset_;
-                continue;
-            }
-        }
-        result.ranges_[result.count_++] = resolved;
+        add_range(start, clamped_end - start + 1);
     } while (has_more);
     if (result.count_ == 0 && !saw_range_spec) {
         return http_byte_range_set{};

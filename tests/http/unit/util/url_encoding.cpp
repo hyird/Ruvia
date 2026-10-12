@@ -40,6 +40,15 @@ RUVIA_TEST(url_decode_form) {
     RUVIA_CHECK_EQ(url_decode("a+b%20c", m_type::form).value(), std::string("a b c"));
 }
 
+RUVIA_TEST(percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
+    RUVIA_CHECK(ruvia::http_try_decode_percent_byte("a%2Fb", 1) == std::optional<unsigned char>('/'));
+    RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("abc", std::string_view::npos).has_value());
+    RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("abc", 3).has_value());
+    RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("%2", 0).has_value());
+    RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("%G0", 0).has_value());
+    RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("x20", 0).has_value());
+}
+
 RUVIA_TEST(url_decode_uses_requested_resource_and_preserves_results) {
     std::pmr::monotonic_buffer_resource resource;
     auto first = ruvia::decode_url_component("value%20one", {.resource_ = &resource});

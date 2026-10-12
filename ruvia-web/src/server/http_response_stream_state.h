@@ -158,6 +158,9 @@ public:
         }
     }
 
+    // Trailers are optional metadata (RFC 9110 6.5): framing that cannot carry
+    // them discards them, so only a status that can never carry content is a
+    // handler error here. The caller writes trailers only if trailers_available().
     void ensure_trailers_allowed() const {
         if (aborted()) {
             throw std::logic_error("response stream is aborted");
@@ -166,8 +169,8 @@ public:
             throw std::logic_error("response stream is already ended");
         }
         const auto* plan = commit_plan();
-        if (plan == nullptr || !plan->trailers_available()) {
-            throw std::logic_error("response framing does not support trailers");
+        if (plan == nullptr || !plan->status_permits_trailers()) {
+            throw std::logic_error("response status does not permit trailers");
         }
     }
 

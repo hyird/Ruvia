@@ -20,7 +20,7 @@ http_response_header http_response_headers::make_owned_header(
         std::memcpy(bytes_value, name.data(), name.size());
         std::memcpy(bytes_value + name.size(), value.data(), value.size());
     }
-    return detail::make_response_header(bytes_value, static_cast<std::uint32_t>(name.size()),
+    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()),
         static_cast<std::uint32_t>(value.size()), known_bit, true);
 }
 
@@ -33,7 +33,7 @@ http_response_header http_response_headers::make_uninitialized_header(
         bytes_value = static_cast<char*>(resource_->allocate(total, 1));
         std::memcpy(bytes_value, name.data(), name.size());
     }
-    return detail::make_response_header(bytes_value, static_cast<std::uint32_t>(name.size()),
+    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()),
         static_cast<std::uint32_t>(value_size), known_bit, true);
 }
 
@@ -60,6 +60,14 @@ void http_response_headers::release_header(http_response_header& header_value) n
     header_value.known_bit_ = 0;
     header_value.owned_ = false;
     header_value.append_ = false;
+}
+
+void http_response_headers::truncate(iterator new_end) noexcept {
+    if (spilled_) {
+        heap_.erase(heap_.begin() + (new_end - heap_.data()), heap_.end());
+        return;
+    }
+    size_ = static_cast<std::size_t>(new_end - inline_data());
 }
 
 http_response_header& http_response_headers::append_header(http_response_header header_value) {

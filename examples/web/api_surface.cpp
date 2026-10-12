@@ -11,6 +11,8 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -67,7 +69,7 @@ ruvia::task<ruvia::http_response> surface_not_found(ruvia::context& c) {
     co_return c.text("surface not found\n");
 }
 
-class surface_context_middleware final : public ruvia::middleware {
+class surface_context_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -77,14 +79,17 @@ public:
             const bool downstream_was_internal_error =
                 downstream_response != nullptr &&
                 downstream_response->status() == ruvia::http_status::internal_server_error;
-            c.status(ruvia::http_status::internal_server_error);
-            auto response = c.text("caught by middleware\n");
-            response.header("X-Surface-Error", "true");
-            response.header(
-                "X-Surface-Error-Response", had_downstream_error_response ? "true" : "false");
-            response.header("X-Surface-Error-Status",
-                downstream_was_internal_error ? "internal-server-error" : "other");
-            c.respond(std::move(response));
+            // The framework already mapped the failure to its status (400 for
+            // malformed JSON, 415 for an unsupported content coding, a handler's
+            // http_error); keep it. Without a mapped response it is a server fault.
+            // A replacement inherits nothing else from the downstream error
+            // response; it starts from the context metadata set from here on.
+            c.status(downstream_response != nullptr ? downstream_response->status()
+                                                    : ruvia::http_status::internal_server_error);
+            c.header("X-Surface-Error", "true");
+            c.header("X-Surface-Error-Response", had_downstream_error_response ? "true" : "false");
+            c.header("X-Surface-Error-Status", downstream_was_internal_error ? "internal-server-error" : "other");
+            c.respond(c.text("caught by middleware\n"));
             co_return;
         }
         c.header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
@@ -93,7 +98,7 @@ public:
     }
 };
 
-class surface_return_middleware final : public ruvia::middleware {
+class surface_return_middleware final {
 public:
     ruvia::task<ruvia::http_response> handle(ruvia::context& c, ruvia::next&) {
         c.status(ruvia::http_status::accepted);
@@ -101,8 +106,7 @@ public:
     }
 };
 
-class surface_pre_direct_response_middleware final
-    : public ruvia::middleware {
+class surface_pre_direct_response_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         c.header("X-Surface-Pre-Direct", "true");
@@ -110,7 +114,7 @@ public:
     }
 };
 
-class surface_res_slot_only_middleware final : public ruvia::middleware {
+class surface_res_slot_only_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
         c.header("X-Surface-Res-Slot-Only", "true");
@@ -119,11 +123,11 @@ public:
     }
 };
 
-class api_surface_controller final : public ruvia::controller<api_surface_controller> {
+class api_surface_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/surface", surface_context_middleware)
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(api_surface_controller)
     RUVIA_GET("/request", request_info);
     RUVIA_GET("/context", context_info);
     RUVIA_GET("/raw", raw_body);
@@ -528,10 +532,15 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8088})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .on_not_found(&surface_not_found)
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8088})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .on_not_found(&surface_not_found)
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

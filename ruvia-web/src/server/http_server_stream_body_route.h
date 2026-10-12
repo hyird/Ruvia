@@ -45,13 +45,13 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         if (body_reader) {
             exception_services = exception_services.with_streaming_request_body(body_reader->facade()).with_request_trailers(body_reader->reader().trailers());
         }
-        co_return co_await complete_failed_http_body_route(d.scanner_entry_, exception, d.parsed_,
+        co_return co_await complete_failed_http_route(d.scanner_entry_, exception, d.parsed_,
             d.routes_, d.request_memory_, exception_services, d.response_);
     }
 
     co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
-        d.request_sequence_, body_reader->reader().consumption(), pipeline_stash,
-        [&body_reader](std::pmr::string& stash) { body_reader->reader().take_pipeline(stash); });
+        d.request_sequence_, body_reader->reader().consumption(), used_bytes, pipeline_stash,
+        [&body_reader](std::pmr::string& stash) { return body_reader->reader().take_pipeline(stash); });
 }
 
 }  // namespace ruvia::detail

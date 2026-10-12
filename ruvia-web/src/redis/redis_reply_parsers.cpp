@@ -82,72 +82,63 @@ std::pmr::vector<redis_scored_value> parse_redis_scored_array(
     return result;
 }
 
-redis_scan_result parse_redis_scan_result(const redis_value& value, std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> parse_redis_string_array(
+    const redis_value& value, std::pmr::memory_resource* resource) {
+    throw_if_redis_error(value);
+    const auto items = redis_value_array(value);
+    std::pmr::vector<std::pmr::string> output(resource);
+    output.reserve(items.size());
+    for (const auto& item : items) {
+        throw_if_redis_error(item);
+        if (!item.null()) {
+            const auto text = redis_value_string(item);
+            emplace_redis_string(output, text);
+        }
+    }
+    return output;
+}
+
+namespace {
+
+// SCAN-family replies share one envelope: [cursor, payload]. The payload is
+// handed to the matching array parser.
+template <typename result_type, typename payload_parser_type>
+[[nodiscard]] result_type parse_redis_scan_envelope(const redis_value& value, result_type result_value,
+    std::string_view context_value, payload_parser_type parse_payload) {
     throw_if_redis_error(value);
     const auto root = redis_value_array(value);
     if (root.size() != 2) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scan reply");
+        throw redis_error(redis_error::code_type::protocol_error, context_value);
     }
-    const auto cursor_value = parse_redis_cursor(redis_value_string(root[0]));
-    const auto values = redis_value_array(root[1]);
-    redis_scan_result result_value = redis_types_access::scan_result(resource);
-    redis_types_access::next_cursor(result_value) = cursor_value;
-    auto& output_values = redis_types_access::values(result_value);
-    output_values.reserve(values.size());
-    for (const auto& item : values) {
-        const auto text = redis_value_string(item);
-        emplace_redis_string(output_values, text);
-    }
+    redis_types_access::next_cursor(result_value) = parse_redis_cursor(redis_value_string(root[0]));
+    parse_payload(result_value, root[1]);
     return result_value;
+}
+
+}  // namespace
+
+redis_scan_result parse_redis_scan_result(const redis_value& value, std::pmr::memory_resource* resource) {
+    return parse_redis_scan_envelope(value, redis_types_access::scan_result(resource), "unexpected redis scan reply",
+        [resource](redis_scan_result& result_value, const redis_value& payload) {
+            redis_types_access::values(result_value) = parse_redis_string_array(payload, resource);
+        });
 }
 
 redis_hash_scan_result parse_redis_hash_scan_result(
     const redis_value& value, std::pmr::memory_resource* resource) {
-    throw_if_redis_error(value);
-    const auto root = redis_value_array(value);
-    if (root.size() != 2) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis hscan reply");
-    }
-    const auto cursor_value = parse_redis_cursor(redis_value_string(root[0]));
-    const auto values = redis_value_array(root[1]);
-    if (values.size() % 2 != 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis hscan entry count");
-    }
-    redis_hash_scan_result result_value = redis_types_access::hash_scan_result(resource);
-    redis_types_access::next_cursor(result_value) = cursor_value;
-    auto& output_entries = redis_types_access::entries(result_value);
-    output_entries.reserve(values.size() / 2);
-    for (std::size_t i = 0; i < values.size(); i += 2) {
-        const auto key = redis_value_string(values[i]);
-        const auto field_value = redis_value_string(values[i + 1]);
-        output_entries.push_back(redis_types_access::key_value(key, field_value, resource));
-    }
-    return result_value;
+    return parse_redis_scan_envelope(value, redis_types_access::hash_scan_result(resource),
+        "unexpected redis hscan reply", [resource](redis_hash_scan_result& result_value, const redis_value& payload) {
+            redis_types_access::entries(result_value) =
+                parse_redis_key_value_array(payload, resource, "unexpected redis hscan entry count");
+        });
 }
 
 redis_z_scan_result parse_redis_z_scan_result(
     const redis_value& value, std::pmr::memory_resource* resource) {
-    throw_if_redis_error(value);
-    const auto root = redis_value_array(value);
-    if (root.size() != 2) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis zscan reply");
-    }
-    const auto cursor_value = parse_redis_cursor(redis_value_string(root[0]));
-    const auto values = redis_value_array(root[1]);
-    if (values.size() % 2 != 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis zscan entry count");
-    }
-    redis_z_scan_result result_value = redis_types_access::z_scan_result(resource);
-    redis_types_access::next_cursor(result_value) = cursor_value;
-    auto& output_entries = redis_types_access::entries(result_value);
-    output_entries.reserve(values.size() / 2);
-    for (std::size_t i = 0; i < values.size(); i += 2) {
-        const auto member = redis_value_string(values[i]);
-        const auto score_text = redis_value_string(values[i + 1]);
-        output_entries.push_back(redis_types_access::scored_value(
-            member, parse_redis_double(score_text, "invalid redis zscan score"), resource));
-    }
-    return result_value;
+    return parse_redis_scan_envelope(value, redis_types_access::z_scan_result(resource),
+        "unexpected redis zscan reply", [resource](redis_z_scan_result& result_value, const redis_value& payload) {
+            redis_types_access::entries(result_value) = parse_redis_scored_array(payload, resource);
+        });
 }
 
 std::optional<redis_key_value> parse_redis_blocking_pop_reply(

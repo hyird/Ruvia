@@ -11,7 +11,6 @@
 
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_frame_view.h"
-#include "websocket/http_websocket_message_access.h"
 #include "websocket/http_websocket_payload_validation.h"
 
 namespace ruvia::detail {
@@ -209,7 +208,7 @@ public:
             const auto opcode = fragmented->opcode();
             const auto encoding = fragmented->encoding();
             state_.template emplace<websocket_inbound_idle>();
-            const auto message = websocket_message_access::make(opcode, std::string_view(message_));
+            const auto message = websocket_message::borrow(opcode, std::string_view(message_));
             if (encoding == websocket_inbound_content_encoding::per_message_deflate) {
                 return websocket_inbound_result::make_message(
                     message, websocket_inbound_content_encoding::per_message_deflate);
@@ -233,7 +232,7 @@ public:
             }
             const auto opcode = static_cast<websocket_opcode>(frame.kind());
             if (frame.final()) {
-                const auto message = websocket_message_access::make(opcode, frame.payload());
+                const auto message = websocket_message::borrow(opcode, frame.payload());
                 if (frame.compressed()) {
                     return websocket_inbound_result::make_message(
                         message, websocket_inbound_content_encoding::per_message_deflate);

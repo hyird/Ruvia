@@ -13,8 +13,6 @@ namespace detail {
 
 [[nodiscard]] bool websocket_subprotocol_offers_valid(const http_request& request) noexcept;
 [[nodiscard]] bool websocket_extension_offers_valid(const http_request& request) noexcept;
-[[nodiscard]] bool websocket_protocol_offered(
-    const http_request& request, std::string_view protocol) noexcept;
 [[nodiscard]] std::string_view choose_websocket_subprotocol(
     const http_request& request, std::span<const std::string_view> supported) noexcept;
 

@@ -35,11 +35,20 @@ struct reverse_db_join_columns<std::tuple<columns_type...>> final {
     using type_type = std::tuple<db_join_column<columns_type::referenced, columns_type::local>...>;
 };
 
+// An owning one-to-one relation stores its join columns exactly like an owning
+// many-to-one relation, so both normalize to the same mapping.
+template <typename relation_type>
+consteval db_relation_kind db_relation_mapping_kind() noexcept {
+    return relation_type::kind == db_relation_kind::one_to_one && relation_type::is_owning
+        ? db_relation_kind::many_to_one
+        : relation_type::kind;
+}
+
 // One normalized mapping is consumed by schema generation and query planning.
 // Target metadata is deliberately inspected only when a mapping is consumed,
 // so mutually recursive and self-referential entity declarations stay valid.
 template <typename source, typename relation_type,
-    db_relation_kind kind = relation_type::kind, bool owning = relation_type::is_owning>
+    db_relation_kind kind = db_relation_mapping_kind<relation_type>(), bool owning = relation_type::is_owning>
 struct db_relation_mapping;
 
 template <typename source, typename relation_type>
@@ -47,10 +56,6 @@ struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_one,
     static constexpr bool through_join_table = false;
     using join_columns_type = typename relation_type::join_columns_type;
 };
-
-template <typename source, typename relation_type>
-struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_one, true>
-    : db_relation_mapping<source, relation_type, db_relation_kind::many_to_one, true> {};
 
 template <typename source, typename relation_type>
 struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_many, false> {

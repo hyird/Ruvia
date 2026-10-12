@@ -92,7 +92,6 @@ private:
     return websocket_compression_extension(compression);
 }
 
-struct websocket_message_access;
 }  // namespace detail
 
 class websocket_message final {
@@ -131,8 +130,6 @@ public:
     }
 
 private:
-    friend struct detail::websocket_message_access;
-
     constexpr websocket_message() noexcept = default;
 
     constexpr websocket_message(websocket_opcode opcode, std::string_view payload_value) noexcept

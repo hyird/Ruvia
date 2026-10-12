@@ -621,9 +621,9 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
     }
 }
 
-RUVIA_TEST(http1_response_chunk_adapter_preserves_typed_views_role_and_wire_prefix) {
+RUVIA_TEST(http1_response_role_chunk_decoder_preserves_typed_views_and_wire_prefix) {
     constexpr std::string_view wire = "1\r\nx\r\n0\r\nAccept-Ranges: bytes\r\n\r\nNEXT";
-    ruvia::http_response_chunked_body_decoder decoder(ruvia::protocol_byte_limit::unlimited());
+    ruvia::http1_chunked_body_decoder decoder({.trailer_role_ = ruvia::http1_chunk_trailer_role::response});
     bool zero_budget_rejected = false;
     try {
         (void)decoder.decode(wire, 0);
@@ -650,7 +650,7 @@ RUVIA_TEST(http1_response_chunk_adapter_preserves_typed_views_role_and_wire_pref
     RUVIA_CHECK(replay.complete() != nullptr);
     RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
 
-    ruvia::http_response_chunked_body_decoder invalid(ruvia::protocol_byte_limit::unlimited());
+    ruvia::http1_chunked_body_decoder invalid({.trailer_role_ = ruvia::http1_chunk_trailer_role::response});
     const auto failure = invalid.decode("1\r\nxXX");
     RUVIA_CHECK(failure.failure() != nullptr);
     if (const auto* error = failure.failure()) {

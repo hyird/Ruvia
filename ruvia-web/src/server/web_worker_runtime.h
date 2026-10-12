@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <span>
 
@@ -56,6 +57,14 @@ public:
     // Called on the worker after bounded acceptor queue delivery. Rechecks worker state
     // and capacity, assigns before any I/O, and consumes the ticket on every path.
     void accept_transferred_connection(native_accepted_socket_ticket&& ticket) noexcept;
+    // Any thread, while serving: stops admitting connections and requests,
+    // closes connections outside a request exchange, and lets in-flight
+    // requests finish before their connections close. Stopping the runtime
+    // later closes whatever is left.
+    void request_drain() noexcept;
+    // Lifecycle thread: false when `deadline` passed before the drain completed.
+    // A worker that never served, or that stopped, has nothing to drain.
+    [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] worker_submission_view network_submission() const& noexcept {
@@ -70,6 +79,7 @@ private:
         http_server_options validated_options);
 
     void serve_on_context();
+    void drain_on_context() noexcept;
     void stop_admission_on_context() noexcept;
     void finalize_on_context() noexcept;
     task<void> run_worker();

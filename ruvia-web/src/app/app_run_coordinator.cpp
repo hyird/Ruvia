@@ -1,12 +1,15 @@
 #include "app/app_run_coordinator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,6 +17,7 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
 
@@ -23,6 +27,7 @@
 #include "http/static_root_index.h"
 #include "router/router_impl.h"
 #include "server/http_server_options_validation.h"
+#include "util/error_code_text.h"
 
 namespace ruvia {
 namespace {
@@ -52,31 +57,71 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
         try {
             hook();
         } catch (...) {
-            ruvia::report_unhandled_failure("app stop hook", std::current_exception());
+            detail::report_unhandled_web_failure("app stop hook", std::current_exception());
         }
     }
 }
+
+// Process shutdown signals for one run, on their own core runtime. The first
+// signal requests the application's stop; stopping restores the default
+// disposition, so a repeated signal is not swallowed while the stop drains.
+class process_signal_handling final {
+public:
+    explicit process_signal_handling(application& owner)
+        : runtime_({.queue_capacity_ = 128}),
+          signals_(runtime_.context().io_context()) {
+        runtime_.configure({
+            .stop_admission_ = [this] {
+                std::error_code ignored;
+                signals_.clear(ignored);
+                signals_.cancel(ignored);
+                runtime_.finalize(); },
+            .failure_ = [&owner](std::exception_ptr) noexcept { owner.stop(); },
+        });
+        // A failed registration or thread start must join the runtime while
+        // signals_ is alive: its stop hook still clears and cancels the set,
+        // and member unwinding would destroy signals_ before runtime_.
+        try {
+            add_shutdown_signals(signals_);
+            signals_.async_wait([&owner](const std::error_code& ec, int) {
+                if (!ec) {
+                    owner.stop();
+                }
+            });
+            runtime_.start();
+        } catch (...) {
+            stop();
+            throw;
+        }
+    }
+
+    ~process_signal_handling() {
+        stop();
+    }
+
+    process_signal_handling(const process_signal_handling&) = delete;
+    process_signal_handling& operator=(const process_signal_handling&) = delete;
+
+    void stop() noexcept {
+        runtime_.request_stop();
+        runtime_.join();
+    }
+
+    [[nodiscard]] std::exception_ptr failure() const noexcept {
+        return runtime_.failure();
+    }
+
+private:
+    worker_runtime runtime_;
+    asio::signal_set signals_;
+};
 
 class app_run_coordinator final {
 public:
     app_run_coordinator(application& owner_value, detail::app_state& state_value)
         : owner_(owner_value),
           state_(state_value),
-          runtime_resource_(detail::app_resource()),
-          signal_runtime_({.queue_capacity_ = 128}),
-          signals_(signal_runtime_.context().io_context()) {
-        signal_runtime_.configure({
-            .stop_admission_ = [this] {
-                std::error_code ignored;
-                signals_.cancel(ignored);
-                signal_runtime_.finalize(); },
-            .failure_ = [this](std::exception_ptr) noexcept { owner_.stop(); },
-        });
-    }
-
-    ~app_run_coordinator() {
-        stop_signal_handling();
-    }
+          runtime_resource_(process_resource()) {}
 
     void run() {
         begin_run();
@@ -84,21 +129,25 @@ public:
         try {
             build_and_publish_runtime();
         } catch (...) {
+            // Rethrown to the run() caller, who owns reporting it.
             complete_unpublished_run();
             throw;
         }
 
         auto& group = state_.runtime_->group_;
         std::exception_ptr primary_failure;
+        bool served = false;
         try {
             if (!stop_requested()) {
                 start_signal_handling();
                 // Every worker and the acceptor are ready before start hooks;
                 // no listener accepts until every hook has succeeded.
                 if (group.start()) {
+                    publish_ready_workers();
                     run_start_hooks();
                     if (!stop_requested() && group.serve()) {
                         wait_for_stop();
+                        served = true;
                     }
                 }
             }
@@ -107,27 +156,40 @@ public:
             owner_.stop();
         }
 
+        stop_signal_handling();
+        if (served) {
+            drain();
+        }
         // Stop admission is distinct from final retirement: stop hooks run
         // after admission closes and before any worker is finalized.
         group.request_stop();
-        stop_signal_handling();
         invoke_stop_hooks(state_);
         const auto failure = group.join();
-        const auto signal_failure = signal_runtime_.failure();
+        const auto signal_failure = signals_.has_value() ? signals_->failure() : nullptr;
         retire_runtime();
 
-        if (primary_failure != nullptr) {
-            std::rethrow_exception(primary_failure);
-        }
-        if (signal_failure != nullptr) {
-            std::rethrow_exception(signal_failure);
-        }
-        if (failure != nullptr) {
-            std::rethrow_exception(failure);
+        // The first failure is rethrown and its reporting belongs to the
+        // caller; only the ones it supersedes are reported here, unless they
+        // repeat the rethrown cause (a worker that failed start() is also the
+        // group's join failure).
+        const auto rethrown = primary_failure != nullptr ? primary_failure
+                              : signal_failure != nullptr ? signal_failure
+                                                          : failure;
+        report_superseded("app signal handling", signal_failure, rethrown);
+        report_superseded("worker", failure, rethrown);
+        if (rethrown != nullptr) {
+            std::rethrow_exception(rethrown);
         }
     }
 
 private:
+    static void report_superseded(std::string_view context_value, const std::exception_ptr& failure,
+        const std::exception_ptr& rethrown) noexcept {
+        if (failure != nullptr && !ruvia::equivalent_failures(failure, rethrown)) {
+            detail::report_unhandled_web_failure(context_value, failure);
+        }
+    }
+
     void begin_run() {
         std::lock_guard lock(state_.mutex_);
         detail::ensure_app_not_running(state_.lifecycle_.active(), "app is already running");
@@ -154,21 +216,18 @@ private:
                 },
         };
 
-        std::unique_ptr<static_root, pmr_object_deleter<static_root>> configured_document_root(
-            nullptr, pmr_object_deleter<static_root>{runtime_resource_});
         if (state_.document_root_config_.has_value()) {
-            const auto document_root_path =
-                http_make_path_from_native_path(state_.document_root_config_->root_);
-            configured_document_root = detail::static_root_access::make(
-                runtime_resource_, document_root_path, state_.document_root_config_->static_options_);
-            if (prepared_options.compression_.has_value() &&
-                state_.document_root_config_->precompression_.enabled()) {
-                detail::static_root_access::install_precompressed_variants(
-                    *configured_document_root, nullptr, state_.document_root_config_->precompression_);
-            }
+            const auto& document_root = *state_.document_root_config_;
+            // Precompressed variants are negotiated by the compression policy,
+            // so without it the refresher never builds them.
+            const auto precompression = prepared_options.compression_.has_value()
+                                            ? document_root.precompression_
+                                            : detail::static_root_precompression_options{};
+            runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(runtime_resource_,
+                http_make_path_from_native_path(document_root.root_), document_root.static_options_,
+                document_root.runtime_.refresh_interval_, precompression);
             prepared_options.document_root_ =
-                detail::http_server_options::document_root_type::refreshing(*configured_document_root,
-                    state_.document_root_config_->runtime_, state_.document_root_config_->precompression_);
+                detail::http_server_options::document_root_type::refreshing(*runtime->document_root_);
         }
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =
@@ -217,7 +276,7 @@ private:
                 .accept_ = &acceptor_target_accept,
             });
         }
-        runtime->ingress_ = std::make_unique<detail::acceptor>(
+        runtime->ingress_ = make_pmr_object<detail::acceptor>(runtime_resource_,
             validated_configuration.listeners(), acceptor_targets, &owner_, &acceptor_failed);
         runtime->ingress_->prepare();
         // Ingress is the external producer of every worker.
@@ -247,16 +306,14 @@ private:
     }
 
     void start_signal_handling() {
-        if (state_.process_signal_handlers_ != process_signal_handler_policy::install) {
-            return;
+        if (state_.process_signal_handlers_ == process_signal_handler_policy::install) {
+            signals_.emplace(owner_);
         }
-        add_shutdown_signals(signals_);
-        signals_.async_wait([this](const std::error_code& ec, int) {
-            if (!ec) {
-                owner_.stop();
-            }
-        });
-        signal_runtime_.start();
+    }
+
+    void publish_ready_workers() {
+        std::lock_guard lock(state_.mutex_);
+        state_.runtime_->workers_ready_ = true;
     }
 
     void run_start_hooks() {
@@ -277,8 +334,30 @@ private:
     }
 
     void stop_signal_handling() noexcept {
-        signal_runtime_.request_stop();
-        signal_runtime_.join();
+        if (signals_.has_value()) {
+            signals_->stop();
+        }
+    }
+
+    // Graceful stop of a serving app: ingress stops accepting, every worker
+    // stops admitting requests, and in-flight requests may finish until the
+    // shared drain deadline. A member failure has already stopped the group,
+    // which closes every connection at once instead.
+    void drain() noexcept {
+        auto& runtime = *state_.runtime_;
+        if (state_.drain_timeout_.count() == 0 || runtime.group_.stop_requested()) {
+            return;
+        }
+        const auto deadline = worker_timer_deadline_after(state_.drain_timeout_);
+        runtime.ingress_->close_admission();
+        for (auto& slot : runtime.workers_) {
+            slot.runtime_->request_drain();
+        }
+        for (auto& slot : runtime.workers_) {
+            if (!slot.runtime_->wait_until_drained(deadline)) {
+                return;
+            }
+        }
     }
 
     void retire_runtime() noexcept {
@@ -298,8 +377,8 @@ private:
     application& owner_;
     detail::app_state& state_;
     std::pmr::memory_resource* runtime_resource_;
-    worker_runtime signal_runtime_;
-    asio::signal_set signals_;
+    // Constructed only for process_signal_handler_policy::install.
+    std::optional<process_signal_handling> signals_;
 };
 
 }  // namespace

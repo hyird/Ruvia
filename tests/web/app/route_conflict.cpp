@@ -17,9 +17,9 @@
 
 namespace {
 
-class route_conflict_controller final : public ruvia::controller<route_conflict_controller> {
+class route_conflict_controller final {
 public:
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(route_conflict_controller)
     RUVIA_GET("/conflict/:id/files", first);
     RUVIA_GET("/conflict/:name/files/", second);
     RUVIA_ROUTES_END

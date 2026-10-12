@@ -11,6 +11,7 @@
 #include <system_error>
 #include <type_traits>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/redis/redis_types.h"
 
@@ -23,22 +24,26 @@ namespace ruvia::detail {
 template <typename t_type>
 [[nodiscard]] std::pmr::string encode_redis_number(
     t_type value, std::pmr::memory_resource* resource) {
-    char buffer[128]{};
-    const auto result_value = [&] {
-        if constexpr (std::is_floating_point_v<t_type>) {
-            if (!std::isfinite(value)) {
-                throw_invalid_redis_scalar("non-finite Redis scalar");
-            }
-            return std::to_chars(buffer, std::end(buffer), value, std::chars_format::general,
-                std::numeric_limits<t_type>::max_digits10);
-        } else {
-            return std::to_chars(buffer, std::end(buffer), value);
+    if constexpr (std::is_floating_point_v<t_type>) {
+        if (!std::isfinite(value)) {
+            throw_invalid_redis_scalar("non-finite Redis scalar");
         }
-    }();
-    if (result_value.ec != std::errc{}) {
-        throw_invalid_redis_scalar("failed to encode Redis scalar");
+        char buffer[128]{};
+        const auto result_value = std::to_chars(buffer, std::end(buffer), value, std::chars_format::general,
+            std::numeric_limits<t_type>::max_digits10);
+        if (result_value.ec != std::errc{}) {
+            throw_invalid_redis_scalar("failed to encode Redis scalar");
+        }
+        return std::pmr::string(buffer, static_cast<std::size_t>(result_value.ptr - buffer), resource);
+    } else {
+        std::pmr::string result_value(resource);
+        if constexpr (std::is_unsigned_v<t_type>) {
+            http_append_unsigned(result_value, value);
+        } else {
+            http_append_formatted_number(result_value, value, "failed to encode Redis scalar");
+        }
+        return result_value;
     }
-    return std::pmr::string(buffer, static_cast<std::size_t>(result_value.ptr - buffer), resource);
 }
 
 template <typename t_type>

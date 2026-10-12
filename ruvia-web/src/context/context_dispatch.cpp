@@ -1,5 +1,4 @@
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
@@ -13,6 +12,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
@@ -36,9 +36,9 @@ constexpr std::size_t max_subrequest_header_bytes = 64 * 1024;
 }  // namespace
 
 std::optional<std::string_view> dispatch_response::header(std::string_view name) const& noexcept {
-    for (const auto& [key, value] : headers_) {
-        if (http_ascii_equals_ignore_case(key, name)) {
-            return value;
+    for (const auto& header : headers_) {
+        if (http_ascii_equals_ignore_case(header.name(), name)) {
+            return header.value();
         }
     }
     return std::nullopt;
@@ -91,17 +91,15 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
 task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, operation_options options) {
     auto memory = memory_.fork();
     const std::string_view body = fields[subrequest_field_body];
-    std::array<char, 20> content_length_text{};
-    const auto content_length_end =
-        std::to_chars(content_length_text.data(), content_length_text.data() + content_length_text.size(), body.size()).ptr;
+    std::array<char, http_max_unsigned_decimal_size> content_length_text;
+    const auto content_length = http_format_unsigned(content_length_text, body.size());
     std::pmr::vector<http_header_view> headers(memory.resource());
     headers.reserve(2 + (fields.size() - subrequest_field_headers) / 2);
     headers.emplace_back("Host", "localhost");
     for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
         headers.emplace_back(fields[index], fields[index + 1]);
     }
-    headers.emplace_back("Content-Length",
-        std::string_view(content_length_text.data(), static_cast<std::size_t>(content_length_end - content_length_text.data())));
+    headers.emplace_back("Content-Length", content_length);
     const auto [request, parse_error] = make_parsed_http_request(fields[subrequest_field_method],
         fields[subrequest_field_target], headers, std::as_bytes(std::span(body.data(), body.size())), memory.resource());
     if (parse_error.has_value()) {
@@ -140,8 +138,9 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     dispatch_response result(pool());
     result.status_ = response.status();
     result.body_.assign(response.body_bytes());
+    result.headers_.reserve(response.headers().size());
     for (const auto& header : response.headers()) {
-        result.headers_.emplace_back(std::pmr::string(header.name(), pool()), std::pmr::string(header.value(), pool()));
+        result.headers_.push_back(http_header::copy_of(header.name(), header.value(), pool()));
     }
     co_return result;
 }

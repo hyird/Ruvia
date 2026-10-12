@@ -27,6 +27,7 @@
 
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
+#include "http/http_cors.h"
 #include "server/connection_scanner.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_server_response_state.h"
@@ -37,8 +38,11 @@ namespace ruvia::detail {
 template <typename stream_type>
 class response_stream_sink final {
 public:
+    // `cors` is the application's CORS policy (null when none is configured);
+    // like `request`, it must outlive the sink.
     response_stream_sink(stream_type& stream, worker_memory& memory, http_response_head_buffer& head,
-        connection_scanner::entry_type& scanner_entry, const worker_handle& worker_value, http_response_stream_kind kind,
+        connection_scanner::entry_type& scanner_entry, const worker_handle& worker_value,
+        const http_request& request, const cors_options* cors, http_response_stream_kind kind,
         http1_response_stream_plan plan, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability) noexcept
         : stream_(stream),
@@ -46,13 +50,15 @@ public:
           trailers_(memory.resource()),
           scanner_entry_(scanner_entry),
           worker_(worker_value),
+          request_(request),
+          cors_(cors),
           kind_(kind),
           plan_(plan),
           connection_plan_(plan.request_connection_plan().require_close()),
           compression_(memory.resource(), response_coding, response_coding_availability) {}
 
     response_stream_sink(stream_type&, worker_memory&, http_response_head_buffer&, connection_scanner::entry_type&,
-        worker_handle&&,
+        worker_handle&&, const http_request&, const cors_options*,
         http_response_stream_kind, http1_response_stream_plan, http_response_coding_selection,
         http_response_coding_availability) = delete;
 
@@ -105,6 +111,11 @@ private:
 
         try {
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
+            // The same final-representation order as a buffered response: the
+            // application CORS policy first, then content coding.
+            if (cors_ != nullptr) {
+                apply_cors_headers(request_, response, *cors_);
+            }
             compression_.prepare(plan_.request_method(), response, kind_);
             auto prepare_result =
                 prepare_http1_response_stream_head(std::move(response), kind_, plan_, trailer_intent);
@@ -286,6 +297,8 @@ private:
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
     const worker_handle& worker_;
+    const http_request& request_;
+    const cors_options* cors_;
     http_response_stream_kind kind_;
     http1_response_stream_plan plan_;
     http1_request_connection_plan connection_plan_;

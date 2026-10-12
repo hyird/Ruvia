@@ -74,7 +74,12 @@ void http_content_coding_field_parser::update(std::string_view value) {
                 begin = comma + 1;
                 continue;
             }
-            codings_.push_back(coding);
+            if (codings_.size() == max_content_codings) {
+                // Keep scanning: later malformed members still invalidate the field.
+                unsupported_ = true;
+            } else {
+                codings_.push_back(coding);
+            }
         }
         if (comma == std::string_view::npos) {
             break;
@@ -213,24 +218,29 @@ http_content_encode_result encode_http_content(std::span<const http_content_codi
 http_content_decode_result decode_http_content(std::span<const http_content_coding> codings,
     std::string_view input, http_content_decode_options options) {
     auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    if (codings.empty()) {
+    std::pmr::string current(resource);
+    std::string_view source_value = input;
+    bool decoded = false;
+    for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
+        // identity transforms nothing; only the size limit below applies to it.
+        if (*coding == http_content_coding::identity) {
+            continue;
+        }
+        auto stage = decode_http_content(*coding, source_value, options);
+        auto* content = stage.decoded();
+        if (content == nullptr) {
+            return detail::http_content_decode_result_access::failure(stage.failure()->error());
+        }
+        current = std::move(*content).take_bytes();
+        source_value = current;
+        decoded = true;
+    }
+    if (!decoded) {
         if (input.size() > options.max_decoded_bytes_) {
             return detail::http_content_decode_result_access::failure(
                 http_content_decode_error::decoded_size_exceeded);
         }
-        return detail::http_content_decode_result_access::decoded(std::pmr::string(input, resource));
-    }
-
-    std::pmr::string current(resource);
-    std::string_view source_value = input;
-    for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-        auto decoded = decode_http_content(*coding, source_value, options);
-        auto* content = decoded.decoded();
-        if (content == nullptr) {
-            return detail::http_content_decode_result_access::failure(decoded.failure()->error());
-        }
-        current = std::move(*content).take_bytes();
-        source_value = current;
+        current.assign(input);
     }
     return detail::http_content_decode_result_access::decoded(std::move(current));
 }

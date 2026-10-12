@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -33,14 +34,16 @@ struct static_root_precompression_options final {
     }
 };
 
+// Snapshots built by one refresher reuse an unchanged file's encoded bytes
+// instead of copying them: the buffer is immutable and shared by every
+// snapshot that indexes the same file version.
 struct static_root_memory_variant final {
     explicit static_root_memory_variant(std::pmr::memory_resource* resource)
-        : bytes_(resource),
-          etag_(resource),
+        : etag_(resource),
           last_modified_(resource) {}
 
     http_content_coding content_coding_{http_content_coding::identity};
-    std::pmr::string bytes_;
+    std::shared_ptr<const std::pmr::string> bytes_;
     std::uint64_t modified_token_{0};
     std::time_t modified_seconds_{0};
     std::pmr::string etag_;
@@ -74,12 +77,6 @@ struct static_root_state final {
     static_root_config_storage config_;
     std::pmr::vector<static_root_entry> entries_;
     std::pmr::vector<std::pmr::string> directories_;
-    // Refresh request leases are charged to this worker-owned snapshot, not to
-    // the server globally. The refresh loop can therefore reclaim unrelated
-    // retired snapshots while a long request still holds an older one.
-    // Application-owned immutable roots outlive all workers and never touch
-    // this counter from their concurrent request paths.
-    std::size_t active_bindings_{0};
     std::uint64_t fingerprint_{0};
 
     static_root_state(std::pmr::memory_resource* resource, static_root_config_storage configured_policy)
@@ -193,7 +190,7 @@ public:
         }
         for (const auto& variant : *memory_variants_) {
             if (variant.content_coding_ == coding) {
-                return static_root_memory_variant_view(variant.content_coding_, variant.bytes_,
+                return static_root_memory_variant_view(variant.content_coding_, *variant.bytes_,
                     variant.modified_token_, variant.modified_seconds_, variant.etag_,
                     variant.last_modified_);
             }
@@ -247,8 +244,6 @@ public:
     [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> make(
         std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
         static_root_config_storage&& config);
-    [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> clone(
-        std::pmr::memory_resource* object_resource, const static_root& source);
     [[nodiscard]] static static_root_config_storage copy_config(
         const static_root& root, std::pmr::memory_resource* resource);
     [[nodiscard]] static std::string_view index_file(const static_root& root) noexcept;
@@ -262,9 +257,6 @@ public:
     [[nodiscard]] static std::uint64_t fingerprint(const static_root& root) noexcept;
     [[nodiscard]] static bool same_snapshot(
         const static_root& left, const static_root& right) noexcept;
-    static void acquire_binding(const static_root& root) noexcept;
-    static void release_binding(const static_root& root) noexcept;
-    [[nodiscard]] static bool has_active_bindings(const static_root& root) noexcept;
     static void install_precompressed_variants(static_root& root, const static_root* previous,
         const static_root_precompression_options& options);
 

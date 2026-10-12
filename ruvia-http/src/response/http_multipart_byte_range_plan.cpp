@@ -1,29 +1,16 @@
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 
-#include <array>
-#include <charconv>
 #include <limits>
 #include <stdexcept>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 
 #include "coding/http_content_coding.h"
 
 namespace ruvia {
-namespace {
-
-void append_number(std::pmr::string& target, std::uint64_t value) {
-    std::array<char, 32> buffer{};
-    const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (error != std::errc{}) {
-        throw std::length_error("multipart range number formatting failed");
-    }
-    target.append(buffer.data(), end);
-}
-
-}  // namespace
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, std::uint64_t representation_length,
@@ -43,7 +30,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     auto& storage = *plan.state_;
     auto& metadata = storage.metadata_;
     storage.content_type_.append("multipart/byteranges; boundary=");
-    const bool boundary_is_token = detail::http_token_prefix_size(boundary) == boundary.size();
+    const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
     if (!boundary_is_token) {
         storage.content_type_.push_back('"');
     }
@@ -81,11 +68,11 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
             metadata.append(content_encoding);
         }
         metadata.append("\r\nContent-Range: bytes ");
-        append_number(metadata, range.offset_);
+        http_append_unsigned(metadata, range.offset_);
         metadata.push_back('-');
-        append_number(metadata, range.offset_ + range.length_ - 1);
+        http_append_unsigned(metadata, range.offset_ + range.length_ - 1);
         metadata.push_back('/');
-        append_number(metadata, representation_length);
+        http_append_unsigned(metadata, representation_length);
         metadata.append("\r\n\r\n");
         record_metadata(part_offset);
 

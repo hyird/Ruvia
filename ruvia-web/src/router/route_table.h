@@ -67,8 +67,10 @@ public:
     // Builds a request path from a registered route pattern: ":name" segments
     // take the next value (percent-encoded, non-empty), a trailing "*" takes
     // the final value (slashes preserved, may be empty). The pattern is the
-    // route's identity -- an unregistered pattern or a value-count mismatch is
-    // a programming error and throws std::invalid_argument.
+    // route's identity -- an unregistered pattern, a value-count mismatch, a
+    // "."/".." segment, or a pattern starting with an empty segment (a "//"
+    // network-path reference) is a programming error and throws
+    // std::invalid_argument. A root "*" value's leading slash becomes "%2F".
     [[nodiscard]] std::pmr::string url_for(std::string_view pattern,
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
@@ -81,9 +83,6 @@ public:
     // of a 405. Written into caller storage so no allocation outlives the call.
     [[nodiscard]] std::span<const std::string_view> extension_methods_for(
         std::string_view path, std::span<std::string_view> buffer) const noexcept;
-    // Unique extension method tokens registered anywhere on the server, for the
-    // server-wide Allow header of OPTIONS *.
-    [[nodiscard]] std::span<const std::string_view> extension_methods_for_server() const noexcept;
     [[nodiscard]] bool has_extension_routes_for(std::string_view path) const noexcept;
 
     // Whether ANY route in the table uses this exact token. RFC 9110 15.5.6
@@ -97,9 +96,8 @@ public:
     // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
     // the routing machinery becomes an error response. Connection persistence
     // and wire framing remain the HTTP/1 driver's responsibility. Pass
-    // document_root_binding::none() when no root is configured,
-    // document_root_binding::standalone(root) for an immutable root, or
-    // document_root_binding::configured(root) for a server-owned refreshing root.
+    // document_root_binding::none() when no root is configured, or the
+    // worker's document_root_binding::configured(generation) lease otherwise.
     task<http_response> dispatch_buffered_response(const http_request& request,
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
         context_services services,
@@ -116,6 +114,9 @@ public:
     task<std::optional<http_response>> dispatch_websocket(const http_request& request,
         const resolved_route& route, request_memory& memory, const route_stream_handler_type& handler,
         context_services services) const;
+    // The not-found handler that applies to `path`: the tightest prefix scope
+    // covering it, else the plan-wide one; null when neither is configured.
+    [[nodiscard]] http_not_found_handler_ref_type not_found_handler_for(std::string_view path) const noexcept;
 
 private:
     friend class router_impl;
@@ -129,7 +130,7 @@ private:
     // classify_http_method() returned unknown.
     [[nodiscard]] route_resolution resolve_extension_method(
         std::string_view method_token, std::string_view path) const noexcept;
-    [[nodiscard]] route_resolution resolved(const route_entry& route, route_match match = {}) const noexcept;
+    [[nodiscard]] route_resolution resolved(const route_entry& route, const route_match& match = {}) const noexcept;
 
     // How dispatch_request treats a failure escaping the routing machinery
     // itself. Handler exceptions are already converted inside the route path.
@@ -162,7 +163,6 @@ private:
         http_known_method method, std::string_view path, route_match& match) const noexcept;
     [[nodiscard]] std::uint32_t allowed_methods(
         std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept;
-    [[nodiscard]] std::uint32_t allowed_methods_for_server() const noexcept;
     [[nodiscard]] task<http_response> dispatch_request(const http_request& request,
         const route_resolution& resolution, request_memory& memory, context_services services,
         document_root_binding document_root, dispatch_failure_type failure,
@@ -196,7 +196,6 @@ private:
         context& context, std::exception_ptr exception) const;
 
     [[nodiscard]] http_error_handler_ref_type error_handler_for(std::string_view path) const noexcept;
-    [[nodiscard]] http_not_found_handler_ref_type not_found_handler_for(std::string_view path) const noexcept;
 
     std::pmr::memory_resource* resource_;
     const compiled_route_plan* plan_;

@@ -5,7 +5,6 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_body_failure.h"
 
-#include "app/app_access.h"
 #include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
@@ -51,7 +50,7 @@ void http_response_tail::record_access(const access_log_sink& access_log, http_s
     }
     const auto micros =
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_).count();
-    const access_log_record record = access_log_record_access::make(
+    const access_log_record record(
         *request_, client_address_, status, micros < 0 ? 0 : static_cast<std::uint64_t>(micros));
     access_log.invoke(record);
 }

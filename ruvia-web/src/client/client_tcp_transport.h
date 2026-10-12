@@ -66,10 +66,12 @@ struct client_tcp_endpoint final {
     // nullptr selects plaintext TCP.
     const client_tls_config_storage* tls_;
     client_tcp_config tcp_;
+    // ALPN offered in the TLS handshake; ignored for plaintext TCP.
+    client_alpn alpn_;
 };
 
-// The one outbound TCP/TLS byte transport shared by the HTTP/1 and
-// WebSocket clients. Protocol-neutral: callers map results onto their error
+// The one outbound TCP/TLS byte transport shared by the HTTP/1, WebSocket and
+// Redis clients. Protocol-neutral: callers map results onto their error
 // types. One worker owns the socket; the read lane (resolve, connect, TLS
 // handshake, reads) and the write lane have independent deadlines so a
 // full-duplex exchange can bound its upload separately. Address-stable.
@@ -87,8 +89,8 @@ public:
         return endpoint_.tls_ != nullptr;
     }
     // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
-    // peer identity and HTTP/1.1 ALPN before the handshake. Every operation borrowing
-    // a previous connection must have finished.
+    // peer identity and the endpoint's ALPN offer before the handshake. Every
+    // operation borrowing a previous connection must have finished.
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
@@ -103,9 +105,16 @@ public:
         abort_reason_ = client_abort_reason::none;
     }
     // Records the reason (replacing an earlier one) and cancels pending
-    // resolve and socket operations; the socket stays open until close().
+    // resolve and socket operations; the socket stays open until close(),
+    // except during connect: Asio's multi-endpoint connect moves on to the next
+    // endpoint after a cancelled attempt and stops only on a closed socket.
     void abort(client_abort_reason reason) noexcept;
     void close() noexcept;
+    // Bounded non-blocking check of a connected, idle transport that never
+    // runs the TLS engine. An HTTP/1 peer sends nothing between exchanges, so
+    // readable or TLS-buffered bytes or end of stream retire the connection
+    // (FIN, TLS close_notify, post-handshake records or an unsolicited response).
+    [[nodiscard]] bool idle_open() noexcept;
 
     // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown.
     [[nodiscard]] asio::ssl::stream<asio::ip::tcp::socket>& stream() noexcept {
@@ -137,6 +146,7 @@ private:
     lane_deadline write_;
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool tls_started_{false};
+    bool connecting_{false};
 };
 
 }  // namespace ruvia::detail

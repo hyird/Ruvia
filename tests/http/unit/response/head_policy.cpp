@@ -110,7 +110,8 @@ RUVIA_TEST(response_stream_plan_restricts_trailers_by_status_and_method) {
     const auto head_plan = ruvia::plan_http_response_stream_commit(
         ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::head,
         ruvia::http_status::ok, ruvia::http_response_trailer_intent::present);
-    RUVIA_CHECK(!head_plan.trailer_intent_allowed());
+    RUVIA_CHECK(head_plan.trailer_intent_allowed());
+    RUVIA_CHECK(!head_plan.trailers_available());
     RUVIA_CHECK(head_plan.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
 }
 

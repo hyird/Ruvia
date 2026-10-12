@@ -9,7 +9,7 @@ namespace detail {
 
 class router_impl;
 
-// The registration surface a controller's RUVIA_ROUTES_BEGIN block declares its
+// The registration surface a controller's RUVIA_ROUTES_BEGIN(type) block declares its
 // routes into. One exists only while compile_route_plan() builds the process
 // route plan, so an application never names this type: it appears only inside
 // the macro-generated register_routes() signature. It is internal for that

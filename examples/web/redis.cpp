@@ -14,6 +14,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -83,11 +85,11 @@ void append_ttl(std::pmr::string& output, const ruvia::redis_ttl& ttl) {
     }
 }
 
-class redis_controller final : public ruvia::controller<redis_controller> {
+class redis_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/redis")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(redis_controller)
     RUVIA_GET("/ping", ping);
     RUVIA_GET("/value/:key", get_value);
     RUVIA_POST("/value/:key", set_value);
@@ -409,8 +411,7 @@ public:
 
     ruvia::task<ruvia::http_response> transaction(ruvia::context& c) {
         auto tx = c.redis().transaction();
-        tx.watch("ruvia:example:tx")
-            .set("ruvia:example:tx", "1")
+        tx.set("ruvia:example:tx", "1")
             .incr("ruvia:example:tx")
             .get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
@@ -470,17 +471,22 @@ public:
 }  // namespace
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    auto config = redis_config(env_value);
-    app.redis({.config_ = config})
-        .redis({.alias_ = "cache", .config_ = config})
-        .listen({.address_ = "0.0.0.0",
-            .http_ = env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
-        .server({
-            .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-        })
-        .run();
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        auto config = redis_config(env_value);
+        app.redis({.config_ = config})
+            .redis({.alias_ = "cache", .config_ = config})
+            .listen({.address_ = "0.0.0.0",
+                .http_ = env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
+            .server({
+                .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

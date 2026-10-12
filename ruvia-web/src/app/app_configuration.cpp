@@ -45,14 +45,15 @@ app_configuration::app_configuration(std::pmr::memory_resource* resource)
       middlewares_(pmr_resource_or_default(resource)),
       worker_states_(pmr_resource_or_default(resource)) {}
 
-void app_configuration::add_middleware(controller_middleware_descriptor descriptor) {
-    if (!descriptor.valid() || descriptor.create() == nullptr || descriptor.destroy() == nullptr) {
+void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
+    const auto& value = descriptor.descriptor();
+    if (!value.valid() || value.create() == nullptr || value.destroy() == nullptr) {
         throw std::invalid_argument("app middleware must be constructible and invocable");
     }
-    if (descriptor.validated_model_type_key() != nullptr) {
+    if (value.validated_model_type_key() != nullptr) {
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
     }
-    middlewares_.push_back(descriptor);
+    middlewares_.push_back(std::move(descriptor));
 }
 
 void app_configuration::add_worker_state(worker_state_definition definition) {
@@ -89,7 +90,12 @@ void app_configuration::apply(
         routes_value.set_prefix_not_found_handlers(views);
     }
     if (!middlewares_.empty()) {
-        routes_value.set_global_middlewares(middlewares_);
+        std::pmr::vector<controller_middleware_descriptor> descriptors(resource);
+        descriptors.reserve(middlewares_.size());
+        for (const auto& middleware_value : middlewares_) {
+            descriptors.push_back(middleware_value.descriptor());
+        }
+        routes_value.set_global_middlewares(descriptors);
     }
 }
 

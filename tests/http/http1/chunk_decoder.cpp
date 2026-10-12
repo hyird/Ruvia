@@ -483,6 +483,30 @@ RUVIA_TEST(chunked_body_decoder_preserves_incomplete_delimiter_consumption) {
     RUVIA_CHECK_EQ(suffix.substr(complete_value.consumed_bytes()), "NEXT");
 }
 
+RUVIA_TEST(chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
+    for (const std::string_view wire : {std::string_view("5\nhello\n0\n\n"), std::string_view("5;a=b\n"),
+             std::string_view("\n"), std::string_view("0\r\nX-Trace: ok\n\n"), std::string_view("0\r\n\n"),
+             std::string_view("0\r\nX-Trace: ok\r\n\n")}) {
+        http1_chunked_body_decoder decoder;
+        const auto result_value = decoder.decode(wire);
+        RUVIA_CHECK(result_value.failure() != nullptr);
+        if (const auto* failure = result_value.failure()) {
+            RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+        }
+    }
+
+    // A bare LF arriving in a later fragment of a partial size line is rejected too.
+    http1_chunked_body_decoder fragmented;
+    const auto partial = fragmented.decode("5;a=");
+    RUVIA_CHECK(partial.need_more() != nullptr);
+    RUVIA_CHECK_EQ(partial.consumed_bytes(), std::size_t{0});
+    const auto rejected = fragmented.decode("5;a=b\nhello\r\n");
+    RUVIA_CHECK(rejected.failure() != nullptr);
+    if (const auto* failure = rejected.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    }
+}
+
 RUVIA_TEST(chunked_body_decoder_preserves_trailer_failure_precedence) {
     std::string oversized = "0\r\nX-Trace: ";
     oversized.append(ruvia::max_http_header_bytes, 'a');

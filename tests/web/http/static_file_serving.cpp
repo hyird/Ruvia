@@ -16,6 +16,16 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/web/context.h"
@@ -446,6 +456,11 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
         const std::string content(20, 'z');
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
+    fs::create_directories(dir / "sub");
+    {
+        std::ofstream out(dir / "sub" / "inner.txt", std::ios::binary | std::ios::trunc);
+        out << "inner";
+    }
     static_root_options options;
     options.file_types_ =
         ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
@@ -476,6 +491,13 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
     // ascend past it either.
     RUVIA_CHECK_EQ(serve("%2e%2e%2fetc%2fpasswd"), ruvia::http_status::forbidden);
     RUVIA_CHECK_EQ(serve("sub%2f%2e%2e%2f%2e%2e%2fetc"), ruvia::http_status::forbidden);
+
+    // An encoded separator is not a path boundary to routing or to path-scoped
+    // middleware, so it must not become one here: "sub%2Finner.txt" is a single
+    // segment and never names "sub/inner.txt".
+    RUVIA_CHECK_EQ(serve("sub/inner.txt"), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(serve("sub%2Finner.txt"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub%5Cinner.txt"), ruvia::http_status::forbidden);
 
     // A decoded NUL ("%00") cannot occur in a filename and is rejected outright.
     RUVIA_CHECK_EQ(serve("my%00report.txt"), ruvia::http_status::forbidden);
@@ -946,6 +968,11 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     RUVIA_CHECK_EQ(base.first, ruvia::http_status::ok);
     const std::string etag = base.second;
     RUVIA_CHECK(!etag.empty());
+    // A compact strong validator: a quoted 64-bit digest, not the raw size,
+    // timestamp and volume/file index it is derived from.
+    RUVIA_CHECK_EQ(etag.size(), std::size_t{18});
+    RUVIA_CHECK(etag.front() == '"' && etag.back() == '"');
+    RUVIA_CHECK(etag.find_first_not_of("0123456789abcdef", 1) == etag.size() - 1);
     // A date well before the file's mtime -> If-Unmodified-Since fails on its own.
     constexpr std::string_view old_date = "Thu, 01 Jan 1970 00:00:00 GMT";
 
@@ -1071,6 +1098,22 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     RUVIA_CHECK_EQ(
         serve("If-None-Match", "\"stale\"").first,
         ruvia::http_status::ok);
+    // RFC 9110 15.4.5: the 304 keeps its validator but no representation-only
+    // metadata such as Content-Type or Accept-Ranges.
+    {
+        static_file_test_request request;
+        request.set_method("GET");
+        request.add_header(http_header_view{"If-None-Match", etag});
+        with_static_context(request, [&](ruvia::context& context_value) {
+            const auto response =
+                context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            RUVIA_CHECK_EQ(response.status(), ruvia::http_status::not_modified);
+            RUVIA_CHECK_EQ(response.header("ETag").value_or(""), std::string_view(etag));
+            RUVIA_CHECK(!response.header("Content-Type").has_value());
+            RUVIA_CHECK(!response.header("Accept-Ranges").has_value());
+            RUVIA_CHECK(!response.header("Last-Modified").has_value());
+        });
+    }
 
     // A comma inside an opaque tag is data, not a list separator. This malformed
     // value closes that tag immediately before the current ETag and must not let
@@ -1303,3 +1346,53 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
 
     fs::remove_all(dir);
 }
+
+#if defined(__linux__)
+RUVIA_TEST(file_response_rejects_a_fifo_without_blocking_the_worker) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() /
+                     ("ruvia_file_fifo_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(dir);
+    const auto fifo = dir / "payload.txt";
+    RUVIA_CHECK_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+
+    // Opening a writerless FIFO for reading blocks until a writer appears. The
+    // rescuer becomes that writer after a generous delay, so a blocking open
+    // fails this case instead of hanging the suite.
+    std::mutex mutex;
+    std::condition_variable served_signal;
+    bool served = false;
+    bool rescued = false;
+    std::thread rescuer([&] {
+        std::unique_lock lock(mutex);
+        if (served_signal.wait_for(lock, std::chrono::seconds(5), [&served] { return served; })) {
+            return;
+        }
+        rescued = true;
+        lock.unlock();
+        const int writer = ::open(fifo.c_str(), O_WRONLY | O_CLOEXEC);
+        if (writer >= 0) {
+            ::close(writer);
+        }
+    });
+
+    static_file_test_request request;
+    const auto status = with_static_context(request, [&](ruvia::context& context_value) {
+        try {
+            return context_value.file({.path_ = fifo}).status();
+        } catch (const ruvia::http_error& error) {
+            return error.info().status();
+        }
+    });
+    {
+        std::lock_guard lock(mutex);
+        served = true;
+    }
+    served_signal.notify_one();
+    rescuer.join();
+
+    RUVIA_CHECK(!rescued);
+    RUVIA_CHECK_EQ(status, ruvia::http_status::not_found);
+    fs::remove_all(dir);
+}
+#endif

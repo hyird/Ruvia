@@ -5,6 +5,8 @@
 // The demo issuer grants a fixed identity; replace it with real authentication.
 
 #include <chrono>
+#include <exception>
+#include <iostream>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -49,11 +51,13 @@ struct authenticated_user final {
     std::string_view subject_;
 };
 
-class jwt_auth_middleware final : public ruvia::middleware {
+class jwt_auth_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         const auto token = ruvia::jwt_bearer_token(c.req().header("Authorization").value_or(""));
         if (!token) {
+            // RFC 9110 15.5.2: a 401 names the scheme that would succeed.
+            c.header("WWW-Authenticate", "Bearer");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
                 .code_ = "missing_token",
                 .message_ = "missing bearer token"}));
@@ -67,6 +71,8 @@ public:
         try {
             payload.emplace(ruvia::jwt_verify(verify_options(*token, c.arena())));
         } catch (...) {
+            // RFC 6750 3.1: a presented but unusable token is invalid_token.
+            c.header("WWW-Authenticate", R"(Bearer error="invalid_token")");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
                 .code_ = "invalid_token",
                 .message_ = "invalid bearer token"}));
@@ -82,11 +88,11 @@ public:
     }
 };
 
-class auth_controller final : public ruvia::controller<auth_controller> {
+class auth_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/auth")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(auth_controller)
     RUVIA_POST("/token", token);
     RUVIA_GET("/me", me, jwt_auth_middleware);
     RUVIA_ROUTES_END
@@ -112,9 +118,14 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8085})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8085})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

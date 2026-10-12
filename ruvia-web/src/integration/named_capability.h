@@ -34,23 +34,33 @@ struct named_capability_definition final {
     storage_type config_;
 };
 
-// Validates and normalizes the replacement before mutating retained application state.
-// Existing aliases preserve registration order; new aliases take one owned PMR
-// copy of the name and configuration.
+// Replaces the definition registered under replacement.alias_ in place, so
+// existing aliases preserve registration order, or appends a new alias. The
+// replacement must already be validated and normalized into the owning PMR domain.
+template <typename definition_type>
+void upsert_named_capability_definition(
+    std::pmr::vector<definition_type>& definitions, definition_type&& replacement) {
+    const std::string_view alias = replacement.alias_;
+    for (auto& definition : definitions) {
+        if (std::string_view(definition.alias_) == alias) {
+            definition = std::move(replacement);
+            return;
+        }
+    }
+    definitions.push_back(std::move(replacement));
+}
+
+// Validates and normalizes the replacement before mutating retained application
+// state; the new definition takes one owned PMR copy of the name and configuration.
 template <typename definition_type, typename source_config_type>
 void upsert_named_capability_definition(std::pmr::vector<definition_type>& definitions,
     std::string_view alias, const source_config_type& source_config, const char* empty_message,
     std::pmr::memory_resource* resource) {
     validate_capability_alias(alias, empty_message);
     auto* const resolved = pmr_resource_or_default(resource);
-    typename definition_type::config_storage_type stored_config(source_config, resolved);
-    for (auto& definition : definitions) {
-        if (std::string_view(definition.alias_) == alias) {
-            definition.config_ = std::move(stored_config);
-            return;
-        }
-    }
-    definitions.push_back(definition_type{std::pmr::string(alias, resolved), std::move(stored_config)});
+    upsert_named_capability_definition(definitions,
+        definition_type{std::pmr::string(alias, resolved),
+            typename definition_type::config_storage_type(source_config, resolved)});
 }
 
 // Validates the complete startup alias set without allocating. Capability

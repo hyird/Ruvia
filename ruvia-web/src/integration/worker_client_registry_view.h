@@ -24,9 +24,10 @@ class http_client_registry;
 class redis_registry;
 
 // A copyable view of the complete client registry set owned by one worker.
-// The only states are fully attached and explicitly detached: partial registry
-// graphs are not representable. Dispatch retirement detaches the view after all
-// posted work has joined, before the worker-owned registries are destroyed.
+// The only states are fully attached and detached: partial registry graphs are
+// not representable. Detached views are only placeholders for contexts built
+// without worker capabilities; an attached view never outlives its worker,
+// which joins all posted work before destroying its registries.
 class worker_client_registry_view final {
 public:
     [[nodiscard]] static constexpr worker_client_registry_view detached() noexcept {

@@ -33,8 +33,6 @@ namespace ruvia::detail {
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.
 [[nodiscard]] bool is_valid_uri_component(
     std::string_view value, bool allow_slash, bool allow_question) noexcept;
-[[nodiscard]] bool is_valid_uri_userinfo(std::string_view value) noexcept;
-[[nodiscard]] bool is_valid_uri_port(std::string_view value) noexcept;
 
 [[nodiscard]] bool parse_ipv4_address(std::string_view value) noexcept;
 // Both take the literal without its surrounding brackets.

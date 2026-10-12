@@ -6,31 +6,13 @@
 namespace ruvia::detail {
 namespace {
 
-http_server_listener_definition::tls_identity_type clone_tls_identity(
-    const http_server_listener_definition::tls_identity_type& source_value, std::pmr::memory_resource* resource) {
-    http_server_listener_definition::tls_identity_type result_value(resolved_pmr_resource_tag{}, resource);
-    result_value.certificate_chain_file_ = source_value.certificate_chain_file_;
-    result_value.private_key_file_ = source_value.private_key_file_;
-    result_value.private_key_password_ = source_value.private_key_password_;
-    result_value.certificate_ = source_value.certificate_;
-    return result_value;
-}
-
 http_server_listener_definition::tls_type clone_tls(
     const http_server_listener_definition::tls_type& source_value, std::pmr::memory_resource* resource) {
-    http_server_listener_definition::tls_type result_value(resolved_pmr_resource_tag{}, resource);
-    result_value.identity_ = clone_tls_identity(source_value.identity_, resource);
-    if (source_value.client_certificates_.has_value()) {
-        auto& policy = result_value.client_certificates_.emplace(
-            resolved_pmr_resource_tag{}, resource, source_value.client_certificates_->requirement_);
-        policy.verify_file_ = source_value.client_certificates_->verify_file_;
-        policy.client_ca_ = source_value.client_certificates_->client_ca_;
-    }
+    http_server_listener_definition::tls_type result_value(source_value.certificate_, resource);
+    result_value.client_certificates_ = source_value.client_certificates_;
     result_value.sni_identities_.reserve(source_value.sni_identities_.size());
     for (const auto& configured : source_value.sni_identities_) {
-        auto& sni = result_value.sni_identities_.emplace_back(resolved_pmr_resource_tag{}, resource);
-        sni.host_ = configured.host_;
-        sni.identity_ = clone_tls_identity(configured.identity_, resource);
+        result_value.sni_identities_.emplace_back(configured.host_, configured.certificate_, resource);
     }
     result_value.session_ticket_keys_ = source_value.session_ticket_keys_;
     return result_value;

@@ -12,7 +12,8 @@ namespace ruvia::detail::model {
 // RUVIA_REGEX retains its historical full-match use, but deliberately accepts
 // only the bounded RUVIA_PATTERN dialect. General std::regex is not safe for
 // attacker-controlled input because it may backtrack without bound. Unsupported
-// syntax is rejected at compile time; patterns are capped at 256 bytes to bound
+// syntax, including letter or digit escapes other than \d, \w and \s (such as \n
+// or \D), is rejected at compile time; patterns are capped at 256 bytes to bound
 // compiler storage and matcher recursion. Inputs are capped at 4096 bytes, and
 // matching charges scanned bytes to the shared work budget; either limit fails the
 // validation rule closed.
@@ -25,6 +26,7 @@ struct compiled_regex_plan final {
     static constexpr auto value = compile_pattern_plan<capacity>(pattern.view());
     static_assert(value.valid_,
         "RUVIA_REGEX supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
+        "Escaped letters and digits other than \\d, \\w, \\s (such as \\n or \\D) are unsupported. "
         "Ranges require ordered single-character endpoints. General std::regex syntax is unsupported; use RUVIA_CUSTOM for other matching logic.");
 };
 

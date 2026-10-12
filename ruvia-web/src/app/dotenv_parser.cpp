@@ -1,9 +1,8 @@
 #include <algorithm>
-#include <fstream>
+#include <istream>
 #include <ranges>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 
 #include "app/env_state.h"
 
@@ -56,7 +55,7 @@ namespace {
 
 [[nodiscard]] std::pmr::string location_message(
     const std::filesystem::path& path, std::size_t line_number, std::string_view message) {
-    std::pmr::string result_value("invalid dotenv entry in ", app_resource());
+    std::pmr::string result_value("invalid dotenv entry in ", process_resource());
     result_value += path.string();
     result_value += ':';
     result_value += std::to_string(line_number);
@@ -67,7 +66,7 @@ namespace {
 
 [[nodiscard]] std::pmr::string parse_double_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
-    std::pmr::string result(app_resource());
+    std::pmr::string result(process_resource());
     result.reserve(value.size());
 
     for (std::size_t index = 1; index < value.size(); ++index) {
@@ -123,7 +122,7 @@ namespace {
     }
 
     consumed = close + 1;
-    return std::pmr::string(value.substr(1, close - 1), app_resource());
+    return std::pmr::string(value.substr(1, close - 1), process_resource());
 }
 
 void validate_quoted_remainder(
@@ -144,7 +143,7 @@ void validate_quoted_remainder(
         }
     }
 
-    return std::pmr::string(trim(value.substr(0, end)), app_resource());
+    return std::pmr::string(trim(value.substr(0, end)), process_resource());
 }
 
 [[nodiscard]] std::pmr::string parse_value(
@@ -208,8 +207,8 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 
 std::pmr::vector<dotenv_entry> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path) {
-    std::pmr::vector<dotenv_entry> entries(app_resource());
-    std::pmr::string line(app_resource());
+    std::pmr::vector<dotenv_entry> entries(process_resource());
+    std::pmr::string line(process_resource());
     std::size_t line_number = 0;
 
     while (std::getline(input, line)) {
@@ -233,18 +232,6 @@ std::pmr::vector<dotenv_entry> read_dotenv_entries(
     }
 
     return entries;
-}
-
-std::pmr::vector<dotenv_entry> read_dotenv_entries(const std::filesystem::path& path) {
-    std::ifstream input(path);
-    if (!input) {
-        std::error_code error;
-        if (std::filesystem::exists(path, error) || error) {
-            throw std::runtime_error("failed to read dotenv file: " + path.string());
-        }
-        return {};
-    }
-    return read_dotenv_entries(input, path);
 }
 
 }  // namespace ruvia::detail

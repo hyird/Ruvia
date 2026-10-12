@@ -18,16 +18,20 @@
 #include "http/tls_tunnel_output.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
+#include "server/http_request_admission.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
 
 namespace ruvia::detail {
 
 // Admission already validated a CONNECT-UDP head (`udp`). HTTP/1 framing adds
-// one rule of its own: a CONNECT request cannot carry request content.
+// one rule of its own: a CONNECT request cannot carry request content. A
+// successful handshake is access-logged through `tail` once its head reaches
+// the transport; a buffered answer is left to the session's ordinary tail.
 template <typename stream_type>
 [[nodiscard]] task<std::optional<http1_session_request_completion>> dispatch_http_tunnel_route(
-    http1_route_dispatch<stream_type> d, const resolved_route& resolved, bool udp, std::string_view pending) {
+    http1_route_dispatch<stream_type> d, const http_response_tail& tail, const resolved_route& resolved, bool udp,
+    std::string_view pending) {
     if (d.parsed_.body_plan_.requires_consumption()) {
         d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
@@ -69,6 +73,7 @@ template <typename stream_type>
         if (written.error_code()) {
             throw std::system_error(written.error_code(), "CONNECT head write");
         }
+        tail.record_access(d.options_.access_log_, head_response.status());
         if constexpr (requires { d.stream_.next_layer(); }) {
             tls_output.emplace(*d.stream_.native_handle(), d.stream_.next_layer(), d.base_route_services_.worker(), *d.memory_.resource());
             tls_output->start();
@@ -103,8 +108,7 @@ template <typename stream_type>
     }
     if (auto* buffered = outcome->response()) {
         d.response_ = std::move(*buffered);
-        co_return http1_session_request_completion::make_buffered_closing(
-            require_http1_final_response_commit(d.response_, d.parsed_.connection_plan_.require_close()));
+        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
     }
     co_return std::nullopt;
 }

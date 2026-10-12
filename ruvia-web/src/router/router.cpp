@@ -172,10 +172,9 @@ detail::compiled_route_plan_ptr_type detail::router_impl::compile() {
             plan.extension_route_indices_.push_back(route.index());
         }
     }
-    build_allowed_method_mask();
+    build_static_method_mask();
     build_static_index();
     build_dynamic_routes();
-    build_server_extension_method_tokens();
     build_url_patterns();
     return std::move(plan_);
 }

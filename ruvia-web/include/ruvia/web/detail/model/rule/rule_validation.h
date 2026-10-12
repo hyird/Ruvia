@@ -63,7 +63,7 @@ template <auto bound_type, typename value_t_type>
 
 template <typename value_t_type, typename validator_t_type, auto bound_type, fixed_string message>
 void validate_rule(
-    const value_t_type& value, std::string_view path, validator_t_type& validator_value, const min<bound_type, message>&) {
+    const value_t_type& value, const model_path& path, validator_t_type& validator_value, const min<bound_type, message>&) {
     if (below_model_bound<bound_type>(value)) {
         validator_value.add(path, "too_small", message.view());
     }
@@ -71,14 +71,14 @@ void validate_rule(
 
 template <typename value_t_type, typename validator_t_type, auto bound_type, fixed_string message>
 void validate_rule(
-    const value_t_type& value, std::string_view path, validator_t_type& validator_value, const max<bound_type, message>&) {
+    const value_t_type& value, const model_path& path, validator_t_type& validator_value, const max<bound_type, message>&) {
     if (above_model_bound<bound_type>(value)) {
         validator_value.add(path, "too_big", message.view());
     }
 }
 
 template <typename value_t_type, typename validator_t_type, fixed_string message, fixed_string... values>
-void validate_rule(const value_t_type& value, std::string_view path, validator_t_type& validator_value,
+void validate_rule(const value_t_type& value, const model_path& path, validator_t_type& validator_value,
     const one_of<message, values...>&) {
     const auto actual = model_string(value);
     if (!((actual == values.view()) || ...)) {
@@ -88,14 +88,14 @@ void validate_rule(const value_t_type& value, std::string_view path, validator_t
 
 template <typename value_t_type, typename validator_t_type, fixed_string message>
 void validate_rule(
-    const value_t_type& value, std::string_view path, validator_t_type& validator_value, const email<message>&) {
+    const value_t_type& value, const model_path& path, validator_t_type& validator_value, const email<message>&) {
     if (!is_email_like(model_string(value))) {
         validator_value.add(path, "email", message.view());
     }
 }
 
 template <typename value_t_type, typename validator_t_type, fixed_string pattern, fixed_string message>
-void validate_rule(const value_t_type& value, std::string_view path, validator_t_type& validator_value,
+void validate_rule(const value_t_type& value, const model_path& path, validator_t_type& validator_value,
     const pattern_rule<pattern, message>&) {
     const auto actual = model_string(value);
     if (!match_pattern_plan<pattern>(actual)) {
@@ -104,7 +104,7 @@ void validate_rule(const value_t_type& value, std::string_view path, validator_t
 }
 
 template <typename value_t_type, typename validator_t_type, fixed_string pattern, fixed_string message>
-void validate_rule(const value_t_type& value, std::string_view path, validator_t_type& validator_value,
+void validate_rule(const value_t_type& value, const model_path& path, validator_t_type& validator_value,
     const regex_rule<pattern, message>&) {
     const auto actual = model_string(value);
     if (!match_regex_pattern<pattern>(actual)) {
@@ -113,7 +113,7 @@ void validate_rule(const value_t_type& value, std::string_view path, validator_t
 }
 
 template <typename value_t_type, typename validator_t_type, auto predicate, fixed_string message>
-void validate_rule(const value_t_type& value, std::string_view path, validator_t_type& validator_value,
+void validate_rule(const value_t_type& value, const model_path& path, validator_t_type& validator_value,
     const custom<predicate, message>&) {
     if (!predicate(value)) {
         validator_value.add(path, "custom", message.view());

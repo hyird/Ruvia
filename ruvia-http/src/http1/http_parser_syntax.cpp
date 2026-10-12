@@ -198,14 +198,6 @@ request_header_kind classify_request_header(std::string_view name) noexcept {
     return request_header_kind::other;
 }
 
-bool is_valid_http_header_name(std::string_view name) noexcept {
-    return ruvia::is_valid_http_header_name(name);
-}
-
-bool is_valid_http_header_value(std::string_view value) noexcept {
-    return ruvia::is_valid_http_header_value(value);
-}
-
 bool is_valid_http_chunk_extension(std::string_view value) noexcept {
     if (value.empty()) {
         return true;
@@ -263,35 +255,11 @@ bool is_valid_http_chunk_extension(std::string_view value) noexcept {
             return false;
         }
         if (value[cursor_value] == '"') {
-            ++cursor_value;
-            bool closed = false;
-            while (cursor_value < value.size()) {
-                const auto c = static_cast<unsigned char>(value[cursor_value]);
-                if (c == '"') {
-                    ++cursor_value;
-                    closed = true;
-                    break;
-                }
-                if (c == '\\') {
-                    ++cursor_value;
-                    if (cursor_value == value.size()) {
-                        return false;
-                    }
-                    const auto escaped = static_cast<unsigned char>(value[cursor_value]);
-                    if (escaped == 0x7F || (escaped < 0x20 && escaped != '\t')) {
-                        return false;
-                    }
-                    ++cursor_value;
-                    continue;
-                }
-                if (c == 0x7F || (c < 0x20 && c != '\t')) {
-                    return false;
-                }
-                ++cursor_value;
-            }
-            if (!closed) {
+            const auto quoted_size = http_quoted_string_size(value.substr(cursor_value));
+            if (quoted_size == 0) {
                 return false;
             }
+            cursor_value += quoted_size;
         } else if (!parse_token()) {
             return false;
         }

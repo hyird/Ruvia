@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
 #include "ruvia/core/mpsc_ring_queue.h"
 #include "ruvia/core/worker_cancellation.h"
@@ -92,6 +93,31 @@ RUVIA_TEST(mpsc_ring_queue_preserves_full_input_and_recovers_failed_construction
     RUVIA_CHECK(access.front() != nullptr);
     access.pop();
     RUVIA_CHECK(access.front() == nullptr);
+}
+
+RUVIA_TEST(worker_queue_yields_to_io_context_between_batches) {
+    struct reposting_task final {
+        const ruvia::worker_handle* worker_;
+        const bool* foreign_ran_;
+        unsigned* runs_;
+        void operator()() const {
+            ++*runs_;
+            if (!*foreign_ran_ && *runs_ < 1000) {
+                static_cast<void>(worker_->post(*this));
+            }
+        }
+    };
+    asio::io_context context;
+    ruvia::worker_runtime_context runtime(context, 1);
+    const auto worker_value = runtime.handle();
+    bool foreign_ran{};
+    unsigned runs{};
+    RUVIA_CHECK(worker_value.post(reposting_task{&worker_value, &foreign_ran, &runs}).accepted());
+    asio::post(context, [&foreign_ran] { foreign_ran = true; });
+    runtime.run();
+    // The repost lands behind the plain handler queued after the first batch.
+    RUVIA_CHECK(foreign_ran);
+    RUVIA_CHECK_EQ(runs, 2u);
 }
 
 RUVIA_TEST(worker_cancellation_registration_retires_before_slot_reuse) {

@@ -3,14 +3,36 @@
 
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
+#include "ruvia/web/detail/util/fnv1a.h"
 
 #include "router/route_table.h"
 
 namespace ruvia {
 namespace {
 
-constexpr std::uint64_t fnv_offset = 1469598103934665603ULL;
-constexpr std::uint64_t fnv_prime = 1099511628211ULL;
+// "." or "..", in any percent-encoded spelling (RFC 3986 6.2.2.2).
+[[nodiscard]] bool is_dot_segment(std::string_view segment) noexcept {
+    // The longest spelling is "%2E%2E"; the size check keeps ordinary segments cheap.
+    return !segment.empty() && segment.size() <= 6 &&
+           (url_components_equivalent(segment, ".", url_decode_mode::percent) ||
+               url_components_equivalent(segment, "..", url_decode_mode::percent));
+}
+
+[[nodiscard]] bool has_dot_segment(std::string_view path) noexcept {
+    std::size_t cursor = 0;
+    for (;;) {
+        const auto slash = path.find('/', cursor);
+        const auto end = slash == std::string_view::npos ? path.size() : slash;
+        if (is_dot_segment(path.substr(cursor, end - cursor))) {
+            return true;
+        }
+        if (slash == std::string_view::npos) {
+            return false;
+        }
+        cursor = slash + 1;
+    }
+}
 
 }  // namespace
 
@@ -23,7 +45,8 @@ detail::route_stream_handler_type detail::resolved_route::stream_handler() const
     return callback_access::make<task<void>(context&)>(handler_target_, route_->endpoint().stream_invoke());
 }
 
-detail::route_resolution detail::route_table::resolved(const route_entry& route, route_match match) const noexcept {
+detail::route_resolution detail::route_table::resolved(
+    const route_entry& route, const route_match& match) const noexcept {
     return route_resolution::resolved(route, handler_targets_[route.index()], match);
 }
 
@@ -37,8 +60,26 @@ detail::route_resolution detail::route_table::resolve(const http_request& reques
     if (request.known_method() == http_known_method::connect) {
         return resolve_connect({}, request.path());
     }
-    if (request.path().empty()) {
-        return {};
+    // Routes and path scopes name origin paths. A generic-scheme absolute-form
+    // target can carry a rootless path ("x:admin/panel") that the segment trie
+    // would match like "/admin/panel" while every path-scoped middleware and
+    // fallback treats it as outside its prefix, so it names no route here.
+    // Only an OPTIONS asterisk-form stays, for the server-wide answer.
+    //
+    // Dot-segments are refused for the same reason: path scopes compare raw
+    // segments, while a handler resolving "/public/../private" (a wildcard
+    // capture handed to static_file, for one) reaches a resource outside the
+    // scope the route was matched and guarded under. A conforming client
+    // removes them before sending (RFC 3986 5.2.4).
+    //
+    // The rejection is terminal: the document root normalizes dot segments
+    // itself, so serving "/private/./file" from it would bypass the guards of
+    // the route that owns "/private/file".
+    const auto path = request.path();
+    if (path.empty() ||
+        (path.front() != '/' && (path != "*" || request.known_method() != http_known_method::options)) ||
+        has_dot_segment(path)) {
+        return route_resolution::reject();
     }
     if (request.known_method() == http_known_method::unknown) {
         return resolve_extension_method(request.method(), request.path());
@@ -147,10 +188,6 @@ std::span<const std::string_view> detail::route_table::extension_methods_for(
     return buffer.first(count);
 }
 
-std::span<const std::string_view> detail::route_table::extension_methods_for_server() const noexcept {
-    return plan_->server_extension_method_tokens_;
-}
-
 detail::route_resolution detail::route_table::resolve(
     http_known_method method, std::string_view path) const noexcept {
     if (method == http_known_method::connect) {
@@ -218,12 +255,7 @@ bool detail::route_table::supports_head_fallback(const route_entry& route) noexc
 }
 
 std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
-    auto hash = fnv_offset;
-
-    for (const unsigned char c : path) {
-        hash ^= c;
-        hash *= fnv_prime;
-    }
+    auto hash = detail::fnv1a_accumulate(detail::fnv1a_offset_basis, path);
 
     // MurmurHash3's public-domain fmix64 spreads common path prefixes across
     // the low bits used by the power-of-two table.
@@ -237,7 +269,7 @@ std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
 
 std::uint64_t detail::route_table::route_hash(
     http_known_method method, std::uint64_t hash) noexcept {
-    return hash ^ (static_cast<std::uint64_t>(method) * fnv_prime);
+    return hash ^ (static_cast<std::uint64_t>(method) * detail::fnv1a_prime);
 }
 
 const detail::route_entry* detail::route_table::find_static_route(
@@ -293,10 +325,6 @@ std::uint32_t detail::route_table::allowed_methods(
         }
     }
     return mask;
-}
-
-std::uint32_t detail::route_table::allowed_methods_for_server() const noexcept {
-    return plan_->allowed_method_mask_;
 }
 
 }  // namespace ruvia

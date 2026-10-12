@@ -12,7 +12,7 @@ namespace ruvia::detail {
         status = http_status::internal_server_error;
     }
     auto status_text = error.status_text();
-    if (status_text.empty() || !is_valid_http_status_text(status_text)) {
+    if (status_text.empty() || !is_valid_http_header_value(status_text)) {
         status_text = http_reason_phrase(status);
         if (status_text.empty()) {
             // Application error presentation remains a Web concern. Do not

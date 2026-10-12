@@ -77,30 +77,4 @@ struct http_response_header_access final {
     }
 };
 
-[[nodiscard]] inline constexpr http_response_header make_response_header(const char* bytes_value,
-    std::uint32_t name_size, std::uint32_t value_size, std::uint32_t known_bit, bool owned) noexcept {
-    return http_response_header_access::make(bytes_value, name_size, value_size, known_bit, owned);
-}
-
-[[nodiscard]] inline char* response_header_value_begin(http_response_header& header_value) noexcept {
-    return http_response_header_access::value_begin(header_value);
-}
-
-[[nodiscard]] inline char* response_header_value_end(http_response_header& header_value) noexcept {
-    return http_response_header_access::value_end(header_value);
-}
-
-[[nodiscard]] inline std::uint32_t response_header_known_bit(
-    const http_response_header& header_value) noexcept {
-    return http_response_header_access::known_bit(header_value);
-}
-
-[[nodiscard]] inline bool response_header_append(const http_response_header& header_value) noexcept {
-    return http_response_header_access::append(header_value);
-}
-
-inline void set_response_header_append(http_response_header& header_value, bool value) noexcept {
-    http_response_header_access::set_append(header_value, value);
-}
-
 }  // namespace ruvia::detail

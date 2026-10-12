@@ -50,6 +50,21 @@ RUVIA_TEST(http_base64_encoded_size_preserves_padding_at_numeric_boundaries) {
     }
 }
 
+RUVIA_TEST(http_base64_unpadded_size_uses_actual_tail_at_numeric_boundary) {
+    constexpr auto maximum = (std::numeric_limits<std::size_t>::max)();
+    constexpr auto groups = maximum / 4;
+    constexpr auto forbidden = ruvia::http_base64_padding::forbidden;
+    RUVIA_CHECK_EQ(ruvia::http_base64_encoded_size(3 * groups + 1, forbidden), maximum - 1);
+    RUVIA_CHECK_EQ(ruvia::http_base64_encoded_size(3 * groups + 2, forbidden), maximum);
+    bool rejected = false;
+    try {
+        (void)ruvia::http_base64_encoded_size(3 * groups + 3, forbidden);
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
 RUVIA_TEST(http_base64_decodes_single_characters_per_alphabet) {
     for (std::size_t i = 0; i < ruvia::http_base64_alphabet.size(); ++i) {
         RUVIA_CHECK_EQ(ruvia::http_base64_decode_char(ruvia::http_base64_alphabet[i]), static_cast<int>(i));

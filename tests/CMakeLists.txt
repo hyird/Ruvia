@@ -113,6 +113,8 @@ endif()
 if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # A conflicting route pair makes every application in its executable fail
     # startup, so it cannot share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
@@ -124,6 +126,16 @@ if(RUVIA_BUILD_WEB)
     # process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_server_admission_tests 60
         web/http/server_admission.cpp)
+    # Owns an application with an app-wide CORS policy and access-log hook, so
+    # it cannot share the process-wide application of the other server suites.
+    ruvia_add_web_standalone_test(ruvia_response_policy_tests 60
+        web/http1/response_policy.cpp)
+    # Owns an application with a document root shadowing a guarded route.
+    ruvia_add_web_standalone_test(ruvia_document_root_tests 60
+        web/http/document_root.cpp)
+    # Owns a multi-worker application whose document root changes under it.
+    ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
+        web/http/document_root_refresh.cpp)
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)

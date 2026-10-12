@@ -53,6 +53,8 @@ template <typename t_type>
 }
 
 // Serializes current values without invoking field rules or initializers.
+// The output is always well-formed UTF-8 (RFC 8259 §8.1): a string value holding
+// ill-formed UTF-8 has each maximal ill-formed subpart replaced by U+FFFD.
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_serialize_options options = {}) {

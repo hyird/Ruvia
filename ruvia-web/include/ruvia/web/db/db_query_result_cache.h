@@ -18,6 +18,8 @@ class db_query_result_cache final {
 public:
     db_query_result_cache(const db_query_result_cache& other) noexcept;
     db_query_result_cache& operator=(const db_query_result_cache&) = delete;
+    // Removes the entries cached under each id passed to cache(), including the
+    // get_one/get_exists/get_count results a repository builder derived from it.
     [[nodiscard]] scoped_operation<void> remove(std::span<const std::string_view> ids) const;
     [[nodiscard]] scoped_operation<void> clear() const;
 

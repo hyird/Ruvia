@@ -43,8 +43,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
     route_stream_handler_type handler, context_services services) const {
     const auto& route = resolved.route();
-    auto context_value =
-        make_route_context(memory, request, resolved, services.with_route_handlers(*this, not_found_handler_for(request.path())));
+    auto context_value = make_route_context(memory, request, resolved, services.with_routes(*this));
     const auto* response_stream_output = services.response_output().response_stream();
     response_stream_context_binding stream_context_binding(
         response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
@@ -61,11 +60,12 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
             handler_invoked = true;
             co_await handler(context_value);
         } else {
-            // The stream terminal: a websocket upgrade commits the session the
-            // middleware chain opened before the handshake, then the handler
-            // runs.
+            // The stream terminal: a websocket or tunnel upgrade commits the
+            // session the middleware chain opened before its handshake head,
+            // then the handler runs. A response stream commits it lazily with
+            // its head, so the handler may still change the session first.
             auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
-                if (route.endpoint().get_websocket() != nullptr && terminal_context.try_session()) {
+                if (route.endpoint().response_stream() == nullptr && terminal_context.try_session()) {
                     co_await session_access::commit(terminal_context);
                 }
                 handler_invoked = true;

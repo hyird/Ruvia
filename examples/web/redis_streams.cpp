@@ -9,6 +9,8 @@
 
 #include <array>
 #include <chrono>
+#include <exception>
+#include <iostream>
 #include <string>
 
 #include "ruvia/web/app.h"
@@ -23,10 +25,10 @@ namespace {
 constexpr std::string_view stream_key = "ruvia:example:stream";
 constexpr std::string_view group_name = "example-readers";
 
-class streams_controller final : public ruvia::controller<streams_controller> {
+class streams_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/streams")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(streams_controller)
     RUVIA_POST("/setup", setup);
     RUVIA_POST("/publish", publish, ruvia::body_limit<4096>);
     RUVIA_GET("/consume", consume);
@@ -76,21 +78,26 @@ private:
 }  // namespace
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .listen({.address_ = "127.0.0.1", .http_ = 8095})
-        .redis({.config_ = {
-                    .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
-                    .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-                    .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
-                    .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
-                    .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
-                    .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
-                    // Blocking stream reads use a separate pool, leaving normal
-                    // commands usable while a consumer waits for new messages.
-                    .blocking_pool_size_per_worker_ = 2,
-                }})
-        .run();
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .listen({.address_ = "127.0.0.1", .http_ = 8095})
+            .redis({.config_ = {
+                        .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
+                        .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
+                        .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
+                        .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
+                        .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
+                        .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
+                        // Blocking stream reads use a separate pool, leaving normal
+                        // commands usable while a consumer waits for new messages.
+                        .blocking_pool_size_per_worker_ = 2,
+                    }})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

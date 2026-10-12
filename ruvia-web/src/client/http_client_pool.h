@@ -116,6 +116,8 @@ public:
 
 private:
     using connection_owner_type = std::unique_ptr<http_client_connection, pmr_object_deleter<http_client_connection>>;
+    // Rejects new requests with closing once join() has started.
+    void require_accepting() const;
     [[nodiscard]] task<void> execute_into(
         http_client_request_storage request, operation_options options, http_client_response_state* state);
     [[nodiscard]] task<void> execute_request_into(

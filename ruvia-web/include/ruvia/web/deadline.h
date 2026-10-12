@@ -6,7 +6,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
@@ -56,7 +55,7 @@ namespace ruvia {
 // extend application::deadline()'s handler deadline, and where a controller-wide and
 // a route-specific declaration both exist the stricter wins.
 template <std::int64_t milliseconds>
-class deadline final : public middleware {
+class deadline final {
 public:
     static_assert(milliseconds > 0, "deadline must be greater than 0ms");
 

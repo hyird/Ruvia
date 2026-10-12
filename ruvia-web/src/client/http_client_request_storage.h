@@ -9,7 +9,6 @@
 
 namespace ruvia::detail {
 
-struct http_client_request_storage_access;
 class http_client_upload_state;
 class http_client_tunnel_state;
 class http_client_output_queue;
@@ -75,40 +74,19 @@ public:
         return method_.get_allocator().resource();
     }
 
+    // Field views borrow this request's owned fields through `headers`.
+    [[nodiscard]] http_client_request_view view(std::pmr::vector<http_header_view>& headers) const;
+
 private:
-    friend struct http_client_request_storage_access;
-
-    struct header_type final {
-        header_type(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
-            : name_(name, resource),
-              value_(value, resource) {}
-        std::pmr::string name_;
-        std::pmr::string value_;
-    };
-
     std::pmr::string method_;
     std::pmr::string target_;
-    std::pmr::vector<header_type> headers_;
+    std::pmr::vector<http_header> headers_;
     std::pmr::string body_;
     std::pmr::string tunnel_authority_;
     tunnel_kind tunnel_kind_{};
     http_client_tunnel_state* tunnel_{};
     bool has_body_{false};
     http_client_upload_state* upload_{};
-};
-
-struct http_client_request_storage_access final {
-    [[nodiscard]] static http_client_request_view view(
-        const http_client_request_storage& request, std::pmr::vector<http_header_view>& headers);
-    [[nodiscard]] static const auto& headers(const http_client_request_storage& request) noexcept {
-        return request.headers_;
-    }
-    [[nodiscard]] static auto& headers(http_client_request_storage& request) noexcept {
-        return request.headers_;
-    }
-    [[nodiscard]] static bool has_body(const http_client_request_storage& request) noexcept {
-        return request.has_body_;
-    }
 };
 
 }  // namespace ruvia::detail

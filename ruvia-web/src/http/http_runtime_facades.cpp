@@ -24,15 +24,6 @@ ruvia::task<void> write_transferred_chunk(void* target,
 }
 
 struct owned_trailers final {
-    struct owned_trailer_type final {
-        owned_trailer_type(ruvia::http_header_view header_value, std::pmr::memory_resource* resource)
-            : name_(header_value.name(), resource),
-              value_(header_value.value(), resource) {}
-
-        std::pmr::string name_;
-        std::pmr::string value_;
-    };
-
     explicit owned_trailers(
         std::span<const ruvia::http_header_view> source_value, std::pmr::memory_resource* resource)
         : fields_(resource),
@@ -40,14 +31,12 @@ struct owned_trailers final {
         fields_.reserve(source_value.size());
         views_.reserve(source_value.size());
         for (const auto& header : source_value) {
-            fields_.emplace_back(header, resource);
-        }
-        for (const auto& field : fields_) {
-            views_.emplace_back(field.name_, field.value_);
+            const auto& field = fields_.emplace_back(ruvia::http_header::copy_of(header.name(), header.value(), resource));
+            views_.emplace_back(field.name(), field.value());
         }
     }
 
-    std::pmr::vector<owned_trailer_type> fields_;
+    std::pmr::vector<ruvia::http_header> fields_;
     std::pmr::vector<ruvia::http_header_view> views_;
 };
 

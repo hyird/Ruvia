@@ -138,12 +138,15 @@ public:
     // Binds the operation's stop token to one slot for the duration of the
     // operation. A stop delivered on (or posted to) the worker reaches
     // cancel_operation_by_id(), which marks the slot cancelled and lets the
-    // policy abort the driver connection.
+    // policy abort the driver connection. A cancellation belongs to the
+    // operation it ended; closing is permanent, so an operation still holding
+    // a lease after close() (an open stream or transaction) observes it.
     class cancellation_guard final {
     public:
         cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value)
             : registration_(pool.cancellation_target_, pool.slots_[slot].cancellation_id_) {
-            pool.slots_[slot].abort_reason_ = pool_slot_abort_reason::none;
+            pool.slots_[slot].abort_reason_ =
+                pool.closing() ? pool_slot_abort_reason::closing : pool_slot_abort_reason::none;
             registration_.arm(stop_token_value);
         }
         cancellation_guard(const cancellation_guard&) = delete;
@@ -212,7 +215,7 @@ public:
                     }
                 });
         } catch (...) {
-            state.deadline_timer_.cancel_quietly();
+            state.deadline_timer_.cancel();
             state.deadline_.reset();
             throw;
         }

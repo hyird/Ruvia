@@ -185,6 +185,9 @@ struct blocking_payload<void> final {
 // Guards the one-shot half a submitted task owns. If the task is destroyed
 // without running -- a stopped pool discards its queue -- the guard still
 // answers the waiting coroutine instead of leaving it suspended forever.
+// Answering or moving releases the completion, which is the answered marker:
+// an empty completion rejects without effect. Holding nothing else keeps the
+// submitted closure within move_only_function's inline storage.
 template <typename t_type>
 class blocking_completion_guard final {
 public:
@@ -193,15 +196,10 @@ public:
 
     blocking_completion_guard(const blocking_completion_guard&) = delete;
     blocking_completion_guard& operator=(const blocking_completion_guard&) = delete;
-    blocking_completion_guard(blocking_completion_guard&& other) noexcept
-        : completion_(std::move(other.completion_)),
-          answered_(std::exchange(other.answered_, true)) {}
+    blocking_completion_guard(blocking_completion_guard&& other) noexcept = default;
     blocking_completion_guard& operator=(blocking_completion_guard&&) = delete;
 
     ~blocking_completion_guard() {
-        if (answered_) {
-            return;
-        }
         blocking_payload<t_type> payload;
         payload.status_ = blocking_status::pool_stopped;
         // Nothing above this can receive a failure, and a rejected completion is
@@ -210,22 +208,20 @@ public:
     }
 
     void answer(blocking_payload<t_type>&& payload_value) {
+        const auto completion = std::move(completion_);
         try {
-            (void)completion_.complete(std::move(payload_value));
-            answered_ = true;
+            (void)completion.complete(std::move(payload_value));
         } catch (...) {
             blocking_payload<t_type> failure;
             failure.error_ = std::current_exception();
             // An error-only payload has no result value to move, so it remains transportable
             // even when moving the callable's result was what failed above.
-            (void)completion_.complete(std::move(failure));
-            answered_ = true;
+            (void)completion.complete(std::move(failure));
         }
     }
 
 private:
     one_shot_completion<blocking_payload<t_type>> completion_;
-    bool answered_{false};
 };
 
 }  // namespace detail
@@ -325,6 +321,19 @@ template <typename fn_type>
     static_assert(std::is_void_v<result_type> || std::is_move_constructible_v<result_type>,
         "a blocking callable's result travels back to the worker by move");
 
+    // Every outcome the wait would decide without the callable is decided
+    // first, so a misplaced, cancelled, or expired call never occupies a pool
+    // thread or queue slot for a result nobody receives.
+    if (!worker_value.is_current()) {
+        throw std::logic_error("blocking work must be awaited on its bound worker");
+    }
+    if (stop_token_value.stop_requested()) {
+        co_return blocking_result_access::rejected<result_type>(blocking_status::cancelled);
+    }
+    if (timeout.has_value() && *timeout <= std::chrono::steady_clock::duration::zero()) {
+        co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
+    }
+
     // The one-shot outlives the request that started it: a worker that stops
     // resumes the waiter immediately while the pool thread is still running, so
     // this state cannot live in the request arena.
@@ -404,14 +413,16 @@ template <typename t_type>
 // status. The callable's own exception is retained in the result.
 //
 // The returned task must be awaited on `worker` -- that is the thread the
-// coroutine resumes on and the only thread the result is touched from. `fn` is
-// moved into the pool and runs on a foreign thread: it must own everything it
-// uses (see the file header).
+// coroutine resumes on and the only thread the result is touched from;
+// awaiting it elsewhere throws std::logic_error before `fn` is submitted. `fn`
+// is moved into the pool and runs on a foreign thread: it must own everything
+// it uses (see the file header).
 //
-// Never throws for a rejection; the status says what happened. Use
-// std::move(result).value() to turn a rejection into an exception and to
-// rethrow the callable's own exception; value() is rvalue-only because it
-// consumes the result.
+// Never throws for a rejection; the status says what happened. A stop token
+// that is already stopped, or a timeout that is already exhausted, rejects
+// without submitting `fn`. Use std::move(result).value() to turn a rejection
+// into an exception and to rethrow the callable's own exception; value() is
+// rvalue-only because it consumes the result.
 template <typename fn_type>
 [[nodiscard]] auto try_run_blocking(blocking_pool& pool, worker_handle worker_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {

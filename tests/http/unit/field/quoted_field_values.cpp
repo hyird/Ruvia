@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_accept_encoding.h"
@@ -29,6 +30,31 @@ RUVIA_TEST(public_quoted_field_visitors_preserve_quoted_delimiters) {
             return true;
         });
     RUVIA_CHECK_EQ(item_count, std::size_t{2});
+}
+
+RUVIA_TEST(public_quoted_string_cursor_validates_and_decodes) {
+    std::string decoded;
+    ruvia::http_quoted_string_cursor cursor(R"("a\"b\\c";rest)");
+    unsigned char byte = 0;
+    while (cursor.next(byte)) {
+        decoded.push_back(static_cast<char>(byte));
+    }
+    RUVIA_CHECK(cursor.closed());
+    RUVIA_CHECK_EQ(decoded, std::string_view(R"(a"b\c)"));
+    RUVIA_CHECK_EQ(cursor.consumed(), std::size_t{9});
+
+    RUVIA_CHECK_EQ(ruvia::http_quoted_string_size(R"("x" tail)"), std::size_t{3});
+    RUVIA_CHECK(ruvia::http_is_quoted_string(R"("")"));
+    RUVIA_CHECK(ruvia::http_is_quoted_string("\"\t obs\x80\""));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string(""));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string("token"));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string(R"("open)"));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string(R"("a"b")"));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string(R"("trailing\")"));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string("\"ctl\x01\""));
+    RUVIA_CHECK(!ruvia::http_is_quoted_string("\"del\x7f\""));
+
+    RUVIA_CHECK_EQ(ruvia::http_find_unquoted_delimiter(R"(a="x,\",y",b)", 0, ','), std::size_t{10});
 }
 
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {

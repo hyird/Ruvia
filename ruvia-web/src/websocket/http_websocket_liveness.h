@@ -123,10 +123,18 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
         return now - pong->sent_at_ms() >= pong_timeout ? websocket_liveness_decision::abort_transport
                                                         : websocket_liveness_decision::idle;
     }
+    // A write that holds the lane (including a heartbeat Ping) blocks the next
+    // Ping, so a peer that neither reads nor sends would never be probed. Give
+    // such a stall the same budget as an unanswered Ping. The two budgets are
+    // compared in stages: their sum can overflow for long configured values.
+    const auto idle_for = now - last_active_ms;
+    if (write_active && idle_for >= ping_interval && idle_for - ping_interval >= pong_timeout) {
+        return websocket_liveness_decision::abort_transport;
+    }
     if (!std::holds_alternative<websocket_liveness_idle>(state_value)) {
         return websocket_liveness_decision::idle;
     }
-    if (now - last_active_ms < ping_interval || write_active) {
+    if (idle_for < ping_interval || write_active) {
         return websocket_liveness_decision::idle;
     }
     return websocket_liveness_decision::send_ping;

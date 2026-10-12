@@ -8,6 +8,7 @@
 
 #include "ruvia/core/socket.h"
 
+#include "server/connection_drain.h"
 #include "server/http_connection_state.h"
 
 namespace ruvia::detail {
@@ -16,13 +17,14 @@ namespace ruvia::detail {
 // linear value. The lease is acquired only after socket configuration succeeds,
 // then moves into the lazy session task before co_spawn initiation. If coroutine
 // allocation or co_spawn throws, destroying that cold ownership chain closes the
-// socket first and releases the count second.
+// socket first and releases the count second; the last release completes a
+// begun worker drain.
 class accepted_connection_lease final {
 public:
-    accepted_connection_lease(asio::ip::tcp::socket socket, std::atomic<std::size_t>& count) noexcept
+    accepted_connection_lease(asio::ip::tcp::socket socket, connection_drain& count) noexcept
         : socket_(std::move(socket)),
           count_(&count) {
-        count_->fetch_add(1, std::memory_order_relaxed);
+        count_->acquire();
     }
 
     accepted_connection_lease(const accepted_connection_lease&) = delete;
@@ -39,10 +41,7 @@ public:
             return;
         }
         ruvia::close_socket(socket_);
-        if (count_->load(std::memory_order_relaxed) == 0) {
-            std::terminate();
-        }
-        count_->fetch_sub(1, std::memory_order_relaxed);
+        count_->release();
     }
 
     [[nodiscard]] asio::ip::tcp::socket& socket() & noexcept {
@@ -52,7 +51,7 @@ public:
 
 private:
     asio::ip::tcp::socket socket_;
-    std::atomic<std::size_t>* count_;
+    connection_drain* count_;
 };
 
 // Returns a connection's borrowed work set to the per-worker pool on scope exit.

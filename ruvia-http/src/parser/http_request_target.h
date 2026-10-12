@@ -18,7 +18,6 @@ struct request_target_view {
     std::string_view path_;
     std::string_view query_;
     std::string_view authority_;
-    std::uint16_t default_port_{0};
     http_request_target_form form_{http_request_target_form::origin};
 };
 
@@ -30,14 +29,10 @@ struct request_target_view {
 
 // RFC 3986 scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
 [[nodiscard]] bool is_valid_uri_scheme(std::string_view value) noexcept;
-// Returns the HTTP-defined default for http/https (case-insensitively), or 0
-// when the framework does not know a default port for the valid URI scheme.
-[[nodiscard]] std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept;
 
 // Strict origin-form starts with '/'. Asterisk-form is a separate target form
 // and is exposed explicitly so callers cannot lose its OPTIONS-only contract.
 [[nodiscard]] bool is_valid_origin_form_target(std::string_view target) noexcept;
-[[nodiscard]] bool is_valid_origin_or_asterisk_form_target(std::string_view target) noexcept;
 [[nodiscard]] bool is_valid_origin_or_asterisk_form_target(
     http_known_method method, std::string_view target) noexcept;
 
@@ -45,10 +40,6 @@ struct request_target_view {
 // authority (RFC 9112 section 3.2); callers that require a usable HTTP origin
 // must additionally require a non-empty value.
 [[nodiscard]] bool is_valid_host_header(std::string_view value) noexcept;
-// RFC 3986 authority = [ userinfo "@" ] host [ ":" port ]. Unlike an HTTP
-// Host field, the generic grammar permits userinfo, an empty reg-name, and a
-// syntactically unbounded decimal port. Scheme-specific rules remain separate.
-[[nodiscard]] bool is_valid_uri_authority(std::string_view value) noexcept;
 // RFC 3986 `host` / HTTP `uri-host`, without a port. IP literals use their
 // standard bracketed form; IPv6 zone identifiers are not URI syntax (RFC 9844
 // reverted RFC 6874), while IPvFuture remains valid.

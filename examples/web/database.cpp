@@ -4,7 +4,8 @@
 
 // Direct SQL, buffered/streamed rows, transactions, and startup migrations.
 // Build with a SQL backend and set RUVIA_DB_DRIVER=postgresql or mariadb,
-// RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE. Run on port 8086.
+// RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE. Run on port 8086. Startup fails
+// unless RUVIA_DB_USER and RUVIA_DB_DATABASE name a database to serve.
 // RUVIA_DB_MIGRATE=true explicitly enables the demo schema migrations.
 // POST a name to /db/users, then GET /db/users or /db/users/1.
 // /db/transfer expects accounts 1 and 2 to exist; it commits both updates
@@ -17,7 +18,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/web/app.h"
@@ -61,7 +65,7 @@ ruvia::db_config db_config_from_env(const example::environment& env_value) {
 
 }  // namespace
 
-class database_controller final : public ruvia::controller<database_controller> {
+class database_controller final {
 public:
     static void set_driver(ruvia::db_driver driver) noexcept {
         driver_ = driver;
@@ -69,7 +73,7 @@ public:
 
     RUVIA_CONTROLLER_GROUP("/db")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(database_controller)
     RUVIA_GET("/users/:id", find_user);
     RUVIA_GET("/users", stream_users);
     RUVIA_POST("/users", create_user);
@@ -171,12 +175,15 @@ private:
 };
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
 
-    const auto config = db_config_from_env(env_value);
-    if (!config.username_.empty() && !config.database_.empty()) {
+        const auto config = db_config_from_env(env_value);
+        if (config.username_.empty() || config.database_.empty()) {
+            throw std::invalid_argument("no database configured: set RUVIA_DB_USER and RUVIA_DB_DATABASE");
+        }
         static const std::array mariadb_migrations{
             ruvia::db_migration{{.id_ = "001_create_users",
                 .sql_ = "CREATE TABLE IF NOT EXISTS users ("
@@ -207,10 +214,13 @@ int main() {
         }
         database_controller::set_driver(config.driver_);
         app.database({.config_ = config});
-    }
 
-    app.listen({.address_ = "0.0.0.0", .http_ = 8086})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .run();
+        app.listen({.address_ = "0.0.0.0", .http_ = 8086})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

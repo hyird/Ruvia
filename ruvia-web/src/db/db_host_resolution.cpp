@@ -7,6 +7,8 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 
+#include "util/error_code_text.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -28,7 +30,7 @@ db_resolved_addresses_type collect_db_resolved_addresses(const asio::ip::tcp::re
             address = result.endpoint().address().to_string();
         } catch (const std::system_error& error) {
             throw db_error(db_error::code_type::resolve_failed, driver,
-                error.what(), error.code().value());
+                system_error_text(error), error.code().value());
         }
         if (std::ranges::none_of(addresses, [&address](const std::pmr::string& existing) {
                 return std::string_view(existing) == address;

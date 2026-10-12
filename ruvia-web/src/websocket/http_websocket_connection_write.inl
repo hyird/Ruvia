@@ -36,13 +36,14 @@ task<void> websocket_connection<stream_type>::close_owned(::ruvia::websocket_clo
         co_await wait_for_write_idle();
         const auto reason = options.reason_.view();
         bool flush_output = false;
-        bool await_peer_close = false;
         {
             write_guard_type write_guard(*this, write_phase_type::application);
             switch (protocol_.submit_close(options.code_, reason)) {
                 case websocket_close_submit_status::accepted:
+                    // The deadline covers the Close write too: a peer that stops
+                    // reading must not hold the flush below open past the timeout.
+                    liveness_state_ = websocket_awaiting_peer_close(websocket_steady_now_ms());
                     flush_output = true;
-                    await_peer_close = true;
                     break;
                 case websocket_close_submit_status::already_closing:
                     flush_output = true;
@@ -59,20 +60,14 @@ task<void> websocket_connection<stream_type>::close_owned(::ruvia::websocket_clo
             if (flush_output) {
                 co_await flush_protocol_output_now();
             }
-            if (await_peer_close && protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close) {
-                // The timeout bounds the peer's response window, so commit it only
-                // after the local Close bytes have reached the transport. The
-                // successful flush touched the scanner with the current coarse
-                // worker timestamp.
-                liveness_state_ = websocket_awaiting_peer_close(scanner_entry_.last_active_ms());
-            }
         }
 
         // RFC 6455: sending Close starts, but does not complete, the handshake.
         // Keep parsing transport input until the peer Close arrives (or EOF/timeout
         // aborts this transport). The core suppresses application messages in this
-        // phase while still validating frames and handling control traffic.
-        if (await_peer_close) {
+        // phase while still validating frames and handling control traffic. The
+        // Close may be this call's or the one a draining server already sent.
+        if (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close) {
             if (read_phase_ == read_phase_type::active) {
                 while (read_phase_ == read_phase_type::active) {
                     co_await reader_done_signal_.wait();
@@ -193,7 +188,17 @@ task<std::error_code> websocket_connection<stream_type>::write_bytes(std::string
     }
     const auto buffer = asio::buffer(bytes_value.data(), bytes_value.size());
     const auto write_completion = co_await ruvia::async_asio([this, buffer](auto handler) mutable {
-        asio::async_write(stream_, buffer, std::move(handler));
+        // Partial progress is transport activity: a slow reader that keeps
+        // draining a large write must not look like a stalled peer to the
+        // heartbeat.
+        asio::async_write(stream_, buffer,
+            [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
+                if (bytes_transferred != 0) {
+                    scanner_entry_.touch();
+                }
+                return asio::transfer_all()(ec, bytes_transferred);
+            },
+            std::move(handler));
     });
     co_return write_completion.error_code();
 }

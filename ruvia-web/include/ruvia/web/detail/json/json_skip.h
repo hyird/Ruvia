@@ -11,7 +11,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool skip_json_value(std::string_view& input) noexcept;
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept;
 
 template <typename element_budget_type>
@@ -58,11 +57,6 @@ template <typename element_budget_type>
     return false;
 }
 
-[[nodiscard]] inline bool skip_json_object(std::string_view& input) noexcept {
-    auto consume_element = []() noexcept { return true; };
-    return skip_json_object(input, 0, consume_element);
-}
-
 template <typename element_budget_type>
 [[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth,
     element_budget_type& consume_element) noexcept {
@@ -97,10 +91,6 @@ template <typename element_budget_type>
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept {
     auto consume_element = []() noexcept { return true; };
     return skip_json_value(input, depth, consume_element);
-}
-
-[[nodiscard]] inline bool skip_json_value(std::string_view& input) noexcept {
-    return skip_json_value(input, 0);
 }
 
 }  // namespace ruvia::detail

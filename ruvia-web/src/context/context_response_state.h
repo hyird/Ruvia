@@ -40,10 +40,13 @@ private:
     http_response response_;
 };
 
+// A final response plus the context metadata assigned after it became final.
+// The overlay starts empty for every final response: a response replacing this
+// one starts from what was set afterwards, never from the discarded response.
 class context_final_response final {
 public:
-    explicit context_final_response(http_response&& response)
-        : response_(std::move(response)) {}
+    context_final_response(http_response&& response, std::pmr::memory_resource* resource)
+        : response_(std::move(response)), metadata_({.resource_ = resource}) {}
 
     [[nodiscard]] http_response& response() noexcept {
         return response_;
@@ -52,8 +55,16 @@ public:
         return response_;
     }
 
+    [[nodiscard]] http_response& metadata() noexcept {
+        return metadata_;
+    }
+    [[nodiscard]] const http_response& metadata() const noexcept {
+        return metadata_;
+    }
+
 private:
     http_response response_;
+    http_response metadata_;
 };
 
 // One tagged value owns the response lifecycle, so phase and storage cannot
@@ -85,6 +96,35 @@ public:
     }
     const http_response& active_response() const&& = delete;
 
+    // Applies a context metadata mutation (status, headers, cookies). Before a
+    // final response exists it edits the pending or provisional response. Once
+    // final it records the change in the final metadata overlay, so a
+    // replacement built afterwards keeps it, and post-processes the final
+    // response. The overlay goes first: inputs may borrow the final response's
+    // own header storage, which only the final response's update may release.
+    template <typename t_update>
+    void update_metadata(t_update&& update) {
+        if (auto* final_state = std::get_if<context_final_response>(&value_)) {
+            update(final_state->metadata());
+            update(final_state->response());
+            return;
+        }
+        update(active_response());
+    }
+
+    // The context metadata a newly built response starts from. A final
+    // response describes its own representation -- Content-Encoding,
+    // Content-Range, validators, cache policy -- so a response replacing it,
+    // an error included, inherits none of it: once final, only the metadata
+    // assigned after finalization applies.
+    [[nodiscard]] const http_response& metadata() const& noexcept {
+        if (const auto* final_state = final()) {
+            return final_state->metadata();
+        }
+        return active_response();
+    }
+    const http_response& metadata() const&& = delete;
+
     [[nodiscard]] http_response& materialize_provisional() {
         if (auto* pending_state = std::get_if<context_pending_response>(&value_)) {
             auto response = std::move(pending_state->response());
@@ -94,12 +134,12 @@ public:
     }
 
     void finalize(http_response&& response) {
-        value_.template emplace<context_final_response>(std::move(response));
+        value_.template emplace<context_final_response>(std::move(response), resource_);
     }
 
     void finalize_active() {
         auto response = std::move(active_response());
-        value_.template emplace<context_final_response>(std::move(response));
+        value_.template emplace<context_final_response>(std::move(response), resource_);
     }
 
     [[nodiscard]] http_response take() {

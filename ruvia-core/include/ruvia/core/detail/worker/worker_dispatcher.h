@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -24,30 +25,66 @@ class worker_dispatcher;
 // mutex once they know they run on their own worker.
 [[nodiscard]] const worker_dispatcher* current_worker_dispatcher() noexcept;
 
-// A shutdown listener is an intrusive node in its worker's registry. Linking and
-// unlinking are O(1) under the registry mutex and never allocate or scan. The
-// node keeps the registry alive, so a listener can unlink from its destructor
-// after the derived owner has already released its own worker handle; the
-// listener may die on any thread, so the registry stays mutex-protected.
-class worker_shutdown_listener {
+// A shutdown hook is an intrusive node in its worker's registry, held as a
+// data member of the state it notifies. Linking and unlinking are O(1) under
+// the registry mutex and never allocate or scan. The node keeps the registry
+// alive, so it can unlink from its destructor after the owner has already
+// released its own worker handle; the owner may die on any thread, so the
+// registry stays mutex-protected. Owners declare the hook as their first data
+// member so it unlinks only after every other member has been destroyed.
+class worker_shutdown_hook final {
 public:
-    worker_shutdown_listener() noexcept = default;
-    worker_shutdown_listener(const worker_shutdown_listener&) = delete;
-    worker_shutdown_listener& operator=(const worker_shutdown_listener&) = delete;
-    virtual ~worker_shutdown_listener();
+    // Per-owner-type phase table; a null entry skips that phase.
+    struct operations_type final {
+        using phase_type = void (*)(void* owner) noexcept;
 
-    virtual void worker_stopping() noexcept = 0;
-    virtual void worker_stopping_complete() noexcept {}
+        phase_type stopping_;
+        phase_type stopping_complete_;
+    };
+
+    worker_shutdown_hook() noexcept = default;
+    worker_shutdown_hook(const worker_shutdown_hook&) = delete;
+    worker_shutdown_hook& operator=(const worker_shutdown_hook&) = delete;
+    ~worker_shutdown_hook();
 
 private:
     friend class worker_dispatcher;
 
+    const operations_type* operations_{nullptr};
     std::shared_ptr<worker_dispatcher> registry_;
-    std::weak_ptr<worker_shutdown_listener> self_;
-    worker_shutdown_listener* previous_{nullptr};
-    worker_shutdown_listener* next_{nullptr};
+    // Aliases the owner object; locking it pins the owner, and therefore this
+    // hook, for the duration of one phase callback.
+    std::weak_ptr<void> owner_;
+    worker_shutdown_hook* previous_{nullptr};
+    worker_shutdown_hook* next_{nullptr};
     bool linked_{false};
 };
+
+// Phase table of one owner type: `void worker_stopping() noexcept` runs in the
+// first notification pass and `void worker_stopping_complete() noexcept` in the
+// second, after every hook has seen the first.
+template <typename owner_type>
+[[nodiscard]] consteval worker_shutdown_hook::operations_type make_worker_shutdown_operations() noexcept {
+    constexpr bool has_stopping = requires(owner_type& owner) { owner.worker_stopping(); };
+    constexpr bool has_stopping_complete = requires(owner_type& owner) { owner.worker_stopping_complete(); };
+    static_assert(has_stopping || has_stopping_complete, "a worker shutdown hook owner must handle a stop phase");
+    worker_shutdown_hook::operations_type operations{nullptr, nullptr};
+    if constexpr (has_stopping) {
+        static_assert(noexcept(std::declval<owner_type&>().worker_stopping()));
+        operations.stopping_ = [](void* owner) noexcept { static_cast<owner_type*>(owner)->worker_stopping(); };
+    }
+    if constexpr (has_stopping_complete) {
+        static_assert(noexcept(std::declval<owner_type&>().worker_stopping_complete()));
+        operations.stopping_complete_ = [](void* owner) noexcept {
+            static_cast<owner_type*>(owner)->worker_stopping_complete();
+        };
+    }
+    return operations;
+}
+
+template <typename owner_type>
+inline constexpr worker_shutdown_hook::operations_type worker_shutdown_operations =
+    make_worker_shutdown_operations<owner_type>();
 
 class worker_dispatcher final : public std::enable_shared_from_this<worker_dispatcher> {
 public:
@@ -76,17 +113,21 @@ public:
             std::terminate();
         }
     }
-    // Throws std::runtime_error once the worker stops accepting.
-    void register_shutdown_listener(const std::shared_ptr<worker_shutdown_listener>& listener);
-    // Runs after the first stopping batch has notified every listener, or now if
+    // Links `hook`, a member of the object `owner` aliases, for both stop
+    // phases. Throws std::runtime_error once the worker stops accepting.
+    void register_shutdown_hook(
+        worker_shutdown_hook& hook, std::weak_ptr<void> owner, const worker_shutdown_hook::operations_type& operations);
+    // Runs after the first stopping batch has notified every hook, or now if
     // no batch is active. The active bit is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
     void when_idle(move_only_function<void()> callback);
     worker_timer_schedule_status schedule_timer(worker_timer_registration& registration,
         std::chrono::steady_clock::time_point deadline,
         move_only_function<void(worker_timer_outcome)> completion);
+    // From any thread. A notified cancellation of a still-live timer delivers
+    // `cancelled` inline from the handler a foreign thread posts, or deferred
+    // when the caller is already running on this worker.
     void request_timer_cancellation(std::size_t slot, std::uint64_t generation, bool notify) noexcept;
-    void cancel_timer(std::size_t slot, std::uint64_t generation, bool notify) noexcept;
     void stop_timers() noexcept;
     // Runs the owned/attached io_context with a thread-local worker identity so
     // worker-affine hot paths do not lock merely to prove their current worker.
@@ -120,7 +161,7 @@ public:
     [[nodiscard]] worker_id_type id() const noexcept;
 
 private:
-    friend class worker_shutdown_listener;
+    friend class worker_shutdown_hook;
     using idle_callbacks_type = std::pmr::vector<move_only_function<void()>>;
 
     // True only inside this worker's run_context(), where the io_context is
@@ -132,8 +173,9 @@ private:
     static void notify_idle(idle_callbacks_type callbacks) noexcept;
     // Returns whether this call opened the (single) stopping batch.
     [[nodiscard]] bool begin_stopping(bool abandon_drain) noexcept;
+    [[nodiscard]] bool begin_stopping_locked(bool abandon_drain) noexcept;
     void notify_stopping(bool batch_active) noexcept;
-    void unlink_shutdown_listener(worker_shutdown_listener& listener) noexcept;
+    void unlink_shutdown_hook(worker_shutdown_hook& hook) noexcept;
     void abandon_queued() noexcept;
     void schedule_drain_locked();
     // Claims one free node against capacity; the caller owns it until it
@@ -149,6 +191,10 @@ private:
     // Deactivates an active slot, returns it to the free list, and hands back
     // its completion for the caller to invoke or destroy.
     [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;
+    // Removes a live timer from the queue and hands back its completion; empty
+    // when the timer already expired or was cancelled.
+    [[nodiscard]] move_only_function<void(worker_timer_outcome)> take_timer(
+        std::size_t slot, std::uint64_t generation) noexcept;
 
     asio::io_context& io_context_;
     struct impl_type;
@@ -161,6 +207,16 @@ void worker_handle_access::defer_or_terminate(const worker_handle& worker, fn_ty
         std::terminate();
     }
     worker.dispatcher_->defer_or_terminate(std::forward<fn_type>(fn));
+}
+
+template <typename owner_type>
+void worker_handle_access::register_shutdown_hook(
+    const worker_handle& worker, const std::shared_ptr<owner_type>& owner, worker_shutdown_hook owner_type::* hook) {
+    if (!worker.dispatcher_) {
+        throw std::runtime_error("cannot register state on a stopped worker");
+    }
+    worker.dispatcher_->register_shutdown_hook(
+        (*owner).*hook, std::weak_ptr<void>(owner), worker_shutdown_operations<owner_type>);
 }
 
 }  // namespace ruvia::detail

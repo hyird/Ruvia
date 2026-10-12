@@ -16,40 +16,38 @@ namespace {
 // `"6\0"` is equivalent to `60`. Syntactically valid overflow saturates to the
 // greatest convenient representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parse_delta_seconds(std::string_view value) noexcept {
-    bool quoted = false;
-    std::size_t begin = 0;
-    std::size_t end = value.size();
-    if (!value.empty() && value.front() == '"') {
-        if (value.size() < 2 || value.back() != '"') {
-            return std::nullopt;
-        }
-        quoted = true;
-        begin = 1;
-        --end;
-    }
-    if (begin == end) {
-        return std::nullopt;
-    }
-
     std::uint64_t result_value = 0;
-    constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-    for (std::size_t cursor_value = begin; cursor_value < end; ++cursor_value) {
-        auto ch = static_cast<unsigned char>(value[cursor_value]);
-        if (quoted && ch == '\\') {
-            if (++cursor_value == end) {
+    bool any_digit = false;
+    const auto accumulate = [&result_value, &any_digit](unsigned char ch) noexcept {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+        const auto digit = static_cast<std::uint64_t>(ch - '0');
+        result_value = result_value > (maximum - digit) / 10 ? maximum : result_value * 10 + digit;
+        any_digit = true;
+        return true;
+    };
+    if (!value.empty() && value.front() == '"') {
+        http_quoted_string_cursor cursor(value);
+        unsigned char ch = 0;
+        while (cursor.next(ch)) {
+            if (!accumulate(ch)) {
                 return std::nullopt;
             }
-            ch = static_cast<unsigned char>(value[cursor_value]);
         }
-        if (ch < '0' || ch > '9') {
+        if (!cursor.closed() || cursor.consumed() != value.size()) {
             return std::nullopt;
         }
-        const auto digit = static_cast<std::uint64_t>(ch - '0');
-        if (result_value > (maximum - digit) / 10) {
-            result_value = maximum;
-        } else {
-            result_value = result_value * 10 + digit;
+    } else {
+        for (const auto ch : value) {
+            if (!accumulate(static_cast<unsigned char>(ch))) {
+                return std::nullopt;
+            }
         }
+    }
+    if (!any_digit) {
+        return std::nullopt;
     }
     return result_value;
 }
@@ -60,54 +58,10 @@ namespace {
     }
     if (value.front() != '"') {
         return std::ranges::all_of(value, [](char ch) noexcept {
-            return detail::is_http_token_char(static_cast<unsigned char>(ch));
+            return is_http_token_char(static_cast<unsigned char>(ch));
         });
     }
-    if (value.size() < 2 || value.back() != '"') {
-        return false;
-    }
-    for (std::size_t cursor_value = 1; cursor_value + 1 < value.size(); ++cursor_value) {
-        const auto ch = static_cast<unsigned char>(value[cursor_value]);
-        if (ch == '\\') {
-            if (++cursor_value + 1 >= value.size()) {
-                return false;
-            }
-            const auto escaped = static_cast<unsigned char>(value[cursor_value]);
-            if (escaped != '\t' && escaped != ' ' && (escaped < 0x21 || escaped > 0x7e) &&
-                escaped < 0x80) {
-                return false;
-            }
-        } else if (ch == '"' ||
-                   (ch != '\t' && ch != ' ' && ch != 0x21 && (ch < 0x23 || ch > 0x5b) &&
-                       (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] std::size_t cache_directive_end(std::string_view value, std::size_t begin) noexcept {
-    bool quoted = false;
-    bool escaped = false;
-    for (std::size_t cursor_value = begin; cursor_value < value.size(); ++cursor_value) {
-        const auto ch = value[cursor_value];
-        if (quoted) {
-            if (escaped) {
-                escaped = false;
-            } else if (ch == '\\') {
-                escaped = true;
-            } else if (ch == '"') {
-                quoted = false;
-            }
-            continue;
-        }
-        if (ch == '"') {
-            quoted = true;
-        } else if (ch == ',') {
-            return cursor_value;
-        }
-    }
-    return value.size();
+    return http_is_quoted_string(value);
 }
 
 }  // namespace
@@ -115,7 +69,7 @@ namespace {
 void cache_control_field_parser::update(std::string_view value) noexcept {
     std::size_t pos = 0;
     while (pos < value.size()) {
-        const auto comma = cache_directive_end(value, pos);
+        const auto comma = http_find_unquoted_delimiter(value, pos, ',');
         auto token = value.substr(pos, comma - pos);
         pos = comma == value.size() ? value.size() : comma + 1;
 

@@ -24,6 +24,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_body_decoding.h"
 
@@ -35,6 +36,7 @@
 #include "client/http_client_transport_error.h"
 #include "http/http_socket_tunnel_transport.h"
 #include "http/tls_tunnel_output.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 
@@ -65,13 +67,19 @@ task<void> http1_client_exchange::write(std::string_view bytes_value, const oper
     }
 }
 
-task<std::size_t> http1_client_exchange::read_some(
-    std::span<char> bytes_value, const operation_timeout& timeout, bool allow_eof) {
-    const auto read = co_await connection_.transport_.read_some(bytes_value, timeout);
+task<std::size_t> http1_client_exchange::read_append(
+    std::pmr::string& target, std::size_t max_bytes, const operation_timeout& timeout) {
+    const auto old_size = target.size();
+    http_resize_pmr_string_for_overwrite(target, old_size + max_bytes);
+    const auto read =
+        co_await connection_.transport_.read_some(std::span<char>(target.data() + old_size, max_bytes), timeout);
+    // close() may clear the target while the read is pending; never restore
+    // the bytes it discarded.
+    target.resize(std::min(target.size(), old_size + read.bytes_));
     if (read.ok()) {
         co_return read.bytes_;
     }
-    if (allow_eof && read.status_ == client_transport_status::eof) {
+    if (read.status_ == client_transport_status::eof) {
         co_return 0;
     }
     throw_http_client_transport_error(read, "upstream closed the HTTP connection");
@@ -81,7 +89,7 @@ task<void> http1_client_exchange::exchange(
     const http_client_request_storage& request, const operation_timeout& timeout, http_client_response_state& state_value) {
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());
-    auto source_value = http_client_request_storage_access::view(request, headers);
+    auto source_value = request.view(headers);
     std::pmr::string cookie_header(pool_.resource());
     pool_.policy().append_headers(request, headers, cookie_header);
     source_value.headers_ = std::span<const http_header_view>(headers);
@@ -163,7 +171,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     auto* const response_resource = state_value.resource_;
     const auto max_response_bytes = pool_.config().max_response_bytes_;
     auto& read_buffer = connection_.read_buffer_;
-    std::array<char, 16384> input{};
+    constexpr std::size_t read_chunk_bytes = 16384;
     for (;;) {
         auto parse_result = parser.parse(read_buffer);
         if (parse_result.failure()) {
@@ -174,12 +182,11 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             if (read_buffer.size() >= max_http_header_bytes) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
             }
-            const auto bytes_value = co_await read_some(input, timeout, true);
+            const auto bytes_value = co_await read_append(read_buffer, read_chunk_bytes, timeout);
             if (bytes_value == 0) {
                 throw http_client_error(
                     http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
             }
-            read_buffer.append(input.data(), bytes_value);
             continue;
         }
         auto* parsed_value = parse_result.parsed();
@@ -306,7 +313,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             }
         };
 
-        std::array<char, http_body_buffer_bytes> output{};
+        std::array<char, http_body_buffer_bytes> output;
         bool eof = false;
         http1_close_policy persistence = http1_close_policy::close_after_response;
         for (;;) {
@@ -344,11 +351,9 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             if (eof) {
                 throw std::logic_error("HTTP body decoder requested input after EOF");
             }
-            const auto bytes_value = co_await read_some(input, timeout, true);
+            const auto bytes_value = co_await read_append(read_buffer, read_chunk_bytes, timeout);
             if (bytes_value == 0) {
                 eof = true;
-            } else {
-                read_buffer.append(input.data(), bytes_value);
             }
         }
         if (!read_buffer.empty()) {
@@ -421,7 +426,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                                                          error == asio::ssl::error::stream_truncated);
                     throw http_client_error(
                         tls_error ? http_client_error::code_type::tls_failed : http_client_error::code_type::io_error,
-                        error.message());
+                        error_code_text(error));
                 }
                 pool_.wire_counters().sent_ += bytes_value.size();
                 if (ending == http_stream_end::end) {
@@ -440,7 +445,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     std::exception_ptr receive_failure;
     try {
         auto& read_buffer = connection.read_buffer_;
-        std::array<char, 4096> input{};
+        constexpr std::size_t read_chunk_bytes = 4096;
         for (;;) {
             while (state_value.pending_.size() >= max_response_bytes && !state_value.abandoned_) {
                 co_await state_value.space_signal_.wait();
@@ -457,15 +462,13 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                 state_value.data_signal_.notify();
                 continue;
             }
-            const auto count =
-                co_await read_some(std::span<char>(input).first(std::min(input.size(), room)), timeout, true);
-            if (count == 0) {
+            // The consumer may swap pending_ away while a read is in flight, so
+            // reads land in the connection buffer and move on the next pass.
+            if (co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout) == 0) {
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
                 break;
             }
-            state_value.pending_.append(input.data(), count);
-            state_value.data_signal_.notify();
         }
     } catch (...) {
         receive_failure = std::current_exception();

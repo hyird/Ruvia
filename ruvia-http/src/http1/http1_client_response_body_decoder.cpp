@@ -47,7 +47,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
         framing_ = framing_type::chunked;
         persistence_ = chunked->persistence();
         configure_coding(chunked->transfer_codings());
-        chunked_.emplace(protocol_byte_limit::unlimited());
+        chunked_.emplace(http1_chunked_body_decoder_config{.trailer_role_ = http1_chunk_trailer_role::response});
     } else if (const auto* close = plan.close_delimited()) {
         framing_ = framing_type::close_delimited;
         configure_coding(close->transfer_codings());
@@ -61,7 +61,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
             framing_ = framing_type::chunked;
             persistence_ = zero_chunked->persistence();
             configure_coding(zero_chunked->transfer_codings());
-            chunked_.emplace(protocol_byte_limit::unlimited());
+            chunked_.emplace(http1_chunked_body_decoder_config{.trailer_role_ = http1_chunk_trailer_role::response});
         } else if (const auto* zero_close = zero->close_delimited()) {
             framing_ = framing_type::close_delimited;
             configure_coding(zero_close->transfer_codings());

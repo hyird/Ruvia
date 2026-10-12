@@ -8,7 +8,6 @@ namespace ruvia::detail {
 constexpr std::size_t websocket_client_handshake_nonce_bytes = 16;
 constexpr std::size_t websocket_client_handshake_request_buffer_extra_bytes = 1024;
 constexpr std::size_t websocket_client_transport_buffer_bytes = std::size_t{16} * 1024;
-constexpr std::size_t websocket_client_close_handshake_buffer_bytes = std::size_t{4} * 1024;
 // RFC 6455 Section 5.2: base header, 64-bit extended length and masking key.
 constexpr std::size_t websocket_client_max_frame_header_bytes = 14;
 

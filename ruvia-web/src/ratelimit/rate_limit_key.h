@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <span>
 #include <string_view>
 #include <variant>
 
@@ -10,6 +12,7 @@
 
 #include "ruvia/core/ip_address.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_number_format.h"
 
 namespace ruvia::detail {
 
@@ -44,26 +47,14 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
     }
     if (address.is_v4_mapped()) {
         const auto bytes_value = asio::ip::make_address_v4(asio::ip::v4_mapped, address).to_bytes();
-        auto append_octet = [](char* out, unsigned octet) noexcept {
-            if (octet >= 100) {
-                *out++ = static_cast<char>('0' + octet / 100);
-                octet %= 100;
-                *out++ = static_cast<char>('0' + octet / 10);
-                *out++ = static_cast<char>('0' + octet % 10);
-            } else if (octet >= 10) {
-                *out++ = static_cast<char>('0' + octet / 10);
-                *out++ = static_cast<char>('0' + octet % 10);
-            } else {
-                *out++ = static_cast<char>('0' + octet);
-            }
-            return out;
-        };
         char* cursor_value = buffer;
         for (std::size_t i = 0; i < bytes_value.size(); ++i) {
             if (i != 0) {
                 *cursor_value++ = '.';
             }
-            cursor_value = append_octet(cursor_value, bytes_value[i]);
+            std::array<char, http_max_unsigned_decimal_size> digits;
+            const auto octet = http_format_unsigned(digits, bytes_value[i]);
+            cursor_value += octet.copy(cursor_value, octet.size());
         }
         return std::string_view(buffer, static_cast<std::size_t>(cursor_value - buffer));
     }
@@ -71,10 +62,8 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
     buffer[0] = 'v';
     buffer[1] = '6';
     buffer[2] = '/';
-    for (std::size_t i = 0; i < 8; ++i) {  // first 8 bytes = the /64 network prefix
-        buffer[3 + i * 2] = http_lower_hex_digit(bytes_value[i] >> 4);
-        buffer[3 + i * 2 + 1] = http_lower_hex_digit(bytes_value[i]);
-    }
+    // The first 8 bytes are the /64 network prefix.
+    http_encode_lower_hex(buffer + 3, std::span<const unsigned char>(bytes_value.data(), 8));
     return std::string_view(buffer, rate_limit_key_buffer_bytes);
 }
 

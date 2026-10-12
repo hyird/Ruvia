@@ -1,13 +1,11 @@
 #include "ruvia/http/sse.h"
 
-#include <array>
-#include <charconv>
 #include <cstddef>
 #include <stdexcept>
 #include <string_view>
-#include <system_error>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_number_format.h"
 
 namespace ruvia {
 namespace {
@@ -28,15 +26,6 @@ void append_sse_data(std::pmr::string& frame, std::string_view data) {
         }
         data.remove_prefix(advance);
     }
-}
-
-void append_unsigned(std::pmr::string& frame, std::uint64_t value) {
-    std::array<char, 20> buffer;
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format SSE retry value");
-    }
-    frame.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
 }
 
 }  // namespace
@@ -70,7 +59,7 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
     }
     if (message.retry_.has_value()) {
         frame.append("retry: ");
-        append_unsigned(frame, static_cast<std::uint64_t>(message.retry_->count()));
+        http_append_unsigned(frame, static_cast<std::uint64_t>(message.retry_->count()));
         frame.push_back('\n');
     }
     if (message.data_.has_value()) {

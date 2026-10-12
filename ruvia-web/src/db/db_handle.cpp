@@ -204,9 +204,6 @@ task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_back
     auto transaction = co_await begin_pool_transaction(
         backend.pool_, backend.resource_, std::move(operation_options_value), std::move(transaction_options));
     transaction.bind_operation_scope(operation_scope);
-#ifdef RUVIA_ENABLE_REDIS
-    transaction.cache_ = backend.cache_;
-#endif
     co_return transaction;
 }
 

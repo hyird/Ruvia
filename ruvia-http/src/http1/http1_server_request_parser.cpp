@@ -1,9 +1,14 @@
 #include "ruvia/http/http1_server_request_parser.h"
 
+#include <limits>
+#include <variant>
+
+#include "ruvia/http/detail/parser/http_chunk_framing.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_content_semantics.h"
+#include "ruvia/http/protocol_byte_limit.h"
 
-#include "parser/http_chunk_parser.h"
 #include "parser/http_header_block_parser.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
@@ -12,14 +17,32 @@ namespace ruvia {
 namespace {
 
 using ruvia::detail::find_http_request_head_end;
-using ruvia::detail::http_chunk_scan_error;
 using ruvia::detail::http_request_access;
 using ruvia::detail::parse_http_header_block;
 using ruvia::detail::parse_request_target;
 using ruvia::detail::parsed_request_header_block;
 using ruvia::detail::request_header_kind;
 using ruvia::detail::request_target_view;
-using ruvia::detail::scan_http_chunked_body;
+
+[[nodiscard]] http_parse_error chunk_framing_parse_error(detail::chunk_framing_error error) noexcept {
+    switch (error) {
+        case detail::chunk_framing_error::invalid_size:
+            return http_parse_error::invalid_chunk_size;
+        case detail::chunk_framing_error::size_overflow:
+            return http_parse_error::chunk_size_overflow;
+        case detail::chunk_framing_error::invalid_extension:
+            return http_parse_error::invalid_chunk_extension;
+        case detail::chunk_framing_error::invalid_crlf:
+            return http_parse_error::invalid_chunk_crlf;
+        case detail::chunk_framing_error::invalid_trailer:
+            return http_parse_error::invalid_trailer;
+        case detail::chunk_framing_error::trailer_limit_exceeded:
+        case detail::chunk_framing_error::body_limit_exceeded:
+        case detail::chunk_framing_error::framing_limit_exceeded:
+            break;
+    }
+    return http_parse_error::body_too_large;
+}
 
 }  // namespace
 
@@ -37,10 +60,12 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
     http_request_access::reset(state_value.request_);
 
     const auto fail = [&state_value](http_parse_error error) noexcept {
-        // The request version may already have been accepted when a later
-        // target/framing semantic check fails. Preserve that protocol contract
-        // so an HTTP/1.0 error response is not silently upgraded to HTTP/1.1.
-        const auto connection_plan = state_value.connection_plan_;
+        // A rejected head leaves the message boundary unknown and its content
+        // unconsumed, so the connection cannot be reused (RFC 9112 sections 6.1
+        // and 6.3). The request version may already have been accepted when a
+        // later target/framing semantic check fails; preserve it so an HTTP/1.0
+        // error response is not silently upgraded to HTTP/1.1.
+        const auto connection_plan = state_value.connection_plan_.require_close();
         http_request_access::reset(state_value.request_);
         state_value.progress_ = http1_server_request_parse_failure(error);
         state_value.connection_plan_ = connection_plan;
@@ -58,7 +83,7 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
         return fail(http_parse_error::header_too_large);
     }
 
-    parsed_request_header_block block(resource);
+    parsed_request_header_block block;
     if (const auto error = parse_http_header_block(buffer, header_bytes, block)) {
         return fail(*error);
     }
@@ -95,12 +120,15 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
                                        ? plan_http11_request_connection(block.connection_options_.close())
                                        : plan_http10_request_connection(block.connection_options_.close(),
                                              block.connection_options_.keep_alive());
+    if (known_method == http_known_method::connect) {
+        state_value.connection_plan_ = state_value.connection_plan_.with_tunnel_request();
+    }
     if (block.upgrade_protocols_.has_field() && !block.connection_options_.upgrade()) {
         return fail(http_parse_error::invalid_connection);
     }
-    if (block.te_header_present_ && !block.connection_options_.te()) {
-        return fail(http_parse_error::invalid_connection);
-    }
+    // RFC 9110 10.1.4 obliges the TE sender to list "TE" in Connection; it does
+    // not oblige the recipient to reject. The server never acts on TE (it does
+    // not condition trailers on it), so a bare TE is simply ignored.
 
     request_target_view target_view;
     if (!parse_request_target(known_method, target, target_view)) {
@@ -139,7 +167,6 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
     const auto* final_chunked =
         transfer_encoding.has_value() ? transfer_encoding->final_chunked() : nullptr;
     if (transfer_encoding.has_value() && final_chunked == nullptr) {
-        state_value.connection_plan_ = state_value.connection_plan_.require_close();
         return fail(http_parse_error::invalid_transfer_encoding);
     }
     if (block.non_empty_trailer_header_present_ && final_chunked == nullptr) {
@@ -152,7 +179,6 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
         return fail(http_parse_error::invalid_transfer_encoding);
     }
     if (block.transfer_encoding_.unsupported()) {
-        state_value.connection_plan_ = state_value.connection_plan_.require_close();
         return fail(http_parse_error::unsupported_transfer_encoding);
     }
 
@@ -246,29 +272,29 @@ void http1_server_request_parser::parse_message_body(
         // Chunk framing has no cumulative budget, so the whole buffered message
         // limit bounds the scanned wire bytes.
         const auto body_budget = max_http_request_bytes - header_bytes;
-        const auto chunked = scan_http_chunked_body(buffer.substr(header_bytes, body_budget));
-        if (const auto* complete = chunked.complete()) {
-            message_bytes = header_bytes + complete->consumed_bytes();
-        } else if (chunked.need_more() != nullptr) {
-            if (buffer.size() - header_bytes >= body_budget) {
-                return fail(http_parse_error::body_too_large);
+        const auto body = buffer.substr(header_bytes, body_budget);
+        detail::http_chunk_framing framing({
+            .body_limit_ = protocol_byte_limit::limited(default_max_buffered_body_bytes),
+            .trailer_section_limit_ = protocol_byte_limit::limited(max_http_header_bytes),
+            .trailer_role_ = detail::chunk_trailer_role::request,
+        });
+        std::size_t consumed = 0;
+        for (;;) {
+            const auto result_value = framing.decode(body.substr(consumed), std::numeric_limits<std::size_t>::max());
+            if (const auto* complete = std::get_if<detail::chunk_framing_complete>(&result_value)) {
+                message_bytes = header_bytes + consumed + complete->consumed_bytes_;
+                break;
             }
-            return need_more();
-        } else {
-            switch (chunked.failure()->error()) {
-                case http_chunk_scan_error::invalid_size:
-                    return fail(http_parse_error::invalid_chunk_size);
-                case http_chunk_scan_error::size_overflow:
-                    return fail(http_parse_error::chunk_size_overflow);
-                case http_chunk_scan_error::invalid_extension:
-                    return fail(http_parse_error::invalid_chunk_extension);
-                case http_chunk_scan_error::invalid_crlf:
-                    return fail(http_parse_error::invalid_chunk_crlf);
-                case http_chunk_scan_error::invalid_trailer:
-                    return fail(http_parse_error::invalid_trailer);
-                case http_chunk_scan_error::too_large:
+            if (const auto* failure = std::get_if<detail::chunk_framing_failure>(&result_value)) {
+                return fail(chunk_framing_parse_error(failure->error_));
+            }
+            if (std::holds_alternative<detail::chunk_framing_need_more>(result_value)) {
+                if (buffer.size() - header_bytes >= body_budget) {
                     return fail(http_parse_error::body_too_large);
+                }
+                return need_more();
             }
+            consumed += std::get<detail::chunk_framing_body>(result_value).consumed_bytes_;
         }
     } else if (known_length_body != nullptr) {
         const auto content_length = known_length_body->content_length();
@@ -318,21 +344,17 @@ std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_reques
     } else if (headers.size() > max_http_header_fields) {
         error = http_parse_error::too_many_headers;
     } else {
-        std::size_t header_bytes = 0;
+        http_field_section_budget budget;
         for (const auto& header : headers) {
-            if (!detail::is_valid_http_header_name(header.name()) ||
-                !detail::is_valid_http_header_value(header.value())) {
+            if (!is_valid_http_header_name(header.name()) ||
+                !is_valid_http_header_value(header.value())) {
                 error = http_parse_error::invalid_header;
                 break;
             }
-            const auto remaining = max_http_header_bytes - header_bytes;
-            if (header.name().size() > remaining ||
-                header.value().size() > remaining - header.name().size() ||
-                remaining - header.name().size() - header.value().size() < 4) {
+            if (!budget.add_field(header.name(), header.value())) {
                 error = http_parse_error::header_too_large;
                 break;
             }
-            header_bytes += header.name().size() + header.value().size() + 4;
         }
     }
     if (error.has_value()) {

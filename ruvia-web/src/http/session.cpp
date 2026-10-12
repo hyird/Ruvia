@@ -63,11 +63,11 @@ task<void> detail::session_access::commit(context& context_value) {
 #ifdef RUVIA_ENABLE_REDIS
 
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <memory_resource>
 
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/redis/redis_handle.h"
 
@@ -137,7 +137,7 @@ task<void> session_middleware::commit(context& c) const {
     const bool secure = connection.scheme() == http_scheme::https;
     if (const auto* cleared = state_value.cleared()) {
         auto& response = detail::context_access::response_storage(c);
-        auto staged = response.clone_headers_for_transaction(1);
+        auto staged = response.headers().clone(1);
         detail::append_expired_session_cookie_header(staged, c.pool(), config_.cookie_name_, secure);
         if (cleared->old_id_.has_value()) {
             std::pmr::string key(c.pool());
@@ -145,7 +145,7 @@ task<void> session_middleware::commit(context& c) const {
             key.append(cleared->old_id_->data(), cleared->old_id_->size());
             (void)(co_await c.redis(config_.redis_alias_).del(key));
         }
-        response.commit_headers_from(std::move(staged));
+        response.commit_headers(std::move(staged));
         co_return;
     }
 
@@ -171,7 +171,7 @@ task<void> session_middleware::commit(context& c) const {
     // Allocate and validate the cookie before changing Redis. Publication after
     // successful storage is an allocation-free move of the complete header state.
     auto& response = detail::context_access::response_storage(c);
-    auto staged = response.clone_headers_for_transaction(1);
+    auto staged = response.headers().clone(1);
     detail::append_session_cookie_header(staged, c.pool(), config_.cookie_name_, new_id, secure);
 
     std::pmr::string key(c.pool());
@@ -180,13 +180,11 @@ task<void> session_middleware::commit(context& c) const {
     if (!old_id.empty()) {
         std::pmr::string old_key(c.pool());
         old_key.append(config_.key_prefix_).append(old_id);
-        std::array<char, 32> ttl_buffer{};
-        const auto [ttl_end, ttl_error] = std::to_chars(ttl_buffer.data(), ttl_buffer.data() + ttl_buffer.size(), config_.ttl_.count());
-        if (ttl_error != std::errc{}) {
-            throw std::logic_error("session TTL serialization failed");
-        }
+        // config_storage_type::validate requires a positive TTL.
+        std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
+        const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(config_.ttl_.count()));
         const std::array<std::string_view, 2> keys{old_key, key};
-        const std::array<std::string_view, 2> args{data, std::string_view(ttl_buffer.data(), ttl_end)};
+        const std::array<std::string_view, 2> args{data, ttl};
         // Redis executes the entire transition atomically. A stale request may
         // neither recreate a revoked identifier nor mint a successor from it.
         const auto result_value = co_await c.redis(config_.redis_alias_).eval(detail::session_rotation_script, keys, args);
@@ -206,7 +204,7 @@ task<void> session_middleware::commit(context& c) const {
             .code_ = "session_conflict",
             .message_ = "session expired or was revoked; retry with a new session"});
     }
-    response.commit_headers_from(std::move(staged));
+    response.commit_headers(std::move(staged));
 }
 
 }  // namespace ruvia

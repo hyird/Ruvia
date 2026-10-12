@@ -1,10 +1,12 @@
 #include "ruvia/web/websocket.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -15,6 +17,7 @@
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/http/http_interim_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -31,6 +34,7 @@ struct websocket_eof_observation {
     std::atomic<bool> write_overlap_rejected_{};
     std::atomic<bool> close_overlap_rejected_{};
     std::atomic<bool> failed_{};
+    std::atomic<bool> inform_rejected_{};
 };
 const auto websocket_eof_observed = std::make_shared<websocket_eof_observation>();
 [[maybe_unused]] const bool websocket_eof_observation_registered = [] {
@@ -39,14 +43,40 @@ const auto websocket_eof_observed = std::make_shared<websocket_eof_observation>(
     return true;
 }();
 
-class http1_websocket_routes final : public ruvia::controller<http1_websocket_routes> {
-    RUVIA_ROUTES_BEGIN
+// Large enough that loopback socket buffers cannot absorb it, so the write
+// stays active while the client does not read.
+constexpr std::size_t stalled_payload_size = std::size_t{16} << 20;
+
+class http1_websocket_routes final {
+    RUVIA_ROUTES_BEGIN(http1_websocket_routes)
+    // The longest heartbeat a route accepts; the Pong timeout defaults to it.
+    const auto longest_heartbeat = ruvia::websocket_route_config{
+        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds::max()}}};
+    const auto required_subprotocol =
+        ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
+    RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
+    RUVIA_GET_WS_OPTIONS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
     RUVIA_ROUTES_END
+
+    ruvia::task<void> accept_only(ruvia::context&) {
+        co_return;
+    }
+
+    ruvia::task<void> write_stalled(ruvia::context& context_value) {
+        co_await context_value.get_websocket().binary(std::string(stalled_payload_size, 'w'));
+    }
 
     ruvia::task<void> read_until_eof(ruvia::context& context_value) {
         auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
         auto& websocket_value = context_value.get_websocket();
+        // The 101 head is committed: a 1xx head written now would land inside
+        // the frame stream.
+        try {
+            co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        } catch (const std::logic_error&) {
+            observed_value.inform_rejected_ = true;
+        }
         try {
             auto first_read = websocket_value.read();
             auto last_read = websocket_value.read();
@@ -99,6 +129,7 @@ class http1_websocket_routes final : public ruvia::controller<http1_websocket_ro
 };
 }  // namespace http1_websocket_test
 
+using http1_websocket_test::stalled_payload_size;
 using http1_websocket_test::websocket_eof_observed;
 
 // A peer that closes its TCP send direction without a Close frame ends the
@@ -113,6 +144,7 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
     websocket_eof_observed->write_overlap_rejected_ = false;
     websocket_eof_observed->close_overlap_rejected_ = false;
     websocket_eof_observed->failed_ = false;
+    websocket_eof_observed->inform_rejected_ = false;
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
@@ -184,4 +216,149 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
     RUVIA_CHECK(websocket_eof_observed->write_overlap_rejected_);
     RUVIA_CHECK(websocket_eof_observed->close_overlap_rejected_);
     RUVIA_CHECK(!websocket_eof_observed->failed_);
+    RUVIA_CHECK(websocket_eof_observed->inform_rejected_);
+}
+
+// The stalled-write budget is the ping interval plus the Pong timeout. At the
+// longest configurable heartbeat that budget is effectively unbounded, so a
+// write the client takes a while to drain is never aborted.
+RUVIA_TEST(http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    std::exception_ptr failure;
+    std::size_t received = 0;
+    bool payload_intact = true;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog_value(io, std::chrono::seconds(10));
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        try {
+            constexpr std::string_view upgrade =
+                "GET /http1-websocket-longest-heartbeat HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: websocket\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+            if (sent.error_code()) {
+                throw std::system_error(sent.error_code());
+            }
+            std::string head;
+            char byte{};
+            while (!head.ends_with("\r\n\r\n")) {
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
+                }
+                head.push_back(byte);
+            }
+            RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
+            // Leave the server's write blocked across many connection scans.
+            asio::steady_timer stall(io, std::chrono::milliseconds(300));
+            (void)co_await ruvia::async_asio([&](auto handler) { stall.async_wait(std::move(handler)); });
+            std::array<unsigned char, 10> frame_head{};
+            const auto head_read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_read(client, asio::buffer(frame_head), std::move(handler)); });
+            if (head_read.error_code()) {
+                throw std::system_error(head_read.error_code());
+            }
+            RUVIA_CHECK_EQ(frame_head[0], static_cast<unsigned char>(0x82));
+            RUVIA_CHECK_EQ(frame_head[1], static_cast<unsigned char>(127));
+            std::size_t length = 0;
+            for (std::size_t index = 2; index != frame_head.size(); ++index) {
+                length = (length << 8) | frame_head[index];
+            }
+            RUVIA_CHECK_EQ(length, stalled_payload_size);
+            std::array<char, 65536> input{};
+            while (received < stalled_payload_size) {
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(input.data(), std::min(input.size(), stalled_payload_size - received)), std::move(handler));
+                });
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
+                }
+                payload_intact = payload_intact && std::string_view(input.data(), read.result()).find_first_not_of('w') == std::string_view::npos;
+                received += read.result();
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(client);
+        (void)watchdog_value.cancel();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK_EQ(received, stalled_payload_size);
+    RUVIA_CHECK(payload_intact);
+}
+
+// A route that requires a subprotocol refuses an upgrade offering none of its
+// own with 400 instead of switching protocols, and still selects one that is
+// offered alongside unknown entries.
+RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    std::array<std::string, 3> heads;
+    auto run = [&]() -> ruvia::task<void> {
+        constexpr std::array<std::string_view, 3> offers{
+            "", "Sec-WebSocket-Protocol: other\r\n", "Sec-WebSocket-Protocol: other, chat.v1\r\n"};
+        for (std::size_t index = 0; index != offers.size(); ++index) {
+            asio::ip::tcp::socket client(io);
+            asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
+            watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+            try {
+                client.connect(server.endpoint());
+                const std::string upgrade = std::string(
+                    "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
+                    std::string(offers[index]) + "\r\n";
+                const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+                if (sent.error_code()) {
+                    throw std::system_error(sent.error_code());
+                }
+                char byte{};
+                while (!heads[index].ends_with("\r\n\r\n")) {
+                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                    if (read.error_code()) {
+                        throw std::system_error(read.error_code());
+                    }
+                    heads[index].push_back(byte);
+                }
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            ruvia::close_socket(client);
+            (void)watchdog_value.cancel();
+            if (failure) {
+                break;
+            }
+        }
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK(heads[0].starts_with("HTTP/1.1 400 "));
+    RUVIA_CHECK(heads[1].starts_with("HTTP/1.1 400 "));
+    RUVIA_CHECK(heads[0].find("Sec-WebSocket-Accept") == std::string::npos);
+    RUVIA_CHECK(heads[2].starts_with("HTTP/1.1 101 "));
+    RUVIA_CHECK(heads[2].find("\r\nSec-WebSocket-Protocol: chat.v1\r\n") != std::string::npos);
 }

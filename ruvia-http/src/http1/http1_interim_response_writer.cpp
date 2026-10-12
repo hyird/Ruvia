@@ -1,16 +1,14 @@
 #include "ruvia/http/http1_interim_response_writer.h"
 
-#include <array>
-#include <cstring>
-
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
 
 #include "field/http_interim_response_validation.h"
-#include "util/http_text_overlap.h"
+#include "util/http_wire_sink.h"
 
 namespace ruvia::detail {
 
@@ -42,18 +40,10 @@ constexpr std::string_view http11_status_prefix = "HTTP/1.1 ";
 constexpr std::string_view crlf = "\r\n";
 
 struct http1_interim_header_facts final {
-    std::size_t wire_bytes_{0};
+    http_field_section_budget section_;
     detail::http_connection_options connection_options_;
     detail::http_upgrade_protocols upgrade_protocols_;
 };
-
-[[nodiscard]] bool add_head_bytes(std::size_t& total, std::size_t bytes_value) noexcept {
-    if (bytes_value > max_http_header_bytes - total) {
-        return false;
-    }
-    total += bytes_value;
-    return true;
-}
 
 [[nodiscard]] http1_interim_response_prepare_error common_validation_error(
     detail::http_interim_response_header_validation_status status) noexcept {
@@ -99,9 +89,7 @@ struct http1_interim_header_facts final {
             return false;
         }
 
-        if (!add_head_bytes(facts.wire_bytes_, name.size()) || !add_head_bytes(facts.wire_bytes_, 2) ||
-            !add_head_bytes(facts.wire_bytes_, header.value().size()) ||
-            !add_head_bytes(facts.wire_bytes_, crlf.size())) {
+        if (!facts.section_.add_field(name, header.value())) {
             error = http1_interim_response_prepare_error::header_too_large;
             return false;
         }
@@ -113,41 +101,18 @@ struct http1_interim_header_facts final {
     return true;
 }
 
-void append_view(char*& cursor_value, std::string_view value) noexcept {
-    if (!value.empty()) {
-        std::memcpy(cursor_value, value.data(), value.size());
-        cursor_value += value.size();
-    }
-}
-
 void write_interim_response_head(char* output, const http_interim_response_head& response,
     std::string_view status_token, std::string_view reason_phrase) noexcept {
-    append_view(output, http11_status_prefix);
-    append_view(output, status_token);
-    *output++ = ' ';
-    append_view(output, reason_phrase);
-    append_view(output, crlf);
+    detail::http_raw_wire_sink sink(output);
+    sink.append(http11_status_prefix);
+    sink.append(status_token);
+    sink.append(' ');
+    sink.append(reason_phrase);
+    sink.append(crlf);
     for (const auto& header : response.headers()) {
-        append_view(output, header.name());
-        append_view(output, ": ");
-        append_view(output, header.value());
-        append_view(output, crlf);
+        detail::emit_http1_field_line(sink, header.name(), header.value());
     }
-    append_view(output, crlf);
-}
-
-// Keep the bounded snapshot off the ordinary non-overlapping call path.
-#if defined(_MSC_VER)
-__declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
-void write_overlapping_interim_response_head(std::span<char> output,
-    const http_interim_response_head& response, std::string_view status_token,
-    std::string_view reason_phrase) noexcept {
-    std::array<char, max_http_header_bytes> scratch;
-    write_interim_response_head(scratch.data(), response, status_token, reason_phrase);
-    std::memcpy(output.data(), scratch.data(), output.size());
+    sink.append(crlf);
 }
 
 }  // namespace
@@ -196,40 +161,31 @@ http1_interim_response_prepare_result http1_interim_response_writer::prepare(
     const auto reason_phrase = http_reason_phrase(response.status());
     const auto status_token = detail::http_status_code_token(response.status());
     http1_interim_header_facts facts;
-    facts.wire_bytes_ =
-        http11_status_prefix.size() + status_token.size() + 1 + reason_phrase.size() + crlf.size();
     http1_interim_response_prepare_error error = http1_interim_response_prepare_error::invalid_header;
     if (!analyze_http1_fields(response, facts, error)) {
         return detail::http1_interim_response_prepare_result_access::failure(error);
     }
-    if (!add_head_bytes(facts.wire_bytes_, crlf.size())) {
+    if (!facts.section_.add(
+            http11_status_prefix.size() + status_token.size() + 1 + reason_phrase.size() + crlf.size()) ||
+        !facts.section_.add(crlf.size())) {
         return detail::http1_interim_response_prepare_result_access::failure(
             http1_interim_response_prepare_error::header_too_large);
     }
-    if (head_buffer.size() < facts.wire_bytes_) {
-        return detail::http1_interim_response_prepare_result_access::buffer_too_small(facts.wire_bytes_);
+    const auto head_bytes = facts.section_.bytes();
+    if (head_buffer.size() < head_bytes) {
+        return detail::http1_interim_response_prepare_result_access::buffer_too_small(head_bytes);
     }
 
-    const auto output = head_buffer.first(facts.wire_bytes_);
-    const auto output_view = std::string_view(output.data(), output.size());
-    bool overlaps = false;
-    for (const auto& header : response.headers()) {
-        if (detail::http_text_overlaps(header.name(), output_view) ||
-            detail::http_text_overlaps(header.value(), output_view)) {
-            overlaps = true;
-            break;
-        }
-    }
-    if (overlaps) {
-        write_overlapping_interim_response_head(
-            output, response, detail::http_status_code_token_view(status_token), reason_phrase);
-    } else {
-        write_interim_response_head(
-            output.data(), response, detail::http_status_code_token_view(status_token), reason_phrase);
-    }
+    const auto output = head_buffer.first(head_bytes);
+    const auto status_text = detail::http_status_code_token_view(status_token);
+    detail::write_http_wire(output,
+        detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()),
+        [&](char* destination) noexcept {
+            write_interim_response_head(destination, response, status_text, reason_phrase);
+        });
 
     return detail::http1_interim_response_prepare_result_access::prepared(
-        std::string_view(head_buffer.data(), facts.wire_bytes_),
+        std::string_view(head_buffer.data(), head_bytes),
         facts.connection_options_.close()
             ? http1_interim_connection_disposition::close_after_interim_response
             : http1_interim_connection_disposition::unchanged);

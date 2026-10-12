@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <utility>
 #include <variant>
 
@@ -31,19 +32,25 @@ public:
     task_scope& operator=(task_scope&&) = delete;
 
     // Every operation is bound to this scope's stable address: child
-    // completion nodes point back to it, and join() reserves it from a lazy
-    // coroutine frame. Reject temporary scopes before either lifetime can be
+    // completion nodes point back to it, and lazy join tasks borrow it.
+    // Reject temporary scopes before either lifetime can be
     // created and keep even state/token access on the same explicit owner.
     void spawn(task<void> task) &;
     void spawn(task<void>) && = delete;
+    // Stop control is worker-affine like the rest of the scope. The stop state
+    // is created by the first token request, so a scope whose token is never
+    // observed allocates none; get_stop_token() may throw std::bad_alloc.
     void request_stop() & noexcept;
     void request_stop() && = delete;
-    [[nodiscard]] stop_token get_stop_token() const& noexcept;
+    [[nodiscard]] stop_token get_stop_token() const&;
     stop_token get_stop_token() const&& = delete;
     [[nodiscard]] bool stop_requested() const& noexcept;
     bool stop_requested() const&& = delete;
     [[nodiscard]] std::size_t size() const& noexcept;
     std::size_t size() const&& = delete;
+    // Cold join tasks do not close spawn admission. Starting a join claims the
+    // scope exactly once and prevents further spawning; the scope and worker
+    // must remain alive until that task and all children have completed.
     [[nodiscard]] task<void> join() &;
     task<void> join() && = delete;
 
@@ -52,7 +59,6 @@ private:
 
     struct task_scope_empty_type final {};
     struct task_scope_open_type final {};
-    struct task_scope_join_reserved_type final {};
     class task_scope_joining_type final {
     public:
         explicit task_scope_joining_type(std::coroutine_handle<> continuation) noexcept
@@ -84,44 +90,24 @@ private:
 
     struct join_awaiter_type {
         task_scope& scope_;
-        [[nodiscard]] bool await_ready() const noexcept;
-        bool await_suspend(std::coroutine_handle<> continuation);
+        [[nodiscard]] bool await_ready() const;
+        void await_suspend(std::coroutine_handle<> continuation) noexcept;
         void await_resume();
     };
 
-    class join_reservation_type final {
-    public:
-        explicit join_reservation_type(task_scope& scope) noexcept
-            : scope_(&scope) {}
-        ~join_reservation_type();
-
-        join_reservation_type(const join_reservation_type&) = delete;
-        join_reservation_type& operator=(const join_reservation_type&) = delete;
-        join_reservation_type(join_reservation_type&& other) noexcept
-            : scope_(std::exchange(other.scope_, nullptr)) {}
-        join_reservation_type& operator=(join_reservation_type&&) = delete;
-
-        [[nodiscard]] task_scope& scope() const noexcept {
-            return *scope_;
-        }
-
-    private:
-        task_scope* scope_;
-    };
-
     static void child_complete(void* raw) noexcept;
-    [[nodiscard]] static task<void> join_reserved(join_reservation_type reservation);
-    void release_join_reservation() noexcept;
+    [[nodiscard]] static task<void> join_scope(task_scope& scope);
     void finish(node_type* node) noexcept;
     void rethrow_failure();
 
-    using lifecycle_type = std::variant<task_scope_empty_type, task_scope_open_type, task_scope_join_reserved_type,
+    using lifecycle_type = std::variant<task_scope_empty_type, task_scope_open_type,
         task_scope_joining_type, task_scope_joined_type>;
     using outcome_type = std::variant<task_scope_success_type, task_scope_failure_type>;
 
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
-    stop_source stop_source_;
+    mutable std::optional<stop_source> stop_source_;
+    bool stop_requested_{false};
     node_type* head_{nullptr};
     std::size_t active_{0};
     lifecycle_type lifecycle_;

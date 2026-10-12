@@ -61,6 +61,8 @@ discarded, but a started task must be awaited or joined, including after
 cancellation. Stream and WebSocket operations occupy their read/write lanes when
 started; unstarted operations may coexist and be awaited in sequence. These write
 entry points own their input before returning.
+A task scope accepts children until its join task starts; joining is single-shot
+and prevents further spawning.
 Offloaded work carries owned data and returns through a bounded
 blocking pool. With GCC 13/14, keep over-aligned coroutine locals in separately
 allocated owned storage because those compilers can misalign coroutine frames.
@@ -77,13 +79,18 @@ An attachment holds work on its context until it has retired, so keep running
 the context after `stop()` until `run()` returns; destroying the context while
 Ruvia work is still outstanding is a contract violation that terminates.
 Closing a channel sender permits buffered input to drain; closing or destroying
-its receiver prevents later receives from consuming that input.
+its receiver destroys the buffered input on that thread and prevents later
+receives from consuming any.
 `ruvia::stop_token` values are copyable views over at most four distinct stop
 sources; combining more, for example by merging `ruvia::operation_options`,
-throws `std::length_error`.
+throws `std::length_error`. A `ruvia::stop_source` keeps its shared stop state
+in Ruvia's process memory pool rather than the global heap.
 
-The server and outbound client support HTTP/1 over TCP and TLS. TLS certificates,
-private keys, and client CA bundles are loaded during configuration validation.
+The server and outbound client support HTTP/1 over TCP and TLS. Server TLS
+certificates, private keys, and client CA bundles are loaded once by
+`application::listen()`, which throws for unreadable files or a wrong key
+password; paths are opened as Unicode on every platform, and the server keeps
+no copy of a private-key password.
 Outbound origins and connection pools are configured before serving.
 Clients configured to retain response cookies save them when the final response
 headers arrive, even while the body is still being received.
@@ -91,12 +98,37 @@ WebSocket uses HTTP/1.1 Upgrade. CONNECT tunnels support independent send and re
 half-closes; CONNECT-UDP uses reliable DATAGRAM capsules. See
 [tunnels.cpp](examples/web/tunnels.cpp).
 
+`application::stop()` (also the installed SIGINT/SIGTERM handlers) stops a
+serving app gracefully. The listeners close; connections with no admitted
+request (idle, or still receiving a request head) close at once; each
+WebSocket session starts its close handshake with 1001 Going Away, bounded by
+the route's `close_handshake_timeout_`; requests whose head arrived finish
+and then close their connection (`Connection: close`), and tunnels keep
+running. An upgrade still in its route chain completes its handshake and then
+ends without running its session handler: a WebSocket with the 1001 close
+handshake, a tunnel by closing. Once they have all finished, or when
+`server_config::drain_timeout_` (default 10 s; zero disables the drain) passes,
+every remaining connection closes, handler stop tokens fire, and `on_stop`
+hooks run before the workers retire. Streaming responses and tunnels that end
+only on their stop token hold the drain until the deadline. A repeated signal
+during the drain gets the default disposition. A stop during startup, or a
+worker failure, closes everything at once. `run()` reports a failure to stderr
+and rethrows it, so `main()` should catch it and exit non-zero.
+
 Controllers and middleware are worker-local. Request views borrow their owner;
 copy data before carrying it beyond that lifetime or into offloaded work.
 JSON parsing applies cumulative array-element and storage limits through
-`model_parse_options`, including arrays in unknown fields and decoded field names.
+`model_parse_options`, including arrays in unknown fields, decoded field names,
+and borrowed `json_value`/`json_object` parses.
+Model moves into a destination owned by the source, such as a root into one of
+its children, throw `std::invalid_argument` and leave both sides unchanged.
+`header_model` matches names ASCII case-insensitively, so its schema must not
+declare fields whose names differ only by ASCII case.
 JWT payload assignment retains the destination PMR resource, including nested
 audiences and custom claims.
+Validator copies retain the source PMR resource, which must outlive them;
+assignment retains the destination resource. Thrown validation errors own their
+diagnostics independently.
 `RUVIA_PATTERN` and `RUVIA_REGEX` use the same bounded, anchored byte-pattern
 dialect; use `RUVIA_CUSTOM` for matching outside its supported syntax. See
 [models_validation.cpp](examples/web/models_validation.cpp) for model rules.
@@ -114,6 +146,8 @@ constant static storage. Moving an `http_response` transfers its headers and bod
 the source keeps its PMR resource and remains reusable with empty headers and body.
 Moving an `http_client_response_head` leaves source metadata readable and fields
 empty; repeated `take_headers()` calls return empty vectors in its original PMR.
+HTTP/1 client request preparation permits metadata to borrow its output buffer;
+content must remain outside the emitted head.
 File responses use native file transfer for plain TCP,
 and the blocking pool for TLS reads; disabling the pool makes those reads run
 on the worker. A file changed during transfer aborts the response.

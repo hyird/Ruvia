@@ -16,48 +16,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::optional<std::string_view> http_header_value_in_block(
-    std::string_view headers, std::string_view name) noexcept {
-    std::optional<std::string_view> result;
-    while (!headers.empty()) {
-        const auto line_end = headers.find("\r\n");
-        const auto line = line_end == std::string_view::npos ? headers : headers.substr(0, line_end);
-        const auto colon = line.find(':');
-        if (colon != std::string_view::npos) {
-            const auto key = http_trim_ows(line.substr(0, colon));
-            if (http_ascii_equals_ignore_case(key, name)) {
-                result = http_trim_ows(line.substr(colon + 1));
-            }
-        }
-
-        if (line_end == std::string_view::npos) {
-            break;
-        }
-        headers.remove_prefix(line_end + 2);
-    }
-
-    return result;
-}
-
-template <http_temporary_owning_char_string headers_type>
-std::optional<std::string_view> http_header_value_in_block(headers_type&&, std::string_view) = delete;
-
-[[nodiscard]] inline std::optional<std::string_view> http_disposition_parameter(
-    std::string_view disposition, std::string_view name) noexcept {
-    // Content-Disposition parameter names are case-insensitive (RFC 6266 section 4.1 /
-    // RFC 2183), matching how parse_multipart_boundary treats the Content-Type
-    // "boundary" parameter. Match "name"/"filename" the same way so a part using
-    // e.g. `Name=` or `FileName=` is not spuriously rejected.
-    const auto value = http_find_semicolon_parameter_quoted_ignore_case(disposition, name);
-    if (!value) {
-        return std::nullopt;
-    }
-    return http_trim_quotes(*value);
-}
-
-template <http_temporary_owning_char_string disposition_type>
-std::optional<std::string_view> http_disposition_parameter(disposition_type&&, std::string_view) = delete;
-
 [[nodiscard]] inline bool http_is_form_data_disposition(std::string_view disposition) noexcept {
     const auto value = http_trim_ows(disposition);
     const auto semicolon = value.find(';');
@@ -225,7 +183,7 @@ private:
                 multipart_parse_error::invalid_content_disposition);
         }
 
-        const auto decoded = http_trim_quotes(value);
+        const auto decoded = http_trim_quoted_field_value(value);
         if (http_ascii_equals_ignore_case(key, "name")) {
             name = decoded;
         } else if (http_ascii_equals_ignore_case(key, "filename")) {

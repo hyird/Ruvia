@@ -1,14 +1,12 @@
 #include "server/http_response_head.h"
 
-#include <array>
-#include <charconv>
-#include <cstring>
 #include <optional>
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
@@ -17,9 +15,9 @@
 
 #include "coding/http_content_length.h"
 #include "field/response_field_validation.h"
-#include "http1/http1_chunked_framing.h"
 #include "response/http_response_header_access.h"
 #include "server/http_date_cache.h"
+#include "util/http_wire_sink.h"
 
 namespace ruvia::detail {
 
@@ -40,7 +38,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
     // encodes presence: empty means no Content-Length line was seen.
     http_content_length_state<> state;
     for (const auto& header : response.headers()) {
-        if (response_header_known_bit(header) != response_header_content_length) {
+        if (http_response_header_access::known_bit(header) != response_header_content_length) {
             continue;
         }
         if (state.parse_field(header.value()) != http_content_length_parse_status::ok) {
@@ -54,54 +52,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
     return static_cast<std::uint64_t>(*value);
 }
 
-// Unchecked sink writing through a raw cursor; the caller guarantees capacity
-// via http_response_head_buffer::append_generated. Constant-size appends inline to stores.
-struct raw_head_sink {
-    char* out_;
-
-    void append(std::string_view value) noexcept {
-        // A default-constructed empty string_view may carry a null data pointer.
-        // libc annotates memcpy arguments as nonnull even when the byte count is
-        // zero, so avoid passing that representation across the C boundary.
-        if (value.empty()) {
-            return;
-        }
-        std::memcpy(out_, value.data(), value.size());
-        out_ += value.size();
-    }
-
-    void append(char value) noexcept {
-        *out_++ = value;
-    }
-
-    void append_unsigned(std::uint64_t value) noexcept {
-        // Format into a local buffer and copy. The measured head reserves only
-        // decimal_digits(value) bytes for these digits, so std::to_chars(out,
-        // out + 20, ...) would form a pointer past the 512-byte stack buffer's
-        // end (undefined per [expr.add]) when the head nearly fills it, even
-        // though no byte beyond the digits is written. Mirrors
-        // http_response_head_buffer::append_unsigned.
-        std::array<char, 20> digits;
-        const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
-        append(std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
-    }
-};
-
-void add_response_head_bytes(std::size_t& total, std::size_t bytes_value) {
-    if (bytes_value > max_http_header_bytes - total) {
-        throw std::length_error("HTTP response head is too large");
-    }
-    total += bytes_value;
-}
-
-[[nodiscard]] std::size_t decimal_digits(std::uint64_t value) noexcept {
-    std::size_t digits = 1;
-    while (value >= 10) {
-        value /= 10;
-        ++digits;
-    }
-    return digits;
-}
+inline constexpr std::string_view content_length_name = "Content-Length";
 
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
     bool trailer_header_allowed, response_field_state& fields, http_connection_options& connection_options,
@@ -133,7 +84,7 @@ void add_response_head_bytes(std::size_t& total, std::size_t bytes_value) {
     return true;
 }
 
-void emit_response_head(const http_response& response, raw_head_sink& sink_value, http_status_code response_status,
+void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
     std::string_view reason_phrase, std::string_view date_header, response_head_flags flags) noexcept {
     sink_value.append(flags.protocol_version_ == http_protocol_version::http10
                           ? std::string_view("HTTP/1.0 ")
@@ -146,7 +97,7 @@ void emit_response_head(const http_response& response, raw_head_sink& sink_value
     sink_value.append(std::string_view("\r\n"));
 
     for (const auto& header : response.headers()) {
-        const auto known_bit = response_header_known_bit(header);
+        const auto known_bit = http_response_header_access::known_bit(header);
         // HTTP/1 framing belongs exclusively to http1_response_head_plan. A handler
         // cannot override canonical chunked framing, invent Transfer-Encoding on
         // an HTTP/1.0 response, or attach Content-Length to a body-open
@@ -155,10 +106,7 @@ void emit_response_head(const http_response& response, raw_head_sink& sink_value
             known_bit == response_header_content_length) {
             continue;
         }
-        sink_value.append(header.name());
-        sink_value.append(std::string_view(": "));
-        sink_value.append(header.value());
-        sink_value.append(std::string_view("\r\n"));
+        emit_http1_field_line(sink_value, header.name(), header.value());
     }
 
     const auto known_bits = response_known_header_bits(response);
@@ -169,7 +117,8 @@ void emit_response_head(const http_response& response, raw_head_sink& sink_value
         sink_value.append(chunked_transfer_encoding_header);
     }
     if (flags.emit_content_length_) {
-        sink_value.append(std::string_view("Content-Length: "));
+        sink_value.append(content_length_name);
+        sink_value.append(std::string_view(": "));
         sink_value.append_unsigned(flags.canonical_content_length_);
         sink_value.append(std::string_view("\r\n"));
     }
@@ -204,9 +153,17 @@ void append_response_head(
         body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
         !auto_content_length_owned_by_writer &&
         (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
+    // A HEAD handler may describe the GET representation without producing it.
+    // Its empty suppressed body then has no length of its own, so the declared
+    // Content-Length is the only truthful value (RFC 9110 section 8.6).
+    const bool suppressed_empty_buffered_body = buffered != nullptr && body_plan.body_suppressed() &&
+                                                body_plan.status_allows_body() &&
+                                                body_plan.explicit_content_length_allowed() &&
+                                                buffered->content_length() == 0;
     const auto known_bits = response_known_header_bits(response);
     const auto declared_content_length =
-        explicit_content_length_allowed && (known_bits & response_header_content_length) != 0
+        (explicit_content_length_allowed || suppressed_empty_buffered_body) &&
+                (known_bits & response_header_content_length) != 0
             ? explicit_content_length(response)
             : std::nullopt;
     const response_head_flags flags{.protocol_version_ = plan.protocol_version(),
@@ -227,19 +184,21 @@ void append_response_head(
     const auto date_header = cached_date_header();
 
     // Measure the exact emitted head before touching reusable output storage.
-    // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
-    // field-section ceiling used by request parsing.
-    std::size_t head_bytes = 9;
-    add_response_head_bytes(head_bytes, http_status_code_token_size);
-    add_response_head_bytes(head_bytes, 1);
-    add_response_head_bytes(head_bytes, reason_phrase.size());
-    add_response_head_bytes(head_bytes, 2);
+    // This both bounds the unchecked raw stack sink and enforces the shared
+    // field-section rule used by request parsing.
+    http_field_section_budget head_budget;
+    const auto charge = [](bool fits) {
+        if (!fits) {
+            throw std::length_error("HTTP response head is too large");
+        }
+    };
+    charge(head_budget.add(9 + http_status_code_token_size + 1 + reason_phrase.size() + 2));
     std::size_t field_count = 0;
     response_field_state fields;
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
-        const auto known_bit = response_header_known_bit(header);
+        const auto known_bit = http_response_header_access::known_bit(header);
         if (known_bit == response_header_transfer_encoding ||
             known_bit == response_header_content_length) {
             continue;
@@ -250,34 +209,31 @@ void append_response_head(
             throw std::invalid_argument("invalid HTTP response header");
         }
         ++field_count;
-        add_response_head_bytes(head_bytes, header.name().size());
-        add_response_head_bytes(head_bytes, header.value().size());
-        add_response_head_bytes(head_bytes, 4);
+        charge(head_budget.add_field(header.name(), header.value()));
     }
     if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
         throw std::invalid_argument("HTTP Upgrade response requires Connection: Upgrade");
     }
     if ((known_bits & response_header_date) == 0 && !date_header.empty()) {
         ++field_count;
-        add_response_head_bytes(head_bytes, date_header.size());
+        charge(head_budget.add(date_header.size()));
     }
     if (emit_chunked_transfer_encoding) {
         ++field_count;
-        add_response_head_bytes(head_bytes, chunked_transfer_encoding_header.size());
+        charge(head_budget.add(chunked_transfer_encoding_header.size()));
     }
     if (flags.emit_content_length_) {
         ++field_count;
-        add_response_head_bytes(head_bytes, 16);
-        add_response_head_bytes(head_bytes, decimal_digits(flags.canonical_content_length_));
-        add_response_head_bytes(head_bytes, 2);
+        charge(head_budget.add_field(content_length_name.size(),
+            http_unsigned_decimal_size(flags.canonical_content_length_)));
     }
     if (field_count > max_http_header_fields) {
         throw std::length_error("too many HTTP response headers");
     }
-    add_response_head_bytes(head_bytes, 2);
+    charge(head_budget.add(2));
 
-    head.append_generated(head_bytes, [&](char* cursor_value) noexcept {
-        raw_head_sink sink_value{cursor_value};
+    head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
+        http_raw_wire_sink sink_value(cursor_value);
         emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags);
     });
 }
@@ -293,7 +249,10 @@ void append_http1_response_head(const http_response& response, http_response_hea
 
 void append_http1_response_trailers(
     std::pmr::string& output, const http_response_trailer_section& trailers) {
-    detail::append_http1_trailer_section(output, trailers);
+    detail::http_string_wire_sink sink(output);
+    for (const auto& trailer : trailers.fields()) {
+        detail::emit_http1_field_line(sink, trailer.name(), trailer.value());
+    }
 }
 
 }  // namespace ruvia

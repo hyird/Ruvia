@@ -39,8 +39,8 @@ const auto udp_observation = std::make_shared<udp_tunnel_observation>();
     return true;
 }();
 
-class udp_tunnel_routes final : public ruvia::controller<udp_tunnel_routes> {
-    RUVIA_ROUTES_BEGIN
+class udp_tunnel_routes final {
+    RUVIA_ROUTES_BEGIN(udp_tunnel_routes)
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/target.test/53/", echo);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/cancel.test/53/", delayed);
     RUVIA_GET("/udp-tunnel-sibling", sibling);

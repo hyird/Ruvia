@@ -5,7 +5,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
@@ -46,7 +45,7 @@ private:
         : headers_(resource),
           body_(resource) {}
     http_status_code status_{http_status::ok};
-    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> headers_;
+    std::pmr::vector<http_header> headers_;
     std::pmr::string body_;
 };
 

@@ -195,11 +195,7 @@ std::pmr::string detail::migration_checksum(
     }
 
     std::pmr::string hex(pmr_resource_or_default(resource));
-    hex.reserve(migration_checksum_size);
-    for (std::size_t i = 0; i < digest_size; ++i) {
-        hex.push_back(http_lower_hex_digit(digest[i] >> 4));
-        hex.push_back(http_lower_hex_digit(digest[i]));
-    }
+    http_append_lower_hex(hex, std::span<const unsigned char>(digest.data(), digest_size));
     return hex;
 }
 
@@ -278,7 +274,9 @@ private:
         }
 
         // PostgreSQL's advisory lock waits without a bound of its own; the
-        // session's lock_timeout is what ends that wait.
+        // session's lock_timeout is what ends that wait. It bounds only this
+        // wait: migration statements run on the same session and must keep the
+        // server's configured lock_timeout.
         std::pmr::string timeout_sql("SET lock_timeout TO '", resource);
         detail::append_db_number(timeout_sql, detail::postgres_lock_timeout_milliseconds(lock_timeout));
         timeout_sql.append("ms'");
@@ -286,6 +284,7 @@ private:
         std::array<db_value, 1> lock_params{db_value{lock_name}};
         (void)co_await handle.query("SELECT pg_advisory_lock(hashtextextended($1, 0))",
             std::span<const db_value>(lock_params));
+        (void)co_await handle.execute("RESET lock_timeout");
     }
 
     [[nodiscard]] static task<void> release_lock(

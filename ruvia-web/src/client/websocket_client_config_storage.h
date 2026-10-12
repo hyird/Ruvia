@@ -20,16 +20,6 @@
 
 namespace ruvia::detail {
 
-struct websocket_client_stored_header final {
-    websocket_client_stored_header(
-        std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
-        : name_(name, resource),
-          value_(value, resource) {}
-
-    std::pmr::string name_;
-    std::pmr::string value_;
-};
-
 // Owned in place by one websocket_client_state and never copied or moved: the
 // stored views borrow the strings above them.
 struct websocket_client_config_storage final {
@@ -48,7 +38,7 @@ struct websocket_client_config_storage final {
     std::pmr::string uri_host_;
     http_origin_view origin_;
     std::pmr::string target_;
-    std::pmr::vector<websocket_client_stored_header> headers_;
+    std::pmr::vector<http_header> headers_;
     std::pmr::vector<std::pmr::string> subprotocols_;
     std::pmr::vector<http_header_view> header_views_;
     std::pmr::vector<std::string_view> subprotocol_views_;
@@ -79,12 +69,12 @@ private:
         return scheme == websocket_scheme::wss ? http_origin_view::https(options) : http_origin_view::http(options);
     }
 
-    [[nodiscard]] static std::pmr::vector<websocket_client_stored_header> copy_headers(
+    [[nodiscard]] static std::pmr::vector<http_header> copy_headers(
         const websocket_client_config& source_value, std::pmr::memory_resource* resource) {
-        std::pmr::vector<websocket_client_stored_header> result_value(resource);
+        std::pmr::vector<http_header> result_value(resource);
         result_value.reserve(source_value.headers_.size());
         for (const auto& [name, value] : source_value.headers_) {
-            result_value.emplace_back(name, value, resource);
+            result_value.push_back(http_header::copy_of(name, value, resource));
         }
         return result_value;
     }
@@ -100,11 +90,11 @@ private:
     }
 
     [[nodiscard]] static std::pmr::vector<http_header_view> view_headers(
-        const std::pmr::vector<websocket_client_stored_header>& headers, std::pmr::memory_resource* resource) {
+        const std::pmr::vector<http_header>& headers, std::pmr::memory_resource* resource) {
         std::pmr::vector<http_header_view> result_value(resource);
         result_value.reserve(headers.size());
         for (const auto& header : headers) {
-            result_value.emplace_back(header.name_, header.value_);
+            result_value.emplace_back(header.name(), header.value());
         }
         return result_value;
     }
@@ -141,7 +131,9 @@ private:
           write_timeout_(source_value.write_timeout_),
           close_handshake_timeout_(source_value.close_handshake_timeout_),
           heartbeat_(normalize_websocket_heartbeat_config(source_value.heartbeat_)),
-          tls_(source_value.tls_, resource),
+          tls_(source_value.tls_,
+              source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
+              resource),
           tcp_(source_value.tcp_),
           user_agent_(source_value.user_agent_, resource) {
         validate_websocket_client_protocols_and_headers(header_views_, subprotocol_views_, user_agent_, deflate_);

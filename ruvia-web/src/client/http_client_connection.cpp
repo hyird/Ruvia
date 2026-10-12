@@ -15,7 +15,8 @@ constexpr std::size_t connection_read_buffer_initial_bytes = std::size_t{16} * 1
     return {.host_ = config.host_,
         .port_ = config.port_,
         .tls_ = config.scheme_ == http_scheme::https ? &config.tls_ : nullptr,
-        .tcp_ = config.tcp_};
+        .tcp_ = config.tcp_,
+        .alpn_ = client_alpn::http11};
 }
 
 }  // namespace
@@ -84,7 +85,12 @@ bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcep
 task<void> http_client_connection::ensure_connected(
     const operation_timeout& operation_timeout_value, stop_token stop_token_value) {
     if (connected_) {
-        co_return;
+        if (transport_.idle_open()) {
+            co_return;
+        }
+        // The peer retired the idle connection; reconnect instead of writing
+        // the request into a closed stream.
+        close();
     }
     transport_.reset_abort();
     generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;

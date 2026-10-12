@@ -8,13 +8,13 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
@@ -81,65 +81,11 @@ namespace ruvia::detail {
         [](std::string_view name) noexcept { return is_forbidden_response_trailer_name(name); });
 }
 
-// Name syntax is established by the field API or the wire parser's token scan.
-[[nodiscard]] inline bool response_trailer_content_valid(
-    std::string_view name, std::string_view value) noexcept {
-    return !is_forbidden_response_trailer_name(name) && is_valid_http_field_value(value);
-}
-
 // True if (name, value) is an acceptable HTTP/1.1 chunked response trailer.
 [[nodiscard]] inline bool response_trailer_field_valid(
     std::string_view name, std::string_view value) noexcept {
-    return is_valid_http_field_name(name) && response_trailer_content_valid(name, value);
-}
-
-// Visit a parsed HTTP/1 chunked response trailer block. The input is the bytes
-// between the terminal zero-size chunk and the empty line that ends the trailer
-// section; a final CRLF after the last field is also accepted for standalone
-// validation. Values are exposed after HTTP optional whitespace has been
-// stripped, matching the normalized public response-trailer contract.
-template <typename visitor_type>
-[[nodiscard]] inline bool visit_http_response_trailer_fields(
-    std::string_view trailers, visitor_type&& visitor) {
-    if (trailers.size() > max_http_header_bytes) {
-        return false;
-    }
-
-    std::size_t cursor_value = 0;
-    std::size_t field_count = 0;
-    while (cursor_value < trailers.size()) {
-        if (field_count == max_http_header_fields) {
-            return false;
-        }
-        ++field_count;
-
-        const auto line_end = trailers.find("\r\n", cursor_value);
-        const auto line = line_end == std::string_view::npos
-                              ? trailers.substr(cursor_value)
-                              : trailers.substr(cursor_value, line_end - cursor_value);
-        // Finding the separator also proves that the complete name is a token.
-        const auto colon = http_token_prefix_size(line);
-        if (colon == 0 || colon == line.size() || line[colon] != ':') {
-            return false;
-        }
-
-        const auto name = line.substr(0, colon);
-        const auto value = http_trim_ows(line.substr(colon + 1));
-        if (!response_trailer_content_valid(name, value) || !visitor(name, value)) {
-            return false;
-        }
-
-        if (line_end == std::string_view::npos) {
-            return true;
-        }
-        cursor_value = line_end + 2;
-    }
-    return true;
-}
-
-[[nodiscard]] inline bool http_response_trailer_block_valid(std::string_view trailers) {
-    return visit_http_response_trailer_fields(
-        trailers, [](std::string_view, std::string_view) noexcept { return true; });
+    return is_valid_http_header_name(name) && !is_forbidden_response_trailer_name(name) &&
+           is_valid_http_header_value(value);
 }
 
 class http_response_trailer_section_result;
@@ -219,10 +165,10 @@ http_response_trailer_section_result check_http_response_trailer_section(headers
     if (trailers.size() > max_http_header_fields) {
         return http_response_trailer_section_result(http_response_trailer_section_failure());
     }
-    http_header_section_size section_size;
+    auto section_size = http_trailer_section_budget();
     for (const auto& trailer : trailers) {
         if (!response_trailer_field_valid(trailer.name(), trailer.value()) ||
-            !section_size.add(trailer.name(), trailer.value())) {
+            !section_size.add_field(trailer.name(), trailer.value())) {
             return http_response_trailer_section_result(http_response_trailer_section_failure());
         }
     }

@@ -156,12 +156,14 @@ enum class http_response_header_transfer : std::uint8_t {
     apply,
 };
 
+struct http_response_header_options {
+    http_response_header_mode mode_{http_response_header_mode::replace};
+};
+
 namespace detail {
 
 struct http_response_body_access;
-struct http_response_file_access;
 struct http_response_header_access;
-struct http_response_headers_access;
 struct http_response_header_state_access;
 
 }  // namespace detail
@@ -195,11 +197,21 @@ private:
 static_assert(std::is_trivially_copyable_v<http_response_header>);
 static_assert(sizeof(http_response_header) <= 24);
 
+// Owns a response header block: descriptor storage, the known-header index, every
+// field mutation rule, and descriptor staging. A clone is a header-only
+// transaction: edit it around external operations, then publish it with
+// http_response::commit_headers.
 class http_response_headers final {
 public:
     using value_type = http_response_header;
     using const_iterator = const http_response_header*;
 
+    // Moving transfers every descriptor and the index. The source keeps its
+    // resource and remains usable, independent, and empty.
+    http_response_headers(http_response_headers&& other) noexcept;
+    http_response_headers(const http_response_headers&) = delete;
+    http_response_headers& operator=(const http_response_headers&) = delete;
+    http_response_headers& operator=(http_response_headers&&) = delete;
     ~http_response_headers();
 
     [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -230,23 +242,40 @@ public:
         return size() == 0;
     }
 
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const&& = delete;
+    // Inputs may borrow current header storage. Refresh views after mutation.
+    void header(std::string_view key, std::string_view value);
+    void header(std::string_view key, std::string_view value, http_response_header_options options);
+    // Name and value may be retained as borrowed views without copying. Keep
+    // their bytes valid and unchanged while this block or any clone retains them.
+    void header_stable_view(std::string_view key, std::string_view value);
+    void remove_header(std::string_view key);
+    // Replace cookies with the same name, Domain/Path scope, and Partitioned
+    // state; partitioned and unpartitioned cookies may coexist.
+    void set_cookie(const set_cookie_plan& plan);
+    // Owned bytes are copied so either block may change or be destroyed;
+    // stable views are shared. Reserves room for additional_headers more fields.
+    [[nodiscard]] http_response_headers clone(std::size_t additional_headers = 0) const;
+
 private:
     friend class http_response;
-    friend struct detail::http_response_headers_access;
+    friend struct detail::http_response_header_state_access;
 
     using iterator = http_response_header*;
 
-    http_response_headers(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
-
-    http_response_headers(const http_response_headers&) = delete;
-    http_response_headers& operator=(const http_response_headers&) = delete;
-    http_response_headers(http_response_headers&& other) noexcept;
-    http_response_headers& operator=(http_response_headers&&) = delete;
-
+    static constexpr std::size_t known_header_count = 22;
     static constexpr std::size_t inline_capacity = 8;
     struct inline_storage_type {
         alignas(http_response_header) std::byte bytes_[sizeof(http_response_header)];
     };
+
+    // Stages up to `capacity` owned descriptors without touching the table and
+    // publishes them later without allocation or failure.
+    template <std::size_t capacity>
+    class descriptor_stage;
+
+    http_response_headers(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
 
     [[nodiscard]] iterator begin() & noexcept {
         return data();
@@ -256,6 +285,41 @@ private:
         return data() + size();
     }
 
+    // Header-only transaction publication. `staged` must be a clone of a block
+    // sharing this resource; it is left empty and independent.
+    void commit(http_response_headers&& staged) noexcept;
+    void transfer_from(const http_response_headers& source, http_response_header_transfer mode);
+
+    // Field rules and the known-header index.
+    void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
+    void rebuild_known_header_index() noexcept;
+    [[nodiscard]] std::string_view known_header_value(std::uint32_t bit) const noexcept;
+    [[nodiscard]] http_response_header* find_header_for_update(
+        std::string_view key, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] const http_response_header* find_header_for_read(
+        std::string_view key, std::uint32_t known_bit) const noexcept;
+    http_response_header& prepare_header_value_storage(
+        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
+    void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);
+    void append_header_validated(
+        std::string_view key, std::string_view value, std::uint32_t known_bit);
+    http_response_header& append_header_uninitialized_value(
+        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
+    [[nodiscard]] http_response_header& collapse_response_headers(
+        http_response_header& retained, std::uint32_t known_bit) noexcept;
+    bool remove_header_validated(std::string_view key, std::uint32_t known_bit) noexcept;
+    void upsert_set_cookie_header_validated(std::string_view value);
+    [[nodiscard]] http_response_header* find_set_cookie_header(std::string_view wire_prefix,
+        std::string_view cookie_name, bool has_path, std::string_view path,
+        std::string_view domain, bool partitioned) noexcept;
+    void erase_later_set_cookie_headers(http_response_header& retained,
+        std::string_view cookie_name, bool has_path, std::string_view path,
+        std::string_view domain, bool partitioned) noexcept;
+    void allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods);
+    void set_content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
+    void set_content_range_unsatisfied(std::uint64_t size);
+
+    // Descriptor storage.
     [[nodiscard]] http_response_header* inline_data() noexcept;
     [[nodiscard]] const http_response_header* inline_data() const noexcept;
     [[nodiscard]] http_response_header* data() noexcept;
@@ -282,6 +346,9 @@ private:
     void assign_stable_view(http_response_header& header, std::string_view name, std::string_view value,
         std::uint32_t known_bit);
     void release_header(http_response_header& header) noexcept;
+    // Drops every header from new_end onward; the dropped headers must
+    // already be released.
+    void truncate(iterator new_end) noexcept;
     void reserve(std::size_t count);
     http_response_header& append_prepared_header(http_response_header header) noexcept;
     void clear() noexcept;
@@ -293,14 +360,14 @@ private:
     std::array<inline_storage_type, inline_capacity> inline_;
     std::size_t size_{0};
     bool spilled_{false};
+    std::uint32_t known_header_bits_{0};
+    std::array<std::int16_t, known_header_count> known_header_indexes_{};
 };
 
+// Composes one header block with one body. Header rules belong to
+// http_response_headers; this type only publishes body and headers together.
 class http_response final {
 public:
-    struct header_options_type {
-        http_response_header_mode mode_{http_response_header_mode::replace};
-    };
-
     struct options_type final {
         std::pmr::memory_resource* resource_{nullptr};
     };
@@ -323,30 +390,23 @@ public:
     // A generic http_response is always final (200..599). Interim 1xx progress
     // messages use http_interim_response_head; 101 uses a dedicated protocol driver.
     void status(http_status_code status_code);
-    // Inputs may borrow current header storage. Refresh views after mutation.
+    // Header mutations follow http_response_headers.
     void header(std::string_view key, std::string_view value);
-    void header(std::string_view key, std::string_view value, header_options_type options);
-    // Use the stable-view path for a header; name and value may be retained as
-    // borrowed views without copying. Keep their bytes valid and unchanged while
-    // this response or any header clone retains them.
+    void header(std::string_view key, std::string_view value, http_response_header_options options);
     void header_stable_view(std::string_view key, std::string_view value);
     // Format Allow from known-method bits followed by extension method values.
     // Extension methods must be nonempty HTTP tokens and may borrow current headers.
     // The resulting field is owned by this response; refresh views after mutation.
     void allow_methods(
         std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
-    // Remove a header set by an earlier step. header(key, std::nullopt) meant
-    // deletion; removal now has its own named entry point.
     void remove_header(std::string_view key);
-    // Replace cookies with the same name, Domain/Path scope, and Partitioned
-    // state; partitioned and unpartitioned cookies may coexist.
     void set_cookie(const set_cookie_plan& plan);
     // Copy the source's application headers with RFC-aware append and cookie semantics.
     // Assignment preserves the destination Content-Type.
     void transfer_headers_from(const http_response& source, http_response_header_transfer mode);
-    // Header-only staging supports multi-step publication around external operations.
-    [[nodiscard]] http_response clone_headers_for_transaction(std::size_t additional_headers = 0) const;
-    void commit_headers_from(http_response&& staged) noexcept;
+    // Publish a header-only transaction staged from headers().clone() without
+    // allocation. The staged block is left empty and independent.
+    void commit_headers(http_response_headers&& staged) noexcept;
     // Borrowed byte representation; file and empty bodies return an empty view.
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
@@ -382,56 +442,11 @@ public:
 private:
     friend std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response, http_protocol_version);
     friend struct detail::http_response_body_access;
-    friend struct detail::http_response_file_access;
-    friend struct detail::http_response_header_state_access;
 
-    static constexpr std::size_t known_header_count = 22;
-
-    class encoded_header_update;
     void apply_encoded_representation(std::string_view content_encoding, std::pmr::string* body);
-
-    void set_header_unsigned(std::string_view key, std::uint64_t value, std::uint32_t known_bit);
-    void set_content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
-    void set_content_range_unsatisfied(std::uint64_t size);
-    void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);
-    void append_header_validated(
-        std::string_view key, std::string_view value, std::uint32_t known_bit);
-    http_response_header& append_header_uninitialized_value(
-        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
-    void upsert_set_cookie_header_validated(std::string_view value);
-    [[nodiscard]] http_response_header* find_set_cookie_header(std::string_view wire_prefix,
-        std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain, bool partitioned) noexcept;
-    void erase_later_set_cookie_headers(http_response_header& retained,
-        std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain, bool partitioned) noexcept;
-    [[nodiscard]] http_response_header& collapse_response_headers(
-        http_response_header& retained, std::uint32_t known_bit) noexcept;
-    bool remove_header_validated(std::string_view key, std::uint32_t known_bit) noexcept;
-    void rebuild_known_header_index() noexcept;
     http_response(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
-    void set_file_body(std::filesystem::path file, std::uint64_t size);
-    void set_file_body(
-        std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
-    void set_file_body(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length, http_response_file_identity identity);
-    void set_borrowed_file_body(const std::filesystem::path& file, std::uint64_t size);
-    void set_borrowed_file_body(const std::filesystem::path& file, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length);
-    void set_borrowed_native_file_body(const http_native_path_char_type* file, std::uint64_t size);
-    void set_borrowed_native_file_body(const http_native_path_char_type* file, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length);
-    [[nodiscard]] std::string_view known_header_value(std::uint32_t bit) const noexcept;
-    [[nodiscard]] http_response_header* find_header_for_update(
-        std::string_view key, std::uint32_t known_bit) noexcept;
-    [[nodiscard]] const http_response_header* find_header_for_read(
-        std::string_view key, std::uint32_t known_bit) const noexcept;
-    http_response_header& prepare_header_value_storage(
-        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
-    void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
+
     http_status_code status_code_{http_status::ok};
-    std::uint32_t known_header_bits_{0};
-    std::array<std::int16_t, known_header_count> known_header_indexes_{};
     http_response_headers headers_;
     detail::http_response_body body_;
 };

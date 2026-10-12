@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <array>
+#include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -173,4 +175,20 @@ RUVIA_TEST(http1_streaming_request_finish_accepts_output_alias_at_trailer_limit)
     }
     RUVIA_CHECK(writer.commit_finish().index() == 0);
     RUVIA_CHECK(writer.finished());
+}
+
+RUVIA_TEST(http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_output) {
+    auto writer = chunked_request_writer();
+    // The descriptor array itself lives where the trailer section is written, so
+    // every descriptor must be consumed before the first output byte lands.
+    alignas(ruvia::http_header_view) std::array<char, 256> buffer{};
+    auto* const descriptors = ::new (static_cast<void*>(buffer.data()))
+        ruvia::http_header_view[2]{{"X-One", "first"}, {"X-Two", "second"}};
+    const std::span<const ruvia::http_header_view> trailers(descriptors, 2);
+    const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
+    RUVIA_CHECK(planned.index() == 0);
+    if (planned.index() == 0) {
+        RUVIA_CHECK_EQ(std::get<0>(planned), std::string_view("0\r\nX-One: first\r\nX-Two: second\r\n\r\n"));
+    }
+    RUVIA_CHECK(writer.commit_finish().index() == 0);
 }

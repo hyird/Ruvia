@@ -1,5 +1,6 @@
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -198,4 +199,60 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
     }
     RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
+    ruvia::test::counting_memory_resource resource;
+    const std::string text(160, 'f');
+    const auto rejects = [](auto&& operation) {
+        try {
+            operation();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    {
+        resource_node root({.resource_ = &resource});
+        root.set<"name">(text);
+        auto& child_value = root.ensure<"children">().emplace();
+        child_value.set<"name">("child");
+        auto& grandchildren = child_value.ensure<"children">();
+        grandchildren.emplace().set<"name">("grandchild");
+
+        RUVIA_CHECK(rejects([&] { child_value = std::move(root); }));
+        RUVIA_CHECK(rejects([&] { grandchildren = std::move(root.ensure<"children">()); }));
+        RUVIA_CHECK(rejects([&] { grandchildren.push_back(std::move(root)); }));
+        RUVIA_CHECK(rejects([&] { root.ensure<"children">().emplace(std::move(root)); }));
+        RUVIA_CHECK(rejects([&] { child_value.set<"children">(std::move(root.ensure<"children">())); }));
+
+        RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));
+        RUVIA_CHECK_EQ(root.get<"children">()->size(), std::size_t{1});
+        RUVIA_CHECK(&root.get<"children">()->front() == &child_value);
+        RUVIA_CHECK_EQ(child_value.get<"name">().view(), std::string_view("child"));
+        RUVIA_CHECK_EQ(grandchildren.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(grandchildren.front().get<"name">().view(), std::string_view("grandchild"));
+
+        // A field reassigned from its own value does not own its destination.
+        root.set<"children">(std::move(root.ensure<"children">()));
+        RUVIA_CHECK_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("child"));
+
+        resource_dense_node dense({.resource_ = &resource});
+        dense.set<"name">(text);
+        auto& dense_children = dense.ensure<"children">();
+        auto& dense_child = dense_children.emplace_back();
+        dense_child.set<"name">("child");
+        auto& dense_grandchildren = dense_child.ensure<"children">();
+
+        RUVIA_CHECK(rejects([&] { dense_child = std::move(dense); }));
+        RUVIA_CHECK(rejects([&] { dense_grandchildren = std::move(dense_children); }));
+        RUVIA_CHECK(rejects([&] { dense_grandchildren.emplace_back(std::move(dense)); }));
+        RUVIA_CHECK(rejects([&] { dense_children.emplace_back(std::move(dense)); }));
+
+        RUVIA_CHECK_EQ(dense.get<"name">().view(), std::string_view(text));
+        RUVIA_CHECK_EQ(dense_children.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(dense_child.get<"name">().view(), std::string_view("child"));
+        RUVIA_CHECK(dense_grandchildren.empty());
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

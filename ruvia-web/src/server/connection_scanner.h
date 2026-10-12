@@ -37,8 +37,10 @@ private:
     struct impl_type;
 
 public:
-    // Product-owned checks run on the worker during each scan.
+    // Product-owned callbacks. A tick runs on the worker during each scan; a
+    // drain callback runs on the worker when draining reaches the connection.
     using periodic_check_type = void (*)(void*, std::int64_t) noexcept;
+    using drain_check_type = void (*)(void*) noexcept;
 
     enum class phase_type : std::uint8_t {
         idle,
@@ -70,12 +72,15 @@ public:
         periodic_check_registration_type* next_{nullptr};
         void* target_{nullptr};
         periodic_check_type tick_{nullptr};
+        drain_check_type drain_{nullptr};
     };
 
     // Connection-owned node. touch()/set_phase() use the scanner's
-    // cached coarse time, not a per-request clock read. Destruction detaches the
-    // entry and its checks, including during a periodic callback. Destroying the
-    // scanner detaches its entries before releasing its timestamp storage.
+    // cached coarse time, not a per-request clock read; the scanner advances it
+    // on every tick and discounts its one-interval lag before timing out.
+    // Destruction detaches the entry and its checks, including during a periodic
+    // callback. Destroying the scanner detaches its entries before releasing
+    // its timestamp storage.
     class entry_type final {
     public:
         entry_type() noexcept = default;
@@ -85,16 +90,31 @@ public:
         entry_type(entry_type&&) = delete;
         entry_type& operator=(entry_type&&) = delete;
         void touch() noexcept;
+        // Not for long_lived: an upgrade enters that phase via enter_long_lived().
+        // Ends a request-head read started by read_request_head().
         void set_phase(phase_type next_phase) noexcept;
+        // Reads the head of the connection's next request, timed by
+        // `timeout_phase`. No request is admitted until a later set_phase(), so
+        // draining closes the connection meanwhile; touch() keeps the read open.
+        void read_request_head(phase_type timeout_phase) noexcept;
+        // Moves an established upgrade into the untimed long_lived phase. Once
+        // the scanner drains, the upgrade is not admitted and false tells the
+        // caller not to start the session's handler: an upgrade with a drain
+        // callback is notified to end gracefully, any other has its socket closed.
+        [[nodiscard]] bool enter_long_lived() noexcept;
         [[nodiscard]] std::int64_t last_active_ms() const noexcept;
-        void register_periodic_check(
-            periodic_check_registration_type& registration, void* target, periodic_check_type tick) noexcept;
+        // `drain` is optional: a long-lived connection uses it to end itself
+        // gracefully once draining starts.
+        void register_periodic_check(periodic_check_registration_type& registration, void* target,
+            periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
 
     private:
         friend class connection_scanner;
         friend class periodic_check_registration_type;
         friend struct impl_type;
         [[nodiscard]] bool linked() const noexcept;
+        [[nodiscard]] bool has_drain_check() const noexcept;
+        void notify_drain() noexcept;
         void remove_periodic_check(periodic_check_registration_type& registration) noexcept;
         void detach_periodic_checks() noexcept;
         asio::ip::tcp::socket* socket_{nullptr};
@@ -105,6 +125,7 @@ public:
         std::int64_t last_active_ms_{0};
         std::int64_t phase_started_ms_{0};
         phase_type phase_{phase_type::idle};
+        bool reading_request_head_{false};
         periodic_check_registration_type* periodic_checks_{nullptr};
         periodic_check_registration_type* periodic_scan_next_{nullptr};
     };
@@ -136,6 +157,13 @@ public:
     void start();
     void stop() noexcept;
     void close_all() noexcept;
+    // Starts draining: closes connections that have no admitted request (those
+    // waiting for or still reading a request head), notifies each long-lived
+    // upgrade's drain callbacks, and from then on refuses every upgrade as it
+    // reaches enter_long_lived(). Request exchanges already admitted, and
+    // long-lived connections without a drain callback, keep running until the
+    // worker stops.
+    void drain() noexcept;
 
 private:
     friend class entry_type;
@@ -160,6 +188,7 @@ struct connection_scanner::impl_type final {
     void register_entry(entry_type& entry, asio::ip::tcp::socket& socket);
     void unregister_entry(entry_type& entry) noexcept;
     void close_all() noexcept;
+    void drain() noexcept;
     void periodic_check_added() noexcept;
     void periodic_check_removed() noexcept;
     [[nodiscard]] bool has_scanning_work() const noexcept;
@@ -188,6 +217,8 @@ struct connection_scanner::impl_type final {
     // Worker-local: set only by the timer callback while scan() runs callbacks.
     bool scanning_{false};
     bool release_after_scan_{false};
+    // Worker-local; set once by drain() and never cleared.
+    bool draining_{false};
 };
 
 }  // namespace ruvia::detail

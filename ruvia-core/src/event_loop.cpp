@@ -26,21 +26,29 @@ void report_through_loop(const std::weak_ptr<detail::event_loop_state>& loop, st
     report_unhandled_failure(context, std::move(failure));
 }
 
+}  // namespace
+
+namespace detail {
+
 // The callback owner is kept alive by the completion handler until both the
 // returned task frame and its completion chain have retired.
-class event_loop_stop_listener final : public detail::worker_shutdown_listener,
-                                       public std::enable_shared_from_this<event_loop_stop_listener> {
+class event_loop_stop_listener final : public std::enable_shared_from_this<event_loop_stop_listener> {
 public:
     event_loop_stop_listener(worker_handle worker_value, asio::io_context::executor_type executor,
-        move_only_function<task<void>()> callback_value, std::weak_ptr<detail::event_loop_state> loop,
-        std::shared_ptr<detail::event_loop_retirement> retirement)
+        move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop,
+        std::shared_ptr<event_loop_retirement> retirement)
         : worker_(std::move(worker_value)),
           executor_(std::move(executor)),
           callback_(std::move(callback_value)),
           loop_(std::move(loop)),
           retirement_(std::move(retirement)) {}
 
-    void worker_stopping() noexcept override {
+    void install_shutdown_hook() {
+        worker_handle_access::register_shutdown_hook(
+            worker_, shared_from_this(), &event_loop_stop_listener::shutdown_hook_);
+    }
+
+    void worker_stopping() noexcept {
         if (!callback_) {
             return;
         }
@@ -51,7 +59,7 @@ public:
             return;
         }
         try {
-            detail::worker_handle_access::defer(worker_,
+            worker_handle_access::defer(worker_,
                 [self = std::move(self)]() mutable noexcept { self->start_callback(std::move(self)); });
         } catch (...) {
             report(std::current_exception());
@@ -78,29 +86,28 @@ private:
         }
 
         try {
-            detail::async_start_task(std::move(*task), asio::bind_executor(executor_,
-                                                           [self = std::move(self)](detail::task_completion_result<void> result_value) mutable {
-                                                               if (const auto* failure = result_value.failure()) {
-                                                                   self->report(failure->exception());
-                                                               }
-                                                               self->retirement_->finish();
-                                                           }));
+            async_start_task(std::move(*task),
+                asio::bind_executor(executor_,
+                    [self = std::move(self)](task_completion_result<void> result_value) mutable {
+                        if (const auto* failure = result_value.failure()) {
+                            self->report(failure->exception());
+                        }
+                        self->retirement_->finish();
+                    }));
         } catch (...) {
             report(std::current_exception());
             std::terminate();
         }
     }
 
+    // First member: unlinks from the worker registry after every other member is gone.
+    worker_shutdown_hook shutdown_hook_;
     worker_handle worker_;
     asio::io_context::executor_type executor_;
     move_only_function<task<void>()> callback_;
-    std::weak_ptr<detail::event_loop_state> loop_;
-    std::shared_ptr<detail::event_loop_retirement> retirement_;
+    std::weak_ptr<event_loop_state> loop_;
+    std::shared_ptr<event_loop_retirement> retirement_;
 };
-
-}  // namespace
-
-namespace detail {
 
 event_loop_state::event_loop_state(std::size_t queue_capacity)
     : context_ownership_(std::in_place_type<worker_runtime>,
@@ -115,8 +122,8 @@ event_loop_state::event_loop_state(asio::io_context& external_context, std::size
       executor_(external_context.get_executor()),
       runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
 
-void event_loop_state::install_lifecycle_listener() {
-    worker_handle_access::register_shutdown_listener(runtime_.handle(), shared_from_this());
+void event_loop_state::install_shutdown_hook() {
+    worker_handle_access::register_shutdown_hook(runtime_.handle(), shared_from_this(), &event_loop_state::shutdown_hook_);
 }
 
 void event_loop_state::worker_stopping_complete() noexcept {
@@ -175,7 +182,9 @@ void event_loop_state::stop() noexcept {
                 const auto worker_value = idle_state->runtime_.handle();
                 auto finalization_keep_alive = std::move(idle_state);
                 try {
-                    worker_handle_access::defer(worker_value,
+                    // A detached context ran shutdown_external_context(), which
+                    // already abandoned the stop chain this would finalize.
+                    (void)worker_handle_access::defer_if_attached(worker_value,
                         [state_value = std::move(finalization_keep_alive)] { state_value->finalize_stop(); });
                 } catch (...) {
                     failure_owner->fail_teardown_start(std::current_exception());
@@ -220,7 +229,7 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 }  // namespace detail
 
 event_loop_stop_registration::event_loop_stop_registration(
-    std::shared_ptr<detail::worker_shutdown_listener> listener_value) noexcept
+    std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept
     : listener_(std::move(listener_value)) {}
 
 bool event_loop_stop_registration::valid() const noexcept {
@@ -328,10 +337,10 @@ event_loop_stop_registration event_loop::register_stop_callback(
     if (!state_->runtime_.handle().accepting()) {
         throw std::runtime_error("cannot register a stop callback on a stopping event loop");
     }
-    auto listener_value = std::make_shared<event_loop_stop_listener>(state_->runtime_.handle(),
+    auto listener_value = std::make_shared<detail::event_loop_stop_listener>(state_->runtime_.handle(),
         state_->executor_, std::move(callback_value), state_,
         state_->retirement_);
-    detail::worker_handle_access::register_shutdown_listener(state_->runtime_.handle(), listener_value);
+    listener_value->install_shutdown_hook();
     return event_loop_stop_registration(std::move(listener_value));
 }
 

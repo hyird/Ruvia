@@ -39,10 +39,7 @@ struct forwarded_client final {
 // A bare IPv6 literal has colons of its own, so only a bracketed form or a
 // single trailing colon can carry a port.
 [[nodiscard]] inline std::string_view forwarded_node_address(std::string_view node_value) noexcept {
-    node_value = ::ruvia::http_trim_ows(node_value);
-    if (node_value.size() >= 2 && node_value.front() == '"' && node_value.back() == '"') {
-        node_value = node_value.substr(1, node_value.size() - 2);
-    }
+    node_value = ::ruvia::http_trim_quoted_field_value(::ruvia::http_trim_ows(node_value));
     if (!node_value.empty() && node_value.front() == '[') {
         const auto close = node_value.find(']');
         return close == std::string_view::npos ? std::string_view{} : node_value.substr(1, close - 1);

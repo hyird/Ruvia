@@ -22,6 +22,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/multipart_reader.h"
@@ -39,6 +40,9 @@ struct body_lane_observation final {
     std::atomic<bool> overlap_rejected_{};
     std::atomic<bool> multipart_eof_{};
     std::atomic<bool> multipart_overlap_rejected_{};
+    std::atomic<bool> truncated_read_failed_{};
+    std::atomic<bool> truncated_reread_rejected_{};
+    std::atomic<bool> truncated_reread_yielded_{};
 };
 
 const auto body_lane_observed = std::make_shared<body_lane_observation>();
@@ -47,10 +51,14 @@ const auto body_lane_observed = std::make_shared<body_lane_observation>();
     return true;
 }();
 
-class body_lane_routes final : public ruvia::controller<body_lane_routes> {
-    RUVIA_ROUTES_BEGIN
+class body_lane_routes final {
+    RUVIA_ROUTES_BEGIN(body_lane_routes)
     RUVIA_POST_STREAM("/server-lazy-body-read", read);
     RUVIA_POST_STREAM("/server-lazy-multipart-read", read_multipart);
+    RUVIA_POST_STREAM("/server-truncated-body-reread", reread_truncated);
+    RUVIA_POST_STREAM("/server-small-chunk-body", read_small_chunks);
+    RUVIA_GET("/server-small-chunk-next", small_chunk_next);
+    RUVIA_POST("/server-pipelined-echo", pipelined_echo);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
@@ -112,6 +120,41 @@ class body_lane_routes final : public ruvia::controller<body_lane_routes> {
         }
         observed.multipart_eof_ = true;
         co_return context_value.text(std::move(body));
+    }
+
+    ruvia::task<ruvia::http_response> reread_truncated(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& reader = context_value.req().get_body_reader();
+        try {
+            static_cast<void>(co_await reader.read());
+        } catch (const ruvia::http_protocol_error&) {
+            observed.truncated_read_failed_ = true;
+        }
+        try {
+            observed.truncated_reread_yielded_ = (co_await reader.read()).has_value();
+        } catch (const std::logic_error&) {
+            observed.truncated_reread_rejected_ = true;
+        }
+        co_return context_value.text("reread-observed");
+    }
+
+    ruvia::task<ruvia::http_response> read_small_chunks(ruvia::context& context_value) {
+        auto& reader = context_value.req().get_body_reader();
+        std::pmr::string body(context_value.allocator<char>());
+        while (const auto chunk = co_await reader.text()) {
+            body.append(*chunk);
+        }
+        body.push_back(';');
+        body.append(context_value.req().trailer("X-Sum").value_or("missing"));
+        co_return context_value.text(std::move(body));
+    }
+
+    ruvia::task<ruvia::http_response> small_chunk_next(ruvia::context& context_value) {
+        co_return context_value.text("next");
+    }
+
+    ruvia::task<ruvia::http_response> pipelined_echo(ruvia::context& context_value) {
+        co_return context_value.text(co_await context_value.req().text());
     }
 };
 
@@ -188,9 +231,89 @@ void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
     }
 }
 
+// Writes `head`, waits for `100 Continue` when `await_continue` is set, writes
+// `body`, half-closes when `shutdown_send` is set, and returns every byte the
+// server sends until it closes the connection.
+std::string exchange_raw_request(
+    std::string_view head, std::string_view body, bool await_continue, bool shutdown_send) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    std::string response;
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                ruvia::close_socket(client);
+            }
+        });
+        try {
+            const auto write_all = [&](std::string_view bytes) -> ruvia::task<void> {
+                const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(bytes), std::move(handler));
+                });
+                if (sent.error_code()) {
+                    throw std::system_error(sent.error_code());
+                }
+            };
+            co_await write_all(head);
+            if (await_continue) {
+                std::string informational;
+                char byte{};
+                while (!informational.ends_with("\r\n\r\n")) {
+                    const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                        client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                    });
+                    if (received.error_code()) {
+                        throw std::system_error(received.error_code());
+                    }
+                    informational.push_back(byte);
+                }
+                if (!informational.starts_with("HTTP/1.1 100 ")) {
+                    throw std::runtime_error("expected 100 Continue before the request body");
+                }
+            }
+            co_await write_all(body);
+            if (shutdown_send) {
+                client.shutdown(asio::ip::tcp::socket::shutdown_send);
+            }
+            std::array<char, 1024> buffer;
+            for (;;) {
+                const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(buffer), std::move(handler));
+                });
+                if (received.error_code() == asio::error::eof) {
+                    break;
+                }
+                if (received.error_code()) {
+                    throw std::system_error(received.error_code());
+                }
+                response.append(buffer.data(), received.result());
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        static_cast<void>(watchdog.cancel());
+        ruvia::close_socket(client);
+        attachment.stop();
+    };
+    auto done = attachment.loop().start(run());
+    attachment.run();
+    done.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    return response;
+}
+
 }  // namespace request_body_limits_test
 
 using request_body_limits_test::body_lane_observed;
+using request_body_limits_test::exchange_raw_request;
 using request_body_limits_test::exercise_lazy_body_reads;
 
 RUVIA_TEST(web_request_decode_accepts_gzip_content) {
@@ -237,6 +360,95 @@ RUVIA_TEST(multipart_request_cold_reads_preserve_parser_state_after_started_over
     exercise_lazy_body_reads(ruvia_ctx, "/server-lazy-multipart-read", body, "field:value");
     RUVIA_CHECK(body_lane_observed->multipart_eof_);
     RUVIA_CHECK(body_lane_observed->multipart_overlap_rejected_);
+}
+
+RUVIA_TEST(streamed_request_body_stays_failed_after_truncated_read) {
+    body_lane_observed->truncated_read_failed_ = false;
+    body_lane_observed->truncated_reread_rejected_ = false;
+    body_lane_observed->truncated_reread_yielded_ = false;
+    const auto response = exchange_raw_request(
+        "POST /server-truncated-body-reread HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\n", {},
+        false, true);
+    RUVIA_CHECK(body_lane_observed->truncated_read_failed_);
+    RUVIA_CHECK(body_lane_observed->truncated_reread_rejected_);
+    RUVIA_CHECK(!body_lane_observed->truncated_reread_yielded_);
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    // The body was never consumed, so the connection cannot be reused.
+    RUVIA_CHECK(response.find("\r\nConnection: close\r\n") != std::string::npos);
+    RUVIA_CHECK(response.ends_with("reread-observed"));
+}
+
+RUVIA_TEST(streamed_chunked_body_of_small_chunks_keeps_trailers_and_pipeline) {
+    // The body follows 100 Continue, so every chunk arrives through socket
+    // reads after the head, with chunks split across read boundaries.
+    constexpr std::size_t chunk_count = 3000;
+    std::string expected;
+    std::string body;
+    for (std::size_t index = 0; index < chunk_count; ++index) {
+        const auto value = static_cast<char>('a' + index % 26);
+        expected.push_back(value);
+        body.append("1\r\n");
+        body.push_back(value);
+        body.append("\r\n");
+    }
+    body.append("0\r\nX-Sum: ok\r\n\r\n");
+    body.append("GET /server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    const auto response = exchange_raw_request(
+        "POST /server-small-chunk-body HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n"
+        "Expect: 100-continue\r\n\r\n",
+        body, true, false);
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    const auto first_end = response.find(expected + ";ok");
+    RUVIA_CHECK(first_end != std::string::npos);
+    const auto second = response.find("HTTP/1.1 200 ", first_end);
+    RUVIA_CHECK(second != std::string::npos);
+    RUVIA_CHECK(response.ends_with("next"));
+}
+
+RUVIA_TEST(buffered_routes_answer_a_pipelined_burst_in_order) {
+    // One write carries every request, so each buffered-route response is
+    // prepared while the next requests still sit behind it in the read buffer,
+    // and the echoed bodies borrow that buffer until the response owns them.
+    const auto response = exchange_raw_request(
+        "GET /server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "POST /server-pipelined-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 6\r\n\r\nfirst!"
+        "POST /server-pipelined-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\n\r\nsecond!"
+        "GET /server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        {}, false, false);
+    std::size_t position = 0;
+    for (const std::string_view body : {"next", "first!", "second!", "next"}) {
+        position = response.find("HTTP/1.1 200 ", position);
+        RUVIA_CHECK(position != std::string::npos);
+        if (position == std::string::npos) {
+            return;
+        }
+        position = response.find("\r\n\r\n", position);
+        RUVIA_CHECK(position != std::string::npos);
+        if (position == std::string::npos) {
+            return;
+        }
+        position += 4;
+        RUVIA_CHECK_EQ(std::string_view(response).substr(position, body.size()), body);
+    }
+    RUVIA_CHECK_EQ(position + 4, response.size());
+}
+
+RUVIA_TEST(server_rejects_absolute_form_targets_outside_http_schemes) {
+    // A front proxy that only recognises http(s) absolute URIs must not see a
+    // different target than the one routed here, so other schemes are a 400.
+    for (const std::string_view head : {
+             "GET ftp://evil/server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\n\r\n",
+             "GET javascript:/server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\n\r\n",
+             "GET x:80 HTTP/1.1\r\nHost: localhost\r\n\r\n"}) {
+        const auto response = exchange_raw_request(head, {}, false, false);
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 400 "));
+        RUVIA_CHECK(response.find("next") == std::string::npos);
+    }
+    const auto accepted = exchange_raw_request(
+        "GET http://localhost/server-small-chunk-next HTTP/1.1\r\nHost: other\r\nConnection: close\r\n\r\n", {},
+        false, false);
+    RUVIA_CHECK(accepted.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(accepted.ends_with("next"));
 }
 
 RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {

@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -21,6 +22,19 @@
 namespace ruvia {
 
 namespace detail {
+
+[[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
+    std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
+    // Empty containers can allocate debug iterator proxies. Use a constructor
+    // that can propagate failure while the original diagnostics remain intact.
+    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, resource);
+    const auto count = std::min(issues.size(), max_validation_issues);
+    copied.reserve(count);
+    for (const auto& issue : issues.first(count)) {
+        copied.push_back(validation_issue_access::copy(issue, resource));
+    }
+    return copied;
+}
 
 template <typename t_type>
 [[nodiscard]] std::string_view validation_string_view(const t_type& value) noexcept {
@@ -44,13 +58,13 @@ public:
     using issue_list_type = std::pmr::vector<validation_issue>;
 
     explicit validation_error(const issue_list_type& issues, validation_error_options options = {})
-        : issues_(copy_issues(issues)),
+        : issues_(detail::clone_validation_issues(issues, process_resource())),
           status_code_(options.status_),
           code_(options.code_.view(), process_resource()),
           message_(options.message_.view(), process_resource()) {}
 
     validation_error(const validation_error& other)
-        : issues_(copy_issues(other.issues_)),
+        : issues_(detail::clone_validation_issues(other.issues_, process_resource())),
           status_code_(other.status_code_),
           code_(other.code_, process_resource()),
           message_(other.message_, process_resource()) {}
@@ -60,12 +74,12 @@ public:
             return *this;
         }
 
-        auto copied_issues = copy_issues(other.issues_);
+        auto copied_issues = detail::clone_validation_issues(other.issues_, process_resource());
         std::pmr::string copied_code(other.code_, process_resource());
         std::pmr::string copied_message(other.message_, process_resource());
-        issues_ = std::move(copied_issues);
-        code_ = std::move(copied_code);
-        message_ = std::move(copied_message);
+        issues_.swap(copied_issues);
+        code_.swap(copied_code);
+        message_.swap(copied_message);
         status_code_ = other.status_code_;
         return *this;
     }
@@ -106,24 +120,18 @@ public:
     [[nodiscard]] http_error_info info() const&& = delete;
 
 private:
-    [[nodiscard]] static issue_list_type copy_issues(const issue_list_type& issues) {
-        issue_list_type copied(process_resource());
-        const auto count = std::min(issues.size(), max_validation_issues);
-        copied.reserve(count);
-        for (std::size_t index = 0; index < count; ++index) {
-            const auto& issue = issues[index];
-            copied.push_back(detail::validation_issue_access::copy(
-                issue, process_resource()));
-        }
-        return copied;
-    }
-
     issue_list_type issues_{process_resource()};
     http_status_code status_code_{http_status::bad_request};
     std::pmr::string code_{process_resource()};
     std::pmr::string message_{process_resource()};
 };
 
+// Diagnostics belong to the configured PMR resource. Copy and move construction
+// retain the source resource, whose owner must outlive every resulting validator.
+// Assignment retains the destination resource, including nested diagnostic text;
+// rebinding may allocate, and allocation failure leaves both validators unchanged.
+// Moves within the same resource do not allocate. Successful moves leave an
+// empty source that can be reused with its original resource.
 class validator final {
 public:
     using issue_list_type = validation_error::issue_list_type;
@@ -136,8 +144,38 @@ public:
         : validator(options_type{}) {}
 
     explicit validator(options_type options)
-        : resource_(pmr_resource_or_default(options.resource_)),
-          issues_(resource_) {}
+        : issues_(std::initializer_list<validation_issue>{}, pmr_resource_or_default(options.resource_)) {}
+
+    validator(const validator& other)
+        : issues_(detail::clone_validation_issues(other.issues_, other.resource())) {}
+
+    validator& operator=(const validator& other) {
+        if (this != &other) {
+            auto copied = detail::clone_validation_issues(other.issues_, resource());
+            issues_.swap(copied);
+        }
+        return *this;
+    }
+
+    validator(validator&& other) noexcept
+        : issues_(std::move(other.issues_)) {
+        other.issues_.clear();
+    }
+
+    validator& operator=(validator&& other) {
+        if (this != &other) {
+            if (resource() == other.resource()) {
+                issues_.swap(other.issues_);
+            } else {
+                auto copied = detail::clone_validation_issues(other.issues_, resource());
+                issues_.swap(copied);
+            }
+            other.issues_.clear();
+        }
+        return *this;
+    }
+
+    ~validator() = default;
 
     [[nodiscard]] bool full() const noexcept {
         return issues_.size() >= max_validation_issues;
@@ -148,7 +186,7 @@ public:
             return *this;
         }
         issues_.push_back(validation_issue(
-            {.field_ = field, .code_ = code, .message_ = message, .resource_ = resource_}));
+            {.field_ = field, .code_ = code, .message_ = message, .resource_ = resource()}));
         return *this;
     }
 
@@ -221,7 +259,7 @@ public:
     [[nodiscard]] const issue_list_type& issues() const&& = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
+        return issues_.get_allocator().resource();
     }
 
     void throw_if_invalid(validation_error_options options = {}) const& {
@@ -231,7 +269,6 @@ public:
     }
 
 private:
-    std::pmr::memory_resource* resource_;
     issue_list_type issues_;
 };
 

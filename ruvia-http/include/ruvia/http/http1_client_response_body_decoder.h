@@ -9,8 +9,9 @@
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_response_body_decoding.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 
 namespace ruvia {
 
@@ -196,7 +197,7 @@ private:
     framing_type framing_;
     http1_close_policy persistence_{http1_close_policy::close_after_response};
     std::optional<http_transfer_coding_stack_decoder> transfer_;
-    std::optional<http_response_chunked_body_decoder> chunked_;
+    std::optional<http1_chunked_body_decoder> chunked_;
     std::optional<terminal_type> terminal_;
     std::size_t remaining_{0};
     // The chunk parser advances through a whole body view. These counters let

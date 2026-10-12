@@ -10,14 +10,21 @@
 
 namespace ruvia::detail {
 
+// The time left of a budget that started at `started_ms`. Subtracting the
+// elapsed time from the budget cannot overflow, unlike adding a configured
+// budget to a timestamp.
 std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t now) const noexcept {
-    std::int64_t deadline_value = now + 1;
+    const auto remaining = [now](std::int64_t started_ms, std::int64_t budget) noexcept {
+        const auto elapsed = now - started_ms;
+        return elapsed >= budget ? std::int64_t{0} : budget - std::max<std::int64_t>(elapsed, 0);
+    };
+    std::int64_t delay_value = 1;
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_)) {
-        deadline_value = pong->sent_at_ms() + config_.heartbeat_.pong_timeout_->count();
+        delay_value = remaining(pong->sent_at_ms(), config_.heartbeat_.pong_timeout_->count());
     } else if (std::holds_alternative<websocket_liveness_idle>(liveness_state_)) {
-        deadline_value = last_active_ms_ + config_.heartbeat_.ping_interval_->count();
+        delay_value = remaining(last_active_ms_, config_.heartbeat_.ping_interval_->count());
     }
-    return std::chrono::milliseconds(std::max<std::int64_t>(1, deadline_value - now));
+    return std::chrono::milliseconds(std::max<std::int64_t>(1, delay_value));
 }
 
 void websocket_client_state::arm_heartbeat_timer(std::chrono::milliseconds delay) {
@@ -46,6 +53,24 @@ void websocket_client_state::touch_activity() noexcept {
     }
 }
 
+void websocket_client_state::resume_pong_deadline() noexcept {
+    const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
+    if (pong == nullptr || !protocol_open()) {
+        return;
+    }
+    const auto now = websocket_steady_now_ms();
+    if (now - pong->sent_at_ms() < config_.heartbeat_.pong_timeout_->count()) {
+        // The window is still open and its timer armed.
+        return;
+    }
+    liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
+    try {
+        arm_heartbeat_timer(*config_.heartbeat_.pong_timeout_);
+    } catch (...) {
+        fail_transport();
+    }
+}
+
 bool websocket_client_state::heartbeat_ping_due() noexcept {
     const auto now = websocket_steady_now_ms();
     const websocket_lifecycle_options options{
@@ -59,6 +84,11 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
         return true;
     }
     if (decision == websocket_liveness_decision::abort_transport) {
+        // Only a polling reader can match the Pong. Without one, an unread
+        // Pong is not a dead peer: the window restarts when a read begins.
+        if (!read_active_ && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
+            return false;
+        }
         retire(client_abort_reason::timeout);
         return false;
     }
@@ -93,7 +123,7 @@ task<void> websocket_client_state::heartbeat() {
         // signal as every other writer. The write may have refreshed activity or
         // the connection may have closed meanwhile, so liveness is evaluated
         // again once the write lane is idle.
-        co_await wait_for_write_idle();
+        co_await wait_for_write_idle(write_wait_type::writer);
         if (protocol_open() && heartbeat_ping_due()) {
             write_guard_type write_guard(*this, write_phase_type::heartbeat);
             const auto challenge = ++heartbeat_sequence_;

@@ -50,8 +50,9 @@ public:
     [[nodiscard]] bool stop_requested() const noexcept;
     // Requests stop and waits for its member notifications/abandon hooks to
     // finish before retiring any tier. Returns the first member failure in
-    // tier order; later ones are reported as unhandled. Repeated joins return
-    // the same result without repeating retirement or diagnostics.
+    // tier order; later ones are reported as unhandled ("additional worker"),
+    // equivalent ones collapsed into one line with their count. Repeated joins
+    // return the same result without repeating retirement or diagnostics.
     [[nodiscard]] std::exception_ptr join() noexcept;
 
 private:

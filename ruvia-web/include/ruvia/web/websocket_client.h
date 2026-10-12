@@ -46,6 +46,8 @@ struct websocket_client_config final {
     // After a local Close is sent, the maximum time to wait for the peer Close.
     // nullopt disables this guard.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
+    // Pongs are matched by read(); a pong timeout retires the client only while
+    // a read is active, and an expired window restarts when the next read begins.
     websocket_heartbeat_config heartbeat_{};
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};

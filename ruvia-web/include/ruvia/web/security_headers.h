@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
@@ -61,7 +61,7 @@ void apply_security_headers(context& context_value, const security_headers_confi
 
 // Registered app-wide with the defaults as `app().use<security_headers_middleware>()`,
 // or with an owning policy as `app().use<security_headers_middleware>(config)`.
-class security_headers_middleware final : public middleware {
+class security_headers_middleware final {
 public:
     // A 404 is a response to an attacker-reachable URL like any other, so it
     // needs the same CSP, frame and referrer policy a matched route gets. CORS
@@ -79,14 +79,6 @@ public:
     task<void> handle(context& context, next& next);
 
 private:
-    struct stored_header_type final {
-        stored_header_type(
-            std::string_view name, std::string_view value, std::pmr::memory_resource* resource);
-
-        std::pmr::string name_;
-        std::pmr::string value_;
-    };
-
     struct config_storage_type final {
         config_storage_type(const security_headers_config& source_value, std::pmr::memory_resource* resource);
 
@@ -98,7 +90,7 @@ private:
         std::pmr::string content_security_policy_;
         std::pmr::string referrer_policy_;
         std::pmr::string permissions_policy_;
-        std::pmr::vector<stored_header_type> custom_headers_;
+        std::pmr::vector<http_header> custom_headers_;
 
     private:
         struct validated_config_type final {

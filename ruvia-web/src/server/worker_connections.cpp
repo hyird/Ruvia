@@ -96,12 +96,22 @@ void worker_connections::prepare() {
     scanner_.start();
 }
 void worker_connections::open_admission() noexcept {
+    drain_.open();
     serving_.store(true, std::memory_order_release);
+}
+void worker_connections::drain() noexcept {
+    serving_.store(false, std::memory_order_release);
+    drain_.begin();
+    scanner_.drain();
 }
 void worker_connections::stop() noexcept {
     serving_.store(false, std::memory_order_release);
     scanner_.stop();
     scanner_.close_all();
+    drain_.complete();
+}
+bool worker_connections::wait_until_drained(std::chrono::steady_clock::time_point deadline) {
+    return drain_.wait_until(deadline);
 }
 void worker_connections::retire_tls() noexcept {
     for (auto& listener : listeners_) {
@@ -112,11 +122,11 @@ void worker_connections::retire_tls() noexcept {
 }
 bool worker_connections::available() const noexcept {
     return serving_.load(std::memory_order_acquire) &&
-           (!options_.max_connections_ || active_.load(std::memory_order_relaxed) < *options_.max_connections_);
+           (!options_.max_connections_ || drain_.active() < *options_.max_connections_);
 }
 http_server_stats worker_connections::stats() const noexcept {
     http_server_stats result;
-    result.active_connections_ = active_.load(std::memory_order_relaxed);
+    result.active_connections_ = drain_.active();
     result.connections_refused_ = refused_.load(std::memory_order_relaxed);
     result.connection_failures_ = failures_.load(std::memory_order_relaxed);
     result.accept_failures_ = accept_failures_.load(std::memory_order_relaxed);
@@ -132,14 +142,14 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
         return;
     }
     const auto configure = [tls](asio::ssl::context& context_value,
-                               const http_server_listener_definition::tls_identity_type& identity) {
+                               const tls_certificate& certificate) {
         context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                                   asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
                                   asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
         SSL_CTX_set_options(context_value.native_handle(), SSL_OP_NO_COMPRESSION);
         SSL_CTX_set_alpn_select_cb(context_value.native_handle(), select_alpn_protocol, nullptr);
         configure_http_server_tls_identity(
-            context_value.native_handle(), identity, tls->client_certificates_);
+            context_value.native_handle(), certificate, tls->client_certificates_);
         install_tls_session_ticket_keys(*context_value.native_handle(), *tls);
     };
 
@@ -147,7 +157,7 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
     listener_value.sni_contexts_.reserve(tls->sni_identities_.size());
     for (const auto& sni : tls->sni_identities_) {
         auto& context_value = listener_value.sni_contexts_.emplace_back(asio::ssl::context::tls_server);
-        configure(context_value, sni.identity_);
+        configure(context_value, sni.certificate_);
     }
     listener_value.sni_lookup_.reserve(tls->sni_identities_.size());
     for (std::size_t i = 0; i < tls->sni_identities_.size(); ++i) {
@@ -156,7 +166,7 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
 
     listener_value.tls_context_.emplace(asio::ssl::context::tls_server);
     auto& context_value = *listener_value.tls_context_;
-    configure(context_value, tls->identity_);
+    configure(context_value, tls->certificate_);
     if (!listener_value.sni_lookup_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context_value.native_handle(), &select_sni_context);
         SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &listener_value.sni_lookup_);
@@ -179,6 +189,10 @@ task<void> worker_connections::run_session(
         }
         context_services base_services = capabilities_.make_context_services(stop_token_);
         if (listener_value.tls() != nullptr) {
+            // A draining worker admits no new request, and a handshake leads only to one.
+            if (!http_server_worker_running(state_)) {
+                co_return;
+            }
             asio::ssl::stream<tcp_socket_type&> tls_stream(socket, *listener_value.tls_context_);
             {
                 // The TLS handshake has its own initial-read deadline. It must be
@@ -192,7 +206,7 @@ task<void> worker_connections::run_session(
                 // sessions (websocket, keep-alive, slow uploads, streaming).
                 connection_scanner::entry_type handshake_entry;
                 connection_scanner::guard_type handshake_guard(scanner_, handshake_entry, socket);
-                handshake_entry.set_phase(connection_scanner::phase_type::reading_initial);
+                handshake_entry.read_request_head(connection_scanner::phase_type::reading_initial);
                 const auto handshake_completion =
                     co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
                 if (handshake_completion.error_code()) {
@@ -205,7 +219,7 @@ task<void> worker_connections::run_session(
             const auto tls_services = base_services.with_tls_transport(
                 remote_address, client_certificate, remote_port);
             const auto close_mode = co_await run_stream(listener_value, tls_stream, socket, tls_services);
-            // Worker stop keeps the immediate close; scanner close_all reaches a
+            // A worker stop keeps the immediate close; scanner close_all reaches a
             // graceful close that is already running.
             if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
                 co_await close_http_connection_gracefully(tls_stream, scanner_, worker_, close_mode);
@@ -235,21 +249,14 @@ task<void> worker_connections::run_session(
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
-    if (!http_server_worker_running(state_)) {
-        return;
-    }
-    if (listener_index >= listeners_.size()) {
-        return;
-    }
-    if (options_.max_connections_.has_value() &&
-        active_.load(std::memory_order_relaxed) >= *options_.max_connections_) {
+    if (options_.max_connections_.has_value() && drain_.active() >= *options_.max_connections_) {
         refused_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     try {
         ruvia::configure_accepted_socket(socket);
-        accepted_connection_lease connection(std::move(socket), active_);
+        accepted_connection_lease connection(std::move(socket), drain_);
         tasks_.spawn(run_session(*listeners_[listener_index], std::move(connection)));
     } catch (...) {
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
@@ -262,7 +269,14 @@ void worker_connections::accept(native_accepted_socket_ticket&& ticket) noexcept
         return;
     }
     const auto listener_index = ticket.listener_index();
-    if (!http_server_worker_running(state_) || listener_index >= listeners_.size()) {
+    if (listener_index >= listeners_.size()) {
+        return;
+    }
+    // Only a worker that still admits connections may adopt one. A ticket the
+    // acceptor published before admission closed is refused, and dropping it
+    // closes the connection.
+    if (!http_server_worker_running(state_)) {
+        refused_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 

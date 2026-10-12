@@ -1,7 +1,6 @@
 #include "db/db_pool.h"
 
 #include <array>
-#include <charconv>
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -9,8 +8,10 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
+#include "ruvia/http/http_number_format.h"
 
 #include "db/db_transaction_start.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {
@@ -28,7 +29,7 @@ namespace {
     } catch (const db_error& error) {
         return error;
     } catch (const std::system_error& error) {
-        return db_error(db_error::code_type::io_error, driver, error.what(), error.code().value());
+        return db_error(db_error::code_type::io_error, driver, system_error_text(error), error.code().value());
     } catch (const std::exception& error) {
         return db_error(db_error::code_type::io_error, driver, error.what());
     }
@@ -37,12 +38,11 @@ namespace {
 }  // namespace
 
 std::array<char, 6> format_db_port(std::uint16_t port) {
+    std::array<char, http_max_unsigned_decimal_size> digits;
+    const auto text = http_format_unsigned(digits, port);
+    // Zero initialization NUL-terminates the at most five port digits.
     std::array<char, 6> output{};
-    const auto parsed_value = std::to_chars(output.data(), output.data() + output.size() - 1, port);
-    if (parsed_value.ec != std::errc{}) {
-        throw std::logic_error("failed to format database port");
-    }
-    *parsed_value.ptr = '\0';
+    text.copy(output.data(), text.size());
     return output;
 }
 
@@ -241,9 +241,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
         }
         if (resolve_error) {
             throw db_error(db_error::code_type::resolve_failed, driver_type::driver,
-                std::system_error(resolve_error,
-                    std::string("resolving ").append(driver_type::name).append(" host failed"))
-                    .what(),
+                std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)),
                 resolve_error.value());
         }
         co_return collect_db_resolved_addresses(results, driver_type::driver, resource_);
@@ -261,7 +259,7 @@ task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
     auto& slot = slots_[index];
     if (const auto error = slot.wait_socket_.attach(native); error) {
         throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error.message()),
+            std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)),
             error.value());
     }
 

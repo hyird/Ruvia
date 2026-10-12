@@ -10,7 +10,6 @@
 #include "client/http_client_access.h"
 #include "client/http_client_response_head.h"
 #include "client/http_client_response_limits.h"
-#include "http_header_access.h"
 #include "parser/field_line_folding.h"
 #include "parser/http_header_block_parser.h"
 
@@ -143,8 +142,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
             head_section = *unfolded_head;
         }
     }
-    auto parsed_head =
-        detail::parse_http1_client_response_head_fields(head_section, exchange_state_, resource_);
+    auto parsed_head = detail::parse_http1_client_response_head_fields(head_section, exchange_state_);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }
@@ -174,8 +172,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     }
     for (std::size_t i = 0; i < parsed_value.header_count_; ++i) {
         const auto& header_value = parsed_value.headers_[i];
-        headers.emplace_back(
-            detail::http_header_access::make(header_value.name(), header_value.value(), resource_));
+        headers.push_back(http_header::copy_of(header_value.name(), header_value.value(), resource_));
     }
 
     auto result_value = detail::http1_client_response_parse_result_access::parsed(

@@ -19,7 +19,7 @@ constexpr field_names names[]{
 constexpr std::string_view values[]{"first", "middle", "final"};
 
 void populate_headers(ruvia::http_response& response, const field_names& name) {
-    const ruvia::http_response::header_options_type append{.mode_ = ruvia::http_response_header_mode::append};
+    const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
     response.header("X-Before", "before");
     response.header(name.primary_, values[0], append);
     response.header("Content-Type", "text/plain");
@@ -126,4 +126,19 @@ RUVIA_TEST(response_header_replacement_failure_preserves_borrowed_inputs_for_ret
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
+}
+
+RUVIA_TEST(response_commit_headers_leaves_staged_response_independent) {
+    ruvia::http_response response;
+    auto staged = response.headers().clone();
+    staged.header("Content-Type", "text/plain");
+    response.commit_headers(std::move(staged));
+    RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/plain");
+
+    // The moved-from staging block must not resolve headers into committed storage.
+    RUVIA_CHECK(!staged.header("Content-Type").has_value());
+    staged.header("Content-Type", "application/json");
+    RUVIA_CHECK_EQ(staged.header("Content-Type").value_or(""), "application/json");
+    RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/plain");
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
 }

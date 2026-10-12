@@ -82,6 +82,8 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     const redis_value& value, std::pmr::memory_resource* resource, std::string_view context_value);
 [[nodiscard]] std::pmr::vector<redis_scored_value> parse_redis_scored_array(
     const redis_value& value, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::vector<std::pmr::string> parse_redis_string_array(
+    const redis_value& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_scan_result parse_redis_scan_result(
     const redis_value& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(

@@ -31,14 +31,16 @@ void finalize_context_response(detail::context_response_state& state_value, http
         state_value.finalize_active();
         return;
     }
-    response.transfer_headers_from(state_value.active_response(), transfer);
+    if (const auto& metadata = state_value.metadata(); !metadata.headers().empty()) {
+        response.transfer_headers_from(metadata, transfer);
+    }
     state_value.finalize(std::move(response));
 }
 
 }  // namespace
 
 void context::status(http_status_code status_code) {
-    response_state().active_response().status(status_code);
+    response_state().update_metadata([status_code](http_response& response) { response.status(status_code); });
 }
 
 std::pmr::string context::url_for(
@@ -50,18 +52,13 @@ std::pmr::string context::url_for(
         pattern, std::span<const std::string_view>(values.begin(), values.size()), arena());
 }
 
-context& context::remove_response_header(std::string_view name) {
-    response_state().active_response().remove_header(name);
-    return *this;
-}
-
 void context::remove_header(std::string_view name) {
-    response_state().active_response().remove_header(name);
+    response_state().update_metadata([name](http_response& response) { response.remove_header(name); });
 }
 
 void context::header(std::string_view name, std::string_view value, header_options_type options) {
-    response_state().active_response().header(
-        name, value, http_response::header_options_type{.mode_ = options.mode_});
+    response_state().update_metadata(
+        [&](http_response& response) { response.header(name, value, options); });
 }
 
 void context::store_response(http_response&& response) {
@@ -173,8 +170,13 @@ scoped_operation<http_response> context::not_found() {
 }
 
 task<http_response> context::not_found_task() {
-    if (services().not_found_handler() != nullptr) {
-        co_return co_await services().not_found_handler()(*this);
+    // Selected only here, on demand: every matched request carries the table,
+    // and few of them ever ask for a not-found answer.
+    const auto* routes = services().routes();
+    const auto handler = routes == nullptr ? detail::http_not_found_handler_ref_type{nullptr}
+                                           : routes->not_found_handler_for(request_.path());
+    if (handler != nullptr) {
+        co_return co_await handler(*this);
     }
 
     auto response = detail::make_default_error_response(arena(),
@@ -200,16 +202,17 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
 }
 
 context& context::set_stable_response_header(std::string_view name, std::string_view value) {
-    response_state().active_response().header_stable_view(name, value);
+    response_state().update_metadata([&](http_response& response) { response.header_stable_view(name, value); });
     return *this;
 }
 
 void context::apply_response_state(
     http_response& response, std::optional<http_status_code> status_code) const {
-    const auto& active_response = response_state().active_response();
-    const auto final_status_code = status_code.value_or(active_response.status());
-    response.status(final_status_code);
-    response.transfer_headers_from(active_response, http_response_header_transfer::apply);
+    const auto& metadata = response_state().metadata();
+    response.status(status_code.value_or(metadata.status()));
+    if (!metadata.headers().empty()) {
+        response.transfer_headers_from(metadata, http_response_header_transfer::apply);
+    }
 }
 
 namespace detail {

@@ -127,46 +127,6 @@ private:
     http_response_file_identity identity_;
 };
 
-class http_borrowed_response_file final {
-public:
-    [[nodiscard]] constexpr const http_native_path_char_type* native_path_c_str() const noexcept {
-        return native_path_;
-    }
-
-    [[nodiscard]] constexpr std::uint64_t size() const noexcept {
-        return size_;
-    }
-
-    [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
-        return offset_;
-    }
-
-    [[nodiscard]] constexpr std::uint64_t length() const noexcept {
-        return length_;
-    }
-
-    [[nodiscard]] constexpr http_response_file_identity identity() const noexcept {
-        return identity_;
-    }
-
-private:
-    friend class http_response_body;
-
-    constexpr http_borrowed_response_file(const http_native_path_char_type* native_path, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, http_response_file_identity identity) noexcept
-        : native_path_(native_path),
-          size_(size),
-          offset_(offset),
-          length_(length),
-          identity_(identity) {}
-
-    const http_native_path_char_type* native_path_;
-    std::uint64_t size_;
-    std::uint64_t offset_;
-    std::uint64_t length_;
-    http_response_file_identity identity_;
-};
-
 class http_multipart_response_body final {
 public:
     http_multipart_response_body(std::pmr::memory_resource* resource,
@@ -271,10 +231,6 @@ public:
     }
     [[nodiscard]] const http_owned_response_file* owned_file() const&& = delete;
 
-    [[nodiscard]] const http_borrowed_response_file* borrowed_file() const& noexcept {
-        return std::get_if<http_borrowed_response_file>(&value_);
-    }
-    [[nodiscard]] const http_borrowed_response_file* borrowed_file() const&& = delete;
     [[nodiscard]] const http_multipart_response_body* multipart_body() const& noexcept {
         return std::get_if<http_multipart_response_body>(&value_);
     }
@@ -299,10 +255,6 @@ public:
             return http_response_file_view(body->native_path_c_str(), body->size(), body->offset(),
                 body->length(), body->identity());
         }
-        if (const auto* body = borrowed_file()) {
-            return http_response_file_view(body->native_path_c_str(), body->size(), body->offset(),
-                body->length(), body->identity());
-        }
         if (const auto* body = multipart_body()) {
             return body->file();
         }
@@ -312,9 +264,6 @@ public:
 
     [[nodiscard]] std::uint64_t size() const noexcept {
         if (const auto* body = owned_file()) {
-            return body->length();
-        }
-        if (const auto* body = borrowed_file()) {
             return body->length();
         }
         if (const auto* body = multipart_body()) {
@@ -328,8 +277,7 @@ private:
 
     using value_type =
         std::variant<http_empty_response_body, http_borrowed_response_bytes, http_static_response_bytes,
-            http_owned_response_bytes, http_owned_response_file, http_borrowed_response_file,
-            http_multipart_response_body>;
+            http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
     static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
     void set_empty() noexcept {
@@ -393,13 +341,6 @@ private:
             resource, file, size, identity, std::move(plan));
         static_assert(std::is_nothrow_move_constructible_v<http_multipart_response_body>);
         value_.emplace<http_multipart_response_body>(std::move(replacement));
-    }
-
-    void set_borrowed_file(const http_native_path_char_type* file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length,
-        http_response_file_identity identity = http_response_file_identity::unchecked()) noexcept {
-        value_.emplace<http_borrowed_response_file>(
-            http_borrowed_response_file(file, size, offset, length, identity));
     }
 
     value_type value_;

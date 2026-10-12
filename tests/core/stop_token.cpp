@@ -2,8 +2,11 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -11,6 +14,32 @@
 #include <utility>
 
 #include "test_harness.h"
+
+namespace {
+
+// Counts global-heap allocations made by this thread while armed.
+thread_local bool global_allocations_armed = false;
+thread_local std::size_t global_allocations = 0;
+
+}  // namespace
+
+void* operator new(std::size_t bytes) {
+    if (global_allocations_armed) {
+        ++global_allocations;
+    }
+    if (void* block = std::malloc(bytes == 0 ? 1 : bytes)) {
+        return block;
+    }
+    throw std::bad_alloc();
+}
+
+void operator delete(void* block) noexcept {
+    std::free(block);
+}
+
+void operator delete(void* block, std::size_t) noexcept {
+    std::free(block);
+}
 
 namespace stop_token_test {
 
@@ -332,4 +361,66 @@ RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies)
     second.request_stop();
     RUVIA_CHECK(combined.stop_requested());
     RUVIA_CHECK_EQ(calls, 1);
+}
+
+RUVIA_TEST(stop_source_state_never_uses_the_global_heap) {
+    // The first source may grow the process pool from its upstream.
+    { ruvia::stop_source warm_up; }
+    global_allocations_armed = true;
+    for (int round = 0; round != 16; ++round) {
+        ruvia::stop_source source;
+        auto token = source.token();
+        int calls = 0;
+        auto registration = token.register_callback([&calls] { ++calls; });
+        source.request_stop();
+        if (calls != 1 || !token.stop_requested()) {
+            global_allocations_armed = false;
+            RUVIA_CHECK(false);
+        }
+    }
+    global_allocations_armed = false;
+    RUVIA_CHECK_EQ(global_allocations, std::size_t{0});
+}
+
+RUVIA_TEST(stop_token_outlives_its_source_across_threads) {
+    std::optional<ruvia::stop_source> source(std::in_place);
+    auto token = source->token();
+    source->request_stop();
+    source.reset();
+    RUVIA_CHECK(token.stop_requested());
+    RUVIA_CHECK(token.stoppable());
+    std::thread([retained = std::move(token)]() mutable { retained = {}; }).join();
+
+    std::optional<ruvia::stop_source> idle(std::in_place);
+    auto idle_token = idle->token();
+    idle.reset();
+    RUVIA_CHECK(!idle_token.stop_requested());
+    RUVIA_CHECK(!idle_token.stoppable());
+}
+
+RUVIA_TEST(stop_registration_reset_waits_for_callback_running_on_another_thread) {
+    ruvia::stop_source source;
+    std::atomic_bool entered{false};
+    std::atomic_bool released{false};
+    std::atomic_bool returned{false};
+    auto registration = source.token().register_callback([&] {
+        entered.store(true, std::memory_order_release);
+        while (!released.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        returned.store(true, std::memory_order_release);
+    });
+    std::thread stopper([&source] { source.request_stop(); });
+    while (!entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::thread releaser([&released] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        released.store(true, std::memory_order_release);
+    });
+    registration.reset();
+    const bool waited = returned.load(std::memory_order_acquire);
+    releaser.join();
+    stopper.join();
+    RUVIA_CHECK(waited);
 }

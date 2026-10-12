@@ -14,7 +14,7 @@ using worker_id_type = std::uint64_t;
 
 namespace detail {
 class worker_dispatcher;
-class worker_shutdown_listener;
+class worker_shutdown_hook;
 struct worker_handle_access;
 }  // namespace detail
 
@@ -79,8 +79,12 @@ struct worker_handle_access {
     // already on that worker.
     template <typename fn_type>
     static void defer_or_terminate(const worker_handle& worker, fn_type&& fn) noexcept;
-    static void register_shutdown_listener(
-        const worker_handle& worker, const std::shared_ptr<worker_shutdown_listener>& listener);
+    // Defined in detail/worker/worker_dispatcher.h: links `owner->*hook` with
+    // the phase table of owner_type. Throws std::runtime_error when the worker
+    // has stopped or stops accepting.
+    template <typename owner_type>
+    static void register_shutdown_hook(const worker_handle& worker, const std::shared_ptr<owner_type>& owner,
+        worker_shutdown_hook owner_type::* hook);
     static void when_shutdown_notifications_complete(
         const worker_handle& worker, move_only_function<void()> callback);
     static void when_idle(const worker_handle& worker, move_only_function<void()> callback);

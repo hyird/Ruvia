@@ -6,6 +6,7 @@
 #include <exception>
 #include <mutex>
 #include <string_view>
+#include <typeinfo>
 
 namespace ruvia {
 
@@ -69,20 +70,42 @@ struct rate_decision final {
     return decision;
 }
 
-void write_line(std::string_view context_value, std::string_view what, std::size_t suppressed) noexcept {
-    if (suppressed == 0) {
-        std::fprintf(stderr, "ruvia: %.*s failed: %.*s\n", static_cast<int>(context_value.size()),
-            context_value.data(), static_cast<int>(what.size()), what.data());
-        return;
+void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences,
+    std::size_t suppressed) noexcept {
+    // One fprintf per line keeps concurrent reports from interleaving.
+    char occurrences_text[32] = "";
+    if (occurrences > 1) {
+        std::snprintf(occurrences_text, sizeof(occurrences_text), " (x%zu)", occurrences);
     }
-    std::fprintf(stderr, "ruvia: %.*s failed: %.*s (+%zu suppressed)\n",
-        static_cast<int>(context_value.size()), context_value.data(), static_cast<int>(what.size()),
-        what.data(), suppressed);
+    char suppressed_text[48] = "";
+    if (suppressed != 0) {
+        std::snprintf(suppressed_text, sizeof(suppressed_text), " (+%zu suppressed)", suppressed);
+    }
+    std::fprintf(stderr, "ruvia: %.*s failed: %.*s%s%s\n", static_cast<int>(context_value.size()),
+        context_value.data(), static_cast<int>(what.size()), what.data(), occurrences_text, suppressed_text);
+}
+
+struct failure_identity final {
+    const std::type_info* type_{nullptr};
+    const char* what_{nullptr};
+};
+
+// The exception object outlives this call: `exception` keeps it alive, so the
+// returned what() pointer stays valid while the caller holds the pointer.
+[[nodiscard]] failure_identity identify(const std::exception_ptr& exception) noexcept {
+    try {
+        std::rethrow_exception(exception);
+    } catch (const std::exception& error) {
+        return {&typeid(error), error.what()};
+    } catch (...) {
+        return {};
+    }
 }
 
 }  // namespace
 
-void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception) noexcept {
+void report_unhandled_failure(
+    std::string_view context_value, std::exception_ptr exception, std::size_t occurrences) noexcept {
     if (exception == nullptr) {
         return;
     }
@@ -96,10 +119,31 @@ void report_unhandled_failure(std::string_view context_value, std::exception_ptr
     try {
         std::rethrow_exception(exception);
     } catch (const std::exception& error) {
-        write_line(context_value, error.what(), decision.suppressed_);
+        write_line(context_value, error.what(), occurrences, decision.suppressed_);
     } catch (...) {
-        write_line(context_value, "unknown exception", decision.suppressed_);
+        write_line(context_value, "unknown exception", occurrences, decision.suppressed_);
     }
+}
+
+void report_unhandled_failure(std::string_view context_value, std::string_view what) noexcept {
+    const auto decision = admit();
+    if (decision.emit_) {
+        write_line(context_value, what, 1, decision.suppressed_);
+    }
+}
+
+bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept {
+    if (left == right) {
+        return true;
+    }
+    if (left == nullptr || right == nullptr) {
+        return false;
+    }
+    const auto left_identity = identify(left);
+    const auto right_identity = identify(right);
+    return left_identity.type_ != nullptr && right_identity.type_ != nullptr &&
+           *left_identity.type_ == *right_identity.type_ &&
+           std::string_view(left_identity.what_) == std::string_view(right_identity.what_);
 }
 
 }  // namespace ruvia

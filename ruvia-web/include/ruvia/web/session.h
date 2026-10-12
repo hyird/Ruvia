@@ -21,8 +21,9 @@ class next;
 // A request-local capability bound by session_middleware. The handle borrows
 // context state and therefore cannot escape the request.
 // Changes are persisted automatically before the response head (including a
-// stream or websocket handshake) is sent. Once that commit begins, set(),
-// clear(), and regenerate() throw std::logic_error; data() remains readable.
+// stream head or a websocket/CONNECT handshake) is sent. Once that commit
+// begins, set(), clear(), and regenerate() throw std::logic_error; data()
+// remains readable.
 class session final {
 public:
     [[nodiscard]] std::string_view data() const& noexcept;
@@ -50,7 +51,6 @@ private:
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 
@@ -66,7 +66,7 @@ struct session_config final {
     std::chrono::seconds ttl_{std::chrono::hours(24)};
 };
 
-class session_middleware final : public middleware {
+class session_middleware final {
 public:
     session_middleware();
     explicit session_middleware(const session_config& config);

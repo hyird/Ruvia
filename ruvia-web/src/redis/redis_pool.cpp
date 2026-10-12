@@ -45,33 +45,24 @@ void redis_pool::slot_policy::throw_aborted(const redis_pool&, pool_slot_abort_r
     std::terminate();
 }
 
-void redis_pool::slot_policy::expire_slot(redis_pool& pool, std::size_t slot, deadline_kind_type kind) noexcept {
-    auto& connection = pool.connections_[slot];
-    if (kind == deadline_kind_type::resolve) {
-        connection.resolver_.cancel();
-    } else {
-        std::error_code ignored;
-        connection.socket_.cancel(ignored);
-    }
-}
-
 void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) noexcept {
-    pool.close(slot);
+    pool.abort(slot, client_abort_reason::cancelled);
 }
 
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource, operation_options options) {
-    return execute_with_timeout_impl(std::move(args), std::move(options), resource);
+    std::pmr::memory_resource* resource, operation_options options,
+    std::optional<std::chrono::milliseconds> reply_timeout) {
+    return execute_with_timeout_impl(std::move(args), std::move(options), reply_timeout, resource);
 }
 
 template <typename arg_source_type>
-task<redis_value> redis_pool::execute_with_timeout_impl(
-    arg_source_type args, operation_options options, std::pmr::memory_resource* resource) {
+task<redis_value> redis_pool::execute_with_timeout_impl(arg_source_type args, operation_options options,
+    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
     const ruvia::operation_timeout operation_timeout_value(options.timeout_);
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
-    auto& connection = connections_[slot];
+    auto& connection = *connections_[slot];
     try {
         if (!connection.connected_) {
             co_await connect(slot, &operation_timeout_value);
@@ -82,8 +73,9 @@ task<redis_value> redis_pool::execute_with_timeout_impl(
         const auto arg_span = redis_arg_span(args);
         connection.write_buffer_.reserve(resp_command_serialized_size(arg_span));
         append_resp_command(connection.write_buffer_, arg_span);
-        const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_);
-        co_await async_socket_write(slot, deadline_value);
+        const auto deadline_value =
+            operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
+        co_await write_request(slot, deadline_value);
 
         auto reply = co_await read_reply(slot, deadline_value, resource);
         slots_.throw_if_aborted(slot);
@@ -109,7 +101,7 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
-    auto& connection = connections_[slot];
+    auto& connection = *connections_[slot];
     try {
         if (!connection.connected_) {
             co_await connect(slot, &operation_timeout_value);
@@ -133,7 +125,7 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
         }
 
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_);
-        co_await async_socket_write(slot, deadline_value);
+        co_await write_request(slot, deadline_value);
 
         while (replies.size() < commands.size()) {
             replies.emplace_back(co_await read_reply(slot, deadline_value, resolved));

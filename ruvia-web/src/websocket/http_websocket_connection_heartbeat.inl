@@ -8,7 +8,49 @@ void websocket_connection<stream_type>::finish_write(write_phase_type phase) noe
         std::terminate();
     }
     write_phase_ = write_phase_type::idle;
+    if (going_away_pending_) {
+        start_going_away();
+    }
     background_write_signal_.notify();
+}
+
+template <typename stream_type>
+void websocket_connection<stream_type>::start_going_away() noexcept {
+    if (protocol_.liveness_mode() != websocket_liveness_mode::open) {
+        // A close handshake (or a terminal failure) is already under way.
+        going_away_pending_ = false;
+        return;
+    }
+    if (write_phase_ != write_phase_type::idle) {
+        // The lane owner's finish_write() starts the close.
+        going_away_pending_ = true;
+        return;
+    }
+    going_away_pending_ = false;
+    write_phase_ = write_phase_type::going_away;
+    try {
+        asio::co_spawn(stream_.get_executor(), ruvia::as_awaitable(write_going_away_close()),
+            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+    } catch (...) {
+        finish_write(write_phase_type::going_away);
+        abort_transport();
+    }
+}
+
+template <typename stream_type>
+task<void> websocket_connection<stream_type>::write_going_away_close() {
+    write_guard_type write_guard(*this, write_phase_type::going_away, write_claim_type::adopt);
+    try {
+        // The session may have closed or failed before this coroutine ran.
+        if (protocol_.submit_close(1001, {}) != websocket_close_submit_status::accepted) {
+            co_return;
+        }
+        // Same deadline as a locally initiated close(); it covers this write.
+        liveness_state_ = websocket_awaiting_peer_close(websocket_steady_now_ms());
+        co_await flush_protocol_output_now();
+    } catch (...) {
+        abort_transport();
+    }
 }
 
 template <typename stream_type>

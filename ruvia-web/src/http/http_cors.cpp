@@ -1,7 +1,6 @@
 #include "http/http_cors.h"
 
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -12,6 +11,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_name_list.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_origin.h"
 
 namespace ruvia::detail {
@@ -38,14 +38,10 @@ void set_cors_max_age(http_response& response, const std::optional<std::chrono::
     if (!max_age.has_value() || has_response_header(response, "Access-Control-Max-Age")) {
         return;
     }
-    std::array<char, 32> buffer{};
-    const auto [end, error] = std::to_chars(
-        buffer.data(), buffer.data() + buffer.size(), max_age->count());
-    if (error != std::errc{}) {
-        throw std::logic_error("CORS max age integer formatting failed");
-    }
+    // make_cors_options rejects negative max ages.
+    std::array<char, http_max_unsigned_decimal_size> buffer;
     response.header("Access-Control-Max-Age",
-        std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data())));
+        http_format_unsigned(buffer, static_cast<std::uint64_t>(max_age->count())));
 }
 
 void reflect_cors_request_header_names(const http_request& request, http_response& response) {
@@ -70,7 +66,7 @@ void reflect_cors_request_header_names(const http_request& request, http_respons
                 first = false;
             } else {
                 response.header("Access-Control-Allow-Headers", *name,
-                    http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+                    http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
             }
         }
         if (!saw_name || !names.valid()) {

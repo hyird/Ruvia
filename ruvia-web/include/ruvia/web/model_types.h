@@ -52,6 +52,17 @@ enum class model_string_storage : std::uint8_t {
     owned,
 };
 
+[[nodiscard]] inline bool model_address_within(
+    const void* address, const void* begin, std::size_t bytes_value) noexcept {
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    const auto first = reinterpret_cast<std::uintptr_t>(begin);
+    return value >= first && value - first < bytes_value;
+}
+
+[[noreturn]] inline void throw_model_move_source_owns_destination() {
+    throw std::invalid_argument("model move source owns its destination");
+}
+
 struct model_value_rebind_access final {
     template <typename t_type>
     [[nodiscard]] static consteval bool has_rebind_for_model() {
@@ -83,6 +94,37 @@ struct model_value_rebind_access final {
             return std::forward<t_type>(value);
         }
     }
+
+    template <typename t_type>
+    [[nodiscard]] static consteval bool can_own() {
+        using value_t_type = std::remove_cvref_t<t_type>;
+        if constexpr (requires { typename value_t_type::ruvia_model_schema_type; }) {
+            return true;
+        } else {
+            return requires(const value_t_type& source_value, const void* address) {
+                source_value.owns_for_model(address);
+            };
+        }
+    }
+
+    // Whether `address` lies in storage that `value` owns, excluding its own
+    // inline bytes. Consuming a value destroys everything it owns.
+    template <typename t_type>
+    [[nodiscard]] static bool owns(const t_type& value, const void* address) noexcept {
+        if constexpr (requires { typename t_type::ruvia_model_schema_type; }) {
+            return value.fields_.owns(address);
+        } else if constexpr (can_own<t_type>()) {
+            return value.owns_for_model(address);
+        } else {
+            return false;
+        }
+    }
+
+    // Whether consuming `value` would destroy the object at `address`.
+    template <typename t_type>
+    [[nodiscard]] static bool contains(const t_type& value, const void* address) noexcept {
+        return model_address_within(address, std::addressof(value), sizeof(t_type)) || owns(value, address);
+    }
 };
 
 template <typename t_type>
@@ -100,31 +142,37 @@ struct model_options final {
 namespace detail {
 
 // Construction is shared; containers decide how the normalized value is owned
-// (inline vector element or address-stable PMR box).
+// (inline vector element or address-stable PMR box). `destination` is the
+// container, which a transferred value must not own.
 template <typename value_type, typename insert_type, typename... argument_types>
-value_type& emplace_model_value(std::pmr::memory_resource* resource,
+value_type& emplace_model_value(std::pmr::memory_resource* resource, const void* destination,
     insert_type insert, argument_types&&... arguments) {
-    auto own_and_insert = [&insert, resource](auto&& value) -> value_type& {
-        // Borrowed/const inputs are cloned; only mutable rvalues may transfer.
-        using input_type = std::conditional_t<
-            std::is_lvalue_reference_v<decltype(value)> ||
-                std::is_const_v<std::remove_reference_t<decltype(value)>>,
-            const value_type&, value_type&&>;
-        return insert(rebind_model_value(static_cast<input_type>(value), resource));
-    };
     if constexpr (sizeof...(argument_types) == 1 &&
                   (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
-        return own_and_insert(std::forward<argument_types>(arguments)...);
+        return [&]<typename input_type>(input_type&& value) -> value_type& {
+            if constexpr (std::is_lvalue_reference_v<input_type&&> ||
+                          std::is_const_v<std::remove_reference_t<input_type>>) {
+                // Borrowed/const inputs are cloned.
+                return insert(rebind_model_value(static_cast<const value_type&>(value), resource));
+            } else {
+                // Mutable rvalues transfer, unless consuming one would destroy the container.
+                if (model_value_rebind_access::contains(value, destination)) {
+                    throw_model_move_source_owns_destination();
+                }
+                return insert(rebind_model_value(std::move(value), resource));
+            }
+        }(std::forward<argument_types>(arguments)...);
     } else if constexpr (sizeof...(argument_types) == 0 && std::constructible_from<value_type, model_options>) {
-        return own_and_insert(value_type(model_options{.resource_ = resource}));
+        // Fresh values are built owning on the destination resource.
+        return insert(value_type(model_options{.resource_ = resource}));
     } else if constexpr (requires {
                              value_type(std::forward<argument_types>(arguments)...,
                                  model_options{.resource_ = resource});
                          }) {
-        return own_and_insert(value_type(std::forward<argument_types>(arguments)...,
+        return insert(value_type(std::forward<argument_types>(arguments)...,
             model_options{.resource_ = resource}));
     } else {
-        return own_and_insert(value_type(std::forward<argument_types>(arguments)...));
+        return insert(rebind_model_value(value_type(std::forward<argument_types>(arguments)...), resource));
     }
 }
 
@@ -132,7 +180,7 @@ value_type& emplace_model_value(std::pmr::memory_resource* resource,
 
 struct model_parse_options final {
     std::pmr::memory_resource* resource_{nullptr};
-    // Totals across the complete typed JSON document, including nested arrays.
+    // Totals across the complete typed or dynamic JSON document, including nested arrays.
     std::size_t max_array_elements_{64 * 1024};
     std::size_t max_representation_bytes_{16 * 1024 * 1024};
 };
@@ -510,6 +558,10 @@ public:
         if (this == &other) {
             return *this;
         }
+        // Consuming a source that owns this array would destroy the destination.
+        if (other.owns_for_model(this)) {
+            detail::throw_model_move_source_owns_destination();
+        }
 
         auto rebound = [&]() {
             if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
@@ -616,7 +668,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & {
-        return detail::emplace_model_value<t_type>(resource_, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
+        return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
     }
 
     void push_back(const t_type& value) & {
@@ -661,6 +713,20 @@ private:
         return rebound;
     }
 
+    [[nodiscard]] bool owns_for_model(const void* address) const noexcept {
+        if (detail::model_address_within(address, items_.data(), items_.size() * sizeof(t_type))) {
+            return true;
+        }
+        if constexpr (detail::model_value_rebind_access::can_own<t_type>()) {
+            for (const auto& value : items_) {
+                if (detail::model_value_rebind_access::owns(value, address)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     std::pmr::memory_resource* resource_;
     std::pmr::vector<t_type> items_;
 };
@@ -687,6 +753,10 @@ public:
     boxed_array& operator=(boxed_array&& other) {
         if (this == &other) {
             return *this;
+        }
+        // Consuming a source that owns this array would destroy the destination.
+        if (other.owns_for_model(this)) {
+            detail::throw_model_move_source_owns_destination();
         }
 
         auto rebound = [&]() {
@@ -781,7 +851,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace(args_type&&... args) & {
-        return detail::emplace_model_value<t_type>(resource_, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
+        return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
     }
 
     void push_back(const t_type& value) & {
@@ -888,6 +958,20 @@ private:
             rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
         }
         return rebound;
+    }
+
+    [[nodiscard]] bool owns_for_model(const void* address) const noexcept {
+        for (const auto* value : items_) {
+            if (detail::model_address_within(address, value, sizeof(t_type))) {
+                return true;
+            }
+            if constexpr (detail::model_value_rebind_access::can_own<t_type>()) {
+                if (detail::model_value_rebind_access::owns(*value, address)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     std::pmr::memory_resource* resource_;

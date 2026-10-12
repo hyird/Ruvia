@@ -1,6 +1,9 @@
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
+
+#include <openssl/ssl.h>
 
 #include "ruvia/core/worker_selection.h"
 
@@ -11,7 +14,11 @@
 namespace ruvia::detail {
 
 app_state::app_state()
-    : runtime_(nullptr, pmr_object_deleter<app_runtime_graph>{app_resource()}) {
+    : runtime_(nullptr, pmr_object_deleter<app_runtime_graph>{process_resource()}) {
+    // listen() keeps loaded TLS credentials here; initializing OpenSSL first registers its atexit cleanup before the app singleton completes, so the app is destroyed first.
+    if (OPENSSL_init_ssl(0, nullptr) != 1) {
+        throw std::runtime_error("failed to initialize OpenSSL");
+    }
     apply_server_config(*this, server_config{});
 }
 
@@ -27,12 +34,12 @@ application& app() {
 }
 
 application::application()
-    : state_(construct_pmr_object<detail::app_state>(detail::app_resource())) {}
+    : state_(construct_pmr_object<detail::app_state>(process_resource())) {}
 
 application::~application() = default;
 
 void application::state_deleter_type::operator()(detail::app_state* state_value) const noexcept {
-    destroy_pmr_object(state_value, detail::app_resource());
+    destroy_pmr_object(state_value, process_resource());
 }
 
 const env& application::env() const noexcept {
@@ -53,10 +60,13 @@ http_server_stats application::http_stats() const {
         total.connection_failures_ += stats.connection_failures_;
         total.accept_failures_ += stats.accept_failures_;
         total.worker_failures_ += stats.worker_failures_;
-        total.document_root_refresh_failures_ += stats.document_root_refresh_failures_;
     }
     if (state_value.runtime_->ingress_) {
         total.connections_refused_ += state_value.runtime_->ingress_->refused_connections();
+    }
+    // One application-wide refresher owns the count; workers only adopt.
+    if (state_value.runtime_->document_root_) {
+        total.document_root_refresh_failures_ = state_value.runtime_->document_root_->failures();
     }
     return total;
 }
@@ -74,7 +84,7 @@ std::vector<web_worker_handle> application::workers() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     std::vector<web_worker_handle> result;
-    if (!state_value.runtime_) {
+    if (!state_value.runtime_ || !state_value.runtime_->workers_ready_) {
         return result;
     }
     result.reserve(state_value.runtime_->workers_.size());
@@ -87,7 +97,8 @@ std::vector<web_worker_handle> application::workers() const {
 web_worker_handle application::worker_for(std::uint64_t key) const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
-    if (!state_value.runtime_ || state_value.runtime_->workers_.empty()) {
+    if (!state_value.runtime_ || !state_value.runtime_->workers_ready_ ||
+        state_value.runtime_->workers_.empty()) {
         return {};
     }
     return state_value.runtime_->workers_[key % state_value.runtime_->workers_.size()].runtime_->web_worker();
@@ -105,10 +116,15 @@ void application::stop() {
     auto& state_value = *state_;
     {
         std::lock_guard lock(state_value.mutex_);
-        if (state_value.lifecycle_.request_stop() == detail::app_stop_request::ignored) {
+        const auto request = state_value.lifecycle_.request_stop();
+        if (request == detail::app_stop_request::ignored) {
             return;
         }
-        detail::request_runtime_stop(state_value);
+        // A serving app drains first: its run() owner wakes below and stops
+        // the runtime once in-flight requests have finished.
+        if (request == detail::app_stop_request::startup) {
+            detail::request_runtime_stop(state_value);
+        }
     }
     state_value.lifecycle_changed_.notify_all();
 }

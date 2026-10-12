@@ -16,6 +16,8 @@ enum class json_hex_case : std::uint8_t { upper,
     return value == '"' || value == '\\' || value < 0x20;
 }
 
+// Reservation hint for append_json_string. It counts escapes only; output for
+// ill-formed UTF-8 grows by up to two bytes per replaced byte beyond the hint.
 [[nodiscard]] inline std::size_t json_string_size_hint(std::string_view value) noexcept {
     std::size_t size = value.size() + 2;
     std::size_t offset = 0;
@@ -40,19 +42,34 @@ enum class json_hex_case : std::uint8_t { upper,
     return size;
 }
 
-// Escapes and appends a JSON string. Bytes >= 0x20 (other than '"' and '\\')
-// are copied verbatim, including any 0x80..0xFF, without UTF-8 validation: this
-// is the response hot path, and validating every byte of every string is a cost
-// the framework deliberately avoids. RFC 8259 8.1 requires interchanged JSON to
-// be UTF-8, so the caller must supply valid UTF-8 in string values; an ill-formed
-// sequence is emitted as-is and yields a non-UTF-8 body.
+// Escapes and appends a JSON string. RFC 8259 §8.1 requires interchanged JSON
+// to be UTF-8, so the output is well-formed UTF-8 whatever the input bytes are:
+// well-formed multibyte sequences are copied verbatim, and each maximal subpart
+// of an ill-formed sequence (a stray continuation byte, a truncated or overlong
+// sequence, a surrogate, a value above U+10FFFF, or text in another encoding
+// such as a Windows ANSI code page) becomes one U+FFFD REPLACEMENT CHARACTER
+// (Unicode 3.9 "U+FFFD substitution of maximal subparts"). ASCII runs are still
+// scanned 16 bytes at a time.
 template <json_hex_case case_value = json_hex_case::upper, typename string_t_type>
 inline void append_json_string(string_t_type& output, std::string_view value) {
+    constexpr std::string_view replacement_character = "\xEF\xBF\xBD";
     output.push_back('"');
     std::size_t chunk_begin = 0;
     std::size_t i = 0;
-    while ((i = find_json_escape_byte(value, i)) != std::string_view::npos) {
+    while ((i = find_json_string_token_byte(value, i)) != std::string_view::npos) {
         const auto c = static_cast<unsigned char>(value[i]);
+        if (c >= 0x80) {
+            const auto sequence = scan_json_utf8_sequence(value, i);
+            if (!sequence.well_formed_) {
+                if (i > chunk_begin) {
+                    output.append(value.data() + chunk_begin, i - chunk_begin);
+                }
+                output.append(replacement_character.data(), replacement_character.size());
+                chunk_begin = i + sequence.length_;
+            }
+            i += sequence.length_;
+            continue;
+        }
         if (i > chunk_begin) {
             output.append(value.data() + chunk_begin, i - chunk_begin);
         }

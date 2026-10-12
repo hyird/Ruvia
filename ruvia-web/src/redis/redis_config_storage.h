@@ -48,6 +48,18 @@ private:
         return source_value;
     }
 
+    // Public configuration parses the TLS files every pool's context
+    // installs; allocator-rebound copies share them.
+    template <typename source_type>
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const source_type& source_value, std::pmr::memory_resource* resource) {
+        if constexpr (std::same_as<source_type, redis_config>) {
+            return {source_value.tls_, client_tls_files::parse, resource};
+        } else {
+            return {source_value.tls_, resource};
+        }
+    }
+
     // Public configuration validation and allocator-rebound copies enter the
     // same owning construction path; no intermediate string copies or views.
     template <typename source_type>
@@ -59,7 +71,7 @@ private:
           port_(source_value.port_),
           username_(source_value.username_, resource),
           password_(source_value.password_, resource),
-          tls_(source_value.tls_, resource),
+          tls_(tls_storage(source_value, resource)),
           database_(source_value.database_),
           pool_size_per_worker_(source_value.pool_size_per_worker_),
           blocking_pool_size_per_worker_(source_value.blocking_pool_size_per_worker_),

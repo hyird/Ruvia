@@ -72,6 +72,9 @@ private:
         application,
         heartbeat };
 
+    enum class write_wait_type : std::uint8_t { writer,
+        reader };
+
     class write_guard_type final {
     public:
         write_guard_type(websocket_client_state& state_value, write_phase_type phase)
@@ -156,12 +159,16 @@ private:
     // Retires the client and throws the error describing a failed transport result.
     [[noreturn]] void throw_transport_failure(const client_transport_result& result);
     void finish_write(write_phase_type phase) noexcept;
-    [[nodiscard]] task<void> wait_for_write_idle();
+    // A waiting reader goes first: a writer that finishes and writes again
+    // would otherwise retake the lane before the reader's deferred wake-up.
+    [[nodiscard]] task<void> wait_for_write_idle(write_wait_type type);
     [[nodiscard]] task<void> heartbeat();
     void heartbeat_timer_fired() noexcept;
     [[nodiscard]] bool heartbeat_ping_due() noexcept;
     void arm_heartbeat_timer(std::chrono::milliseconds delay);
     void touch_activity() noexcept;
+    // Restarts an expired Pong window when a reader resumes polling input.
+    void resume_pong_deadline() noexcept;
     [[nodiscard]] std::chrono::milliseconds heartbeat_delay(std::int64_t now) const noexcept;
     [[nodiscard]] task<void> flush_output();
     [[nodiscard]] task<void> throw_protocol_error_after_flush(std::string_view message);
@@ -184,11 +191,11 @@ private:
     client_wire_counters wire_counters_{};
     client_tcp_transport transport_;
     worker_timer_registration connect_timer_;
-    worker_timer_registration read_timer_;
-    worker_timer_registration write_timer_;
     worker_timer_registration heartbeat_timer_;
     worker_timer_registration close_handshake_timer_;
     worker_signal write_signal_;
+    // Opening-handshake response bytes, then the transport read buffer of the
+    // single input reader (read_active_).
     std::pmr::string input_;
     std::optional<ruvia::websocket_connection> protocol_;
     std::pmr::string selected_subprotocol_;
@@ -198,6 +205,7 @@ private:
     bool write_active_{false};
     bool close_active_{false};
     write_phase_type write_phase_{write_phase_type::idle};
+    bool reader_waiting_{false};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     std::uint64_t heartbeat_sequence_{0};
     std::int64_t last_active_ms_{0};

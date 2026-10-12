@@ -30,7 +30,6 @@ task_scope::task_scope(const worker_handle& worker_value, task_scope_options opt
 
 task_scope::~task_scope() {
     if (active_ != 0 || std::holds_alternative<task_scope_open_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_join_reserved_type>(lifecycle_) ||
         std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
         std::terminate();
     }
@@ -40,9 +39,11 @@ void task_scope::spawn(task<void> task_value) & {
     if (!worker_.is_current()) {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
-    if (std::holds_alternative<task_scope_join_reserved_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_joining_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_joined_type>(lifecycle_)) {
+    const auto join_started = [this] {
+        return std::holds_alternative<task_scope_joining_type>(lifecycle_) ||
+               std::holds_alternative<task_scope_joined_type>(lifecycle_);
+    };
+    if (join_started()) {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
     if (task_value.handle_ == nullptr) {
@@ -51,6 +52,12 @@ void task_scope::spawn(task<void> task_value) & {
 
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);
     auto* node_value = allocator.new_object<node_type>(*this, std::move(task_value));
+    // The scope's resource may reenter it and start a join while allocating;
+    // that join owns the scope, so the unstarted child is discarded.
+    if (join_started()) {
+        allocator.delete_object(node_value);
+        throw std::logic_error("cannot spawn a task after task scope join started");
+    }
     node_value->next_ = head_;
     if (head_ != nullptr) {
         head_->previous_ = node_value;
@@ -64,15 +71,24 @@ void task_scope::spawn(task<void> task_value) & {
 }
 
 void task_scope::request_stop() & noexcept {
-    stop_source_.request_stop();
+    stop_requested_ = true;
+    if (stop_source_) {
+        stop_source_->request_stop();
+    }
 }
 
-stop_token task_scope::get_stop_token() const& noexcept {
-    return stop_source_.token();
+stop_token task_scope::get_stop_token() const& {
+    if (!stop_source_) {
+        stop_source_.emplace();
+        if (stop_requested_) {
+            stop_source_->request_stop();
+        }
+    }
+    return stop_source_->token();
 }
 
 bool task_scope::stop_requested() const& noexcept {
-    return stop_source_.stop_requested();
+    return stop_requested_;
 }
 
 std::size_t task_scope::size() const& noexcept {
@@ -83,58 +99,34 @@ task<void> task_scope::join() & {
     if (!worker_.is_current()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (std::holds_alternative<task_scope_join_reserved_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_joining_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_joined_type>(lifecycle_)) {
-        throw std::logic_error("task scope can only be joined once");
-    }
-    lifecycle_.template emplace<task_scope_join_reserved_type>();
-    return join_reserved(join_reservation_type(*this));
+    return join_scope(*this);
 }
 
-task<void> task_scope::join_reserved(join_reservation_type reservation) {
-    auto& scope = reservation.scope();
-    if (!scope.worker_.is_current()) {
-        throw std::logic_error("task scope join must run on its bound worker");
-    }
+task<void> task_scope::join_scope(task_scope& scope) {
     co_await join_awaiter_type{scope};
 }
 
-task_scope::join_reservation_type::~join_reservation_type() {
-    if (scope_ != nullptr) {
-        scope_->release_join_reservation();
+bool task_scope::join_awaiter_type::await_ready() const {
+    if (!scope_.worker_.is_current()) {
+        throw std::logic_error("task scope join must run on its bound worker");
     }
-}
-
-void task_scope::release_join_reservation() noexcept {
-    if (!std::holds_alternative<task_scope_join_reserved_type>(lifecycle_)) {
-        return;
-    }
-    if (active_ == 0) {
-        lifecycle_.template emplace<task_scope_empty_type>();
-    } else {
-        lifecycle_.template emplace<task_scope_open_type>();
-    }
-}
-
-bool task_scope::join_awaiter_type::await_ready() const noexcept {
-    return scope_.active_ == 0;
-}
-
-bool task_scope::join_awaiter_type::await_suspend(std::coroutine_handle<> continuation) {
-    if (!std::holds_alternative<task_scope_join_reserved_type>(scope_.lifecycle_) ||
-        std::holds_alternative<task_scope_joining_type>(scope_.lifecycle_) ||
+    if (std::holds_alternative<task_scope_joining_type>(scope_.lifecycle_) ||
         std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
+    if (scope_.active_ == 0) {
+        scope_.lifecycle_.template emplace<task_scope_joined_type>();
+        return true;
+    }
+    return false;
+}
+
+void task_scope::join_awaiter_type::await_suspend(std::coroutine_handle<> continuation) noexcept {
     scope_.lifecycle_.template emplace<task_scope_joining_type>(continuation);
-    return true;
 }
 
 void task_scope::join_awaiter_type::await_resume() {
-    if (std::holds_alternative<task_scope_join_reserved_type>(scope_.lifecycle_)) {
-        scope_.lifecycle_.template emplace<task_scope_joined_type>();
-    } else if (!std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
+    if (!std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
         std::terminate();
     }
     scope_.rethrow_failure();

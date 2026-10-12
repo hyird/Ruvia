@@ -40,9 +40,9 @@ ruvia::task<request_binding_out> make_response(std::string_view id, std::string_
 
 }  // namespace
 
-class request_binding_controller final : public ruvia::controller<request_binding_controller> {
+class request_binding_controller final {
 public:
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(request_binding_controller)
     RUVIA_PUT("/request-binding/:id", update, ruvia::path_model<request_binding_params>,
         ruvia::json_body<request_binding_body>);
     RUVIA_PATCH("/request-binding-patch", patch, ruvia::json_body<patch_binding_body>);

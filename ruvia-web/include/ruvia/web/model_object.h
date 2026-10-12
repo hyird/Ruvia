@@ -59,7 +59,8 @@ public:
     [[nodiscard]] static std::optional<json_value> parse(
         std::string_view body, model_parse_options options = {}) noexcept {
         auto input = body;
-        if (!detail::skip_json_value(input)) {
+        detail::json_parse_budget budget(options);
+        if (!budget.skip_value(input, 0)) {
             return std::nullopt;
         }
         detail::skip_json_whitespace(input);
@@ -218,7 +219,9 @@ public:
     [[nodiscard]] static std::optional<json_object> parse(
         std::string_view body, model_parse_options options = {}) noexcept {
         auto input = body;
-        if (!detail::skip_json_object(input)) {
+        detail::json_parse_budget budget(options);
+        detail::skip_json_whitespace(input);
+        if (input.empty() || input.front() != '{' || !budget.skip_value(input, 0)) {
             return std::nullopt;
         }
         detail::skip_json_whitespace(input);

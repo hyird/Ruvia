@@ -221,18 +221,6 @@ void detail::router_impl::build_middleware_frames() {
     plan.unmatched_middleware_count_ = plan.middleware_frame_instances_.size() - plan.unmatched_middleware_offset_;
 }
 
-void detail::router_impl::build_server_extension_method_tokens() {
-    auto& plan = *plan_;
-    plan.server_extension_method_tokens_.reserve(plan.extension_route_indices_.size());
-    for (const auto route_index : plan.extension_route_indices_) {
-        const auto token = plan.routes_[route_index].method_token();
-        if (std::ranges::find(plan.server_extension_method_tokens_, token) ==
-            plan.server_extension_method_tokens_.end()) {
-            plan.server_extension_method_tokens_.push_back(token);
-        }
-    }
-}
-
 void detail::router_impl::build_url_patterns() {
     auto& patterns = plan_->url_patterns_;
     patterns.reserve(plan_->routes_.size());

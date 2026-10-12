@@ -140,39 +140,43 @@ http_response_compression_decision prepare_response_compression(
     return http_response_compression_decision::encode;
 }
 
-http_response_compression_result apply_response_compression(const http_response_coding_selection& selection,
-    http_known_method request_method, http_response& response, const compression_config& options) {
-    const auto response_content = response.body_bytes();
+http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection,
+    http_known_method request_method, http_response& response, const compression_config& options,
+    bool offload_available) {
+    constexpr http_buffered_compression_step not_applicable{
+        http_response_compression_result::make_not_applicable(), false};
+    const auto body = response.body_bytes();
 
     const auto decision = prepare_response_compression(selection, request_method, response,
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
-    if (decision != http_response_compression_decision::encode) {
-        return http_response_compression_result::make_not_applicable();
+    if (decision != http_response_compression_decision::encode || body.size() < options.min_bytes_ ||
+        body.size() > options.max_bytes_) {
+        return not_applicable;
+    }
+    // Without a blocking pool there is no offload boundary, only the
+    // configured policy: everything through max_bytes_ encodes in line.
+    if (offload_available && body.size() > options.sync_bytes_) {
+        return {http_response_compression_result::make_not_applicable(), true};
     }
 
     const auto coding = selection.coding();
-    if (response_content.size() < options.min_bytes_ ||
-        response_content.size() > options.max_bytes_ || response_content.size() > options.sync_bytes_) {
-        return http_response_compression_result::make_not_applicable();
-    }
-    const auto body = response_content;
     const auto max_encoded_bytes = body.empty() ? 0 : body.size() - 1;
     std::optional<http_content_encode_result> encoding;
     try {
         encoding.emplace(encode_http_content(coding, body,
             {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()}));
     } catch (...) {
-        return http_response_compression_result::make_failed();
+        return {http_response_compression_result::make_failed(), false};
     }
     auto* encoded = encoding->encoded();
     if (encoded == nullptr) {
         const auto* failure = encoding->failure();
         if (failure != nullptr &&
             failure->error() == http_content_encode_error::encoded_size_exceeded) {
-            return http_response_compression_result::make_not_applicable();
+            return not_applicable;
         }
-        return http_response_compression_result::make_failed();
+        return {http_response_compression_result::make_failed(), false};
     }
 
     try {
@@ -183,40 +187,17 @@ http_response_compression_result apply_response_compression(const http_response_
         // publishing the owned body. A request-resource failure therefore
         // leaves the identity response usable for the typed 500 path instead
         // of exposing a mixed body/metadata state.
-        return http_response_compression_result::make_failed();
+        return {http_response_compression_result::make_failed(), false};
     }
-    return http_response_compression_result::make_compressed();
+    return {http_response_compression_result::make_compressed(), false};
 }
 
-task<http_response_compression_result> apply_response_compression_async(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, compression_config options, blocking_pool* pool,
-    const worker_handle& worker_value) {
-    const auto response_content = response.body_bytes();
-    const auto coding = selection.coding();
-    const auto size = response_content.size();
-    if (size <= options.sync_bytes_) {
-        co_return apply_response_compression(selection, request_method, response, options);
-    }
-    if (pool == nullptr) {
-        // An explicitly disabled pool removes the offload boundary, not the
-        // configured compression policy. Extend the synchronous range through
-        // max_bytes and keep the same eligibility/commit behavior.
-        options.sync_bytes_ = options.max_bytes_;
-        co_return apply_response_compression(selection, request_method, response, options);
-    }
-    const auto decision = prepare_response_compression(selection, request_method, response,
-        http_response_compression_source::buffered,
-        http_response_coding_availability::identity_and_compression);
-    if (decision != http_response_compression_decision::encode || size < options.min_bytes_ ||
-        size > options.max_bytes_) {
-        co_return http_response_compression_result::make_not_applicable();
-    }
-
+task<http_response_compression_result> compress_response_offloaded(http_content_coding coding,
+    http_response& response, blocking_pool& pool, const worker_handle& worker_value) {
     try {
-        std::pmr::string plain(response_content, process_resource());
+        std::pmr::string plain(response.body_bytes(), process_resource());
         auto result_value =
-            co_await try_run_blocking(*pool, worker_value, [coding, plain = std::move(plain)]() mutable {
+            co_await try_run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() mutable {
                 return encode_buffered_body(coding, std::move(plain));
             });
         if (result_value.failed()) {

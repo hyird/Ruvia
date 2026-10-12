@@ -382,6 +382,9 @@ public:
         auto mapper = projection_mapper<output_type>();
         auto query = query_.clone(query_.resource());
         query.limit(1);
+        // An id-keyed cache entry ignores the SQL, so each result shape derived
+        // from one builder is keyed by the id together with its shape.
+        query.copy_cache(query_, detail::db_cache_shape::one);
         if constexpr (std::same_as<output_type, entity_type>) {
             if (relations_ && !relations_->empty()) {
                 auto prepared = relations_->template prepare<entity_type>(query, alias_, executor_.query_driver());
@@ -400,7 +403,7 @@ public:
         source_value.clear_order().clear_lock().limit(std::nullopt).offset(std::nullopt);
         db_query query(query_.resource());
         query.select(query.alias(query.exists(source_value), "exists"));
-        query.copy_cache(query_);
+        query.copy_cache(query_, detail::db_cache_shape::exists);
         return executor_.template query_mapped<bool>(query, detail::db_map_exists{});
     }
     template <typename output_type = entity_type>
@@ -410,7 +413,6 @@ public:
         }
         auto mapper = projection_mapper<output_type>();
         auto count = count_query();
-        count.copy_cache(query_, "-count");
         if constexpr (std::same_as<output_type, entity_type>) {
             if (relations_ && !relations_->empty()) {
                 auto prepared = relations_->template prepare<entity_type>(query_, alias_, executor_.query_driver());
@@ -471,7 +473,7 @@ private:
         db_query count(query_.resource());
         const std::array args{count.star()};
         count.select(count.alias(count.aggregate("count", args), "count")).from(source_value, "count_source");
-        count.copy_cache(query_);
+        count.copy_cache(query_, detail::db_cache_shape::count);
         return count;
     }
     db_query_builder& join_and_select(std::string_view relation, std::string_view alias, db_join_type join) {

@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "router/path_segments.h"
 #include "router/route_table.h"
@@ -36,10 +36,27 @@ void append_url_for_value(std::pmr::string& output, std::string_view value, bool
         if (escaped == value.end()) {
             return;
         }
-        const auto raw = static_cast<unsigned char>(*escaped);
-        const char encoded[] = {'%', http_upper_hex_digit(raw >> 4), http_upper_hex_digit(raw)};
-        output.append(encoded, sizeof(encoded));
+        http_append_percent_byte(output, static_cast<unsigned char>(*escaped));
         value.remove_prefix(plain_size + 1);
+    }
+}
+
+// RFC 3986 5.2.4 resolvers remove "." and ".." segments, and WHATWG URL
+// parsers treat "%2E" spellings the same way, so encoding cannot keep them.
+[[nodiscard]] constexpr bool is_url_for_dot_segment(std::string_view segment) noexcept {
+    return segment == "." || segment == "..";
+}
+
+[[nodiscard]] bool has_url_for_dot_segment(std::string_view value) noexcept {
+    while (true) {
+        const auto slash = value.find('/');
+        if (is_url_for_dot_segment(value.substr(0, slash))) {
+            return true;
+        }
+        if (slash == std::string_view::npos) {
+            return false;
+        }
+        value.remove_prefix(slash + 1);
     }
 }
 
@@ -66,11 +83,21 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             if (next_value >= values.size()) {
                 throw std::invalid_argument("url_for is missing a value for '*'");
             }
-            const auto value = values[next_value++];
+            auto value = values[next_value++];
+            if (has_url_for_dot_segment(value)) {
+                throw std::invalid_argument("url_for '*' value must not contain a '.' or '..' segment");
+            }
             // An empty capture addresses the bare mount path itself, which is
             // exactly what the wildcard route matches for it.
             if (!value.empty()) {
+                const bool at_root = url.empty();
                 url.push_back('/');
+                if (at_root && value.front() == '/') {
+                    // "//" would start a network-path reference naming another
+                    // host; the router decodes "%2F" back to the same capture.
+                    url.append("%2F");
+                    value.remove_prefix(1);
+                }
                 append_url_for_value(url, value, /*keep_slashes=*/true);
             } else if (url.empty()) {
                 url.push_back('/');
@@ -86,8 +113,14 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             if (value.empty()) {
                 throw std::invalid_argument("url_for route parameter value must not be empty");
             }
+            if (is_url_for_dot_segment(value)) {
+                throw std::invalid_argument("url_for route parameter value must not be '.' or '..'");
+            }
             append_url_for_value(url, value, /*keep_slashes=*/false);
         } else {
+            if (is_url_for_dot_segment(segment)) {
+                throw std::invalid_argument("url_for pattern must not contain a '.' or '..' segment");
+            }
             url.append(segment.data(), segment.size());
         }
     }
@@ -96,6 +129,10 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
     }
     if (pattern.ends_with('/')) {
         url.push_back('/');
+    }
+    // Only a pattern starting with an empty segment can still produce "//".
+    if (url.starts_with("//")) {
+        throw std::invalid_argument("url_for pattern must not start with an empty segment");
     }
     return url;
 }

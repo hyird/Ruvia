@@ -71,14 +71,7 @@ private:
     std::pmr::string key_;
     websocket_client_negotiation negotiation_;
 
-    struct stored_header_type final {
-        std::pmr::string name_;
-        std::pmr::string value_;
-        stored_header_type(std::string_view n, std::string_view v, std::pmr::memory_resource* r)
-            : name_(n, r),
-              value_(v, r) {}
-    };
-    std::pmr::vector<stored_header_type> headers_;
+    std::pmr::vector<http_header> headers_;
     std::pmr::string user_agent_;
 };
 

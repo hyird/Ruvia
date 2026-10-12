@@ -16,7 +16,6 @@ using ruvia::http_parse_protocol_error;
 using ruvia::is_valid_http_header_name;
 using ruvia::is_valid_http_header_value;
 using ruvia::is_valid_http_method_token;
-using ruvia::is_valid_http_status_text;
 using ruvia::known_http_method_token;
 
 }  // namespace

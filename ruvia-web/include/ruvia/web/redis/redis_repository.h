@@ -69,7 +69,8 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory);
-        detail::redis_map_many<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
+        detail::redis_map_many<entity_type> mapper{std::pmr::string(mapping().prefix_, memory),
+            options.take_.has_value() ? std::nullopt : std::optional<std::uint64_t>(options.skip_.value_or(0U))};
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
 

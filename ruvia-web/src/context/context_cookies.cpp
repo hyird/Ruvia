@@ -45,17 +45,16 @@ namespace {
     return signed_value;
 }
 
-void write_cookie(http_response& response, std::string_view name, std::string_view value,
+void write_cookie(detail::context_response_state& state_value, std::string_view name, std::string_view value,
     const cookie_options& options) {
     const set_cookie_plan plan(name, value, options);
-    response.set_cookie(plan);
+    state_value.update_metadata([&plan](http_response& response) { response.set_cookie(plan); });
 }
 
 }  // namespace
 
 void context::set_cookie(set_cookie_options options) {
-    write_cookie(response_state().active_response(), options.name_.view(), options.value_.view(),
-        options.attributes_);
+    write_cookie(response_state(), options.name_.view(), options.value_.view(), options.attributes_);
 }
 
 void context::set_signed_cookie(set_signed_cookie_options options) {
@@ -63,7 +62,7 @@ void context::set_signed_cookie(set_signed_cookie_options options) {
     const auto name = options.name_.view();
     const auto value = options.value_.view();
     const auto secret = options.secret_.view();
-    write_cookie(response_state().active_response(), name,
+    write_cookie(response_state(), name,
         compose_signed_cookie_value(
             pool(), cookie_wire_name(wire_name, name, options.attributes_), value, secret),
         options.attributes_);
@@ -71,7 +70,7 @@ void context::set_signed_cookie(set_signed_cookie_options options) {
 
 void context::delete_cookie(delete_cookie_options options) {
     options.attributes_.max_age_ = std::chrono::seconds(0);
-    write_cookie(response_state().active_response(), options.name_.view(), "", options.attributes_);
+    write_cookie(response_state(), options.name_.view(), "", options.attributes_);
 }
 
 }  // namespace ruvia

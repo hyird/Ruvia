@@ -103,16 +103,15 @@ void detail::http_client_response_state::retain_informational(http_status_code s
     }
     http_client_informational_response head(status_code, resource_);
     head.headers_.reserve(fields_value.size());
-    std::size_t bytes_value = informational_field_bytes_;
+    auto budget = informational_budget_;
     for (const auto& field : fields_value) {
-        if (bytes_value > max_http_header_bytes - 32 || field.name().size() > max_http_header_bytes - bytes_value - 32 || field.value().size() > max_http_header_bytes - bytes_value - 32 - field.name().size()) {
+        if (!budget.add_field(field.name(), field.value())) {
             throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
         }
-        bytes_value += 32 + field.name().size() + field.value().size();
         head.headers_.push_back(http_header::copy_of(field.name(), field.value(), resource_));
     }
     informational_.push_back(std::move(head));
-    informational_field_bytes_ = bytes_value;
+    informational_budget_ = budget;
 }
 
 http_status_code http_client_response::status() const noexcept {
@@ -175,19 +174,18 @@ void detail::http_client_response_state::discard_response_body() noexcept {
 }
 
 void detail::http_client_response_state::release_consumed_body_prefix() {
-    if (offset_ == 0) {
-        return;
-    }
     if (offset_ > buffered_.size()) {
         std::terminate();
     }
-    if (offset_ == buffered_.size()) {
-        {
-            std::pmr::string empty(resource_);
-            buffered_.swap(empty);
-        }
-    } else {
-        buffered_.erase(0, offset_);
+    // A partly consumed buffer keeps its prefix behind the cursor: compacting
+    // it on every chunk would move the unread tail once per read. Producers
+    // only append to pending_, so the retained prefix never limits them.
+    if (offset_ == 0 || offset_ != buffered_.size()) {
+        return;
+    }
+    {
+        std::pmr::string empty(resource_);
+        buffered_.swap(empty);
     }
     offset_ = 0;
     notify_producer_space();

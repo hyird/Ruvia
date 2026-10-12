@@ -48,8 +48,10 @@ struct redis_config {
     // pool, including write and every reply read, rather than restarting for
     // each I/O wait; startup commands honor the earlier of both deadlines.
     // The isolated blocking pool does not inherit this timeout: typed finite
-    // waits derive a per-operation deadline from their Redis wait, and infinite
-    // waits require an explicit stop_token or operation timeout.
+    // waits bound the reply by their Redis wait plus a one-second grace, armed
+    // when the command is written, so slot acquisition (acquire_timeout) and a
+    // lazy connect (connect_timeout) do not consume the server-side window.
+    // Infinite waits require an explicit stop_token or operation timeout.
     std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
     std::optional<std::chrono::milliseconds> command_timeout_{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
@@ -509,8 +511,7 @@ public:
         io_error,
         timeout,
         cancelled,
-        closing,
-        transaction_aborted
+        closing
     };
 
     redis_error(code_type code, std::string_view message);

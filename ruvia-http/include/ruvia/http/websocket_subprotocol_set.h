@@ -19,7 +19,7 @@ public:
             return false;
         }
         for (const char character : protocol) {
-            if (!detail::is_http_token_char(static_cast<unsigned char>(character))) {
+            if (!is_http_token_char(static_cast<unsigned char>(character))) {
                 return false;
             }
         }

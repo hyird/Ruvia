@@ -60,42 +60,36 @@ task<redis_z_scan_result> execute_redis_z_scan(detail::redis_command_executor ex
     co_return detail::parse_redis_z_scan_result(value, resource);
 }
 
-[[nodiscard]] std::chrono::milliseconds redis_block_client_timeout(
-    std::chrono::milliseconds timeout) noexcept {
-    constexpr auto grace = std::chrono::seconds(1);
-    if (timeout > std::chrono::milliseconds::max() - grace) {
-        return std::chrono::milliseconds::max();
-    }
-    return timeout + grace;
-}
-
-[[nodiscard]] operation_options redis_blocking_operation_options(
-    operation_options options, redis_block_wait wait) {
+// The server-side wait starts when the command is written, so the reply
+// deadline is armed at write time: slot acquisition and a lazy connect must not
+// consume the block window. The grace covers the reply's network latency.
+[[nodiscard]] std::optional<std::chrono::milliseconds> redis_block_reply_timeout(
+    const operation_options& options, redis_block_wait wait) {
     if (const auto duration = wait.duration(); duration.has_value()) {
-        const auto client_timeout = redis_block_client_timeout(*duration);
-        if (!options.timeout_.has_value() || client_timeout < *options.timeout_) {
-            options.timeout_ = client_timeout;
+        constexpr auto grace = std::chrono::seconds(1);
+        if (*duration > std::chrono::milliseconds::max() - grace) {
+            return std::chrono::milliseconds::max();
         }
-    } else if (!options.stop_token_.stoppable() && !options.timeout_.has_value()) {
+        return *duration + grace;
+    }
+    if (!options.stop_token_.stoppable() && !options.timeout_.has_value()) {
         throw std::invalid_argument(
             "infinite redis block requires a stop_token or finite operation timeout");
     }
-    return options;
+    return std::nullopt;
 }
 
 task<std::optional<redis_key_value>> execute_redis_blocking_pop(detail::redis_pool& pool,
     std::pmr::vector<std::pmr::string> args, operation_options options,
-    std::pmr::memory_resource* resource) {
-    auto reply = co_await detail::execute_owned_redis_command(
-        pool, std::move(args), std::move(options), resource);
+    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
+    auto reply = co_await pool.execute_owned(std::move(args), resource, std::move(options), reply_timeout);
     co_return detail::parse_redis_blocking_pop_reply(reply, resource);
 }
 
 task<std::optional<redis_x_read_group_result>> execute_redis_x_read_group(detail::redis_pool& pool,
     std::pmr::vector<std::pmr::string> args, operation_options options,
-    std::pmr::memory_resource* resource) {
-    auto reply = co_await detail::execute_owned_redis_command(
-        pool, std::move(args), std::move(options), resource);
+    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
+    auto reply = co_await pool.execute_owned(std::move(args), resource, std::move(options), reply_timeout);
     co_return detail::parse_redis_x_read_group_reply(reply, resource);
 }
 
@@ -167,32 +161,34 @@ scoped_operation<std::pmr::vector<bool>> redis_handle::script_exists(
 scoped_operation<std::optional<redis_key_value>> redis_handle::blpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
+    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
     return scoped(execute_redis_blocking_pop(*blocking_pool_,
-        detail::redis_blocking_pop_args("BLPOP", keys, wait, resource_),
-        redis_blocking_operation_options(operation_options_, wait), resource_));
+        detail::redis_blocking_pop_args("BLPOP", keys, wait, resource_), operation_options_, reply_timeout,
+        resource_));
 }
 
 scoped_operation<std::optional<redis_key_value>> redis_handle::brpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
+    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
     return scoped(execute_redis_blocking_pop(*blocking_pool_,
-        detail::redis_blocking_pop_args("BRPOP", keys, wait, resource_),
-        redis_blocking_operation_options(operation_options_, wait), resource_));
+        detail::redis_blocking_pop_args("BRPOP", keys, wait, resource_), operation_options_, reply_timeout,
+        resource_));
 }
 
 scoped_operation<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
     std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams,
     redis_x_read_group_options options) const {
     registration_.require_active();
-    auto operation = operation_options_;
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options, resource_);
     auto* selected_pool = pool_;
+    std::optional<std::chrono::milliseconds> reply_timeout;
     if (options.block_.has_value()) {
         selected_pool = blocking_pool_;
-        operation = redis_blocking_operation_options(std::move(operation), *options.block_);
+        reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);
     }
-    return scoped(
-        execute_redis_x_read_group(*selected_pool, std::move(args), std::move(operation), resource_));
+    return scoped(execute_redis_x_read_group(
+        *selected_pool, std::move(args), operation_options_, reply_timeout, resource_));
 }
 
 redis_pipeline redis_handle::pipeline() const {

@@ -232,3 +232,34 @@ RUVIA_TEST(json_value_get_reads_object_fields_and_rejects_non_objects) {
     RUVIA_CHECK(array_value.has_value());
     RUVIA_CHECK(!array_value->get<ruvia::int32>("age").has_value());
 }
+
+RUVIA_TEST(json_dynamic_parse_enforces_cumulative_array_element_budget) {
+    RUVIA_CHECK(!ruvia::json_value::parse("[1]", {.max_array_elements_ = 0}).has_value());
+    RUVIA_CHECK(ruvia::json_value::parse("[]", {.max_array_elements_ = 0}).has_value());
+    RUVIA_CHECK(ruvia::json_value::parse("[1]", {.max_array_elements_ = 1}).has_value());
+    RUVIA_CHECK(!ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 3}).has_value());
+    RUVIA_CHECK(ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 4}).has_value());
+    RUVIA_CHECK(!ruvia::json_value::parse(R"({"a":{"b":[1,2]}})", {.max_array_elements_ = 1}).has_value());
+
+    RUVIA_CHECK(!ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 0}).has_value());
+    RUVIA_CHECK(ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 1}).has_value());
+    RUVIA_CHECK(!ruvia::json_object::parse(R"({"a":{"b":[1,2]},"c":[3]})", {.max_array_elements_ = 2})
+                     .has_value());
+    RUVIA_CHECK(ruvia::json_object::parse(" {} ", {.max_array_elements_ = 0}).has_value());
+    RUVIA_CHECK(!ruvia::json_object::parse("[]").has_value());
+
+    const auto elements = [](std::size_t count) {
+        std::string body = R"({"a":[)";
+        for (std::size_t index = 0; index != count; ++index) {
+            body.append(index == 0 ? "0" : ",0");
+        }
+        body.append("]}");
+        return body;
+    };
+    const auto at_default_limit = elements(64 * 1024);
+    const auto over_default_limit = elements(64 * 1024 + 1);
+    RUVIA_CHECK(ruvia::json_value::parse(at_default_limit).has_value());
+    RUVIA_CHECK(ruvia::json_object::parse(at_default_limit).has_value());
+    RUVIA_CHECK(!ruvia::json_value::parse(over_default_limit).has_value());
+    RUVIA_CHECK(!ruvia::json_object::parse(over_default_limit).has_value());
+}

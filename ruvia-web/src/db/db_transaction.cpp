@@ -80,11 +80,7 @@ db_transaction::db_transaction(detail::db_pool_ref_type client, std::size_t slot
 
 db_transaction::db_transaction(db_transaction&& other) noexcept
     : state_(std::move(other.state_)),
-      registration_(std::move(other.registration_), this) {
-#ifdef RUVIA_ENABLE_REDIS
-    cache_ = other.cache_;
-#endif
-}
+      registration_(std::move(other.registration_), this) {}
 
 db_transaction::~db_transaction() = default;
 
@@ -111,12 +107,11 @@ std::pmr::memory_resource* db_transaction::query_resource() const {
     return state_->operation_.preparation_payload().resource_;
 }
 
+// A transaction never uses the shared query cache: its reads may include its
+// own uncommitted writes, which must neither be published nor be replaced by
+// rows cached outside the transaction.
 detail::db_query_backend db_transaction::query_backend(const lease_type& lease) const {
-    detail::db_query_backend backend{lease.client_, lease.slot_, lease.resource_};
-#ifdef RUVIA_ENABLE_REDIS
-    backend.cache_ = cache_;
-#endif
-    return backend;
+    return detail::db_query_backend{lease.client_, lease.slot_, lease.resource_};
 }
 
 task<db_rows> db_transaction::query_task(const db_query& query) {
@@ -149,7 +144,7 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
         operation.finish_active();
         co_return result_value;
     } catch (...) {
-        // SQL failures have already retired the lease in the backend. Cache
+        // SQL failures have already retired the lease in the backend. Deadline
         // failures must retire it here while it is still owned by this operation.
         if (!backend_failed) {
             abort_pool_transaction(lease_value.client_, lease_value.slot_);

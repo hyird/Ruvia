@@ -81,6 +81,21 @@ private:
 };
 }  // namespace
 
+RUVIA_TEST(worker_memory_returns_bulk_blocks_upstream) {
+    constexpr std::size_t bulk_bytes = std::size_t{1} << 20;
+    counting_resource upstream;
+    ruvia::worker_memory worker_value(upstream);
+    auto* const resource = worker_value.resource();
+    const auto baseline = upstream.live_bytes_;
+    auto* const block = resource->allocate(bulk_bytes);
+    RUVIA_CHECK(upstream.live_bytes_ - baseline >= bulk_bytes);
+    // A pooled bulk block would stay reserved, with spares, for the worker's
+    // life; only the pool's own small bookkeeping may remain upstream.
+    RUVIA_CHECK(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
+    resource->deallocate(block, bulk_bytes);
+    RUVIA_CHECK(upstream.live_bytes_ - baseline < bulk_bytes / 16);
+}
+
 RUVIA_TEST(worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {
     counting_resource upstream;
     auto* const previous_default = std::pmr::get_default_resource();

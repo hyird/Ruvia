@@ -13,7 +13,6 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
-#include "context/http_tunnel_access.h"
 #include "http/http_socket_tunnel_transport.h"
 #include "http/http_stream_read_result.h"
 #include "http/tls_tunnel_output.h"
@@ -30,7 +29,7 @@ public:
         : transport_(stream, tls_output),
           resource_(resource),
           pending_(pending, &resource),
-          facade_(http_tunnel_access::make(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk)) {}
+          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
@@ -60,11 +59,13 @@ public:
             receive_ended_ = read.end() != nullptr;
         }
     }
+    // The transport must be stopped before joining if an operation remains
+    // suspended. Cold operations expire while their borrowed owner is alive.
     [[nodiscard]] task<void> join() {
-        if (http_tunnel_access::has_running_operations(facade_)) {
+        if (facade_.running_operations_ != 0) {
             abort();
         }
-        co_await http_tunnel_access::close_and_join(facade_);
+        co_await facade_.operations_.close_and_join();
     }
 
 private:
@@ -113,7 +114,10 @@ template <typename stream_type>
 [[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<stream_type>& session_value,
     connection_scanner::entry_type& entry_value, const route_stream_handler_type& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
-    entry_value.set_phase(connection_scanner::phase_type::long_lived);
+    // A draining worker closed the socket instead of admitting the tunnel.
+    if (!entry_value.enter_long_lived()) {
+        co_return;
+    }
     co_await handler(context_value);
 }
 

@@ -206,12 +206,14 @@ private:
     if (generate_upgrade_option) {
         if (response_options.has_field()) {
             response.header("Connection", "Upgrade",
-                http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         } else {
             response.header_stable_view("Connection", "Upgrade");
         }
     }
-    if (response_options.close()) {
+    // A failed CONNECT never becomes a tunnel; bytes the client already sent
+    // for the tunnel must not be parsed as the next request (RFC 9110 9.3.6).
+    if (response_options.close() || (plan.tunnel_request() && !response.status().is_successful())) {
         plan = plan.require_close();
     }
     if (plan.disposition() == http1_close_policy::close_after_response) {
@@ -222,7 +224,7 @@ private:
                !response_options.keep_alive()) {
         if (response_options.has_field() || generate_upgrade_option) {
             response.header("Connection", "keep-alive",
-                http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         } else {
             response.header_stable_view("Connection", "keep-alive");
         }

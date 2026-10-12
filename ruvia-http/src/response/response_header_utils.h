@@ -38,7 +38,7 @@ inline bool vary_token_repeated_in_batch(const std::string_view* tokens, std::si
         return false;
     }
     for (const auto& header : response.headers()) {
-        if (response_header_known_bit(header) == response_header_vary &&
+        if (http_response_header_access::known_bit(header) == response_header_vary &&
             http_has_token(header.value(), token)) {
             return true;
         }
@@ -100,7 +100,7 @@ inline void add_vary_tokens(
     std::size_t existing_bytes = 0;
     if (response_has_known_header(response, response_header_vary)) {
         for (const auto& header : response.headers()) {
-            if (response_header_known_bit(header) != response_header_vary ||
+            if (http_response_header_access::known_bit(header) != response_header_vary ||
                 http_trim_ows(header.value()).empty()) {
                 continue;
             }
@@ -120,7 +120,7 @@ inline void add_vary_tokens(
     updated.reserve(existing_bytes + added_bytes + (part_count == 0 ? 0 : (part_count - 1) * 2));
     if (existing_value_count != 0) {
         for (const auto& header : response.headers()) {
-            if (response_header_known_bit(header) != response_header_vary ||
+            if (http_response_header_access::known_bit(header) != response_header_vary ||
                 http_trim_ows(header.value()).empty()) {
                 continue;
             }

@@ -24,6 +24,15 @@ namespace {
     return result_budget_domain;
 }
 
+// An abandoned response may still be queued for a slot or connecting, before
+// its exchange registers a cancellation id: it must not write a request.
+void throw_if_abandoned(const http_client_response_state& state_value) {
+    if (state_value.abandoned_) {
+        throw http_client_error(
+            http_client_error::code_type::cancelled, "HTTP request abandoned before transport admission");
+    }
+}
+
 }  // namespace
 
 static_assert(worker_cancellation_post_is_inline<http_client_cancellation_target>);
@@ -130,6 +139,13 @@ void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noe
     }
 }
 
+void http_client_pool::require_accepting() const {
+    // join() retires background_tasks_, which then rejects every spawn.
+    if (background_joined_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
+    }
+}
+
 void http_client_pool::spawn_request(
     http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
     state_value.buffered_limit_ = config_.max_response_bytes_;
@@ -167,9 +183,7 @@ task<void> http_client_pool::await_head(http_client_response_state& state_value,
 
 task<http_client_tunnel_result> http_client_pool::open_tunnel(
     http_client_request_storage request, http_client_tunnel_config config, operation_options options) {
-    if (!response_memory_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
-    }
+    require_accepting();
     auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
@@ -189,9 +203,7 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
 
 task<http_client_exchange> http_client_pool::open_request(
     http_client_request_storage request, http_client_upload_config upload, operation_options options) {
-    if (!response_memory_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
-    }
+    require_accepting();
     auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
@@ -203,9 +215,7 @@ task<http_client_exchange> http_client_pool::open_request(
 }
 
 task<http_client_response> http_client_pool::execute(http_client_request_storage request, operation_options options) {
-    if (!response_memory_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
-    }
+    require_accepting();
     // The request owns all data before transport work can outlive the caller.
     auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
@@ -219,10 +229,7 @@ task<void> http_client_pool::execute_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     http_client_response keep_alive(state_value, true);
     try {
-        if (state_value->abandoned_) {
-            throw http_client_error(
-                http_client_error::code_type::cancelled, "HTTP request abandoned before transport admission");
-        }
+        throw_if_abandoned(*state_value);
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
         state_value->failure_ = std::current_exception();
@@ -286,8 +293,14 @@ task<void> http_client_pool::execute_request_into(
 task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
     const http_client_request_storage& request, const operation_timeout& timeout,
     stop_token stop_token_value, http_client_response_state& state_value, bool& discard_connection) {
+    // Abandonment before the exchange starts leaves no request bytes on the
+    // connection, so it stays reusable.
+    throw_if_abandoned(state_value);
     discard_connection = true;
     co_await connection_value.ensure_connected(timeout, stop_token_value);
+    discard_connection = false;
+    throw_if_abandoned(state_value);
+    discard_connection = true;
     http1_client_exchange exchange(*this, connection_value);
     co_await exchange.run(request, timeout, stop_token_value, state_value);
     discard_connection = false;

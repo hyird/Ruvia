@@ -2,6 +2,9 @@
 
 #include <concepts>
 #include <memory_resource>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_client.h"
@@ -42,7 +45,8 @@ struct http_client_config_storage final {
     client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
     std::pmr::string user_agent_;
-    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> cookies_;
+    // Configured name/value cookie pairs, one allocation per pair.
+    std::pmr::vector<http_header> cookies_;
 
     // Validating factory for the fixed origin. Owners that are never moved
     // cache the returned view, which borrows uri_host_.
@@ -68,6 +72,33 @@ private:
         }
     }
 
+    // Public https configuration parses the TLS files every pool's context
+    // installs; allocator-rebound copies share them.
+    template <typename source_type>
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const source_type& source_value, std::pmr::memory_resource* resource) {
+        if constexpr (std::same_as<source_type, http_client_config>) {
+            return {source_value.tls_,
+                source_value.scheme_ == http_scheme::https ? client_tls_files::parse : client_tls_files::keep_paths,
+                resource};
+        } else {
+            return {source_value.tls_, resource};
+        }
+    }
+
+    [[nodiscard]] static std::string_view cookie_name(const std::pair<std::string, std::string>& cookie) noexcept {
+        return cookie.first;
+    }
+    [[nodiscard]] static std::string_view cookie_name(const http_header& cookie) noexcept {
+        return cookie.name();
+    }
+    [[nodiscard]] static std::string_view cookie_value(const std::pair<std::string, std::string>& cookie) noexcept {
+        return cookie.second;
+    }
+    [[nodiscard]] static std::string_view cookie_value(const http_header& cookie) noexcept {
+        return cookie.value();
+    }
+
     // Resolve representation differences at the boundary, then own every field
     // and cookie through one allocator-bound construction path.
     template <typename source_type>
@@ -89,15 +120,14 @@ private:
           request_timeout_(source_value.request_timeout_),
           acquire_timeout_(source_value.acquire_timeout_),
           max_response_bytes_(source_value.max_response_bytes_),
-          tls_(source_value.tls_, resource),
+          tls_(tls_storage(source_value, resource)),
           tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
           user_agent_(source_value.user_agent_, resource),
           cookies_(resource) {
         cookies_.reserve(source_value.cookies_.size());
-        for (const auto& [name, value] : source_value.cookies_) {
-            cookies_.emplace_back(
-                std::pmr::string(name, resource), std::pmr::string(value, resource));
+        for (const auto& cookie : source_value.cookies_) {
+            cookies_.push_back(http_header::copy_of(cookie_name(cookie), cookie_value(cookie), resource));
         }
     }
 };

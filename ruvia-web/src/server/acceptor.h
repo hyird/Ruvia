@@ -22,6 +22,7 @@ namespace ruvia::detail {
 // The ingress owner detaches TCP sockets once for adoption by their worker.
 // Target objects must outlive this owner and its joined thread. Core owns the
 // lifecycle; serving starts acceptance and stopping closes every listener.
+// close_admission() closes the listeners earlier, while the runtime still runs.
 class acceptor final {
 public:
     struct worker_target final {
@@ -45,6 +46,9 @@ public:
         return runtime_;
     }
     worker_runtime& runtime() && = delete;
+    // Any thread: closes every listener on the owner thread without stopping
+    // the runtime. A stop closes them anyway.
+    void close_admission() noexcept;
     // TCP connections closed at ingress because no worker could take them or
     // the chosen worker's bounded queue rejected the hand-off. Any thread.
     [[nodiscard]] std::size_t refused_connections() const noexcept {
@@ -67,6 +71,8 @@ private:
     void schedule_retry(std::size_t index) noexcept;
     void close_listeners() noexcept;
     void stop_on_owner() noexcept;
+    // Owner thread: listeners still accept.
+    [[nodiscard]] bool admitting() const noexcept;
 
     worker_runtime runtime_;
     asio::io_context& io_context_;
@@ -75,6 +81,8 @@ private:
     void* failure_target_{};
     failure_callback failure_callback_{};
     std::size_t next_target_{};
+    // Owner thread only.
+    bool admitting_{true};
     std::atomic<std::size_t> refused_connections_{};
 };
 

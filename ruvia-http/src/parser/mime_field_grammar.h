@@ -65,29 +65,7 @@ namespace ruvia::detail {
     if (value.front() != '"') {
         return std::ranges::all_of(value, http_mime_token_char);
     }
-    if (value.size() < 2 || value.back() != '"') {
-        return false;
-    }
-
-    const auto last = value.size() - 1;
-    for (std::size_t index = 1; index < last; ++index) {
-        const auto byte = static_cast<unsigned char>(value[index]);
-        if (value[index] == '\\') {
-            if (++index >= last) {
-                return false;
-            }
-            const auto escaped = static_cast<unsigned char>(value[index]);
-            if (escaped != '\t' && (escaped < 0x20 || escaped == 0x7F)) {
-                return false;
-            }
-            continue;
-        }
-        if (value[index] == '"' || byte == 0 || byte == '\r' || byte == '\n' || byte == 0x7F ||
-            (byte < 0x20 && byte != '\t')) {
-            return false;
-        }
-    }
-    return true;
+    return http_is_quoted_string(value);
 }
 
 [[nodiscard]] inline bool http_parse_mime_parameter(std::string_view parameter, std::string_view& name,

@@ -5,6 +5,8 @@
 
 #include <array>
 #include <chrono>
+#include <exception>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -17,10 +19,10 @@
 
 namespace {
 
-class feature_controller final : public ruvia::controller<feature_controller> {
+class feature_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/features")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(feature_controller)
     RUVIA_GET("/info", info);
     RUVIA_GET("/asset", asset);
     RUVIA_GET("/safe", safe);
@@ -95,23 +97,28 @@ private:
 }  // namespace
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    ruvia::listen_config listener_value{.address_ = "127.0.0.1", .http_ = 8093};
-    const auto certificate = env_value.get("RUVIA_TLS_CERT");
-    const auto key = env_value.get("RUVIA_TLS_KEY");
-    if (certificate.has_value() != key.has_value()) {
-        throw std::invalid_argument("set both RUVIA_TLS_CERT and RUVIA_TLS_KEY");
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        ruvia::listen_config listener_value{.address_ = "127.0.0.1", .http_ = 8093};
+        const auto certificate = env_value.get("RUVIA_TLS_CERT");
+        const auto key = env_value.get("RUVIA_TLS_KEY");
+        if (certificate.has_value() != key.has_value()) {
+            throw std::invalid_argument("set both RUVIA_TLS_CERT and RUVIA_TLS_KEY");
+        }
+        if (certificate && key) {
+            listener_value.https_ = 8444;
+            listener_value.tls_.certificate_chain_file_ = std::string(*certificate);
+            listener_value.tls_.private_key_file_ = std::string(*key);
+        }
+        app.server({.worker_count_ = 2,
+                       .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .listen(std::move(listener_value))
+            .compression({.min_bytes_ = 16})
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
     }
-    if (certificate && key) {
-        listener_value.https_ = 8444;
-        listener_value.tls_.certificate_chain_file_ = std::string(*certificate);
-        listener_value.tls_.private_key_file_ = std::string(*key);
-    }
-    app.server({.worker_count_ = 2,
-                   .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .listen(std::move(listener_value))
-        .compression({.min_bytes_ = 16})
-        .run();
 }

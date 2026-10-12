@@ -9,6 +9,7 @@
 
 #include "ruvia/web/redis/redis_handle.h"
 
+#include "db/db_cache_shape.h"
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
 
@@ -123,7 +124,8 @@ std::optional<std::pmr::string> db_query_cache_state::key(
     if (!query.cache_enabled().value_or(always_enabled_) || !query.cacheable()) {
         return std::nullopt;
     }
-    return db_cache_key(name_space_, query.cache_id(), statement.sql(), statement.params(), driver, resource_);
+    return db_cache_key(name_space_, query.cache_id(), query.cache_shape(), statement.sql(), statement.params(), driver,
+        resource_);
 }
 
 task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
@@ -190,15 +192,18 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     co_return rows;
 }
 
+// A cache id names every result shape a repository builder derived from it.
 task<void> db_query_cache_state::remove(std::span<const std::string_view> ids, operation_options options) {
     require_open();
     std::pmr::vector<std::pmr::string> keys(resource_);
-    keys.reserve(ids.size());
+    keys.reserve(ids.size() * db_cache_shapes.size());
     for (const auto id : ids) {
         if (id.empty()) {
             throw std::invalid_argument("cache identifier must not be empty");
         }
-        keys.push_back(db_cache_key(name_space_, id, {}, {}, db_driver::unspecified, resource_));
+        for (const auto shape : db_cache_shapes) {
+            keys.push_back(db_cache_id_key(name_space_, id, shape, resource_));
+        }
     }
     return remove_keys(redis_, std::move(keys), std::move(options));
 }

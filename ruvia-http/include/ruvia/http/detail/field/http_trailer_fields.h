@@ -1,10 +1,16 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_limits.h"
 
 namespace ruvia::detail {
 
@@ -87,7 +93,7 @@ template <typename forbidden_name_type>
     std::string_view value, http_field_list_role role, forbidden_name_type&& forbidden_name) noexcept {
     const bool empty_field = http_trim_ows(value).empty();
     bool valid = true;
-    http_visit_comma_separated_quoted_items(
+    http_visit_comma_separated_quoted_field_items(
         value, [&valid, empty_field, role, &forbidden_name](std::string_view item) noexcept {
             if (item.empty()) {
                 // RFC 9110 section 5.6.1.1: senders must not generate empty list
@@ -111,6 +117,66 @@ template <typename forbidden_name_type>
     std::string_view value, http_field_list_role role) noexcept {
     return is_valid_http_trailer_field_value(value, role,
         [](std::string_view name) noexcept { return is_forbidden_http_request_trailer_name(name); });
+}
+
+enum class http_trailer_block_status : std::uint8_t {
+    ok,
+    invalid_field,
+    forbidden_field,
+    section_too_large,
+    visitor_stopped,
+};
+
+// The single HTTP/1 trailer-block field parser for both message directions.
+// `block` holds the field lines between the last chunk and the empty line that
+// ends the trailer section; a final CRLF after the last field is accepted for
+// standalone validation. Values are exposed with field-line OWS trimmed.
+// `forbidden_name` is the direction's trailer policy. `budget` and
+// `field_count` are the section totals before this block, so a caller can
+// extend a retained section; `budget` is advanced for every accepted field.
+// The visitor receives views borrowing `block` and returns false to stop.
+template <typename forbidden_name_type, typename visitor_type>
+[[nodiscard]] http_trailer_block_status visit_http1_trailer_block(std::string_view block,
+    forbidden_name_type&& forbidden_name, http_field_section_budget& budget, std::size_t field_count,
+    visitor_type&& visitor) {
+    if (block.size() > max_http_header_bytes) {
+        return http_trailer_block_status::section_too_large;
+    }
+    std::size_t cursor_value = 0;
+    while (cursor_value < block.size()) {
+        if (field_count == max_http_header_fields) {
+            return http_trailer_block_status::section_too_large;
+        }
+        const auto line_end = block.find("\r\n", cursor_value);
+        const auto line = line_end == std::string_view::npos
+                              ? block.substr(cursor_value)
+                              : block.substr(cursor_value, line_end - cursor_value);
+        // Finding the separator also proves that the complete name is a token.
+        const auto colon = http_token_prefix_size(line);
+        if (colon == 0 || colon == line.size() || line[colon] != ':') {
+            return http_trailer_block_status::invalid_field;
+        }
+        const auto name = line.substr(0, colon);
+        const auto value = http_trim_ows(line.substr(colon + 1));
+        if (!is_valid_http_field_value_bytes(value)) {
+            return http_trailer_block_status::invalid_field;
+        }
+        if (forbidden_name(name)) {
+            return http_trailer_block_status::forbidden_field;
+        }
+        if (!budget.add_field(name, value)) {
+            return http_trailer_block_status::section_too_large;
+        }
+        ++field_count;
+        if (!visitor(name, value)) {
+            return http_trailer_block_status::visitor_stopped;
+        }
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+        cursor_value = line_end + 2;
+    }
+    return http_trailer_block_status::ok;
 }
 
 }  // namespace ruvia::detail

@@ -93,7 +93,7 @@ namespace ruvia::detail {
     int quality = 1000;
     bool quality_seen = false;
     bool valid = true;
-    http_visit_semicolon_parameters_quoted(
+    http_visit_semicolon_parameters_quoted_field(
         value, [&quality, &quality_seen, &valid](
                    std::string_view name, std::string_view parameter) noexcept {
             if (http_ascii_equals_ignore_case(name, "q")) {

@@ -113,12 +113,11 @@ private:
         std::span<const controller_middleware_descriptor> route_middlewares);
     void build_middleware_frames();
     void build_static_index();
-    void build_allowed_method_mask();
+    void build_static_method_mask();
     void build_dynamic_routes();
     void bind_dynamic_param_names(route_entry& route);
     void append_dynamic_param_name(route_entry& route, std::string_view name);
     void insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route);
-    void build_server_extension_method_tokens();
     void build_url_patterns();
 
     [[nodiscard]] static bool is_dynamic_path(std::string_view path) noexcept;

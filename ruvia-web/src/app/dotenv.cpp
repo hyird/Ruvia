@@ -26,12 +26,12 @@ template <typename variables_type>
 }  // namespace
 
 env::env()
-    : state_(construct_pmr_object<detail::env_state>(detail::app_resource())) {}
+    : state_(construct_pmr_object<detail::env_state>(process_resource())) {}
 
 env::~env() = default;
 
 void env::state_deleter_type::operator()(detail::env_state* state_value) const noexcept {
-    destroy_pmr_object(state_value, detail::app_resource());
+    destroy_pmr_object(state_value, process_resource());
 }
 
 std::optional<std::string_view> env::get(std::string_view name) const& noexcept {

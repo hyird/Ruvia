@@ -57,7 +57,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         options_.inbound_buffer_pool_ != nullptr ? options_.inbound_buffer_pool_ : memory_.resource(),
         options_.max_inbound_buffer_bytes_per_connection_);
     base_route_services = base_route_services.with_inbound_buffer_pool(connection_buffers);
-    http1_request_sequence request_sequence(options_.max_requests_per_connection_);
+    http1_request_sequence request_sequence(options_.max_requests_per_connection_, state_);
     std::size_t used_bytes = 0;
     connection_work_set* work_set = nullptr;
     work_set_return work_set_return(work_sets_, work_set);
@@ -91,12 +91,16 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         // wait there could stall; TLS holds across the connection.
         if constexpr (plain_tcp) {
             if (plain_tcp_should_wait_for_next_request(used_bytes)) {
+                // A draining worker admits no further request.
+                if (!http_server_worker_running(state_)) {
+                    co_return http_connection_close::abort;
+                }
                 release_idle_work_set(work_sets_, work_set);
                 // Idle wait for the next keep-alive request uses idle_timeout;
                 // the connection's first request uses request_header_timeout.
-                scanner_entry.set_phase(served_keepalive_request
-                                            ? connection_scanner::phase_type::idle
-                                            : connection_scanner::phase_type::reading_initial);
+                scanner_entry.read_request_head(served_keepalive_request
+                                                ? connection_scanner::phase_type::idle
+                                                : connection_scanner::phase_type::reading_initial);
                 auto idle_completion = co_await ruvia::async_asio<std::size_t>(
                     [&socket, &idle_read_buffer](auto handler) mutable {
                         socket.async_read_some(
@@ -105,6 +109,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                     });
                 const auto idle_ec = idle_completion.error_code();
                 const auto idle_bytes = idle_completion.result();
+                // Draining closed this connection while it awaited the request.
                 if (idle_ec || !http_server_worker_running(state_)) {
                     co_return http_connection_close::abort;
                 }
@@ -142,10 +147,10 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             }
         } header_lifetime{parsed_value.request_};
         http_response response({.resource_ = request_memory_value.resource()});
-        // Holds the next pipelined request from the moment a body route hands it
-        // over until the read buffer is cleaned up below. Declared before
-        // request_completion, which borrows it, and empty for the common case of a
-        // client that does not pipeline.
+        // Holds the next pipelined request when a body reader over-read it into
+        // its own buffer, which dies with the route, until the read buffer is
+        // cleaned up below. Declared before request_completion, which borrows
+        // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
         // Declared here, before the admission and everything that borrows its
         // services, so the deadline's stop source outlives every dispatch that
@@ -163,7 +168,9 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         // costs ~660 resident bytes per site in every connection's frame.
         std::optional<http_request_rejection> closing_rejection;
         std::size_t header_search_offset = 0;
-        const auto request_start = std::chrono::steady_clock::now();
+        // Request timing starts with the request's first bytes. Plain TCP has
+        // them already (the idle wait above); TLS waits for them below.
+        auto request_start = std::chrono::steady_clock::now();
         for (;;) {
             const auto buffer_view = std::string_view(read_buffer.data(), used_bytes);
             parser.parse_head(buffer_view, parsed_value, header_search_offset, request_memory_value.resource());
@@ -247,10 +254,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                         parsed_value.connection_plan_, parsed_value.body_plan_.requires_consumption()
                                                            ? http1_request_body_consumption::incomplete
                                                            : http1_request_body_consumption::complete);
-                    connection_plan =
-                        finalize_buffered_route_response(response, connection_plan, request_sequence);
-                    request_completion.emplace(http1_session_request_completion::make_buffered_unrestored(
-                        connection_plan, request_head->header_bytes()));
+                    request_completion.emplace(finalize_buffered_route_response(
+                        response, connection_plan, request_sequence, request_head->header_bytes()));
                     scanner_entry.touch();
                     break;
                 }
@@ -281,9 +286,10 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                     const auto pending = std::string_view(read_buffer.data() + request_head->header_bytes(),
                         used_bytes - request_head->header_bytes());
                     auto completion = endpoint_kind == http_request_endpoint::tunnel
-                                          ? co_await dispatch_http_tunnel_route(
-                                                route_dispatch(), *resolved, admission->udp_tunnel(), pending)
-                                          : co_await dispatch_http_websocket_route(route_dispatch(), *resolved, pending);
+                                          ? co_await dispatch_http_tunnel_route(route_dispatch(), admission->tail(),
+                                                *resolved, admission->udp_tunnel(), pending)
+                                          : co_await dispatch_http_websocket_route(
+                                                route_dispatch(), admission->tail(), *resolved, pending);
                     if (!completion) {
                         co_return http_connection_close::abort;
                     }
@@ -327,7 +333,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                     }
 
                     if (body_setup_exception != nullptr) {
-                        request_completion.emplace(co_await complete_failed_http_body_route(scanner_entry,
+                        request_completion.emplace(co_await complete_failed_http_route(scanner_entry,
                             body_setup_exception, parsed_value, routes_value, request_memory_value,
                             admission->services(), response));
                         break;
@@ -339,8 +345,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
 
                     request_completion.emplace(complete_successful_http_body_route(scanner_entry,
                         response, parsed_value.connection_plan_, request_sequence, body_state.consumption(),
-                        pipeline_stash,
-                        [&body_state](std::pmr::string& stash) { body_state.take_pipeline(stash); }));
+                        used_bytes, pipeline_stash,
+                        [&body_state](std::pmr::string& stash) { return body_state.take_pipeline(stash); }));
                     break;
                 }
             }
@@ -363,9 +369,14 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             // With no request bytes yet on a reused connection this read is the
             // keepalive idle wait (idle_timeout); once any header bytes are
             // buffered, or on the first request, request_header_timeout governs.
-            scanner_entry.set_phase((used_bytes == 0 && served_keepalive_request)
-                                        ? connection_scanner::phase_type::idle
-                                        : connection_scanner::phase_type::reading_initial);
+            // Either way no request is admitted yet: a draining worker admits
+            // none, and a drain that begins during the read closes it.
+            if (!http_server_worker_running(state_)) {
+                co_return http_connection_close::abort;
+            }
+            scanner_entry.read_request_head(used_bytes == 0 && served_keepalive_request
+                                                ? connection_scanner::phase_type::idle
+                                                : connection_scanner::phase_type::reading_initial);
             grow_read_buffer(read_buffer, used_bytes);
             if (used_bytes == read_buffer.size()) {
                 const auto error = http_parse_protocol_error(http_parse_error::header_too_large);
@@ -384,12 +395,21 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             const auto bytes_read = read_completion.result();
             if (ec) {
                 // A clean peer end (FIN, or TLS close_notify) is answered with
-                // this side's close alert; anything else closes immediately.
-                co_return ec == asio::error::eof&& http_server_worker_running(state_)
+                // this side's close alert unless the worker is stopping, which
+                // closes immediately; anything else closes immediately.
+                co_return ec == asio::error::eof && !stop_token_.stop_requested()
                     ? http_connection_close::peer_finished
                     : http_connection_close::abort;
             }
 
+            // A request head still incomplete when draining began is not
+            // admitted, even if this read completed before the drain closed it.
+            if (!http_server_worker_running(state_)) {
+                co_return http_connection_close::abort;
+            }
+            if (used_bytes == 0) {
+                request_start = std::chrono::steady_clock::now();
+            }
             used_bytes += bytes_read;
             scanner_entry.touch();
         }
@@ -409,23 +429,34 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (!request_completion) {
             throw std::logic_error("HTTP/1 request dispatch returned no terminal completion");
         }
+        if (const auto* rejected = request_completion->rejected_final_response()) {
+            request_completion.emplace(co_await complete_failed_http_route(scanner_entry,
+                std::make_exception_ptr(rejected->exception()), parsed_value, routes_value,
+                request_memory_value, admission->services(), response));
+        }
         const auto tail = admission ? admission->tail()
                                     : http_response_tail(parsed_value.request_,
                                           http_response_coding_policy::disabled(), remote_address, request_start);
         auto connection_plan = request_completion->connection_plan();
         if (request_completion->buffered_response() != nullptr) {
             scanner_entry.set_phase(connection_scanner::phase_type::writing);
-            const auto preparation = co_await tail.prepare(response, options_, routes_value, request_memory_value,
-                admission ? admission->services() : request_services);
-            if (preparation.recovered_) {
+            const auto preparation = tail.prepare(response, options_);
+            const auto prepared = preparation.ready() != nullptr
+                                      ? *preparation.ready()
+                                      : co_await tail.finish_prepare(preparation, response, options_, routes_value,
+                                            request_memory_value, admission ? admission->services() : request_services);
+            if (prepared.recovered_) {
                 connection_plan = require_http1_final_response_commit(response, connection_plan);
                 request_completion = request_completion->with_buffered_connection_plan(connection_plan);
                 connection_plan = request_completion->connection_plan();
             }
-            const auto write_plan = preparation.write_plan_;
+            const auto write_plan = prepared.write_plan_;
             const auto response_plan = get_http1_buffered_response_plan(write_plan, connection_plan);
-            const auto write_result =
-                co_await write_response(stream, response_head, response, response_plan, file_output);
+            const auto write_start = start_response_write(stream, response_head, response, response_plan);
+            const auto write_result = write_start.finished_
+                                          ? *write_start.finished_
+                                          : co_await finish_response_write(stream, response_head, response,
+                                                response_plan, write_start, file_output, scanner_entry);
             scanner_entry.set_phase(connection_scanner::phase_type::idle);
             if (const auto committed_status = write_result.committed_status()) {
                 tail.record_access(options_.access_log_, *committed_status);
@@ -440,10 +471,10 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
 
-        if (!http_server_worker_running(state_)) {
-            co_return http_connection_close::abort;
-        }
-        if (connection_plan.disposition() == http1_close_policy::close_after_response) {
+        // A draining worker closes after the response, even one whose head
+        // already allowed reuse because the drain began while it streamed.
+        if (connection_plan.disposition() == http1_close_policy::close_after_response ||
+            !http_server_worker_running(state_)) {
             co_return http_connection_close::after_response;
         }
         apply_reusable_http1_request_buffer_completion(

@@ -6,6 +6,7 @@
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 
@@ -65,7 +66,7 @@ namespace ruvia::detail {
     if (result.status_ == client_transport_status::eof) {
         throw http_client_error(http_client_error::code_type::io_error, eof_message);
     }
-    throw http_client_error(http_client_transport_error(result), result.error_.message());
+    throw http_client_error(http_client_transport_error(result), error_code_text(result.error_));
 }
 
 }  // namespace ruvia::detail

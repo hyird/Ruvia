@@ -194,7 +194,7 @@ event_loop_attachment attach_event_loop(
             report_unhandled_failure("attached event loop failure after retirement", std::move(failure));
         }
     };
-    state_value->install_lifecycle_listener();
+    state_value->install_shutdown_hook();
     state_value->attach(state_value);
     return event_loop_attachment(std::move(state_value));
 }

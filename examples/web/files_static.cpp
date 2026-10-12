@@ -10,7 +10,9 @@
 // The document root refreshes; the explicitly constructed static_root is a
 // snapshot. Keep it alive until application::run() returns and all file responses retire.
 
+#include <exception>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 
 #include "ruvia/web/app.h"
@@ -27,11 +29,11 @@ std::filesystem::path examples_root() {
 
 }  // namespace
 
-class files_controller final : public ruvia::controller<files_controller> {
+class files_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/files")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(files_controller)
     RUVIA_GET("/download", download);
     RUVIA_GET("/assets/*", asset);
     RUVIA_ROUTES_END
@@ -49,39 +51,44 @@ private:
 };
 
 int main() {
-    g_assets = std::make_unique<ruvia::static_root>(examples_root() / "public",
-        ruvia::static_root_options{
-            .cache_control_ = "public, max-age=3600",
-            .index_file_ = "index.html",
-            .mime_types_ = {{"txt", "text/plain; charset=utf-8"}},
-            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::only,
-                .extensions_ = {"html", "txt"}},
-            .range_requests_ = ruvia::static_range_request_policy::honor,
-            .response_validators_ = ruvia::static_response_validator_policy::emit,
-            .dotfiles_ = ruvia::static_dotfile_policy::deny,
-        });
-
-    auto document_root = ruvia::document_root_config{
-        .root_ = examples_root() / "public",
-        .static_options_ =
-            {
+    try {
+        g_assets = std::make_unique<ruvia::static_root>(examples_root() / "public",
+            ruvia::static_root_options{
                 .cache_control_ = "public, max-age=3600",
                 .index_file_ = "index.html",
-            },
-        .precompress_gzip_ = true,
-    };
-    // Document roots refresh every second by default. To tune the interval:
-    // .runtime = {
-    //     .refresh_interval_ = std::chrono::milliseconds(500),
-    // },
-    // .precompress_gzip_ refresh-builds gzip variants for changed text assets.
-    // The application blocking pool is enabled by default.
+                .mime_types_ = {{"txt", "text/plain; charset=utf-8"}},
+                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::only,
+                    .extensions_ = {"html", "txt"}},
+                .range_requests_ = ruvia::static_range_request_policy::honor,
+                .response_validators_ = ruvia::static_response_validator_policy::emit,
+                .dotfiles_ = ruvia::static_dotfile_policy::deny,
+            });
 
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8083})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        .compression({})
-        .document_root(std::move(document_root))
-        .run();
+        auto document_root = ruvia::document_root_config{
+            .root_ = examples_root() / "public",
+            .static_options_ =
+                {
+                    .cache_control_ = "public, max-age=3600",
+                    .index_file_ = "index.html",
+                },
+            .precompress_gzip_ = true,
+        };
+        // Document roots refresh every second by default. To tune the interval:
+        // .runtime = {
+        //     .refresh_interval_ = std::chrono::milliseconds(500),
+        // },
+        // .precompress_gzip_ refresh-builds gzip variants for changed text assets.
+        // The application blocking pool is enabled by default.
+
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8083})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .compression({})
+            .document_root(std::move(document_root))
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

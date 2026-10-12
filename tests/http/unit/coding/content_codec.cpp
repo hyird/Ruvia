@@ -209,6 +209,39 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     }
 }
 
+RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
+    std::string value("identity");
+    for (std::size_t index = 1; index < ruvia::max_content_codings; ++index) {
+        value += ", gzip";
+    }
+    const auto bounded = parse_http_content_coding(value);
+    RUVIA_CHECK(bounded.unsupported() == nullptr);
+    RUVIA_CHECK_EQ(bounded.codings().size(), ruvia::max_content_codings);
+
+    value += ", identity";
+    const auto oversized = parse_http_content_coding(value);
+    RUVIA_CHECK(oversized.invalid() == nullptr);
+    RUVIA_CHECK(oversized.unsupported() != nullptr);
+    RUVIA_CHECK(oversized.codings().empty());
+
+    value += ", bad coding";
+    const auto malformed = parse_http_content_coding(value);
+    RUVIA_CHECK(malformed.invalid() != nullptr);
+
+    // identity stages transform nothing but still observe the decoded limit.
+    constexpr std::array identity_stack{http_content_coding::identity, http_content_coding::identity};
+    const auto identity = decode_http_content(identity_stack, "plain", {.max_decoded_bytes_ = 5});
+    RUVIA_CHECK(identity.decoded() != nullptr);
+    if (const auto* decoded = identity.decoded()) {
+        RUVIA_CHECK_EQ(decoded->bytes(), std::string_view("plain"));
+    }
+    const auto oversized_identity = decode_http_content(identity_stack, "plain", {.max_decoded_bytes_ = 4});
+    RUVIA_CHECK(oversized_identity.failure() != nullptr);
+    if (const auto* failure = oversized_identity.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http_content_decode_error::decoded_size_exceeded);
+    }
+}
+
 RUVIA_TEST(http_deflate_content_uses_the_rfc9110_zlib_wrapper) {
     const std::string input(4096, 'd');
     auto encoded = encode_http_content(

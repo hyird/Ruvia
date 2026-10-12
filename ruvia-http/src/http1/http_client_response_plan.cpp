@@ -114,9 +114,15 @@ namespace {
 
 [[nodiscard]] http1_close_policy final_response_persistence(
     const http1_client_exchange_state& exchange_state,
-    const http1_client_parsed_response_head& response) noexcept {
+    const http1_client_parsed_response_head& response,
+    http1_client_request_content_phase request_content_phase) noexcept {
+    // A final response while Expect still gates the content cancels content
+    // whose framing the request head already committed. The server may keep
+    // reading it (RFC 9110 section 10.1.1), so the next request on this
+    // connection would be consumed as that content.
     if (http1_client_exchange_state_access::close_policy(exchange_state) ==
-        http1_close_policy::close_after_response) {
+            http1_close_policy::close_after_response ||
+        request_content_phase == http1_client_request_content_phase::awaiting_continue) {
         return http1_close_policy::close_after_response;
     }
     return response_persistence(response);
@@ -235,7 +241,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
         return http1_client_response_parse_error::invalid_content_length;
     }
 
-    const auto persistence = final_response_persistence(exchange_state, response);
+    const auto persistence = final_response_persistence(exchange_state, response, request_content_phase);
     const auto persistent_content_signal = request_content_signal(request_content_phase,
         response.status_code_, persistence == http1_close_policy::close_after_response);
     if (content_semantics == http_response_content_semantics::without_content) {
@@ -281,11 +287,11 @@ http1_client_response_planning_result_type plan_http1_client_response(
     // length is delimited by server close and cannot return to a pool.
     if (reset_content_requires_empty) {
         return http1_client_response_plan_access::zero_content_close_delimited(
-            http_transfer_codings(response.transfer_encoding_.resource()),
+            http_transfer_codings{},
             request_content_signal(request_content_phase, response.status_code_, true));
     }
     return http1_client_response_plan_access::close_delimited(
-        http_transfer_codings(response.transfer_encoding_.resource()),
+        http_transfer_codings{},
         request_content_signal(request_content_phase, response.status_code_, true));
 }
 

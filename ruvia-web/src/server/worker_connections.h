@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -14,6 +15,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/web_worker.h"
 
+#include "server/connection_drain.h"
 #include "server/connection_scanner.h"
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
@@ -32,6 +34,10 @@ class worker_capabilities;
 
 // Worker-local connection resources and session assembly. The surrounding Web
 // runtime owns lifecycle phases and the task_scope that joins all sessions.
+// Admission runs open -> drain (optional) -> stop: draining closes connections
+// without an admitted request, has WebSocket sessions start their close
+// handshake, and lets admitted requests and tunnels finish; stopping closes
+// every connection.
 class worker_connections final {
 public:
     worker_connections(asio::io_context& io, const worker_handle& worker_value,
@@ -43,10 +49,11 @@ public:
     worker_connections& operator=(const worker_connections&) = delete;
     void prepare();
     void open_admission() noexcept;
-    void close_admission() noexcept {
-        serving_.store(false, std::memory_order_release);
-    }
+    // Worker thread, once the worker state left running.
+    void drain() noexcept;
     void stop() noexcept;
+    // Lifecycle thread: false when `deadline` passed before every connection closed.
+    [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     void retire_tls() noexcept;
     [[nodiscard]] bool available() const noexcept;
     void accept(native_accepted_socket_ticket&& ticket) noexcept;
@@ -71,7 +78,7 @@ private:
     connection_scanner scanner_;
     connection_work_set_pool work_sets_;
     // Caller-thread statistics and ingress observations require atomic reads.
-    std::atomic<std::size_t> active_{};
+    connection_drain drain_;
     std::atomic<std::size_t> refused_{};
     std::atomic<std::size_t> failures_{};
     std::atomic<std::size_t> accept_failures_{};

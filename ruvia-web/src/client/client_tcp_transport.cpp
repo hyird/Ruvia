@@ -1,14 +1,18 @@
 #include "client/client_tcp_transport.h"
 
+#include <array>
 #include <chrono>
 #include <utility>
 
 #include <asio/connect.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/tcp_socket_options.h"
+#include "ruvia/http/http_number_format.h"
 
 #include "tls/tls_stream_end.h"
 
@@ -40,7 +44,11 @@ void client_tcp_transport::abort(client_abort_reason reason) noexcept {
     }
     resolver_.cancel();
     std::error_code ignored;
-    (void)stream_.lowest_layer().cancel(ignored);
+    if (connecting_) {
+        (void)stream_.lowest_layer().close(ignored);
+    } else {
+        (void)stream_.lowest_layer().cancel(ignored);
+    }
 }
 
 void client_tcp_transport::close() noexcept {
@@ -52,6 +60,42 @@ void client_tcp_transport::close() noexcept {
     std::error_code ignored;
     (void)stream_.lowest_layer().cancel(ignored);
     (void)stream_.lowest_layer().close(ignored);
+}
+
+// An idle pooled connection is reusable only while the peer has sent nothing:
+// unsolicited bytes are a stray response or the start of a close. The probe is
+// a constant-time inspection that never runs the TLS engine: a decrypting read
+// on the worker keeps processing records for as long as the peer keeps sending
+// post-handshake control records (TLS 1.3 NewSessionTicket, KeyUpdate), and
+// nonblocking mode does not bound that loop. Without decrypting, those records
+// cannot be told from a close_notify or a stray response, so any record
+// OpenSSL already buffers (decrypted or not) or any byte waiting on the socket
+// retires the connection. Servers send their tickets right after the
+// handshake, ahead of the first response, so the response read consumes them
+// and an idle connection normally carries none; a later control record only
+// costs one reconnect. Raw bytes Asio holds in its own input buffer stay
+// invisible here, like a close racing the probe: the response read reports them.
+bool client_tcp_transport::idle_open() noexcept {
+    auto& socket = stream_.next_layer();
+    if (!socket.is_open()) {
+        return false;
+    }
+    if (secure()) {
+        SSL* const native = stream_.native_handle();
+        if (SSL_has_pending(native) != 0 || BIO_ctrl_pending(SSL_get_rbio(native)) != 0) {
+            return false;
+        }
+    }
+    std::error_code error;
+    (void)socket.non_blocking(true, error);
+    if (error) {
+        return false;
+    }
+    char byte{};
+    (void)socket.receive(asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
+    std::error_code ignored;
+    (void)socket.non_blocking(false, ignored);
+    return error == asio::error::would_block;
 }
 
 bool client_tcp_transport::arm(lane_deadline& lane, lane_type kind, const operation_timeout& timeout) {
@@ -115,8 +159,8 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (!arm(read_, lane_type::read, timeout)) {
         co_return aborted();
     }
-    client_port_text_buffer_type port_buffer{};
-    const auto port = format_client_port(endpoint_.port_, port_buffer);
+    std::array<char, http_max_unsigned_decimal_size> port_buffer;
+    const auto port = http_format_unsigned(port_buffer, endpoint_.port_);
     auto resolved = co_await async_asio<asio::ip::tcp::resolver::results_type>([this, port](auto handler) mutable {
         resolver_.async_resolve(endpoint_.host_, port, std::move(handler));
     });
@@ -127,9 +171,11 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         co_return finish(read_, timeout, resolved.error_code(), 0, client_transport_status::resolve_failed);
     }
     const auto endpoints = std::move(resolved).take_result();
+    connecting_ = true;
     const auto connected = co_await async_asio([this, &endpoints](auto handler) mutable {
         asio::async_connect(stream_.lowest_layer(), endpoints, std::move(handler));
     });
+    connecting_ = false;
     if (connected.error_code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
         timeout.expired()) {
         co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
@@ -140,7 +186,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     }
     tls_started_ = true;
     if (const auto prepared = prepare_client_tls_stream(
-            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_);
+            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,

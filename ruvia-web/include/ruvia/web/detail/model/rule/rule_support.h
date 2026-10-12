@@ -1,13 +1,13 @@
 #pragma once
 
-#include <charconv>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/model/rule/rule_types.h"
 #include "ruvia/web/detail/model/traits.h"
 
@@ -106,28 +106,77 @@ template <typename t_type>
     }
 }
 
-inline void append_path(std::pmr::string& output, std::string_view prefix, std::string_view field) {
-    output.clear();
-    output.reserve(prefix.size() + (prefix.empty() ? 0 : 1) + field.size());
-    if (!prefix.empty()) {
-        output.append(prefix.data(), prefix.size());
-        output.push_back('.');
-    }
-    output.append(field.data(), field.size());
-}
+// A validation path as segments on the traversal stack. Text is rendered only
+// when an issue is emitted, so successful validation builds no path strings.
+class model_path final {
+public:
+    constexpr model_path() noexcept = default;
 
-inline void append_index_path(std::pmr::string& output, std::string_view prefix, std::size_t index) {
-    output.clear();
-    output.reserve(prefix.size() + 2 + 20);
-    output.append(prefix.data(), prefix.size());
-    output.push_back('[');
-    char buffer[32];
-    const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), index);
-    if (ec == std::errc{}) {
-        output.append(buffer, static_cast<std::size_t>(ptr - buffer));
+    constexpr model_path(const model_path& parent, std::string_view field) noexcept
+        : parent_(&parent),
+          field_(field) {}
+
+    constexpr model_path(const model_path& parent, std::size_t index) noexcept
+        : parent_(&parent),
+          index_(index),
+          indexed_(true) {}
+
+    model_path(const model_path&) = delete;
+    model_path& operator=(const model_path&) = delete;
+
+    void render(std::pmr::string& output) const {
+        output.clear();
+        append_to(output);
     }
-    output.push_back(']');
-}
+
+private:
+    void append_to(std::pmr::string& output) const {
+        if (parent_ == nullptr) {
+            return;
+        }
+        parent_->append_to(output);
+        if (indexed_) {
+            output.push_back('[');
+            http_append_unsigned(output, index_);
+            output.push_back(']');
+            return;
+        }
+        if (!output.empty()) {
+            output.push_back('.');
+        }
+        output.append(field_);
+    }
+
+    const model_path* parent_{nullptr};
+    std::string_view field_{};
+    std::size_t index_{0};
+    bool indexed_{false};
+};
+
+// Forwards issues to a validator, rendering their paths into one scratch
+// string that is created by the first issue and reused for later ones.
+template <typename validator_t_type>
+class model_issue_sink final {
+public:
+    explicit model_issue_sink(validator_t_type& validator_value) noexcept
+        : validator_(validator_value) {}
+
+    [[nodiscard]] bool full() const noexcept {
+        return validator_.full();
+    }
+
+    void add(const model_path& path, std::string_view code, std::string_view message) {
+        if (!path_) {
+            path_.emplace(validator_.resource());
+        }
+        path.render(*path_);
+        validator_.add(*path_, code, message);
+    }
+
+private:
+    validator_t_type& validator_;
+    std::optional<std::pmr::string> path_;
+};
 
 template <typename rule_type>
 [[nodiscard]] constexpr bool is_default_rule() noexcept {

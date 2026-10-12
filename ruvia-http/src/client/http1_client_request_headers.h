@@ -1,20 +1,19 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
 #include <span>
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 
 #include "field/http_request_field_validation.h"
 
 // What a caller-supplied request header section must satisfy before the writer
-// will encode it, and the facts the encoder then needs from it: how many wire
-// bytes it costs, which singleton fields it already carries, and the connection
-// and upgrade options it expresses.
+// will encode it, and the facts the encoder then needs from it: its field
+// section budget, which singleton fields it already carries, and the
+// connection and upgrade options it expresses.
 
 namespace ruvia {
 
@@ -22,25 +21,13 @@ namespace ruvia {
 inline constexpr std::string_view crlf = "\r\n";
 
 struct request_header_facts final {
-    std::size_t wire_bytes_{0};
+    // The caller's fields, charged by the shared field-section rule.
+    http_field_section_budget section_;
     detail::request_field_state fields_{};
     detail::http_connection_options connection_options_;
     detail::http_upgrade_protocols upgrade_protocols_;
     bool has_te_{false};
 };
-
-// Decimal width of a value, for sizing a head before it is filled.
-[[nodiscard]] constexpr std::size_t decimal_digits(std::size_t value) noexcept {
-    std::size_t digits = 1;
-    while (value >= 10) {
-        value /= 10;
-        ++digits;
-    }
-    return digits;
-}
-
-// Accumulate head bytes, refusing to exceed the header-section ceiling.
-[[nodiscard]] bool add_head_bytes(std::size_t& total, std::size_t bytes_value) noexcept;
 
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.

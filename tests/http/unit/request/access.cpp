@@ -198,3 +198,15 @@ RUVIA_TEST(owned_header_copies_stay_in_the_source_resource) {
     }
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }
+
+RUVIA_TEST(owned_header_lowercase_copy_normalizes_only_the_name_in_one_allocation) {
+    header_memory memory;
+    {
+        const auto before = memory.allocations_;
+        const auto header = ruvia::http_header::copy_with_lowercase_name("X-Trace-ID", "AbC", &memory);
+        RUVIA_CHECK_EQ(header.name(), std::string_view("x-trace-id"));
+        RUVIA_CHECK_EQ(header.value(), std::string_view("AbC"));
+        RUVIA_CHECK_EQ(memory.allocations_, before + 1);
+    }
+    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
+}

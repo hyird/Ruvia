@@ -66,8 +66,9 @@ struct static_root_state;
 }  // namespace detail
 
 // An immutable index of the document root, built once by this constructor and
-// never refreshed directly. The Web runtime always rebuilds a configured
-// document_root_type replacement off the worker and publishes it between requests.
+// never refreshed directly. For a configured document root the application's
+// one refresher rebuilds a replacement off the workers, and each worker adopts
+// it between requests.
 // Relative URL keys use the generic UTF-8 form on every platform; filesystem
 // I/O keeps native paths.
 // Each entry records the file's size, ETag, Last-Modified and an

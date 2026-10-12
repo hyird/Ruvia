@@ -60,6 +60,13 @@ public:
         bool deferred_{false};
     };
 
+    // One extended-protocol Parse message: the statement text and the
+    // parameter type OIDs the client declared (0 leaves a type unknown).
+    struct postgres_parse final {
+        std::string sql_;
+        std::vector<std::uint32_t> parameter_types_;
+    };
+
     explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
         after_startup behavior = after_startup::idle, std::vector<postgres_reply> replies = {})
         : gate_(io_),
@@ -106,6 +113,11 @@ public:
             replies_released_ = true;
             gate_.cancel();
         });
+    }
+
+    // Every Parse message received so far, read on the peer's own thread.
+    [[nodiscard]] std::vector<postgres_parse> postgres_parses() {
+        return asio::post(io_, asio::use_future([this] { return postgres_parses_; })).get();
     }
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -209,6 +221,9 @@ private:
             }
             std::vector<unsigned char> body(size - 4);
             co_await asio::async_read(socket_, asio::buffer(body), asio::use_awaitable);
+            if (header[0] == 'P') {
+                record_postgres_parse(body);
+            }
             if (header[0] == 'X') {
                 co_return false;
             }
@@ -216,6 +231,35 @@ private:
                 co_return true;
             }
         }
+    }
+
+    // Parse: statement name, query text, Int16 count, then one Int32 OID each.
+    void record_postgres_parse(const std::vector<unsigned char>& body) {
+        const auto text_end = [&body](std::size_t start) {
+            for (auto index = start; index < body.size(); ++index) {
+                if (body[index] == 0) {
+                    return index;
+                }
+            }
+            throw std::runtime_error("unterminated PostgreSQL Parse string");
+        };
+        const auto query_start = text_end(0) + 1;
+        const auto query_end = text_end(query_start);
+        postgres_parse parsed;
+        parsed.sql_.assign(reinterpret_cast<const char*>(body.data()) + query_start, query_end - query_start);
+        auto offset = query_end + 1;
+        if (offset + 2 > body.size()) {
+            throw std::runtime_error("truncated PostgreSQL Parse parameter count");
+        }
+        const auto count = (std::size_t{body[offset]} << 8) | std::size_t{body[offset + 1]};
+        offset += 2;
+        if (offset + count * 4 != body.size()) {
+            throw std::runtime_error("invalid PostgreSQL Parse parameter types");
+        }
+        for (std::size_t index = 0; index < count; ++index, offset += 4) {
+            parsed.parameter_types_.push_back(integer(body.data() + offset));
+        }
+        postgres_parses_.push_back(std::move(parsed));
     }
 
     static void postgres_result(std::string& response, const postgres_reply& reply) {
@@ -383,6 +427,7 @@ private:
     bool defer_authentication_;
     after_startup after_startup_;
     std::vector<postgres_reply> postgres_replies_;
+    std::vector<postgres_parse> postgres_parses_;
     bool replies_released_{false};
     bool closing_{false};
     std::promise<void> startup_;

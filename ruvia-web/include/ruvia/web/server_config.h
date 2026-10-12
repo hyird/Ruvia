@@ -50,10 +50,17 @@ struct server_config final {
     // Business workers; one server network thread is additional.
     std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
     process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
+    // Graceful stop of a serving app: once stop() closes admission, admitted
+    // requests, tunnels and WebSocket close handshakes may finish for up to
+    // this long before every remaining connection is closed. Zero closes them
+    // at once.
+    std::chrono::milliseconds drain_timeout_{std::chrono::seconds(10)};
     std::size_t worker_queue_capacity_{1024};
     // HTTP connection inactivity; upgraded WebSockets use their route lifecycle
     // heartbeat and close-handshake deadlines instead, even when heartbeat is disabled.
     std::optional<std::chrono::milliseconds> idle_timeout_{std::chrono::seconds(75)};
+    // How often connection timeouts are checked. A timeout fires once at least
+    // its duration has passed, and at most about two intervals later.
     std::chrono::milliseconds connection_scan_interval_{std::chrono::seconds(1)};
     std::optional<std::chrono::milliseconds> request_header_timeout_{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> request_body_timeout_{std::chrono::seconds(60)};
@@ -86,7 +93,7 @@ struct trusted_proxy_config final {
 };
 
 namespace detail {
-struct access_log_record_access;
+class http_response_tail;
 struct access_log_sink;
 struct connection_failure_record_access;
 struct connection_failure_sink;
@@ -197,8 +204,10 @@ struct deadline_config final {
 };
 
 // Runtime behavior belongs to the server's document-root binding, not to the
-// immutable static_root index. application document roots are always refreshed; a
-// standalone static_root remains immutable because it has no server runtime.
+// immutable static_root index. application document roots are always refreshed:
+// one refresher per application rebuilds the index each interval and every
+// worker adopts the shared snapshot. A standalone static_root remains immutable
+// because it has no server runtime.
 struct document_root_runtime_config final {
     std::chrono::milliseconds refresh_interval_{std::chrono::seconds(1)};
 };
@@ -216,9 +225,10 @@ struct document_root_config final {
 
 // One terminal response outcome with a committed final status, passed to the
 // access-log callback after a complete buffered response head has reached the
-// transport or a stream head is committed. The record borrows the immutable
-// request and connection-owned remote address; the record and all returned views
-// are valid only for the callback.
+// transport, a stream head is committed, or a CONNECT/WebSocket handshake head
+// has reached the transport (before the long-lived handler runs). The record
+// borrows the immutable request and connection-owned remote address; the record
+// and all returned views are valid only for the callback.
 class access_log_record final {
 public:
     [[nodiscard]] std::string_view method() const noexcept {
@@ -250,7 +260,7 @@ public:
     }
 
 private:
-    friend struct detail::access_log_record_access;
+    friend class detail::http_response_tail;
 
     constexpr access_log_record(const http_request& request, std::string_view remote_address,
         http_status_code status, std::uint64_t duration_micros) noexcept
@@ -319,17 +329,19 @@ struct http_server_stats final {
     // Connections closed on accept because that budget was full. A rising
     // count means the server is shedding load rather than queueing it.
     std::size_t connections_refused_{0};
-    // Connections lost to an exception, as delivered to on_connection_failure.
+    // Connections lost to an exception, as delivered to on_connection_failure
+    // (peer resets and closes and server-cancelled I/O are not failures).
     std::size_t connection_failures_{0};
     // Accepts that failed transiently (descriptor exhaustion, a session that
     // could not be started). Each cost one connection, not the listener.
     std::size_t accept_failures_{0};
     // Failures that escaped to the worker's io_context and stopped it.
     std::size_t worker_failures_{0};
-    // Polling refreshes whose replacement index could not be built. The
-    // previous complete document-root snapshot remains active; this counter
-    // makes filesystem/permission failures observable without taking the
-    // worker down.
+    // Document-root refresh passes whose replacement index could not be built
+    // or adopted. The application runs one refresher however many workers it
+    // has, so each failed pass counts once. The previous complete snapshot
+    // remains active; this counter makes filesystem/permission failures
+    // observable without taking a worker down.
     std::size_t document_root_refresh_failures_{0};
 };
 

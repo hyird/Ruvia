@@ -3,36 +3,6 @@
 namespace ruvia::detail {
 
 template <typename stream_type>
-void stream_body_reader<stream_type>::compact_pending() {
-    if (pending_compact_until_ == 0) {
-        return;
-    }
-    if (!initial_body_and_pipeline_.empty()) {
-        read_cursor_ = std::min(pending_compact_until_, initial_body_and_pipeline_.size());
-        pending_compact_until_ = 0;
-        if (read_cursor_ == initial_body_and_pipeline_.size()) {
-            initial_body_and_pipeline_ = {};
-            read_cursor_ = 0;
-        }
-        return;
-    }
-    if (pending_compact_until_ > buffer_.size()) {
-        pending_compact_until_ = 0;
-        read_cursor_ = 0;
-        return;
-    }
-
-    const auto removed = pending_compact_until_;
-    const auto remaining = buffer_.size() - pending_compact_until_;
-    if (remaining > 0) {
-        std::memmove(buffer_.data(), buffer_.data() + pending_compact_until_, remaining);
-    }
-    buffer_.resize(buffer_.size() - removed);
-    pending_compact_until_ = 0;
-    read_cursor_ = 0;
-}
-
-template <typename stream_type>
 std::string_view stream_body_reader<stream_type>::initial_pipeline_remainder() const noexcept {
     if (initial_body_and_pipeline_.empty()) {
         return {};
@@ -63,7 +33,6 @@ void stream_body_reader<stream_type>::reset_pipeline_state() noexcept {
     buffer_.clear();
     initial_body_and_pipeline_ = {};
     read_cursor_ = 0;
-    pending_compact_until_ = 0;
 }
 
 template <typename stream_type>
@@ -75,7 +44,6 @@ void stream_body_reader<stream_type>::materialize_initial_remainder() {
         initial_body_and_pipeline_.data() + read_cursor_, initial_body_and_pipeline_.size() - read_cursor_);
     initial_body_and_pipeline_ = {};
     read_cursor_ = 0;
-    pending_compact_until_ = 0;
 }
 
 }  // namespace ruvia::detail

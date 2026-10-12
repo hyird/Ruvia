@@ -3,11 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 // Internal startup-time middleware descriptor.
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 
@@ -17,16 +19,17 @@ namespace detail {
 
 class controller_middleware_descriptor;
 
-template <typename middleware_t_type, typename... args_type>
-[[nodiscard]] controller_middleware_descriptor make_middleware_descriptor(args_type&&... args);
+template <middleware middleware_t_type, typename args_t_type>
+[[nodiscard]] controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
 class controller_middleware_descriptor final {
 public:
     using invoke_type = route_middleware_type::invoke_type;
-    // `args` points at the registration-owned argument tuple captured by
-    // use<T>(args...) -- empty when the middleware is default constructed. It
-    // lives on the process registration resource, so it outlives every instance
-    // a worker's route table materializes from this descriptor.
+    // `args` points at the argument tuple captured by use<T>(args...), or is
+    // null when the middleware is default constructed. The tuple belongs to the
+    // owned_middleware_descriptor the app configuration keeps, which outlives
+    // every plan compiled from it and every instance a worker's route table
+    // materializes from this descriptor.
     using create_type = void* (*)(const void* args);
     using destroy_type = void (*)(void*) noexcept;
 
@@ -90,8 +93,8 @@ public:
     }
 
 private:
-    template <typename middleware_t_type, typename... args_type>
-    friend controller_middleware_descriptor make_middleware_descriptor(args_type&&... args);
+    template <middleware middleware_t_type, typename args_t_type>
+    friend controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
     constexpr controller_middleware_descriptor() noexcept = default;
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
@@ -118,6 +121,47 @@ private:
     std::size_t request_body_limit_{0};
     std::int64_t deadline_ms_{0};
     bool runs_on_unmatched_requests_{false};
+};
+
+// An app-level use<T>(args...) registration: the descriptor plus ownership of
+// the argument tuple it points at. The app configuration holds it for its own
+// lifetime, which spans every route plan compiled from it; descriptors copied
+// into plans and route tables only borrow the tuple. A registration without
+// arguments owns nothing.
+class owned_middleware_descriptor final {
+public:
+    using release_args_type = void (*)(const void* args) noexcept;
+
+    owned_middleware_descriptor(controller_middleware_descriptor descriptor, release_args_type release_args) noexcept
+        : descriptor_(descriptor),
+          release_args_(release_args) {}
+
+    owned_middleware_descriptor(const owned_middleware_descriptor&) = delete;
+    owned_middleware_descriptor& operator=(const owned_middleware_descriptor&) = delete;
+
+    owned_middleware_descriptor(owned_middleware_descriptor&& other) noexcept
+        : descriptor_(other.descriptor_),
+          release_args_(std::exchange(other.release_args_, nullptr)) {}
+    owned_middleware_descriptor& operator=(owned_middleware_descriptor&&) = delete;
+
+    ~owned_middleware_descriptor() {
+        if (release_args_ != nullptr) {
+            release_args_(descriptor_.args());
+        }
+    }
+
+    [[nodiscard]] const controller_middleware_descriptor& descriptor() const noexcept {
+        return descriptor_;
+    }
+
+    [[nodiscard]] owned_middleware_descriptor scoped_to(std::string_view prefix) && noexcept {
+        descriptor_ = descriptor_.scoped_to(prefix);
+        return std::move(*this);
+    }
+
+private:
+    controller_middleware_descriptor descriptor_;
+    release_args_type release_args_{nullptr};
 };
 
 }  // namespace detail

@@ -1,3 +1,4 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -6,9 +7,13 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
+#include <asio/write.hpp>
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/task_scope.h"
@@ -29,6 +34,7 @@ struct stream_lane_observation final {
     std::atomic<bool> write_overlap_rejected_{};
     std::atomic<bool> end_overlap_rejected_{};
     std::atomic<bool> completed_{};
+    std::atomic<bool> endless_write_failed_{};
 };
 
 const auto stream_lane_observed = std::make_shared<stream_lane_observation>();
@@ -37,9 +43,10 @@ const auto stream_lane_observed = std::make_shared<stream_lane_observation>();
     return true;
 }();
 
-class stream_lane_routes final : public ruvia::controller<stream_lane_routes> {
-    RUVIA_ROUTES_BEGIN
+class stream_lane_routes final {
+    RUVIA_ROUTES_BEGIN(stream_lane_routes)
     RUVIA_GET_STREAM("/server-lazy-stream-output", output);
+    RUVIA_GET_STREAM("/server-endless-stream", endless);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -75,6 +82,21 @@ class stream_lane_routes final : public ruvia::controller<stream_lane_routes> {
         co_await std::move(last);
         co_await std::move(end);
         observed.completed_ = true;
+    }
+
+    // Streams until the peer goes away, like an SSE feed a browser tab closes.
+    ruvia::task<void> endless(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& writer = context_value.stream_text();
+        const std::string chunk(16384, 'x');
+        try {
+            for (;;) {
+                co_await writer.write(chunk);
+            }
+        } catch (...) {
+            observed.endless_write_failed_ = true;
+            throw;
+        }
     }
 };
 
@@ -133,4 +155,32 @@ RUVIA_TEST(response_stream_cold_outputs_share_a_lane_only_when_started) {
     RUVIA_CHECK(stream_lane_observed->write_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->end_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->completed_);
+}
+
+// A peer that resets a streaming response (a closed SSE tab) ends the
+// connection normally: it is neither reported nor counted as a failure.
+RUVIA_TEST(response_stream_peer_reset_is_not_a_connection_failure) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    stream_lane_observed->endless_write_failed_ = false;
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string_view request = "GET /server-endless-stream HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        std::array<char, 10> head{};
+        asio::read(client, asio::buffer(head));
+        RUVIA_CHECK_EQ(std::string_view(head.data(), head.size()), std::string_view("HTTP/1.1 2"));
+        // SO_LINGER 0 turns close() into a reset.
+        client.set_option(asio::socket_base::linger(true, 0));
+        client.close();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!stream_lane_observed->endless_write_failed_ && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    server.finish();
+    RUVIA_CHECK(stream_lane_observed->endless_write_failed_);
+    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
 }

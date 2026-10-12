@@ -37,7 +37,6 @@ public:
           middleware_scopes_(resource_),
           param_names_(resource_),
           extension_route_indices_(resource_),
-          server_extension_method_tokens_(resource_),
           connect_route_indices_(resource_),
           connect_protocols_(resource_),
           static_slots_(resource_),
@@ -124,7 +123,6 @@ private:
     std::size_t unmatched_middleware_count_{0};
     std::pmr::vector<std::string_view> param_names_;
     std::pmr::vector<std::size_t> extension_route_indices_;
-    std::pmr::vector<std::string_view> server_extension_method_tokens_;
     std::pmr::vector<std::size_t> connect_route_indices_;
     std::pmr::vector<connect_protocol_index_type> connect_protocols_;
     std::pmr::vector<static_route_slot> static_slots_;
@@ -139,7 +137,6 @@ private:
     std::pmr::vector<prefix_handler_type<http_not_found_handler_ref_type>> prefix_not_found_handlers_;
     std::uint32_t static_method_mask_{0};
     std::uint32_t dynamic_method_mask_{0};
-    std::uint32_t allowed_method_mask_{0};
     std::size_t static_slot_mask_{};
     bool has_route_rate_limit_{false};
 };

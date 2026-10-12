@@ -161,19 +161,29 @@ private:
     return true;
 }
 
-[[nodiscard]] http_response_compression_result apply_response_compression(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, const compression_config& options);
+// Outcome of the synchronous compression phase for an in-memory body. An
+// eligible body above sync_bytes_ with a blocking pool configured is left as
+// identity and flagged for offload; every other outcome is final here.
+struct http_buffered_compression_step final {
+    http_response_compression_result result_;
+    bool offload_;
+};
 
-// Applies the same policy as apply_response_compression(), but offloads an
-// in-memory body above sync_bytes_ to the bounded blocking pool. A disabled pool
-// extends synchronous compression through max_bytes; rejection by an existing
-// pool is an intentional identity fallback. Encoder/commit failures remain
-// typed failures so a client that forbids identity receives a terminal error.
-[[nodiscard]] task<http_response_compression_result> apply_response_compression_async(
+// Applies the buffered compression policy without suspending: eligibility,
+// size bounds, and encoding up to sync_bytes_ (through max_bytes_ when
+// `offload_available` is false, i.e. no blocking pool is configured). Only an
+// offload result requires compress_response_offloaded(), so identity and
+// ineligible responses never create a coroutine frame.
+[[nodiscard]] http_buffered_compression_step apply_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, compression_config options, blocking_pool* pool,
-    const worker_handle& worker_value);
+    http_response& response, const compression_config& options, bool offload_available);
+
+// Encodes the body flagged by apply_response_compression() on the bounded
+// blocking pool. Rejection by the pool is an intentional identity fallback;
+// encoder/commit failures remain typed failures so a client that forbids
+// identity receives a terminal error.
+[[nodiscard]] task<http_response_compression_result> compress_response_offloaded(http_content_coding coding,
+    http_response& response, blocking_pool& pool, const worker_handle& worker_value);
 
 // Response compression policy. Fixed representations do not vary by coding;
 // eligible representations are annotated before deciding between identity

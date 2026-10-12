@@ -22,11 +22,11 @@
 
 #include "environment.h"
 
-class ops_controller final : public ruvia::controller<ops_controller> {
+class ops_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/admin", ruvia::security_headers_middleware)
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(ops_controller)
     RUVIA_GET("/health", health);
     // Configuration travels in the type, so a route-level middleware needs no
     // constructor arguments and no hand-written wrapper class.
@@ -80,46 +80,51 @@ private:
 };
 
 int main() {
-    auto& app = ruvia::app();
-    app.load_dotenv();
-    const example::environment env_value(&app.env());
-    if (env_value.get<bool>("RUVIA_TRUST_LOCAL_PROXY").value_or(false)) {
-        app.trusted_proxies({.cidrs_ = {"127.0.0.1", "::1"}, .trust_x_forwarded_proto_ = true});
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        if (env_value.get<bool>("RUVIA_TRUST_LOCAL_PROXY").value_or(false)) {
+            app.trusted_proxies({.cidrs_ = {"127.0.0.1", "::1"}, .trust_x_forwarded_proto_ = true});
+        }
+        app
+            .listen({.address_ = "0.0.0.0", .http_ = 8080})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            // Each worker counts independently. Route-level limits additionally
+            // apply and can only tighten the deployment-wide rule.
+            .get_rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})
+            .on_start([] {
+                // Runs on the thread calling run(), after worker capabilities are
+                // ready and before any listener starts serving. Throwing rolls back
+                // startup; wait for any posted initialization before returning.
+                std::puts("all workers ready; opening admission");
+            })
+            .on_stop([] {
+                // Stop external producers here. Worker teardown is joined after
+                // this hook; other threads should only request application::stop().
+                std::puts("admission closed; joining workers");
+            })
+            .on_access([](const ruvia::access_log_record& record) noexcept {
+                // Views are callback-scoped. Production sinks should enqueue an
+                // owned record to a bounded logger instead of blocking the worker.
+                std::printf("%.*s %.*s in %llu us\n",
+                    static_cast<int>(record.method().size()), record.method().data(),
+                    static_cast<int>(record.path().size()), record.path().data(),
+                    static_cast<unsigned long long>(record.duration_micros()));
+            })
+            .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
+                try {
+                    std::rethrow_exception(record.exception());
+                } catch (const std::exception& error) {
+                    std::fprintf(stderr, "connection failed: %s\n", error.what());
+                } catch (...) {
+                    std::fputs("connection failed with a non-standard exception\n", stderr);
+                }
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        return 1;
     }
-    app
-        .listen({.address_ = "0.0.0.0", .http_ = 8080})
-        .server({.worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-        // Each worker counts independently. Route-level limits additionally
-        // apply and can only tighten the deployment-wide rule.
-        .get_rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})
-        .on_start([] {
-            // Runs on the thread calling run(), after worker capabilities are
-            // ready and before any listener starts serving. Throwing rolls back
-            // startup; wait for any posted initialization before returning.
-            std::puts("all workers ready; opening admission");
-        })
-        .on_stop([] {
-            // Stop external producers here. Worker teardown is joined after
-            // this hook; other threads should only request application::stop().
-            std::puts("admission closed; joining workers");
-        })
-        .on_access([](const ruvia::access_log_record& record) noexcept {
-            // Views are callback-scoped. Production sinks should enqueue an
-            // owned record to a bounded logger instead of blocking the worker.
-            std::printf("%.*s %.*s in %llu us\n",
-                static_cast<int>(record.method().size()), record.method().data(),
-                static_cast<int>(record.path().size()), record.path().data(),
-                static_cast<unsigned long long>(record.duration_micros()));
-        })
-        .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
-            try {
-                std::rethrow_exception(record.exception());
-            } catch (const std::exception& error) {
-                std::fprintf(stderr, "connection failed: %s\n", error.what());
-            } catch (...) {
-                std::fputs("connection failed with a non-standard exception\n", stderr);
-            }
-        })
-        .run();
 }

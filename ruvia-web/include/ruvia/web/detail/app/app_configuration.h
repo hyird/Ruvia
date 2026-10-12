@@ -19,14 +19,14 @@ namespace ruvia::detail {
 
 class router_impl;
 
-template <typename middleware_type, typename... args_types>
-[[nodiscard]] controller_middleware_descriptor make_scoped_app_middleware(
+template <middleware middleware_type, typename... args_types>
+[[nodiscard]] owned_middleware_descriptor make_scoped_app_middleware(
     const middleware_scope_options& options, args_types&&... args) {
     static_assert(!middleware_runs_on_unmatched_requests<middleware_type>(),
         "a middleware declaring ruvia_runs_on_unmatched_requests cannot be path-scoped with "
         "use_at(); register it app-wide with use<T>()");
     const auto normalized = normalize_fallback_prefix(options.prefix_);
-    return make_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...)
+    return make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...)
         .scoped_to(retain_registration_text(normalized));
 }
 
@@ -51,7 +51,7 @@ public:
     app_configuration(app_configuration&&) = delete;
     app_configuration& operator=(app_configuration&&) = delete;
 
-    void add_middleware(controller_middleware_descriptor descriptor);
+    void add_middleware(owned_middleware_descriptor descriptor);
     void add_worker_state(worker_state_definition definition);
     void on_error(http_error_handler_type handler);
     void on_error(scoped_error_handler_options options);
@@ -69,7 +69,7 @@ private:
     http_not_found_handler_type not_found_handler_{nullptr};
     std::pmr::vector<std::pair<std::pmr::string, http_error_handler_type>> prefix_error_handlers_;
     std::pmr::vector<std::pair<std::pmr::string, http_not_found_handler_type>> prefix_not_found_handlers_;
-    std::pmr::vector<controller_middleware_descriptor> middlewares_;
+    std::pmr::vector<owned_middleware_descriptor> middlewares_;
     std::pmr::vector<worker_state_definition> worker_states_;
 };
 

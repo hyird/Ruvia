@@ -2,41 +2,68 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <optional>
+#include <span>
 #include <string>
-#include <system_error>
+#include <string_view>
 #include <utility>
 
-#include <asio/connect.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/write.hpp>
-
-#include "ruvia/core/async.h"
-#include "ruvia/core/tcp_socket_options.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "client/client_transport.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
+namespace {
+
+// Redis' mapping of failed client_tcp_transport results. Cancellation and
+// pool shutdown abort the transport and surface through the slot's abort
+// reason, which callers check first. An aborted result is therefore an
+// expired deadline.
+[[noreturn]] void throw_redis_connect_error(const client_transport_result& result) {
+    switch (result.status_) {
+        case client_transport_status::aborted:
+            throw redis_error(redis_error::code_type::timeout, "redis connect timed out");
+        case client_transport_status::resolve_failed:
+            throw redis_error(redis_error::code_type::connect_failed, "redis resolve failed: " + error_code_text(result.error_));
+        case client_transport_status::tls_failed:
+            throw redis_error(
+                redis_error::code_type::connect_failed, "redis TLS handshake failed: " + error_code_text(result.error_));
+        case client_transport_status::ok:
+        case client_transport_status::eof:
+        case client_transport_status::connect_failed:
+        case client_transport_status::io_failed:
+            break;
+    }
+    throw redis_error(redis_error::code_type::connect_failed, "redis connect failed: " + error_code_text(result.error_));
+}
+
+[[noreturn]] void throw_redis_io_error(const client_transport_result& result) {
+    if (result.status_ == client_transport_status::aborted) {
+        throw redis_error(redis_error::code_type::timeout, "redis command timed out");
+    }
+    if (result.status_ == client_transport_status::eof) {
+        throw redis_error(redis_error::code_type::io_error, "redis server closed the connection");
+    }
+    throw redis_error(redis_error::code_type::io_error, error_code_text(result.error_));
+}
+
+}  // namespace
 
 void redis_pool::close(std::size_t slot) noexcept {
-    auto& connection = connections_[slot];
-    std::error_code ignored;
-    connection.resolver_.cancel();
-    connection.socket_.cancel(ignored);
-    connection.socket_.close(ignored);
+    auto& connection = *connections_[slot];
+    connection.transport_.close();
     connection.connected_ = false;
-    (void)slots_.clear_deadline(slot);
     connection.reader_.reset();
     connection.reply_bytes_ = 0;
 }
 
-void redis_pool::configure_socket(connection_type& connection) noexcept {
-    ruvia::apply_tcp_socket_policies(connection.socket_, config_.tcp_.no_delay_, config_.tcp_.keep_alive_);
+void redis_pool::abort(std::size_t slot, client_abort_reason reason) noexcept {
+    connections_[slot]->transport_.abort(reason);
+    close(slot);
 }
 
 void redis_pool::ensure_reader(connection_type& connection) {
@@ -50,51 +77,21 @@ void redis_pool::ensure_reader(connection_type& connection) {
     connection.reply_bytes_ = 0;
 }
 
-task<void> redis_pool::async_socket_write(std::size_t slot, const ruvia::operation_timeout& timeout) {
-    auto& connection = connections_[slot];
-    if (!slots_.arm_deadline(slot, timeout.remaining(), deadline_kind_type::socket)) {
-        throw redis_error(redis_error::code_type::timeout, "redis command timed out");
-    }
-    const auto write_completion = co_await ruvia::async_asio([&connection](auto handler) mutable {
-        if (connection.tls_stream_) {
-            asio::async_write(*connection.tls_stream_, asio::buffer(connection.write_buffer_), std::move(handler));
-        } else {
-            asio::async_write(connection.socket_, asio::buffer(connection.write_buffer_), std::move(handler));
-        }
-    });
+task<void> redis_pool::write_request(std::size_t slot, const ruvia::operation_timeout& timeout) {
+    auto& connection = *connections_[slot];
+    const auto written = co_await connection.transport_.write(connection.write_buffer_, timeout);
+    // The transport no longer borrows the buffer. One oversized request must
+    // not pin its capacity for the lifetime of this long-lived connection.
+    http_clear_pmr_string_retaining_small(connection.write_buffer_);
     slots_.throw_if_aborted(slot);
-    const auto ec = write_completion.error_code();
-    if (slots_.clear_deadline(slot) || timeout.expired() || ec == asio::error::timed_out) {
-        throw redis_error(redis_error::code_type::timeout, "redis command timed out");
+    if (!written.ok()) {
+        throw_redis_io_error(written);
     }
-    if (ec) {
-        throw redis_error(redis_error::code_type::io_error, ec.message());
-    }
-}
-
-task<asio_completion<std::size_t>> redis_pool::async_socket_read_some(
-    std::size_t slot, std::span<char> buffer, const ruvia::operation_timeout& timeout) {
-    auto& connection = connections_[slot];
-    if (!slots_.arm_deadline(slot, timeout.remaining(), deadline_kind_type::socket)) {
-        co_return asio_completion<std::size_t>::completed(asio::error::timed_out, 0);
-    }
-    auto result_value = co_await ruvia::async_asio<std::size_t>([&connection, buffer](auto handler) mutable {
-        if (connection.tls_stream_) {
-            connection.tls_stream_->async_read_some(asio::buffer(buffer.data(), buffer.size()), std::move(handler));
-        } else {
-            connection.socket_.async_read_some(asio::buffer(buffer.data(), buffer.size()), std::move(handler));
-        }
-    });
-    slots_.throw_if_aborted(slot);
-    if (slots_.clear_deadline(slot) || timeout.expired()) {
-        co_return asio_completion<std::size_t>::completed(asio::error::timed_out, 0);
-    }
-    co_return result_value;
 }
 
 task<redis_value> redis_pool::read_reply(
     std::size_t slot, const ruvia::operation_timeout& timeout, std::pmr::memory_resource* resource) {
-    auto& connection = connections_[slot];
+    auto& connection = *connections_[slot];
     ensure_reader(connection);
     connection.reply_builder_->begin(pmr_resource_or_default(resource));
     for (;;) {
@@ -132,18 +129,15 @@ task<redis_value> redis_pool::read_reply(
             const auto unread = connection.reader_->len - connection.reader_->pos;
             read_capacity = std::min(read_capacity, *config_.max_reply_bytes_ - connection.reply_bytes_ - unread);
         }
-        auto read_completion = co_await async_socket_read_some(slot,
+        const auto received = co_await connection.transport_.read_some(
             std::span<char>(connection.read_buffer_.data(), read_capacity), timeout);
-        const auto read_ec = read_completion.error_code();
-        const auto bytes_read = read_completion.result();
-        if (read_ec) {
-            if (read_ec == asio::error::timed_out) {
-                throw redis_error(redis_error::code_type::timeout, "redis command timed out");
-            }
-            throw redis_error(redis_error::code_type::io_error, read_ec.message());
+        // A cancellation or shutdown closed the connection and released its
+        // reader; report it before touching the reader again.
+        slots_.throw_if_aborted(slot);
+        if (!received.ok()) {
+            throw_redis_io_error(received);
         }
-        if (redisReaderFeed(connection.reader_.get(), connection.read_buffer_.data(), bytes_read) !=
-            REDIS_OK) {
+        if (redisReaderFeed(connection.reader_.get(), connection.read_buffer_.data(), received.bytes_) != REDIS_OK) {
             throw redis_error(
                 redis_error::code_type::protocol_error, hiredis_reader_error(*connection.reader_));
         }
@@ -151,84 +145,24 @@ task<redis_value> redis_pool::read_reply(
 }
 
 task<void> redis_pool::connect(std::size_t slot, const ruvia::operation_timeout* operation_timeout_value) {
-    auto& connection = connections_[slot];
+    auto& connection = *connections_[slot];
     if (connection.connected_) {
         co_return;
     }
-
-    std::array<char, 8> port_buffer;
-    auto [port_end, port_ec] =
-        std::to_chars(port_buffer.data(), port_buffer.data() + port_buffer.size(), config_.port_);
-    if (port_ec != std::errc{}) {
-        throw redis_error(redis_error::code_type::connect_failed, "invalid redis port");
-    }
-    const auto port =
-        std::string_view(port_buffer.data(), static_cast<std::size_t>(port_end - port_buffer.data()));
-
     const auto deadline_value = operation_timeout_value != nullptr
                                     ? operation_timeout_value->constrained_by(config_.connect_timeout_)
                                     : ruvia::operation_timeout(config_.connect_timeout_);
-    if (!slots_.arm_deadline(slot, deadline_value.remaining(), deadline_kind_type::resolve)) {
-        throw redis_error(redis_error::code_type::timeout, "redis resolve timed out");
-    }
-    auto resolve_completion = co_await ruvia::async_asio<asio::ip::tcp::resolver::results_type>(
-        [this, &connection, port](auto handler) mutable {
-            connection.resolver_.async_resolve(config_.host_, port, std::move(handler));
-        });
-    slots_.throw_if_aborted(slot);
-    const auto resolve_ec = resolve_completion.error_code();
-    auto endpoints = std::move(resolve_completion).take_result();
-    if (slots_.clear_deadline(slot) || deadline_value.expired()) {
-        throw redis_error(redis_error::code_type::timeout, "redis resolve timed out");
-    }
-    if (resolve_ec) {
-        throw redis_error(redis_error::code_type::connect_failed, resolve_ec.message());
-    }
-
-    if (!slots_.arm_deadline(slot, deadline_value.remaining(), deadline_kind_type::socket)) {
-        throw redis_error(redis_error::code_type::timeout, "redis connect timed out");
-    }
-    const auto connect_completion =
-        co_await ruvia::async_asio([&connection, &endpoints](auto handler) mutable {
-            asio::async_connect(connection.socket_, endpoints, std::move(handler));
-        });
-    slots_.throw_if_aborted(slot);
-    const auto connect_ec = connect_completion.error_code();
-    if (slots_.clear_deadline(slot) || deadline_value.expired()) {
-        throw redis_error(redis_error::code_type::timeout, "redis connect timed out");
-    }
-    if (connect_ec) {
-        throw redis_error(redis_error::code_type::connect_failed, connect_ec.message());
-    }
-    configure_socket(connection);
-    connection.tls_stream_.reset();
-    if (tls_context_ != nullptr) {
-        connection.tls_stream_ = make_pmr_object<connection_type::tls_stream_type>(resource_, connection.socket_, *tls_context_);
-        const auto prepared = prepare_client_tls_session(
-            *connection.tls_stream_->native_handle(), config_.tls_.tls_host(config_.host_), config_.tls_.mode_);
-        if (prepared != client_tls_setup_error::none) {
-            std::string message("redis TLS setup failed: ");
-            message.append(client_tls_setup_error_message(prepared));
-            throw redis_error(redis_error::code_type::connect_failed, message);
-        }
-        if (!slots_.arm_deadline(slot, deadline_value.remaining(), deadline_kind_type::socket)) {
-            throw redis_error(redis_error::code_type::timeout, "redis TLS handshake timed out");
-        }
-        const auto handshake = co_await ruvia::async_asio([&connection](auto handler) {
-            connection.tls_stream_->async_handshake(asio::ssl::stream_base::client, std::move(handler));
-        });
-        slots_.throw_if_aborted(slot);
-        if (slots_.clear_deadline(slot) || deadline_value.expired()) {
-            throw redis_error(redis_error::code_type::timeout, "redis TLS handshake timed out");
-        }
-        if (handshake.error_code()) {
-            throw redis_error(redis_error::code_type::connect_failed, "redis TLS handshake failed: " + handshake.error_code().message());
-        }
-    }
-    ensure_reader(connection);
-    connection.connected_ = true;
-
     try {
+        slots_.throw_if_aborted(slot);
+        // An expired deadline of the retired connection must not abort this one.
+        connection.transport_.reset_abort();
+        const auto connected = co_await connection.transport_.connect(deadline_value);
+        slots_.throw_if_aborted(slot);
+        if (!connected.ok()) {
+            throw_redis_connect_error(connected);
+        }
+        ensure_reader(connection);
+        connection.connected_ = true;
         co_await authenticate(slot, deadline_value);
     } catch (...) {
         close(slot);
@@ -237,19 +171,21 @@ task<void> redis_pool::connect(std::size_t slot, const ruvia::operation_timeout*
 }
 
 task<void> redis_pool::authenticate(std::size_t slot, const ruvia::operation_timeout& connect_timeout) {
-    auto& connection = connections_[slot];
+    auto& connection = *connections_[slot];
     auto run_control = [this, slot, &connection, &connect_timeout](
                            std::span<const std::string_view> args) -> task<redis_value> {
         connection.write_buffer_.clear();
         connection.write_buffer_.reserve(resp_command_serialized_size(args));
         append_resp_command(connection.write_buffer_, args);
         const auto deadline_value = connect_timeout.constrained_by(command_timeout_);
-        co_await async_socket_write(slot, deadline_value);
+        co_await write_request(slot, deadline_value);
 
         co_return co_await read_reply(slot, deadline_value, resource_);
     };
 
-    if (!config_.password_.empty()) {
+    // An ACL user must authenticate by name even without a password (a
+    // nopass user accepts any); skipping AUTH would connect as "default".
+    if (!config_.username_.empty() || !config_.password_.empty()) {
         redis_value reply(resource_);
         if (!config_.username_.empty()) {
             std::array<std::string_view, 3> args{

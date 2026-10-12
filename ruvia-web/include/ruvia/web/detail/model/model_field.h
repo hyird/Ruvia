@@ -10,6 +10,7 @@
 
 #include "ruvia/web/detail/model/model_options.h"
 #include "ruvia/web/detail/model/parse/field_assign.h"
+#include "ruvia/web/detail/util/fnv1a.h"
 
 namespace ruvia::detail::model {
 
@@ -19,12 +20,7 @@ class model_storage;
 [[nodiscard]] constexpr std::uint64_t model_field_name_hash(std::string_view name) noexcept {
     // FNV-1a is only a dispatch prefilter. The parser still compares the full
     // decoded key before binding, so collisions cannot change JSON semantics.
-    std::uint64_t hash = 14695981039346656037ULL;
-    for (const unsigned char byte : name) {
-        hash ^= byte;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
+    return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, name);
 }
 
 template <typename value_t_type, bool is_required, typename options_t_type, fixed_string field_wire_name>
@@ -184,6 +180,10 @@ private:
             rebound.value_.emplace(detail::rebind_model_value(*value_, resource));
         }
         return rebound;
+    }
+
+    [[nodiscard]] bool owns(const void* address) const noexcept {
+        return value_ && model_value_rebind_access::owns(*value_, address);
     }
 
     void reset_after_move() noexcept {

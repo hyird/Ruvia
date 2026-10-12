@@ -1,21 +1,25 @@
 // websocket: upgrade routes, subprotocol options, lifecycle timeouts,
 // text/binary echo and the RFC close handshake.
 // Run ruvia_example_websocket, then connect to ws://localhost:8084/ws/echo.
-// /ws/chat requires one of chat_options()'s advertised subprotocols.
+// /ws/chat requires one of chat_options()'s advertised subprotocols: an upgrade
+// offering none (send Sec-WebSocket-Protocol: chat.v1) is refused with 400.
 // Read until close; join the close handshake before releasing the connection.
 
 #include <chrono>
+#include <exception>
+#include <iostream>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 
-class websocket_controller final : public ruvia::controller<websocket_controller> {
+class websocket_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/ws")
 
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(websocket_controller)
     const auto chat_options = ruvia::websocket_route_config{
         .subprotocols_ = {"chat.v1"},
+        .require_subprotocol_ = true,
         .lifecycle_ =
             {
                 .heartbeat_ =
@@ -55,12 +59,17 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .listen({.address_ = "0.0.0.0", .http_ = 8084})
-        .server({
-            .worker_count_ = 2,
-            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-            .max_websocket_message_bytes_ = 16 * 1024 * 1024,
-        })
-        .run();
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8084})
+            .server({
+                .worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .max_websocket_message_bytes_ = 16 * 1024 * 1024,
+            })
+            .run();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

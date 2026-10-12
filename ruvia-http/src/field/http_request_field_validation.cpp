@@ -34,30 +34,8 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool http_expectation_quoted_string(std::string_view value) noexcept {
-    if (value.size() < 2 || value.front() != '"' || value.back() != '"') {
-        return false;
-    }
-    for (std::size_t i = 1; i + 1 < value.size(); ++i) {
-        auto ch = static_cast<unsigned char>(value[i]);
-        if (ch == '\\') {
-            ++i;
-            if (i + 1 >= value.size()) {
-                return false;
-            }
-            ch = static_cast<unsigned char>(value[i]);
-        } else if (ch == '"') {
-            return false;
-        }
-        if (!is_http_field_value_char(ch)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 [[nodiscard]] bool http_expectation_value(std::string_view value) noexcept {
-    return http_expectation_token(value) || http_expectation_quoted_string(value);
+    return http_expectation_token(value) || http_is_quoted_string(value);
 }
 
 [[nodiscard]] bool http_expectation_item(std::string_view item) noexcept {
@@ -84,6 +62,11 @@ namespace {
         ++start;
         const auto end = http_find_unquoted_delimiter(item, start, ';');
         const auto parameter = http_trim_ows(item.substr(start, end - start));
+        // RFC 9110 section 5.6.6: parameters = *( OWS ";" OWS [ parameter ] ).
+        if (parameter.empty()) {
+            start = end;
+            continue;
+        }
         const auto parameter_equals = parameter.find('=');
         if (parameter_equals == std::string_view::npos) {
             return false;
@@ -104,7 +87,7 @@ namespace {
 // are rejected with 417 or ignored.
 [[nodiscard]] bool is_valid_received_http_expect_field_value(std::string_view value) noexcept {
     bool valid = true;
-    http_visit_comma_separated_quoted_items(value, [&valid](std::string_view item) noexcept {
+    http_visit_comma_separated_quoted_field_items(value, [&valid](std::string_view item) noexcept {
         item = http_trim_ows(item);
         if (item.empty()) {
             return true;

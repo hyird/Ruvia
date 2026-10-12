@@ -5,6 +5,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -20,7 +21,7 @@ namespace ruvia {
 class pool_lease_scheduler::impl_type final {
 public:
     impl_type(std::size_t pool_size, const worker_handle* worker_value, std::pmr::memory_resource* resource)
-        : worker_(worker_value != nullptr ? *worker_value : worker_handle{}),
+        : worker_(worker_value != nullptr ? std::optional<worker_handle>(*worker_value) : std::nullopt),
           free_slots_(pmr_resource_or_default(resource)),
           busy_(pmr_resource_or_default(resource)),
           waiter_state_(std::allocate_shared<waiter_state_type>(
@@ -52,7 +53,9 @@ public:
                 return;
             }
             auto retained = shared_from_this();
-            detail::worker_handle_access::defer_or_terminate(
+            // A detached worker has already retired the owners of every
+            // suspended acquire, so there is nothing left to cancel.
+            (void)detail::worker_handle_access::defer_if_attached(
                 worker_value, [retained = std::move(retained), waiter_id] {
                     (void)retained->queue_.cancel(waiter_id);
                 });
@@ -90,6 +93,9 @@ public:
         auto& owner_value = reservation.owner();
         if (stop_token_value.stoppable() && (worker_value == nullptr || !worker_value->valid())) {
             throw std::logic_error("cancellable pool acquire requires a valid worker");
+        }
+        if (timeout.has_value() && worker_value == nullptr) {
+            throw std::logic_error("timed pool acquire requires a worker");
         }
         if (owner_value.closing_) {
             co_return pool_waiter_result::make_closed();
@@ -168,7 +174,11 @@ public:
         return true;
     }
 
-    worker_handle worker_;
+    [[nodiscard]] const worker_handle* worker() const noexcept {
+        return worker_ ? &*worker_ : nullptr;
+    }
+
+    std::optional<worker_handle> worker_;
     std::pmr::vector<std::size_t> free_slots_;
     std::pmr::vector<std::uint8_t> busy_;
     std::shared_ptr<waiter_state_type> waiter_state_;
@@ -193,13 +203,13 @@ pool_lease_scheduler::~pool_lease_scheduler() = default;
 
 task<pool_waiter_result> pool_lease_scheduler::acquire(
     const std::optional<std::chrono::milliseconds>& timeout) {
-    return impl_type::acquire_reserved(impl_type::acquire_reservation_type(*impl_), timeout, {}, &impl_->worker_);
+    return impl_type::acquire_reserved(impl_type::acquire_reservation_type(*impl_), timeout, {}, impl_->worker());
 }
 
 task<pool_waiter_result> pool_lease_scheduler::acquire(
     const std::optional<std::chrono::milliseconds>& timeout, stop_token stop_token_value) {
     return impl_type::acquire_reserved(
-        impl_type::acquire_reservation_type(*impl_), timeout, std::move(stop_token_value), &impl_->worker_);
+        impl_type::acquire_reservation_type(*impl_), timeout, std::move(stop_token_value), impl_->worker());
 }
 
 pool_lease_release_status pool_lease_scheduler::release(std::size_t slot) noexcept {

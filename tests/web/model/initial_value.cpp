@@ -59,6 +59,30 @@ RUVIA_MODEL(counted_lifecycle,
     RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_INITIAL(initial_number()),
         RUVIA_DEFAULT(counted_default())));
 
+constexpr std::size_t initial_payload_size = 4096;
+
+RUVIA_MODEL(payload_initial_model,
+    RUVIA_OPTIONAL_FIELD(payload, ruvia::string, RUVIA_INITIAL(std::string(initial_payload_size, 'p'))));
+
+// Counts only allocations large enough to hold an INITIAL payload.
+class payload_counting_resource final : public std::pmr::memory_resource {
+public:
+    std::size_t payload_allocations_{0};
+    ruvia::test::counting_memory_resource allocations_;
+
+private:
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        payload_allocations_ += bytes_value >= initial_payload_size ? 1 : 0;
+        return allocations_.allocate(bytes_value, alignment);
+    }
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
+        allocations_.deallocate(pointer, bytes_value, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
 }  // namespace
 
 RUVIA_TEST(model_initial_values_only_run_for_explicit_construction) {
@@ -176,4 +200,29 @@ RUVIA_TEST(model_initial_and_default_modes_are_evaluated_once_across_codecs_and_
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(moved)), std::string_view(R"({"value":11})"));
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
     RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
+}
+
+RUVIA_TEST(model_initial_fresh_container_elements_are_built_once_on_the_container_resource) {
+    payload_counting_resource resource;
+    {
+        ruvia::array<payload_initial_model> dense({.resource_ = &resource});
+        ruvia::boxed_array<payload_initial_model> boxed({.resource_ = &resource});
+        dense.reserve(4);
+        boxed.reserve(4);
+        for (std::size_t index = 0; index != 4; ++index) {
+            (void)dense.emplace_back();
+            (void)boxed.emplace();
+        }
+        RUVIA_CHECK_EQ(resource.payload_allocations_, std::size_t{8});
+        dense.resize(6);
+        boxed.resize(6);
+        RUVIA_CHECK_EQ(resource.payload_allocations_, std::size_t{12});
+        for (const auto& value : dense) {
+            RUVIA_CHECK_EQ(value.get<"payload">()->size(), initial_payload_size);
+        }
+        for (const auto& value : boxed) {
+            RUVIA_CHECK_EQ(value.get<"payload">()->size(), initial_payload_size);
+        }
+    }
+    RUVIA_CHECK_EQ(resource.allocations_.live_allocations(), std::size_t{0});
 }

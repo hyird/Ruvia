@@ -292,6 +292,10 @@ private:
 // validation. It validates the complete request before touching the caller's
 // buffer, generates Host and exact Content-Length, and returns separate
 // head/content views for writev-style I/O or Expect: 100-continue gating.
+// Metadata text and the header descriptor array may overlap head_buffer:
+// successful preparation consumes them before overwriting the emitted head.
+// Borrowed content must not overlap those written bytes; it may use the unused
+// tail of head_buffer and remains unchanged until the runtime sends it.
 // CONNECT uses its dedicated entry so authority form cannot be confused with an
 // origin-form target.
 class http1_client_request_writer final {

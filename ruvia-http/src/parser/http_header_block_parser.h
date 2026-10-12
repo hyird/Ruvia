@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -45,10 +44,6 @@ struct parsed_request_header_slot {
 using known_request_header_index_type = std::int16_t;
 
 struct parsed_request_header_block {
-    explicit parsed_request_header_block(
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : transfer_encoding_(resource) {}
-
     http_header_slice method_;
     http_header_slice target_;
     http_header_slice version_;
@@ -63,7 +58,6 @@ struct parsed_request_header_block {
     http_transfer_encoding_state transfer_encoding_;
     http_request_expectations expectations_;
     bool non_empty_trailer_header_present_{false};
-    bool te_header_present_{false};
 };
 
 [[nodiscard]] std::size_t find_http_header_end(

@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstddef>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
@@ -99,12 +100,19 @@ private:                                                                        
             ruvia_controller_type>::template make_middlewares<__VA_ARGS__>();                    \
     }
 
-#define RUVIA_ROUTES_BEGIN                                                                                    \
+// A controller is a final, default-constructible class that derives from
+// nothing. RUVIA_ROUTES_BEGIN names it because the registration flag
+// RUVIA_ROUTES_END declares is a static data member initializer, which is not a
+// complete-class context and so cannot deduce the enclosing type.
+#define RUVIA_ROUTES_BEGIN(controller_type)                                                                   \
 private:                                                                                                      \
+    using ruvia_controller_type = controller_type;                                                            \
     using ruvia_controller_access_type =                                                                      \
         ::ruvia::detail::controller_registration_access<ruvia_controller_type>;                               \
     friend class ::ruvia::detail::controller_registration_access<ruvia_controller_type>;                      \
     void register_routes(::ruvia::detail::router& router) {                                                   \
+        static_assert(::std::is_same_v<ruvia_controller_type, ::std::remove_cvref_t<decltype(*this)>>,       \
+            "RUVIA_ROUTES_BEGIN must name its enclosing controller");                                         \
         auto ruvia_controller_group = ruvia_controller_access_type::create_route_group(router,                \
             ruvia_controller_access_type::group_prefix(), ruvia_controller_access_type::group_middlewares()); \
         [[maybe_unused]] auto& ruvia_route_scope = ruvia_controller_group;

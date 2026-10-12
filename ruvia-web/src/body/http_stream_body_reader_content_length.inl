@@ -7,7 +7,6 @@ namespace ruvia::detail {
 template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     std::pmr::string& body, std::size_t content_length) {
-    compact_pending();
     if (finished_) {
         co_return std::string_view(body);
     }
@@ -35,7 +34,6 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
 template <typename stream_type>
 task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>::read_known_length(
     std::size_t content_length) {
-    compact_pending();
     if (finished_) {
         co_return std::nullopt;
     }
@@ -62,10 +60,8 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
 
     // The initial segment is now fully consumed as body: a partial-body prefix
     // cannot be followed by pipelined bytes, so the whole borrowed view was
-    // body. Drop it before recording any buffer_-relative pending_compact_until_,
-    // so compact_pending() compacts buffer_ instead of misreading that offset as
-    // an initial-view offset (mirrors the chunked path's
-    // materialize_initial_remainder()).
+    // body. Drop it before reading into buffer_, so read_cursor_ addresses
+    // buffer_ (mirrors the chunked path's materialize_initial_remainder()).
     if (initial_body_bytes == initial_body_and_pipeline_.size()) {
         initial_body_and_pipeline_ = {};
     }
@@ -78,7 +74,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
     const auto available = buffer_.size() - read_cursor_;
     const auto chunk_bytes = std::min(available, remaining_body);
     auto chunk = std::string_view(buffer_.data() + read_cursor_, chunk_bytes);
-    pending_compact_until_ = read_cursor_ + chunk_bytes;
+    read_cursor_ += chunk_bytes;
     delivered_bytes_ += chunk_bytes;
     if (delivered_bytes_ == content_length) {
         mark_finished();

@@ -45,26 +45,32 @@ struct url_decode_options final {
            std::string_view::npos;
 }
 
-namespace detail {
-
-// Decode the percent-escape at position i, where input[i] == '%'. Returns the
-// decoded byte (0-255), or -1 if the escape is truncated or contains a non-hex
-// digit. On success, advances i past the two hex digits so a `for (...; ++i)`
-// loop lands on the next input character. Single owner of %XX decoding for the
-// URL-component helpers below.
-[[nodiscard]] inline int decode_percent_byte(std::string_view input, std::size_t& i) noexcept {
-    if (i + 2 >= input.size()) {
-        return -1;
+// Decodes the pct-encoded triplet starting at input[index] (RFC 3986 2.1):
+// '%' followed by two hex digits. Returns no value when the triplet is
+// truncated, does not start with '%', or contains a non-hex digit.
+[[nodiscard]] constexpr std::optional<unsigned char> http_try_decode_percent_byte(
+    std::string_view input, std::size_t index) noexcept {
+    if (index >= input.size() || input.size() - index < 3 || input[index] != '%') {
+        return std::nullopt;
     }
-    const auto high = http_decode_hex_nibble(input[i + 1]);
-    const auto low = http_decode_hex_nibble(input[i + 2]);
+    const auto high = http_decode_hex_nibble(input[index + 1]);
+    const auto low = http_decode_hex_nibble(input[index + 2]);
     if (high < 0 || low < 0) {
-        return -1;
+        return std::nullopt;
     }
-    i += 2;
-    return (high << 4) | low;
+    return static_cast<unsigned char>((high << 4) | low);
 }
 
+// Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
+// policy deciding which bytes need escaping.
+template <typename output_type>
+void http_append_percent_byte(output_type& output, unsigned char byte) {
+    output.push_back('%');
+    output.push_back(http_upper_hex_digit(byte >> 4));
+    output.push_back(http_upper_hex_digit(byte));
+}
+
+namespace detail {
 template <typename visitor_type>
 [[nodiscard]] bool dispatch_url_encoded_pair_visitor(
     visitor_type& visitor, std::string_view name, std::string_view value) {
@@ -85,9 +91,10 @@ template <typename visitor_type>
         if (value[i] != '%') {
             continue;
         }
-        if (detail::decode_percent_byte(value, i) < 0) {
+        if (!http_try_decode_percent_byte(value, i)) {
             return false;
         }
+        i += 2;
     }
     return true;
 }
@@ -106,11 +113,12 @@ template <typename visitor_type>
         if (options.mode_ == url_decode_mode::form && c == '+') {
             c = ' ';
         } else if (c == '%') {
-            const int byte = detail::decode_percent_byte(input, i);
-            if (byte < 0) {
+            const auto byte = http_try_decode_percent_byte(input, i);
+            if (!byte) {
                 return std::nullopt;
             }
-            c = static_cast<char>(byte);
+            c = static_cast<char>(*byte);
+            i += 2;
         }
         output[written++] = c;
     }
@@ -133,11 +141,12 @@ template <typename visitor_type>
         if (mode == url_decode_mode::form && c == '+') {
             c = ' ';
         } else if (c == '%') {
-            const int byte = detail::decode_percent_byte(encoded, i);
-            if (byte < 0) {
+            const auto byte = http_try_decode_percent_byte(encoded, i);
+            if (!byte) {
                 return false;
             }
-            c = static_cast<char>(byte);
+            c = static_cast<char>(*byte);
+            i += 2;
         }
         if (out >= decoded.size() || decoded[out] != c) {
             return false;
@@ -159,7 +168,12 @@ template <typename visitor_type>
             return ' ';
         }
         if (c == '%') {
-            return detail::decode_percent_byte(input, i);
+            const auto byte = http_try_decode_percent_byte(input, i);
+            if (!byte) {
+                return -1;
+            }
+            i += 2;
+            return *byte;
         }
         return static_cast<unsigned char>(c);
     };

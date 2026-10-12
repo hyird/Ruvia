@@ -125,10 +125,11 @@ public:
     pool_lease_scheduler& operator=(pool_lease_scheduler&&) = delete;
     ~pool_lease_scheduler();
 
-    // A timeout arms a timer on the scheduler's worker. Once that worker's timer
-    // queue stops (pending or new acquires alike) no timer fires: the acquire
-    // completes only through release(), close() (closed), or its stop token
-    // (cancelled). It never throws for that.
+    // A timeout arms a timer on the scheduler's worker; a scheduler built
+    // without one throws std::logic_error for a timed acquire. Once that
+    // worker's timer queue stops (pending or new acquires alike) no timer
+    // fires: the acquire completes only through release(), close() (closed),
+    // or its stop token (cancelled). It never throws for that.
     [[nodiscard]] task<pool_waiter_result> acquire(
         const std::optional<std::chrono::milliseconds>& timeout);
     [[nodiscard]] task<pool_waiter_result> acquire(const std::optional<std::chrono::milliseconds>& timeout,

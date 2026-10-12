@@ -2,6 +2,7 @@
 
 #include <exception>
 #include <memory_resource>
+#include <system_error>
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_request.h"
@@ -12,7 +13,6 @@
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "websocket/http_websocket_connection.h"
-#include "websocket/websocket_access.h"
 
 namespace ruvia::detail {
 
@@ -39,7 +39,7 @@ void websocket_abort_thunk(void* target) noexcept {
 template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(
     connection_type& connection, std::pmr::memory_resource& resource) noexcept {
-    return websocket_access::make(resource, connection.worker(), &connection, &websocket_read_thunk<connection_type>,
+    return websocket(resource, connection.worker(), &connection, &websocket_read_thunk<connection_type>,
         &websocket_write_thunk<connection_type>, &websocket_close_thunk<connection_type>,
         &websocket_abort_thunk<connection_type>);
 }
@@ -54,7 +54,11 @@ task<void> invoke_websocket_handler(websocket_connection<stream_type>& connectio
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
     context_websocket_binding websocket_binding(context_value, websocket_value);
 
-    scanner_entry.set_phase(connection_scanner::phase_type::long_lived);
+    // A draining worker does not admit the session: it has already started
+    // the 1001 Going Away close, which finish_websocket_session completes.
+    if (!scanner_entry.enter_long_lived()) {
+        co_return;
+    }
     co_await handler(context_value);
 }
 
@@ -66,9 +70,10 @@ task<void> invoke_websocket_handler(websocket_connection<stream_type>& connectio
 // become a 1011 close code -- which tells the peer that something went wrong
 // but not what, and is the last thing that references the failure. Both it and
 // a failure to close are reported here, since nothing after this frame holds
-// either one. close() itself signals a dead peer through error codes, so what
-// it throws is a real fault (an invalid code, or exhaustion), not a routine
-// disconnect.
+// either one. close() reports transport failures as std::system_error: a peer
+// that resets instead of answering the Close, or a close-handshake timeout
+// that aborted the transport, is a routine disconnect rather than a fault.
+// Anything else it throws is a real fault (an invalid code, or exhaustion).
 template <typename stream_type>
 task<void> finish_websocket_session(websocket_connection<stream_type>& connection,
     std::exception_ptr exception, const connection_failure_sink& connection_failure,
@@ -80,6 +85,8 @@ task<void> finish_websocket_session(websocket_connection<stream_type>& connectio
         } else {
             co_await connection.close();
         }
+    } catch (const std::system_error&) {
+        // The transport ended during the close handshake; nothing to report.
     } catch (...) {
         connection_failure.invoke(remote_address, std::current_exception());
     }

@@ -17,6 +17,7 @@
 #include "db/db_mysql_runtime.h"
 #include "db/db_pool.h"
 #include "db/db_sql.h"
+#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {
@@ -27,7 +28,7 @@ using mariadb_pool = db_pool<mariadb_driver>;
     std::string message(operation);
     if (error) {
         message.append(": ");
-        message.append(error.message());
+        message.append(error_code_text(error));
     }
     return db_error(db_error::code_type::io_error, db_driver::mariadb, std::move(message),
         error ? std::optional<std::int64_t>(error.value()) : std::nullopt);

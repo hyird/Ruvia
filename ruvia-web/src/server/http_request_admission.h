@@ -95,6 +95,28 @@ private:
 [[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
     request_memory& memory, const http_request_rejection& rejection, context_services services);
 
+// Result of the synchronous first preparation pass. ready() is null only when
+// a blocking-pool encode or the application error handler must be awaited
+// through http_response_tail::finish_prepare().
+class http_response_preparation final {
+public:
+    [[nodiscard]] const prepared_application_response* ready() const noexcept {
+        return ready_ ? &*ready_ : nullptr;
+    }
+
+private:
+    friend class http_response_tail;
+
+    explicit http_response_preparation(prepared_application_response ready) noexcept
+        : ready_(ready),
+          first_pass_{http_response_compression_result::make_not_applicable(), false} {}
+    explicit http_response_preparation(http_buffered_compression_step first_pass) noexcept
+        : first_pass_(first_pass) {}
+
+    std::optional<prepared_application_response> ready_;
+    http_buffered_compression_step first_pass_;
+};
+
 // The post-response tail: final representation preparation (CORS,
 // compression, 406/500 recovery through the application error handler) and
 // the access-log record of the committed status.
@@ -118,11 +140,16 @@ public:
     }
 
     // All arguments borrow the current request owner through completion. Only
-    // an uncommitted response may enter. The application error handler runs at
-    // most once here.
-    [[nodiscard]] task<prepared_application_response> prepare(http_response& response,
-        const http_server_options& options, const route_table& routes, request_memory& memory,
-        const context_services& services) const;
+    // an uncommitted response may enter. The common response (no blocking-pool
+    // encode, no recovery) completes here without a coroutine frame.
+    [[nodiscard]] http_response_preparation prepare(
+        http_response& response, const http_server_options& options) const;
+
+    // Completes a preparation whose ready() is null, with the arguments given
+    // to prepare(). The application error handler runs at most once here.
+    [[nodiscard]] task<prepared_application_response> finish_prepare(const http_response_preparation& preparation,
+        http_response& response, const http_server_options& options, const route_table& routes,
+        request_memory& memory, const context_services& services) const;
 
     // Records a terminal outcome whose final status was committed. A single
     // null check when no access log is configured.

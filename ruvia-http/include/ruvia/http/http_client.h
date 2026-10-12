@@ -41,8 +41,8 @@ struct http_origin_options final {
 
 class http_origin_view final {
 public:
-    // `host` is a borrowed RFC 3986 uri-host; its storage must outlive this
-    // value and its bytes must remain unchanged. IP literals therefore include
+    // `host` is a borrowed RFC 3986 uri-host; its storage must remain alive and
+    // unchanged whenever this value is consumed. IP literals therefore include
     // brackets (for example, "[::1]"). Factories reject an empty or malformed
     // host before an origin can be observed.
     [[nodiscard]] static http_origin_view http(http_origin_options options);
@@ -159,8 +159,9 @@ struct http_client_request_view {
     ::ruvia::borrowed_text method_{"GET"};
     ::ruvia::borrowed_text target_{"/"};
     // Borrowed header table; its elements and strings must remain alive and
-    // unchanged through the synchronous prepare/submit call. HTTP/1 preparation
-    // owns the small set of facts needed by the later response exchange.
+    // unchanged until synchronous preparation/submission consumes them. The
+    // HTTP/1 writer permits metadata to overlap its emitted head and owns the
+    // small set of facts needed by the later response exchange.
     std::span<const http_header_view> headers_{};
     http_client_request_content_view content_{http_client_request_content_view::none()};
 };

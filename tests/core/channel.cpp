@@ -283,9 +283,12 @@ bool test_retired_receiver_storage_is_released() {
                 cold_receive.emplace(receiver.receive());
             }
             receiver.close();
+            // Retirement destroys the buffered value while the sender still
+            // holds the shared state.
+            success = destructions == 1 && success;
         }
         if (cold_receive) {
-            success = destructions == 0 && resource.live_allocations() != 0 && success;
+            success = resource.live_allocations() != 0 && success;
             if (retirement == cold_task_retirement::completed) {
                 bool closed = false;
                 ruvia::test::run_worker_tasks(runtime, verify_retired_payload_receive(std::move(*cold_receive), closed));
@@ -295,6 +298,78 @@ bool test_retired_receiver_storage_is_released() {
         }
         success = destructions == 1 && resource.live_allocations() == 0 && success;
         runtime.detach();
+    }
+    return success;
+}
+
+struct teardown_payload;
+
+// Endpoint owners a buffered payload can tear down from its destructor.
+struct teardown_endpoints final {
+    std::unique_ptr<channel_sender<teardown_payload>> sender_;
+    std::unique_ptr<channel_receiver<teardown_payload>> receiver_;
+    bool armed_{false};
+    bool release_endpoints_{false};
+    int armed_destructions_{0};
+};
+
+// The defaulted move keeps the endpoint reference in the moved-from source, so
+// every payload object a drain retires runs the teardown, moved-from or not.
+struct teardown_payload final {
+    explicit teardown_payload(teardown_endpoints& endpoints) noexcept
+        : endpoints_(&endpoints) {}
+    teardown_payload(const teardown_payload&) = delete;
+    teardown_payload& operator=(const teardown_payload&) = delete;
+    teardown_payload(teardown_payload&&) noexcept = default;
+    teardown_payload& operator=(teardown_payload&&) noexcept = default;
+    ~teardown_payload() {
+        if (!endpoints_->armed_) {
+            return;
+        }
+        ++endpoints_->armed_destructions_;
+        if (endpoints_->sender_) {
+            endpoints_->sender_->close();
+        }
+        if (endpoints_->release_endpoints_) {
+            endpoints_->receiver_.reset();
+            endpoints_->sender_.reset();
+        }
+    }
+
+    teardown_endpoints* endpoints_;
+};
+
+// Receiver retirement destroys buffered payloads whose destructors reenter the
+// channel: closing the sender must not deadlock on the queue lock, and dropping
+// every endpoint must not free the state while the drain is still running.
+bool test_retired_payload_destructors_can_tear_down_the_channel() {
+    bool success = true;
+    for (const bool release_endpoints : {false, true}) {
+        failing_memory_resource resource;
+        asio::io_context io_context;
+        worker_runtime_context runtime(io_context, 8);
+        {
+            teardown_endpoints endpoints;
+            endpoints.release_endpoints_ = release_endpoints;
+            auto [sender, receiver] =
+                make_channel<teardown_payload>(runtime.handle(), {.capacity_ = 2, .resource_ = &resource});
+            endpoints.sender_ = std::make_unique<channel_sender<teardown_payload>>(std::move(sender));
+            endpoints.receiver_ = std::make_unique<channel_receiver<teardown_payload>>(std::move(receiver));
+            success = endpoints.sender_->send(teardown_payload(endpoints)).accepted() &&
+                      endpoints.sender_->send(teardown_payload(endpoints)).accepted() && success;
+            endpoints.armed_ = true;
+            endpoints.receiver_->close();
+            success = endpoints.armed_destructions_ == 2 && success;
+            endpoints.armed_ = false;
+            if (release_endpoints) {
+                success = !endpoints.sender_ && !endpoints.receiver_ && resource.live_allocations() == 0 && success;
+            } else {
+                success = endpoints.sender_->send(teardown_payload(endpoints)).status() == channel_send_status::closed &&
+                          success;
+            }
+        }
+        runtime.detach();
+        success = resource.live_allocations() == 0 && success;
     }
     return success;
 }
@@ -495,6 +570,7 @@ int main() {
                             worker_stopping && stopping_send &&
                             move_failed && recovered_value && recovered_send &&
                             test_rejected_payload_moves_can_close_the_channel() &&
-                            test_retired_receiver_storage_is_released();
+                            test_retired_receiver_storage_is_released() &&
+                            test_retired_payload_destructors_can_tear_down_the_channel();
     return all_passed ? 0 : 1;
 }

@@ -6,7 +6,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
@@ -24,7 +23,7 @@ struct csrf_protection_config final {
 // rejected with 403. Register on a controller, group, or route that should
 // enforce browser XSRF checks. Cookie and header names default to "XSRF-TOKEN"
 // and "X-XSRF-TOKEN" and can be rebranded per app.
-class csrf_protection final : public middleware {
+class csrf_protection final {
 public:
     csrf_protection();
     explicit csrf_protection(const csrf_protection_config& config);

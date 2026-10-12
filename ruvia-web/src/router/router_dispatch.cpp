@@ -35,10 +35,10 @@ http_response make_allow_no_content_response(request_memory& memory, std::uint32
         return std::nullopt;
     }
 
+    // resolve() rejects every target that is not an origin path naming a
+    // resource, so a probed path here is origin-form and dot-segment free.
     auto relative = request.path();
-    if (!relative.empty() && relative.front() == '/') {
-        relative.remove_prefix(1);
-    }
+    relative.remove_prefix(1);
 
     auto context_value = detail::context_access::make(memory, request, services);
     try {
@@ -106,16 +106,14 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
-            if (auto document_response = select_document_root_fallback(
-                    document_root, request, memory, services, static_file_mode)) {
-                auto context_value = detail::context_access::make(
-                    memory, request, services.with_route_handlers(*this, not_found_handler_for(request.path())));
-                auto terminal = [&document_response](context&) -> task<http_response> {
-                    co_return std::move(*document_response);
-                };
-                co_return co_await run_unmatched_chain(
-                    context_value, callback_access::bind<task<http_response>(context&)>(terminal));
-            }
+            // A document-root file or an automatic OPTIONS answer: complete
+            // responses that still pass through the unmatched-request chain,
+            // like every other answer to a request no route matched. A
+            // rejected target is answered by the not-found path alone.
+            auto unmatched_response = resolution.rejected() != nullptr
+                                          ? std::nullopt
+                                          : select_document_root_fallback(
+                                                document_root, request, memory, services, static_file_mode);
             // One handle_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
             // temporaries in the frame, so distinct inline sites would each
@@ -128,8 +126,10 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
             // the error path.
             std::string_view extension_method_buffer[8];
             std::span<const std::string_view> extension_methods;
-            if (request.known_method() == http_known_method::unknown &&
-                !recognizes_method_token(request.method())) {
+            if (unmatched_response) {
+                // Served from the document root.
+            } else if (request.known_method() == http_known_method::unknown &&
+                       !recognizes_method_token(request.method())) {
                 // RFC 9110 15.5.6/15.6.2: 405 says the method is known here but
                 // unsupported by this resource; a token no route registered is
                 // not known here at all, so it stays 501 whatever the path holds.
@@ -146,17 +146,30 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
                 // an ordinary 404, which the fallback below produces.
             } else if (request.known_method() == http_known_method::options &&
                        request.path() == "*") {
-                co_return make_allow_no_content_response(
-                    memory, allowed_methods_for_server(), extension_methods_for_server());
+                // RFC 9110 9.3.7: OPTIONS * asks about the server in general.
+                // Methods differ per resource, so a server-wide Allow would
+                // advertise methods most resources reject; answer without one.
+                unmatched_response.emplace(http_response({.resource_ = memory.resource()}));
+                unmatched_response->status(ruvia::http_status::no_content);
             } else if (const auto* method_not_allowed = resolution.method_not_allowed()) {
                 extension_methods = extension_methods_for(request.path(), extension_method_buffer);
                 if (request.known_method() == http_known_method::options) {
-                    co_return make_allow_no_content_response(
-                        memory, method_not_allowed->allowed_methods(), extension_methods);
+                    unmatched_response.emplace(make_allow_no_content_response(
+                        memory, method_not_allowed->allowed_methods(), extension_methods));
+                } else {
+                    error = http_error_info({.status_ = ruvia::http_status::method_not_allowed,
+                        .message_ = "method not allowed"});
+                    allowed_methods = method_not_allowed->allowed_methods();
                 }
-                error = http_error_info({.status_ = ruvia::http_status::method_not_allowed,
-                    .message_ = "method not allowed"});
-                allowed_methods = method_not_allowed->allowed_methods();
+            }
+
+            if (unmatched_response) {
+                auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
+                auto terminal = [&unmatched_response](context&) -> task<http_response> {
+                    co_return std::move(*unmatched_response);
+                };
+                co_return co_await run_unmatched_chain(
+                    context_value, callback_access::bind<task<http_response>(context&)>(terminal));
             }
 
             if (error) {
@@ -170,13 +183,9 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
             co_return co_await handle_not_found(request, memory, services);
         }
 
-        auto context_value = make_route_context(
-            memory, request, *resolved, services.with_route_handlers(*this, not_found_handler_for(request.path())));
+        auto context_value = make_route_context(memory, request, *resolved, services.with_routes(*this));
         std::exception_ptr exception;
         try {
-            if (resolved->route().endpoint().buffered() == nullptr) {
-                throw std::logic_error("streaming route requires its dedicated dispatch path");
-            }
             co_return co_await invoke_route(*resolved, context_value);
         } catch (...) {
             exception = std::current_exception();

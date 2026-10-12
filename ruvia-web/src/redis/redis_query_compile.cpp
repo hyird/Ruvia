@@ -9,6 +9,7 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_predicate.h"
 
@@ -33,15 +34,6 @@ constexpr std::string_view present_value = "1";
 
 void append_argument(std::pmr::vector<std::pmr::string>& args, std::string_view value) {
     args.emplace_back(value.data(), value.size());
-}
-
-void append_unsigned(std::pmr::string& output, std::uint64_t value) {
-    char buffer[3 * sizeof(std::uint64_t) + 3]{};
-    const auto result_value = std::to_chars(std::begin(buffer), std::end(buffer), value);
-    if (result_value.ec != std::errc{}) {
-        throw std::invalid_argument("failed to format Redis Search integer");
-    }
-    output.append(buffer, result_value.ptr);
 }
 
 [[nodiscard]] std::pmr::string redis_index_name(std::string_view prefix, std::pmr::memory_resource* resource) {
@@ -128,16 +120,18 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
             if (std::fabs(static_cast<long double>(number)) > max_exact_redis_number) {
                 throw std::invalid_argument("Redis numeric predicate exceeds exact range");
             }
-            result_value = std::to_chars(std::begin(buffer), std::end(buffer), number);
-            break;
+            std::pmr::string text(resource);
+            http_append_formatted_number(text, number, "failed to format Redis numeric predicate");
+            return text;
         }
         case redis_literal_kind::unsigned_integer: {
             const auto number = redis_literal_access::unsigned_value(value);
             if (static_cast<long double>(number) > max_exact_redis_number) {
                 throw std::invalid_argument("Redis numeric predicate exceeds exact range");
             }
-            result_value = std::to_chars(std::begin(buffer), std::end(buffer), number);
-            break;
+            std::pmr::string text(resource);
+            http_append_unsigned(text, number);
+            return text;
         }
         case redis_literal_kind::real: {
             double number = redis_literal_access::real_value(value);
@@ -208,16 +202,14 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
     if (!is_integer_column_kind(column_kind)) {
         throw std::invalid_argument("Redis primary key must be text or integer");
     }
-    char buffer[128]{};
-    std::to_chars_result result_value{};
+    std::pmr::string result_value(resource);
     switch (redis_literal_access::type(value)) {
         case redis_literal_kind::signed_integer:
-            result_value = std::to_chars(std::begin(buffer), std::end(buffer),
-                redis_literal_access::signed_value(value));
+            http_append_formatted_number(result_value, redis_literal_access::signed_value(value),
+                "failed to format Redis primary key");
             break;
         case redis_literal_kind::unsigned_integer:
-            result_value = std::to_chars(std::begin(buffer), std::end(buffer),
-                redis_literal_access::unsigned_value(value));
+            http_append_unsigned(result_value, redis_literal_access::unsigned_value(value));
             break;
         case redis_literal_kind::real: {
             const double number = redis_literal_access::real_value(value);
@@ -225,17 +217,14 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
                 std::fabs(static_cast<long double>(number)) > max_exact_redis_number) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
-            result_value = std::to_chars(std::begin(buffer), std::end(buffer),
-                static_cast<std::int64_t>(number));
+            http_append_formatted_number(result_value, static_cast<std::int64_t>(number),
+                "failed to format Redis primary key");
             break;
         }
         default:
             throw std::invalid_argument("Redis primary key requires a string or integer value");
     }
-    if (result_value.ec != std::errc{}) {
-        throw std::invalid_argument("failed to format Redis primary key");
-    }
-    return std::pmr::string(buffer, static_cast<std::size_t>(result_value.ptr - buffer), resource);
+    return result_value;
 }
 
 [[nodiscard]] redis_index_kind index_kind(const redis_mapping& mapping, std::string_view field) {
@@ -618,10 +607,7 @@ std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resou
     std::pmr::string encoded(pmr_resource_or_default(resource));
     encoded.reserve(value.size() * 2U + 1U);
     encoded.push_back('x');
-    for (const unsigned char byte : value) {
-        encoded.push_back(http_lower_hex_digit(byte >> 4U));
-        encoded.push_back(http_lower_hex_digit(byte));
-    }
+    http_append_lower_hex(encoded, value);
     return encoded;
 }
 
@@ -648,13 +634,13 @@ std::pmr::vector<std::pmr::string> compile_redis_find(std::span<const redis_colu
     } else {
         constexpr auto max_redis_integer = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
         const auto skip = options.skip_.value_or(0U);
-        const auto take = take_override.value_or(options.take_.value_or(100U));
+        const auto take = take_override.value_or(options.take_.value_or(redis_find_default_take));
         if (skip > max_redis_integer || take > max_redis_integer) {
             throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
         }
         std::pmr::string encoded_skip(resource), encoded_take(resource);
-        append_unsigned(encoded_skip, skip);
-        append_unsigned(encoded_take, take);
+        http_append_unsigned(encoded_skip, skip);
+        http_append_unsigned(encoded_take, take);
         args.emplace_back(std::move(encoded_skip));
         args.emplace_back(std::move(encoded_take));
     }

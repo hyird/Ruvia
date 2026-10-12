@@ -9,6 +9,7 @@
 #include "app/app_listener_options.h"
 #include "app/env_state.h"
 #include "server/http_server_options_validation.h"
+#include "server/http_server_tls_identity.h"
 
 namespace ruvia {
 
@@ -17,6 +18,7 @@ void apply_server_config(app_state& state_value, const server_config& config) {
     auto options = normalize_server_options(config, state_value.options_);
     state_value.worker_count_ = config.worker_count_;
     state_value.process_signal_handlers_ = config.process_signal_handlers_;
+    state_value.drain_timeout_ = config.drain_timeout_;
     state_value.options_ = std::move(options);
 }
 
@@ -35,6 +37,7 @@ application& application::load_dotenv(const std::filesystem::path& path, dotenv_
 }
 
 application& application::listen(listen_config config) {
+    const detail::tls_password_cleanser password_cleanser(config.tls_);
     return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
         [&config](detail::app_state& state_value) {
             const auto address = detail::normalize_listen_address(config.address_);
@@ -56,7 +59,7 @@ application& application::listen(listen_config config) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
 
-            auto* const resource = detail::app_resource();
+            auto* const resource = process_resource();
             std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
             replacement.reserve(config.http_.has_value() && config.https_.has_value() ? 2 : 1);
             if (config.http_.has_value()) {
@@ -69,7 +72,8 @@ application& application::listen(listen_config config) {
                 }
             }
             if (config.https_.has_value()) {
-                auto tls = detail::normalize_tls_options(config.tls_, resource);
+                // Credentials load once, here; the definition keeps no file name or password.
+                auto tls = detail::load_http_server_tls(config.tls_, resource);
                 replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https_),
                     std::move(tls));
             }
@@ -134,7 +138,7 @@ application& application::trusted_proxies(trusted_proxy_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change trusted proxies while app is running",
         [config = std::move(config)](detail::app_state& state_value) {
-            detail::trusted_proxy_set parsed(detail::app_resource());
+            detail::trusted_proxy_set parsed(process_resource());
             parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
             for (const auto& cidr : config.cidrs_) {
                 const auto block = detail::parse_trusted_proxy_block(cidr);
@@ -153,7 +157,7 @@ application& application::trusted_proxies(trusted_proxy_config config) {
 application& application::trusted_proxies(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change trusted proxies while app is running", [](detail::app_state& state_value) {
-            state_value.options_.trusted_proxies_ = detail::trusted_proxy_set(detail::app_resource());
+            state_value.options_.trusted_proxies_ = detail::trusted_proxy_set(process_resource());
         });
 }
 

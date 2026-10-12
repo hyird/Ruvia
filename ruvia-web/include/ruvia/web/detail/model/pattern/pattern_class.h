@@ -13,16 +13,23 @@ struct pattern_class_member final {
     unsigned char last_{0};
 };
 
-[[nodiscard]] constexpr pattern_atom_kind pattern_escape_kind(char escape) noexcept {
+// Only \d, \w and \s are escape classes. Other ASCII letters and digits are
+// rejected rather than read as literals, because regex escapes such as \r, \n,
+// \D or \S would otherwise silently change meaning. Remaining escapes are literal.
+[[nodiscard]] constexpr bool decode_pattern_escape(char escape, pattern_atom_kind& kind) noexcept {
     switch (escape) {
         case 'd':
-            return pattern_atom_kind::digit;
+            kind = pattern_atom_kind::digit;
+            return true;
         case 'w':
-            return pattern_atom_kind::word;
+            kind = pattern_atom_kind::word;
+            return true;
         case 's':
-            return pattern_atom_kind::space;
+            kind = pattern_atom_kind::space;
+            return true;
         default:
-            return pattern_atom_kind::literal;
+            kind = pattern_atom_kind::literal;
+            return escape == '_' || !is_pattern_word(escape);
     }
 }
 
@@ -38,7 +45,9 @@ struct pattern_class_member final {
             return false;
         }
         value = pattern[cursor++];
-        member.kind_ = pattern_escape_kind(value);
+        if (!decode_pattern_escape(value, member.kind_)) {
+            return false;
+        }
     }
     member.first_ = static_cast<unsigned char>(value);
     member.last_ = member.first_;

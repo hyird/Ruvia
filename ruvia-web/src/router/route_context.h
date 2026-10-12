@@ -10,14 +10,15 @@
 
 namespace ruvia {
 
-// The context a matched route runs in, carrying its captured parameters and the
-// route identity that scopes a rate limit.
+// The context a matched route runs in, carrying its captured parameters, the
+// route identity that scopes a rate limit, and the route's body ceiling.
 [[nodiscard]] inline context make_route_context(request_memory& memory, const http_request& request,
-    const detail::resolved_route& resolved, detail::context_services services) {
+    const detail::resolved_route& resolved, const detail::context_services& services) {
     const auto& route = resolved.route();
     const auto values = resolved.match().values();
     return detail::context_access::make(memory, request, route.path(), route.param_names().data(),
-        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
+        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route),
+        services.with_route_body_limit(route.max_request_body_bytes()));
 }
 
 }  // namespace ruvia

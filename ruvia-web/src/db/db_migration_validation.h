@@ -152,7 +152,7 @@ namespace ruvia::detail {
     std::string_view sql, db_driver driver) {
     switch (driver) {
         case db_driver::mariadb:
-            return find_sql_syntax_byte(sql, ';');
+            return find_sql_syntax_byte(sql, ';', true);
         case db_driver::postgresql:
             return find_postgresql_syntax_byte(sql, ';');
         default:

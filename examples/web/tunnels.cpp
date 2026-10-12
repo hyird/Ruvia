@@ -22,9 +22,9 @@
 
 namespace {
 
-class tunnel_controller final : public ruvia::controller<tunnel_controller> {
+class tunnel_controller final {
 public:
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(tunnel_controller)
     RUVIA_GET("/health", health);
     const ruvia::http_tunnel_route_config options{
         .peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};

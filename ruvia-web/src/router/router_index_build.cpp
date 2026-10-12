@@ -40,21 +40,13 @@ void detail::router_impl::build_static_index() {
     }
 }
 
-void detail::router_impl::build_allowed_method_mask() {
+void detail::router_impl::build_static_method_mask() {
     auto& plan = *plan_;
     for (const auto& route : plan.routes_) {
-        if (route_table::is_routable_method(route.method())) {
-            const auto method_bit = 1U << route_table::method_index(route.method());
-            plan.allowed_method_mask_ |= method_bit;
-            if (route_table::supports_head_fallback(route)) {
-                plan.allowed_method_mask_ |= 1U << route_table::method_index(http_known_method::head);
-            }
-            if (!route.dynamic()) {
-                plan.static_method_mask_ |= method_bit;
-            }
+        if (route_table::is_routable_method(route.method()) && !route.dynamic()) {
+            plan.static_method_mask_ |= 1U << route_table::method_index(route.method());
         }
     }
-    plan.allowed_method_mask_ |= 1U << route_table::method_index(http_known_method::options);
 }
 
 }  // namespace ruvia

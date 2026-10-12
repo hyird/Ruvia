@@ -33,7 +33,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         body_setup_failure = std::current_exception();
     }
     if (body_setup_failure != nullptr) {
-        co_return co_await complete_failed_http_body_route(d.scanner_entry_, body_setup_failure, d.parsed_,
+        co_return co_await complete_failed_http_route(d.scanner_entry_, body_setup_failure, d.parsed_,
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
     }
     d.base_route_services_ = body_state.with_loader(d.base_route_services_);
@@ -44,8 +44,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
     response_sink_type response_sink(d.stream_, d.memory_, response_head, d.scanner_entry_,
-        d.base_route_services_.worker(), endpoint.kind(), stream_plan, d.response_coding_,
-        d.response_coding_availability_);
+        d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
+        endpoint.kind(), stream_plan, d.response_coding_, d.response_coding_availability_);
 
     d.scanner_entry_.set_phase(connection_scanner::phase_type::writing);
     auto result_value = co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
@@ -61,10 +61,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     if (auto* route_response = result_value.route_response()) {
         d.response_ = std::move(*route_response).take_response();
         d.scanner_entry_.touch();
-        connection_plan =
-            finalize_buffered_route_response(d.response_, connection_plan, d.request_sequence_);
-        co_return http1_session_request_completion::make_buffered_unrestored(
-            connection_plan, request_head.header_bytes());
+        co_return finalize_buffered_route_response(
+            d.response_, connection_plan, d.request_sequence_, request_head.header_bytes());
     }
 
     const auto committed_status = result_value.committed_status();

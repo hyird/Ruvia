@@ -7,7 +7,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/next.h"
 #include "ruvia/web/rate_limit_rule.h"
 
@@ -19,7 +18,10 @@ struct route_rate_limit_options final {
     rate_limit_rule rule_{};
 };
 
-[[nodiscard]] bool apply_route_rate_limit(context& context_value, const route_rate_limit_options& options);
+// `declaration` identifies the rule's declaration: stacked rules on one route
+// each count in their own window.
+[[nodiscard]] bool apply_route_rate_limit(
+    context& context_value, const void* declaration, const route_rate_limit_options& options);
 
 [[nodiscard]] constexpr route_rate_limit_options get_route_rate_limit_options(
     std::size_t max_requests, std::int64_t window_ms) {
@@ -44,12 +46,14 @@ struct route_rate_limit_options final {
 // pastes its arguments back together.
 //
 // The limit is scoped to the route it is registered on and keyed on the client
-// address, so two routes carrying the same numbers count independently. It does
-// not replace application::get_rate_limit() -- both apply, so the stricter is what a
+// address, so two routes carrying the same numbers count independently. Each
+// declaration also counts on its own: an app or controller rule stacked over a
+// route rule enforces both windows, never one shared counter. It does not
+// replace application::get_rate_limit() -- both apply, so the stricter is what a
 // caller meets, the same "narrower scope may only tighten" rule body_limit
 // follows. Worker-local, like the app-wide rule.
 template <std::size_t max_requests, std::int64_t window_ms>
-class rate_limit final : public middleware {
+class rate_limit final {
 public:
     static_assert(max_requests > 0, "route rate limit max requests must be greater than 0");
     static_assert(window_ms > 0, "route rate limit window must be greater than 0ms");
@@ -57,7 +61,7 @@ public:
     static constexpr bool ruvia_uses_route_rate_limit = true;
 
     task<void> handle(context& context_value, next& next_value) {
-        if (!detail::apply_route_rate_limit(context_value, options())) {
+        if (!detail::apply_route_rate_limit(context_value, this, options())) {
             co_return;
         }
 

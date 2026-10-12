@@ -2,7 +2,7 @@
 
 // In-memory testing facade for applications built on Ruvia -- the actix
 // test_request / Hono app.request() analog. test_app collects every controller
-// linked into the binary (the same CRTP registration path application::run() uses),
+// linked into the binary (the same macro registration path application::run() uses),
 // finalizes the production route table, and dispatches TestRequests through
 // the real buffered request chain of a server with default options: request
 // admission (body ceilings, handler deadlines, rate limits), routing,
@@ -176,13 +176,13 @@ public:
 
     // Uses the same composed dispatch configuration as application, with test_app's
     // first-request lifecycle guard instead of the process lifecycle.
-    template <typename middleware_type, typename... args_types>
+    template <middleware middleware_type, typename... args_types>
     test_app& use(args_types&&... args) {
         return use_middleware(
-            detail::make_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
+            detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
 
-    template <typename middleware_type, typename... args_types>
+    template <middleware middleware_type, typename... args_types>
     test_app& use_at(const middleware_scope_options& options, args_types&&... args) {
         return use_middleware(
             detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
@@ -215,7 +215,7 @@ public:
     [[nodiscard]] test_response request(const test_request& request);
 
 private:
-    test_app& use_middleware(detail::controller_middleware_descriptor descriptor);
+    test_app& use_middleware(detail::owned_middleware_descriptor descriptor);
     test_app& use_worker_state_definition(detail::worker_state_definition definition);
 
     struct impl_type;

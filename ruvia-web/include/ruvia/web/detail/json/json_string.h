@@ -40,55 +40,6 @@ namespace ruvia::detail {
     return code_unit >= 0xDC00 && code_unit <= 0xDFFF;
 }
 
-// Length (1-4) of the well-formed UTF-8 sequence beginning at input[i] (whose
-// lead byte is >= 0x80), or 0 if the bytes there are not valid UTF-8. Enforces the
-// Unicode 3.9 Table 3-7 constraints: no overlong forms (C0/C1, E0 80-9F, F0 80-8F),
-// no UTF-16 surrogate code points (ED A0-BF), nothing above U+10FFFF (F4 90-.., F5+),
-// and no stray/truncated continuation bytes. RFC 8259 §8.1 requires JSON to be UTF-8,
-// so a string carrying anything else is rejected rather than passed through verbatim.
-[[nodiscard]] inline std::size_t json_utf8_sequence_length(
-    std::string_view input, std::size_t i) noexcept {
-    const auto is_cont = [](unsigned char b) noexcept { return (b & 0xC0U) == 0x80U; };
-    const auto b0 = static_cast<unsigned char>(input[i]);
-    if (b0 >= 0xC2 && b0 <= 0xDF) {
-        return (i + 1 < input.size() && is_cont(static_cast<unsigned char>(input[i + 1]))) ? 2 : 0;
-    }
-    if (b0 >= 0xE0 && b0 <= 0xEF) {
-        if (i + 2 >= input.size()) {
-            return 0;
-        }
-        const auto b1 = static_cast<unsigned char>(input[i + 1]);
-        const auto b2 = static_cast<unsigned char>(input[i + 2]);
-        if (!is_cont(b2)) {
-            return 0;
-        }
-        if (b0 == 0xE0   ? (b1 < 0xA0 || b1 > 0xBF)
-            : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F)
-                         : !is_cont(b1)) {
-            return 0;
-        }
-        return 3;
-    }
-    if (b0 >= 0xF0 && b0 <= 0xF4) {
-        if (i + 3 >= input.size()) {
-            return 0;
-        }
-        const auto b1 = static_cast<unsigned char>(input[i + 1]);
-        const auto b2 = static_cast<unsigned char>(input[i + 2]);
-        const auto b3 = static_cast<unsigned char>(input[i + 3]);
-        if (!is_cont(b2) || !is_cont(b3)) {
-            return 0;
-        }
-        if (b0 == 0xF0   ? (b1 < 0x90 || b1 > 0xBF)
-            : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F)
-                         : !is_cont(b1)) {
-            return 0;
-        }
-        return 4;
-    }
-    return 0;  // 0x80-0xC1 (bare continuation / overlong lead) or 0xF5-0xFF
-}
-
 enum class json_string_encoding : std::uint8_t { literal,
     escaped };
 
@@ -178,11 +129,11 @@ private:
             return token;
         }
         if (uc >= 0x80) {
-            const auto length = json_utf8_sequence_length(remaining, i);
-            if (length == 0) {
+            const auto sequence = scan_json_utf8_sequence(remaining, i);
+            if (!sequence.well_formed_) {
                 return std::nullopt;
             }
-            i += length;
+            i += sequence.length_;
             continue;
         }
         ++i;
@@ -225,14 +176,14 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
                 return std::nullopt;
             }
             if (uc >= 0x80) {
-                const auto length = json_utf8_sequence_length(input, i);
-                if (length == 0) {
+                // RFC 8259 §8.1 requires JSON to be UTF-8: ill-formed input is
+                // rejected rather than passed through verbatim.
+                const auto sequence = scan_json_utf8_sequence(input, i);
+                if (!sequence.well_formed_) {
                     return std::nullopt;
                 }
-                for (std::size_t k = 0; k < length; ++k) {
-                    output.push_back(input[i + k]);
-                }
-                i += length - 1;  // the loop's ++i steps past the final byte
+                output.append(input.data() + i, sequence.length_);
+                i += sequence.length_ - 1;  // the loop's ++i steps past the final byte
                 continue;
             }
             output.push_back(c);

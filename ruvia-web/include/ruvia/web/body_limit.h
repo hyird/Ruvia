@@ -5,7 +5,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
@@ -32,7 +31,7 @@ namespace ruvia {
 // applies it to that controller's routes, and where both a controller-wide and
 // a route-specific one exist the stricter wins.
 template <std::size_t max_bytes>
-class body_limit final : public middleware {
+class body_limit final {
 public:
     static_assert(max_bytes > 0, "body limit must be greater than 0");
 

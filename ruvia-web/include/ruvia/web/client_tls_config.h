@@ -18,7 +18,9 @@ enum class client_tls_mode : std::uint8_t {
 
 // The one client TLS shape shared by HTTP, WebSocket, database and Redis
 // clients. Authentication is the default. Empty CA selects the system or
-// driver trust store.
+// driver trust store. HTTP, WebSocket and Redis clients read the CA bundle and
+// identity once, when the client or its registration is created, and share
+// them across workers; database drivers read the files when connecting.
 struct client_tls_config final {
     client_tls_mode mode_{client_tls_mode::verify_identity};
     // File paths must not contain NUL bytes.
@@ -27,7 +29,8 @@ struct client_tls_config final {
     std::string private_key_file_{};
     // Binary password bytes, including embedded NUL, are preserved.
     std::string private_key_password_{};
-    // SNI and verified peer name; nullopt uses the configured host.
+    // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
+    // uses the configured host.
     std::optional<std::string> server_name_{};
 };
 

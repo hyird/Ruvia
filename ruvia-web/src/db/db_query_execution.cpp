@@ -63,8 +63,8 @@ task<db_query_result<with_count>> execute_db_query_plan(
         auto step_options = db_required_options(options, deadline_value);
 #ifdef RUVIA_ENABLE_REDIS
         if (backend.cache_ != nullptr && step.cache_key_.has_value()) {
-            // The cache marks database failures itself; its own store
-            // failures leave the transaction lease with its owner.
+            // The cache runs only on pooled backends; a transaction never
+            // carries one.
             results[index].emplace(co_await backend.cache_->wrap(step.cache_duration_,
                 std::move(*step.cache_key_),
                 db_cache_query(backend, std::move(step.sql_), std::move(step.params_)), std::move(step_options),

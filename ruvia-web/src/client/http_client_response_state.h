@@ -16,6 +16,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -96,7 +97,8 @@ public:
     http_known_method request_method_{http_known_method::unknown};
     std::optional<http_response_body_plan> response_body_plan_{};
     std::pmr::vector<http_client_informational_response> informational_;
-    std::size_t informational_field_bytes_{};
+    // One aggregate field-section budget across every retained interim head.
+    http_field_section_budget informational_budget_;
     std::pmr::vector<http_header> headers_;
     std::pmr::vector<http_header> trailers_;
     std::pmr::string buffered_;

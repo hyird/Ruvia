@@ -64,10 +64,10 @@ struct memory_state final {
     counting_resource resource_;
 };
 
-class testing_memory_controller final : public ruvia::controller<testing_memory_controller> {
+class testing_memory_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/testing-memory")
-    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_BEGIN(testing_memory_controller)
     RUVIA_GET("/owned", owned);
     RUVIA_GET("/throw", throwing);
     RUVIA_GET("/cancel", cancelled, ruvia::deadline<5>);

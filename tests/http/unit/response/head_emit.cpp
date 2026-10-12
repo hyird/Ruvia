@@ -27,6 +27,7 @@ using ruvia::http1_request_connection_plan;
 using ruvia::http1_response_head_plan;
 using ruvia::http_known_method;
 using ruvia::http_response;
+using ruvia::http_response_header_options;
 using ruvia::plan_http_response_body;
 
 ruvia::http1_request_connection_plan connection_plan_for(
@@ -197,7 +198,7 @@ RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
         } else {
             response.header("Connection", combination == 1 ? "keep-alive" : "UpGrAdE");
             response.header("cOnNeCtIoN", combination == 1 ? "UpGrAdE" : "keep-alive",
-                http_response::header_options_type{.mode_ = ruvia::http_response_header_mode::append});
+                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         }
         const auto head = emit_buffered_head(response);
         RUVIA_CHECK(head.find("UpGrAdE") != std::string_view::npos);
@@ -431,6 +432,23 @@ RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {
     const auto unknown_wire = emit_chunked_stream_head(unknown, http_known_method::head);
     RUVIA_CHECK(!(unknown_wire.find("Content-Length:") != std::string_view::npos));
     RUVIA_CHECK(!(unknown_wire.find("Transfer-Encoding:") != std::string_view::npos));
+}
+
+RUVIA_TEST(http1_buffered_head_keeps_declared_length_without_body) {
+    // RFC 9110 section 8.6: HEAD Content-Length is what GET would send.
+    http_response metadata({.resource_ = std::pmr::new_delete_resource()});
+    metadata.header("Content-Length", "1048576");
+    const auto metadata_wire = emit_buffered_head(metadata, http_known_method::head);
+    RUVIA_CHECK_EQ(count_occurrences(metadata_wire, "Content-Length: "), std::size_t{1});
+    RUVIA_CHECK((metadata_wire.find("Content-Length: 1048576\r\n") != std::string_view::npos));
+
+    // A materialized representation remains authoritative.
+    http_response materialized({.resource_ = std::pmr::new_delete_resource()});
+    materialized.body("hello");
+    materialized.header("Content-Length", "999");
+    const auto materialized_wire = emit_buffered_head(materialized, http_known_method::head);
+    RUVIA_CHECK_EQ(count_occurrences(materialized_wire, "Content-Length: "), std::size_t{1});
+    RUVIA_CHECK((materialized_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
 }
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {

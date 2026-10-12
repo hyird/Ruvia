@@ -1,12 +1,9 @@
 #include "ruvia/http/cookies.h"
 
-#include <cassert>
-#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 #include <variant>
 
@@ -15,6 +12,7 @@
 
 #include "cookie/cookie_validation.h"
 #include "field/http_imf_fixdate.h"
+#include "util/http_wire_sink.h"
 
 namespace ruvia {
 
@@ -45,7 +43,6 @@ set_cookie_plan::set_cookie_plan(
     }
     if (has_max_age_) {
         max_age_value_ = static_cast<std::uint64_t>(options.max_age_->count());
-        max_age_size_ = http_unsigned_decimal_size(max_age_value_);
     }
 
     const auto add_size = [this](std::size_t amount) {
@@ -73,7 +70,7 @@ set_cookie_plan::set_cookie_plan(
     }
     if (has_max_age_) {
         add_size(std::string_view("; Max-Age=").size());
-        add_size(max_age_size_);
+        add_size(http_unsigned_decimal_size(max_age_value_));
     }
     if (expires_size_ != 0) {
         add_size(std::string_view("; Expires=").size());
@@ -106,61 +103,48 @@ void set_cookie_plan::write(char* cursor_value) const {
 
 set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value) const noexcept {
     written_fields fields;
-    const auto* const name_begin = cursor_value;
-    const auto append = [&cursor_value](std::string_view text) noexcept {
-        if (!text.empty()) {
-            std::memcpy(cursor_value, text.data(), text.size());
-            cursor_value += text.size();
-        }
-    };
-    const auto append_unsigned = [&cursor_value](std::uint64_t number, std::size_t size) noexcept {
-        auto* const end = cursor_value + size;
-        // The constructor fixed the exact digit count; integral to_chars does
-        // not throw and this immutable value fits its prevalidated slice.
-        const auto result_value = std::to_chars(cursor_value, end, number);
-        assert(result_value.ec == std::errc{} && result_value.ptr == end);
-        cursor_value = result_value.ptr;
-    };
-
-    append(prefix_text_);
-    append(name_);
-    fields.wire_name_ = {name_begin, static_cast<std::size_t>(cursor_value - name_begin)};
-    *cursor_value++ = '=';
-    append(value_);
+    detail::http_raw_wire_sink sink(cursor_value);
+    const auto* const name_begin = sink.position();
+    sink.append(prefix_text_);
+    sink.append(name_);
+    fields.wire_name_ = {name_begin, static_cast<std::size_t>(sink.position() - name_begin)};
+    sink.append('=');
+    sink.append(value_);
     if (!path_.empty()) {
-        append("; Path=");
-        fields.path_ = {cursor_value, path_.size()};
-        append(path_);
+        sink.append("; Path=");
+        fields.path_ = {sink.position(), path_.size()};
+        sink.append(path_);
     }
     if (!domain_.empty()) {
-        append("; Domain=");
-        fields.domain_ = {cursor_value, domain_.size()};
-        append(domain_);
+        sink.append("; Domain=");
+        fields.domain_ = {sink.position(), domain_.size()};
+        sink.append(domain_);
     }
     if (has_max_age_) {
-        append("; Max-Age=");
-        append_unsigned(max_age_value_, max_age_size_);
+        // The constructor sized this slice with http_unsigned_decimal_size().
+        sink.append("; Max-Age=");
+        sink.append_unsigned(max_age_value_);
     }
     if (expires_size_ != 0) {
-        append("; Expires=");
-        append(std::string_view(expires_buffer_.data(), expires_size_));
+        sink.append("; Expires=");
+        sink.append(std::string_view(expires_buffer_.data(), expires_size_));
     }
     if (http_only_) {
-        append("; HttpOnly");
+        sink.append("; HttpOnly");
     }
     if (secure_) {
-        append("; Secure");
+        sink.append("; Secure");
     }
     if (!same_site_text_.empty()) {
-        append("; SameSite=");
-        append(same_site_text_);
+        sink.append("; SameSite=");
+        sink.append(same_site_text_);
     }
     if (!priority_text_.empty()) {
-        append("; Priority=");
-        append(priority_text_);
+        sink.append("; Priority=");
+        sink.append(priority_text_);
     }
     if (partitioned_) {
-        append("; Partitioned");
+        sink.append("; Partitioned");
     }
     return fields;
 }

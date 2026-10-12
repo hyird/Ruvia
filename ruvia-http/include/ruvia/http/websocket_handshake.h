@@ -31,6 +31,15 @@ struct websocket_server_handshake_options final {
     websocket_deflate_config deflate_{};
 };
 
+struct websocket_handshake_validation_options final {
+    // RFC 6455 4.2.2 lets a server that only speaks particular subprotocols
+    // refuse a client offering none of them, instead of accepting without a
+    // Sec-WebSocket-Protocol response field. When set, a request whose offer
+    // shares no entry with supported_subprotocols_ fails validation.
+    std::span<const std::string_view> supported_subprotocols_{};
+    bool require_subprotocol_{false};
+};
+
 class websocket_handshake_accepted final {
 private:
     friend class websocket_handshake_validation_result;
@@ -50,7 +59,8 @@ private:
     friend class websocket_handshake_validation_result;
 
     enum class kind_type : std::uint8_t { invalid_request,
-        unsupported_version };
+        unsupported_version,
+        unsupported_subprotocol };
 
     explicit constexpr websocket_handshake_failure(kind_type kind) noexcept
         : kind_(kind) {}
@@ -72,7 +82,7 @@ public:
 
 private:
     friend websocket_handshake_validation_result validate_websocket_handshake(
-        const http_request&, const http1_request_body_plan&) noexcept;
+        const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 
     using value_type = std::variant<websocket_handshake_accepted, websocket_handshake_failure>;
 
@@ -100,13 +110,20 @@ private:
             websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_version));
     }
 
+    [[nodiscard]] static constexpr websocket_handshake_validation_result
+    make_unsupported_subprotocol() noexcept {
+        return websocket_handshake_validation_result(
+            websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_subprotocol));
+    }
+
     value_type value_;
 };
 
 // Validates an RFC 6455 HTTP/1.1 opening handshake, including the parser-owned
 // request-body framing plan. It does not create or write a response.
 [[nodiscard]] websocket_handshake_validation_result validate_websocket_handshake(
-    const http_request& request, const http1_request_body_plan& body_plan) noexcept;
+    const http_request& request, const http1_request_body_plan& body_plan,
+    websocket_handshake_validation_options options = {}) noexcept;
 
 // Owned HTTP/1.1 101 response plan. for_each_response_part emits stable views for
 // scatter-gather I/O; compression() configures the subsequent websocket driver

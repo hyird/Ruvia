@@ -314,7 +314,7 @@ private:
 [[nodiscard]] inline websocket_compression websocket_scan_deflate_offers(
     std::string_view offers, bool context_takeover = false) noexcept {
     std::optional<websocket_compression> accepted;
-    http_visit_comma_separated_quoted_items(offers, [&accepted, context_takeover](std::string_view offer) noexcept {
+    http_visit_comma_separated_quoted_field_items(offers, [&accepted, context_takeover](std::string_view offer) noexcept {
         if (offer.empty()) {
             return true;
         }

@@ -9,7 +9,6 @@
 #include "ruvia/http/http_set_cookie_plan.h"
 
 #include "response/http_response_header_access.h"
-#include "response/http_response_headers_access.h"
 #include "response/response_header_index_cache.h"
 
 // Set-Cookie is the one response field that neither replaces nor appends by
@@ -46,13 +45,13 @@ namespace {
 
 }  // namespace
 
-void http_response::set_cookie(const set_cookie_plan& plan) {
+void http_response_headers::set_cookie(const set_cookie_plan& plan) {
     auto* retained = find_set_cookie_header(
         plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain(), plan.partitioned_);
     if (retained == nullptr) {
         auto& header_value = append_header_uninitialized_value(
             "Set-Cookie", plan.size(), detail::response_header_set_cookie);
-        plan.write(detail::response_header_value_begin(header_value));
+        plan.write(detail::http_response_header_access::value_begin(header_value));
         return;
     }
 
@@ -63,22 +62,22 @@ void http_response::set_cookie(const set_cookie_plan& plan) {
         detail::response_header_storage_overlaps(*retained, plan.domain_);
     set_cookie_plan::written_fields written;
     if (borrows_retained) {
-        auto prepared = headers_.make_uninitialized_header(
+        auto prepared = make_uninitialized_header(
             "Set-Cookie", plan.size(), detail::response_header_set_cookie);
-        written = plan.write_fields(detail::response_header_value_begin(prepared));
-        headers_.release_header(*retained);
+        written = plan.write_fields(detail::http_response_header_access::value_begin(prepared));
+        release_header(*retained);
         *retained = prepared;
     } else {
-        headers_.assign_uninitialized_value(
+        assign_uninitialized_value(
             *retained, "Set-Cookie", plan.size(), detail::response_header_set_cookie);
-        written = plan.write_fields(detail::response_header_value_begin(*retained));
+        written = plan.write_fields(detail::http_response_header_access::value_begin(*retained));
     }
-    detail::set_response_header_append(*retained, true);
+    detail::http_response_header_access::set_append(*retained, true);
     erase_later_set_cookie_headers(*retained, written.wire_name_, !written.path_.empty(),
         written.path_, written.domain_, plan.partitioned_);
 }
 
-void http_response::upsert_set_cookie_header_validated(std::string_view value) {
+void http_response_headers::upsert_set_cookie_header_validated(std::string_view value) {
     const auto parsed_value = parse_set_cookie(value);
     const auto cookie_name = parsed_value.has_value() && is_valid_http_header_name(parsed_value->name())
                                  ? parsed_value->name()
@@ -104,18 +103,18 @@ void http_response::upsert_set_cookie_header_validated(std::string_view value) {
                                                           : static_cast<std::size_t>(parsed_value->path().data() - value.data());
     const auto domain_offset = parsed_value->domain().empty() ? std::size_t{0}
                                                               : static_cast<std::size_t>(parsed_value->domain().data() - value.data());
-    headers_.assign(*retained, "Set-Cookie", value, detail::response_header_set_cookie);
-    detail::set_response_header_append(*retained, true);
+    assign(*retained, "Set-Cookie", value, detail::response_header_set_cookie);
+    detail::http_response_header_access::set_append(*retained, true);
     const auto copied_value = retained->value();
     erase_later_set_cookie_headers(*retained, copied_value.substr(name_offset, name_size), has_path,
         copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size), partitioned);
 }
 
-http_response_header* http_response::find_set_cookie_header(std::string_view wire_prefix,
+http_response_header* http_response_headers::find_set_cookie_header(std::string_view wire_prefix,
     std::string_view cookie_name, bool has_path, std::string_view path,
     std::string_view domain, bool partitioned) noexcept {
-    for (auto& header : headers_) {
-        if (detail::response_header_known_bit(header) == detail::response_header_set_cookie &&
+    for (auto& header : *this) {
+        if (detail::http_response_header_access::known_bit(header) == detail::response_header_set_cookie &&
             set_cookie_value_matches_storage_key(
                 header.value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
             return &header;
@@ -124,20 +123,19 @@ http_response_header* http_response::find_set_cookie_header(std::string_view wir
     return nullptr;
 }
 
-void http_response::erase_later_set_cookie_headers(http_response_header& retained,
+void http_response_headers::erase_later_set_cookie_headers(http_response_header& retained,
     std::string_view cookie_name, bool has_path, std::string_view path,
     std::string_view domain, bool partitioned) noexcept {
     // A response might already contain duplicates introduced through the raw
     // header API. Once an authoritative cookie path owns this storage key,
     // collapse every later occurrence so the final response has one value.
-    auto* const begin = headers_.begin();
-    auto* const end = headers_.end();
+    auto* const end_value = end();
     auto* write = &retained + 1;
-    for (auto* read = &retained + 1; read != end; ++read) {
-        if (detail::response_header_known_bit(*read) == detail::response_header_set_cookie &&
+    for (auto* read = write; read != end_value; ++read) {
+        if (detail::http_response_header_access::known_bit(*read) == detail::response_header_set_cookie &&
             set_cookie_value_matches_storage_key(
                 read->value(), {}, cookie_name, has_path, path, domain, partitioned)) {
-            headers_.release_header(*read);
+            release_header(*read);
             continue;
         }
         if (write != read) {
@@ -145,8 +143,8 @@ void http_response::erase_later_set_cookie_headers(http_response_header& retaine
         }
         ++write;
     }
-    if (write != end) {
-        detail::http_response_headers_access::truncate(headers_, begin, write);
+    if (write != end_value) {
+        truncate(write);
     }
     rebuild_known_header_index();
 }

@@ -82,6 +82,8 @@ private:
 
     chunk_framing_config config_;
     std::variant<progress, chunk_framing_error> state_{progress::size_line};
+    // Bytes of the pending size line or trailer section already scanned for LF.
+    std::size_t size_line_search_offset_{0};
     std::size_t trailer_search_offset_{0};
     std::size_t remaining_{0};
     std::size_t decoded_bytes_{0};

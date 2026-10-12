@@ -42,7 +42,7 @@ struct csrf_outcome final {
     return set_cookie.find("; Secure") != std::string_view::npos;
 }
 
-class csrf_test_middleware final : public ruvia::middleware {
+class csrf_test_middleware final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
@@ -57,7 +57,7 @@ private:
     ruvia::csrf_protection* middleware_;
 };
 
-class accepted_response final : public ruvia::middleware {
+class accepted_response final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 

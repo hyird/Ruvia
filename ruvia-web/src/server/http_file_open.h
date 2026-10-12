@@ -5,6 +5,7 @@
 // closing the stat/open replacement window.
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <ios>
@@ -141,5 +142,21 @@ private:
     std::ifstream input_;
 };
 #endif
+
+// Fills output from the input's current position through the same handle that
+// matches_snapshot() later validates; false on a read error or early EOF.
+[[nodiscard]] inline bool read_exact(response_file_input& input, char* output, std::size_t size) {
+    constexpr auto max_chunk = static_cast<std::size_t>((std::numeric_limits<std::streamsize>::max)());
+    while (size != 0) {
+        input.read(output, static_cast<std::streamsize>(std::min(size, max_chunk)));
+        const auto count = input.gcount();
+        if (!input || count <= 0) {
+            return false;
+        }
+        output += count;
+        size -= static_cast<std::size_t>(count);
+    }
+    return true;
+}
 
 }  // namespace ruvia::detail

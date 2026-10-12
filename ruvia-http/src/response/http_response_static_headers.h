@@ -21,7 +21,7 @@ template <std::size_t n>
     if (response_known_header_slot(known_bit) == response_known_header_count) {
         throw "static response header requires one known header bit";
     }
-    return make_response_header(
+    return http_response_header_access::make(
         bytes_value, name_size, static_cast<std::uint32_t>(n - 1 - name_size), known_bit, false);
 }
 

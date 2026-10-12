@@ -15,7 +15,7 @@ namespace ruvia {
         throw std::invalid_argument("response stream commit plan status does not match response");
     }
     if (!commit_plan.trailer_intent_allowed()) {
-        throw std::invalid_argument("response stream status or framing does not permit trailers");
+        throw std::invalid_argument("response stream status does not permit trailers");
     }
     const auto framing = commit_plan.framing();
     const auto body_plan = commit_plan.body_plan();
@@ -39,6 +39,11 @@ namespace ruvia {
     }
     if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {
         response.remove_header("Content-Length");
+    }
+    // Without a chunked body the trailer section is discarded, so the head must
+    // not announce trailer fields that will never follow (RFC 9110 6.6.2).
+    if (!commit_plan.trailers_available()) {
+        response.remove_header("Trailer");
     }
 
     const bool needs_sse_content_type = kind == http_response_stream_kind::sse &&
