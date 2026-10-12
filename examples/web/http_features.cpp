@@ -13,6 +13,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
 #include "environment.h"
@@ -117,8 +118,8 @@ int main() {
             .listen(std::move(listener_value))
             .compression({.min_bytes_ = 16})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

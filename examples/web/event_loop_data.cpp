@@ -18,6 +18,7 @@
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/db/db_client.h"
 #include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis_client.h"
 #include "ruvia/web/redis/redis_repository.h"
 
@@ -167,8 +168,8 @@ int main(int argc, char** argv) {
             std::rethrow_exception(failure);
         }
         std::cout << "Both workers completed SQL and Redis ORM lookups.\n";
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

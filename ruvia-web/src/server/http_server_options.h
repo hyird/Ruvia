@@ -49,7 +49,10 @@ struct connection_failure_record_access final {
 // server cancelled its I/O (stop, drain, or a timeout that closes the socket),
 // is a normal end of connection rather than a failure: browsers close SSE
 // tabs with a reset, and drain aborts pending reads. Such endings are neither
-// reported nor counted, so the sink stays reserved for real faults.
+// reported nor counted, so the sink stays reserved for real faults. Only an
+// inbound_transport_error -- thrown by I/O on the connection's own transport,
+// possibly propagated through a handler -- qualifies; any other exception is
+// reported whatever error code it carries.
 struct connection_failure_sink final {
     connection_failure_callback_ref_type callback_;
     // Owned by the web_worker_runtime this sink was configured for; null before one

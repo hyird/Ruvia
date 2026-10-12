@@ -5,6 +5,7 @@
 #include "ruvia/http/websocket_protocol.h"
 
 #include "server/inbound_buffer_resource.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 
@@ -33,7 +34,7 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
                     if (const auto* failure = read_result_value.failure()) {
                         close_stream();
                         (void)protocol_.abort();
-                        throw std::system_error(failure->error_code(), "failed to read websocket bytes");
+                        throw inbound_transport_error(failure->error_code(), "failed to read websocket bytes");
                     }
                     if (read_result_value.end() != nullptr) {
                         // EOF is an abnormal websocket close when no peer Close was

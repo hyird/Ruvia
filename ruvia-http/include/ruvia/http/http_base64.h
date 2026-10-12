@@ -2,11 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 
 namespace ruvia {
 
@@ -120,7 +122,10 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
 // characters of `charset`, '=' exactly as `padding` requires, no final
 // quantum of one character, and zero unused bits in the final quantum
 // (RFC 4648 section 3.5). Returns the decoded byte count, or nullopt for
-// invalid input or an `output` too small for the decoded bytes. Length and
+// invalid input or an `output` too small for the decoded bytes. `output` may
+// start at or before `input` (in-place decoding) or past its encoded
+// characters; one starting inside them, after the first, would overwrite
+// unread input and is rejected with nullopt before any write. Length and
 // ownership policy belongs to the caller.
 [[nodiscard]] constexpr std::optional<std::size_t> http_base64_decode(std::string_view input,
     std::span<std::uint8_t> output, http_base64_charset charset, http_base64_padding padding) noexcept {
@@ -146,6 +151,14 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     const auto decoded_size = http_base64_decoded_size_bound(data.size());
     if (decoded_size > output.size()) {
         return std::nullopt;
+    }
+    // Overlap needs reinterpret_cast, which constant evaluation excludes.
+    if (!std::is_constant_evaluated() && !data.empty()) {
+        const auto* const encoded = reinterpret_cast<const std::uint8_t*>(data.data());
+        const std::less<const std::uint8_t*> before;
+        if (before(encoded, output.data()) && before(output.data(), encoded + data.size())) {
+            return std::nullopt;
+        }
     }
     const auto value_of = [charset](char c) noexcept {
         return charset == http_base64_charset::url_safe ? http_base64_url_decode_char(c)

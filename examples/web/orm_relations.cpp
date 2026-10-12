@@ -21,6 +21,7 @@
 #include "ruvia/web/db/db_client.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/error.h"
 
 #include "backend_tls.h"
 
@@ -267,8 +268,8 @@ int main(int argc, char** argv) {
             root.get();
         }
         return 0;
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

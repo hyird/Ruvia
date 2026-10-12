@@ -4,6 +4,7 @@
 #include <memory_resource>
 #include <functional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -50,23 +51,34 @@ inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcep
         output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
 
-// `bytes` may alias `output`; an overlapping input is rebased by offset after
-// the resize, which may reallocate.
+// `bytes` may alias `output`, up to and including its terminating NUL at
+// output.data()[output.size()]; an aliased input is rebased by offset after
+// the resize, which may reallocate. Throws std::length_error when the result
+// cannot fit the string.
 inline void http_append_lower_hex(std::pmr::string& output, std::span<const unsigned char> bytes) {
     const auto start = output.size();
+    if (bytes.size() > (output.max_size() - start) / 2) {
+        throw std::length_error("hex output length is not representable");
+    }
     const auto* const first = reinterpret_cast<const unsigned char*>(output.data());
     const std::less<const unsigned char*> before;
-    const bool aliased = !bytes.empty() && !before(bytes.data(), first) && before(bytes.data(), first + start);
+    const bool aliased = !bytes.empty() && !before(bytes.data(), first) && !before(first + start, bytes.data());
     const auto offset = aliased ? static_cast<std::size_t>(bytes.data() - first) : 0;
     output.resize(start + bytes.size() * 2);
     if (!aliased) {
         http_encode_lower_hex(output.data() + start, bytes);
         return;
     }
-    // The source lies inside [0, start) and the digits land at [start, ...), so
-    // no write can clobber an unread source byte.
-    const auto* source = reinterpret_cast<const unsigned char*>(output.data()) + offset;
-    http_encode_lower_hex(output.data() + start, std::span(source, bytes.size()));
+    // The source ends at the latest at the old terminating NUL, index start,
+    // where the digits begin (resize rewrote that byte with the same NUL).
+    // Encoding backwards keeps every write above the unread source bytes.
+    const auto* const source = reinterpret_cast<const unsigned char*>(output.data()) + offset;
+    auto* digit = output.data() + output.size();
+    for (auto index = bytes.size(); index != 0;) {
+        const auto byte = source[--index];
+        *--digit = http_lower_hex_digit(byte);
+        *--digit = http_lower_hex_digit(byte >> 4);
+    }
 }
 
 inline void http_append_lower_hex(std::pmr::string& output, std::string_view bytes) {

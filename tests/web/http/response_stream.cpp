@@ -7,9 +7,11 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
+#include <asio/error.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
@@ -47,6 +49,7 @@ class stream_lane_routes final {
     RUVIA_ROUTES_BEGIN(stream_lane_routes)
     RUVIA_GET_STREAM("/server-lazy-stream-output", output);
     RUVIA_GET_STREAM("/server-endless-stream", endless);
+    RUVIA_GET_STREAM("/server-upstream-timeout-stream", upstream_timeout);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -97,6 +100,13 @@ class stream_lane_routes final {
             observed.endless_write_failed_ = true;
             throw;
         }
+    }
+
+    // Commits the response, then fails the way an awaited upstream request
+    // that timed out does.
+    ruvia::task<void> upstream_timeout(ruvia::context& context_value) {
+        co_await context_value.stream_text().write("partial");
+        throw std::system_error(asio::error::make_error_code(asio::error::timed_out), "upstream request");
     }
 };
 
@@ -183,4 +193,30 @@ RUVIA_TEST(response_stream_peer_reset_is_not_a_connection_failure) {
     server.finish();
     RUVIA_CHECK(stream_lane_observed->endless_write_failed_);
     RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+}
+
+// A handler failure after commit is reported even when it carries a code an
+// ending inbound connection also produces: an upstream timeout says nothing
+// about the peer, so the truncated response is a real fault.
+RUVIA_TEST(response_stream_handler_failure_with_a_transport_code_is_a_connection_failure) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string_view request = "GET /server-upstream-timeout-stream HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        // The server closes the connection of the truncated response.
+        std::string response;
+        std::array<char, 1024> input{};
+        std::error_code ec;
+        while (!ec) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
+        }
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    }
+    server.finish();
+    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
 }

@@ -14,6 +14,7 @@
 #include "ruvia/http/http_request.h"
 
 #include "context/http_interim_response_output.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 template <typename stream_type>
@@ -52,7 +53,7 @@ private:
             asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
         });
         if (completion.error_code()) {
-            throw std::system_error(completion.error_code());
+            throw inbound_transport_error(completion.error_code(), "failed to write HTTP/1 interim response");
         }
     }
     stream_type& stream_;

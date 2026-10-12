@@ -49,11 +49,14 @@ public:
     void request_stop() noexcept;
     [[nodiscard]] bool stop_requested() const noexcept;
     // Requests stop and waits for its member notifications/abandon hooks to
-    // finish before retiring any tier. Returns the first member failure in
-    // tier order; later ones are reported as unhandled ("additional worker"),
+    // finish before retiring any tier. Returns the failure its caller rethrows:
+    // `primary` when given (a failure the caller already holds, such as one
+    // start() or serve() threw), else the first member failure in tier order.
+    // It is chosen before any report, so it is never reported here; every
+    // other member failure is reported as unhandled ("additional worker"),
     // equivalent ones collapsed into one line with their count. Repeated joins
-    // return the same result without repeating retirement or diagnostics.
-    [[nodiscard]] std::exception_ptr join() noexcept;
+    // return the first result without repeating retirement or diagnostics.
+    [[nodiscard]] std::exception_ptr join(std::exception_ptr primary = nullptr) noexcept;
 
 private:
     friend class worker_runtime;

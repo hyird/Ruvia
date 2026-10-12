@@ -27,6 +27,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/db/db.h"
+#include "ruvia/web/error.h"
 
 #include "backend_tls.h"
 
@@ -219,8 +220,8 @@ int main() {
             .server({.worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

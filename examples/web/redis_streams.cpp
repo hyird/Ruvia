@@ -16,6 +16,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis.h"
 
 #include "backend_tls.h"
@@ -96,8 +97,8 @@ int main() {
                         .blocking_pool_size_per_worker_ = 2,
                     }})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

@@ -2,7 +2,6 @@
 
 #include <exception>
 #include <memory_resource>
-#include <system_error>
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_request.h"
@@ -68,12 +67,11 @@ task<void> invoke_websocket_handler(websocket_connection<stream_type>& connectio
 //
 // A handler that failed is already past the upgrade, so its exception can only
 // become a 1011 close code -- which tells the peer that something went wrong
-// but not what, and is the last thing that references the failure. Both it and
-// a failure to close are reported here, since nothing after this frame holds
-// either one. close() reports transport failures as std::system_error: a peer
-// that resets instead of answering the Close, or a close-handshake timeout
-// that aborted the transport, is a routine disconnect rather than a fault.
-// Anything else it throws is a real fault (an invalid code, or exhaustion).
+// but not what, and is the last thing that references the failure. It, a
+// failure to close, and a failed heartbeat or Going Away write are reported
+// here, since nothing after this frame holds any of them. The sink classifies
+// each: a peer that resets instead of answering the Close, or a close-handshake
+// timeout that aborted the transport, ends the connection normally.
 template <typename stream_type>
 task<void> finish_websocket_session(websocket_connection<stream_type>& connection,
     std::exception_ptr exception, const connection_failure_sink& connection_failure,
@@ -85,12 +83,11 @@ task<void> finish_websocket_session(websocket_connection<stream_type>& connectio
         } else {
             co_await connection.close();
         }
-    } catch (const std::system_error&) {
-        // The transport ended during the close handshake; nothing to report.
     } catch (...) {
         connection_failure.invoke(remote_address, std::current_exception());
     }
     co_await connection.detach_and_drain_writes();
+    connection_failure.invoke(remote_address, connection.take_background_failure());
 }
 
 }  // namespace ruvia::detail

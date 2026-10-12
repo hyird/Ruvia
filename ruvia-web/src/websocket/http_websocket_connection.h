@@ -90,6 +90,12 @@ public:
         }
     }
     task<void> detach_and_drain_writes();
+    // The failure of a heartbeat or Going Away write. Those writes run detached
+    // from any caller, so the session reports it once detach_and_drain_writes()
+    // has aborted the transport and joined them.
+    [[nodiscard]] std::exception_ptr take_background_failure() noexcept {
+        return std::exchange(background_failure_, nullptr);
+    }
 
 private:
     enum class write_phase_type : std::uint8_t {
@@ -233,6 +239,8 @@ private:
     task<std::error_code> write_bytes(std::string_view bytes_value);
     void close_stream() noexcept;
     void abort_transport(bool force_transport = false) noexcept;
+    // Aborts the transport and retains the first background write failure.
+    void fail_background(std::exception_ptr failure) noexcept;
     void notify_write_idle() noexcept;
     [[nodiscard]] bool has_operations_to_drain() const noexcept {
         return read_phase_ != read_phase_type::idle || write_active_ || write_phase_ != write_phase_type::idle;
@@ -251,6 +259,7 @@ private:
     read_phase_type read_phase_{read_phase_type::idle};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     bool going_away_pending_{false};
+    std::exception_ptr background_failure_;
     std::uint64_t heartbeat_sequence_{0};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.

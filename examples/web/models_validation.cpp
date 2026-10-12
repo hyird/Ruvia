@@ -17,6 +17,7 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 
 static bool has_ruvia_code_prefix(const ruvia::string& code) {
     return code.view().starts_with("CY-");
@@ -230,8 +231,8 @@ int main() {
             .server({.worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

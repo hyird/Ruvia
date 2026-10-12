@@ -76,3 +76,28 @@ RUVIA_TEST(http_base64_decodes_single_characters_per_alphabet) {
     RUVIA_CHECK_EQ(ruvia::http_base64_url_decode_char('/'), -1);
     RUVIA_CHECK_EQ(ruvia::http_base64_url_decode_char('='), -1);
 }
+
+RUVIA_TEST(http_base64_decode_rejects_output_overwriting_unread_input) {
+    constexpr auto standard = ruvia::http_base64_charset::standard;
+    constexpr auto required = ruvia::http_base64_padding::required;
+    const auto decoded_text = [](const std::uint8_t* bytes, std::size_t size) {
+        return std::string(reinterpret_cast<const char*>(bytes), size);
+    };
+
+    std::uint8_t shifted[16] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
+    const std::string_view shifted_input(reinterpret_cast<const char*>(shifted), 8);
+    RUVIA_CHECK(!ruvia::http_base64_decode(shifted_input, std::span(shifted + 4, 6), standard, required));
+    RUVIA_CHECK_EQ(decoded_text(shifted, 8), std::string("QUJDREVG"));
+
+    std::uint8_t in_place[8] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
+    const std::string_view in_place_input(reinterpret_cast<const char*>(in_place), 8);
+    const auto in_place_size = ruvia::http_base64_decode(in_place_input, std::span(in_place), standard, required);
+    RUVIA_CHECK(in_place_size && *in_place_size == 6);
+    RUVIA_CHECK_EQ(decoded_text(in_place, 6), std::string("ABCDEF"));
+
+    std::uint8_t after[16] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
+    const std::string_view after_input(reinterpret_cast<const char*>(after), 8);
+    const auto after_size = ruvia::http_base64_decode(after_input, std::span(after + 8, 8), standard, required);
+    RUVIA_CHECK(after_size && *after_size == 6);
+    RUVIA_CHECK_EQ(decoded_text(after + 8, 6), std::string("ABCDEF"));
+}

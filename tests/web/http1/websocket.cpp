@@ -57,10 +57,20 @@ class http1_websocket_routes final {
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
+    RUVIA_GET_WS("/http1-websocket-upstream-reset", fail_on_upstream_reset);
     RUVIA_ROUTES_END
 
     ruvia::task<void> accept_only(ruvia::context&) {
         co_return;
+    }
+
+    // Fails the way an awaited upstream request whose connection was reset
+    // does; the inbound websocket itself is healthy.
+    ruvia::task<void> fail_on_upstream_reset(ruvia::context& context_value) {
+        const auto message = co_await context_value.get_websocket().read();
+        if (message.has_value()) {
+            throw std::system_error(asio::error::make_error_code(asio::error::connection_reset), "upstream request");
+        }
     }
 
     ruvia::task<void> write_stalled(ruvia::context& context_value) {
@@ -361,4 +371,47 @@ RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
     RUVIA_CHECK(heads[0].find("Sec-WebSocket-Accept") == std::string::npos);
     RUVIA_CHECK(heads[2].starts_with("HTTP/1.1 101 "));
     RUVIA_CHECK(heads[2].find("\r\nSec-WebSocket-Protocol: chat.v1\r\n") != std::string::npos);
+}
+
+// A websocket handler failure is reported even when it carries a code an
+// ending inbound connection also produces, while a peer that resets instead of
+// answering the resulting 1011 Close ends the connection normally: exactly one
+// failure is counted.
+RUVIA_TEST(http1_websocket_handler_failure_is_reported_and_a_close_reset_is_not) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        constexpr std::string_view upgrade =
+            "GET /http1-websocket-upstream-reset HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: Upgrade\r\n"
+            "Upgrade: websocket\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        asio::write(client, asio::buffer(upgrade));
+        std::string head;
+        char byte{};
+        while (!head.ends_with("\r\n\r\n")) {
+            asio::read(client, asio::buffer(&byte, 1));
+            head.push_back(byte);
+        }
+        RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
+        // One masked text frame (zero masking key).
+        constexpr std::array<char, 8> frame{'\x81', '\x82', '\0', '\0', '\0', '\0', 'g', 'o'};
+        asio::write(client, asio::buffer(frame));
+        // The server's Close: code 1011 followed by its reason.
+        std::array<char, 4> close_head{};
+        asio::read(client, asio::buffer(close_head));
+        RUVIA_CHECK_EQ(close_head[0], '\x88');
+        RUVIA_CHECK_EQ(close_head[2], '\x03');
+        RUVIA_CHECK_EQ(close_head[3], '\xf3');
+        // SO_LINGER 0 turns close() into a reset instead of a Close answer.
+        client.set_option(asio::socket_base::linger(true, 0));
+        client.close();
+    }
+    server.finish();
+    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
 }

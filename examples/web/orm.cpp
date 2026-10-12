@@ -24,6 +24,7 @@
 
 #include "backend_tls.h"
 #ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis_client.h"
 #endif
 
@@ -266,8 +267,8 @@ int main(int argc, char** argv) {
             attachment.run();
             root.get();
         }
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

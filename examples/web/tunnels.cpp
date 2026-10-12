@@ -14,6 +14,7 @@
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/http_udp_tunnel.h"
@@ -168,9 +169,7 @@ int main(int argc, char** argv) {
                 .listen(std::move(listener_value))
                 .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
                     try {
-                        std::rethrow_exception(record.exception());
-                    } catch (const std::exception& error) {
-                        std::cerr << "tunnel connection failed: " << error.what() << '\n';
+                        std::cerr << "tunnel connection failed: " << ruvia::exception_text(record.exception()) << '\n';
                     } catch (...) {
                         std::cerr << "tunnel connection failed\n";
                     }
@@ -178,10 +177,11 @@ int main(int argc, char** argv) {
                 .run();
         }
     } catch (const ruvia::http_client_error& error) {
-        std::cerr << "client error " << static_cast<int>(error.code()) << ": " << error.what() << '\n';
+        std::cerr << "client error " << static_cast<int>(error.code()) << ": "
+                  << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

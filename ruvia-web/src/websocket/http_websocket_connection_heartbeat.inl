@@ -33,7 +33,7 @@ void websocket_connection<stream_type>::start_going_away() noexcept {
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finish_write(write_phase_type::going_away);
-        abort_transport();
+        fail_background(std::current_exception());
     }
 }
 
@@ -49,7 +49,7 @@ task<void> websocket_connection<stream_type>::write_going_away_close() {
         liveness_state_ = websocket_awaiting_peer_close(websocket_steady_now_ms());
         co_await flush_protocol_output_now();
     } catch (...) {
-        abort_transport();
+        fail_background(std::current_exception());
     }
 }
 
@@ -74,7 +74,7 @@ void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcep
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finish_write(write_phase_type::heartbeat);
-        abort_transport();
+        fail_background(std::current_exception());
         return;
     }
 }
@@ -99,7 +99,15 @@ task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
             liveness_state_ = websocket_awaiting_pong(ping_sent_at_ms, challenge);
         }
     } catch (...) {
-        abort_transport();
+        fail_background(std::current_exception());
+    }
+}
+
+template <typename stream_type>
+void websocket_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
+    abort_transport();
+    if (background_failure_ == nullptr) {
+        background_failure_ = std::move(failure);
     }
 }
 

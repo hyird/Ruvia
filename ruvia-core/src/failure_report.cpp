@@ -70,9 +70,39 @@ struct rate_decision final {
     return decision;
 }
 
+// Holds the stdio lock of `stream`, so the pieces of one line reach it
+// together, without interleaving with any concurrent stdio writer.
+class stream_lock final {
+public:
+    explicit stream_lock(std::FILE* stream) noexcept : stream_(stream) {
+#if defined(_WIN32)
+        _lock_file(stream_);
+#else
+        flockfile(stream_);
+#endif
+    }
+
+    ~stream_lock() {
+#if defined(_WIN32)
+        _unlock_file(stream_);
+#else
+        funlockfile(stream_);
+#endif
+    }
+
+    stream_lock(const stream_lock&) = delete;
+    stream_lock& operator=(const stream_lock&) = delete;
+
+private:
+    std::FILE* stream_;
+};
+
+void write_text(std::string_view text) noexcept {
+    std::fwrite(text.data(), 1, text.size(), stderr);
+}
+
 void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences,
     std::size_t suppressed) noexcept {
-    // One fprintf per line keeps concurrent reports from interleaving.
     char occurrences_text[32] = "";
     if (occurrences > 1) {
         std::snprintf(occurrences_text, sizeof(occurrences_text), " (x%zu)", occurrences);
@@ -81,8 +111,16 @@ void write_line(std::string_view context_value, std::string_view what, std::size
     if (suppressed != 0) {
         std::snprintf(suppressed_text, sizeof(suppressed_text), " (+%zu suppressed)", suppressed);
     }
-    std::fprintf(stderr, "ruvia: %.*s failed: %.*s%s%s\n", static_cast<int>(context_value.size()),
-        context_value.data(), static_cast<int>(what.size()), what.data(), occurrences_text, suppressed_text);
+    // Views are written by their exact length: they need not be NUL-terminated
+    // and may be longer than printf's int precision can express.
+    const stream_lock lock(stderr);
+    write_text("ruvia: ");
+    write_text(context_value);
+    write_text(" failed: ");
+    write_text(what);
+    write_text(occurrences_text);
+    write_text(suppressed_text);
+    write_text("\n");
 }
 
 struct failure_identity final {

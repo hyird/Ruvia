@@ -150,7 +150,7 @@ bool worker_group::stop_requested() const noexcept {
     return stopping_;
 }
 
-std::exception_ptr worker_group::join() noexcept {
+std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     if (joined_) {
         return join_failure_;
     }
@@ -175,26 +175,26 @@ std::exception_ptr worker_group::join() noexcept {
         }
         begin = end;
     }
-    // The first failure in tier order is returned; the rest are reported here.
-    // Workers commonly fail for one shared cause (an unreachable dependency),
-    // so equivalent failures collapse into a single line with their count.
-    std::size_t first_secondary = members_.size();
-    for (std::size_t index = 0; index != members_.size(); ++index) {
-        if (auto failure = members_[index].runtime_->failure(); failure != nullptr) {
-            if (join_failure_ == nullptr) {
-                join_failure_ = std::move(failure);
-            } else if (first_secondary == members_.size()) {
-                first_secondary = index;
+    // The returned failure is settled before any report, so it is never also
+    // reported here: the caller's primary, else the first member failure in
+    // tier order.
+    if (primary == nullptr) {
+        for (const auto& member : members_) {
+            if (auto failure = member.runtime_->failure(); failure != nullptr) {
+                primary = std::move(failure);
+                break;
             }
         }
     }
-    for (auto index = first_secondary; index < members_.size(); ++index) {
+    // Workers commonly fail for one shared cause (an unreachable dependency),
+    // so equivalent failures collapse into a single line with their count.
+    for (std::size_t index = 0; index != members_.size(); ++index) {
         const auto failure = members_[index].runtime_->failure();
-        if (failure == nullptr) {
+        if (failure == nullptr || equivalent_failures(failure, primary)) {
             continue;
         }
         bool reported = false;
-        for (auto earlier = first_secondary; earlier != index && !reported; ++earlier) {
+        for (std::size_t earlier = 0; earlier != index && !reported; ++earlier) {
             reported = equivalent_failures(members_[earlier].runtime_->failure(), failure);
         }
         if (reported) {
@@ -208,6 +208,7 @@ std::exception_ptr worker_group::join() noexcept {
         }
         report_unhandled_failure("additional worker", failure, occurrences);
     }
+    join_failure_ = std::move(primary);
     joined_ = true;
     return join_failure_;
 }

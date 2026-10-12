@@ -125,4 +125,12 @@ private:
 
 [[nodiscard]] std::string_view default_error_code(http_status_code status) noexcept;
 
+// UTF-8 text describing any exception, for logging a failure such as the one
+// application::run rethrows. On Windows, what() of a std::system_error in the
+// system or Asio category carries the OS message in the ANSI code page; that
+// message is replaced with its UTF-8 form. Any other std::exception yields
+// what(), a non-standard exception a fixed description, and null an empty
+// string.
+[[nodiscard]] std::string exception_text(const std::exception_ptr& exception);
+
 }  // namespace ruvia

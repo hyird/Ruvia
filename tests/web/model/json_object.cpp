@@ -209,8 +209,14 @@ RUVIA_TEST(json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
     RUVIA_CHECK(json.has_value());
     bool thrown = false;
     try {
-        (void)json->for_each_field([](std::string_view, const ruvia::json_value&) -> bool {
-            throw std::runtime_error("visitor");
+        // The throw depends on the visited key, as in a real visitor: one that
+        // can never return leaves the traversal after it unreachable, which
+        // optimizing compilers report (MSVC C4702).
+        (void)json->for_each_field([](std::string_view key, const ruvia::json_value&) {
+            if (key.ends_with('a')) {
+                throw std::runtime_error("visitor");
+            }
+            return true;
         });
     } catch (const std::runtime_error&) {
         thrown = true;

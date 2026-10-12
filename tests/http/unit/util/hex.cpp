@@ -28,4 +28,18 @@ RUVIA_TEST(hex_append_accepts_input_aliasing_the_output) {
     const std::span<const unsigned char> tail(reinterpret_cast<const unsigned char*>(part.data()) + 63, 2);
     ruvia::http_append_lower_hex(part, tail);
     RUVIA_CHECK_EQ(std::string_view(part).substr(65), std::string_view("7aff"));
+
+    // The terminating NUL is readable input: it ends where the digits begin.
+    std::pmr::string terminated("A", std::pmr::new_delete_resource());
+    terminated.shrink_to_fit();
+    ruvia::http_append_lower_hex(terminated, std::string_view(terminated.data(), terminated.size() + 1));
+    RUVIA_CHECK_EQ(std::string_view(terminated), std::string_view("A4100"));
+
+    // A full string reallocates while the NUL-only input borrows the old buffer.
+    std::pmr::string nul_only("A", std::pmr::new_delete_resource());
+    nul_only.resize(nul_only.capacity(), 'B');
+    const auto filled = nul_only.size();
+    ruvia::http_append_lower_hex(nul_only, std::string_view(nul_only.data() + filled, 1));
+    RUVIA_CHECK_EQ(nul_only.size(), filled + 2);
+    RUVIA_CHECK_EQ(std::string_view(nul_only).substr(filled - 1), std::string_view("B00"));
 }

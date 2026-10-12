@@ -16,6 +16,7 @@
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/web/dotenv.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 
 #include "environment.h"
@@ -148,8 +149,8 @@ int main() {
         loops.join();
         const auto bytes_value = body.bytes();
         std::cout.write(reinterpret_cast<const char*>(bytes_value.data()), static_cast<std::streamsize>(bytes_value.size()));
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

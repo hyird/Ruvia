@@ -1,6 +1,7 @@
 #include "util/error_code_text.h"
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/web/error.h"
 
 #ifdef _WIN32
 #include <array>
@@ -105,3 +106,22 @@ void report_unhandled_web_failure(std::string_view context_value, const std::exc
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+std::string exception_text(const std::exception_ptr& exception) {
+    if (exception == nullptr) {
+        return {};
+    }
+    try {
+        std::rethrow_exception(exception);
+    } catch (const std::system_error& error) {
+        return detail::system_error_text(error);
+    } catch (const std::exception& error) {
+        return error.what();
+    } catch (...) {
+        return "non-standard exception";
+    }
+}
+
+}  // namespace ruvia

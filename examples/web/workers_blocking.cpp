@@ -20,6 +20,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 
 namespace {
 
@@ -140,8 +141,8 @@ int main() {
                 .queue_capacity_ = 128,
             })
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

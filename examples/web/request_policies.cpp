@@ -21,6 +21,7 @@
 #include "ruvia/web/csrf.h"
 #include "ruvia/web/deadline.h"
 #include "ruvia/web/dispatch.h"
+#include "ruvia/web/error.h"
 
 namespace {
 
@@ -113,8 +114,8 @@ int main() {
             .listen({.address_ = "127.0.0.1", .http_ = 8091})
             .deadline({.handler_ = std::chrono::seconds(2)})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

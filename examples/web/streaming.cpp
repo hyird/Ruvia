@@ -6,6 +6,7 @@
 // curl -F file=@file.bin http://127.0.0.1:8082/streaming/upload/multipart
 // A chunk borrows reusable reader storage; consume it before the next read.
 
+#include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
 #include <charconv>
@@ -116,8 +117,8 @@ int main() {
                 .max_stream_body_bytes_ = std::nullopt,
             })
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

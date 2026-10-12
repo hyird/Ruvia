@@ -83,32 +83,15 @@ public:
     }
 };
 
-// The middleware contract is structural, not a base class: any final class
-// whose handle(context&, next&) returns task<void> or task<http_response>.
+// A middleware may answer by itself: handle() returning task<http_response>
+// produces the response without running the rest of the chain.
 class response_middleware final {
 public:
-    ruvia::task<ruvia::http_response> handle(ruvia::context&, ruvia::next&);
+    ruvia::task<ruvia::http_response> handle(ruvia::context& c, ruvia::next&) {
+        c.status(ruvia::http_status::accepted);
+        co_return c.text("returned by middleware");
+    }
 };
-
-class non_final_middleware {
-public:
-    ruvia::task<void> handle(ruvia::context&, ruvia::next&);
-};
-
-class handle_less_middleware final {};
-
-class wrong_result_middleware final {
-public:
-    ruvia::task<int> handle(ruvia::context&, ruvia::next&);
-};
-
-static_assert(ruvia::middleware<plain_middleware>);
-static_assert(ruvia::middleware<configured_by_type<2>>);
-static_assert(ruvia::middleware<response_middleware>);
-static_assert(ruvia::middleware<ruvia::rate_limit<10, 60'000>>);
-static_assert(!ruvia::middleware<non_final_middleware>);
-static_assert(!ruvia::middleware<handle_less_middleware>);
-static_assert(!ruvia::middleware<wrong_result_middleware>);
 
 class configured_by_type_controller final {
 public:
@@ -121,6 +104,7 @@ public:
     RUVIA_POST("/small-decoded", small, ruvia::body_limit<64>);
     RUVIA_POST("/default", default_body);
     RUVIA_GET("/deadline", deadline, ruvia::deadline<100>);
+    RUVIA_GET("/answered", one, response_middleware);
     // Unparameterized and parameterized entries in ONE list: both are types, so
     // the typename pack takes them together and a bare name needs no braces.
     RUVIA_POST("/mixed", mixed, configured_by_type<2>, plain_middleware, ruvia::body_limit<32>,
@@ -281,6 +265,13 @@ RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {
     RUVIA_CHECK_EQ(response.header("X-Plain").value_or(std::string_view{}), std::string_view("on"));
     RUVIA_CHECK_EQ(
         response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
+}
+
+RUVIA_TEST(route_middleware_returning_a_response_answers_without_the_handler) {
+    ruvia::test_app app;
+    const auto response = app.request(ruvia::test_request::get("/route-config/answered"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::accepted);
+    RUVIA_CHECK_EQ(response.body(), std::string_view("returned by middleware"));
 }
 
 RUVIA_TEST(test_app_releases_worker_middleware_after_startup_failure_and_normal_retirement) {

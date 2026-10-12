@@ -9,7 +9,6 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -164,32 +163,21 @@ public:
         // after admission closes and before any worker is finalized.
         group.request_stop();
         invoke_stop_hooks(state_);
-        const auto failure = group.join();
+        // The rethrown failure is chosen before the group reports the member
+        // failures it supersedes, so the library reports no failure twice and
+        // never the rethrown one, whose reporting belongs to the run() caller.
         const auto signal_failure = signals_.has_value() ? signals_->failure() : nullptr;
+        const auto rethrown = group.join(primary_failure != nullptr ? primary_failure : signal_failure);
         retire_runtime();
-
-        // The first failure is rethrown and its reporting belongs to the
-        // caller; only the ones it supersedes are reported here, unless they
-        // repeat the rethrown cause (a worker that failed start() is also the
-        // group's join failure).
-        const auto rethrown = primary_failure != nullptr ? primary_failure
-                              : signal_failure != nullptr ? signal_failure
-                                                          : failure;
-        report_superseded("app signal handling", signal_failure, rethrown);
-        report_superseded("worker", failure, rethrown);
+        if (signal_failure != nullptr && !ruvia::equivalent_failures(signal_failure, rethrown)) {
+            detail::report_unhandled_web_failure("app signal handling", signal_failure);
+        }
         if (rethrown != nullptr) {
             std::rethrow_exception(rethrown);
         }
     }
 
 private:
-    static void report_superseded(std::string_view context_value, const std::exception_ptr& failure,
-        const std::exception_ptr& rethrown) noexcept {
-        if (failure != nullptr && !ruvia::equivalent_failures(failure, rethrown)) {
-            detail::report_unhandled_web_failure(context_value, failure);
-        }
-    }
-
     void begin_run() {
         std::lock_guard lock(state_.mutex_);
         detail::ensure_app_not_running(state_.lifecycle_.active(), "app is already running");

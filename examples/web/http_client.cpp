@@ -17,6 +17,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/dotenv.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/streaming.h"
 
@@ -140,8 +141,8 @@ int main() {
                     },
             })
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

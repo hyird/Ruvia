@@ -10,6 +10,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_interim_response_writer.h"
 
+#include "server/inbound_transport_error.h"
+
 namespace ruvia::detail {
 
 template <typename stream_type>
@@ -28,7 +30,7 @@ task<void> write_http1_continue(stream_type& stream) {
         });
     const auto ec = write_completion.error_code();
     if (ec) {
-        throw std::system_error(ec, "failed to write HTTP/1 interim Continue response");
+        throw inbound_transport_error(ec, "failed to write HTTP/1 interim Continue response");
     }
 }
 

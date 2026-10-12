@@ -13,6 +13,7 @@
 #include "ruvia/web/db/db_procedure.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/error.h"
 
 namespace {
 
@@ -127,8 +128,8 @@ int main() {
         portable_queries(&memory);
         postgres_queries(&memory);
         migrations(&memory);
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

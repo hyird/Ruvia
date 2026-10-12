@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <future>
 #include <limits>
 #include <memory>
@@ -549,6 +550,24 @@ RUVIA_TEST(worker_group_rethrows_the_first_member_failure) {
     const auto failure = group.join();
     RUVIA_CHECK(failure != nullptr);
     RUVIA_CHECK_EQ(healthy.state(), state::stopped);
+}
+
+RUVIA_TEST(worker_group_join_returns_the_callers_primary_failure) {
+    ruvia::worker_runtime failing;
+    failing.configure({.startup_ = [] { throw std::runtime_error("member startup failed"); }});
+    ruvia::worker_group group;
+    group.add(failing, 0);
+    bool start_threw = false;
+    try {
+        (void)group.start();
+    } catch (const std::runtime_error&) {
+        start_threw = true;
+    }
+    const auto primary = std::make_exception_ptr(std::logic_error("start hook failed"));
+    RUVIA_CHECK(start_threw);
+    RUVIA_CHECK(group.join(primary) == primary);
+    RUVIA_CHECK(group.join() == primary);
+    RUVIA_CHECK_EQ(failing.state(), state::stopped);
 }
 
 RUVIA_TEST(worker_group_serve_failure_closes_every_members_admission) {

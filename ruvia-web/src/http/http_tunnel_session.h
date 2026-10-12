@@ -18,6 +18,7 @@
 #include "http/tls_tunnel_output.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
+#include "server/inbound_transport_error.h"
 namespace ruvia::detail {
 // The tunnel over the HTTP/1 connection's byte stream (plain TCP socket or TLS
 // stream); a TLS stream writes its ciphertext through tls_output.
@@ -41,7 +42,7 @@ public:
         if (!ended_) {
             const auto error = co_await transport_.write_bytes({}, http_stream_end::end);
             if (error) {
-                throw std::system_error(error, "HTTP tunnel finish");
+                throw inbound_transport_error(error, "HTTP tunnel finish");
             }
             ended_ = true;
         }
@@ -54,7 +55,7 @@ public:
             std::pmr::string discarded(&resource_);
             const auto read = co_await transport_.read_more(discarded);
             if (const auto* failed = read.failure()) {
-                throw std::system_error(failed->error_code(), "HTTP tunnel drain");
+                throw inbound_transport_error(failed->error_code(), "HTTP tunnel drain");
             }
             receive_ended_ = read.end() != nullptr;
         }
@@ -77,7 +78,7 @@ private:
         std::pmr::string bytes_value(&owner_value.resource_);
         const auto result_value = co_await owner_value.transport_.read_more(bytes_value);
         if (const auto* failed = result_value.failure()) {
-            throw std::system_error(failed->error_code(), "HTTP tunnel read");
+            throw inbound_transport_error(failed->error_code(), "HTTP tunnel read");
         }
         if (result_value.end() != nullptr) {
             owner_value.receive_ended_ = true;
@@ -92,7 +93,7 @@ private:
         }
         const auto error = co_await owner_value.transport_.write_bytes(bytes_value, http_stream_end::keep_open);
         if (error) {
-            throw std::system_error(error, "HTTP tunnel write");
+            throw inbound_transport_error(error, "HTTP tunnel write");
         }
     }
     static task<void> finish_thunk(void* raw) {

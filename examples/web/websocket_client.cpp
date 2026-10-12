@@ -3,6 +3,7 @@
 // Set RUVIA_TLS_CA to trust the local CA. Expected output: text=hello,
 // binary bytes=3, then a clean close.
 
+#include "ruvia/web/error.h"
 #include "ruvia/web/websocket_client.h"
 
 #include <chrono>
@@ -73,8 +74,8 @@ int main() {
         done.get();
         loops.stop();
         loops.join();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

@@ -4,6 +4,7 @@
 // and exits. No server, database, or network connection is required.
 
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <memory_resource>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/web/error.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/model_form.h"
 #include "ruvia/web/model_json.h"
@@ -83,8 +85,8 @@ int main() {
             throw std::runtime_error("integer bounds were not enforced");
         }
         std::cout << ruvia::to_json(*numbers, {.resource_ = &memory}) << '\n';
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

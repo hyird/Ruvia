@@ -21,6 +21,7 @@
 #include "server/http_request_admission.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 
@@ -71,7 +72,7 @@ template <typename stream_type>
             asio::async_write(d.stream_, asio::buffer(head.view()), std::move(handler));
         });
         if (written.error_code()) {
-            throw std::system_error(written.error_code(), "CONNECT head write");
+            throw inbound_transport_error(written.error_code(), "CONNECT head write");
         }
         tail.record_access(d.options_.access_log_, head_response.status());
         if constexpr (requires { d.stream_.next_layer(); }) {

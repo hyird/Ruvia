@@ -215,8 +215,8 @@ int main() {
             .on_error({.prefix_ = "/api", .handler_ = &api_error})
             .on_not_found({.prefix_ = "/api", .handler_ = &api_not_found})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

@@ -158,7 +158,7 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_now() {
         if (ec) {
             close_stream();
             (void)protocol_.abort();
-            throw std::system_error(ec, "failed to write websocket bytes");
+            throw inbound_transport_error(ec, "failed to write websocket bytes");
         }
         if (protocol_.consume_output(plan.bytes().size()) != websocket_output_consume_status::drained) {
             std::terminate();

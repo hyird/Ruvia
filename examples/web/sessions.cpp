@@ -17,6 +17,7 @@
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/csrf.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/session.h"
 
 #include "backend_tls.h"
@@ -81,8 +82,8 @@ int main() {
                         .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
                     }})
             .run();
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
 }

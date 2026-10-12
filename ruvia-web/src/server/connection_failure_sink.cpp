@@ -3,6 +3,7 @@
 #include <asio/error.hpp>
 
 #include "server/http_server_options.h"
+#include "server/inbound_transport_error.h"
 #include "util/error_code_text.h"
 
 namespace ruvia::detail {
@@ -19,10 +20,14 @@ namespace {
            error == asio::error::not_connected || error == asio::error::shut_down;
 }
 
+// Only the connection's own transport can end it normally. A handler or
+// upstream failure is a real fault even when it carries one of the codes above:
+// an upstream request that timed out or was reset says nothing about the
+// inbound peer.
 [[nodiscard]] bool is_connection_end(const std::exception_ptr& exception) noexcept {
     try {
         std::rethrow_exception(exception);
-    } catch (const std::system_error& error) {
+    } catch (const inbound_transport_error& error) {
         return is_connection_end(error.code());
     } catch (...) {
         return false;

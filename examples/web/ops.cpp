@@ -15,6 +15,7 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/health.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/security_headers.h"
@@ -115,16 +116,14 @@ int main() {
             })
             .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
                 try {
-                    std::rethrow_exception(record.exception());
-                } catch (const std::exception& error) {
-                    std::fprintf(stderr, "connection failed: %s\n", error.what());
+                    std::fprintf(stderr, "connection failed: %s\n", ruvia::exception_text(record.exception()).c_str());
                 } catch (...) {
-                    std::fputs("connection failed with a non-standard exception\n", stderr);
+                    std::fputs("connection failed; formatting its reason failed\n", stderr);
                 }
             })
             .run();
-    } catch (const std::exception& error) {
-        std::fprintf(stderr, "%s\n", error.what());
+    } catch (...) {
+        std::fprintf(stderr, "%s\n", ruvia::exception_text(std::current_exception()).c_str());
         return 1;
     }
 }

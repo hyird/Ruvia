@@ -32,6 +32,7 @@
 #include "server/http_response_stream_state.h"
 #include "server/http_server_response_state.h"
 #include "server/http_streaming_response_compression.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 
@@ -156,7 +157,7 @@ private:
         const auto ec = write_completion.error_code();
         if (ec) {
             state_.mark_aborted();
-            throw std::system_error(ec);
+            throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
         scanner_entry_.touch();
     }
@@ -217,7 +218,7 @@ private:
             const auto raw_ec = write_completion.error_code();
             if (raw_ec) {
                 state_.mark_aborted();
-                throw std::system_error(raw_ec);
+                throw inbound_transport_error(raw_ec, "failed to write HTTP response stream body");
             }
             scanner_entry_.touch();
             co_return;
@@ -232,7 +233,7 @@ private:
         const auto write_ec = write_completion.error_code();
         if (write_ec) {
             state_.mark_aborted();
-            throw std::system_error(write_ec);
+            throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
         }
         scanner_entry_.touch();
     }
@@ -284,7 +285,7 @@ private:
         const auto ec = write_completion.error_code();
         if (ec) {
             state_.mark_aborted();
-            throw std::system_error(ec);
+            throw inbound_transport_error(ec, "failed to write HTTP response stream end");
         }
         state_.mark_ended();
         scanner_entry_.touch();

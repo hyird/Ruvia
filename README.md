@@ -112,8 +112,11 @@ every remaining connection closes, handler stop tokens fire, and `on_stop`
 hooks run before the workers retire. Streaming responses and tunnels that end
 only on their stop token hold the drain until the deadline. A repeated signal
 during the drain gets the default disposition. A stop during startup, or a
-worker failure, closes everything at once. `run()` reports a failure to stderr
-and rethrows it, so `main()` should catch it and exit non-zero.
+worker failure, closes everything at once. `run()` rethrows the primary
+failure (the first preparation, startup, or worker failure) without reporting
+it, so `main()` must catch it, log it (`ruvia::exception_text` gives UTF-8
+text), and exit non-zero; the library reports to stderr only the failures it
+supersedes.
 
 Controllers and middleware are worker-local. Request views borrow their owner;
 copy data before carrying it beyond that lifetime or into offloaded work.
