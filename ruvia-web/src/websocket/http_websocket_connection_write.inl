@@ -191,14 +191,11 @@ task<std::error_code> websocket_connection<stream_type>::write_bytes(std::string
         // Partial progress is transport activity: a slow reader that keeps
         // draining a large write must not look like a stalled peer to the
         // heartbeat.
-        asio::async_write(stream_, buffer,
-            [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
+        asio::async_write(stream_, buffer, [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
                 if (bytes_transferred != 0) {
                     scanner_entry_.touch();
                 }
-                return asio::transfer_all()(ec, bytes_transferred);
-            },
-            std::move(handler));
+                return asio::transfer_all()(ec, bytes_transferred); }, std::move(handler));
     });
     co_return write_completion.error_code();
 }

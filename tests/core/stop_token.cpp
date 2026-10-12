@@ -365,7 +365,9 @@ RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies)
 
 RUVIA_TEST(stop_source_state_never_uses_the_global_heap) {
     // The first source may grow the process pool from its upstream.
-    { ruvia::stop_source warm_up; }
+    {
+        ruvia::stop_source warm_up;
+    }
     global_allocations_armed = true;
     for (int round = 0; round != 16; ++round) {
         ruvia::stop_source source;

@@ -74,7 +74,8 @@ struct rate_decision final {
 // together, without interleaving with any concurrent stdio writer.
 class stream_lock final {
 public:
-    explicit stream_lock(std::FILE* stream) noexcept : stream_(stream) {
+    explicit stream_lock(std::FILE* stream) noexcept
+        : stream_(stream) {
 #if defined(_WIN32)
         _lock_file(stream_);
 #else

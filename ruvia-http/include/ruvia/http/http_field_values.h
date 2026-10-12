@@ -145,7 +145,9 @@ public:
     }
 
 private:
-    enum class state_type : unsigned char { open, closed, failed };
+    enum class state_type : unsigned char { open,
+        closed,
+        failed };
 
     std::string_view input_;
     std::size_t position_{1};

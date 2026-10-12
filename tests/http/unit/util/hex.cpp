@@ -1,9 +1,9 @@
-#include "ruvia/http/http_hex.h"
-
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+
+#include "ruvia/http/http_hex.h"
 
 #include "test_harness.h"
 
@@ -20,7 +20,8 @@ RUVIA_TEST(hex_append_accepts_input_aliasing_the_output) {
     std::pmr::string whole("\x01\xab", std::pmr::new_delete_resource());
     whole.shrink_to_fit();
     ruvia::http_append_lower_hex(whole, std::string_view(whole));
-    RUVIA_CHECK_EQ(std::string_view(whole), std::string_view("\x01\xab" "01ab"));
+    RUVIA_CHECK_EQ(std::string_view(whole), std::string_view("\x01\xab"
+                                                             "01ab"));
 
     // A long prefix forces reallocation while the source is a strict subrange.
     std::pmr::string part(std::string(64, 'z') + "\xff", std::pmr::new_delete_resource());

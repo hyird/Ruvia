@@ -3,7 +3,6 @@
 // Set RUVIA_TLS_CA to trust the local CA. Expected output: text=hello,
 // binary bytes=3, then a clean close.
 
-#include "ruvia/web/error.h"
 #include "ruvia/web/websocket_client.h"
 
 #include <chrono>
@@ -14,6 +13,7 @@
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/dotenv.h"
+#include "ruvia/web/error.h"
 
 #include "environment.h"
 

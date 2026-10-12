@@ -250,7 +250,7 @@ RUVIA_TEST(json_dynamic_parse_enforces_cumulative_array_element_budget) {
     RUVIA_CHECK(!ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 0}).has_value());
     RUVIA_CHECK(ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 1}).has_value());
     RUVIA_CHECK(!ruvia::json_object::parse(R"({"a":{"b":[1,2]},"c":[3]})", {.max_array_elements_ = 2})
-                     .has_value());
+            .has_value());
     RUVIA_CHECK(ruvia::json_object::parse(" {} ", {.max_array_elements_ = 0}).has_value());
     RUVIA_CHECK(!ruvia::json_object::parse("[]").has_value());
 

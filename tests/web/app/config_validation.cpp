@@ -63,7 +63,8 @@ RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
     RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name is invalid"));
     // The override replaces the origin host for SNI and peer verification, so
     // it must be an IP literal or an ASCII DNS name.
-    for (const std::string_view server_name : {std::string_view("a::b::c"), std::string_view("b\xc3\xbc" "cher.example"),
+    for (const std::string_view server_name : {std::string_view("a::b::c"), std::string_view("b\xc3\xbc"
+                                                                                             "cher.example"),
              std::string_view("-leading.example")}) {
         tls_config = with_host("example.com");
         tls_config.tls_.server_name_ = std::string(server_name);

@@ -40,8 +40,8 @@ struct reverse_db_join_columns<std::tuple<columns_type...>> final {
 template <typename relation_type>
 consteval db_relation_kind db_relation_mapping_kind() noexcept {
     return relation_type::kind == db_relation_kind::one_to_one && relation_type::is_owning
-        ? db_relation_kind::many_to_one
-        : relation_type::kind;
+               ? db_relation_kind::many_to_one
+               : relation_type::kind;
 }
 
 // One normalized mapping is consumed by schema generation and query planning.

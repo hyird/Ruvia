@@ -153,13 +153,13 @@ RUVIA_TEST(model_json_codec_supports_public_scalar_and_array_roots) {
 RUVIA_TEST(model_json_writer_replaces_ill_formed_utf8_with_replacement_characters) {
     // Each literal piece ends at a hex escape so the next letter is not read as a
     // further hex digit.
-    std::string input = "a\xD3\xC9";        // GBK lead/trail bytes: two maximal subparts
-    input += "b\xE4\xBD";                   // truncated 3-byte sequence: one subpart
-    input += "c\xC0\xAF";                   // overlong lead and stray continuation
-    input += "d\xED\xA0\x80";               // UTF-16 surrogate code point
-    input += "e\xF4\x90\x80\x80";           // above U+10FFFF
+    std::string input = "a\xD3\xC9";           // GBK lead/trail bytes: two maximal subparts
+    input += "b\xE4\xBD";                      // truncated 3-byte sequence: one subpart
+    input += "c\xC0\xAF";                      // overlong lead and stray continuation
+    input += "d\xED\xA0\x80";                  // UTF-16 surrogate code point
+    input += "e\xF4\x90\x80\x80";              // above U+10FFFF
     input += "f\xE4\xB8\xAD\xF0\x9F\x98\x80";  // well-formed U+4E2D and U+1F600
-    input += "\"\n\xF0\x9F\x98";            // escapes, then a sequence cut at the end
+    input += "\"\n\xF0\x9F\x98";               // escapes, then a sequence cut at the end
     const std::string replacement = "\xEF\xBF\xBD";
     std::string expected = "\"a" + replacement + replacement;
     expected += "b" + replacement;

@@ -99,8 +99,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                 // Idle wait for the next keep-alive request uses idle_timeout;
                 // the connection's first request uses request_header_timeout.
                 scanner_entry.read_request_head(served_keepalive_request
-                                                ? connection_scanner::phase_type::idle
-                                                : connection_scanner::phase_type::reading_initial);
+                                                    ? connection_scanner::phase_type::idle
+                                                    : connection_scanner::phase_type::reading_initial);
                 auto idle_completion = co_await ruvia::async_asio<std::size_t>(
                     [&socket, &idle_read_buffer](auto handler) mutable {
                         socket.async_read_some(

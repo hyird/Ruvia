@@ -153,8 +153,7 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     RUVIA_CHECK_EQ(reuse_statement.sql(), "SELECT ($1 || $2), CAST($3 AS DECIMAL), (- $3) FROM \"items\"");
     // MariaDB placeholders carry no casts.
     db_query maria;
-    maria.select(maria.call("left", {maria.column("name"), maria.value(3)})).from("items").where(
-        maria.binary(maria.column("ratio"), op_type::greater, maria.value(0.25)));
+    maria.select(maria.call("left", {maria.column("name"), maria.value(3)})).from("items").where(maria.binary(maria.column("ratio"), op_type::greater, maria.value(0.25)));
     const auto maria_statement = maria.compile(db_driver::mariadb, nullptr);
     RUVIA_CHECK_EQ(maria_statement.sql(), "SELECT left(`name`, ?) FROM `items` WHERE (`ratio` > ?)");
 }

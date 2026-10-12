@@ -237,14 +237,14 @@ RUVIA_TEST(route_body_limit_bounds_the_decoded_representation) {
     // The compressed body fits the route's ceiling on the wire, but the
     // route reads the decoded representation, which is far larger.
     const auto rejected = app.request(ruvia::test_request::post("/route-config/small-decoded")
-                                          .header("Content-Encoding", "gzip")
-                                          .body(encoded.encoded()->bytes()));
+            .header("Content-Encoding", "gzip")
+            .body(encoded.encoded()->bytes()));
     RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::content_too_large);
 
     // A sibling without the declaration decodes up to the app-wide ceiling.
     const auto accepted = app.request(ruvia::test_request::post("/route-config/default")
-                                          .header("Content-Encoding", "gzip")
-                                          .body(encoded.encoded()->bytes()));
+            .header("Content-Encoding", "gzip")
+            .body(encoded.encoded()->bytes()));
     RUVIA_CHECK_EQ(accepted.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(accepted.body(), std::string_view(plain));
 }

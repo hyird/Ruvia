@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <functional>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>

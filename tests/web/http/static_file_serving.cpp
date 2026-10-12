@@ -17,13 +17,13 @@
 #include <vector>
 
 #if defined(__linux__)
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #endif
 
 #include "ruvia/http/http_cache.h"

@@ -18,8 +18,8 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/rate_limit_rule.h"
 #include "ruvia/web/detail/util/fnv1a.h"
+#include "ruvia/web/rate_limit_rule.h"
 
 namespace ruvia::detail {
 

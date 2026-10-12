@@ -111,7 +111,7 @@ private:                                                                        
         ::ruvia::detail::controller_registration_access<ruvia_controller_type>;                               \
     friend class ::ruvia::detail::controller_registration_access<ruvia_controller_type>;                      \
     void register_routes(::ruvia::detail::router& router) {                                                   \
-        static_assert(::std::is_same_v<ruvia_controller_type, ::std::remove_cvref_t<decltype(*this)>>,       \
+        static_assert(::std::is_same_v<ruvia_controller_type, ::std::remove_cvref_t<decltype(*this)>>,        \
             "RUVIA_ROUTES_BEGIN must name its enclosing controller");                                         \
         auto ruvia_controller_group = ruvia_controller_access_type::create_route_group(router,                \
             ruvia_controller_access_type::group_prefix(), ruvia_controller_access_type::group_middlewares()); \

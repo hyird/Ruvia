@@ -329,13 +329,13 @@ RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
             try {
                 client.connect(server.endpoint());
                 const std::string upgrade = std::string(
-                    "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
-                    "Host: 127.0.0.1\r\n"
-                    "Connection: Upgrade\r\n"
-                    "Upgrade: websocket\r\n"
-                    "Sec-WebSocket-Version: 13\r\n"
-                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
-                    std::string(offers[index]) + "\r\n";
+                                                "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
+                                                "Host: 127.0.0.1\r\n"
+                                                "Connection: Upgrade\r\n"
+                                                "Upgrade: websocket\r\n"
+                                                "Sec-WebSocket-Version: 13\r\n"
+                                                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
+                                            std::string(offers[index]) + "\r\n";
                 const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
                 if (sent.error_code()) {
                     throw std::system_error(sent.error_code());

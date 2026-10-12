@@ -106,7 +106,7 @@ chunk_framing_result http_chunk_framing::decode(std::string_view available, std:
                 // preceded by CR; an LF directly after a CRLF ends the section.
                 auto trailer_end = std::string_view::npos;
                 for (auto line_feed = trailers.find('\n', trailer_search_offset_);
-                     line_feed != std::string_view::npos; line_feed = trailers.find('\n', line_feed + 1)) {
+                    line_feed != std::string_view::npos; line_feed = trailers.find('\n', line_feed + 1)) {
                     if (line_feed == 0 || trailers[line_feed - 1] != '\r') {
                         return fail(cursor_value, chunk_framing_error::invalid_crlf);
                     }

@@ -6,7 +6,6 @@
 // curl -F file=@file.bin http://127.0.0.1:8082/streaming/upload/multipart
 // A chunk borrows reusable reader storage; consume it before the next read.
 
-#include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
 #include <charconv>
@@ -20,6 +19,7 @@
 #include "ruvia/http/multipart_parser.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/multipart_reader.h"
 
 class streaming_controller final {
