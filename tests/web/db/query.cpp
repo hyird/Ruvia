@@ -4,6 +4,7 @@
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -158,11 +159,132 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
         .from("items");
     const auto wide_statement = wide.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK_EQ(wide_statement.sql(), "SELECT COALESCE($1::numeric, $2::numeric) FROM \"items\"");
+    RUVIA_CHECK_EQ(wide_statement.params().size(), std::size_t{2});
+    const auto wide_literal = wide.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK_EQ(wide_literal.sql(), "SELECT COALESCE(18446744073709551615, 1) FROM \"items\"");
+    RUVIA_CHECK(wide_literal.params().empty());
     // MariaDB placeholders carry no casts.
     db_query maria;
     maria.select(maria.call("left", {maria.column("name"), maria.value(3)})).from("items").where(maria.binary(maria.column("ratio"), op_type::greater, maria.value(0.25)));
     const auto maria_statement = maria.compile(db_driver::mariadb, nullptr);
     RUVIA_CHECK_EQ(maria_statement.sql(), "SELECT left(`name`, ?) FROM `items` WHERE (`ratio` > ?)");
+}
+
+RUVIA_TEST(db_query_postgresql_bitwise_parameters_use_integer_overloads) {
+    struct integer_case final {
+        db_value value_;
+        std::string_view literal_;
+    };
+    const std::array values{
+        integer_case{db_value(std::numeric_limits<std::int64_t>::min()), "-9223372036854775808"},
+        integer_case{db_value(std::numeric_limits<std::int64_t>::max()), "9223372036854775807"},
+        integer_case{db_value(std::uint64_t{0}), "0"},
+        integer_case{db_value(std::uint64_t{1}), "1"},
+        integer_case{db_value(static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())), "9223372036854775807"},
+    };
+    for (const auto& item : values) {
+        db_query query;
+        const auto operand = query.value(item.value_);
+        const auto mask = query.value(std::uint64_t{1});
+        const auto inverted = query.unary(db_unary_operator::bit_not, operand);
+        query.select({query.binary(operand, op_type::bit_and, mask),
+            query.binary(operand, op_type::bit_or, mask),
+            query.binary(operand, op_type::bit_xor, mask),
+            inverted});
+        const auto statement = query.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(statement.sql(), "SELECT ($1::int8 & $2::int8), ($1::int8 | $2::int8), ($1::int8 # $2::int8), (~ $1::int8)");
+        RUVIA_CHECK_EQ(statement.params().size(), std::size_t{2});
+        const auto literal = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+        const auto operand_literal = "(" + std::string(item.literal_) + ")::int8";
+        const auto literal_sql = "SELECT (" + operand_literal + " & (1)::int8), (" + operand_literal +
+                                 " | (1)::int8), (" + operand_literal + " # (1)::int8), (~ " + operand_literal + ")";
+        RUVIA_CHECK_EQ(literal.sql(), std::string_view(literal_sql));
+        RUVIA_CHECK(literal.params().empty());
+        const auto inverted_sql = "(~ " + operand_literal + ")";
+        RUVIA_CHECK_EQ(db_query::render_expression(inverted, db_driver::postgresql, nullptr), std::string_view(inverted_sql));
+    }
+}
+
+RUVIA_TEST(db_query_postgresql_bitwise_parameters_reject_unsigned_overflow_in_both_modes) {
+    const std::array values{
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1,
+        std::numeric_limits<std::uint64_t>::max(),
+    };
+    for (const auto value : values) {
+        for (const auto mode : {db_parameter_mode::bound, db_parameter_mode::literal}) {
+            for (const auto op : {op_type::bit_and, op_type::bit_or, op_type::bit_xor}) {
+                for (const bool overflow_on_left : {true, false}) {
+                    db_query query;
+                    const auto overflow = query.value(value);
+                    const auto mask = query.value(std::uint64_t{1});
+                    query.select(query.binary(overflow_on_left ? overflow : mask, op, overflow_on_left ? mask : overflow));
+                    bool rejected = false;
+                    try {
+                        (void)query.compile(db_driver::postgresql, nullptr, mode);
+                    } catch (const std::invalid_argument&) {
+                        rejected = true;
+                    }
+                    RUVIA_CHECK(rejected);
+                }
+            }
+            db_query query;
+            query.select(query.unary(db_unary_operator::bit_not, query.value(value)));
+            bool rejected = false;
+            try {
+                (void)query.compile(db_driver::postgresql, nullptr, mode);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+            db_query reused;
+            const auto overflow = reused.value(value);
+            reused.select({reused.coalesce({overflow, overflow}), reused.unary(db_unary_operator::bit_not, overflow)});
+            bool reused_rejected = false;
+            try {
+                (void)reused.compile(db_driver::postgresql, nullptr, mode);
+            } catch (const std::invalid_argument&) {
+                reused_rejected = true;
+            }
+            RUVIA_CHECK(reused_rejected);
+        }
+    }
+}
+
+RUVIA_TEST(db_query_postgresql_reuses_one_parameter_across_numeric_and_bitwise_casts) {
+    for (const bool numeric_first : {true, false}) {
+        db_query query;
+        const auto value = query.value(std::uint64_t{7});
+        const auto numeric = query.coalesce({value, value});
+        const auto binary = query.binary(value, op_type::bit_and, value);
+        const auto unary = query.unary(db_unary_operator::bit_not, value);
+        query.select(numeric_first ? std::array{numeric, binary, unary} : std::array{binary, unary, numeric});
+        const auto statement = query.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(statement.sql(), numeric_first
+                                            ? "SELECT COALESCE($1::numeric, $1::numeric), ($1::int8 & $1::int8), (~ $1::int8)"
+                                            : "SELECT ($1::int8 & $1::int8), (~ $1::int8), COALESCE($1::numeric, $1::numeric)");
+        RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+    }
+}
+
+RUVIA_TEST(db_query_postgresql_bitwise_values_keep_column_and_explicit_cast_contexts) {
+    db_query query;
+    const auto value = query.value(std::numeric_limits<std::uint64_t>::max());
+    const auto flags = query.column("flags");
+    const auto cast = query.cast(value, db_type_definition{.custom_name_ = "app_flags"});
+    query.select({query.binary(flags, op_type::bit_and, value),
+                     query.binary(value, op_type::bit_or, flags),
+                     query.binary(cast, op_type::bit_xor, value),
+                     query.unary(db_unary_operator::bit_not, cast)})
+        .from("items");
+    const auto statement = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(statement.sql(),
+        "SELECT (\"flags\" & $1), ($1 | \"flags\"), (CAST($1 AS \"app_flags\") # $1), (~ CAST($1 AS \"app_flags\")) FROM \"items\"");
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+    const auto literal = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK_EQ(literal.sql(),
+        "SELECT (\"flags\" & 18446744073709551615), (18446744073709551615 | \"flags\"), "
+        "(CAST(18446744073709551615 AS \"app_flags\") # 18446744073709551615), (~ CAST(18446744073709551615 AS \"app_flags\")) FROM \"items\"");
+    RUVIA_CHECK(literal.params().empty());
 }
 
 RUVIA_TEST(db_value_borrows_pmr_string_lvalues) {
@@ -614,7 +736,8 @@ RUVIA_TEST(db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_commen
         const auto negated_sql = db_query::render_expression(negated, driver, nullptr);
         RUVIA_CHECK_EQ(negated_sql, "(- -5)");
         RUVIA_CHECK(negated_sql.find("--") == std::string_view::npos);
-        RUVIA_CHECK_EQ(db_query::render_expression(inverted, driver, nullptr), "(~ -5)");
+        RUVIA_CHECK_EQ(db_query::render_expression(inverted, driver, nullptr),
+            driver == db_driver::postgresql ? "(~ (-5)::int8)" : "(~ -5)");
     }
 }
 

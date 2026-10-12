@@ -156,6 +156,14 @@ dialect; use `RUVIA_CUSTOM` for matching outside its supported syntax. See
 ORM array columns retain PostgreSQL one-dimensional element order, including
 nondefault lower bounds, without keeping the subscripts; multidimensional arrays
 are rejected. See [orm.cpp](examples/web/orm.cpp).
+
+Without a SQL type context, PostgreSQL `db_query` bitwise operations (`&`, `|`,
+`#`, `~`) over bare integers use signed SQL `bigint` semantics in both parameter
+modes and reject unsigned operands above `INT64_MAX` with `std::invalid_argument`.
+Where `db_query` must supply a numeric type, unsigned values use `numeric` to
+preserve their full range; columns and explicit casts keep PostgreSQL type
+inference.
+
 `ruvia/web/controller.h` includes context and request validation; include
 `streaming.h`, `multipart_reader.h`, `websocket.h`, `http_tunnel.h`, `session.h`,
 or `http_client_handle.h` where their capabilities are used.

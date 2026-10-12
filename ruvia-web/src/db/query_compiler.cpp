@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -40,6 +41,8 @@ enum class pg_parameter_cast : std::uint8_t {
     // Nothing types the value: signed integers render ::int8, unsigned
     // integers ::numeric, doubles ::float8, booleans ::bool and text ::text.
     value_category,
+    // Bare integer bitwise operands use bigint's signed range.
+    bitwise_integer,
     // The PostgreSQL signature at this position accepts only int4; other
     // values stay untyped.
     int4,
@@ -128,22 +131,23 @@ constexpr std::array pg_function_parameter_cast_table{
     return pg_parameter_cast::context;
 }
 
-// Arithmetic (including bitwise) operators are overloaded across numeric
-// types, so two unknown operands select no overload. Concatenation is not
-// listed: unknown || unknown resolves to text || text.
-[[nodiscard]] bool pg_operator_needs_typed_operands(db_binary_operator value) noexcept {
+// Two unknown arithmetic operands select no overload. Bitwise integer
+// operands need an integral SQL type rather than the wider numeric category.
+// Concatenation resolves unknown || unknown to text || text.
+[[nodiscard]] pg_parameter_cast pg_binary_operand_cast(db_binary_operator value) noexcept {
     switch (value) {
         case db_binary_operator::add:
         case db_binary_operator::subtract:
         case db_binary_operator::multiply:
         case db_binary_operator::divide:
         case db_binary_operator::modulo:
+            return pg_parameter_cast::value_category;
         case db_binary_operator::bit_and:
         case db_binary_operator::bit_or:
         case db_binary_operator::bit_xor:
-            return true;
+            return pg_parameter_cast::bitwise_integer;
         default:
-            return false;
+            return pg_parameter_cast::context;
     }
 }
 
@@ -152,13 +156,18 @@ constexpr std::array pg_function_parameter_cast_table{
     return node.kind_ == db_node_kind::value && db_value_access::type(node.value_) != db_value_type::null;
 }
 
-// An operand of an arithmetic operator: numeric and boolean values carry their
-// category, but a string stays untyped. No arithmetic operator accepts text, and
-// a reused parameter may already be typed numeric by an earlier reference.
-[[nodiscard]] pg_parameter_cast pg_arithmetic_operand_cast(const db_query_node& node) noexcept {
-    return is_untyped_value(node) && db_value_access::type(node.value_) != db_value_type::string
+// Only bare integers acquire the bitwise range contract. Other numeric and
+// boolean values retain their category; strings retain SQL context because a
+// reused parameter may already have been typed by an earlier reference.
+[[nodiscard]] pg_parameter_cast pg_operator_operand_cast(const db_query_node& node, pg_parameter_cast cast) noexcept {
+    if (!is_untyped_value(node) || db_value_access::type(node.value_) == db_value_type::string) {
+        return pg_parameter_cast::context;
+    }
+    const auto type = db_value_access::type(node.value_);
+    return cast == pg_parameter_cast::bitwise_integer &&
+                   type != db_value_type::signed_value && type != db_value_type::unsigned_value
                ? pg_parameter_cast::value_category
-               : pg_parameter_cast::context;
+               : cast;
 }
 
 class query_sql_writer final {
@@ -209,11 +218,24 @@ public:
     }
 
     // `cast` refines PostgreSQL parameter typing for the position the value
-    // fills; it has no effect on MariaDB or literal output.
+    // fills. Bare bitwise integers share the same range and SQL type in bound
+    // and literal output; other casts leave literals to PostgreSQL's parser.
     void bound(const db_value& value, const db_query_node* node = nullptr,
         pg_parameter_cast cast = pg_parameter_cast::context) {
+        const bool bitwise_integer = pg() && cast == pg_parameter_cast::bitwise_integer;
+        if (bitwise_integer && db_value_access::type(value) == db_value_type::unsigned_value &&
+            db_value_access::unsigned_value(value) > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+            throw std::invalid_argument("PostgreSQL integer bitwise operand exceeds bigint range");
+        }
         if (mode_ == db_parameter_mode::literal || db_value_access::type(value) == db_value_type::null) {
+            if (bitwise_integer) {
+                sql_ += '(';
+            }
             append_db_literal(sql_, value, driver_);
+            if (bitwise_integer) {
+                // Cast the whole signed literal, including a possible minus.
+                sql_ += ")::int8";
+            }
             return;
         }
         if (pg() && node != nullptr) {
@@ -248,6 +270,10 @@ private:
         append_db_number(sql_, static_cast<std::uint64_t>(position));
         const auto type = db_value_access::type(value);
         const bool integer = type == db_value_type::signed_value || type == db_value_type::unsigned_value;
+        if (cast == pg_parameter_cast::bitwise_integer) {
+            sql_ += "::int8";
+            return;
+        }
         if (cast == pg_parameter_cast::int4) {
             if (integer) {
                 sql_ += "::int4";
@@ -711,15 +737,15 @@ private:
                 binary(s, n, depth + 1);
                 break;
             case db_node_kind::unary: {
-                // Negation and bitwise NOT are numeric operators: a bound
-                // operand carries its category unless it is a string. The null
-                // predicates accept any type, so their bound operand is cast
-                // by category. NOT and IS TRUE/FALSE coerce theirs to boolean.
+                // Negation retains the value category; bitwise NOT selects an
+                // integer type for bare integer operands. Null predicates take
+                // any category. NOT and IS TRUE/FALSE coerce theirs to boolean.
                 const auto& operand = s.nodes_.at(n.left_);
                 auto operand_cast = pg_parameter_cast::context;
                 if (output_.pg()) {
                     if (n.unary_ == db_unary_operator::negate || n.unary_ == db_unary_operator::bit_not) {
-                        operand_cast = pg_arithmetic_operand_cast(operand);
+                        operand_cast = pg_operator_operand_cast(operand,
+                            n.unary_ == db_unary_operator::bit_not ? pg_parameter_cast::bitwise_integer : pg_parameter_cast::value_category);
                     } else if ((n.unary_ == db_unary_operator::is_null ||
                                    n.unary_ == db_unary_operator::is_not_null) &&
                                is_untyped_value(operand)) {
@@ -993,12 +1019,12 @@ private:
         auto left_cast = pg_parameter_cast::context;
         auto right_cast = pg_parameter_cast::context;
         if (output_.pg()) {
-            // A bound value takes its type from the other operand or from the
-            // operator's signature. Only arithmetic over two bound values
-            // selects no overload.
-            if (pg_operator_needs_typed_operands(n.binary_) && is_untyped_value(left) && is_untyped_value(right)) {
-                left_cast = pg_arithmetic_operand_cast(left);
-                right_cast = pg_arithmetic_operand_cast(right);
+            // Preserve the other operand's SQL type. Only arithmetic over two
+            // bare values needs an explicit choice of overload.
+            const auto operand_cast = pg_binary_operand_cast(n.binary_);
+            if (operand_cast != pg_parameter_cast::context && is_untyped_value(left) && is_untyped_value(right)) {
+                left_cast = pg_operator_operand_cast(left, operand_cast);
+                right_cast = pg_operator_operand_cast(right, operand_cast);
             }
             // jsonb -> n, ->> n and - n index arrays with int4 only; untyped,
             // an integer would be read as a text key.
