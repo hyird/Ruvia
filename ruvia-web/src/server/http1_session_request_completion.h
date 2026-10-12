@@ -172,6 +172,15 @@ public:
             unshifted_buffer_completion(connection_plan, consumed_bytes));
     }
 
+    [[nodiscard]] static http1_session_request_completion make_committed_stream_pipeline_restore(
+        http1_request_connection_plan connection_plan, http_status_code status, borrowed_text pipeline) noexcept {
+        if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
+            std::terminate();
+        }
+        return http1_session_request_completion(http1_committed_stream_response(status), connection_plan,
+            http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
+    }
+
     [[nodiscard]] static http1_session_request_completion make_rejected_final_response(
         http1_request_connection_plan connection_plan, ::ruvia::http1_final_response_commit_failure failure) noexcept {
         return http1_session_request_completion(http1_rejected_final_response(failure),

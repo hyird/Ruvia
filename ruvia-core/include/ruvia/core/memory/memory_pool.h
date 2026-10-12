@@ -6,10 +6,9 @@
 #include <span>
 
 #include "ruvia/core/memory/memory_pool_config.h"
+#include "ruvia/core/worker_handle.h"
 
 namespace ruvia {
-
-class worker_handle;
 
 // Explicit worker-local owner, not thread_local storage. All allocations and
 // deallocations are worker-affine; this pool has no internal synchronization.
@@ -39,9 +38,9 @@ public:
 
     // Returns every cached large block upstream and drains the calling
     // thread's coroutine frame cache; live allocations and the small-object
-    // pool are untouched. Owner thread only: `owner` is the worker this memory
-    // serves, and the call throws std::logic_error unless it runs on that
-    // worker.
+    // pool are untouched. Owner thread only: the first call binds `owner` as
+    // the worker this memory serves, and every call throws std::logic_error
+    // unless it runs on that worker.
     void trim(const worker_handle& owner);
 
     template <typename t_type = std::byte>
@@ -73,6 +72,8 @@ private:
     // Cache the resource borrow and configuration without a hot-path Impl lookup.
     std::pmr::memory_resource* resource_;
     std::size_t request_initial_buffer_bytes_;
+    // Bound by the first trim(); 0 until then.
+    worker_id_type owner_id_{0};
 };
 
 // Request/handshake lifetime arena borrowing its worker and optional initial
@@ -88,8 +89,9 @@ public:
     request_memory(const request_memory&) = delete;
     request_memory& operator=(const request_memory&) = delete;
 
-    // Independent arena with the same worker-owned upstream. The child may
-    // outlive this arena, but never the worker that owns its storage.
+    // Independent arena with the same worker-owned upstream and the same
+    // initial block size. The child may outlive this arena, but never the
+    // worker that owns its storage.
     [[nodiscard]] request_memory fork() const&;
     request_memory fork() const&& = delete;
 
@@ -113,9 +115,9 @@ public:
     [[nodiscard]] std::pmr::memory_resource* upstream_resource() const&& = delete;
 
 private:
-    struct child_arena_type {};
-    request_memory(child_arena_type, std::pmr::memory_resource* upstream);
+    request_memory(std::size_t initial_bytes, std::pmr::memory_resource* upstream);
     mutable std::pmr::monotonic_buffer_resource arena_;
+    std::size_t initial_bytes_;
 };
 
 }  // namespace ruvia

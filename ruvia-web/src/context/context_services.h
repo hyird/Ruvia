@@ -55,6 +55,10 @@ struct context_worker_services final {
 
 struct context_connection_services final {
     conn_info info_;
+    // Whether the peer is a configured trusted proxy. Decided once per
+    // connection: the peer address never changes, so its IP parse and block
+    // match are not repeated per request.
+    bool peer_trusted_{false};
 };
 
 struct context_request_services final {
@@ -250,8 +254,16 @@ public:
     // The connection metadata one request sees. Identical to get_conn_info() unless
     // the peer is a configured trusted proxy, in which case its forwarding
     // headers name the client. Resolved per request rather than per connection:
-    // each keep-alive request may carry different forwarding headers.
+    // each keep-alive request may carry different forwarding headers. Admission
+    // resolves it once and binds the result with with_conn_info, so every
+    // context created for the request reads get_conn_info().
     [[nodiscard]] conn_info resolve_conn_info(const http_request& request) const noexcept;
+
+    [[nodiscard]] context_services with_conn_info(const conn_info& resolved) const noexcept {
+        auto services = *this;
+        services.connection_services_.info_ = resolved;
+        return services;
+    }
 
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched.
@@ -260,6 +272,7 @@ public:
         auto services = *this;
         services.connection_services_.info_ = conn_info::plain(remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
+        services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
         return services;
     }
 
@@ -273,6 +286,7 @@ public:
         auto services = *this;
         services.connection_services_.info_ = conn_info::tls(remote_address, client_certificate_subject);
         services.connection_services_.info_.set_remote_port(remote_port);
+        services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
         return services;
     }
 
@@ -285,6 +299,10 @@ public:
         std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t = 0) const = delete;
 
 private:
+    [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {
+        return worker_services_.trusted_proxies_ != nullptr && worker_services_.trusted_proxies_->trusts(remote_address);
+    }
+
     context_worker_services worker_services_;
     context_connection_services connection_services_{.info_ = conn_info::plain({})};
     context_request_services request_services_;

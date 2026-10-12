@@ -25,7 +25,8 @@ namespace ruvia {
 
 namespace detail {
 class redis_client_runtime;
-}
+struct redis_orm_script;
+}  // namespace detail
 
 template <typename entity_type>
 class redis_repository;
@@ -277,12 +278,24 @@ private:
     // command when it already lives in the handle's resource and copied into
     // that resource otherwise.
     [[nodiscard]] task<redis_value> command_owned(std::pmr::vector<std::pmr::string>&& args) const;
+    // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
+    // EVAL within the same operation.
+    [[nodiscard]] task<redis_value> script_owned(
+        const detail::redis_orm_script& script, std::pmr::vector<std::pmr::string>&& args) const;
 
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<result_type> command_mapped(
         std::pmr::vector<std::pmr::string>&& args, mapper_type mapper) const {
         registration_.require_active();
         return scoped(detail::map_redis_command<result_type>(command_owned(std::move(args)), resource_, std::move(mapper)));
+    }
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] scoped_operation<result_type> script_mapped(const detail::redis_orm_script& script,
+        std::pmr::vector<std::pmr::string>&& args, mapper_type mapper) const {
+        registration_.require_active();
+        return scoped(detail::map_redis_command<result_type>(
+            script_owned(script, std::move(args)), resource_, std::move(mapper)));
     }
 
     redis_handle(detail::redis_pool& general_pool, detail::redis_pool& blocking_pool_value,

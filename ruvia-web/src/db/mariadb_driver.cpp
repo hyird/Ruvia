@@ -1,3 +1,4 @@
+#include <errmsg.h>
 #include <mysql.h>
 
 #include <chrono>
@@ -43,6 +44,21 @@ using mariadb_pool = db_pool<mariadb_driver>;
     return static_cast<db_slot_socket::native_socket_type>(native);
 }
 
+// Builds the error for a failed statement call. A statement the server
+// rejected ends with its error packet, so the connection is idle again and
+// the pool keeps it. A client-library failure, or a result the server still
+// has to send, leaves the connection state unknown: the slot is closed here,
+// before the pool sees a statement_failed it would otherwise keep.
+[[nodiscard]] db_error mysql_statement_error(mariadb_pool& pool, std::size_t index, std::string_view operation) {
+    auto& connection = *pool.slot(index).connection_;
+    auto error = mysql_error(connection, operation, db_error::code_type::statement_failed);
+    if (error.code() == db_error::code_type::statement_failed &&
+        (mysql_errno(&connection) >= CR_MIN_ERROR || mysql_more_results(&connection) != 0)) {
+        pool.close_slot(index);
+    }
+    return error;
+}
+
 // An unbuffered result borrows its connection, and mysql_free_result() would
 // drain the unread rows through it synchronously, or through a connection
 // that close_slot() already freed. Detach it first; the caller closes the
@@ -54,17 +70,54 @@ void discard_unbuffered_result(void* result_value) noexcept {
     }
 }
 
+// One MariaDB wait: the mask libmariadb asked for, mapped onto a pool slot
+// wait, and the outcome mapped back to the mask libmariadb continues with.
+//
 // A db_config deadline is this pool's to enforce, not the driver's. Reporting
 // its expiry to MariaDB as MYSQL_WAIT_TIMEOUT only works where libmariadb has
 // a matching timeout option of its own -- it has one for connect, none for a
 // statement -- so a query deadline would be handed over and dropped. Failing
-// here instead ends the operation, and the caller closes the connection: the
+// here instead ends the operation, and the pool closes the connection: the
 // statement may still be running server-side, which is exactly what a
 // client-side timeout means.
-task<int> wait_for_mysql(mariadb_pool& pool, std::size_t index, int status, const operation_timeout& deadline_value) {
-    pool.leases().throw_if_aborted(index);
-    auto& slot = pool.slot(index);
-    auto& connection = *slot.connection_;
+struct mysql_wait final {
+    mariadb_pool& pool_;
+    mysql_wait_deadline_source deadline_source_;
+    mariadb_pool::slot_wait wait_;
+
+    [[nodiscard]] bool await_ready() {
+        return wait_.await_ready();
+    }
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        return wait_.await_suspend(handle);
+    }
+    [[nodiscard]] int await_resume() {
+        const auto wait_result = wait_.await_resume();
+        if (wait_result.expired_) {
+            if (deadline_source_ == mysql_wait_deadline_source::operation) {
+                throw pool_.timed_out();
+            }
+            return MYSQL_WAIT_TIMEOUT;
+        }
+        if (wait_result.error_) {
+            throw mysql_socket_error("waiting for MariaDB socket", wait_result.error_);
+        }
+        switch (wait_result.ready_) {
+            case db_socket_readiness::read:
+                return MYSQL_WAIT_READ;
+            case db_socket_readiness::write:
+                return MYSQL_WAIT_WRITE;
+            case db_socket_readiness::error:
+                return MYSQL_WAIT_EXCEPT;
+            default:
+                return MYSQL_WAIT_TIMEOUT;
+        }
+    }
+};
+
+[[nodiscard]] mysql_wait wait_for_mysql(
+    mariadb_pool& pool, std::size_t index, int status, const operation_timeout& deadline_value) {
+    auto& connection = *pool.slot(index).connection_;
     const auto timeout = deadline_value.remaining();
     if (timeout.has_value() && timeout->count() <= 0) {
         throw pool.timed_out();
@@ -91,32 +144,7 @@ task<int> wait_for_mysql(mariadb_pool& pool, std::size_t index, int status, cons
             throw db_error(
                 db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
         }
-        if (pool.leases().arm_deadline(index, selected_deadline.timeout_, db_deadline_kind::sleep)) {
-            struct deadline_awaiter final {
-                mariadb_pool& pool_;
-                std::size_t index_;
-
-                [[nodiscard]] bool await_ready() noexcept {
-                    return pool_.leases().poll_deadline(index_);
-                }
-                void await_suspend(std::coroutine_handle<> handle) noexcept {
-                    pool_.slot(index_).deadline_continuation_ = handle;
-                }
-                void await_resume() const noexcept {}
-            };
-            db_slot_active_wait_guard active_wait(slot);
-            co_await deadline_awaiter{pool, index};
-        }
-        (void)pool.leases().clear_deadline(index);
-        slot.deadline_continuation_ = {};
-        pool.leases().throw_if_aborted(index);
-        if (slot.close_requested_) {
-            throw pool.closing_error();
-        }
-        if (deadline_value.expired() || selected_deadline.source_ == mysql_wait_deadline_source::operation) {
-            throw pool.timed_out();
-        }
-        co_return MYSQL_WAIT_TIMEOUT;
+        return mysql_wait{pool, selected_deadline.source_, pool.sleep(index, selected_deadline.timeout_, deadline_value)};
     }
 
     const auto native = mysql_native_socket(connection);
@@ -124,26 +152,8 @@ task<int> wait_for_mysql(mariadb_pool& pool, std::size_t index, int status, cons
         throw mysql_socket_error("MariaDB returned an invalid socket for an active wait",
             std::make_error_code(std::errc::bad_file_descriptor));
     }
-    const auto wait_result = co_await pool.wait_socket(index, native, wanted, selected_deadline.timeout_, deadline_value);
-    if (wait_result.expired_) {
-        if (selected_deadline.source_ == mysql_wait_deadline_source::operation) {
-            throw pool.timed_out();
-        }
-        co_return MYSQL_WAIT_TIMEOUT;
-    }
-    if (wait_result.error_) {
-        throw mysql_socket_error("waiting for MariaDB socket", wait_result.error_);
-    }
-    switch (wait_result.ready_) {
-        case db_socket_readiness::read:
-            co_return MYSQL_WAIT_READ;
-        case db_socket_readiness::write:
-            co_return MYSQL_WAIT_WRITE;
-        case db_socket_readiness::error:
-            co_return MYSQL_WAIT_EXCEPT;
-        default:
-            co_return MYSQL_WAIT_TIMEOUT;
-    }
+    return mysql_wait{pool, selected_deadline.source_,
+        pool.wait_socket(index, native, wanted, selected_deadline.timeout_, deadline_value)};
 }
 
 task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::string_view sql,
@@ -162,7 +172,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
             &query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
     }
     if (query_result != 0) {
-        throw mysql_error(connection, "mysql_real_query", db_error::code_type::statement_failed);
+        throw mysql_statement_error(pool, index, "mysql_real_query");
     }
 }
 
@@ -179,9 +189,11 @@ task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const
 
 // A CALL that returns rows ends with a separate status result, and the
 // connection refuses every later command until that result has been read.
-// Only status results may follow; a further result set cannot be returned.
+// Only status results may follow; a further row set is read and dropped so
+// the connection is idle when it is refused.
 task<void> finish_mysql_results(mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
+    bool extra_row_set = false;
     while (mysql_more_results(&connection) != 0) {
         int next_result = 0;
         int status = mysql_next_result_start(&next_result, &connection);
@@ -190,11 +202,19 @@ task<void> finish_mysql_results(mariadb_pool& pool, std::size_t index, const ope
                 &next_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
         }
         if (next_result != 0) {
-            throw mysql_error(connection, "mysql_next_result", db_error::code_type::statement_failed);
+            throw mysql_statement_error(pool, index, "mysql_next_result");
         }
         if (mysql_field_count(&connection) != 0) {
-            throw std::invalid_argument("SQL must not return more than one result set");
+            auto* extra = co_await store_mysql_result(pool, index, deadline_value);
+            if (extra == nullptr) {
+                throw mysql_statement_error(pool, index, "mysql_store_result");
+            }
+            free_stored_result(extra);
+            extra_row_set = true;
         }
+    }
+    if (extra_row_set) {
+        throw std::invalid_argument("SQL must not return more than one result set");
     }
 }
 
@@ -311,8 +331,9 @@ task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::str
         // field count when it drops the connection, so only mysql_errno()
         // tells a failed transfer from a statement without a row set.
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
-            throw mysql_error(connection, "mysql_store_result", db_error::code_type::statement_failed);
+            throw mysql_statement_error(pool, index, "mysql_store_result");
         }
+        co_await finish_mysql_results(pool, index, deadline_value);
         throw std::invalid_argument("query() requires row-producing SQL");
     }
 
@@ -356,10 +377,11 @@ task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index,
     auto* raw_result = co_await store_mysql_result(pool, index, deadline_value);
     if (raw_result != nullptr) {
         free_stored_result(raw_result);
+        co_await finish_mysql_results(pool, index, deadline_value);
         throw std::invalid_argument("execute() does not accept row-producing SQL");
     }
     if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
-        throw mysql_error(connection, "mysql_store_result", db_error::code_type::statement_failed);
+        throw mysql_statement_error(pool, index, "mysql_store_result");
     }
     co_return db_result_access::make_exec_result(
         affected_rows, insert_id == 0 ? std::nullopt : std::optional<std::uint64_t>(insert_id));

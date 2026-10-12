@@ -1164,8 +1164,9 @@ RUVIA_TEST(testing_facade_router_slash) {
     auto res1 = app.request(ruvia::test_request::get("/t/a/123/"));
     RUVIA_CHECK_EQ(res1.status(), ruvia::http_status::ok);
 
+    // "/a/:id/" names paths ending in '/'; the bare spelling is another path.
     auto res2 = app.request(ruvia::test_request::get("/t/a/123"));
-    RUVIA_CHECK_EQ(res2.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(res2.status(), ruvia::http_status::not_found);
 }
 
 RUVIA_TEST(testing_facade_dynamic_paths_preserve_empty_segments) {

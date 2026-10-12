@@ -19,6 +19,7 @@
 #include "db/db_migration_checksum.h"
 #include "db/db_migration_validation.h"
 #include "db/db_registry.h"
+#include "db/db_sql_format.h"
 #include "integration/named_capability.h"
 
 namespace ruvia {
@@ -39,9 +40,13 @@ struct db_migrator_options_storage final {
 };
 
 void validate_db_migrator_options(const db_migrator_options& options, db_driver driver) {
-    if (!detail::is_valid_migration_table_name(options.table_, driver)) {
+    if (!detail::is_valid_migration_table_name(options.table_)) {
         throw std::invalid_argument("database migration table has an invalid backend identifier");
     }
+    // The backend's identifier limit is the quoting rule's; quoting once here
+    // refuses an overlong name at configuration time rather than at run time.
+    std::pmr::string quoted;
+    detail::append_db_identifier(quoted, options.table_, driver);
     if (options.lock_timeout_.count() <= 0) {
         throw std::invalid_argument("database migration lock timeout must be greater than zero");
     }
@@ -50,16 +55,6 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
         // duration can still overflow that representation during conversion.
         (void)detail::postgres_lock_timeout_milliseconds(options.lock_timeout_);
     }
-}
-
-void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier, db_driver driver) {
-    if (!detail::is_valid_migration_table_name(identifier, driver)) {
-        throw std::invalid_argument("database migration table has an invalid backend identifier");
-    }
-    const auto quote = driver == db_driver::postgresql ? '"' : '`';
-    sql.push_back(quote);
-    sql.append(identifier);
-    sql.push_back(quote);
 }
 
 [[nodiscard]] std::pmr::string build_migration_lock_name(
@@ -84,7 +79,7 @@ void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier
     std::pmr::string sql(resource);
     sql.reserve(table_value.size() + 260);
     sql.append("CREATE TABLE IF NOT EXISTS ");
-    append_quoted_identifier(sql, table_value, driver);
+    detail::append_db_identifier(sql, table_value, driver);
     if (driver == db_driver::postgresql) {
         // timestamptz records the instant; PostgreSQL's plain timestamp would
         // record a wall-clock reading whose zone nobody wrote down.
@@ -128,7 +123,7 @@ void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier
     std::pmr::string sql(resource);
     sql.reserve(table_value.size() + 48);
     sql.append("ALTER TABLE ");
-    append_quoted_identifier(sql, table_value, driver);
+    detail::append_db_identifier(sql, table_value, driver);
     sql.append(" ADD COLUMN checksum CHAR(64)");
     return sql;
 }
@@ -138,7 +133,7 @@ void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier
     std::pmr::string sql(resource);
     sql.reserve(table_value.size() + 50);
     sql.append("SELECT checksum FROM ");
-    append_quoted_identifier(sql, table_value, driver);
+    detail::append_db_identifier(sql, table_value, driver);
     sql.append(driver == db_driver::postgresql ? " WHERE migration_id = $1 LIMIT 1"
                                                : " WHERE migration_id = ? LIMIT 1");
     return sql;
@@ -149,7 +144,7 @@ void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier
     std::pmr::string sql(resource);
     sql.reserve(table_value.size() + 40);
     sql.append("INSERT INTO ");
-    append_quoted_identifier(sql, table_value, driver);
+    detail::append_db_identifier(sql, table_value, driver);
     sql.append(driver == db_driver::postgresql ? " (migration_id, checksum) VALUES ($1, $2)"
                                                : " (migration_id, checksum) VALUES (?, ?)");
     return sql;
@@ -163,7 +158,7 @@ void append_quoted_identifier(std::pmr::string& sql, std::string_view identifier
     std::pmr::string sql(resource);
     sql.reserve(table_value.size() + 72);
     sql.append("UPDATE ");
-    append_quoted_identifier(sql, table_value, driver);
+    detail::append_db_identifier(sql, table_value, driver);
     sql.append(driver == db_driver::postgresql ? " SET checksum = $1 WHERE migration_id = $2"
                                                : " SET checksum = ? WHERE migration_id = ?");
     return sql;

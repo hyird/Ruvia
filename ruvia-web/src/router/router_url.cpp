@@ -127,9 +127,6 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
     if (next_value != values.size()) {
         throw std::invalid_argument("url_for received more values than the pattern has parameters");
     }
-    if (pattern.ends_with('/')) {
-        url.push_back('/');
-    }
     // Only a pattern starting with an empty segment can still produce "//".
     if (url.starts_with("//")) {
         throw std::invalid_argument("url_for pattern must not start with an empty segment");

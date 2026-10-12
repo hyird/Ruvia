@@ -183,6 +183,10 @@ RUVIA_TEST(websocket_client_handshake_rejects_invalid_configuration_and_reserved
     const std::array transfer_encoding{
         ruvia::http_header_view{"Transfer-Encoding", "chunked"}};
     const std::array user_agent_header{ruvia::http_header_view{"User-Agent", "custom-agent"}};
+    const std::array trailer{ruvia::http_header_view{"Trailer", "X-End"}};
+    const std::array expect{ruvia::http_header_view{"Expect", "100-continue"}};
+    const std::array pseudo{ruvia::http_header_view{":authority", "evil.example"}};
+    const std::array extensions{ruvia::http_header_view{"Sec-WebSocket-Extensions", "permessage-deflate"}};
     const std::array duplicate{std::string_view{"chat"}, std::string_view{"chat"}};
     const std::array empty{std::string_view{""}};
     const std::array bad_token{std::string_view{"bad token"}};
@@ -192,6 +196,10 @@ RUVIA_TEST(websocket_client_handshake_rejects_invalid_configuration_and_reserved
     RUVIA_CHECK(rejects_configuration(reserved));
     RUVIA_CHECK(rejects_configuration(transfer_encoding));
     RUVIA_CHECK(rejects_configuration(user_agent_header, {}, "another-agent"));
+    RUVIA_CHECK(rejects_configuration(trailer));
+    RUVIA_CHECK(rejects_configuration(expect));
+    RUVIA_CHECK(rejects_configuration(pseudo));
+    RUVIA_CHECK(rejects_configuration(extensions));
     RUVIA_CHECK(rejects_configuration({}, duplicate));
     RUVIA_CHECK(rejects_configuration({}, empty));
     RUVIA_CHECK(rejects_configuration({}, bad_token));

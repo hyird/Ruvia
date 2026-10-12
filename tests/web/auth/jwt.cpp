@@ -348,20 +348,30 @@ RUVIA_TEST(jwt_verify_requires_unique_complete_json_objects) {
     }
 }
 
-RUVIA_TEST(jwt_payload_nesting_counts_the_claims_object_toward_max_depth) {
-    // The claims object is depth 0, so 64 nested arrays reach the limit and 65 exceed it.
-    const auto payload_with_nesting = [](std::size_t levels) {
+RUVIA_TEST(jwt_rejects_non_string_custom_claims) {
+    // A custom claim is either a string or the token is rejected; a silently
+    // dropped value would make "claim absent" indistinguishable from "claim
+    // sent with an unsupported type".
+    const auto nested = [](std::size_t levels) {
         std::string payload = R"({"sub":"user-1","exp":4102444800,"deep":)";
         payload.append(levels, '[');
         payload.append(levels, ']');
         payload.push_back('}');
         return payload;
     };
-    const auto at_limit = signed_token_with_payload(secret, payload_with_nesting(64));
-    const auto at_limit_payload = decode_jwt_unverified(at_limit);
-    RUVIA_CHECK_EQ(at_limit_payload.subject(), std::string_view("user-1"));
-    const auto over_limit = signed_token_with_payload(secret, payload_with_nesting(65));
-    RUVIA_CHECK(throws_on([&] { (void)decode_jwt_unverified(over_limit); }));
+    for (const auto& payload : {std::string(R"({"sub":"u","exp":4102444800,"admin":true})"),
+             std::string(R"({"sub":"u","exp":4102444800,"scope":5})"),
+             std::string(R"({"sub":"u","exp":4102444800,"roles":["a"]})"),
+             std::string(R"({"sub":"u","exp":4102444800,"meta":{}})"),
+             std::string(R"({"sub":"u","exp":4102444800,"nick":null})"), nested(64), nested(65)}) {
+        const auto token = signed_token_with_payload(secret, payload);
+        RUVIA_CHECK(throws_on([&] { (void)verify_jwt(token, verify_options(secret)); }));
+        RUVIA_CHECK(throws_on([&] { (void)decode_jwt_unverified(token); }));
+    }
+    const auto text = signed_token_with_payload(secret, R"({"sub":"u","exp":4102444800,"admin":"true"})");
+    const auto text_payload = verify_jwt(text, verify_options(secret));
+    const auto admin = text_payload.claim("admin");
+    RUVIA_CHECK(admin.has_value() && *admin == std::string_view("true"));
 }
 
 RUVIA_TEST(jwt_verify_rejects_unsupported_payload_encoding_headers) {
@@ -494,10 +504,25 @@ RUVIA_TEST(jwt_verify_enforces_registered_claims) {
     const auto verified = verify_jwt(token, ok);
     RUVIA_CHECK_EQ(verified.audience(), std::string_view("api"));
 
-    // A wrong expected issuer is rejected.
-    auto bad_issuer = verify_options(secret);
+    // A wrong expected issuer is rejected; the audience matches, so it is the only failure.
+    auto bad_issuer = ok;
     bad_issuer.issuer_.assign("evil");
     RUVIA_CHECK(throws_on([&] { (void)verify_jwt(token, bad_issuer); }));
+
+    // RFC 7519 §4.1.3: a token minted for an audience is rejected by a verifier
+    // that configures none, so it cannot leak into an unrelated service.
+    auto no_audience = verify_options(secret);
+    RUVIA_CHECK(throws_on([&] { (void)verify_jwt(token, no_audience); }));
+    for (const auto* payload : {R"({"sub":"u","exp":4102444800,"aud":"other"})",
+             R"({"sub":"u","exp":4102444800,"aud":["other","web"]})",
+             R"({"sub":"u","exp":4102444800,"aud":[]})"}) {
+        const auto foreign = signed_token_with_payload(secret, payload);
+        RUVIA_CHECK(throws_on([&] { (void)verify_jwt(foreign, no_audience); }));
+    }
+    // A token without "aud" still verifies with no configured audience.
+    const auto unaudienced = sign(sign_options(secret));
+    const auto unaudienced_payload = verify_jwt(unaudienced, no_audience);
+    RUVIA_CHECK(unaudienced_payload.audience().empty());
 
     // A wrong expected audience is rejected.
     auto bad_audience = verify_options(secret);

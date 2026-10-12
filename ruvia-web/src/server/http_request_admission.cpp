@@ -81,8 +81,10 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     auto coding_policy = selection != nullptr ? http_response_coding_policy::selected(*selection)
                                               : http_response_coding_policy::no_acceptable_coding();
     // Keyed on the client, not the hop: behind a trusted proxy every request
-    // would otherwise share the proxy's single key. Resolved once per request.
-    const auto client_address = services.resolve_conn_info(request).client().address();
+    // would otherwise share the proxy's single key. Resolved once per request
+    // and bound to the services every context of this request is created from.
+    services = services.with_conn_info(services.resolve_conn_info(request));
+    const auto client_address = services.get_conn_info().client().address();
 
     const auto* resolved = input.resolution_.resolved();
     // Armed before every server-layer rejection: a custom on_error handler is

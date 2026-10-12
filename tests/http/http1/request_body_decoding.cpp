@@ -3,8 +3,11 @@
 #include "ruvia/http/http1_server_request_parser.h"
 
 #include "content_decoding_fixture.h"
+#include "http1_request_message_fixture.h"
 
 // Decoding a request body: what each coding accepts and what it refuses.
+
+using ruvia::testing::parse_http1_request_message;
 
 RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
     const auto too_large =
@@ -28,10 +31,9 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
 }
 
 RUVIA_TEST(http1_parse_message_classifies_cleartext_request_line_failures) {
-    const http1_server_request_parser parser;
     constexpr std::string_view invalid_request_line = "GET / NOT-HTTP\r\n\r\n";
-    const auto parsed_line = parser.parse_message(invalid_request_line);
-    const auto* line_failure = parsed_line.failure();
+    const auto parsed_line = parse_http1_request_message(invalid_request_line);
+    const auto* line_failure = parsed_line.state_.failure();
     RUVIA_CHECK(line_failure != nullptr);
     if (line_failure != nullptr) {
         RUVIA_CHECK(line_failure->source() ==
@@ -40,8 +42,8 @@ RUVIA_TEST(http1_parse_message_classifies_cleartext_request_line_failures) {
             invalid_request_line, line_failure->source()));
     }
 
-    const auto malformed_header = parser.parse_message("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
-    const auto* message_failure = malformed_header.failure();
+    const auto malformed_header = parse_http1_request_message("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
+    const auto* message_failure = malformed_header.state_.failure();
     RUVIA_CHECK(message_failure != nullptr);
     if (message_failure != nullptr) {
         RUVIA_CHECK(message_failure->source() ==
@@ -53,18 +55,17 @@ RUVIA_TEST(http1_parse_message_classifies_cleartext_request_line_failures) {
 }
 
 RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
-    http1_server_request_parser parser;
-    const auto none_state = parser.parse_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    const auto& none = none_state.body_plan_;
+    const auto none_message = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    const auto& none = none_message.state_.body_plan_;
     RUVIA_CHECK(none.without_body() != nullptr);
     RUVIA_CHECK(none.known_length() == nullptr);
     RUVIA_CHECK(none.chunked() == nullptr);
     RUVIA_CHECK(!none.requires_consumption());
 
-    const auto empty_length_state = parser.parse_message(
+    const auto empty_length_message = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
-    const auto& empty_length = empty_length_state.body_plan_;
+    const auto& empty_length = empty_length_message.state_.body_plan_;
     const auto* known_length = empty_length.known_length();
     RUVIA_CHECK(known_length != nullptr);
     RUVIA_CHECK(empty_length.without_body() == nullptr);
@@ -78,11 +79,11 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
         empty_length.expectation_plan(http_unsupported_expectation_policy::reject);
     RUVIA_CHECK(empty_expectation_plan.no_action() != nullptr);
 
-    const auto compressed_chunked_state = parser.parse_message(
+    const auto compressed_chunked_message = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\n"
         "Transfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n");
-    const auto& compressed_chunked = compressed_chunked_state.body_plan_;
+    const auto& compressed_chunked = compressed_chunked_message.state_.body_plan_;
     const auto* chunked_body = compressed_chunked.chunked();
     RUVIA_CHECK(chunked_body != nullptr);
     RUVIA_CHECK(compressed_chunked.without_body() == nullptr);

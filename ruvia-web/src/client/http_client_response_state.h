@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -68,6 +69,10 @@ public:
         return memory_domain_;
     }
     void notify_producer_space() noexcept;
+    // The consumer's wait for the final head: rethrows the producer's failure
+    // or reports `head_message` for its error code. An encoded body is decoded
+    // completely before the head is returned, so its failure is observed here.
+    [[nodiscard]] task<void> await_head(std::string_view head_message);
     void discard_pending_body() noexcept;
     void discard_response_body() noexcept;
     void release_consumed_body_prefix();

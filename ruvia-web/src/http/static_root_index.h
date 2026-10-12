@@ -35,6 +35,19 @@ struct static_root_precompression_options final {
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return gzip_ || brotli_ || zstd_;
     }
+
+    [[nodiscard]] constexpr bool enabled(http_content_coding coding) const noexcept {
+        switch (coding) {
+            case http_content_coding::gzip:
+                return gzip_;
+            case http_content_coding::brotli:
+                return brotli_;
+            case http_content_coding::zstd:
+                return zstd_;
+            default:
+                return false;
+        }
+    }
 };
 
 // Document-root snapshots keep the bytes of files up to max_file_bytes_, within

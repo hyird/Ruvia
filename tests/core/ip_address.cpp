@@ -71,14 +71,27 @@ RUVIA_TEST(ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
     RUVIA_CHECK((ruvia::parse_ip_address(std::string_view("192.0.2.1\0suffix", 16)).index() != 0));
 }
 
+RUVIA_TEST(ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4) {
+    for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256",
+             "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1"}) {
+        RUVIA_CHECK((ruvia::parse_ip_address(text).index() != 0));
+    }
+    RUVIA_CHECK((ruvia::parse_ip_address("0.0.0.0").index() == 0));
+    RUVIA_CHECK((ruvia::parse_ip_address("255.255.255.255").index() == 0));
+    const auto mapped = ruvia::parse_ip_address("::ffff:192.0.2.1");
+    RUVIA_CHECK((mapped.index() == 0) && std::get<0>(mapped).is_v6());
+}
+
 RUVIA_TEST(ip_address_parsing_returns_long_input_pmr_storage) {
     counting_resource resource;
     const auto result_value = [&] {
         scoped_default_resource scope(resource);
-        return ruvia::parse_ip_address(std::string(1024, 'x'));
+        // Only a lexically plausible literal reaches the platform parser.
+        return ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
     }();
 
-    RUVIA_CHECK(result_value.index() != 0);
+    // An unknown zone name is a platform decision; the storage must round-trip either way.
+    RUVIA_CHECK(result_value.index() != 0 || std::get<0>(result_value).is_v6());
     RUVIA_CHECK(resource.allocations_ > 0);
     RUVIA_CHECK_EQ(resource.live_, std::size_t{0});
     RUVIA_CHECK_EQ(resource.allocations_, resource.returns_);

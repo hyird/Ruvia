@@ -116,12 +116,10 @@ template <typename t_type, typename state_type>
 class worker_single_wait_awaiter final {
 public:
     worker_single_wait_awaiter(std::shared_ptr<state_type> state_value,
-        std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value)
+        std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value) noexcept
         : state_(std::move(state_value)),
           timeout_(timeout),
-          stop_token_(std::move(stop_token_value)),
-          generation_(stop_token_.stoppable() ? reserve_generation(*state_) : 0),
-          stop_registration_(register_cancellation(stop_token_, state_, generation_)) {}
+          stop_token_(std::move(stop_token_value)) {}
 
     worker_single_wait_awaiter(const worker_single_wait_awaiter&) = delete;
     worker_single_wait_awaiter& operator=(const worker_single_wait_awaiter&) = delete;
@@ -149,47 +147,59 @@ public:
         return completion_.complete(worker_wait_result_access::outcome<t_type>(status));
     }
 
-    // Called with the state's lock held.
+    // Called with the state's lock held, only when the wait is about to
+    // suspend: the cancellation generation exists only for a pending wait.
     void publish() noexcept {
-        state().wait_slot_.publish(*this, generation_);
+        auto& slot = state().wait_slot_;
+        generation_ = stop_token_.stoppable() ? slot.reserve_generation() : 0;
+        slot.publish(*this, generation_);
     }
 
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
         auto& owner_value = state();
         auto* waiter = this;
-        auto lock = owner_value.lock_state();
-        auto& slot = owner_value.wait_slot_;
-        // Arm the deadline before publishing the continuation: the timer only
-        // fires on this worker after suspension, and a stopped timer queue can
-        // still complete the wait synchronously. A published waiter that is no
-        // longer attached has already completed and needs no deadline.
-        if (timeout_ && slot.holds(waiter)) {
-            auto status = worker_timer_schedule_status::worker_stopping;
-            try {
-                status = owner_value.worker_.schedule_timer(timer_,
-                    worker_timer_deadline_after(*timeout_),
-                    [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
-                        {
-                            auto state_lock = owner_value.lock_state();
-                            // Still pending: a cancellation reaching a pending
-                            // wait comes only from stop_timers().
-                            if (owner_value.wait_slot_.detach(waiter)) {
-                                (void)completion->complete(worker_wait_result_access::outcome<t_type>(
-                                    outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
-                                                                             : worker_wait_status::worker_stopping));
+        {
+            auto lock = owner_value.lock_state();
+            auto& slot = owner_value.wait_slot_;
+            // Arm the deadline before publishing the continuation: the timer only
+            // fires on this worker after suspension, and a stopped timer queue can
+            // still complete the wait synchronously. A published waiter that is no
+            // longer attached has already completed and needs no deadline.
+            if (timeout_ && slot.holds(waiter)) {
+                auto status = worker_timer_schedule_status::worker_stopping;
+                try {
+                    status = owner_value.worker_.schedule_timer(timer_,
+                        worker_timer_deadline_after(*timeout_),
+                        [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
+                            {
+                                auto state_lock = owner_value.lock_state();
+                                // Still pending: a cancellation reaching a pending
+                                // wait comes only from stop_timers().
+                                if (owner_value.wait_slot_.detach(waiter)) {
+                                    (void)completion->complete(worker_wait_result_access::outcome<t_type>(
+                                        outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
+                                                                                 : worker_wait_status::worker_stopping));
+                                }
                             }
-                        }
-                        completion->continuation().resume();
-                    });
-            } catch (...) {
-                (void)slot.detach(waiter);
-                throw;
+                            completion->continuation().resume();
+                        });
+                } catch (...) {
+                    (void)slot.detach(waiter);
+                    throw;
+                }
+                if (status == worker_timer_schedule_status::worker_stopping) {
+                    (void)slot.detach(waiter);
+                    (void)completion_.complete(
+                        worker_wait_result_access::outcome<t_type>(worker_wait_status::worker_stopping));
+                }
             }
-            if (status == worker_timer_schedule_status::worker_stopping) {
-                (void)slot.detach(waiter);
-                (void)completion_.complete(
-                    worker_wait_result_access::outcome<t_type>(worker_wait_status::worker_stopping));
-            }
+        }
+        // Registered only once the wait really suspends. A stop requested since
+        // await_ready runs the callback inline, which defers the cancellation
+        // to this worker behind the suspension. The callback fits the inline
+        // storage of move_only_function, so registration cannot fail.
+        if (generation_ != 0) {
+            register_cancellation();
         }
         return completion_.suspend(handle);
     }
@@ -219,21 +229,17 @@ private:
         completion_.continuation().resume();
     }
 
-    [[nodiscard]] static std::uint64_t reserve_generation(state_type& state_value) noexcept {
-        auto lock = state_value.lock_state();
-        return state_value.wait_slot_.reserve_generation();
-    }
-
-    [[nodiscard]] static stop_registration register_cancellation(
-        const stop_token& token, const std::shared_ptr<state_type>& state_value, std::uint64_t generation) {
-        if (!token.stoppable() || token.stop_requested()) {
-            return {};
-        }
-        return token.register_callback([state_value, generation] {
-            (void)worker_handle_access::defer_if_attached(state_value->worker_, [state_value, generation] {
-                auto lock = state_value->lock_state();
-                state_value->wait_slot_.cancel(generation);
-            });
+    // The callback only forwards (state, generation) to the worker, which
+    // validates them under the state lock. The awaiter's state_ outlives the
+    // registration, whose teardown waits for a running callback, so the
+    // callback borrows it and copies the shared_ptr only into the posted work.
+    void register_cancellation() {
+        stop_token_.register_callback(stop_registration_, [state_value = &state_, generation = generation_] {
+            (void)worker_handle_access::defer_if_attached((*state_value)->worker_,
+                [state_value = *state_value, generation] {
+                    auto lock = state_value->lock_state();
+                    state_value->wait_slot_.cancel(generation);
+                });
         });
     }
 

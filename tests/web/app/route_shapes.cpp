@@ -70,8 +70,16 @@ public:
     RUVIA_GET("/shapes/w/:id", w_param);
     RUVIA_GET("/shapes/w/*", w_wildcard);
     RUVIA_GET("/:section/panel", panel);
+    RUVIA_GET("/:section/panel/", panel_slash);
     RUVIA_GET("/admin/settings", settings);
     RUVIA_GET("/assets/*", asset);
+    RUVIA_GET("/slash/static", static_bare);
+    RUVIA_GET("/slash/static/", static_slash);
+    RUVIA_GET("/slash/:id", dynamic_bare);
+    RUVIA_GET("/slash/:id/", dynamic_slash);
+    RUVIA_GET("/only/:id", only_dynamic);
+    RUVIA_GET("/only-static", only_static);
+    RUVIA_GET("/slash-links", slash_links);
     RUVIA_ROUTES_END
 
 private:
@@ -112,12 +120,50 @@ private:
         return labelled(c, "panel", c.req().param("section").value_or("?"));
     }
 
+    ruvia::task<ruvia::http_response> panel_slash(ruvia::context& c) {
+        return labelled(c, "panel-slash", c.req().param("section").value_or("?"));
+    }
+
     ruvia::task<ruvia::http_response> settings(ruvia::context& c) {
         return labelled(c, "settings", "admin");
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
         return labelled(c, "asset", c.req().param("*").value_or("?"));
+    }
+
+    ruvia::task<ruvia::http_response> static_bare(ruvia::context& c) {
+        return labelled(c, "static", "bare");
+    }
+
+    ruvia::task<ruvia::http_response> static_slash(ruvia::context& c) {
+        return labelled(c, "static", "slash");
+    }
+
+    ruvia::task<ruvia::http_response> dynamic_bare(ruvia::context& c) {
+        return labelled(c, "dyn", c.req().param("id").value_or("?"));
+    }
+
+    ruvia::task<ruvia::http_response> dynamic_slash(ruvia::context& c) {
+        return labelled(c, "dyn-slash", c.req().param("id").value_or("?"));
+    }
+
+    ruvia::task<ruvia::http_response> only_dynamic(ruvia::context& c) {
+        return labelled(c, "only", c.req().param("id").value_or("?"));
+    }
+
+    ruvia::task<ruvia::http_response> only_static(ruvia::context& c) {
+        return labelled(c, "only", "static");
+    }
+
+    ruvia::task<ruvia::http_response> slash_links(ruvia::context& c) {
+        std::pmr::string body(c.arena());
+        body.append(c.url_for("/slash/static/"));
+        body.push_back(' ');
+        body.append(c.url_for("/slash/:id/", {"7"}));
+        body.push_back(' ');
+        body.append(c.url_for("/slash/:id", {"7"}));
+        co_return c.body(std::move(body));
     }
 };
 
@@ -172,6 +218,7 @@ RUVIA_TEST(route_shapes_scoped_middleware_follows_the_request_path) {
     // One parameterized route serves paths on both sides of the scope.
     RUVIA_CHECK_EQ(body_of(app, "/admin/panel"), std::string("panel:admin"));
     RUVIA_CHECK_EQ(scope_of(app, "/admin/panel"), std::string("admin"));
+    RUVIA_CHECK_EQ(body_of(app, "/admin/panel/"), std::string("panel-slash:admin"));
     RUVIA_CHECK_EQ(scope_of(app, "/admin/panel/"), std::string("admin"));
     RUVIA_CHECK_EQ(body_of(app, "/other/panel"), std::string("panel:other"));
     RUVIA_CHECK_EQ(scope_of(app, "/other/panel"), std::string("none"));
@@ -198,6 +245,31 @@ RUVIA_TEST(route_shapes_scoped_middleware_checks_wildcard_captures) {
     RUVIA_CHECK_EQ(scope_of(app, "/assets/private/key"), std::string("none"));
     RUVIA_CHECK_EQ(scope_of(app, "/assets/publicity"), std::string("none"));
     RUVIA_CHECK_EQ(scope_of(app, "/assets"), std::string("none"));
+}
+
+RUVIA_TEST(route_shapes_trailing_slash_is_a_distinct_path_for_every_route_kind) {
+    // RFC 3986 path identity: "/a" and "/a/" name different resources, so
+    // static and dynamic routes alike neither alias nor shadow each other.
+    ruvia::test_app app;
+    RUVIA_CHECK_EQ(body_of(app, "/slash/static"), std::string("static:bare"));
+    RUVIA_CHECK_EQ(body_of(app, "/slash/static/"), std::string("static:slash"));
+    RUVIA_CHECK_EQ(body_of(app, "/slash/42"), std::string("dyn:42"));
+    RUVIA_CHECK_EQ(body_of(app, "/slash/42/"), std::string("dyn-slash:42"));
+    RUVIA_CHECK_EQ(body_of(app, "/slash/42//"), std::string("unexpected status"));
+
+    RUVIA_CHECK_EQ(body_of(app, "/only/1"), std::string("only:1"));
+    RUVIA_CHECK_EQ(app.request(ruvia::test_request::get("/only/1/")).status(), ruvia::http_status::not_found);
+    RUVIA_CHECK_EQ(body_of(app, "/only-static"), std::string("only:static"));
+    RUVIA_CHECK_EQ(app.request(ruvia::test_request::get("/only-static/")).status(), ruvia::http_status::not_found);
+}
+
+RUVIA_TEST(route_shapes_url_for_keeps_the_registered_trailing_slash) {
+    ruvia::test_app app;
+    const auto links = app.request(ruvia::test_request::get("/slash-links"));
+    RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(links.body(), "/slash/static/ /slash/7/ /slash/7");
+    RUVIA_CHECK_EQ(body_of(app, "/slash/7/"), std::string("dyn-slash:7"));
+    RUVIA_CHECK_EQ(body_of(app, "/slash/7"), std::string("dyn:7"));
 }
 
 RUVIA_TEST(route_shapes_non_http_absolute_target_is_rejected) {

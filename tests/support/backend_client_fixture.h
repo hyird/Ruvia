@@ -49,6 +49,9 @@ public:
         // Answers the first statement with the start of a one-column row set
         // and one row, then drops the connection before the result ends.
         drop_mid_result,
+        // Like idle, but when the client closes the connection, accepts one
+        // more and serves the remaining scripted replies on it.
+        reaccept,
     };
 
     struct postgres_reply final {
@@ -58,6 +61,13 @@ public:
         std::string command_{"SELECT 1"};
         char status_{'I'};
         bool deferred_{false};
+        // Non-empty: the statement is answered with ErrorResponse carrying
+        // this message and sql_state_ instead of a result.
+        std::string error_;
+        std::string sql_state_{"42601"};
+        // The statement is answered with CopyOutResponse: the connection stays
+        // in COPY state and no ReadyForQuery follows.
+        bool copy_out_{false};
     };
 
     // One extended-protocol Parse message: the statement text and the
@@ -120,6 +130,11 @@ public:
         return asio::post(io_, asio::use_future([this] { return postgres_parses_; })).get();
     }
 
+    // Startups received so far, read on the peer's own thread.
+    [[nodiscard]] std::size_t startups() {
+        return asio::post(io_, asio::use_future([this] { return startup_count_; })).get();
+    }
+
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_config config() const {
         return {.driver_ = db_driver::postgresql,
@@ -179,7 +194,9 @@ private:
             break;
         }
         gate_.expires_at(asio::steady_timer::time_point::max());
-        startup_.set_value();
+        if (++startup_count_ == 1) {
+            startup_.set_value();
+        }
         if (defer_authentication_) {
             std::error_code ignored;
             co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
@@ -300,7 +317,8 @@ private:
     }
 
     asio::awaitable<void> postgres_script() {
-        for (const auto& reply : postgres_replies_) {
+        while (next_reply_ < postgres_replies_.size()) {
+            const auto& reply = postgres_replies_[next_reply_];
             if (!(co_await postgres_statement())) {
                 co_return;
             }
@@ -313,11 +331,35 @@ private:
                 }
             }
             std::string response;
-            postgres_result(response, reply);
-            std::string command(reply.command_);
-            command.push_back('\0');
-            message(response, 'C', command);
-            message(response, 'Z', std::string_view(&reply.status_, 1));
+            if (!reply.error_.empty()) {
+                std::string fields;
+                for (const auto& [code, value] : std::array{std::pair{'S', std::string_view("ERROR")},
+                         std::pair{'C', std::string_view(reply.sql_state_)},
+                         std::pair{'M', std::string_view(reply.error_)}}) {
+                    fields.push_back(code);
+                    fields.append(value);
+                    fields.push_back('\0');
+                }
+                fields.push_back('\0');
+                message(response, 'E', fields);
+                message(response, 'Z', std::string_view(&reply.status_, 1));
+            } else if (reply.copy_out_) {
+                // Text format, one column in text format.
+                std::string copy;
+                copy.push_back('\0');
+                append_short(copy, 1);
+                append_short(copy, 0);
+                message(response, '1', {});
+                message(response, '2', {});
+                message(response, 'H', copy);
+            } else {
+                postgres_result(response, reply);
+                std::string command(reply.command_);
+                command.push_back('\0');
+                message(response, 'C', command);
+                message(response, 'Z', std::string_view(&reply.status_, 1));
+            }
+            ++next_reply_;
             co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
         }
     }
@@ -384,41 +426,51 @@ private:
     }
 
     asio::awaitable<void> serve(protocol selected) {
-        try {
-            co_await acceptor_.async_accept(socket_, asio::use_awaitable);
-            if (selected == protocol::postgresql) {
-                co_await postgres_startup();
-            } else if (selected == protocol::mariadb) {
-                co_await maria_startup();
-            }
-            if (closing_) {
-                co_return;
-            }
-            if (after_startup_ == after_startup::drop_mid_result) {
-                if (selected == protocol::postgresql) {
-                    co_await postgres_drop_mid_result();
-                } else if (selected == protocol::mariadb) {
-                    co_await maria_drop_mid_result();
+        for (;;) {
+            try {
+                co_await serve_connection(selected);
+            } catch (const std::system_error& error) {
+                // EOF/reset are the client's public close path. Only cancellation
+                // caused by this peer's own teardown may suppress an aborted wait.
+                if (error.code() != asio::error::eof &&
+                    error.code() != asio::error::connection_reset &&
+                    !(closing_ && (error.code() == asio::error::operation_aborted ||
+                                      error.code() == asio::error::bad_descriptor))) {
+                    throw;
                 }
-                socket_.close();
+            }
+            if (closing_ || after_startup_ != after_startup::reaccept || next_reply_ >= postgres_replies_.size()) {
                 co_return;
             }
-            if (selected == protocol::postgresql && !postgres_replies_.empty()) {
-                co_await postgres_script();
+            socket_ = asio::ip::tcp::socket(io_);
+        }
+    }
+
+    asio::awaitable<void> serve_connection(protocol selected) {
+        co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+        if (selected == protocol::postgresql) {
+            co_await postgres_startup();
+        } else if (selected == protocol::mariadb) {
+            co_await maria_startup();
+        }
+        if (closing_) {
+            co_return;
+        }
+        if (after_startup_ == after_startup::drop_mid_result) {
+            if (selected == protocol::postgresql) {
+                co_await postgres_drop_mid_result();
+            } else if (selected == protocol::mariadb) {
+                co_await maria_drop_mid_result();
             }
-            std::array<char, 64> buffer{};
-            for (;;) {
-                co_await socket_.async_read_some(asio::buffer(buffer), asio::use_awaitable);
-            }
-        } catch (const std::system_error& error) {
-            // EOF/reset are the client's public close path. Only cancellation
-            // caused by this peer's own teardown may suppress an aborted wait.
-            if (error.code() != asio::error::eof &&
-                error.code() != asio::error::connection_reset &&
-                !(closing_ && (error.code() == asio::error::operation_aborted ||
-                                  error.code() == asio::error::bad_descriptor))) {
-                throw;
-            }
+            socket_.close();
+            co_return;
+        }
+        if (selected == protocol::postgresql && !postgres_replies_.empty()) {
+            co_await postgres_script();
+        }
+        std::array<char, 64> buffer{};
+        for (;;) {
+            co_await socket_.async_read_some(asio::buffer(buffer), asio::use_awaitable);
         }
     }
 
@@ -428,6 +480,8 @@ private:
     after_startup after_startup_;
     std::vector<postgres_reply> postgres_replies_;
     std::vector<postgres_parse> postgres_parses_;
+    std::size_t next_reply_{0};
+    std::size_t startup_count_{0};
     bool replies_released_{false};
     bool closing_{false};
     std::promise<void> startup_;

@@ -36,56 +36,65 @@ std::string_view http_content_coding_token(http_content_coding coding) noexcept 
 }  // namespace ruvia
 
 namespace ruvia::detail {
+namespace {
+
+// The one Content-Encoding list walk (RFC 9110 section 5.6.1): members are
+// comma-separated tokens; recipients ignore empty members, senders cannot
+// generate them. Returns false on invalid grammar, after which the visitor is
+// not called again.
+template <typename visitor_type>
+[[nodiscard]] bool visit_content_coding_members(
+    std::string_view value, http_field_list_role role, visitor_type&& visit) noexcept {
+    std::size_t begin = 0;
+    for (;;) {
+        const auto comma = value.find(',', begin);
+        const auto token = http_trim_ows(value.substr(
+            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
+        if (token.empty()) {
+            if (role == http_field_list_role::sender) {
+                return false;
+            }
+        } else if (!is_valid_http_header_name(token)) {
+            return false;
+        } else {
+            visit(token);
+        }
+        if (comma == std::string_view::npos) {
+            return true;
+        }
+        begin = comma + 1;
+    }
+}
+
+}  // namespace
 
 void http_content_coding_field_parser::update(std::string_view value) {
     if (invalid_) {
         return;
     }
-    std::size_t begin = 0;
-    while (begin <= value.size()) {
-        const auto comma = value.find(',', begin);
-        const auto token = http_trim_ows(value.substr(
-            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
-        if (token.empty()) {
-            if (role_ == http_field_list_role::sender) {
-                invalid_ = true;
-                return;
-            }
-        } else if (!is_valid_http_header_name(token)) {
-            invalid_ = true;
-            return;
+    invalid_ = !visit_content_coding_members(value, role_, [this](std::string_view token) noexcept {
+        http_content_coding coding = http_content_coding::identity;
+        if (http_ascii_equals_ignore_case(token, "identity")) {
+            coding = http_content_coding::identity;
+        } else if (http_is_gzip_coding_token(token)) {
+            coding = http_content_coding::gzip;
+        } else if (http_ascii_equals_ignore_case(token, "deflate")) {
+            coding = http_content_coding::deflate;
+        } else if (http_ascii_equals_ignore_case(token, "br")) {
+            coding = http_content_coding::brotli;
+        } else if (http_ascii_equals_ignore_case(token, "zstd")) {
+            coding = http_content_coding::zstd;
         } else {
-            http_content_coding coding = http_content_coding::identity;
-            if (http_ascii_equals_ignore_case(token, "identity")) {
-                coding = http_content_coding::identity;
-            } else if (http_is_gzip_coding_token(token)) {
-                coding = http_content_coding::gzip;
-            } else if (http_ascii_equals_ignore_case(token, "deflate")) {
-                coding = http_content_coding::deflate;
-            } else if (http_ascii_equals_ignore_case(token, "br")) {
-                coding = http_content_coding::brotli;
-            } else if (http_ascii_equals_ignore_case(token, "zstd")) {
-                coding = http_content_coding::zstd;
-            } else {
-                unsupported_ = true;
-                if (comma == std::string_view::npos) {
-                    break;
-                }
-                begin = comma + 1;
-                continue;
-            }
-            if (codings_.size() == max_content_codings) {
-                // Keep scanning: later malformed members still invalidate the field.
-                unsupported_ = true;
-            } else {
-                codings_.push_back(coding);
-            }
+            unsupported_ = true;
+            return;
         }
-        if (comma == std::string_view::npos) {
-            break;
+        if (codings_.size() == max_content_codings) {
+            // Keep scanning: later malformed members still invalidate the field.
+            unsupported_ = true;
+        } else {
+            codings_.push_back(coding);
         }
-        begin = comma + 1;
-    }
+    });
 }
 
 http_content_coding_field_result http_content_coding_field_parser::finish() && {
@@ -99,23 +108,7 @@ http_content_coding_field_result http_content_coding_field_parser::finish() && {
 }
 
 bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept {
-    std::size_t begin = 0;
-    while (begin <= value.size()) {
-        const auto comma = value.find(',', begin);
-        const auto token = http_trim_ows(value.substr(
-            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
-        if (token.empty() && role == http_field_list_role::sender) {
-            return false;
-        }
-        if (!token.empty() && !is_valid_http_header_name(token)) {
-            return false;
-        }
-        if (comma == std::string_view::npos) {
-            return true;
-        }
-        begin = comma + 1;
-    }
-    return true;
+    return visit_content_coding_members(value, role, [](std::string_view) noexcept {});
 }
 
 }  // namespace ruvia::detail
@@ -193,24 +186,29 @@ http_content_encode_result encode_http_content(
 http_content_encode_result encode_http_content(std::span<const http_content_coding> codings,
     std::string_view input, http_content_encode_options options) {
     auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    if (codings.empty()) {
+    std::pmr::string current(resource);
+    std::string_view source_value = input;
+    bool encoded = false;
+    for (const auto coding : codings) {
+        // identity transforms nothing; only the size limit below applies to it.
+        if (coding == http_content_coding::identity) {
+            continue;
+        }
+        auto stage = encode_http_content(coding, source_value, options);
+        auto* content = stage.encoded();
+        if (content == nullptr) {
+            return detail::http_content_encode_result_access::failure(stage.failure()->error());
+        }
+        current = std::move(*content).take_bytes();
+        source_value = current;
+        encoded = true;
+    }
+    if (!encoded) {
         if (input.size() > options.max_encoded_bytes_) {
             return detail::http_content_encode_result_access::failure(
                 http_content_encode_error::encoded_size_exceeded);
         }
-        return detail::http_content_encode_result_access::encoded(std::pmr::string(input, resource));
-    }
-
-    std::pmr::string current(resource);
-    std::string_view source_value = input;
-    for (const auto coding : codings) {
-        auto encoded = encode_http_content(coding, source_value, options);
-        auto* content = encoded.encoded();
-        if (content == nullptr) {
-            return detail::http_content_encode_result_access::failure(encoded.failure()->error());
-        }
-        current = std::move(*content).take_bytes();
-        source_value = current;
+        current.assign(input);
     }
     return detail::http_content_encode_result_access::encoded(std::move(current));
 }

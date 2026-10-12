@@ -9,7 +9,7 @@ conn_info context_services::resolve_conn_info(const http_request& request) const
     // forwarding headers are never even read. They are attacker-controlled
     // otherwise, and believing them would let any caller choose its own
     // rate-limit key and claim a secure scheme.
-    if (worker_services_.trusted_proxies_ == nullptr || !worker_services_.trusted_proxies_->trusts(resolved.remote().address())) {
+    if (!connection_services_.peer_trusted_) {
         return resolved;
     }
     const auto forwarded = resolve_forwarded_client(request, *worker_services_.trusted_proxies_);

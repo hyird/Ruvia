@@ -189,6 +189,8 @@ public:
     // before return; the operation and its storage retire on the owning worker.
     // Output is linear when started. Unstarted operations may coexist and do not
     // block the final response; starting one after the final head commits throws.
+    // A failed write throws std::system_error, which is not routed through
+    // on_error: the connection ends.
     [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
 
     ~context();
@@ -547,6 +549,9 @@ private:
     mutable request_storage_owner_type request_storage_;
     std::exception_ptr error_;
     mutable bool body_decoded_ : 1 {false};
+    // Content-Encoding was parsed and is empty: request_body() returns the raw
+    // bytes without re-reading the header.
+    mutable bool body_identity_ : 1 {false};
 
     [[nodiscard]] detail::context_request_body_source& request_body_source() noexcept;
     [[nodiscard]] const detail::context_request_body_source& request_body_source() const noexcept;

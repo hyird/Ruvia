@@ -176,3 +176,117 @@ RUVIA_TEST(http1_client_tunnel_and_rejections_preserve_ownership_and_tcp_half_cl
         exercise_client_connect(ruvia_ctx, mode);
     }
 }
+
+namespace {
+
+ruvia::task<std::string> read_head(asio::ip::tcp::socket& stream) {
+    std::string head;
+    char byte{};
+    while (!head.ends_with("\r\n\r\n")) {
+        const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) { stream.async_read_some(asio::buffer(&byte, 1), std::move(h)); });
+        if (read.error_code()) {
+            throw std::system_error(read.error_code());
+        }
+        head.push_back(byte);
+    }
+    co_return head;
+}
+
+ruvia::task<void> write_all(asio::ip::tcp::socket& stream, std::string_view bytes_value) {
+    const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+        asio::async_write(stream, asio::buffer(bytes_value), std::move(handler));
+    });
+    if (written.error_code()) {
+        throw std::system_error(written.error_code());
+    }
+}
+
+}  // namespace
+
+// A proxy that rejects CONNECT without Connection: close may follow the
+// rejection with bytes of unknown ownership. The client delivers the rejection
+// but never reuses that connection: the next request opens a new one.
+RUVIA_TEST(http1_client_rejected_keep_alive_connect_retires_the_proxy_connection) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    unsigned accepted = 0;
+    std::string after_rejection;
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        const auto& worker_value = attachment.loop().handle();
+        asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
+        ruvia::task_scope tasks(worker_value);
+        const auto serve = [&]() -> ruvia::task<void> {
+            for (;;) {
+                auto accepted_socket = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) { acceptor.async_accept(std::move(h)); });
+                if (accepted_socket.error_code() == asio::error::operation_aborted) {
+                    co_return;
+                }
+                if (accepted_socket.error_code()) {
+                    throw std::system_error(accepted_socket.error_code());
+                }
+                auto socket = std::move(accepted_socket.result());
+                ++accepted;
+                const auto head = co_await read_head(socket);
+                if (accepted == 1) {
+                    if (!head.starts_with("CONNECT target.test:443 HTTP/1.1\r\n")) {
+                        throw std::runtime_error("expected CONNECT on the first connection");
+                    }
+                    co_await write_all(socket, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\nProxy-Authenticate: Basic realm=proxy\r\n\r\ndenied");
+                    // Keep-alive: the client, not the proxy, must end this connection.
+                    after_rejection = co_await read_to_end(socket);
+                    continue;
+                }
+                if (!head.starts_with("GET /after HTTP/1.1\r\n")) {
+                    throw std::runtime_error("expected the next request on a new connection");
+                }
+                co_await write_all(socket, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            }
+        };
+        tasks.spawn(serve());
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5)});
+        try {
+            {
+                auto result_value = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
+                RUVIA_CHECK(!result_value.tunnel() && result_value.response());
+                if (!result_value.response()) {
+                    throw std::runtime_error("missing CONNECT rejection");
+                }
+                RUVIA_CHECK(result_value.response()->status().value() == 407);
+                std::string text;
+                while (auto bytes = co_await result_value.response()->body().text()) {
+                    text.append(*bytes);
+                }
+                RUVIA_CHECK(text == "denied");
+            }
+            auto response = co_await client.handle().send({.target_ = "/after"});
+            RUVIA_CHECK(response.status().value() == 200);
+            std::string text;
+            while (auto bytes = co_await response.body().text()) {
+                text.append(*bytes);
+            }
+            RUVIA_CHECK(text == "ok");
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        std::error_code ignored;
+        acceptor.close(ignored);
+        try {
+            co_await tasks.join();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK_EQ(accepted, 2U);
+    RUVIA_CHECK(after_rejection.empty());
+}

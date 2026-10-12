@@ -48,6 +48,7 @@ class pipelining_routes final {
     RUVIA_GET("/pipelining/file", file);
     RUVIA_POST("/pipelining/echo", echo);
     RUVIA_GET_STREAM("/pipelining/stream", stream);
+    RUVIA_GET_STREAM("/pipelining/stream-echo", stream_echo);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {
@@ -87,6 +88,11 @@ class pipelining_routes final {
 
     ruvia::task<void> stream(ruvia::context& c) {
         co_await c.stream().write("streamed-chunk");
+    }
+
+    ruvia::task<void> stream_echo(ruvia::context& c) {
+        const auto body = "stream-echo-" + std::string(co_await c.req().text());
+        co_await c.stream().write(body);
     }
 };
 
@@ -230,6 +236,24 @@ RUVIA_TEST(a_long_interim_head_is_sent_whole_between_pipelined_responses) {
     RUVIA_CHECK(appear_in_order(
         output, {"item-before", "HTTP/1.1 103 ", hint_field, "\r\n\r\n", "long-hinted", "item-after"}));
     RUVIA_CHECK_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{4});
+}
+
+RUVIA_TEST(a_stream_route_that_consumed_its_request_body_keeps_the_connection) {
+    // The body bytes are read before the stream head commits, so nothing of
+    // the request is left in the socket and the pipelined request after it
+    // is served on the same connection.
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = exchange_pipelined(server.endpoint(),
+        "GET /pipelining/stream-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\nbody" +
+            get("/pipelining/item/after", "Connection: close\r\n"));
+    server.finish();
+
+    RUVIA_CHECK(response.has_value());
+    const auto output = response.value_or("");
+    RUVIA_CHECK(appear_in_order(output, {"HTTP/1.1 200 ", "stream-echo-body", "HTTP/1.1 200 ", "item-after"}));
+    RUVIA_CHECK_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{2});
+    RUVIA_CHECK(output.ends_with("item-after"));
 }
 
 RUVIA_TEST(held_pipelined_responses_are_sent_before_waiting_for_more_input) {

@@ -301,6 +301,67 @@ RUVIA_TEST(http_content_encoding_stack_round_trips_in_protocol_order) {
     RUVIA_CHECK_EQ(resource.live_bytes(), 0U);
 }
 
+RUVIA_TEST(http_content_encoding_stack_skips_identity_stages_without_copying) {
+    const std::string input(8192, 'i');
+    constexpr std::array stacked{http_content_coding::gzip, http_content_coding::identity};
+    counting_memory_resource single_resource;
+    counting_memory_resource stacked_resource;
+    auto single = encode_http_content(http_content_coding::gzip, input,
+        {.max_encoded_bytes_ = input.size(), .resource_ = &single_resource});
+    auto encoded = encode_http_content(stacked, input,
+        {.max_encoded_bytes_ = input.size(), .resource_ = &stacked_resource});
+    RUVIA_CHECK(single.encoded() != nullptr);
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    if (single.encoded() != nullptr && encoded.encoded() != nullptr) {
+        RUVIA_CHECK_EQ(encoded.encoded()->bytes(), single.encoded()->bytes());
+    }
+    RUVIA_CHECK_EQ(stacked_resource.allocations(), single_resource.allocations());
+
+    constexpr std::array identity_only{http_content_coding::identity, http_content_coding::identity};
+    auto copied = encode_http_content(identity_only, input, {.max_encoded_bytes_ = input.size()});
+    RUVIA_CHECK(copied.encoded() != nullptr && copied.encoded()->bytes() == input);
+    auto capped = encode_http_content(identity_only, input, {.max_encoded_bytes_ = input.size() - 1});
+    RUVIA_CHECK(capped.failure() != nullptr &&
+                capped.failure()->error() == ruvia::http_content_encode_error::encoded_size_exceeded);
+}
+
+RUVIA_TEST(http_content_encoder_reset_starts_an_equivalent_fresh_stream) {
+    const std::string input(16384, 'e');
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate,
+             http_content_coding::brotli, http_content_coding::zstd}) {
+        counting_memory_resource resource;
+        {
+            http_content_encoder encoder(coding, &resource);
+            std::pmr::string first(&resource);
+            encoder.write(input.substr(0, 100), first, true);
+            encoder.write(input.substr(100), first);
+            encoder.finish(first);
+
+            encoder.reset();
+            std::pmr::string second(&resource);
+            encoder.write(input.substr(0, 100), second, true);
+            encoder.write(input.substr(100), second);
+            encoder.finish(second);
+            RUVIA_CHECK_EQ(second, first);
+
+            // A reset mid-stream discards the unfinished stream.
+            encoder.reset();
+            std::pmr::string discarded(&resource);
+            encoder.write(input, discarded);
+            encoder.reset();
+            std::pmr::string third(&resource);
+            encoder.write(input.substr(0, 100), third, true);
+            encoder.write(input.substr(100), third);
+            encoder.finish(third);
+            RUVIA_CHECK_EQ(third, first);
+
+            auto decoded = decode_http_content(coding, third, {.max_decoded_bytes_ = input.size(), .resource_ = &resource});
+            RUVIA_CHECK(decoded.decoded() != nullptr && decoded.decoded()->bytes() == input);
+        }
+        RUVIA_CHECK_EQ(resource.live_bytes(), 0U);
+    }
+}
+
 RUVIA_TEST(http_zstd_content_rejects_window_above_rfc9659_limit) {
     const std::string plain(9 * 1024 * 1024, 'w');
     const std::string encoded = zstd_compress_with_window(plain, 24);

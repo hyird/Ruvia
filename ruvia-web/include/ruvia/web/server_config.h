@@ -56,8 +56,11 @@ struct server_config final {
     // at once.
     std::chrono::milliseconds drain_timeout_{std::chrono::seconds(10)};
     std::size_t worker_queue_capacity_{1024};
-    // HTTP connection inactivity; upgraded WebSockets use their route lifecycle
-    // heartbeat and close-handshake deadlines instead, even when heartbeat is disabled.
+    // HTTP connection inactivity: the keep-alive wait for the next request,
+    // and a handler -- buffered or response-stream -- that neither reads nor
+    // writes the connection (for a stream, the wait between two writes).
+    // Upgraded WebSockets use their route lifecycle heartbeat and
+    // close-handshake deadlines instead, even when heartbeat is disabled.
     std::optional<std::chrono::milliseconds> idle_timeout_{std::chrono::seconds(75)};
     // How often connection timeouts are checked. A timeout fires once at least
     // its duration has passed, and at most about two intervals later.
@@ -67,6 +70,9 @@ struct server_config final {
     // Absolute phase deadlines: progress does not renew these limits.
     std::optional<std::chrono::milliseconds> header_completion_timeout_{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> body_completion_timeout_{std::chrono::seconds(120)};
+    // Inactivity while a response (a buffered response, or one write of a
+    // response stream) is being written: a reader that accepts nothing for
+    // this long loses the connection.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
     std::optional<std::size_t> max_connections_per_worker_{1024};
     // Cumulative request cap for each connection.
@@ -319,8 +325,11 @@ using access_log_callback_type = detail::callback<void(const access_log_record&)
 // past the response's point of no return, an error handler that itself failed,
 // or resource exhaustion. The server closes that connection and keeps serving;
 // this record is how the failure becomes visible instead of vanishing with the
-// connection. A request that fails before its response is committed never gets
-// here -- it is answered with a 5xx through on_error.
+// connection. A request that fails before its response is committed is
+// answered with a 5xx through on_error and never gets here, with one
+// exception: a failed write of an interim head or 100 Continue on the
+// connection's own transport ends the connection and is reported here unless
+// it is a peer reset/close or server-cancelled I/O.
 //
 // Views and the record itself are valid only for the callback invocation.
 class connection_failure_record final {

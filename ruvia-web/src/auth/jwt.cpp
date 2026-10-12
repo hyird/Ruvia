@@ -259,7 +259,13 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     if (!options.subject_.empty() && payload_value.subject() != options.subject_) {
         throw std::runtime_error("JWT subject mismatch");
     }
-    if (!options.audience_.empty() && !payload_value.has_audience(options.audience_)) {
+    // RFC 7519 §4.1.3: a token that names audiences is rejected unless this
+    // verifier identifies itself with one of them.
+    if (options.audience_.empty()) {
+        if (!payload_value.audiences_.empty()) {
+            throw std::runtime_error("JWT audience is present but none is expected");
+        }
+    } else if (!payload_value.has_audience(options.audience_)) {
         throw std::runtime_error("JWT audience mismatch");
     }
     return payload_value;

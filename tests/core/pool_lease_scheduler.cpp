@@ -175,7 +175,7 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
               retained_result->acquired()->index() == held.acquired()->index();
 }
 
-ruvia::task<void> observe_timed_out_acquire(ruvia::task<ruvia::pool_waiter_result> pending, bool& timed_out) {
+ruvia::task<void> observe_timed_out_acquire(ruvia::pool_lease_acquire pending, bool& timed_out) {
     const auto result_value = co_await std::move(pending);
     timed_out = result_value.timed_out() != nullptr;
 }
@@ -187,7 +187,7 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
         ruvia::worker_runtime_context runtime(context, 8);
         {
             ruvia::pool_lease_scheduler scheduler(0, runtime.handle());
-            std::optional<ruvia::task<ruvia::pool_waiter_result>> pending;
+            std::optional<ruvia::pool_lease_acquire> pending;
             {
                 std::optional<std::chrono::milliseconds> timeout = std::chrono::milliseconds(1);
                 if (with_stop_token) {
@@ -209,7 +209,7 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
     return success;
 }
 
-ruvia::task<void> observe_worker_acquire(ruvia::task<ruvia::pool_waiter_result> pending,
+ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending,
     const ruvia::worker_handle& worker_value, ruvia::stop_source& source, bool& cancelled) {
     static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
     const auto result_value = co_await std::move(pending);
@@ -223,7 +223,7 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
     bool success = true;
     {
         std::optional<ruvia::pool_lease_scheduler> scheduler;
-        std::optional<ruvia::task<ruvia::pool_waiter_result>> pending;
+        std::optional<ruvia::pool_lease_acquire> pending;
         ruvia::stop_source source;
         {
             auto temporary_worker = runtime.handle();

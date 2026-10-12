@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
 
@@ -68,11 +69,16 @@ public:
     [[nodiscard]] constexpr std::size_t size() const noexcept {
         return count_;
     }
-    [[nodiscard]] constexpr const range& operator[](std::size_t index) const noexcept {
+    // Both accessors throw std::out_of_range for index >= size().
+    [[nodiscard]] constexpr const range& operator[](std::size_t index) const {
+        if (index >= count_) {
+            throw std::out_of_range("HTTP byte range index out of range");
+        }
         return ranges_[index];
     }
-    [[nodiscard]] constexpr http_resolved_byte_range resolved_range(std::size_t index) const noexcept {
-        return http_resolved_byte_range(ranges_[index].offset_, ranges_[index].length_);
+    [[nodiscard]] constexpr http_resolved_byte_range resolved_range(std::size_t index) const {
+        const auto& selected = (*this)[index];
+        return http_resolved_byte_range(selected.offset_, selected.length_);
     }
     [[nodiscard]] constexpr http_byte_range_unsatisfiable unsatisfiable_outcome() const noexcept {
         return http_byte_range_unsatisfiable{};

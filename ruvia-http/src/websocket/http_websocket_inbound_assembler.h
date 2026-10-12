@@ -6,6 +6,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -176,11 +177,13 @@ public:
         : message_(resource) {}
 
     // A delivered view expires at the next poll, while a fragmented message
-    // remains pinned until its final continuation or connection teardown.
+    // remains pinned until its final continuation or connection teardown. A
+    // delivered message keeps only a bounded scratch, so streams of small
+    // fragmented messages do not allocate per message and large ones are not
+    // pinned to the connection.
     void release_completed() noexcept {
         if (std::holds_alternative<websocket_inbound_idle>(state_)) {
-            std::pmr::string empty(message_.get_allocator());
-            message_.swap(empty);
+            http_clear_pmr_string_retaining_small(message_, websocket_retained_buffer_bytes);
         }
     }
 
@@ -244,9 +247,7 @@ public:
                 return websocket_inbound_result::make_message(
                     message, websocket_inbound_content_encoding::identity);
             }
-            std::pmr::string staged(message_.get_allocator());
-            staged.assign(frame.payload().data(), frame.payload().size());
-            message_.swap(staged);
+            message_.assign(frame.payload().data(), frame.payload().size());
             state_.template emplace<websocket_inbound_fragmented>(
                 opcode, frame.compressed() ? websocket_inbound_content_encoding::per_message_deflate
                                            : websocket_inbound_content_encoding::identity);

@@ -223,23 +223,23 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
     co_return result_value;
 }
 
-task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_timeout& timeout) {
+template <typename buffers_type>
+task<client_transport_result> client_tcp_transport::write_buffers(buffers_type buffers, const operation_timeout& timeout) {
     if (abort_reason_ != client_abort_reason::none) {
         co_return aborted();
     }
-    if (bytes_value.empty()) {
+    if (asio::buffer_size(buffers) == 0) {
         co_return client_transport_result{};
     }
     if (!arm(write_, lane_type::write, timeout)) {
         co_return aborted();
     }
-    const auto buffer = asio::buffer(bytes_value);
     const auto completion = secure()
-                                ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-                                      asio::async_write(stream_, buffer, std::move(handler));
+                                ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
+                                      asio::async_write(stream_, buffers, std::move(handler));
                                   })
-                                : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-                                      asio::async_write(stream_.next_layer(), buffer, std::move(handler));
+                                : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
+                                      asio::async_write(stream_.next_layer(), buffers, std::move(handler));
                                   });
     auto result_value = finish(write_, timeout, completion.error_code(),
         completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
@@ -248,6 +248,15 @@ task<client_transport_result> client_tcp_transport::write(std::string_view bytes
     }
     counters_.sent_ += result_value.bytes_;
     co_return result_value;
+}
+
+task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_timeout& timeout) {
+    return write_buffers(asio::buffer(bytes_value), timeout);
+}
+
+task<client_transport_result> client_tcp_transport::write(
+    std::span<const asio::const_buffer> buffers, const operation_timeout& timeout) {
+    return write_buffers(buffers, timeout);
 }
 
 }  // namespace ruvia::detail

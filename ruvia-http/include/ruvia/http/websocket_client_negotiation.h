@@ -22,7 +22,6 @@ struct websocket_client_deflate_offer final {
     std::optional<int> client_max_window_bits_{};
 };
 struct websocket_client_negotiation_config_view final {
-    std::span<const http_header_view> headers_{};
     std::span<const std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
 };
@@ -37,8 +36,10 @@ struct websocket_client_negotiation_result_view final {
 };
 
 // RFC 6455/7692 client negotiation owner. Configuration is copied into resource
-// once. It supplies request fields to HTTP/1 Upgrade and validates the server's
-// exact selection. The resource must outlive this object.
+// once. It supplies the Sec-WebSocket-Version/Protocol/Extensions request
+// fields to HTTP/1 Upgrade and validates the server's exact selection; the
+// handshake owner decides which application headers accompany them. The
+// resource must outlive this object.
 // All offer views expire with this owner; response views expire with the head.
 class websocket_client_negotiation final {
 public:

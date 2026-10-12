@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -79,10 +80,15 @@ void redis_pool::ensure_reader(connection_type& connection) {
 
 task<void> redis_pool::write_request(std::size_t slot, const ruvia::operation_timeout& timeout) {
     auto& connection = *connections_[slot];
+    const auto serialized_bytes = connection.write_buffer_.size();
     const auto written = co_await connection.transport_.write(connection.write_buffer_, timeout);
-    // The transport no longer borrows the buffer. One oversized request must
-    // not pin its capacity for the lifetime of this long-lived connection.
-    http_clear_pmr_string_retaining_small(connection.write_buffer_);
+    // The transport no longer borrows the buffer. Retention is amortized on
+    // the request just sent so one oversized request does not pin its
+    // capacity for the lifetime of this long-lived connection.
+    constexpr auto size_limit = std::numeric_limits<std::size_t>::max();
+    const auto amortized_bytes = serialized_bytes <= size_limit / 4 ? serialized_bytes * 4 : size_limit;
+    http_clear_pmr_string_retaining_small(
+        connection.write_buffer_, std::max(redis_retained_write_buffer_bytes, amortized_bytes));
     slots_.throw_if_aborted(slot);
     if (!written.ok()) {
         throw_redis_io_error(written);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -20,6 +21,7 @@
 #include <asio/read.hpp>
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
+#include <openssl/evp.h>
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/task.h"
@@ -88,21 +90,18 @@ private:
     ruvia::event_loop_attachment attachment_;
 };
 
+// Deterministic RESP2 peer: answers each command array with the next canned
+// reply and records every received command. A stalled peer leaves its first
+// command unanswered until the client closes the connection.
 class redis_command_server final {
 public:
-    enum class response { integer,
-        // An FT.SEARCH page that reports more matches than it returns.
-        partial_search,
-        stalled };
+    struct stalled_tag final {};
 
-    explicit redis_command_server(response selected)
-        : gate_(io_context_),
-          acceptor_(io_context_, {asio::ip::tcp::v4(), 0}),
-          socket_(io_context_),
-          work_(asio::make_work_guard(io_context_)),
-          command_read_future_(command_read_.get_future()),
-          done_(asio::co_spawn(io_context_, serve(selected), asio::use_future)),
-          thread_([this] { io_context_.run(); }) {}
+    explicit redis_command_server(std::vector<std::string> replies)
+        : redis_command_server(std::move(replies), false) {}
+
+    explicit redis_command_server(stalled_tag)
+        : redis_command_server({}, true) {}
 
     ~redis_command_server() noexcept(false) {
         finish();
@@ -112,16 +111,16 @@ public:
         return acceptor_.local_endpoint().port();
     }
 
-    void wait_until_command_read() {
-        if (command_read_future_.wait_for(std::chrono::seconds(5)) !=
+    void wait_until_commands_read() {
+        if (commands_read_future_.wait_for(std::chrono::seconds(5)) !=
             std::future_status::ready) {
-            throw std::runtime_error("Redis peer did not receive a command");
+            throw std::runtime_error("Redis peer did not receive its commands");
         }
-        command_read_future_.get();
+        commands_read_future_.get();
     }
 
-    [[nodiscard]] const std::vector<std::string>& arguments() const noexcept {
-        return arguments_;
+    [[nodiscard]] const std::vector<std::vector<std::string>>& commands() const noexcept {
+        return commands_;
     }
 
     void finish() {
@@ -142,6 +141,16 @@ public:
     }
 
 private:
+    redis_command_server(std::vector<std::string> replies, bool stalled)
+        : replies_(std::move(replies)),
+          gate_(io_context_),
+          acceptor_(io_context_, {asio::ip::tcp::v4(), 0}),
+          socket_(io_context_),
+          work_(asio::make_work_guard(io_context_)),
+          commands_read_future_(commands_read_.get_future()),
+          done_(asio::co_spawn(io_context_, serve(stalled), asio::use_future)),
+          thread_([this] { io_context_.run(); }) {}
+
     asio::awaitable<std::string> read_line() {
         std::string result;
         char value = 0;
@@ -159,6 +168,7 @@ private:
     }
 
     asio::awaitable<void> read_command() {
+        std::vector<std::string> arguments;
         char marker = 0;
         co_await asio::async_read(socket_, asio::buffer(&marker, 1), asio::use_awaitable);
         if (marker != '*') {
@@ -178,38 +188,40 @@ private:
             if (line_ending != std::array<char, 2>{'\r', '\n'}) {
                 throw std::runtime_error("invalid RESP bulk ending");
             }
-            arguments_.push_back(std::move(value));
+            arguments.push_back(std::move(value));
         }
+        commands_.push_back(std::move(arguments));
     }
 
-    asio::awaitable<void> serve(response selected) {
-        bool command_ready = false;
+    asio::awaitable<void> serve(bool stalled) {
+        bool commands_ready = false;
         try {
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
-            if (selected == response::stalled) {
+            if (stalled) {
                 // Leave the command unanswered until public cancellation closes
                 // the connection; no pool-buffer warm-up is required.
                 char marker = 0;
                 co_await asio::async_read(socket_, asio::buffer(&marker, 1), asio::use_awaitable);
                 gate_.expires_at(asio::steady_timer::time_point::max());
-                command_read_.set_value();
-                command_ready = true;
+                commands_read_.set_value();
+                commands_ready = true;
                 std::error_code error;
                 co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, error));
             } else {
-                co_await read_command();
-                command_read_.set_value();
-                command_ready = true;
-                const std::string_view reply = selected == response::partial_search ? "*1\r\n:150\r\n" : ":1\r\n";
-                co_await asio::async_write(socket_, asio::buffer(reply), asio::use_awaitable);
+                for (const auto& reply : replies_) {
+                    co_await read_command();
+                    co_await asio::async_write(socket_, asio::buffer(reply), asio::use_awaitable);
+                }
+                commands_read_.set_value();
+                commands_ready = true;
                 std::array<char, 64> buffer{};
                 for (;;) {
                     co_await socket_.async_read_some(asio::buffer(buffer), asio::use_awaitable);
                 }
             }
         } catch (const std::system_error& error) {
-            if (!command_ready && !closing_) {
-                command_read_.set_exception(std::current_exception());
+            if (!commands_ready && !closing_) {
+                commands_read_.set_exception(std::current_exception());
             }
             if (error.code() != asio::error::eof &&
                 error.code() != asio::error::connection_reset &&
@@ -218,22 +230,23 @@ private:
                 throw;
             }
         } catch (...) {
-            if (!command_ready) {
-                command_read_.set_exception(std::current_exception());
+            if (!commands_ready) {
+                commands_read_.set_exception(std::current_exception());
             }
             throw;
         }
     }
 
+    std::vector<std::string> replies_;
     asio::io_context io_context_;
     asio::steady_timer gate_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
-    std::promise<void> command_read_;
-    std::future<void> command_read_future_;
+    std::promise<void> commands_read_;
+    std::future<void> commands_read_future_;
     std::future<void> done_;
-    std::vector<std::string> arguments_;
+    std::vector<std::vector<std::string>> commands_;
     bool closing_{false};
     bool finished_{false};
     std::thread thread_;
@@ -259,6 +272,53 @@ template <typename fn_type>
         return true;
     }
     return false;
+}
+
+[[nodiscard]] ruvia::redis_config server_config(const redis_command_server& server) {
+    ruvia::redis_config config;
+    config.host_ = "127.0.0.1";
+    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+    config.port_ = server.port();
+    config.pool_size_per_worker_ = 1;
+    return config;
+}
+
+// Runs `exercise` against the connected client on the worker thread while the
+// peer answers; a peer failure surfaces after the worker has stopped.
+template <typename exercise_type>
+void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client,
+    redis_command_server& server, exercise_type exercise) {
+    auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
+    std::jthread runner([&worker] { worker.run(); });
+    std::exception_ptr peer_failure;
+    try {
+        server.wait_until_commands_read();
+    } catch (...) {
+        peer_failure = std::current_exception();
+        client.close();
+    }
+    root.wait();
+    worker.stop();
+    runner.join();
+    server.finish();
+    root.get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+}
+
+[[nodiscard]] std::string sha1_hex(std::string_view text) {
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+    std::size_t digest_size = 0;
+    if (EVP_Q_digest(nullptr, "SHA1", nullptr, text.data(), text.size(), digest.data(), &digest_size) != 1) {
+        throw std::runtime_error("test SHA1 digest failed");
+    }
+    std::string hex;
+    for (std::size_t index = 0; index < digest_size; ++index) {
+        hex.push_back("0123456789abcdef"[digest[index] >> 4]);
+        hex.push_back("0123456789abcdef"[digest[index] & 0x0F]);
+    }
+    return hex;
 }
 
 }  // namespace
@@ -288,22 +348,17 @@ RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
 }
 
 RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
-    redis_command_server server(redis_command_server::response::integer);
+    redis_command_server server({":1\r\n"});
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::tracking_resource input_resource;
-    ruvia::redis_config config;
-    config.host_ = "127.0.0.1";
-    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-    config.port_ = server.port();
-    config.pool_size_per_worker_ = 1;
     {
-        ruvia::redis_client client(worker.loop(), config);
+        ruvia::redis_client client(worker.loop(), server_config(server));
         const std::string input_id(160, 'i');
         const std::string input_name(160, 'n');
 
         std::uint64_t affected_entities = 0;
-        auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
             const auto repository = connected.handle().get_repository<test_redis_user>(test_redis_repository_config);
             std::optional<test_redis_user> input;
             input.emplace(&input_resource);
@@ -317,31 +372,15 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
             // Destroying the entity before the operation starts must be safe.
             // The repository has synchronously copied every field into operation storage.
             affected_entities = (co_await std::move(pending)).affected_entities();
-        };
-        auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
-        std::jthread runner([&worker] { worker.run(); });
-        std::exception_ptr peer_failure;
-        try {
-            server.wait_until_command_read();
-        } catch (...) {
-            peer_failure = std::current_exception();
-            client.close();
-        }
-        root.wait();
-        worker.stop();
-        runner.join();
-        server.finish();
-        root.get();
-        if (peer_failure) {
-            std::rethrow_exception(peer_failure);
-        }
-        const auto& args = server.arguments();
+        });
+        RUVIA_CHECK_EQ(server.commands().size(), std::size_t{1});
         bool contains_id = false;
         bool contains_name = false;
-        for (std::size_t i = 0; i < args.size(); ++i) {
-            const auto& arg = args[i];
-            contains_id = contains_id || arg == input_id;
-            contains_name = contains_name || arg == input_name;
+        for (const auto& command : server.commands()) {
+            for (const auto& arg : command) {
+                contains_id = contains_id || arg == input_id;
+                contains_name = contains_name || arg == input_name;
+            }
         }
         RUVIA_CHECK(contains_id);
         RUVIA_CHECK(contains_name);
@@ -350,21 +389,64 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
     }
 }
 
-RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
-    for (const bool paged : {false, true}) {
-        redis_command_server server(redis_command_server::response::partial_search);
+RUVIA_TEST(redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
+    // A warm server answers EVALSHA directly; a server whose script cache
+    // lacks the script replies NOSCRIPT, and the same operation reloads the
+    // body through EVAL under the digest it first named.
+    const std::string noscript = "-NOSCRIPT No matching script. Please use EVAL.\r\n";
+    for (const bool cached : {true, false}) {
+        redis_command_server server(cached ? std::vector<std::string>{":1\r\n", ":1\r\n"}
+                                           : std::vector<std::string>{noscript, ":1\r\n", noscript, ":1\r\n"});
         auto& io_context = ruvia::test::new_test_io_context();
         redis_test_worker worker(io_context);
-        ruvia::redis_config config;
-        config.host_ = "127.0.0.1";
-        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-        config.port_ = server.port();
-        config.pool_size_per_worker_ = 1;
+        std::uint64_t inserted = 0;
+        std::uint64_t removed = 0;
+        {
+            ruvia::redis_client client(worker.loop(), server_config(server));
+            exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+                const auto repository = connected.handle().get_repository<test_redis_user>(test_redis_repository_config);
+                const auto user = make_user(std::pmr::get_default_resource());
+                inserted = (co_await repository.insert(user)).affected_entities();
+                removed = (co_await repository.remove(user)).affected_entities();
+            });
+        }
+        RUVIA_CHECK_EQ(inserted, std::uint64_t{1});
+        RUVIA_CHECK_EQ(removed, std::uint64_t{1});
+        const auto& commands = server.commands();
+        const std::size_t expected_commands = cached ? 2 : 4;
+        RUVIA_CHECK_EQ(commands.size(), expected_commands);
+        if (commands.size() != expected_commands) {
+            continue;
+        }
+        const std::size_t stride = cached ? 1 : 2;
+        for (std::size_t operation = 0; operation < 2; ++operation) {
+            const auto& by_digest = commands[operation * stride];
+            RUVIA_CHECK(by_digest.size() >= 4 && by_digest[0] == "EVALSHA" && by_digest[1].size() == 40 &&
+                        by_digest[2] == "1" && by_digest[3].ends_with(":u-1"));
+            if (!cached) {
+                const auto& reloaded = commands[operation * stride + 1];
+                RUVIA_CHECK(reloaded.size() == by_digest.size() && reloaded[0] == "EVAL" &&
+                            reloaded[1].find("redis.call") != std::string::npos);
+                RUVIA_CHECK_EQ(sha1_hex(reloaded[1]), by_digest[1]);
+                RUVIA_CHECK(std::equal(reloaded.begin() + 2, reloaded.end(), by_digest.begin() + 2, by_digest.end()));
+            }
+        }
+        // Insert and delete are distinct scripts.
+        RUVIA_CHECK(commands[0][1] != commands[stride][1]);
+    }
+}
+
+RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
+    for (const bool paged : {false, true}) {
+        // An FT.SEARCH page that reports more matches than it returns.
+        redis_command_server server({"*1\r\n:150\r\n"});
+        auto& io_context = ruvia::test::new_test_io_context();
+        redis_test_worker worker(io_context);
         bool truncated = false;
         std::size_t returned_rows = 1;
         {
-            ruvia::redis_client client(worker.loop(), config);
-            auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+            ruvia::redis_client client(worker.loop(), server_config(server));
+            exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
                 const auto repository =
                     connected.handle().get_repository<test_redis_user>(test_redis_repository_config);
                 ruvia::redis_find_options options;
@@ -376,32 +458,18 @@ RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
                 } catch (const ruvia::redis_error& error) {
                     truncated = error.code() == ruvia::redis_error::code_type::command_error;
                 }
-            };
-            auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
-            std::jthread runner([&worker] { worker.run(); });
-            std::exception_ptr peer_failure;
-            try {
-                server.wait_until_command_read();
-            } catch (...) {
-                peer_failure = std::current_exception();
-                client.close();
-            }
-            root.wait();
-            worker.stop();
-            runner.join();
-            server.finish();
-            root.get();
-            if (peer_failure) {
-                std::rethrow_exception(peer_failure);
-            }
+            });
         }
         // 150 matches with one page of 100 must never read as a complete result;
         // an explicit page accepts the same reply.
         RUVIA_CHECK(truncated != paged);
         RUVIA_CHECK_EQ(returned_rows, std::size_t{paged ? 0U : 1U});
-        const auto& args = server.arguments();
-        RUVIA_CHECK(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
-                    args[5] == "100");
+        RUVIA_CHECK_EQ(server.commands().size(), std::size_t{1});
+        if (server.commands().size() == 1) {
+            const auto& args = server.commands().front();
+            RUVIA_CHECK(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
+                        args[5] == "100");
+        }
     }
 }
 
@@ -468,14 +536,10 @@ RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
 }
 
 RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
-    redis_command_server server(redis_command_server::response::stalled);
+    redis_command_server server(redis_command_server::stalled_tag{});
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
-    ruvia::redis_config config;
-    config.host_ = "127.0.0.1";
-    config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-    config.port_ = server.port();
-    config.pool_size_per_worker_ = 1;
+    auto config = server_config(server);
     config.command_timeout_ = std::nullopt;
     {
         ruvia::redis_client client(worker.loop(), config);
@@ -497,7 +561,7 @@ RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
         std::jthread runner([&worker] { worker.run(); });
         std::exception_ptr peer_failure;
         try {
-            server.wait_until_command_read();
+            server.wait_until_commands_read();
         } catch (...) {
             peer_failure = std::current_exception();
             client.close();

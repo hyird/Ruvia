@@ -1,3 +1,5 @@
+#include <zlib.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -515,6 +517,46 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     RUVIA_CHECK(pong.substr(2, 4) != response.substr(2, 4));
 }
 
+RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {
+    counting_resource memory;
+    {
+        mask_source mask;
+        websocket_connection receiver({.resource_ = &memory, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        const std::string wire(
+            "\x01\x02"
+            "ab"
+            "\x80\x02"
+            "cd",
+            8);
+        const auto deliver = [&] {
+            RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+            const auto event = receiver.next_event();
+            RUVIA_CHECK(event && event->message() && event->message()->payload() == "abcd");
+        };
+        deliver();
+        deliver();
+        const auto allocations = memory.allocations_;
+        for (int i = 0; i < 64; ++i) {
+            deliver();
+        }
+        RUVIA_CHECK_EQ(memory.allocations_, allocations);
+
+        // A large reassembled message is not pinned once it is delivered.
+        const std::string payload(64 * 1024, 'x');
+        std::string large("\x02\x7e\x80\x00", 4);
+        large.append(payload, 0, 32 * 1024);
+        large.append("\x80\x7e\x80\x00", 4);
+        large.append(payload, 0, 32 * 1024);
+        RUVIA_CHECK(receiver.feed(large) == websocket_feed_status::accepted);
+        const auto event = receiver.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload().size() == payload.size());
+        const auto pinned = memory.live_bytes_;
+        deliver();
+        RUVIA_CHECK(memory.live_bytes_ + payload.size() <= pinned);
+    }
+    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
+}
+
 RUVIA_TEST(ws_public_client_rejects_masked_server_and_oversized_message) {
     mask_source source;
     auto invalid_server = client(source);
@@ -1016,4 +1058,46 @@ RUVIA_TEST(ws_server_borrowed_frame_owns_compressed_output) {
     RUVIA_CHECK(!plan.bytes().empty() && (static_cast<unsigned char>(plan.bytes()[0]) & 0x40U) != 0);
     RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value, false) == websocket_frame_submit_status::accepted);
     RUVIA_CHECK(protocol.output_plan().borrowed_bytes().data() == payload_value.data());
+}
+
+RUVIA_TEST(ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_streams) {
+    // zlib has no 8-bit raw deflate window, so a zlib peer that negotiated
+    // window 8 compresses with window 9. Its deflater still never refers back
+    // more than 250 bytes, which the 256-byte inflate window covers. The
+    // inflater consults that window only for history produced by earlier
+    // output passes, so the incompressible prefix ends just past the 8 KiB
+    // inflate pass and the 300-byte repeat refers back across that boundary.
+    std::string message(8192 + 10, '\0');
+    std::uint64_t random = 0x9e3779b97f4a7c15ULL;
+    for (auto& byte : message) {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        byte = static_cast<char>(random);
+    }
+    message += message.substr(message.size() - 300, 300);
+    z_stream stream{};
+    RUVIA_CHECK(deflateInit2(&stream, 6, Z_DEFLATED, -9, 8, Z_DEFAULT_STRATEGY) == Z_OK);
+    std::string compressed(message.size() + 256, '\0');
+    stream.next_in = reinterpret_cast<Bytef*>(message.data());
+    stream.avail_in = static_cast<uInt>(message.size());
+    stream.next_out = reinterpret_cast<Bytef*>(compressed.data());
+    stream.avail_out = static_cast<uInt>(compressed.size());
+    RUVIA_CHECK(deflate(&stream, Z_SYNC_FLUSH) == Z_OK);
+    compressed.resize(compressed.size() - stream.avail_out);
+    deflateEnd(&stream);
+    RUVIA_CHECK(compressed.size() >= 4 && compressed.size() < 65536);
+    compressed.resize(compressed.size() - 4);
+
+    for (const bool no_takeover : {false, true}) {
+        mask_source mask;
+        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover, .server_max_window_bits_ = 8}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        std::string wire("\xc2\x7e", 2);
+        wire.push_back(static_cast<char>(compressed.size() >> 8));
+        wire.push_back(static_cast<char>(compressed.size() & 0xff));
+        wire += compressed;
+        RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+        const auto event = receiver.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
+    }
 }

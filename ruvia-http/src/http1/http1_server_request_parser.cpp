@@ -1,13 +1,11 @@
 #include "ruvia/http/http1_server_request_parser.h"
 
-#include <limits>
-#include <variant>
+#include <algorithm>
 
-#include "ruvia/http/detail/parser/http_chunk_framing.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_content_semantics.h"
-#include "ruvia/http/protocol_byte_limit.h"
 
 #include "parser/http_header_block_parser.h"
 #include "parser/http_request_target.h"
@@ -16,6 +14,7 @@
 namespace ruvia {
 namespace {
 
+using ruvia::detail::classify_http_request_line_prefix;
 using ruvia::detail::find_http_request_head_end;
 using ruvia::detail::http_request_access;
 using ruvia::detail::parse_http_header_block;
@@ -24,36 +23,22 @@ using ruvia::detail::parsed_request_header_block;
 using ruvia::detail::request_header_kind;
 using ruvia::detail::request_target_view;
 
-[[nodiscard]] http_parse_error chunk_framing_parse_error(detail::chunk_framing_error error) noexcept {
-    switch (error) {
-        case detail::chunk_framing_error::invalid_size:
-            return http_parse_error::invalid_chunk_size;
-        case detail::chunk_framing_error::size_overflow:
-            return http_parse_error::chunk_size_overflow;
-        case detail::chunk_framing_error::invalid_extension:
-            return http_parse_error::invalid_chunk_extension;
-        case detail::chunk_framing_error::invalid_crlf:
-            return http_parse_error::invalid_chunk_crlf;
-        case detail::chunk_framing_error::invalid_trailer:
-            return http_parse_error::invalid_trailer;
-        case detail::chunk_framing_error::trailer_limit_exceeded:
-        case detail::chunk_framing_error::body_limit_exceeded:
-        case detail::chunk_framing_error::framing_limit_exceeded:
-            break;
-    }
-    return http_parse_error::body_too_large;
-}
-
 }  // namespace
 
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
     : request_(http_request_access::make()) {}
 
-void http1_server_request_parser::parse_request_head(std::string_view buffer,
-    std::size_t header_search_offset, http1_server_request_parse_state& state_value,
-    std::pmr::memory_resource* resource) {
+void http1_server_request_parser::parse_head(std::string_view buffer,
+    http1_server_request_parse_state& state_value, std::size_t header_search_offset,
+    std::pmr::memory_resource* resource) const {
+    // Bytes before header_search_offset were classified by an earlier call on
+    // this state; an earlier search offset discards that progress.
+    auto scan = state_value.need_request_head() != nullptr ? *state_value.need_request_head()
+                                                           : http1_server_need_request_head{};
+    scan.leading_bytes_ = std::min(scan.leading_bytes_, header_search_offset);
+    scan.request_line_end_ = scan.request_line_end_ <= header_search_offset ? scan.request_line_end_ : 0;
+
     // Incomplete input allocates no descriptor storage.
-    state_value.progress_ = http1_server_need_request_head{};
     state_value.body_plan_ = http1_request_body_plan(http_request_expectations{});
     state_value.connection_plan_ = http1_request_connection_plan::http11_close();
     state_value.response_coding_qualities_ = {};
@@ -71,20 +56,23 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
         state_value.connection_plan_ = connection_plan;
     };
 
-    const auto header_bytes = find_http_request_head_end(buffer, header_search_offset);
+    const auto header_bytes = find_http_request_head_end(buffer, scan.leading_bytes_, header_search_offset);
     if (header_bytes == std::string_view::npos) {
+        if (scan.request_line_end_ == 0) {
+            if (const auto error = classify_http_request_line_prefix(
+                    buffer, scan.leading_bytes_, header_search_offset, scan.request_line_end_)) {
+                return fail(*error);
+            }
+        }
         if (buffer.size() >= max_http_header_bytes) {
             return fail(http_parse_error::header_too_large);
         }
+        state_value.progress_ = scan;
         return;
     }
 
-    if (header_bytes > max_http_header_bytes) {
-        return fail(http_parse_error::header_too_large);
-    }
-
     parsed_request_header_block block;
-    if (const auto error = parse_http_header_block(buffer, header_bytes, block)) {
+    if (const auto error = parse_http_header_block(buffer, scan.leading_bytes_, header_bytes, block)) {
         return fail(*error);
     }
 
@@ -96,21 +84,9 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
     const auto known_method = state_value.request_.known_method();
 
     const auto target = block.target_.bind(buffer);
-    const auto version = block.version_.bind(buffer);
     http_request_access::set_target(state_value.request_, target);
 
-    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' ||
-        version[5] > '9' || version[6] != '.') {
-        return fail(http_parse_error::invalid_request_line);
-    }
-    if (version[7] < '0' || version[7] > '9') {
-        return fail(http_parse_error::invalid_request_line);
-    }
-    if (version[5] != '1' || (version[7] != '0' && version[7] != '1')) {
-        return fail(http_parse_error::unsupported_http_version);
-    }
-    const auto protocol_version =
-        version[7] == '1' ? http_protocol_version::http11 : http_protocol_version::http10;
+    const auto protocol_version = block.protocol_version_;
     http_request_access::set_protocol_version(state_value.request_, protocol_version);
     // Publish the version-specific request contract before any validation that
     // can fail after the version line itself has been accepted. The final
@@ -225,108 +201,6 @@ void http1_server_request_parser::parse_request_head(std::string_view buffer,
     state_value.progress_ = http1_server_request_head_ready(header_bytes);
 }
 
-void http1_server_request_parser::parse_head(std::string_view buffer,
-    http1_server_request_parse_state& state_value, std::size_t header_search_offset,
-    std::pmr::memory_resource* resource) const {
-    parse_request_head(buffer, header_search_offset, state_value, resource);
-}
-
-void http1_server_request_parser::parse_message_body(
-    std::string_view buffer, http1_server_request_parse_state& state_value) noexcept {
-    const auto* request_head = state_value.head_ready();
-    if (request_head == nullptr) {
-        return;
-    }
-
-    const auto header_bytes = request_head->header_bytes();
-
-    const auto fail = [&state_value](http_parse_error error) noexcept {
-        const auto connection_plan = state_value.connection_plan_.require_close();
-        http_request_access::reset(state_value.request_);
-        state_value.progress_ = http1_server_request_parse_failure(error);
-        state_value.body_plan_ = http1_request_body_plan(http_request_expectations{});
-        state_value.connection_plan_ = connection_plan;
-    };
-    // header_bytes is captured rather than passed: every call site forwards the
-    // same head length, and a parameter of that name would shadow it.
-    const auto need_more = [&state_value, header_bytes]() noexcept {
-        // The request views borrow `buffer`. A caller must reparse after growing
-        // or moving that buffer, so an incomplete message intentionally exposes
-        // no apparently reusable request head.
-        http_request_access::reset(state_value.request_);
-        state_value.progress_ = http1_server_need_request_body(header_bytes);
-    };
-    const auto need_more_until = [&state_value, header_bytes](std::size_t required_total_bytes) noexcept {
-        // The request views borrow `buffer`. A caller must reparse after growing
-        // or moving that buffer, so an incomplete message intentionally exposes
-        // no apparently reusable request head.
-        http_request_access::reset(state_value.request_);
-        state_value.progress_ = http1_server_need_request_body(header_bytes, required_total_bytes);
-    };
-
-    const auto& body_plan = state_value.body_plan_;
-    const auto* chunked_body = body_plan.chunked();
-    const auto* known_length_body = body_plan.known_length();
-    std::size_t message_bytes = 0;
-    if (chunked_body != nullptr) {
-        // Chunk framing has no cumulative budget, so the whole buffered message
-        // limit bounds the scanned wire bytes.
-        const auto body_budget = max_http_request_bytes - header_bytes;
-        const auto body = buffer.substr(header_bytes, body_budget);
-        detail::http_chunk_framing framing({
-            .body_limit_ = protocol_byte_limit::limited(default_max_buffered_body_bytes),
-            .trailer_section_limit_ = protocol_byte_limit::limited(max_http_header_bytes),
-            .trailer_role_ = detail::chunk_trailer_role::request,
-        });
-        std::size_t consumed = 0;
-        for (;;) {
-            const auto result_value = framing.decode(body.substr(consumed), std::numeric_limits<std::size_t>::max());
-            if (const auto* complete = std::get_if<detail::chunk_framing_complete>(&result_value)) {
-                message_bytes = header_bytes + consumed + complete->consumed_bytes_;
-                break;
-            }
-            if (const auto* failure = std::get_if<detail::chunk_framing_failure>(&result_value)) {
-                return fail(chunk_framing_parse_error(failure->error_));
-            }
-            if (std::holds_alternative<detail::chunk_framing_need_more>(result_value)) {
-                if (buffer.size() - header_bytes >= body_budget) {
-                    return fail(http_parse_error::body_too_large);
-                }
-                return need_more();
-            }
-            consumed += std::get<detail::chunk_framing_body>(result_value).consumed_bytes_;
-        }
-    } else if (known_length_body != nullptr) {
-        const auto content_length = known_length_body->content_length();
-        if (content_length > default_max_buffered_body_bytes ||
-            content_length > max_http_request_bytes - header_bytes) {
-            return fail(http_parse_error::body_too_large);
-        }
-        message_bytes = header_bytes + content_length;
-    } else {
-        message_bytes = header_bytes;
-    }
-    if (message_bytes > max_http_request_bytes) {
-        return fail(http_parse_error::body_too_large);
-    }
-    if (buffer.size() < message_bytes) {
-        return need_more_until(message_bytes);
-    }
-
-    http_request_access::set_body(state_value.request_,
-        known_length_body != nullptr ? buffer.substr(header_bytes, known_length_body->content_length())
-                                     : std::string_view{});
-    state_value.progress_ = http1_server_request_message_ready(header_bytes, message_bytes);
-}
-
-http1_server_request_parse_state http1_server_request_parser::parse_message(
-    std::string_view buffer, std::pmr::memory_resource* resource) const {
-    http1_server_request_parse_state state;
-    parse_request_head(buffer, 0, state, resource);
-    parse_message_body(buffer, state);
-    return state;
-}
-
 std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource) {
@@ -381,6 +255,14 @@ bool should_drop_invalid_cleartext_http1_input(
     std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept {
     if (source_value != http1_server_request_parse_failure_source::request_line) {
         return false;
+    }
+
+    buffer.remove_prefix(detail::http_request_leading_empty_line_bytes(buffer, 0));
+    if (buffer.empty()) {
+        return false;
+    }
+    if (!is_http_token_char(static_cast<unsigned char>(buffer.front()))) {
+        return true;
     }
 
     const auto line_end = buffer.find("\r\n");

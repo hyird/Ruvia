@@ -56,8 +56,8 @@ namespace {
 // hands a just-freed frame straight to the next allocation of the same class,
 // so the request hot path skips the general allocator and reuses cache-warm
 // memory. Blocks are allocated at the class ceiling, which keeps every cached
-// block large enough for any request that maps to its bin. Only the sized
-// deallocation path may cache: the unsized fallback cannot know the class.
+// block large enough for any request that maps to its bin. Deallocation is
+// always sized, so every freed frame maps back to its class.
 constexpr std::size_t task_frame_cache_granularity = 128;
 constexpr std::size_t task_frame_cache_max_block_bytes = 16 * 1024;
 constexpr std::size_t task_frame_cache_budget_bytes = 512 * 1024;
@@ -150,10 +150,6 @@ void* task_frame_allocate(std::size_t bytes_value) {
     return ::operator new(class_bytes);
 }
 
-void task_frame_deallocate(void* pointer) noexcept {
-    ::operator delete(pointer);
-}
-
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_cache_max_block_bytes &&
@@ -218,24 +214,28 @@ worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_p
 worker_memory::~worker_memory() = default;
 
 void worker_memory::trim(const worker_handle& owner) {
-    if (!owner.is_current()) {
+    const auto owner_id = owner.id();
+    if (owner_id == 0 || !owner.is_current() || (owner_id_ != 0 && owner_id != owner_id_)) {
         throw std::logic_error("worker memory trim must run on its owner worker");
     }
+    owner_id_ = owner_id;
     impl_->blocks_.release_cached();
     detail::task_frame_cache_release();
 }
 
 request_memory::request_memory(worker_memory& worker_value)
-    : arena_(worker_value.request_initial_buffer_bytes(), worker_value.resource()) {}
+    : request_memory(worker_value.request_initial_buffer_bytes(), worker_value.resource()) {}
 
 request_memory::request_memory(worker_memory& worker_value, std::span<std::byte> initial_buffer)
-    : arena_(initial_buffer.data(), initial_buffer.size(), worker_value.resource()) {}
+    : arena_(initial_buffer.data(), initial_buffer.size(), worker_value.resource()),
+      initial_bytes_(worker_value.request_initial_buffer_bytes()) {}
 
-request_memory::request_memory(child_arena_type, std::pmr::memory_resource* upstream)
-    : arena_(request_arena_initial_bytes, upstream) {}
+request_memory::request_memory(std::size_t initial_bytes, std::pmr::memory_resource* upstream)
+    : arena_(initial_bytes, upstream),
+      initial_bytes_(initial_bytes) {}
 
 request_memory request_memory::fork() const& {
-    return request_memory(child_arena_type{}, arena_.upstream_resource());
+    return request_memory(initial_bytes_, arena_.upstream_resource());
 }
 
 std::pmr::memory_resource* request_memory::resource() & noexcept {

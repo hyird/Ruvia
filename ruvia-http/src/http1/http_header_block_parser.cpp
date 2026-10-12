@@ -26,12 +26,10 @@ namespace {
 }
 
 // The request line: method SP request-target SP HTTP-version CRLF (RFC 9112
-// section 3.1). On success `cursor` sits on the first header field, and
-// `ignore_upgrade` reports an HTTP/1.0 version, which changes how the field
-// section treats Upgrade.
+// section 3.1). On success `cursor` sits on the first header field and the
+// block carries the accepted protocol version.
 [[nodiscard]] std::optional<http_parse_error> parse_request_line(std::string_view buffer,
-    std::size_t headers_end, std::size_t& cursor_value, parsed_request_header_block& block,
-    bool& ignore_upgrade) noexcept {
+    std::size_t headers_end, std::size_t& cursor_value, parsed_request_header_block& block) noexcept {
     const auto method_start = cursor_value;
     while (cursor_value < headers_end && is_http_token_char(static_cast<unsigned char>(buffer[cursor_value]))) {
         ++cursor_value;
@@ -65,10 +63,19 @@ namespace {
     if (cursor_value == version_start || cursor_value + 1 >= headers_end || buffer[cursor_value + 1] != '\n') {
         return http_parse_error::invalid_request_line;
     }
-    block.version_ = make_slice(version_start, cursor_value - version_start);
-    ignore_upgrade = buffer.substr(version_start, cursor_value - version_start) == "HTTP/1.0";
+    const auto version = buffer.substr(version_start, cursor_value - version_start);
     cursor_value += 2;
 
+    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3); only
+    // HTTP/1.0 and HTTP/1.1 are served.
+    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' ||
+        version[6] != '.' || version[7] < '0' || version[7] > '9') {
+        return http_parse_error::invalid_request_line;
+    }
+    if (version[5] != '1' || (version[7] != '0' && version[7] != '1')) {
+        return http_parse_error::unsupported_http_version;
+    }
+    block.protocol_version_ = version[7] == '1' ? http_protocol_version::http11 : http_protocol_version::http10;
     return std::nullopt;
 }
 
@@ -219,9 +226,9 @@ std::size_t find_http_header_end(std::string_view buffer, std::size_t search_off
     return std::string_view::npos;
 }
 
-std::size_t http_request_leading_empty_line_bytes(std::string_view buffer) noexcept {
+std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept {
     buffer = buffer.substr(0, max_http_header_bytes);
-    std::size_t cursor_value = 0;
+    auto cursor_value = std::min(skipped, buffer.size());
     for (;;) {
         if (cursor_value < buffer.size() && buffer[cursor_value] == '\n') {
             ++cursor_value;
@@ -233,8 +240,9 @@ std::size_t http_request_leading_empty_line_bytes(std::string_view buffer) noexc
     }
 }
 
-std::size_t find_http_request_head_end(std::string_view buffer, std::size_t search_offset) noexcept {
-    const auto leading_bytes = http_request_leading_empty_line_bytes(buffer);
+std::size_t find_http_request_head_end(
+    std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept {
+    leading_bytes = http_request_leading_empty_line_bytes(buffer, leading_bytes);
     if (leading_bytes >= max_http_header_bytes) {
         return std::string_view::npos;
     }
@@ -244,15 +252,41 @@ std::size_t find_http_request_head_end(std::string_view buffer, std::size_t sear
     return head_end == std::string_view::npos ? head_end : leading_bytes + head_end;
 }
 
-std::optional<http_parse_error> parse_http_header_block(
-    std::string_view buffer, std::size_t header_bytes, parsed_request_header_block& block) {
-    const auto headers_end = header_bytes - 2;
-    std::size_t cursor_value = http_request_leading_empty_line_bytes(buffer.substr(0, header_bytes));
-    bool ignore_upgrade = false;
-    if (const auto error = parse_request_line(buffer, headers_end, cursor_value, block, ignore_upgrade)) {
+std::optional<http_parse_error> classify_http_request_line_prefix(std::string_view buffer,
+    std::size_t leading_bytes, std::size_t search_offset, std::size_t& request_line_end) noexcept {
+    buffer = buffer.substr(0, max_http_header_bytes);
+    if (leading_bytes >= buffer.size()) {
+        return std::nullopt;
+    }
+    // The leading scan stops at a lone CR that may still become an empty line.
+    if (buffer[leading_bytes] == '\r' && leading_bytes + 1 == buffer.size()) {
+        return std::nullopt;
+    }
+    if (!is_http_token_char(static_cast<unsigned char>(buffer[leading_bytes]))) {
+        return http_parse_error::invalid_request_line;
+    }
+    const auto line_feed = buffer.find('\n', std::max(leading_bytes, search_offset));
+    if (line_feed == std::string_view::npos) {
+        return std::nullopt;
+    }
+    parsed_request_header_block block;
+    auto cursor_value = leading_bytes;
+    if (const auto error = parse_request_line(buffer, line_feed + 1, cursor_value, block)) {
         return error;
     }
-    return parse_header_fields(buffer, headers_end, cursor_value, ignore_upgrade, block);
+    request_line_end = cursor_value;
+    return std::nullopt;
+}
+
+std::optional<http_parse_error> parse_http_header_block(std::string_view buffer,
+    std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block) {
+    const auto headers_end = header_bytes - 2;
+    auto cursor_value = leading_bytes;
+    if (const auto error = parse_request_line(buffer, headers_end, cursor_value, block)) {
+        return error;
+    }
+    return parse_header_fields(
+        buffer, headers_end, cursor_value, block.protocol_version_ == http_protocol_version::http10, block);
 }
 
 }  // namespace ruvia::detail

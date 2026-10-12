@@ -5,6 +5,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_resource.h"
 
 namespace ruvia {
@@ -29,9 +30,13 @@ task_scope::task_scope(const worker_handle& worker_value, task_scope_options opt
 }
 
 task_scope::~task_scope() {
-    if (active_ != 0 || std::holds_alternative<task_scope_open_type>(lifecycle_) ||
-        std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
+    if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
         std::terminate();
+    }
+    // Every child finished but no join observed the outcome: the failure has
+    // no other owner.
+    if (std::holds_alternative<task_scope_open_type>(lifecycle_) && outcome_.index() != 0) {
+        report_unhandled_failure("task scope child", std::get<1>(outcome_).exception());
     }
 }
 

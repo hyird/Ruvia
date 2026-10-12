@@ -628,6 +628,72 @@ RUVIA_TEST(websocket_client_heartbeat_pings_after_a_blocked_message_write) {
     RUVIA_CHECK_EQ(message_bytes, std::uint64_t{payload_size});
 }
 
+// A peer that stops reading blocks the application write and defers the
+// heartbeat Ping. The liveness budget (Ping interval plus Pong timeout) still
+// bounds that stall, independently of any transport write timeout.
+RUVIA_TEST(websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_peer) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    constexpr std::size_t payload_size = std::size_t{16} * 1024 * 1024;
+    // Held open without reading, so the client's large write fills the
+    // socket buffers and stalls until the client gives up.
+    std::optional<asio::ip::tcp::socket> stalled;
+    std::exception_ptr peer_failure;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::string request;
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n",
+            asio::use_awaitable);
+        const auto response = make_server_handshake_response(request);
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        stalled.emplace(std::move(socket));
+    };
+    asio::co_spawn(io, serve(), [&peer_failure](std::exception_ptr failure) {
+        peer_failure = failure;
+    });
+
+    std::optional<ruvia::websocket_client_error::code_type> write_error;
+    std::promise<void> write_finished;
+    auto write_done = write_finished.get_future();
+    const auto run_client = [&]() -> ruvia::task<void> {
+        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+                                                              .host_ = "127.0.0.1",
+                                                              .port_ = peer.local_endpoint().port(),
+                                                              .max_message_bytes_ = payload_size,
+                                                              .write_timeout_ = std::nullopt,
+                                                              .heartbeat_ = {
+                                                                  .ping_interval_ = std::chrono::milliseconds(50),
+                                                                  .pong_timeout_ = std::chrono::milliseconds(100),
+                                                              }});
+        co_await client.connect();
+        const std::string payload(payload_size, 'x');
+        try {
+            co_await client.handle().binary(payload);
+        } catch (const ruvia::websocket_client_error& error) {
+            write_error = error.code();
+        }
+        write_finished.set_value();
+    };
+    auto root = attachment.loop().start(run_client());
+    std::thread driver([&] { attachment.run(); });
+    // Well under the 30 s default write timeout the configuration disabled.
+    const bool finished = write_done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    attachment.stop();
+    driver.join();
+    root.get();
+    if (!finished) {
+        throw std::runtime_error("WebSocket client write stalled by a non-reading peer never timed out");
+    }
+    if (peer_failure != nullptr) {
+        std::rethrow_exception(peer_failure);
+    }
+    RUVIA_CHECK(write_error.has_value());
+    if (write_error) {
+        RUVIA_CHECK(*write_error == ruvia::websocket_client_error::code_type::timeout);
+    }
+}
+
 RUVIA_TEST(websocket_client_close_requires_peer_close) {
     check_peer_exchange(ruvia_ctx, false);
     check_peer_exchange(ruvia_ctx, true);

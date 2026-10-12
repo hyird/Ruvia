@@ -149,27 +149,7 @@ task<http_client_response> http_client_exchange::receive_owned(http_client_respo
     if (state_value.upload_->response_taken_) {
         throw std::logic_error("HTTP exchange response has already been transferred");
     }
-    while (!state_value.head_ready_ && !state_value.failure_ && !state_value.error_code_) {
-        co_await state_value.head_signal_.wait();
-    }
-    if (state_value.failure_) {
-        std::rethrow_exception(state_value.failure_);
-    }
-    if (state_value.error_code_) {
-        throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP request failed before response head");
-    }
-    if (state_value.body_decode_required_) {
-        state_value.notify_producer_space();
-        while (!state_value.complete_) {
-            co_await state_value.data_signal_.wait();
-        }
-        if (state_value.failure_) {
-            std::rethrow_exception(state_value.failure_);
-        }
-        if (state_value.error_code_) {
-            throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP encoded response failed");
-        }
-    }
+    co_await state_value.await_head("HTTP request failed before response head");
     state_value.upload_->response_taken_ = true;
     pin.consumer_ = true;
     co_return std::move(pin);

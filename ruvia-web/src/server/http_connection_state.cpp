@@ -20,6 +20,13 @@ namespace {
 // pending bytes fit the initial size. Expressed in terms of the header limit
 // so the two move together if that limit is ever retuned.
 constexpr std::size_t read_buffer_shrink_capacity_bytes = max_http_header_bytes;
+// Capacity a pooled work set keeps across borrowers. A head of 4-8 KB
+// (cookie-heavy browser requests) would otherwise grow the buffer on every
+// request and have reset() shrink it back on every idle return: two
+// reallocations plus a copy per keep-alive request for the connection's
+// whole life. Growth up to this ceiling is retained; only larger storage is
+// given back, so the pool holds at most this much read storage per work set.
+constexpr std::size_t retained_read_buffer_bytes = std::min(std::size_t{16} * 1024, max_http_header_bytes);
 // Upper bound on work sets retained per worker. Beyond this, returned work sets
 // release upstream so the free list never grows unbounded after a burst.
 constexpr std::size_t max_pooled_work_sets = 64;
@@ -79,8 +86,10 @@ void connection_read_buffer::trim() {
 void connection_read_buffer::reset() {
     storage_.clear();
     // With no pending bytes, shrinking reallocates: the grown block is freed
-    // and an initial-size one takes its place.
-    if (storage_.capacity() > initial_read_buffer_bytes) {
+    // and an initial-size one takes its place. Growth within the retained
+    // ceiling stays, so the next borrower's head of that size reads into it
+    // without growing again.
+    if (storage_.capacity() > retained_read_buffer_bytes) {
         storage_.shrink_to(initial_read_buffer_bytes);
     }
 }

@@ -50,12 +50,13 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     }
 }
 
+// The handshake owns application-header and subprotocol policy; the
+// negotiation owns the deflate offer.
 inline void validate_websocket_client_protocols_and_headers(
     std::span<const http_header_view> headers, std::span<const std::string_view> subprotocols,
     std::string_view user_agent, const websocket_client_deflate_offer& deflate) {
     http1_websocket_client_handshake::validate_configuration(headers, subprotocols, user_agent);
-    websocket_client_negotiation::validate_configuration(
-        {.headers_ = headers, .subprotocols_ = subprotocols, .deflate_ = deflate});
+    websocket_client_negotiation::validate_configuration({.subprotocols_ = subprotocols, .deflate_ = deflate});
 }
 
 }  // namespace ruvia::detail

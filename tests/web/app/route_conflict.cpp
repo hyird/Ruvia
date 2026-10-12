@@ -1,9 +1,9 @@
 #include "test_harness.h"
 
-// Two dynamic routes of one method that differ only in parameter names and a
-// trailing slash occupy the same lookup slot: neither can take precedence, so
-// startup must fail instead of letting registration order pick a handler. The
-// controller registry is process-wide, so this conflict lives in its own test
+// Two dynamic routes of one method that differ only in parameter names occupy
+// the same lookup slot: neither can take precedence, so startup must fail
+// instead of letting registration order pick a handler. The controller
+// registry is process-wide, so this conflict lives in its own test
 // executable. Public API only.
 
 #include <stdexcept>
@@ -21,7 +21,7 @@ class route_conflict_controller final {
 public:
     RUVIA_ROUTES_BEGIN(route_conflict_controller)
     RUVIA_GET("/conflict/:id/files", first);
-    RUVIA_GET("/conflict/:name/files/", second);
+    RUVIA_GET("/conflict/:name/files", second);
     RUVIA_ROUTES_END
 
 private:
@@ -45,5 +45,5 @@ RUVIA_TEST(route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
         message = error.what();
     }
     RUVIA_CHECK(message.find("GET /conflict/:id/files") != std::string::npos);
-    RUVIA_CHECK(message.find("GET /conflict/:name/files/") != std::string::npos);
+    RUVIA_CHECK(message.find("GET /conflict/:name/files") != std::string::npos);
 }

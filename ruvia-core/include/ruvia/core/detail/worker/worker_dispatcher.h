@@ -7,6 +7,7 @@
 #include <memory>
 #include <memory_resource>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -187,6 +188,7 @@ private:
     void drain();
     void arm_timer();
     void fire_timers();
+    void fail_timers(std::string_view context_value, std::exception_ptr failure) noexcept;
     [[nodiscard]] bool has_timer(std::size_t slot, std::uint64_t generation) const noexcept;
     // Deactivates an active slot, returns it to the free list, and hands back
     // its completion for the caller to invoke or destroy.

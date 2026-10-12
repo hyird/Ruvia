@@ -79,6 +79,11 @@ struct redis_command_args_view final {
 };
 
 inline constexpr std::size_t redis_read_buffer_bytes = 8192;
+// Serialized request storage a pooled connection keeps after a write: this
+// much, or four times the request it just sent when larger. A steady stream
+// of similar-sized commands reuses one allocation while a single oversized
+// request is not pinned for the connection's lifetime.
+inline constexpr std::size_t redis_retained_write_buffer_bytes = std::size_t{64} * 1024;
 
 class redis_pool final {
 public:
@@ -110,6 +115,9 @@ public:
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
+    // The caller keeps `args` alive until the operation completes.
+    task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
+        operation_options options);
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::span<const redis_owned_command> commands, operation_options options,
         std::pmr::memory_resource* resource);

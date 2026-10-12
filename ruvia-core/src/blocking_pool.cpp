@@ -191,7 +191,6 @@ struct blocking_pool::impl_type final {
     }
 
     static void join(std::pmr::vector<std::thread>& threads) {
-        throw_if_current(threads);
         for (auto& thread : threads) {
             if (thread.joinable()) {
                 thread.join();
@@ -259,47 +258,46 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
-    const auto owner = impl_;
+    auto& owner = *impl_;
     impl_type::node_type* node = nullptr;
     {
-        std::lock_guard lock(owner->mutex_);
-        if (owner->stopping_) {
-            ++owner->discarded_;
+        std::lock_guard lock(owner.mutex_);
+        if (owner.stopping_) {
+            ++owner.discarded_;
             return blocking_submit_status::pool_stopped;
         }
-        if (owner->queued_ + owner->reserved_ >= owner->queue_capacity_) {
-            ++owner->rejected_;
+        if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
+            ++owner.rejected_;
             return blocking_submit_status::queue_full;
         }
-        node = owner->free_head_;
-        owner->free_head_ = node->next_;
-        ++owner->reserved_;
+        node = owner.free_head_;
+        owner.free_head_ = node->next_;
+        ++owner.reserved_;
     }
     node->task_ = std::move(task_value);
     bool stopped = false;
     {
-        std::lock_guard lock(owner->mutex_);
-        --owner->reserved_;
-        stopped = owner->stopping_;
+        std::lock_guard lock(owner.mutex_);
+        --owner.reserved_;
+        stopped = owner.stopping_;
         if (stopped) {
-            ++owner->discarded_;
+            ++owner.discarded_;
         } else {
-            (void)owner->queue_.try_push(node);
-            ++owner->queued_;
+            (void)owner.queue_.try_push(node);
+            ++owner.queued_;
         }
     }
     if (stopped) {
         node->task_ = nullptr;
-        owner->release_node(*node);
+        owner.release_node(*node);
         return blocking_submit_status::pool_stopped;
     }
-    owner->condition_.notify_one();
+    owner.condition_.notify_one();
     return blocking_submit_status::accepted;
 }
 
 void blocking_pool::stop() noexcept {
-    const auto owner = impl_;
-    owner->stop();
+    impl_->stop();
 }
 
 void blocking_pool::join() {

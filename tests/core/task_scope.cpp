@@ -238,6 +238,28 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 
     {
+        // A scope whose children all completed may be destroyed without a
+        // join; an unobserved failure is reported instead of lost.
+        int completed = 0;
+        {
+            ruvia::task_scope unjoined_scope(worker_value);
+            unjoined_scope.spawn(increment(worker_value, completed));
+            unjoined_scope.spawn(fail());
+            // Completion is delivered after the timer pass that resumed the
+            // child, so wait until every child has been retired.
+            while (unjoined_scope.size() != 0) {
+                static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+            }
+            if (!unjoined_scope.stop_requested()) {
+                co_return;
+            }
+        }
+        if (completed != 1) {
+            co_return;
+        }
+    }
+
+    {
         ruvia::task_scope completed_failure_scope(worker_value);
         completed_failure_scope.spawn(fail());
         static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));

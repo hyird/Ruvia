@@ -4,11 +4,9 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -37,7 +35,8 @@ template <typename stream_type>
         case http_content_coding::gzip:
         case http_content_coding::deflate:
             return encoder_stream(std::in_place_type<detail::zlib_deflate_stream>, resource, Z_DEFAULT_COMPRESSION,
-                coding == http_content_coding::gzip ? 15 + 16 : 15, detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY);
+                coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits,
+                detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY);
         case http_content_coding::brotli:
             return encoder_stream(std::in_place_type<detail::brotli_encoder_stream>, resource);
         case http_content_coding::zstd:
@@ -65,25 +64,11 @@ void encode_stream(detail::zlib_deflate_stream& deflater, std::string_view input
     const int operation = finish_value ? Z_FINISH : flush ? Z_SYNC_FLUSH
                                                           : Z_NO_FLUSH;
     auto& stream = deflater.native();
-    struct clear_borrows final {
-        z_stream& stream_;
-        ~clear_borrows() {
-            stream_.next_in = nullptr;
-            stream_.avail_in = 0;
-            stream_.next_out = nullptr;
-            stream_.avail_out = 0;
-        }
-    } clear{stream};
+    const detail::zlib_borrow_scope borrow(stream);
     std::size_t supplied = 0;
     std::array<char, 16384> buffer;
     for (;;) {
-        if (stream.avail_in == 0 && supplied < input.size()) {
-            const auto count = static_cast<uInt>(
-                std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-            stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-            stream.avail_in = count;
-            supplied += count;
-        }
+        detail::zlib_refill_input(stream, input, supplied);
         const auto before_input = stream.avail_in;
         stream.next_out = reinterpret_cast<Bytef*>(buffer.data());
         stream.avail_out = static_cast<uInt>(buffer.size());
@@ -181,7 +166,8 @@ void encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input,
 // the C ABI.
 struct http_content_encoder::impl final {
     impl(http_content_coding coding, std::pmr::memory_resource* resource)
-        : stream_(make_encoder_stream(coding, resource)) {
+        : stream_(make_encoder_stream(coding, resource)),
+          resource_(resource) {
         std::visit([](const auto& stream) {
             if (!stream.initialized()) {
                 throw http_content_encoder_error(initialization_failure(stream));
@@ -194,7 +180,29 @@ struct http_content_encoder::impl final {
         std::visit([&](auto& stream) { encode_stream(stream, input, output, flush, finish_value); }, stream_);
     }
 
+    // Returns the codec to a fresh stream, keeping its working memory. Brotli
+    // has no reset: the encoder is rebuilt in place from the same resource. A
+    // failed rebuild leaves the variant valueless, which the owner never
+    // touches again because it stays failed.
+    void reset() {
+        if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
+            if (!deflater->reset()) {
+                throw http_content_encoder_error("failed to reset zlib content encoder");
+            }
+        } else if (auto* encoder = std::get_if<detail::zstd_encoder_stream>(&stream_)) {
+            if (!encoder->reset()) {
+                throw http_content_encoder_error("failed to reset Zstd content encoder");
+            }
+        } else {
+            const auto& rebuilt = stream_.emplace<detail::brotli_encoder_stream>(resource_);
+            if (!rebuilt.initialized()) {
+                throw http_content_encoder_error(initialization_failure(rebuilt));
+            }
+        }
+    }
+
     encoder_stream stream_;
+    std::pmr::memory_resource* resource_;
 };
 
 http_content_encoder::http_content_encoder(http_content_coding coding, std::pmr::memory_resource* resource)
@@ -251,6 +259,18 @@ void http_content_encoder::finish(std::pmr::string& output) {
         phase_ = phase::failed;
         throw;
     }
+}
+
+void http_content_encoder::reset() {
+    if (impl_ != nullptr) {
+        try {
+            impl_->reset();
+        } catch (...) {
+            phase_ = phase::failed;
+            throw;
+        }
+    }
+    phase_ = phase::active;
 }
 
 }  // namespace ruvia

@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -40,9 +39,6 @@
 namespace ruvia {
 namespace {
 
-// Above this many indexed entries a lookup binary-searches instead of scanning.
-inline constexpr std::size_t static_root_linear_lookup_limit = 8;
-
 // A relative path (generic '/'-separated form) whose first component or any
 // component after a '/' begins with '.' is hidden. Serving these by default
 // leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
@@ -72,43 +68,16 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
 [[nodiscard]] const detail::static_root_entry* find_static_root_entry(
     const std::pmr::vector<detail::static_root_entry>& entries,
     std::string_view relative_path) noexcept {
-    if (entries.size() <= static_root_linear_lookup_limit) {
-        for (const auto& entry : entries) {
-            if (entry.relative_path_ == relative_path) {
-                return &entry;
-            }
-        }
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::lower_bound(entries, relative_path, std::ranges::less{},
+    return detail::find_static_index_entry(entries, relative_path,
         [](const detail::static_root_entry& entry_value) noexcept {
             return std::string_view(entry_value.relative_path_);
         });
-    if (iter == entries.end() || std::string_view(iter->relative_path_) != relative_path) {
-        return nullptr;
-    }
-    return &*iter;
 }
 
 [[nodiscard]] bool contains_static_directory(
     const std::pmr::vector<std::pmr::string>& directories, std::string_view relative_path) noexcept {
-    if (directories.size() <= static_root_linear_lookup_limit) {
-        return std::ranges::find(directories, relative_path, [](const auto& directory) noexcept {
-            return std::string_view(directory);
-        }) != directories.end();
-    }
-
-    return std::ranges::binary_search(
-        directories, relative_path, [](const auto& left, const auto& right) {
-            return std::string_view(left) < std::string_view(right);
-        });
-}
-
-// A precompressed sidecar (foo.js.br / .gz / .zst) is indexed when its base
-// file's type is allowed, so it can be served as a Content-Encoding variant.
-[[nodiscard]] bool is_precompressed_sidecar_extension(std::string_view extension) noexcept {
-    return extension == ".br" || extension == ".gz" || extension == ".zst";
+    return detail::find_static_index_entry(directories, relative_path,
+               [](const std::pmr::string& directory) noexcept { return std::string_view(directory); }) != nullptr;
 }
 
 [[nodiscard]] bool media_type_starts_with(
@@ -140,17 +109,9 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
            media_type_ends_with(media_type, "+json") || media_type_ends_with(media_type, "+xml");
 }
 
-[[nodiscard]] std::string_view static_precompression_suffix(http_content_coding coding) noexcept {
-    switch (coding) {
-        case http_content_coding::gzip:
-            return ".gz";
-        case http_content_coding::brotli:
-            return ".br";
-        case http_content_coding::zstd:
-            return ".zst";
-        default:
-            return {};
-    }
+[[nodiscard]] detail::static_file_version static_root_entry_version(
+    const detail::static_root_entry& entry_value) noexcept {
+    return {entry_value.modified_seconds_, entry_value.modified_token_};
 }
 
 [[nodiscard]] bool same_static_root_entry_metadata(
@@ -163,27 +124,16 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
            left.directly_servable_ == right.directly_servable_;
 }
 
-[[nodiscard]] bool precompressed_variant_is_at_least_as_new(
-    const detail::static_root_entry& identity, const detail::static_root_entry& variant) noexcept {
-    if (variant.modified_seconds_ != identity.modified_seconds_) {
-        return variant.modified_seconds_ > identity.modified_seconds_;
-    }
-    return variant.modified_token_ >= identity.modified_token_;
-}
-
 [[nodiscard]] const detail::static_root_entry* find_fresh_sidecar_entry(
     const detail::static_root_state& state_value, const detail::static_root_entry& identity,
-    http_content_coding coding) {
-    const auto suffix = static_precompression_suffix(coding);
-    if (suffix.empty()) {
-        return nullptr;
-    }
+    std::string_view suffix) {
     std::pmr::string variant_path(process_resource());
     variant_path.reserve(identity.relative_path_.size() + suffix.size());
     variant_path.append(identity.relative_path_.data(), identity.relative_path_.size());
     variant_path.append(suffix.data(), suffix.size());
     const auto* variant = find_static_root_entry(state_value.entries_, variant_path);
-    if (variant == nullptr || !precompressed_variant_is_at_least_as_new(identity, *variant)) {
+    if (variant == nullptr ||
+        !static_root_entry_version(*variant).at_least_as_new_as(static_root_entry_version(identity))) {
         return nullptr;
     }
     return variant;
@@ -295,11 +245,6 @@ void hash_value(std::uint64_t& hash, t_type value) noexcept {
     return hash;
 }
 
-[[nodiscard]] bool same_static_root_entry(
-    const detail::static_root_entry& left, const detail::static_root_entry& right) noexcept {
-    return same_static_root_entry_metadata(left, right);
-}
-
 }  // namespace
 
 detail::static_root_config_storage detail::static_root_access::copy_config(
@@ -362,16 +307,6 @@ void detail::static_root_access::install_precompressed_variants(
 
     auto& state_value = *root.state_;
     auto* const resource = process_resource();
-    const std::array<http_content_coding, 3> codings{
-        http_content_coding::brotli,
-        http_content_coding::zstd,
-        http_content_coding::gzip,
-    };
-    const bool enabled[] = {
-        options.brotli_,
-        options.zstd_,
-        options.gzip_,
-    };
     const auto* previous_state = previous == nullptr ? nullptr : previous->state_.get();
     const bool emit_response_validators =
         state_value.config_.response_validators_ == static_response_validator_policy::emit;
@@ -392,12 +327,9 @@ void detail::static_root_access::install_precompressed_variants(
         }
 
         std::optional<std::pmr::string> plain;
-        for (std::size_t i = 0; i < codings.size(); ++i) {
-            if (!enabled[i]) {
-                continue;
-            }
-            const auto coding = codings[i];
-            if (find_fresh_sidecar_entry(state_value, entry, coding) != nullptr) {
+        for (const auto& sidecar : detail::static_precompression_sidecars) {
+            const auto coding = sidecar.content_coding_;
+            if (!options.enabled(coding) || find_fresh_sidecar_entry(state_value, entry, sidecar.suffix_) != nullptr) {
                 continue;
             }
             if (previous_entry != nullptr) {
@@ -507,7 +439,7 @@ bool detail::static_root_access::same_snapshot(
         }
     }
     for (std::size_t i = 0; i < lhs.entries_.size(); ++i) {
-        if (!same_static_root_entry(lhs.entries_[i], rhs.entries_[i])) {
+        if (!same_static_root_entry_metadata(lhs.entries_[i], rhs.entries_[i])) {
             return false;
         }
     }
@@ -656,7 +588,7 @@ static_root::static_root(prepared_construction_type prepared)
         const auto extension = detail::lower_static_file_extension(file_path, upstream);
         const bool directly_servable = detail::file_type_allowed(extension, config);
         bool usable_as_sidecar = false;
-        if (!directly_servable && is_precompressed_sidecar_extension(extension)) {
+        if (!directly_servable && detail::is_precompressed_sidecar_extension(extension)) {
             usable_as_sidecar = detail::file_type_allowed(
                 detail::lower_static_file_extension(file_path.stem(), upstream), config);
         }

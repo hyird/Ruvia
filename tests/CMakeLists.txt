@@ -144,6 +144,10 @@ if(RUVIA_BUILD_WEB)
     # the handler cases of the other server suites.
     ruvia_add_web_standalone_test(ruvia_interim_phase_timeout_tests 30
         web/http1/interim_phase_timeout.cpp)
+    # Owns an application with an application-wide error handler that must
+    # observe no peer reset.
+    ruvia_add_web_standalone_test(ruvia_peer_reset_tests 60
+        web/http1/peer_reset.cpp)
     # Owns an application with a document root shadowing a guarded route.
     ruvia_add_web_standalone_test(ruvia_document_root_tests 60
         web/http/document_root.cpp)

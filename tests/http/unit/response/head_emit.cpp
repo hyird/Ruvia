@@ -9,12 +9,12 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 
+#include "http1_request_message_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -109,14 +109,13 @@ bool throws_length(fn_type&& fn) {
 }  // namespace
 
 RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
-    using ruvia::http1_server_request_parser;
     using ruvia::plan_buffered_http_response_write;
+    using ruvia::testing::parse_http1_request_message;
 
-    http1_server_request_parser parser;
     const auto emit_for = [&](std::string_view request) {
         http_response response({.resource_ = std::pmr::new_delete_resource()});
         response.body("hello");
-        const auto connection_plan = parser.parse_message(request).connection_plan_;
+        const auto connection_plan = parse_http1_request_message(request).state_.connection_plan_;
         if (connection_plan.protocol_version() == ruvia::http_protocol_version::http10) {
             response.header("Connection", "keep-alive");
         }

@@ -15,13 +15,20 @@
 
 namespace ruvia {
 namespace {
-// The handshake generates Host, the Upgrade/Connection pair and every
-// Sec-WebSocket-* field, and an Upgrade request carries no content.
+// The one application-header policy of the client handshake: it generates
+// Host, the Upgrade/Connection pair and every Sec-WebSocket-* field, and an
+// Upgrade request carries no content, so Trailer and Expect have no place.
 bool is_reserved_handshake_header(std::string_view name) noexcept {
-    return detail::classify_request_header(name) == detail::request_header_kind::host ||
-           detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
-           detail::http_field_name_in(name, detail::http_message_framing_fields) ||
-           detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
+    switch (detail::classify_request_header(name)) {
+        case detail::request_header_kind::host:
+        case detail::request_header_kind::trailer:
+        case detail::request_header_kind::expect:
+            return true;
+        default:
+            return detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
+                   detail::http_field_name_in(name, detail::http_message_framing_fields) ||
+                   detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
+    }
 }
 }  // namespace
 

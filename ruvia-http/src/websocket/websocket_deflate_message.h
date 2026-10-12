@@ -37,19 +37,11 @@ namespace ruvia::detail {
     zlib_deflate_stream& deflater, std::string_view input, std::pmr::string& out) {
     auto& stream = deflater.native();
     const auto start = out.size();
-    // Messages can exceed zlib's 32-bit avail_in, so supply the input in
-    // windows instead of truncating the size.
     stream.avail_in = 0;
     std::size_t supplied = 0;
     char buffer[4096];
     for (;;) {
-        if (stream.avail_in == 0 && supplied < input.size()) {
-            const auto count = static_cast<uInt>(
-                std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-            stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-            stream.avail_in = count;
-            supplied += count;
-        }
+        zlib_refill_input(stream, input, supplied);
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = sizeof(buffer);
         const int status = deflate(&stream, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
@@ -76,19 +68,11 @@ namespace ruvia::detail {
 [[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data,
     std::size_t size, std::pmr::string& out, std::size_t start, protocol_byte_limit message_limit) {
     auto& stream = inflater.native();
-    // Messages can exceed zlib's 32-bit avail_in, so supply the input in
-    // windows instead of truncating the size.
     stream.avail_in = 0;
     std::size_t supplied = 0;
     char buffer[8192];
     for (;;) {
-        if (stream.avail_in == 0 && supplied < size) {
-            const auto count =
-                static_cast<uInt>(std::min<std::size_t>(size - supplied, (std::numeric_limits<uInt>::max)()));
-            stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + supplied));
-            stream.avail_in = count;
-            supplied += count;
-        }
+        zlib_refill_input(stream, std::string_view(data, size), supplied);
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = sizeof(buffer);
         const int status = inflate(&stream, Z_NO_FLUSH);

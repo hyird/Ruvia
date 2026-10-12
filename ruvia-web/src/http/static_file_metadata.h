@@ -1,12 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_hex.h"
@@ -14,6 +17,68 @@
 #include "ruvia/web/detail/util/fnv1a.h"
 
 namespace ruvia::detail {
+
+// Above this many entries an index lookup binary-searches instead of scanning.
+inline constexpr std::size_t static_root_linear_lookup_limit = 8;
+
+// Looks a key up in an index vector sorted by `projection` (a string_view of
+// each entry): a short vector is scanned, a longer one binary-searched.
+template <typename entry_type, typename projection_type>
+[[nodiscard]] const entry_type* find_static_index_entry(
+    const std::pmr::vector<entry_type>& entries, std::string_view key, projection_type projection) noexcept {
+    if (entries.size() <= static_root_linear_lookup_limit) {
+        for (const auto& entry : entries) {
+            if (projection(entry) == key) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    const auto iter = std::ranges::lower_bound(entries, key, std::ranges::less{}, projection);
+    if (iter == entries.end() || projection(*iter) != key) {
+        return nullptr;
+    }
+    return &*iter;
+}
+
+// Precompressed sidecars (foo.js.br / .zst / .gz) in selection preference
+// order: an Accept-Encoding tie resolves br > zstd > gzip. Indexing,
+// precompression and representation selection all read this one table.
+struct static_precompression_sidecar final {
+    std::string_view suffix_;
+    http_content_coding content_coding_;
+};
+
+inline constexpr std::array<static_precompression_sidecar, 3> static_precompression_sidecars{{
+    {".br", http_content_coding::brotli},
+    {".zst", http_content_coding::zstd},
+    {".gz", http_content_coding::gzip},
+}};
+
+[[nodiscard]] constexpr bool is_precompressed_sidecar_extension(std::string_view extension) noexcept {
+    for (const auto& sidecar : static_precompression_sidecars) {
+        if (sidecar.suffix_ == extension) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Orders two indexed snapshots of one file by (mtime, change token). A sidecar
+// older than its identity file is never served: presence alone cannot prove
+// its decoded bytes still describe the current resource.
+struct static_file_version final {
+    std::time_t modified_seconds_;
+    std::uint64_t modified_token_;
+
+    [[nodiscard]] constexpr bool at_least_as_new_as(const static_file_version& identity) const noexcept {
+        if (modified_seconds_ != identity.modified_seconds_) {
+            return modified_seconds_ > identity.modified_seconds_;
+        }
+        return modified_token_ >= identity.modified_token_;
+    }
+};
 
 // URL index keys and extension policy use UTF-8 on every platform rather than
 // the system narrow encoding of filesystem::path::generic_string<char>().

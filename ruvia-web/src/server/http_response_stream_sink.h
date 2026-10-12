@@ -25,6 +25,7 @@
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/context.h"
 
+#include "body/http_lazy_buffered_body.h"
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_cors.h"
@@ -33,18 +34,28 @@
 #include "server/http_server_response_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
+#include "server/worker_codecs.h"
 
 namespace ruvia::detail {
 
+// Writes a response stream to the connection. The handler runs in the
+// session's idle deadman phase (idle_timeout, like a buffered handler); only
+// the sink's own socket writes count as `writing`, so write_timeout measures a
+// slow reader and not the time a handler spends waiting for its next event.
 template <typename stream_type>
 class response_stream_sink final {
 public:
     // `cors` is the application's CORS policy (null when none is configured);
-    // like `request`, it must outlive the sink.
-    response_stream_sink(stream_type& stream, worker_memory& memory, http_response_head_buffer& head,
-        connection_scanner::entry_type& scanner_entry, const worker_handle& worker_value,
-        const http_request& request, const cors_options* cors, http_response_stream_kind kind,
-        http1_response_stream_plan plan, http_response_coding_selection response_coding,
+    // like `request` and `request_body`, it must outlive the sink. `plan`
+    // assumes the request body is left unread; `consumed_plan` is the plan for
+    // the same request once `request_body` reports its complete consumption,
+    // which commit checks so a route that read its body before streaming keeps
+    // the connection reusable.
+    response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
+        http_response_head_buffer& head, connection_scanner::entry_type& scanner_entry,
+        const worker_handle& worker_value, const http_request& request, const cors_options* cors,
+        http_response_stream_kind kind, http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
+        const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability) noexcept
         : stream_(stream),
           head_(head),
@@ -55,12 +66,15 @@ public:
           cors_(cors),
           kind_(kind),
           plan_(plan),
+          consumed_plan_(consumed_plan),
+          request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
-          compression_(memory.resource(), response_coding, response_coding_availability) {}
+          compression_(memory.resource(), codecs, response_coding, response_coding_availability) {}
 
-    response_stream_sink(stream_type&, worker_memory&, http_response_head_buffer&, connection_scanner::entry_type&,
-        worker_handle&&, const http_request&, const cors_options*,
-        http_response_stream_kind, http1_response_stream_plan, http_response_coding_selection,
+    response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
+        connection_scanner::entry_type&, worker_handle&&, const http_request&, const cors_options*,
+        http_response_stream_kind, http1_response_stream_plan, http1_response_stream_plan,
+        const lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
@@ -118,6 +132,13 @@ private:
                 apply_cors_headers(request_, response, *cors_);
             }
             compression_.prepare(plan_.request_method(), response, kind_);
+            // The request body is settled at commit: read in full by now, the
+            // connection stays reusable; anything less closes it after the
+            // stream, since the body bytes still in the socket would be read as
+            // the next request.
+            if (request_body_.consumption() == http1_request_body_consumption::complete) {
+                plan_ = consumed_plan_;
+            }
             auto prepare_result =
                 prepare_http1_response_stream_head(std::move(response), kind_, plan_, trailer_intent);
             if (const auto* failure = prepare_result.failure()) {
@@ -150,24 +171,27 @@ private:
             }
             throw;
         }
-        const auto write_completion =
-            co_await ruvia::async_asio([this, head_view = head_.view()](auto handler) mutable {
-                asio::async_write(stream_, asio::buffer(head_view), std::move(handler));
-            });
-        const auto ec = write_completion.error_code();
+        const auto ec = co_await write_to_stream(asio::buffer(head_.view()));
         if (ec) {
             state_.mark_aborted();
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
-        scanner_entry_.touch();
+    }
+
+    // One socket write, timed as `writing` for exactly its own duration; the
+    // handler's phase and its deadlines resume once it settles.
+    template <typename buffers_type>
+    task<std::error_code> write_to_stream(const buffers_type& buffers) {
+        const connection_scanner::entry_type::phase_scope_type handler_phase(scanner_entry_);
+        scanner_entry_.set_phase(connection_scanner::phase_type::writing);
+        const auto write_completion = co_await ruvia::async_asio([this, &buffers](auto handler) mutable {
+            asio::async_write(stream_, buffers, std::move(handler));
+        });
+        co_return write_completion.error_code();
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-        const auto result_value = co_await sleep_for(worker_, duration, stop_token_value);
-        if (result_value == timer_sleep_result::elapsed) {
-            scanner_entry_.touch();
-        }
-        co_return result_value;
+        co_return co_await sleep_for(worker_, duration, stop_token_value);
     }
 
     task<void> write(std::string_view chunk) {
@@ -212,30 +236,22 @@ private:
         if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto write_completion = co_await ruvia::async_asio([this, chunk](auto handler) mutable {
-                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
-            });
-            const auto raw_ec = write_completion.error_code();
+            const auto raw_ec = co_await write_to_stream(asio::buffer(chunk));
             if (raw_ec) {
                 state_.mark_aborted();
                 throw inbound_transport_error(raw_ec, "failed to write HTTP response stream body");
             }
-            scanner_entry_.touch();
             co_return;
         }
 
         const http1_chunk_header chunk_header(chunk.size());
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk_header.view()),
             asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
-        const auto write_completion = co_await ruvia::async_asio([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
-        const auto write_ec = write_completion.error_code();
+        const auto write_ec = co_await write_to_stream(buffers);
         if (write_ec) {
             state_.mark_aborted();
             throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
         }
-        scanner_entry_.touch();
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
@@ -279,16 +295,12 @@ private:
         // this runtime layer only submits their byte views to the socket.
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(http1_last_chunk_prefix),
             asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
-        const auto write_completion = co_await ruvia::async_asio([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
-        const auto ec = write_completion.error_code();
+        const auto ec = co_await write_to_stream(buffers);
         if (ec) {
             state_.mark_aborted();
             throw inbound_transport_error(ec, "failed to write HTTP response stream end");
         }
         state_.mark_ended();
-        scanner_entry_.touch();
     }
 
     stream_type& stream_;
@@ -302,6 +314,8 @@ private:
     const cors_options* cors_;
     http_response_stream_kind kind_;
     http1_response_stream_plan plan_;
+    http1_response_stream_plan consumed_plan_;
+    const lazy_buffered_body<stream_type>& request_body_;
     http1_request_connection_plan connection_plan_;
     http_streaming_response_compression compression_;
     response_stream_state state_;

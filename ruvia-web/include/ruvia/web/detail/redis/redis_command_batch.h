@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/web/detail/redis/redis_argument_pack.h"
 #include "ruvia/web/detail/redis/redis_owned_command.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
 
@@ -38,178 +37,182 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] redis_command_payload consume();
     void expire() noexcept;
+    // User-supplied raw commands are validated against stateful and blocking
+    // command names; the typed helpers below compose from constant command
+    // words and skip that scan.
     redis_command_batch& command(std::span<const std::string_view> args);
 
-    template <typename... args_type>
-        requires redis_argument_pack<args_type...>
-    redis_command_batch& command(args_type&&... args) {
-        const std::string_view views[]{std::string_view(args)...};
-        return command(std::span<const std::string_view>(views));
-    }
-
     redis_command_batch& get(std::string_view key) {
-        return command("GET", key);
+        return trusted("GET", key);
     }
 
     redis_command_batch& set(std::string_view key, std::string_view value) {
-        return command("SET", key, value);
+        return trusted("SET", key, value);
     }
 
     redis_command_batch& get_del(std::string_view key) {
-        return command("GETDEL", key);
+        return trusted("GETDEL", key);
     }
 
     redis_command_batch& append(std::string_view key, std::string_view value) {
-        return command("APPEND", key, value);
+        return trusted("APPEND", key, value);
     }
 
     redis_command_batch& strlen(std::string_view key) {
-        return command("STRLEN", key);
+        return trusted("STRLEN", key);
     }
 
     redis_command_batch& del(std::string_view key) {
-        return command("DEL", key);
+        return trusted("DEL", key);
     }
 
     redis_command_batch& unlink(std::string_view key) {
-        return command("UNLINK", key);
+        return trusted("UNLINK", key);
     }
 
     redis_command_batch& exists(std::string_view key) {
-        return command("EXISTS", key);
+        return trusted("EXISTS", key);
     }
 
     redis_command_batch& touch(std::string_view key) {
-        return command("TOUCH", key);
+        return trusted("TOUCH", key);
     }
 
     redis_command_batch& type(std::string_view key) {
-        return command("TYPE", key);
+        return trusted("TYPE", key);
     }
 
     redis_command_batch& rename(std::string_view key, std::string_view new_key) {
-        return command("RENAME", key, new_key);
+        return trusted("RENAME", key, new_key);
     }
 
     redis_command_batch& rename_nx(std::string_view key, std::string_view new_key) {
-        return command("RENAMENX", key, new_key);
+        return trusted("RENAMENX", key, new_key);
     }
 
     redis_command_batch& incr(std::string_view key) {
-        return command("INCR", key);
+        return trusted("INCR", key);
     }
 
     redis_command_batch& incr_by(std::string_view key, std::int64_t value) {
         require_ready();
         auto amount = redis_int_string(value, resource());
-        return command("INCRBY", key, std::string_view(amount));
+        return trusted("INCRBY", key, std::string_view(amount));
     }
 
     redis_command_batch& decr(std::string_view key) {
-        return command("DECR", key);
+        return trusted("DECR", key);
     }
 
     redis_command_batch& decr_by(std::string_view key, std::int64_t value) {
         require_ready();
         auto amount = redis_int_string(value, resource());
-        return command("DECRBY", key, std::string_view(amount));
+        return trusted("DECRBY", key, std::string_view(amount));
     }
 
     redis_command_batch& hget(std::string_view key, std::string_view field) {
-        return command("HGET", key, field);
+        return trusted("HGET", key, field);
     }
 
     redis_command_batch& hset(std::string_view key, std::string_view field, std::string_view value) {
-        return command("HSET", key, field, value);
+        return trusted("HSET", key, field, value);
     }
 
     redis_command_batch& hdel(std::string_view key, std::string_view field) {
-        return command("HDEL", key, field);
+        return trusted("HDEL", key, field);
     }
 
     redis_command_batch& hexists(std::string_view key, std::string_view field) {
-        return command("HEXISTS", key, field);
+        return trusted("HEXISTS", key, field);
     }
 
     redis_command_batch& hlen(std::string_view key) {
-        return command("HLEN", key);
+        return trusted("HLEN", key);
     }
 
     redis_command_batch& hget_all(std::string_view key) {
-        return command("HGETALL", key);
+        return trusted("HGETALL", key);
     }
 
     redis_command_batch& lpush(std::string_view key, std::string_view value) {
-        return command("LPUSH", key, value);
+        return trusted("LPUSH", key, value);
     }
 
     redis_command_batch& rpush(std::string_view key, std::string_view value) {
-        return command("RPUSH", key, value);
+        return trusted("RPUSH", key, value);
     }
 
     redis_command_batch& lpop(std::string_view key) {
-        return command("LPOP", key);
+        return trusted("LPOP", key);
     }
 
     redis_command_batch& rpop(std::string_view key) {
-        return command("RPOP", key);
+        return trusted("RPOP", key);
     }
 
     redis_command_batch& llen(std::string_view key) {
-        return command("LLEN", key);
+        return trusted("LLEN", key);
     }
 
     redis_command_batch& lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
         auto start_value = redis_int_string(start, resource());
         auto stop_value = redis_int_string(stop, resource());
-        return command(
+        return trusted(
             "LRANGE", key, std::string_view(start_value), std::string_view(stop_value));
     }
 
     redis_command_batch& sadd(std::string_view key, std::string_view member) {
-        return command("SADD", key, member);
+        return trusted("SADD", key, member);
     }
 
     redis_command_batch& srem(std::string_view key, std::string_view member) {
-        return command("SREM", key, member);
+        return trusted("SREM", key, member);
     }
 
     redis_command_batch& smembers(std::string_view key) {
-        return command("SMEMBERS", key);
+        return trusted("SMEMBERS", key);
     }
 
     redis_command_batch& scard(std::string_view key) {
-        return command("SCARD", key);
+        return trusted("SCARD", key);
     }
 
     redis_command_batch& zadd(std::string_view key, double score, std::string_view member) {
         require_ready();
         auto score_value = redis_score_string(score, resource());
-        return command("ZADD", key, std::string_view(score_value), member);
+        return trusted("ZADD", key, std::string_view(score_value), member);
     }
 
     redis_command_batch& zrem(std::string_view key, std::string_view member) {
-        return command("ZREM", key, member);
+        return trusted("ZREM", key, member);
     }
 
     redis_command_batch& zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
         auto start_value = redis_int_string(start, resource());
         auto stop_value = redis_int_string(stop, resource());
-        return command(
+        return trusted(
             "ZRANGE", key, std::string_view(start_value), std::string_view(stop_value));
     }
 
     redis_command_batch& zscore(std::string_view key, std::string_view member) {
-        return command("ZSCORE", key, member);
+        return trusted("ZSCORE", key, member);
     }
 
     redis_command_batch& zcard(std::string_view key) {
-        return command("ZCARD", key);
+        return trusted("ZCARD", key);
     }
 
 private:
+    redis_command_batch& append_trusted(std::string_view command_name, std::span<const std::string_view> rest);
+
+    template <typename... args_type>
+    redis_command_batch& trusted(std::string_view command_name, args_type... args) {
+        const std::string_view rest[]{args...};
+        return append_trusted(command_name, std::span<const std::string_view>(rest));
+    }
+
     redis_pool* pool_;
     operation_options options_;
     std::pmr::vector<redis_owned_command> commands_;

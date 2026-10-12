@@ -19,14 +19,18 @@ namespace ruvia::detail {
 [[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type code, const pg_result* result = nullptr);
 
-// Parameters are sent untyped in text format: the SQL decides their types,
-// and compiled SQL casts each placeholder from its value category.
+// Parameters are sent in text format. A double declares float8 so the server
+// never infers an integer type from an integral value; every other parameter
+// is left untyped (OID 0): the SQL decides its type, and compiled SQL casts
+// each placeholder from its value category.
 struct postgresql_params final {
     explicit postgresql_params(std::pmr::memory_resource* resource);
 
     std::pmr::vector<std::pmr::string> encoded_;
     std::pmr::vector<const char*> values_;
     std::pmr::vector<int> lengths_;
+    // libpq's Oid is unsigned int; 0 leaves the type to the server.
+    std::pmr::vector<unsigned int> types_;
 };
 
 [[nodiscard]] postgresql_params encode_postgresql_params(

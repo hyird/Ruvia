@@ -22,11 +22,6 @@ class brotli_encoder_stream;
 class zlib_deflate_stream;
 class zstd_encoder_stream;
 
-// zlib window parameters of the gzip (RFC 1952) and deflate (RFC 9110 zlib
-// wrapper) content codings.
-inline constexpr int zlib_gzip_window_bits = 15 + 16;
-inline constexpr int zlib_deflate_window_bits = 15;
-
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.
 [[nodiscard]] inline bool append_decoded_bytes(

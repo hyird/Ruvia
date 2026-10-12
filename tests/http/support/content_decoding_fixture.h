@@ -22,7 +22,6 @@
 
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_body_failure.h"
@@ -40,7 +39,6 @@ using ruvia::decode_http_request_content;
 using ruvia::encode_http_content;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::http1_request_body_plan;
-using ruvia::http1_server_request_parser;
 using ruvia::http_content_coding;
 using ruvia::http_content_decode_error;
 using ruvia::http_content_decode_failure;

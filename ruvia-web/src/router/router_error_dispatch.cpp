@@ -17,6 +17,7 @@
 #include "http/unsupported_request_content_coding.h"
 #include "router/route_table.h"
 #include "server/inbound_buffer_resource.h"
+#include "server/inbound_transport_error.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
@@ -126,6 +127,25 @@ void report_unexpected_failure(const owned_http_error_info& error_info, const st
     }
 }
 
+// A failed I/O on the connection's own transport -- a handler's interim head
+// or the 100 Continue its body read sent to a peer that went away -- is not a
+// handler fault and cannot be answered: no response reaches that peer. It is
+// not turned into a response but propagated to the session, which ends the
+// connection; the connection failure sink then classifies it, so a peer that
+// reset is a normal end and anything else is reported once, as itself.
+void rethrow_inbound_transport_error(const std::exception_ptr& exception) {
+    try {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+    } catch (const detail::inbound_transport_error&) {
+        throw;
+        // Any other failure is answered below.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
+    }
+}
+
 [[nodiscard]] bool is_unsupported_request_content_coding(const std::exception_ptr& exception) noexcept {
     try {
         if (exception != nullptr) {
@@ -181,6 +201,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
     request_memory& memory, std::exception_ptr exception, context_services services) const {
+    rethrow_inbound_transport_error(exception);
     if (error_handler_for(request.path()) == nullptr) {
         owned_http_error_info error_info(memory.resource(), exception);
         report_unexpected_failure(error_info, exception, nullptr);
@@ -233,6 +254,7 @@ task<http_response> detail::route_table::handle_not_found(
 
 task<http_response> detail::route_table::handle_exception(
     context& context_value, std::exception_ptr exception) const {
+    rethrow_inbound_transport_error(exception);
     detail::context_access::set_error(context_value, exception);
     owned_http_error_info error_info(context_value.arena(), exception);
     report_unexpected_failure(

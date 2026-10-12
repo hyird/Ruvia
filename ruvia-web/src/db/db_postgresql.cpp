@@ -12,6 +12,12 @@
 #include "ruvia/web/detail/db/db_utils.h"
 
 namespace ruvia::detail {
+namespace {
+
+// pg_type OID of float8 (double precision); libpq's headers name no type OIDs.
+constexpr unsigned int postgresql_float8_oid = 701;
+
+}  // namespace
 
 db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type error_code, const pg_result* result_value) {
@@ -54,7 +60,8 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
 postgresql_params::postgresql_params(std::pmr::memory_resource* resource)
     : encoded_(pmr_resource_or_default(resource)),
       values_(pmr_resource_or_default(resource)),
-      lengths_(pmr_resource_or_default(resource)) {}
+      lengths_(pmr_resource_or_default(resource)),
+      types_(pmr_resource_or_default(resource)) {}
 
 postgresql_params encode_postgresql_params(
     std::span<const db_value> params, std::pmr::memory_resource* resource) {
@@ -63,10 +70,13 @@ postgresql_params encode_postgresql_params(
     output.encoded_.reserve(params.size());
     output.values_.reserve(params.size());
     output.lengths_.reserve(params.size());
+    output.types_.reserve(params.size());
 
     for (const auto& param : params) {
         output.encoded_.emplace_back();
         auto& value = output.encoded_.back();
+        output.types_.push_back(
+            db_value_access::type(param) == db_value_type::double_value ? postgresql_float8_oid : 0U);
         switch (db_value_access::type(param)) {
             case db_value_type::null:
                 output.values_.push_back(nullptr);

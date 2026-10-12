@@ -61,8 +61,9 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
 }
 
 // Process shutdown signals for one run, on their own core runtime. The first
-// signal requests the application's stop; stopping restores the default
-// disposition, so a repeated signal is not swallowed while the stop drains.
+// signal restores the default disposition and requests the application's
+// stop, so a repeated signal is not swallowed while the stop drains -- or
+// while a slow startup hook still runs, before the stop can take effect.
 class process_signal_handling final {
 public:
     explicit process_signal_handling(application& owner)
@@ -81,8 +82,10 @@ public:
         // and member unwinding would destroy signals_ before runtime_.
         try {
             add_shutdown_signals(signals_);
-            signals_.async_wait([&owner](const std::error_code& ec, int) {
+            signals_.async_wait([this, &owner](const std::error_code& ec, int) {
                 if (!ec) {
+                    std::error_code ignored;
+                    signals_.clear(ignored);
                     owner.stop();
                 }
             });

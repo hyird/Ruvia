@@ -154,6 +154,32 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
     space_signal_.notify();
 }
 
+task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
+    while (!head_ready_ && !failure_ && !error_code_) {
+        co_await head_signal_.wait();
+    }
+    if (failure_) {
+        std::rethrow_exception(failure_);
+    }
+    if (error_code_) {
+        throw http_client_error(static_cast<http_client_error::code_type>(*error_code_), head_message);
+    }
+    if ((tunnel_ && tunnel_->accepted_) || !body_decode_required_) {
+        co_return;
+    }
+    notify_producer_space();
+    while (!complete_) {
+        co_await data_signal_.wait();
+    }
+    if (failure_) {
+        std::rethrow_exception(failure_);
+    }
+    if (error_code_) {
+        throw http_client_error(
+            static_cast<http_client_error::code_type>(*error_code_), "HTTP client encoded response failed");
+    }
+}
+
 void detail::http_client_response_state::discard_pending_body() noexcept {
     {
         std::pmr::string empty(resource_);

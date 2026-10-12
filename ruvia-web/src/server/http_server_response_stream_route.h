@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/core/memory/memory_pool.h"
@@ -21,10 +23,15 @@
 
 namespace ruvia::detail {
 
+// `request_bytes` is the connection's buffered input at dispatch, from the
+// start of this request, the suffix included; `pipeline_stash` is
+// request-scoped storage for a pipelined request the body reader over-read.
 template <typename stream_type>
 task<http1_session_request_completion> dispatch_http_response_stream_route(http1_route_dispatch<stream_type> d,
     http_response_head_buffer& response_head, const http1_server_request_head_ready& request_head,
-    const resolved_route& resolved, std::string_view body_and_pipeline, protocol_byte_limit body_limit_value) {
+    const resolved_route& resolved, std::string_view request_bytes, protocol_byte_limit body_limit_value,
+    std::pmr::string& pipeline_stash) {
+    const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
     http_lazy_buffered_body_route_state<stream_type> body_state;
     std::exception_ptr body_setup_failure;
     try {
@@ -37,17 +44,19 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
     }
     d.base_route_services_ = body_state.with_loader(d.base_route_services_);
-    const auto stream_plan =
-        http1_plan_response_stream(d.parsed_, d.request_sequence_.next_response_close_policy());
+    const auto close_policy = d.request_sequence_.next_response_close_policy();
+    const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy);
     auto connection_plan = stream_plan.request_connection_plan();
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
-    response_sink_type response_sink(d.stream_, d.memory_, response_head, d.scanner_entry_,
+    response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
-        endpoint.kind(), stream_plan, d.response_coding_, d.response_coding_availability_);
+        endpoint.kind(), stream_plan, http1_plan_consumed_response_stream(d.parsed_, close_policy),
+        body_state.body(), d.response_coding_, d.response_coding_availability_);
 
-    d.scanner_entry_.set_phase(connection_scanner::phase_type::writing);
+    // The handler stays in the session's idle deadman phase; the sink times
+    // its own writes.
     auto result_value = co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
         resolved, d.request_memory_, d.base_route_services_);
 
@@ -82,8 +91,20 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         }
         connection_plan = connection_plan.require_close();
     }
+    if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
+        co_return http1_session_request_completion::make_committed_stream(
+            connection_plan, *committed_status, request_head.header_bytes());
+    }
+    // The stream committed a reusable plan, so the request body was read in
+    // full; what followed it is the next request, in the read buffer or in
+    // the reader's own over-read.
+    const auto pipeline = body_state.take_pipeline(pipeline_stash);
+    if (!pipeline.stashed_.empty()) {
+        co_return http1_session_request_completion::make_committed_stream_pipeline_restore(
+            connection_plan, *committed_status, pipeline.stashed_);
+    }
     co_return http1_session_request_completion::make_committed_stream(
-        connection_plan, *committed_status, request_head.header_bytes());
+        connection_plan, *committed_status, request_bytes.size() - pipeline.read_buffer_suffix_bytes_);
 }
 
 }  // namespace ruvia::detail

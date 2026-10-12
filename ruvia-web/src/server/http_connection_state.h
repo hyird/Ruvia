@@ -25,12 +25,12 @@ namespace ruvia::detail {
 class http1_request_buffer_completion;
 struct access_log_sink;
 
-// Fresh size of a work set's read buffer; reset() restores it before the work
-// set is pooled, so a borrower always starts from this capacity and the pool
-// retains at most this much read storage per work set. 4 KB holds a typical
-// request head with room to spare, and prepare_read() doubles on demand up to
-// max_http_header_bytes; keeping the fresh size small matters because under
-// high concurrency every active connection holds one.
+// Fresh size of a work set's read buffer: a borrower always starts from at
+// least this capacity. 4 KB holds a typical request head with room to spare,
+// and prepare_read() doubles on demand up to max_http_header_bytes; keeping
+// the fresh size small matters because under high concurrency every active
+// connection holds one. reset() keeps modest growth (see
+// retained_read_buffer_bytes) and restores this size only beyond it.
 inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
 
 // Bytes of the connection-resident buffer an idle connection reads into while
@@ -81,8 +81,8 @@ public:
     // back once the pending bytes fit the initial size.
     void trim();
     // Empties the buffer for the next borrower. Storage that grew past the
-    // initial size is replaced with a fresh initial-capacity block, so the
-    // grown block goes back to the worker resource.
+    // retained ceiling is replaced with a fresh initial-capacity block, so the
+    // grown block goes back to the worker resource; smaller growth is kept.
     void reset();
 
 private:

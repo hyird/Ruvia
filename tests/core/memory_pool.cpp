@@ -249,6 +249,42 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     resource->deallocate(live_block, block_bytes);
 }
 
+RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
+    ruvia::worker_memory memory;
+    ruvia::worker_runtime first;
+    ruvia::worker_runtime second;
+    const auto first_owner = first.context().handle();
+    const auto second_owner = second.context().handle();
+    bool bound = false;
+    bool rejected = false;
+    bool rebound = false;
+    RUVIA_CHECK(first_owner.post([&] {
+                               memory.trim(first_owner);
+                               bound = true;
+                           })
+            .accepted());
+    first.join();
+    RUVIA_CHECK(bound);
+    RUVIA_CHECK(second_owner
+            .post([&] {
+                // Running on a worker is not enough: it must be the bound one.
+                try {
+                    memory.trim(second_owner);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                try {
+                    memory.trim(first_owner);
+                } catch (const std::logic_error&) {
+                    rebound = true;
+                }
+            })
+            .accepted());
+    second.join();
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(rebound);
+}
+
 RUVIA_TEST(worker_memory_passes_over_aligned_large_blocks_through) {
     constexpr std::size_t block_bytes = 30000;
     constexpr std::size_t alignment = 128;
@@ -561,5 +597,29 @@ RUVIA_TEST(request_memory_fork_survives_parent_and_keeps_its_own_allocations) {
     }
     RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
+    RUVIA_CHECK(upstream.matched_returns_);
+}
+
+RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
+    constexpr std::size_t initial_bytes = 64 * 1024;
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker(upstream, {.request_initial_buffer_bytes_ = initial_bytes});
+        std::array<std::byte, 256> initial;
+        ruvia::request_memory parent(worker, initial);
+        const ruvia::request_memory child_value = parent.fork();
+        const auto live_before = upstream.live_bytes_;
+        // Two allocations that only fit one block of the configured size. The
+        // pool may add bookkeeping allocations of its own, so bytes are what prove
+        // one configured-size block served both.
+        auto* first = static_cast<std::byte*>(child_value.resource()->allocate(20000));
+        auto* second = static_cast<std::byte*>(child_value.resource()->allocate(20000));
+        std::fill_n(first, 20000, std::byte{0x1a});
+        std::fill_n(second, 20000, std::byte{0x2b});
+        RUVIA_CHECK(upstream.live_bytes_ - live_before >= initial_bytes);
+        RUVIA_CHECK(upstream.live_bytes_ - live_before < 2 * initial_bytes);
+        RUVIA_CHECK(first[19999] == std::byte{0x1a} && second[0] == std::byte{0x2b});
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
     RUVIA_CHECK(upstream.matched_returns_);
 }

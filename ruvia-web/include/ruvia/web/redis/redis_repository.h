@@ -212,7 +212,7 @@ private:
     [[nodiscard]] scoped_operation<redis_write_result> delete_by_id(
         std::string_view id, std::pmr::memory_resource* memory) const {
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
-        return handle_.template command_mapped<redis_write_result>(
+        return handle_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
             detail::redis_orm_delete_arguments(key, memory), detail::redis_orm_delete_result);
     }
 
@@ -259,7 +259,8 @@ private:
             }
         });
 
-        return handle_.template command_mapped<redis_write_result>(std::move(args), detail::redis_orm_exec_result);
+        return handle_.template script_mapped<redis_write_result>(
+            detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
     }
 
     static constexpr const auto& columns = detail::redis_query_columns<entity_type>;

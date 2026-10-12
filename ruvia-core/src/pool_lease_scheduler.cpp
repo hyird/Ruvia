@@ -62,54 +62,35 @@ public:
         }
     };
 
-    class acquire_reservation_type final {
-    public:
-        explicit acquire_reservation_type(impl_type& owner_value) noexcept
-            : owner_(&owner_value) {
-            ++owner_->reserved_acquires_;
-        }
-        ~acquire_reservation_type() {
-            if (owner_ != nullptr) {
-                --owner_->reserved_acquires_;
-            }
-        }
-        acquire_reservation_type(const acquire_reservation_type&) = delete;
-        acquire_reservation_type& operator=(const acquire_reservation_type&) = delete;
-        acquire_reservation_type(acquire_reservation_type&& other) noexcept
-            : owner_(std::exchange(other.owner_, nullptr)) {}
-        acquire_reservation_type& operator=(acquire_reservation_type&&) = delete;
-
-        [[nodiscard]] impl_type& owner() const noexcept {
-            return *owner_;
-        }
-
-    private:
-        impl_type* owner_;
-    };
-
-    [[nodiscard]] static task<pool_waiter_result> acquire_reserved(acquire_reservation_type reservation,
-        std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value,
-        const worker_handle* worker_value) {
-        auto& owner_value = reservation.owner();
+    [[nodiscard]] std::optional<pool_waiter_result> try_acquire(
+        const std::optional<std::chrono::milliseconds>& timeout, const stop_token& stop_token_value) {
+        const auto* const worker_value = worker();
         if (stop_token_value.stoppable() && (worker_value == nullptr || !worker_value->valid())) {
             throw std::logic_error("cancellable pool acquire requires a valid worker");
         }
         if (timeout.has_value() && worker_value == nullptr) {
             throw std::logic_error("timed pool acquire requires a worker");
         }
-        if (owner_value.closing_) {
-            co_return pool_waiter_result::make_closed();
+        if (closing_) {
+            return pool_waiter_result::make_closed();
         }
         if (stop_token_value.stop_requested()) {
-            co_return pool_waiter_result::make_cancelled();
+            return pool_waiter_result::make_cancelled();
         }
-        if (!owner_value.free_slots_.empty()) {
-            const auto slot = owner_value.free_slots_.back();
-            owner_value.free_slots_.pop_back();
-            owner_value.busy_[slot] = 1;
-            co_return pool_waiter_result::make_acquired(slot);
+        if (free_slots_.empty()) {
+            return std::nullopt;
         }
+        const auto slot = free_slots_.back();
+        free_slots_.pop_back();
+        busy_[slot] = 1;
+        return pool_waiter_result::make_acquired(slot);
+    }
 
+    // The waiting path only: the caller holds the reservation that keeps this
+    // scheduler alive, and try_acquire() has just found the pool saturated.
+    [[nodiscard]] static task<pool_waiter_result> acquire_waiting(impl_type& owner_value,
+        std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) {
+        const auto* const worker_value = owner_value.worker();
         auto waiter_id = ++owner_value.next_waiter_id_;
         if (waiter_id == 0) {
             waiter_id = ++owner_value.next_waiter_id_;
@@ -201,15 +182,51 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_h
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
-task<pool_waiter_result> pool_lease_scheduler::acquire(
-    const std::optional<std::chrono::milliseconds>& timeout) {
-    return impl_type::acquire_reserved(impl_type::acquire_reservation_type(*impl_), timeout, {}, impl_->worker());
+pool_lease_acquire pool_lease_scheduler::acquire(const std::optional<std::chrono::milliseconds>& timeout) {
+    return pool_lease_acquire(*impl_, timeout, {});
 }
 
-task<pool_waiter_result> pool_lease_scheduler::acquire(
+pool_lease_acquire pool_lease_scheduler::acquire(
     const std::optional<std::chrono::milliseconds>& timeout, stop_token stop_token_value) {
-    return impl_type::acquire_reserved(
-        impl_type::acquire_reservation_type(*impl_), timeout, std::move(stop_token_value), impl_->worker());
+    return pool_lease_acquire(*impl_, timeout, std::move(stop_token_value));
+}
+
+pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
+    std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) noexcept
+    : owner_(&owner_value),
+      timeout_(timeout),
+      stop_token_(std::move(stop_token_value)) {
+    ++owner_->reserved_acquires_;
+}
+
+pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)),
+      timeout_(other.timeout_),
+      stop_token_(std::move(other.stop_token_)) {}
+
+pool_lease_acquire::~pool_lease_acquire() {
+    if (owner_ != nullptr) {
+        --owner_->reserved_acquires_;
+    }
+}
+
+bool pool_lease_acquire::await_ready() {
+    result_ = owner_->try_acquire(timeout_, stop_token_);
+    return result_.has_value();
+}
+
+std::coroutine_handle<> pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
+    // Nothing ran between await_ready and here, so the pool is still saturated.
+    auto& awaiter = waiting_.emplace(
+        pool_lease_scheduler::impl_type::acquire_waiting(*owner_, timeout_, std::move(stop_token_)));
+    return awaiter.await_suspend(continuation);
+}
+
+pool_waiter_result pool_lease_acquire::await_resume() {
+    if (waiting_.has_value()) {
+        return waiting_->await_resume();
+    }
+    return *result_;
 }
 
 pool_lease_release_status pool_lease_scheduler::release(std::size_t slot) noexcept {

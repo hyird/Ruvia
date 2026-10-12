@@ -94,7 +94,8 @@ void http_client_pool::close_now() noexcept {
     if (!slots_.close()) {
         return;
     }
-    background_tasks_.request_stop();
+    // slots_.close() retires queued waiters and connection shutdown aborts
+    // every connect and exchange; a transferred slot fails at admission.
     for (auto& connection_value : connections_) {
         connection_value->shutdown();
     }
@@ -154,35 +155,6 @@ void http_client_pool::spawn_request(
     background_tasks_.spawn(execute_into(std::move(request), std::move(options), &state_value));
 }
 
-task<void> http_client_pool::await_head(http_client_response_state& state_value, std::string_view failure_message) {
-    while (!state_value.head_ready_ && !state_value.failure_ && !state_value.error_code_) {
-        co_await state_value.head_signal_.wait();
-    }
-    if (state_value.failure_) {
-        std::rethrow_exception(state_value.failure_);
-    }
-    if (state_value.error_code_) {
-        throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), failure_message);
-    }
-    if (state_value.tunnel_ && state_value.tunnel_->accepted_) {
-        co_return;
-    }
-    if (!state_value.body_decode_required_) {
-        co_return;
-    }
-    state_value.notify_producer_space();
-    while (!state_value.complete_) {
-        co_await state_value.data_signal_.wait();
-    }
-    if (state_value.failure_) {
-        std::rethrow_exception(state_value.failure_);
-    }
-    if (state_value.error_code_) {
-        throw http_client_error(
-            static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP client encoded response failed");
-    }
-}
-
 task<http_client_tunnel_result> http_client_pool::open_tunnel(
     http_client_request_storage request, http_client_tunnel_config config, operation_options options) {
     require_accepting();
@@ -196,7 +168,7 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
     }
     owned_request.bind_tunnel(*state_value.tunnel_);
     spawn_request(std::move(owned_request), std::move(options), state_value);
-    co_await await_head(state_value, "CONNECT handshake failed");
+    co_await state_value.await_head("CONNECT handshake failed");
     if (state_value.tunnel_->accepted_) {
         co_return http_client_tunnel_result(http_client_tunnel(std::move(response)));
     }
@@ -223,7 +195,7 @@ task<http_client_response> http_client_pool::execute(http_client_request_storage
     http_client_response response(*this);
     auto& state_value = *response.state_;
     spawn_request(std::move(owned_request), std::move(options), state_value);
-    co_await await_head(state_value, "HTTP client request failed before the response head");
+    co_await state_value.await_head("HTTP client request failed before the response head");
     co_return response;
 }
 
@@ -265,6 +237,8 @@ task<void> http_client_pool::execute_request_into(
     struct lease_type final {
         http_client_pool& pool_;
         std::size_t index_;
+        // Set while a transport operation may leave request bytes or a
+        // half-written connect on the connection.
         http_client_connection* discard_{nullptr};
         ~lease_type() {
             if (discard_ != nullptr) {
@@ -273,39 +247,30 @@ task<void> http_client_pool::execute_request_into(
             pool_.slots_.release(index_);
         }
     } lease{*this, index};
-    bool discard_connection = false;
-    http_client_connection* tcp_connection = nullptr;
     try {
-        tcp_connection = &connection(index);
-        state_value->connection_index_ = tcp_connection->index();
-        co_await execute_tcp(*tcp_connection, request, timeout, options.stop_token_, *state_value,
-            discard_connection);
+        // A slot transferred by a releasing lease resumes its waiter after
+        // close_now() may already have retired every connection.
+        slots_.throw_if_aborted(index);
+        auto& tcp_connection = connection(index);
+        state_value->connection_index_ = index;
+        // Abandonment before the exchange starts leaves no request bytes on
+        // the connection, so it stays reusable.
+        throw_if_abandoned(*state_value);
+        lease.discard_ = &tcp_connection;
+        co_await tcp_connection.ensure_connected(timeout, options.stop_token_, *state_value);
+        lease.discard_ = nullptr;
+        throw_if_abandoned(*state_value);
+        lease.discard_ = &tcp_connection;
+        http1_client_exchange exchange(*this, tcp_connection);
+        co_await exchange.run(request, timeout, options.stop_token_, *state_value);
+        lease.discard_ = nullptr;
         --requests_in_flight_;
         ++completed_requests_;
     } catch (...) {
         --requests_in_flight_;
         ++failed_requests_;
-        if (discard_connection) {
-            lease.discard_ = tcp_connection;
-        }
         throw;
     }
-}
-
-task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
-    const http_client_request_storage& request, const operation_timeout& timeout,
-    stop_token stop_token_value, http_client_response_state& state_value, bool& discard_connection) {
-    // Abandonment before the exchange starts leaves no request bytes on the
-    // connection, so it stays reusable.
-    throw_if_abandoned(state_value);
-    discard_connection = true;
-    co_await connection_value.ensure_connected(timeout, stop_token_value);
-    discard_connection = false;
-    throw_if_abandoned(state_value);
-    discard_connection = true;
-    http1_client_exchange exchange(*this, connection_value);
-    co_await exchange.run(request, timeout, stop_token_value, state_value);
-    discard_connection = false;
 }
 
 void http_client_pool::abandon_response(http_client_response_state& state_value) noexcept {
@@ -313,12 +278,9 @@ void http_client_pool::abandon_response(http_client_response_state& state_value)
         return;
     }
     state_value.abandoned_ = true;
-    if (state_value.cancellation_id_ != 0) {
-        cancel_operation_by_id(state_value.cancellation_id_);
-    } else if (state_value.connection_index_ < connections_.size() &&
-               connection(state_value.connection_index_).http1_response_ == &state_value) {
-        connection(state_value.connection_index_).close();
-    }
+    // A connect or exchange in progress published its id; a response still
+    // queued for a slot has none and fails at admission.
+    cancel_operation_by_id(state_value.cancellation_id_);
     if (auto* output = state_value.output()) {
         output->stop();
     }

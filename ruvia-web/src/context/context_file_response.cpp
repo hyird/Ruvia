@@ -538,31 +538,31 @@ http_response context::static_file(const static_root& root, static_file_response
     }
     const std::string_view lookup_path =
         decoded_path.has_value() ? std::string_view(*decoded_path) : relative_path;
-    const auto separator_count = [](std::string_view path) noexcept {
-        return std::ranges::count_if(path, [](char c) noexcept { return c == '/' || c == '\\'; });
-    };
-    if ((lookup_path.find('\0') != std::string_view::npos) ||
-        (decoded_path.has_value() && separator_count(lookup_path) != separator_count(relative_path))) {
-        throw http_error({.status_ = ruvia::http_status::forbidden,
-            .code_ = "forbidden",
-            .message_ = "invalid static file path"});
+    std::pmr::string relative_storage(pool());
+    const auto normalized = detail::normalize_static_relative_path(lookup_path, relative_storage);
+    if (decoded_path.has_value() &&
+        normalized.separator_count_ != static_cast<std::size_t>(std::ranges::count_if(
+                                           relative_path, [](char c) noexcept { return c == '/' || c == '\\'; }))) {
+        detail::throw_invalid_static_file_path();
     }
-    auto relative = detail::normalize_static_relative_path(
-        lookup_path, std::pmr::polymorphic_allocator<char>(pool()));
+    auto relative = normalized.path_;
 
     if (relative.empty() && !detail::static_root_access::has_directory_index(root)) {
-        throw http_error({.status_ = ruvia::http_status::forbidden,
-            .code_ = "forbidden",
-            .message_ = "invalid static file path"});
+        detail::throw_invalid_static_file_path();
     }
 
     auto entry_value = detail::static_root_access::find(root, relative);
     if (!entry_value.has_value() && detail::static_root_access::is_indexed_directory(root, relative)) {
-        if (!relative.empty() && relative.back() != '/') {
-            relative.push_back('/');
+        // A normalized path never ends with '/'.
+        if (relative.data() != relative_storage.data()) {
+            relative_storage.assign(relative.data(), relative.size());
+        }
+        if (!relative_storage.empty()) {
+            relative_storage.push_back('/');
         }
         const auto index_file = detail::static_root_access::index_file(root);
-        relative.append(index_file.data(), index_file.size());
+        relative_storage.append(index_file.data(), index_file.size());
+        relative = relative_storage;
         entry_value = detail::static_root_access::find(root, relative);
     }
     if (!entry_value.has_value()) {

@@ -20,6 +20,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
 #include "test_tls_crypto.h"
@@ -28,8 +29,10 @@
 // An interim head sent from a handler first writes the pipelined responses
 // held before it; over TLS that write always completes asynchronously. Once
 // it and the interim head are out, the handler is timed as a handler again
-// (idle_timeout), not as a write. This executable owns its application, so
-// its short write timeout cannot leak into other suites.
+// (idle_timeout), not as a write. A response-stream handler likewise: only
+// its writes are timed as writes, and the wait between them is governed by
+// idle_timeout. This executable owns its application, so its short write
+// timeout cannot leak into other suites.
 
 namespace interim_phase_timeout_test {
 
@@ -43,6 +46,7 @@ class interim_phase_routes final {
     RUVIA_ROUTES_BEGIN(interim_phase_routes)
     RUVIA_GET("/interim-phase/item", item);
     RUVIA_GET("/interim-phase/hinted", hinted);
+    RUVIA_GET_STREAM("/interim-phase/stream", stream);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {
@@ -53,6 +57,12 @@ class interim_phase_routes final {
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
         (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
         co_return c.text("hinted");
+    }
+
+    ruvia::task<void> stream(ruvia::context& c) {
+        co_await c.stream().write("first-chunk");
+        (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
+        co_await c.stream().write("second-chunk");
     }
 };
 
@@ -127,6 +137,12 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
         const auto interim = output.find("HTTP/1.1 103 ");
         RUVIA_CHECK(item != std::string::npos && interim != std::string::npos && item < interim);
         RUVIA_CHECK(output.ends_with("hinted"));
+
+        const auto streamed = exchange_tls(io, endpoint,
+            "GET /interim-phase/stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        RUVIA_CHECK(streamed.find("first-chunk") != std::string::npos);
+        RUVIA_CHECK(streamed.find("second-chunk") != std::string::npos);
+        RUVIA_CHECK(streamed.ends_with("0\r\n\r\n"));
     }
     app.stop();
     runner.join();

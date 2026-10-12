@@ -9,6 +9,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/web/detail/redis/redis_argument_pack.h"
 #include "ruvia/web/detail/redis/redis_batch_forwarding.h"
 #include "ruvia/web/detail/redis/redis_command_batch.h"
 #include "ruvia/web/redis/redis_types.h"

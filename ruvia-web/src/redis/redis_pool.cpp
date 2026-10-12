@@ -18,6 +18,10 @@ namespace {
     return args;
 }
 
+[[nodiscard]] std::span<const std::pmr::string> redis_arg_span(redis_command_args_view args) noexcept {
+    return args.args_;
+}
+
 }  // namespace
 
 void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, const pool_waiter_result& result) {
@@ -53,6 +57,11 @@ task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> a
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout) {
     return execute_with_timeout_impl(std::move(args), std::move(options), reply_timeout, resource);
+}
+
+task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
+    std::pmr::memory_resource* resource, operation_options options) {
+    return execute_with_timeout_impl(args, std::move(options), std::nullopt, resource);
 }
 
 template <typename arg_source_type>

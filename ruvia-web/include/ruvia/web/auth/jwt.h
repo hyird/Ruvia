@@ -104,6 +104,9 @@ struct jwt_verify_options final {
     borrowed_text secret_{};
     std::string issuer_{};
     std::string subject_{};
+    // The audience this verifier identifies itself with. A token that carries
+    // "aud" is rejected unless this value is one of its audiences (RFC 7519
+    // §4.1.3); when empty, any token that carries "aud" is rejected.
     std::string audience_{};
     std::chrono::seconds leeway_{0};
     jwt_expiration_claim_policy expiration_claim_{jwt_expiration_claim_policy::require};
@@ -142,6 +145,8 @@ public:
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> expires_at() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> not_before() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> issued_at() const noexcept;
+    // Custom claims are string-valued: a token whose custom claim holds any
+    // other JSON value is rejected, like a malformed registered claim.
     [[nodiscard]] std::span<const jwt_claim> claims() const& noexcept;
     [[nodiscard]] std::span<const jwt_claim> claims() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const& noexcept;

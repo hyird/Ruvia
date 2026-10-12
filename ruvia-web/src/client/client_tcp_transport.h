@@ -6,6 +6,7 @@
 #include <string_view>
 #include <system_error>
 
+#include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
@@ -95,8 +96,12 @@ public:
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
     [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_timeout& timeout);
-    // Writes every byte under the write lane's own deadline.
+    // Writes every byte under the write lane's own deadline. The buffer
+    // sequence form sends framed parts (chunk prefix, payload, suffix) as one
+    // transport write, which is one TLS record sequence and one deadline cycle.
     [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> write(
+        std::span<const asio::const_buffer> buffers, const operation_timeout& timeout);
 
     [[nodiscard]] client_abort_reason abort_reason() const noexcept {
         return abort_reason_;
@@ -130,6 +135,8 @@ private:
         worker_timer_registration timer_;
     };
 
+    template <typename buffers_type>
+    [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_timeout& timeout);
     [[nodiscard]] bool arm(lane_deadline& lane, lane_type kind, const operation_timeout& timeout);
     [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
     [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_timeout& timeout,

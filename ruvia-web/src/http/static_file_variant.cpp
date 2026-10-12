@@ -1,5 +1,8 @@
 #include "http/static_file_variant.h"
 
+#include <array>
+#include <cstddef>
+
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 
@@ -8,12 +11,8 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool precompressed_variant_is_at_least_as_new(const detail::static_root_entry_view& identity,
-    const detail::static_root_entry_view& variant) noexcept {
-    if (variant.modified_seconds() != identity.modified_seconds()) {
-        return variant.modified_seconds() > identity.modified_seconds();
-    }
-    return variant.modified_token() >= identity.modified_token();
+[[nodiscard]] detail::static_file_version entry_version(const detail::static_root_entry_view& entry_value) noexcept {
+    return {entry_value.modified_seconds(), entry_value.modified_token()};
 }
 
 }  // namespace
@@ -42,29 +41,29 @@ std::optional<static_file_representation> select_static_file_representation(cons
     }
 
     struct candidate final {
-        std::string_view suffix_;
         http_content_coding content_coding_;
         std::optional<detail::static_root_entry_view> entry_;
         std::optional<detail::static_root_memory_variant_view> memory_variant_;
     };
-    candidate candidates[] = {
-        {".br", http_content_coding::brotli, std::nullopt, std::nullopt},
-        {".zst", http_content_coding::zstd, std::nullopt, std::nullopt},
-        {".gz", http_content_coding::gzip, std::nullopt, std::nullopt},
-    };
+    std::array<candidate, detail::static_precompression_sidecars.size()> candidates{};
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        candidates[i].content_coding_ = detail::static_precompression_sidecars[i].content_coding_;
+    }
 
     auto available = http_response_coding_candidates::identity_only();
     std::pmr::string variant_path(resource);
-    for (auto& candidate : candidates) {
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        auto& candidate = candidates[i];
         if (!qualities.accepts(candidate.content_coding_)) {
             continue;
         }
-        variant_path.reserve(relative.size() + candidate.suffix_.size());
+        const auto suffix = detail::static_precompression_sidecars[i].suffix_;
+        variant_path.reserve(relative.size() + suffix.size());
         variant_path.assign(relative.data(), relative.size());
-        variant_path.append(candidate.suffix_.data(), candidate.suffix_.size());
+        variant_path.append(suffix.data(), suffix.size());
         if (const auto entry_value = detail::static_root_access::find_variant(root, variant_path);
             entry_value.has_value()) {
-            if (!precompressed_variant_is_at_least_as_new(identity, *entry_value)) {
+            if (!entry_version(*entry_value).at_least_as_new_as(entry_version(identity))) {
                 if (auto memory_variant = identity.memory_variant(candidate.content_coding_);
                     memory_variant.has_value()) {
                     candidate.memory_variant_ = *memory_variant;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <coroutine>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -108,9 +109,11 @@ private:
     value_type value_;
 };
 
+class pool_lease_acquire;
+
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
-// A supplied worker endpoint is retained once by the scheduler. Lazy acquires
-// copy their inputs before return and borrow only their scheduler, which must
+// A supplied worker endpoint is retained once by the scheduler. Acquires copy
+// their inputs before return and borrow only their scheduler, which must
 // outlive them.
 class pool_lease_scheduler final {
 public:
@@ -125,14 +128,16 @@ public:
     pool_lease_scheduler& operator=(pool_lease_scheduler&&) = delete;
     ~pool_lease_scheduler();
 
+    // The returned awaitable is cold: nothing is checked or queued until it is
+    // awaited, which must happen on the scheduler's worker. A free slot is
+    // leased synchronously without suspending; only a saturated pool waits.
     // A timeout arms a timer on the scheduler's worker; a scheduler built
     // without one throws std::logic_error for a timed acquire. Once that
     // worker's timer queue stops (pending or new acquires alike) no timer
     // fires: the acquire completes only through release(), close() (closed),
     // or its stop token (cancelled). It never throws for that.
-    [[nodiscard]] task<pool_waiter_result> acquire(
-        const std::optional<std::chrono::milliseconds>& timeout);
-    [[nodiscard]] task<pool_waiter_result> acquire(const std::optional<std::chrono::milliseconds>& timeout,
+    [[nodiscard]] pool_lease_acquire acquire(const std::optional<std::chrono::milliseconds>& timeout);
+    [[nodiscard]] pool_lease_acquire acquire(const std::optional<std::chrono::milliseconds>& timeout,
         stop_token stop_token);
 
     [[nodiscard]] pool_lease_release_status release(std::size_t slot) noexcept;
@@ -140,8 +145,37 @@ public:
     [[nodiscard]] bool closing() const noexcept;
 
 private:
+    friend class pool_lease_acquire;
+
     class impl_type;
     std::unique_ptr<impl_type> impl_;
+};
+
+// One acquire: single-use, movable only before it is awaited. The scheduler
+// must outlive it; destroying a scheduler with live acquires terminates.
+class pool_lease_acquire final {
+public:
+    pool_lease_acquire(pool_lease_acquire&& other) noexcept;
+    pool_lease_acquire(const pool_lease_acquire&) = delete;
+    pool_lease_acquire& operator=(const pool_lease_acquire&) = delete;
+    pool_lease_acquire& operator=(pool_lease_acquire&&) = delete;
+    ~pool_lease_acquire();
+
+    [[nodiscard]] bool await_ready();
+    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation);
+    [[nodiscard]] pool_waiter_result await_resume();
+
+private:
+    friend class pool_lease_scheduler;
+
+    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
+        std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) noexcept;
+
+    pool_lease_scheduler::impl_type* owner_;
+    std::optional<std::chrono::milliseconds> timeout_;
+    stop_token stop_token_;
+    std::optional<pool_waiter_result> result_;
+    std::optional<detail::task_awaiter<pool_waiter_result>> waiting_;
 };
 
 }  // namespace ruvia

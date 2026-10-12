@@ -77,17 +77,12 @@ void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool
             return;
         }
     }
-    auto* output = state.buffer_.data();
-    while (state.filled_ < bytes) {
-        input.read(output + state.filled_, static_cast<std::streamsize>(bytes - state.filled_));
-        const auto count = input.gcount();
-        if (!input || count <= 0) {
-            // The committed length can no longer be honoured.
-            state.error_ = std::make_error_code(std::errc::io_error);
-            return;
-        }
-        state.filled_ += static_cast<std::size_t>(count);
+    if (!read_exact(input, state.buffer_.data(), bytes)) {
+        // The committed length can no longer be honoured.
+        state.error_ = std::make_error_code(std::errc::io_error);
+        return;
     }
+    state.filled_ = bytes;
     state.position_ += state.filled_;
     if (completes_range && !input.matches_snapshot(state.identity_, state.size_)) {
         state.error_ = std::make_error_code(std::errc::operation_canceled);

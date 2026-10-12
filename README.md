@@ -162,12 +162,15 @@ Without a SQL type context, PostgreSQL `db_query` bitwise operations (`&`, `|`,
 modes and reject unsigned operands above `INT64_MAX` with `std::invalid_argument`.
 Where `db_query` must supply a numeric type, unsigned values use `numeric` to
 preserve their full range; columns and explicit casts keep PostgreSQL type
-inference.
+inference. PostgreSQL `double` parameters are always sent typed as `float8`, in
+raw SQL and `db_query` alike; other raw-SQL parameters stay untyped.
 
 `ruvia/web/controller.h` includes context and request validation; include
 `streaming.h`, `multipart_reader.h`, `websocket.h`, `http_tunnel.h`, `session.h`,
 or `http_client_handle.h` where their capabilities are used.
 
+Route patterns are matched byte-exactly (RFC 3986), so `/a` and `/a/` are
+different routes; middleware and error scope prefixes still ignore a trailing slash.
 Ordinary buffered GET routes also handle HEAD unless an explicit HEAD route
 matches. Streaming, SSE, and WebSocket routes require an explicit HEAD route.
 Context body builders copy strings; `ruvia::static_text` explicitly borrows

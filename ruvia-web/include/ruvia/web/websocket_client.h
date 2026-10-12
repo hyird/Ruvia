@@ -48,6 +48,9 @@ struct websocket_client_config final {
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
     // Pongs are matched by read(); a pong timeout retires the client only while
     // a read is active, and an expired window restarts when the next read begins.
+    // A write (application message or Ping) that has not completed within
+    // ping_interval + pong_timeout since the last activity retires the client
+    // with `timeout`, independently of write_timeout_.
     websocket_heartbeat_config heartbeat_{};
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};

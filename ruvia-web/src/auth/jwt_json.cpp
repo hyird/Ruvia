@@ -207,7 +207,9 @@ namespace {
             return true;
         });
     detail::skip_json_whitespace(value);
-    if (!consumed || !value.empty()) {
+    // RFC 7519 §4.1.3: an "aud" claim with no value identifies nobody, so the
+    // token is rejected rather than treated as unaudienced.
+    if (!consumed || !value.empty() || out.empty()) {
         out.clear();
         return false;
     }
@@ -221,7 +223,7 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
     auto* resolved = pmr_resource_or_default(resource);
     jwt_payload payload_value({.resource_ = resolved});
 
-    bool registered_claim_invalid = false;
+    bool claim_invalid = false;
 
     const bool valid = detail::visit_unique_jwt_json_object_fields(
         json, resolved, [&](std::string_view key, std::string_view value) {
@@ -229,7 +231,7 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
                     payload_value.issuer_ = std::move(*issuer);
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
@@ -237,13 +239,13 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
                     payload_value.subject_ = std::move(*subject);
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
             if (key == "aud") {
                 if (!jwt_decode_audiences(payload_value.audiences_, value, resolved)) {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
@@ -251,7 +253,7 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
                     payload_value.id_ = std::move(*id);
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
@@ -259,7 +261,7 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
                     payload_value.expires_at_ = *exp;
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
@@ -267,7 +269,7 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
                     payload_value.not_before_ = *nbf;
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
@@ -275,20 +277,22 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
                 if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
                     payload_value.issued_at_ = *iat;
                 } else {
-                    registered_claim_invalid = true;
+                    claim_invalid = true;
                 }
                 return;
             }
-            if (!detail::jwt_is_reserved_claim(key)) {
-                if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
-                    std::pmr::string claim_name(resolved);
-                    claim_name.assign(key.data(), key.size());
-                    payload_value.claims_.push_back(detail::jwt_payload_access::claim(
-                        std::move(claim_name), std::move(*claim_value)));
-                }
+            // Custom claims are string-valued like the registered name claims;
+            // any other JSON value rejects the token instead of vanishing.
+            if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
+                std::pmr::string claim_name(resolved);
+                claim_name.assign(key.data(), key.size());
+                payload_value.claims_.push_back(detail::jwt_payload_access::claim(
+                    std::move(claim_name), std::move(*claim_value)));
+            } else {
+                claim_invalid = true;
             }
         });
-    if (!valid || registered_claim_invalid) {
+    if (!valid || claim_invalid) {
         throw std::runtime_error("JWT payload is not a valid unique claims object");
     }
     return payload_value;

@@ -45,8 +45,16 @@ struct http_client_config final {
     std::size_t max_cookies_{256};
     std::size_t max_cookie_bytes_{std::size_t{32} * 1024};
     std::chrono::milliseconds connect_timeout_{5000};
+    // Bound of each transport write of the request head, content or an upload chunk.
     std::optional<std::chrono::milliseconds> write_timeout_{30000};
+    // Total deadline of one exchange, from slot acquisition through connect,
+    // request transfer, response head and the complete body, including the
+    // time the body producer waits for a slow consumer (read(), pipe_to()) to
+    // drain max_response_bytes_ of buffered body. Expiry fails the response
+    // with timeout and discards its connection. An operation's own timeout
+    // replaces it; nullopt leaves the exchange unbounded.
     std::optional<std::chrono::milliseconds> request_timeout_{30000};
+    // Bound of the wait for a free connection slot, within request_timeout_.
     std::optional<std::chrono::milliseconds> acquire_timeout_{5000};
     std::size_t max_response_bytes_{default_max_buffered_body_bytes};
     // Used for https; client_tls_mode::disabled is rejected (select http instead).

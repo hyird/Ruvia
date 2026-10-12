@@ -70,7 +70,10 @@ class db_pool;
 
 // The driver hooks. Statement hooks run on a connected, leased slot under a
 // deadline already constrained by the query timeout. `sql` views are
-// NUL-terminated. Hooks throw on failure; the pool closes the slot.
+// NUL-terminated. Hooks throw on failure. A statement_failed db_error or a
+// std::invalid_argument promises that the command has been drained and the
+// connection is idle -- a hook that cannot get there closes the slot before
+// throwing -- so the pool keeps the connection; any other failure closes it.
 struct mariadb_driver final {
     using connection_type = st_mysql;
     using pool_type = db_pool<mariadb_driver>;
@@ -232,14 +235,52 @@ public:
     // wakes that wait so the driving coroutine finishes the close.
     void close_slot(std::size_t index) noexcept;
     task<db_resolved_addresses_type> resolve_host(std::size_t index, const operation_timeout& deadline);
-    // One readiness wait on the driver's current socket under an optional
-    // per-wait timeout. Cancellation, closing, operation timeout, and wait
-    // failures are reported as db_error; slot-deadline expiry and socket
-    // errors are returned for the driver to interpret. Once the slot is
-    // connected, the socket's registration persists across waits.
-    task<db_socket_wait_result> wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
+    // One wait on a leased slot: readiness of the driver's current socket, or
+    // a timed pause without a socket (MariaDB connect), under an optional
+    // per-wait timeout. Not a coroutine: await_ready() registers the socket and
+    // arms the slot deadline, await_suspend() hands the coroutine to the
+    // readiness wait or the deadline, and await_resume() classifies the
+    // outcome -- so a wait allocates nothing. Cancellation, closing, operation
+    // timeout, and wait failures are thrown as db_error; slot-deadline expiry
+    // and socket errors are returned for the driver to interpret, and a pause
+    // always returns expired. Once the slot is connected, the socket's
+    // registration persists across waits.
+    class slot_wait final {
+    public:
+        slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native,
+            db_socket_readiness wanted, std::optional<std::chrono::milliseconds> wait_timeout,
+            const operation_timeout& operation_deadline) noexcept;
+        ~slot_wait();
+
+        slot_wait(const slot_wait&) = delete;
+        slot_wait& operator=(const slot_wait&) = delete;
+
+        [[nodiscard]] bool await_ready();
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        [[nodiscard]] db_socket_wait_result await_resume();
+
+    private:
+        db_pool& pool_;
+        std::size_t index_;
+        db_deadline_kind kind_;
+        db_slot_socket::native_socket_type native_;
+        std::optional<std::chrono::milliseconds> wait_timeout_;
+        const operation_timeout& operation_deadline_;
+        db_slot_socket::readiness_awaiter socket_wait_;
+        // The slot is marked borrowed between arming and resumption.
+        bool borrowed_{false};
+    };
+
+    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
         db_socket_readiness wanted, std::optional<std::chrono::milliseconds> wait_timeout,
-        const operation_timeout& operation_deadline);
+        const operation_timeout& operation_deadline) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_timeout, operation_deadline);
+    }
+    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::milliseconds> wait_timeout,
+        const operation_timeout& operation_deadline) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket,
+            db_socket_readiness::none, wait_timeout, operation_deadline);
+    }
     [[nodiscard]] db_error timed_out() const;
     [[nodiscard]] db_error closing_error() const;
 
@@ -261,6 +302,8 @@ private:
         const operation_timeout& timeout);
     task<void> finish_transaction(std::size_t index, std::string_view command,
         std::pmr::memory_resource* resource, const operation_options& options);
+    task<void> retire_failed_transaction_slot(std::size_t index, std::pmr::memory_resource* resource,
+        const operation_timeout& timeout, const std::exception_ptr& failure);
 
     asio::io_context& io_context_;
     db_config_storage config_;

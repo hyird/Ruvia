@@ -27,6 +27,9 @@ public:
 // Either failure is terminal because input/output may have
 // progressed. Later operations throw std::logic_error. finish() is idempotent;
 // writing after successful finish throws std::logic_error without changing output.
+// reset() returns an encoder in any phase to a fresh active stream, reusing the
+// codec's working memory; a codec that cannot be reset throws
+// http_content_encoder_error and the encoder stays failed.
 class http_content_encoder final {
 public:
     http_content_encoder(http_content_coding coding, std::pmr::memory_resource* resource);
@@ -43,6 +46,7 @@ public:
     // flush emits pending bytes for low-latency response streams such as SSE.
     void write(std::string_view input, std::pmr::string& output, bool flush = false);
     void finish(std::pmr::string& output);
+    void reset();
 
 private:
     struct impl;

@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <variant>
 
 #include "ruvia/core/worker_handle.h"
@@ -21,8 +23,17 @@ std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t n
     std::int64_t delay_value = 1;
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_)) {
         delay_value = remaining(pong->sent_at_ms(), config_.heartbeat_.pong_timeout_->count());
-    } else if (std::holds_alternative<websocket_liveness_idle>(liveness_state_)) {
+    } else if (!std::holds_alternative<websocket_awaiting_peer_close>(liveness_state_)) {
         delay_value = remaining(last_active_ms_, config_.heartbeat_.ping_interval_->count());
+        if (write_phase_ != write_phase_type::idle) {
+            // The write holding the lane (an application message or the Ping
+            // itself) has the Pong timeout on top of the Ping interval before
+            // it counts as stalled.
+            const auto pong_timeout = config_.heartbeat_.pong_timeout_->count();
+            delay_value = pong_timeout > std::numeric_limits<std::int64_t>::max() - delay_value
+                              ? std::numeric_limits<std::int64_t>::max()
+                              : delay_value + pong_timeout;
+        }
     }
     return std::chrono::milliseconds(std::max<std::int64_t>(1, delay_value));
 }
@@ -75,11 +86,10 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
     const auto now = websocket_steady_now_ms();
     const websocket_lifecycle_options options{
         .heartbeat_ = config_.heartbeat_, .close_handshake_timeout_ = config_.close_handshake_timeout_};
-    // An active write does not defer the decision here. heartbeat() waits for
-    // the write lane on write_signal_, so a due ping never re-arms the timer
-    // just to poll for write completion.
-    const auto decision = evaluate_websocket_liveness(
-        options, require_protocol().liveness_mode(), liveness_state_, false, last_active_ms_, now);
+    // A write holding the lane defers the Ping; a stalled write is aborted
+    // once it exceeds the Ping interval plus the Pong timeout.
+    const auto decision = evaluate_websocket_liveness(options, require_protocol().liveness_mode(), liveness_state_,
+        write_phase_ != write_phase_type::idle, last_active_ms_, now);
     if (decision == websocket_liveness_decision::send_ping) {
         return true;
     }
@@ -101,10 +111,11 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
 }
 
 void websocket_client_state::heartbeat_timer_fired() noexcept {
-    // An in-flight heartbeat re-evaluates liveness and re-arms the timer when it
-    // finishes waiting or writing, so a concurrent expiry has nothing to do.
-    if (heartbeat_in_flight_ || !protocol_open() || !config_.heartbeat_.ping_interval_.has_value() ||
-        !heartbeat_ping_due()) {
+    // A heartbeat in flight sends its Ping once the write lane is idle, so a
+    // due Ping spawns nothing. The evaluation still runs: a Ping write stalled
+    // by a peer that stopped reading is aborted like any other stalled write.
+    if (!protocol_open() || !config_.heartbeat_.ping_interval_.has_value() || !heartbeat_ping_due() ||
+        heartbeat_in_flight_) {
         return;
     }
 

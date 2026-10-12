@@ -32,16 +32,23 @@ public:
     }
 
     // Called while the pool slot is exclusively leased; reuses a live connection
-    // and replaces one the peer retired while it was idle.
+    // and replaces one the peer retired while it was idle. The connect is
+    // published as `state_value`'s cancellable operation so an abandoned
+    // response stops a connect in progress.
     [[nodiscard]] task<void> ensure_connected(
-        const operation_timeout& timeout, stop_token stop_token_value);
+        const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
+    // Starts a connect or HTTP/1 exchange: the previous operation's abort is
+    // cleared and a new generation opens. A retired connection refuses with
+    // closing, so a request admitted after shutdown never reconnects.
+    void begin_operation();
     // Close the current transport and discard its buffered wire bytes. Storage
     // is kept: a cancelled read or write may still target it.
     void close() noexcept;
     // Applies the retention policy to both buffers. Only between exchanges,
     // when no transport operation borrows their storage.
     void retain_idle_buffers() noexcept;
-    // Pool shutdown: refuse new connects and HTTP/1 exchanges, then close.
+    // Pool shutdown: permanently refuses new connects and HTTP/1 exchanges,
+    // then closes.
     void shutdown() noexcept;
     // Cancels the connect or HTTP/1 exchange of `generation`.
     void cancel(std::uint64_t generation, client_abort_reason reason) noexcept;
@@ -64,6 +71,7 @@ public:
     std::uint64_t generation_{0};
     std::uint64_t cancellation_id_{0};
     bool connected_{false};
+    bool retired_{false};
 
 private:
     http_client_pool& pool_;

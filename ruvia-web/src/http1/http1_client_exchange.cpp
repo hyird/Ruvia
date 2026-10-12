@@ -1,6 +1,7 @@
 #include "http1/http1_client_exchange.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <optional>
 #include <span>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include <asio/buffer.hpp>
 #include <asio/ssl/error.hpp>
 
 #include "ruvia/core/error_text.h"
@@ -47,28 +49,17 @@ constexpr std::size_t max_client_request_head_bytes = max_http_header_bytes + 10
 
 }  // namespace
 
-task<void> http1_client_exchange::run(const http_client_request_storage& request, const operation_timeout& timeout,
-    stop_token stop_token_value, http_client_response_state& state_value) {
-    auto& connection = connection_;
-    connection.transport_.reset_abort();
-    connection.generation_ = connection.generation_ + 1 == 0 ? 1 : connection.generation_ + 1;
-    struct exchange_generation final {
-        http_client_connection& connection_;
-        ~exchange_generation() {
-            ++connection_.generation_;
-            connection_.http1_response_ = nullptr;
-        }
-    } exchange_generation_value{connection};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), connection.cancellation_id_);
-    state_value.cancellation_id_ = cancellation.id();
-    cancellation.arm(stop_token_value);
-    connection.http1_response_ = &state_value;
-    co_await exchange(request, timeout, state_value);
-}
-
 task<void> http1_client_exchange::write(std::string_view bytes_value, const operation_timeout& timeout) {
     const auto written =
         co_await connection_.transport_.write(bytes_value, timeout.constrained_by(pool_.config().write_timeout_));
+    if (!written.ok()) {
+        throw_http_client_transport_error(written, "upstream closed while receiving the HTTP request");
+    }
+}
+
+task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout) {
+    const auto written =
+        co_await connection_.transport_.write(parts, timeout.constrained_by(pool_.config().write_timeout_));
     if (!written.ok()) {
         throw_http_client_transport_error(written, "upstream closed while receiving the HTTP request");
     }
@@ -92,8 +83,22 @@ task<std::size_t> http1_client_exchange::read_append(
     throw_http_client_transport_error(read, "upstream closed the HTTP connection");
 }
 
-task<void> http1_client_exchange::exchange(
-    const http_client_request_storage& request, const operation_timeout& timeout, http_client_response_state& state_value) {
+task<void> http1_client_exchange::run(const http_client_request_storage& request, const operation_timeout& timeout,
+    stop_token stop_token_value, http_client_response_state& state_value) {
+    auto& connection = connection_;
+    connection.begin_operation();
+    struct exchange_generation final {
+        http_client_connection& connection_;
+        ~exchange_generation() {
+            ++connection_.generation_;
+            connection_.http1_response_ = nullptr;
+        }
+    } exchange_generation_value{connection};
+    worker_cancellation_registration cancellation(pool_.cancellation_target(), connection.cancellation_id_);
+    state_value.cancellation_id_ = cancellation.id();
+    cancellation.arm(stop_token_value);
+    connection.http1_response_ = &state_value;
+
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());
     auto source_value = request.view(headers);
@@ -344,7 +349,10 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             // Backpressure applies to decoding buffered compressed input too,
             // not just to the next transport read. One step cannot overfill the
             // producer queue; read_all retains its separate total byte policy.
-            co_await wait_for_buffer_space();
+            // The wait is a coroutine only for the rare full queue.
+            if (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
+                co_await wait_for_buffer_space();
+            }
             connection_.throw_if_aborted();
             const auto capacity = state_value.collect_all_
                                       ? output.size()
@@ -390,7 +398,9 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         if (timeout.expired()) {
             throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
         }
-        if (persistence == http1_close_policy::close_after_response) {
+        // A rejected CONNECT delivers its response, but the proxy may follow
+        // it with bytes of unknown ownership: the connection is never reused.
+        if (persistence == http1_close_policy::close_after_response || request.is_tunnel()) {
             connection_.close();
         }
         connection_.retain_idle_buffers();
@@ -552,13 +562,9 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 const auto& planned = std::get<0>(chunk);
                 // The write lane has its own deadline, so the concurrent
                 // response reader keeps its read deadline.
-                co_await write(std::string_view(planned.prefix_.data(), planned.prefix_size_), timeout);
-                if (upload.output_.stopped_) {
-                    writer.abort();
-                    co_return;
-                }
-                co_await write(std::string_view(planned.payload_.data(), planned.payload_.size()), timeout);
-                co_await write(planned.suffix_, timeout);
+                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix_.data(), planned.prefix_size_),
+                    asio::buffer(planned.payload_.data(), planned.payload_.size()), asio::buffer(planned.suffix_)};
+                co_await write(parts, timeout);
                 if (writer.commit_chunk(planned.payload_.size()).index() != 0) {
                     std::terminate();
                 }

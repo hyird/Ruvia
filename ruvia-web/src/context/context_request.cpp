@@ -382,6 +382,9 @@ task<std::string_view> context::request_body() const {
     } else {
         raw = as_chars(request_.body_bytes());
     }
+    if (body_identity_) {
+        co_return raw;
+    }
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
@@ -395,6 +398,7 @@ task<std::string_view> context::request_body() const {
     }
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
+        body_identity_ = true;
         co_return raw;
     }
     auto decode_result = decode_http_request_content(codings, raw,

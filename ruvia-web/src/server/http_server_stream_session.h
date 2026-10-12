@@ -380,8 +380,8 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
 
                 if (endpoint_kind == http_request_endpoint::response_stream) {
                     request_completion.emplace(co_await dispatch_http_response_stream_route(route_dispatch(),
-                        response_head, *request_head, *resolved, http_body_and_pipeline(*request_head, buffer_view),
-                        admission->body_limit()));
+                        response_head, *request_head, *resolved, buffer_view, admission->body_limit(),
+                        pipeline_stash));
                     // The stream serialized its own head into the (then empty)
                     // output buffer; it is not response output to keep.
                     response_head.reset();
@@ -403,9 +403,11 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
 
                     // The body reader/loader setup can throw (e.g. constructing a
                     // transfer-coding decoder for a bad Transfer-Encoding), so it
-                    // stays guarded. The dispatch itself never throws:
-                    // dispatch_buffered_response turns any handler or routing
-                    // failure into a response, so it sits outside the guard.
+                    // stays guarded. The dispatch turns any handler or routing
+                    // failure into a response, so it sits outside the guard; the
+                    // one exception it lets through is an inbound_transport_error
+                    // (an interim head or 100 Continue the peer never received),
+                    // which ends the connection through the session's caller.
                     std::exception_ptr body_setup_exception;
                     http_lazy_buffered_body_route_state<stream_type> body_state;
                     try {

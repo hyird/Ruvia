@@ -128,10 +128,25 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
         throw;
     }
     std::ranges::push_heap(impl_->timers_, timer_entry_later{});
-    registration.bind(*this, slot_index, slot.generation_, slot);
+    const auto generation = slot.generation_;
+    registration.bind(*this, slot_index, generation, slot);
     // The armed wait already covers every deadline at or after it.
     if (!impl_->dispatching_timers_ && (!impl_->timer_armed_ || deadline_value < impl_->armed_deadline_)) {
-        arm_timer();
+        try {
+            arm_timer();
+        } catch (...) {
+            // Arming cancelled the previous wait before failing. Withdraw the
+            // new entry so the caller sees a clean failure, then re-arm for the
+            // entries that were pending before this call.
+            registration.release();
+            static_cast<void>(take_timer(slot_index, generation));
+            try {
+                arm_timer();
+            } catch (...) {
+                fail_timers("worker timer arm", std::current_exception());
+            }
+            throw;
+        }
     }
     return worker_timer_schedule_status::scheduled;
 }
@@ -305,14 +320,21 @@ void worker_dispatcher::fire_timers() {
     try {
         arm_timer();
     } catch (...) {
+        fail_timers("worker timer re-arm", std::current_exception());
         if (!failure) {
             throw;
         }
-        report_unhandled_failure("worker timer re-arm", std::current_exception());
     }
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+// Without an armed wait nothing pending could ever fire. Stopping the queue
+// delivers every pending completion as cancelled instead of stalling silently.
+void worker_dispatcher::fail_timers(std::string_view context_value, std::exception_ptr failure) noexcept {
+    report_unhandled_failure(context_value, std::move(failure));
+    stop_timers();
 }
 
 bool worker_dispatcher::has_timer(std::size_t slot, std::uint64_t generation) const noexcept {

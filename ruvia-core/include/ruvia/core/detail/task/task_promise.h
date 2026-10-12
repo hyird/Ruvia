@@ -20,7 +20,6 @@ class task_scope;
 namespace detail {
 
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
-void task_frame_deallocate(void* pointer) noexcept;
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
 // This thread's cached frame bytes, and the drain worker_memory::trim() uses.
 [[nodiscard]] std::size_t task_frame_cached_bytes() noexcept;
@@ -36,18 +35,9 @@ template <std::size_t t_alignment>
 }
 
 template <std::size_t t_alignment>
-void task_frame_deallocate(void* pointer) noexcept {
-    if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-        ::operator delete(pointer, std::align_val_t{t_alignment});
-    } else {
-        task_frame_deallocate(pointer);
-    }
-}
-
-template <std::size_t t_alignment>
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
     if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-        task_frame_deallocate<t_alignment>(pointer);
+        ::operator delete(pointer, std::align_val_t{t_alignment});
     } else {
         task_frame_deallocate_sized(pointer, bytes_value);
     }
@@ -215,9 +205,6 @@ public:
     static void* operator new(std::size_t size) {
         return task_frame_allocate<alignof(task_promise)>(size);
     }
-    static void operator delete(void* pointer) noexcept {
-        task_frame_deallocate<alignof(task_promise)>(pointer);
-    }
     static void operator delete(void* pointer, std::size_t size) noexcept {
         task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);
     }
@@ -262,9 +249,6 @@ public:
     task_promise() noexcept = default;
     static void* operator new(std::size_t size) {
         return task_frame_allocate<alignof(task_promise)>(size);
-    }
-    static void operator delete(void* pointer) noexcept {
-        task_frame_deallocate<alignof(task_promise)>(pointer);
     }
     static void operator delete(void* pointer, std::size_t size) noexcept {
         task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);

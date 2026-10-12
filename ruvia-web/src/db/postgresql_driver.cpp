@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <coroutine>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -61,17 +62,6 @@ public:
 private:
     PGresult* result_;
 };
-
-// Every caller closes the connection after a failed statement, so the rest of
-// the command is never drained here: PQgetResult() blocks the worker until the
-// server's next message arrives, and the server flushes ErrorResponse before
-// the ReadyForQuery that ends the command.
-[[noreturn]] void throw_postgresql_statement_error(
-    PGconn& connection, std::string_view operation, postgresql_result_owner& result_value) {
-    auto error = postgresql_error(connection, operation, db_error::code_type::statement_failed, result_value.get());
-    result_value.reset();
-    throw error;
-}
 
 [[nodiscard]] bool successful_result_status(ExecStatusType status) noexcept {
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
@@ -141,12 +131,34 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
     return std::min(*left, *right);
 }
 
-// db_config's read and write timeouts bound one socket wait in that direction;
-// a flush waits to write, so it is bounded by the write timeout. Expiry fails
-// the operation like its overall deadline does: libpq has no per-I/O timeout
-// to hand the wait back to.
-task<void> wait_for_postgresql(postgresql_pool& pool, std::size_t index, db_socket_readiness wanted,
-    const operation_timeout& deadline_value) {
+// One socket readiness wait. db_config's read and write timeouts bound one
+// socket wait in that direction; a flush waits to write, so it is bounded by
+// the write timeout. Expiry fails the operation like its overall deadline
+// does: libpq has no per-I/O timeout to hand the wait back to.
+struct postgresql_socket_wait final {
+    postgresql_pool& pool_;
+    postgresql_pool::slot_wait wait_;
+
+    [[nodiscard]] bool await_ready() {
+        return wait_.await_ready();
+    }
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        return wait_.await_suspend(handle);
+    }
+    void await_resume() {
+        const auto wait_result = wait_.await_resume();
+        if (wait_result.expired_) {
+            throw pool_.timed_out();
+        }
+        if (wait_result.error_) {
+            throw db_error(db_error::code_type::io_error, db_driver::postgresql,
+                std::string("PostgreSQL socket wait failed: ").append(error_code_text(wait_result.error_)), wait_result.error_.value());
+        }
+    }
+};
+
+[[nodiscard]] postgresql_socket_wait wait_for_postgresql(postgresql_pool& pool, std::size_t index,
+    db_socket_readiness wanted, const operation_timeout& deadline_value) {
     const auto remaining = deadline_value.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
         throw pool.timed_out();
@@ -159,15 +171,9 @@ task<void> wait_for_postgresql(postgresql_pool& pool, std::size_t index, db_sock
         throw db_error(
             db_error::code_type::io_error, db_driver::postgresql, "PostgreSQL connection socket is unavailable");
     }
-    const auto wait_result = co_await pool.wait_socket(index, static_cast<db_slot_socket::native_socket_type>(native),
-        wanted, earlier_timeout(remaining, io_timeout), deadline_value);
-    if (wait_result.expired_) {
-        throw pool.timed_out();
-    }
-    if (wait_result.error_) {
-        throw db_error(db_error::code_type::io_error, db_driver::postgresql,
-            std::string("PostgreSQL socket wait failed: ").append(error_code_text(wait_result.error_)), wait_result.error_.value());
-    }
+    return postgresql_socket_wait{pool,
+        pool.wait_socket(index, static_cast<db_slot_socket::native_socket_type>(native), wanted,
+            earlier_timeout(remaining, io_timeout), deadline_value)};
 }
 
 // libpq's non-blocking send protocol: while PQflush() reports pending output,
@@ -204,6 +210,42 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     }
 }
 
+// Only a result the server rejected (or one libpq could not parse) is
+// followed by ReadyForQuery; a COPY result keeps the connection in COPY state
+// and PQgetResult() returns a fresh COPY result on every call.
+[[nodiscard]] bool rejected_result_status(ExecStatusType status) noexcept {
+    return status == PGRES_FATAL_ERROR || status == PGRES_NONFATAL_ERROR || status == PGRES_BAD_RESPONSE;
+}
+
+// Builds the error for a failed result. A statement the server rejected is
+// followed by ReadyForQuery, so the rest of the command is read here and the
+// connection is idle again when the pool keeps it; a transport failure is
+// reported as is, and the pool closes the slot. A COPY result cannot be
+// drained this way, so it is reported as a protocol error, which makes the
+// pool close the slot.
+task<db_error> postgresql_statement_failure(postgresql_pool& pool, std::size_t index, std::string_view operation,
+    postgresql_result_owner& result_value, const operation_timeout& deadline_value) {
+    auto* connection = pool.slot(index).connection_;
+    const auto status = PQresultStatus(result_value.get());
+    auto error = postgresql_error(*connection, operation, db_error::code_type::statement_failed, result_value.get());
+    result_value.reset();
+    if (error.code() != db_error::code_type::statement_failed) {
+        co_return error;
+    }
+    if (!rejected_result_status(status)) {
+        co_return db_error(db_error::code_type::protocol_error, db_driver::postgresql,
+            "PostgreSQL COPY results are not supported");
+    }
+    while (true) {
+        co_await wait_until_result_ready(pool, index, deadline_value);
+        const postgresql_result_owner remaining(PQgetResult(connection));
+        if (remaining.get() == nullptr) {
+            break;
+        }
+    }
+    co_return error;
+}
+
 // `sql` is NUL-terminated (db_pool's hook contract), so it reaches libpq
 // without a copy.
 task<void> send_query(postgresql_pool& pool, std::size_t index, std::string_view sql,
@@ -221,8 +263,9 @@ task<void> send_query(postgresql_pool& pool, std::size_t index, std::string_view
     auto encoded = encode_postgresql_params(params, pool.resource());
     const auto* values = encoded.values_.empty() ? nullptr : encoded.values_.data();
     const auto* lengths = encoded.lengths_.empty() ? nullptr : encoded.lengths_.data();
+    const auto* types = encoded.types_.empty() ? nullptr : encoded.types_.data();
     if (PQsendQueryParams(
-            connection, sql.data(), static_cast<int>(params.size()), nullptr, values, lengths, nullptr, 0) == 0) {
+            connection, sql.data(), static_cast<int>(params.size()), types, values, lengths, nullptr, 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
     }
     if (single_row && PQsetSingleRowMode(connection) == 0) {
@@ -310,7 +353,7 @@ task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::
         }
         const auto status = PQresultStatus(result_value.get());
         if (!successful_result_status(status)) {
-            throw_postgresql_statement_error(*connection, "PostgreSQL query", result_value);
+            throw co_await postgresql_statement_failure(pool, index, "PostgreSQL query", result_value, deadline_value);
         }
         if (status == PGRES_TUPLES_OK) {
             if (retained_tuple_result) {
@@ -335,6 +378,7 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
     auto* connection = pool.slot(index).connection_;
 
     std::uint64_t affected_rows = 0;
+    bool returned_rows = false;
     while (true) {
         co_await wait_until_result_ready(pool, index, deadline_value);
         postgresql_result_owner result_value(PQgetResult(connection));
@@ -343,13 +387,18 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
         }
         const auto status = PQresultStatus(result_value.get());
         if (!successful_result_status(status)) {
-            throw_postgresql_statement_error(*connection, "PostgreSQL execute", result_value);
+            throw co_await postgresql_statement_failure(pool, index, "PostgreSQL execute", result_value, deadline_value);
         }
+        // The whole command is read before a row set is refused, leaving the
+        // connection idle.
         if (status == PGRES_TUPLES_OK) {
-            result_value.reset();
-            throw std::invalid_argument("execute() does not accept row-producing SQL");
+            returned_rows = true;
+            continue;
         }
         affected_rows = postgresql_affected_rows(*result_value);
+    }
+    if (returned_rows) {
+        throw std::invalid_argument("execute() does not accept row-producing SQL");
     }
     co_return db_result_access::make_exec_result(affected_rows);
 }

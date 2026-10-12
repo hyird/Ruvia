@@ -1,6 +1,9 @@
 #include "content_decoding_fixture.h"
+#include "http1_request_message_fixture.h"
 
 namespace {
+using ruvia::testing::parse_http1_request_message;
+
 class decoder_memory_resource final : public std::pmr::memory_resource {
 public:
     void reject_allocations(bool reject) noexcept {
@@ -313,15 +316,13 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     const std::string wire_body = chunked(gz);
     RUVIA_CHECK(!gz.empty());
     RUVIA_CHECK(!wire_body.empty());
-
-    http1_server_request_parser parser;
     const std::string raw_request = std::string(
                                         "POST / HTTP/1.1\r\nHost: x\r\n"
                                         "Transfer-Encoding: gzip, chunked\r\n\r\n") +
                                     wire_body;
-    const auto parsed_value = parser.parse_message(raw_request);
-    RUVIA_CHECK(parsed_value.message_ready());
-    const auto* chunked_body = parsed_value.body_plan_.chunked();
+    const auto parsed_value = parse_http1_request_message(raw_request);
+    RUVIA_CHECK(parsed_value.complete());
+    const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
     RUVIA_CHECK(chunked_body != nullptr);
     if (chunked_body == nullptr) {
         return;
@@ -355,15 +356,14 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
 }
 
 RUVIA_TEST(transfer_coded_chunked_request_accepts_empty_coded_body) {
-    http1_server_request_parser parser;
     constexpr std::string_view wire_body = "0\r\n\r\n";
     const std::string raw_request = std::string(
                                         "POST / HTTP/1.1\r\nHost: x\r\n"
                                         "Transfer-Encoding: gzip, chunked\r\n\r\n") +
                                     std::string(wire_body);
-    const auto parsed_value = parser.parse_message(raw_request);
-    RUVIA_CHECK(parsed_value.message_ready());
-    const auto* chunked_body = parsed_value.body_plan_.chunked();
+    const auto parsed_value = parse_http1_request_message(raw_request);
+    RUVIA_CHECK(parsed_value.complete());
+    const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
     RUVIA_CHECK(chunked_body != nullptr);
     if (chunked_body == nullptr) {
         return;

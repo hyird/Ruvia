@@ -35,6 +35,24 @@ namespace {
     }
 }
 
+// Whether a slot can serve the next statement after this failure. A driver
+// reports a statement the server rejected, or a result shape the caller got
+// wrong, only once the command has been drained and the connection is idle
+// again -- closing the slot itself when it cannot get there -- so those leave
+// the connection reusable. Every other failure may have interrupted an
+// exchange, and the slot is closed.
+[[nodiscard]] bool db_slot_reusable_after(const std::exception_ptr& failure) noexcept {
+    try {
+        std::rethrow_exception(failure);
+    } catch (const db_error& error) {
+        return error.code() == db_error::code_type::statement_failed;
+    } catch (const std::invalid_argument&) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 }  // namespace
 
 std::array<char, 6> format_db_port(std::uint16_t port) {
@@ -252,56 +270,107 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
 }
 
 template <typename driver_type>
-task<db_socket_wait_result> db_pool<driver_type>::wait_socket(std::size_t index,
+db_pool<driver_type>::slot_wait::slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind,
     db_slot_socket::native_socket_type native, db_socket_readiness wanted,
-    std::optional<std::chrono::milliseconds> wait_timeout, const operation_timeout& operation_deadline) {
-    leases_.throw_if_aborted(index);
-    auto& slot = slots_[index];
-    if (const auto error = slot.wait_socket_.attach(native); error) {
-        throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)),
-            error.value());
-    }
+    std::optional<std::chrono::milliseconds> wait_timeout, const operation_timeout& operation_deadline) noexcept
+    : pool_(pool),
+      index_(index),
+      kind_(kind),
+      native_(native),
+      wait_timeout_(wait_timeout),
+      operation_deadline_(operation_deadline),
+      socket_wait_(pool.slots_[index].wait_socket_.wait(wanted)) {}
 
-    db_socket_wait_result result_value;
-    std::exception_ptr wait_failure;
-    if (leases_.arm_deadline(index, wait_timeout, db_deadline_kind::socket)) {
-        db_slot_active_wait_guard active_wait(slot);
-        try {
-            result_value = co_await slot.wait_socket_.wait(wanted);
-        } catch (...) {
-            wait_failure = std::current_exception();
+template <typename driver_type>
+db_pool<driver_type>::slot_wait::~slot_wait() {
+    if (borrowed_) {
+        pool_.slots_[index_].wait_active_ = false;
+    }
+}
+
+template <typename driver_type>
+bool db_pool<driver_type>::slot_wait::await_ready() {
+    auto& leases = pool_.leases_;
+    leases.throw_if_aborted(index_);
+    auto& slot = pool_.slots_[index_];
+    if (kind_ == db_deadline_kind::socket) {
+        if (const auto error = slot.wait_socket_.attach(native_); error) {
+            throw db_error(db_error::code_type::io_error, driver_type::driver,
+                std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)),
+                error.value());
         }
     }
-    // While connecting, the driver may close this socket and open its next
-    // attempt's socket under the same handle value, which attach() could not
-    // tell apart, so the duplicate must not outlive the wait. Once connected,
-    // the driver keeps its socket until it drops it on a transport failure --
-    // after which it reports no socket at all -- and never reconnects, so the
-    // duplicate stays registered until the slot closes.
-    if (!slot.connected_) {
-        slot.wait_socket_.close();
+    if (!leases.arm_deadline(index_, wait_timeout_, kind_)) {
+        return true;
     }
-    result_value.expired_ = leases_.poll_deadline(index) ||
-                            (wait_timeout.has_value() && wait_timeout->count() <= 0);
-    (void)leases_.clear_deadline(index);
-    leases_.throw_if_aborted(index);
+    if (slot.wait_active_) {
+        std::terminate();
+    }
+    slot.wait_active_ = true;
+    borrowed_ = true;
+    return kind_ == db_deadline_kind::sleep && leases.poll_deadline(index_);
+}
+
+template <typename driver_type>
+bool db_pool<driver_type>::slot_wait::await_suspend(std::coroutine_handle<> handle) noexcept {
+    if (kind_ == db_deadline_kind::sleep) {
+        pool_.slots_[index_].deadline_continuation_ = handle;
+        return true;
+    }
+    return socket_wait_.await_suspend(handle);
+}
+
+template <typename driver_type>
+db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
+    auto& leases = pool_.leases_;
+    auto& slot = pool_.slots_[index_];
+    db_socket_wait_result result_value;
+    std::exception_ptr wait_failure;
+    if (borrowed_) {
+        if (kind_ == db_deadline_kind::socket) {
+            try {
+                result_value = socket_wait_.await_resume();
+            } catch (...) {
+                wait_failure = std::current_exception();
+            }
+        }
+        slot.wait_active_ = false;
+        borrowed_ = false;
+    }
+    if (kind_ == db_deadline_kind::sleep) {
+        slot.deadline_continuation_ = {};
+        result_value.expired_ = true;
+    } else {
+        // While connecting, the driver may close this socket and open its next
+        // attempt's socket under the same handle value, which attach() could not
+        // tell apart, so the duplicate must not outlive the wait. Once connected,
+        // the driver keeps its socket until it drops it on a transport failure --
+        // after which it reports no socket at all -- and never reconnects, so the
+        // duplicate stays registered until the slot closes.
+        if (!slot.connected_) {
+            slot.wait_socket_.close();
+        }
+        result_value.expired_ = leases.poll_deadline(index_) ||
+                                (wait_timeout_.has_value() && wait_timeout_->count() <= 0);
+    }
+    (void)leases.clear_deadline(index_);
+    leases.throw_if_aborted(index_);
     if (slot.close_requested_) {
-        throw closing_error();
+        throw pool_.closing_error();
     }
-    if (operation_deadline.expired()) {
-        throw timed_out();
+    if (operation_deadline_.expired()) {
+        throw pool_.timed_out();
     }
     if (wait_failure != nullptr) {
         throw db_wait_failure(driver_type::driver, std::move(wait_failure));
     }
-    co_return result_value;
+    return result_value;
 }
 
 // One buffered statement on a pooled connection: refuse empty SQL before
 // taking a slot, hold the slot for the duration, and close the connection if
-// the statement throws -- a slot whose statement failed mid-protocol cannot be
-// reused. The lease guard releases the slot either way.
+// the statement failed in a way that leaves the slot unusable. The lease
+// guard releases the slot either way.
 template <typename driver_type>
 template <typename result_type>
 task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
@@ -313,20 +382,41 @@ task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pm
     const auto index = co_await leases_.acquire(timeout, config_.acquire_timeout_, options.stop_token_);
     typename leases_type::lease_guard lease(leases_, index);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+    std::exception_ptr failure;
     try {
         co_await ready_slot(index, timeout);
         co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
             timeout.constrained_by(config_.query_timeout_));
     } catch (...) {
-        close_slot(index);
-        throw;
+        failure = std::current_exception();
     }
+    if (!db_slot_reusable_after(failure)) {
+        close_slot(index);
+    }
+    std::rethrow_exception(failure);
+}
+
+// A failed transaction gives its slot back. When the connection is still
+// usable the open transaction is rolled back first so the next caller does
+// not inherit it; a rollback that fails closes the connection, which ends the
+// transaction as well. The original failure is what the caller sees.
+template <typename driver_type>
+task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t index,
+    std::pmr::memory_resource* resource, const operation_timeout& timeout, const std::exception_ptr& failure) {
+    if (slots_[index].connected_ && db_slot_reusable_after(failure)) {
+        try {
+            co_await execute_control(index, "ROLLBACK", resource, timeout);
+            co_return;
+        } catch (...) {
+        }
+    }
+    close_slot(index);
 }
 
 // A statement inside an open transaction runs on the slot the transaction
 // already holds, so it neither acquires nor releases one -- unless it fails:
-// a transaction whose statement failed mid-protocol cannot continue, so the
-// connection is closed and the slot given back.
+// a transaction whose statement failed cannot continue, so it is retired and
+// the slot given back.
 template <typename driver_type>
 template <typename result_type>
 task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t index, std::pmr::string sql,
@@ -337,16 +427,18 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     }
     const operation_timeout timeout(options.timeout_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+    std::exception_ptr failure;
     try {
         co_await ready_slot(index, timeout);
         co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
             timeout.constrained_by(config_.query_timeout_));
     } catch (...) {
-        close_slot(index);
-        cancellation.finish();
-        leases_.release(index);
-        throw;
+        failure = std::current_exception();
     }
+    co_await retire_failed_transaction_slot(index, resource, timeout, failure);
+    cancellation.finish();
+    leases_.release(index);
+    std::rethrow_exception(failure);
 }
 
 template <typename driver_type>
@@ -409,9 +501,9 @@ task<db_transaction> db_pool<driver_type>::begin_transaction(std::pmr::memory_re
 }
 
 // Ending a transaction runs the control statement on the slot the transaction
-// holds and releases that slot exactly once. A failure closes the connection
-// first: a slot whose COMMIT or ROLLBACK did not complete cannot be handed to
-// the next caller.
+// holds and releases that slot exactly once. A COMMIT the server rejected has
+// rolled the transaction back on a connection that is still usable; it is
+// retired like a failed statement so the slot is clean for the next caller.
 template <typename driver_type>
 task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::string_view command,
     std::pmr::memory_resource* resource, const operation_options& options) {
@@ -420,16 +512,20 @@ task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::stri
     }
     const operation_timeout timeout(options.timeout_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+    std::exception_ptr failure;
     try {
         co_await execute_control(index, command, resource, timeout);
     } catch (...) {
-        close_slot(index);
-        cancellation.finish();
-        leases_.release(index);
-        throw;
+        failure = std::current_exception();
+    }
+    if (failure != nullptr) {
+        co_await retire_failed_transaction_slot(index, resource, timeout, failure);
     }
     cancellation.finish();
     leases_.release(index);
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 
 template <typename driver_type>

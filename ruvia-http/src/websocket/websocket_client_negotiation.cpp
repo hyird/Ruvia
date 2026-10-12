@@ -16,23 +16,6 @@
 namespace ruvia {
 namespace {
 using error_type = websocket_client_negotiation_error;
-// The handshake owns Host, the connection-specific fields, framing, Trailer,
-// Expect and every Sec-WebSocket-* field it generates.
-bool reserved(std::string_view name) noexcept {
-    if (name.empty() || name.front() == ':') {
-        return true;
-    }
-    switch (detail::classify_request_header(name)) {
-        case detail::request_header_kind::host:
-        case detail::request_header_kind::trailer:
-        case detail::request_header_kind::expect:
-            return true;
-        default:
-            return detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
-                   detail::http_field_name_in(name, detail::http_message_framing_fields) ||
-                   detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
-    }
-}
 std::optional<websocket_compression> parse_response_extension(std::string_view text, websocket_client_deflate_offer offer) {
     if (!offer.enabled_) {
         return {};
@@ -162,6 +145,8 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
         joined_bytes += protocol_view.size();
         protocol(protocol_view);
     }
+    // The generated Sec-WebSocket-* fields alone must fit the field section;
+    // the handshake owner budgets the application headers it accepts.
     http_field_section_budget budget;
     auto append = [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
         if (!budget.add_field(name.size(), value_bytes)) {
@@ -169,15 +154,6 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
         }
         field(name, value, value_bytes);
     };
-    if (config.headers_.size() > max_http_header_fields - 3) {
-        throw std::invalid_argument("too many WebSocket client headers");
-    }
-    for (const auto& header : config.headers_) {
-        if (reserved(header.name()) || !is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
-            throw std::invalid_argument("invalid WebSocket client header");
-        }
-        append(header.name(), header.value(), header.value().size());
-    }
     append("Sec-WebSocket-Version", "13", 2);
     if (!config.subprotocols_.empty()) {
         append("Sec-WebSocket-Protocol", {}, joined_bytes);
@@ -189,10 +165,10 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
             .server_max_window_bits_ = config.deflate_.server_max_window_bits_,
             .client_max_window_bits_ = config.deflate_.client_max_window_bits_};
         const auto encoded = detail::get_websocket_compression_extension(parameters);
-        constexpr std::size_t k_client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
+        constexpr std::size_t client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
         const std::size_t offer_bytes = encoded.view().size() +
                                         ((config.deflate_.offer_client_max_window_bits_ && !config.deflate_.client_max_window_bits_)
-                                                ? k_client_window_bits_suffix_bytes
+                                                ? client_window_bits_suffix_bytes
                                                 : 0);
         append("Sec-WebSocket-Extensions", encoded.view(), offer_bytes);
     }

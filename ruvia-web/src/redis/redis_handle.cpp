@@ -3,6 +3,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/web/detail/redis/redis_repository_commands.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
 
@@ -124,6 +125,12 @@ task<redis_value> redis_handle::command_owned(std::pmr::vector<std::pmr::string>
     }
     return detail::execute_owned_redis_command(*pool_,
         std::pmr::vector<std::pmr::string>(args.begin(), args.end(), resource_), operation_options_, resource_);
+}
+
+task<redis_value> redis_handle::script_owned(
+    const detail::redis_orm_script& script, std::pmr::vector<std::pmr::string>&& args) const {
+    registration_.require_active();
+    return detail::execute_redis_orm_script(*pool_, script, std::move(args), operation_options_, resource_);
 }
 
 scoped_operation<void> redis_handle::ping() const {

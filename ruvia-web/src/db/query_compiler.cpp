@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -176,8 +177,7 @@ public:
         : sql_(resource),
           params_(resource),
           driver_(driver),
-          mode_(mode),
-          parameter_positions_(resource) {
+          mode_(mode) {
         require_db_dialect(driver);
     }
 
@@ -238,15 +238,18 @@ public:
             }
             return;
         }
-        if (pg() && node != nullptr) {
-            if (const auto found = parameter_positions_.find(node); found != parameter_positions_.end()) {
+        if (pg() && node != nullptr && parameter_positions_.has_value()) {
+            if (const auto found = parameter_positions_->find(node); found != parameter_positions_->end()) {
                 pg_parameter(found->second, value, cast);
                 return;
             }
         }
         params_.push_back(clone_db_value_for_resource(value, params_.get_allocator().resource()));
         if (pg() && node != nullptr) {
-            parameter_positions_.emplace(node, params_.size());
+            if (!parameter_positions_.has_value()) {
+                parameter_positions_.emplace(params_.get_allocator().resource());
+            }
+            parameter_positions_->emplace(node, params_.size());
         }
         if (pg()) {
             pg_parameter(params_.size(), value, cast);
@@ -308,7 +311,10 @@ private:
 
     db_driver driver_;
     db_parameter_mode mode_;
-    std::pmr::unordered_map<const db_query_node*, std::size_t> parameter_positions_;
+    // PostgreSQL numbers a reused node's parameter once. Built when the first
+    // node-bound PostgreSQL parameter is recorded: the map allocates buckets
+    // on construction, and MariaDB never consults it.
+    std::optional<std::pmr::unordered_map<const db_query_node*, std::size_t>> parameter_positions_;
 };
 
 }  // namespace

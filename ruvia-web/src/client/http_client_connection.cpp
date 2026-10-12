@@ -66,9 +66,18 @@ void http_client_connection::retain_idle_buffers() noexcept {
 }
 
 void http_client_connection::shutdown() noexcept {
+    retired_ = true;
     transport_.abort(client_abort_reason::closing);
     abort_http1_response();
     close();
+}
+
+void http_client_connection::begin_operation() {
+    if (retired_) {
+        throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
+    }
+    transport_.reset_abort();
+    generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
 }
 
 void http_client_connection::cancel(std::uint64_t generation, client_abort_reason reason) noexcept {
@@ -91,7 +100,7 @@ bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcep
 }
 
 task<void> http_client_connection::ensure_connected(
-    const operation_timeout& operation_timeout_value, stop_token stop_token_value) {
+    const operation_timeout& operation_timeout_value, stop_token stop_token_value, http_client_response_state& state_value) {
     if (connected_) {
         if (transport_.idle_open()) {
             co_return;
@@ -100,8 +109,7 @@ task<void> http_client_connection::ensure_connected(
         // the request into a closed stream.
         close();
     }
-    transport_.reset_abort();
-    generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
+    begin_operation();
     struct connect_generation final {
         http_client_connection& connection_;
         ~connect_generation() {
@@ -109,6 +117,7 @@ task<void> http_client_connection::ensure_connected(
         }
     } generation{*this};
     worker_cancellation_registration cancellation(pool_.cancellation_target(), cancellation_id_);
+    state_value.cancellation_id_ = cancellation.id();
     cancellation.arm(stop_token_value);
     throw_if_aborted();
     const auto timeout = operation_timeout_value.constrained_by(pool_.config().connect_timeout_);

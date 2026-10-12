@@ -125,14 +125,9 @@ private:
         http_client_request_storage request, operation_options options, http_client_response_state* state);
     [[nodiscard]] task<void> execute_request_into(
         http_client_request_storage request, operation_options options, http_client_response_state* state);
-    [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
-        const operation_timeout& timeout, stop_token stop_token_value,
-        http_client_response_state& state_value, bool& discard_connection);
     // Spawns the request driver for `state_value`, which the caller's response owns.
     void spawn_request(http_client_request_storage request, operation_options options,
         http_client_response_state& state_value);
-    // Waits for the final head and, for encoded bodies, the decoded body.
-    [[nodiscard]] static task<void> await_head(http_client_response_state& state_value, std::string_view failure_message);
     [[nodiscard]] http_client_connection& connection(std::size_t index) noexcept {
         return *connections_[index];
     }

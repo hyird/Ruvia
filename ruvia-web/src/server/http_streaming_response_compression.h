@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/core/memory/memory_pool.h"
@@ -15,19 +16,25 @@
 #include "ruvia/web/error.h"
 
 #include "server/http_response_compression.h"
+#include "server/worker_codecs.h"
 
 namespace ruvia::detail {
 
 // Owns the response-coding lifecycle used by HTTP/1 stream sinks.
 // The transport only submits output(); it never reconstructs whether a coding
 // was selected, whether the body is suppressed, or whether an encoder exists.
+// The encoder itself is borrowed from the worker's codecs for the stream's
+// lifetime, not constructed per response.
 class http_streaming_response_compression final {
 public:
-    http_streaming_response_compression(std::pmr::memory_resource* resource,
+    http_streaming_response_compression(std::pmr::memory_resource* resource, worker_codecs& codecs,
         http_response_coding_selection selection, http_response_coding_availability availability) noexcept
-        : selection_(selection),
+        : codecs_(codecs),
+          selection_(selection),
           availability_(availability),
           encoded_chunk_(pmr_resource_or_default(resource)) {}
+    http_streaming_response_compression(std::pmr::memory_resource*, worker_codecs&&,
+        http_response_coding_selection, http_response_coding_availability) = delete;
 
     http_streaming_response_compression(const http_streaming_response_compression&) = delete;
     http_streaming_response_compression& operator=(const http_streaming_response_compression&) = delete;
@@ -84,7 +91,7 @@ public:
             state_.emplace<suppressed_type>();
             return;
         }
-        state_.emplace<active_type>(selection_.coding(), encoded_chunk_.get_allocator().resource());
+        state_.emplace<active_type>(codecs_.acquire_stream_encoder(selection_.coding()));
     }
 
     [[nodiscard]] bool active() const noexcept {
@@ -109,7 +116,7 @@ public:
         }
         encoded_chunk_.clear();
         try {
-            active_state->encoder_.write(input, encoded_chunk_, true);
+            active_state->lease_.encoder().write(input, encoded_chunk_, true);
         } catch (...) {
             abort();
             throw;
@@ -126,7 +133,7 @@ public:
             throw std::logic_error("streaming response encoder is not active");
         }
         try {
-            active_state->encoder_.finish(encoded_chunk_);
+            active_state->lease_.encoder().finish(encoded_chunk_);
             state_.emplace<finished_type>();
         } catch (...) {
             abort();
@@ -148,14 +155,15 @@ private:
     struct failed_type final {};
 
     struct active_type final {
-        active_type(http_content_coding coding, std::pmr::memory_resource* resource)
-            : encoder_(coding, resource) {}
+        explicit active_type(stream_encoder_lease lease) noexcept
+            : lease_(std::move(lease)) {}
 
-        http_content_encoder encoder_;
+        stream_encoder_lease lease_;
     };
 
     using state_type = std::variant<unprepared_type, identity_type, pending_type, suppressed_type, finished_type, failed_type, active_type>;
 
+    worker_codecs& codecs_;
     http_response_coding_selection selection_;
     http_response_coding_availability availability_;
     std::pmr::string encoded_chunk_;

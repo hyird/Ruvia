@@ -6,12 +6,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_content_decoding.h"
 
+#include "http1_request_message_fixture.h"
 #include "request_header_memory_fixture.h"
 #include "test_harness.h"
 
@@ -24,6 +24,7 @@ using ruvia::http_protocol_version;
 using ruvia::http_request;
 using ruvia::http_request_target_form;
 using ruvia::request_content_coding;
+using ruvia::testing::parse_http1_request_message;
 
 using ruvia::test::header_memory;
 
@@ -31,34 +32,35 @@ using ruvia::test::header_memory;
 
 RUVIA_TEST(request_header_blocks_reclaim_repeated_parses_and_preserve_retained_results) {
     header_memory resource;
-    const ruvia::http1_server_request_parser parser;
     {
-        auto retained = parser.parse_message("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", &resource);
-        RUVIA_CHECK(retained.message_ready() != nullptr);
+        auto retained = parse_http1_request_message("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", &resource);
+        RUVIA_CHECK(retained.complete());
         const auto baseline = resource.live_bytes_;
         for (int i = 0; i < 64; ++i) {
             {
-                auto result_value = parser.parse_message("GET / HTTP/1.1\r\nHost: second\r\n\r\n", &resource);
-                RUVIA_CHECK(result_value.message_ready() != nullptr);
+                auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: second\r\n\r\n", &resource);
+                RUVIA_CHECK(result_value.complete());
                 auto moved = std::move(result_value);
-                RUVIA_CHECK_EQ(moved.request_.header("Host").value(), std::string_view("second"));
-                RUVIA_CHECK_EQ(retained.request_.header("X-Data").value(), std::string_view("saved"));
+                RUVIA_CHECK_EQ(moved.state_.request_.header("Host").value(), std::string_view("second"));
+                RUVIA_CHECK_EQ(retained.state_.request_.header("X-Data").value(), std::string_view("saved"));
             }
             RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
-            auto incomplete = parser.parse_message("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", &resource);
-            RUVIA_CHECK(incomplete.need_request_body() != nullptr);
+            {
+                const auto incomplete = parse_http1_request_message("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", &resource);
+                RUVIA_CHECK(incomplete.need_body());
+            }
             RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
         }
         resource.reject_ = true;
         bool failed = false;
         try {
-            (void)parser.parse_message("GET / HTTP/1.1\r\nHost: example\r\n\r\n", &resource);
+            (void)parse_http1_request_message("GET / HTTP/1.1\r\nHost: example\r\n\r\n", &resource);
         } catch (const std::bad_alloc&) {
             failed = true;
         }
         RUVIA_CHECK(failed);
         RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
-        RUVIA_CHECK_EQ(retained.request_.path(), std::string_view("/saved"));
+        RUVIA_CHECK_EQ(retained.state_.request_.path(), std::string_view("/saved"));
     }
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
 }

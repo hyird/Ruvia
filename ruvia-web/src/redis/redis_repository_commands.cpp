@@ -1,8 +1,15 @@
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
 
+#include <array>
 #include <stdexcept>
+#include <utility>
+
+#include <openssl/evp.h>
+
+#include "ruvia/http/http_hex.h"
 
 #include "redis/redis_handle_helpers.h"
+#include "redis/redis_registry.h"
 
 namespace ruvia::detail {
 namespace {
@@ -50,7 +57,46 @@ end
 return redis.call('DEL', KEYS[1])
 )lua";
 
+// Owns the digest text the script view borrows; built once per script.
+class redis_orm_script_digest final {
+public:
+    explicit redis_orm_script_digest(std::string_view body) {
+        std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+        std::size_t digest_size = 0;
+        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body.data(), body.size(), digest.data(), &digest_size) != 1 ||
+            digest_size * 2 != sha1_.size()) {
+            throw std::runtime_error("redis entity script digest could not be computed");
+        }
+        http_encode_lower_hex(sha1_.data(), std::span<const unsigned char>(digest.data(), digest_size));
+        script_ = {body, std::string_view(sha1_.data(), sha1_.size())};
+    }
+
+    [[nodiscard]] const redis_orm_script& script() const noexcept {
+        return script_;
+    }
+
+private:
+    std::array<char, 40> sha1_{};
+    redis_orm_script script_;
+};
+
+void append_redis_orm_script_call(redis_orm_arguments_type& args, const redis_orm_script& script) {
+    args.emplace_back("EVALSHA");
+    args.emplace_back(script.sha1_);
+    args.emplace_back("1");
+}
+
 }  // namespace
+
+const redis_orm_script& redis_orm_write_script() {
+    static const redis_orm_script_digest digest(write_script);
+    return digest.script();
+}
+
+const redis_orm_script& redis_orm_delete_script() {
+    static const redis_orm_script_digest digest(delete_script);
+    return digest.script();
+}
 
 redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::string_view mode,
     redis_write_options options, std::pmr::memory_resource* resource) {
@@ -58,9 +104,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::st
         throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
     }
     redis_orm_arguments_type args(resource);
-    args.emplace_back("EVAL");
-    args.emplace_back(write_script);
-    args.emplace_back("1");
+    append_redis_orm_script_call(args, redis_orm_write_script());
     args.emplace_back(key);
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
@@ -71,11 +115,22 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::st
 
 redis_orm_arguments_type redis_orm_delete_arguments(std::string_view key, std::pmr::memory_resource* resource) {
     redis_orm_arguments_type args(resource);
-    args.emplace_back("EVAL");
-    args.emplace_back(delete_script);
-    args.emplace_back("1");
+    append_redis_orm_script_call(args, redis_orm_delete_script());
     args.emplace_back(key);
     return args;
+}
+
+task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
+    redis_orm_arguments_type args, operation_options options, std::pmr::memory_resource* resource) {
+    auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options);
+    if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {
+        co_return reply;
+    }
+    // The server's script cache was flushed or never loaded this script:
+    // EVAL runs the body and caches it under the same digest for later calls.
+    args[0].assign("EVAL");
+    args[1].assign(script.body_);
+    co_return co_await pool.execute_borrowed(redis_command_args_view{args}, resource, std::move(options));
 }
 
 redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource*) {

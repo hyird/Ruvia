@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <limits>
 #include <utility>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -14,22 +13,6 @@
 // routed to the caller's memory resource so neither direction makes a global allocation.
 
 namespace ruvia::detail {
-
-namespace {
-
-inline void refill_gzip_input(
-    z_stream& stream, std::string_view input, std::size_t& supplied) noexcept {
-    if (stream.avail_in != 0 || supplied == input.size()) {
-        return;
-    }
-    const auto count = static_cast<uInt>(
-        std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-    stream.avail_in = count;
-    supplied += count;
-}
-
-}  // namespace
 
 static http_content_decode_result decode_zlib_content(std::string_view input,
     std::size_t max_decoded_bytes, std::pmr::memory_resource* resource, int window_bits,
@@ -44,7 +27,7 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
     std::size_t supplied = 0;
     char buffer[16384];
     for (;;) {
-        refill_gzip_input(stream, input, supplied);
+        zlib_refill_input(stream, input, supplied);
         const auto before_input = stream.avail_in;
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = static_cast<uInt>(sizeof(buffer));
@@ -61,7 +44,7 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
             // RFC 1952 gzip data is a series of members. Preserve any input
             // already supplied to zlib, reset only the member state, and keep
             // decoding until the exact HTTP content boundary is consumed.
-            refill_gzip_input(stream, input, supplied);
+            zlib_refill_input(stream, input, supplied);
             if (stream.avail_in == 0 && supplied == input.size()) {
                 return http_content_decode_result_access::decoded(std::move(output));
             }
@@ -100,21 +83,13 @@ http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater, st
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto& stream = deflater.native();
-    struct clear_borrows final {
-        z_stream& stream_;
-        ~clear_borrows() {
-            stream_.next_in = nullptr;
-            stream_.avail_in = 0;
-            stream_.next_out = nullptr;
-            stream_.avail_out = 0;
-        }
-    } clear{stream};
+    const zlib_borrow_scope borrow(stream);
 
     std::size_t supplied = 0;
     // Uninitialized scratch: only the bytes zlib produced are copied out.
     char buffer[8192];
     for (;;) {
-        refill_gzip_input(stream, input, supplied);
+        zlib_refill_input(stream, input, supplied);
         if (output.size() == max_encoded_bytes) {
             if (stream.avail_in == 0 && supplied == input.size()) {
                 Bytef probe_value{};

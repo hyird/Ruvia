@@ -18,7 +18,7 @@ context::context(request_memory& memory, const http_request& request,
     detail::context_services services)
     : memory_(memory),
       request_(request),
-      conn_info_(services.resolve_conn_info(request)),
+      conn_info_(services.get_conn_info()),
       capabilities_(services.worker(), services.get_stop_token(), services.worker_states(), services.get_blocking_pool()),
       route_path_(route_path),
       param_names_(param_names),

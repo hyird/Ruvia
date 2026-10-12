@@ -6,31 +6,29 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
 
+#include "http1_request_message_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::http1_server_request_parser;
 using ruvia::http_request;
 using ruvia::validate_websocket_handshake;
+using ruvia::testing::parse_http1_request_message;
 
 http_request parse_request(std::string_view raw_request) {
-    http1_server_request_parser parser;
-    auto parsed_value = parser.parse_message(raw_request);
-    return std::move(parsed_value.request_);
+    auto parsed_value = parse_http1_request_message(raw_request);
+    return std::move(parsed_value.state_.request_);
 }
 
 [[nodiscard]] auto validate_request(std::string_view raw_request) {
-    http1_server_request_parser parser;
-    const auto parsed_value = parser.parse_message(raw_request);
-    return validate_websocket_handshake(parsed_value.request_, parsed_value.body_plan_);
+    const auto parsed_value = parse_http1_request_message(raw_request);
+    return validate_websocket_handshake(parsed_value.state_.request_, parsed_value.state_.body_plan_);
 }
 
 [[nodiscard]] bool accepts_request(std::string_view raw_request) {
@@ -182,9 +180,8 @@ RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     };
     constexpr std::array<std::string_view, 2> supported{"chat.v2", "chat.v1"};
     const auto validate = [&](std::string_view raw_request, bool required) {
-        http1_server_request_parser parser;
-        const auto parsed_value = parser.parse_message(raw_request);
-        return validate_websocket_handshake(parsed_value.request_, parsed_value.body_plan_,
+        const auto parsed_value = parse_http1_request_message(raw_request);
+        return validate_websocket_handshake(parsed_value.state_.request_, parsed_value.state_.body_plan_,
             {.supported_subprotocols_ = supported, .require_subprotocol_ = required});
     };
     const auto accepts = [&](std::string_view raw_request, bool required) {

@@ -10,8 +10,6 @@ namespace ruvia {
 
 namespace {
 
-inline constexpr std::size_t static_root_linear_lookup_limit = 8;
-
 inline constexpr std::string_view default_static_file_types[] = {
     "apng",
     "avif",
@@ -46,23 +44,10 @@ inline constexpr std::string_view default_static_file_types[] = {
 const detail::static_root_mime_type_storage* find_static_mime_type(
     const std::pmr::vector<detail::static_root_mime_type_storage>& mime_types,
     std::string_view extension) noexcept {
-    if (mime_types.size() <= static_root_linear_lookup_limit) {
-        for (const auto& mime : mime_types) {
-            if (mime.extension_ == extension) {
-                return &mime;
-            }
-        }
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::lower_bound(mime_types, extension, std::ranges::less{},
+    return detail::find_static_index_entry(mime_types, extension,
         [](const detail::static_root_mime_type_storage& mime) noexcept {
             return std::string_view(mime.extension_);
         });
-    if (iter == mime_types.end() || std::string_view(iter->extension_) != extension) {
-        return nullptr;
-    }
-    return &*iter;
 }
 
 }  // namespace

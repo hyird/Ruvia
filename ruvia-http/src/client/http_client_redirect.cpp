@@ -1,5 +1,7 @@
 #include "ruvia/http/http_client_redirect.h"
 
+#include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -137,6 +139,33 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
     return is_valid_http_origin_form_target(resolved);
 }
 
+// The one redirect authority rule: no userinfo, a valid authority, and the
+// origin comparison by effective port of the target scheme and URI host
+// equivalence.
+struct http_client_redirect_authority final {
+    std::string_view host_;
+    std::uint16_t port_;
+    bool same_origin_;
+};
+
+[[nodiscard]] std::optional<http_client_redirect_authority> parse_http_client_redirect_authority(
+    const http_origin_view& origin, http_scheme target_scheme, std::string_view authority) noexcept {
+    if (authority.find('@') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto parsed_value = parse_http_authority(authority);
+    if (!parsed_value) {
+        return std::nullopt;
+    }
+    const auto port = parsed_value->effective_port(detail::http_scheme_default_port(target_scheme));
+    return http_client_redirect_authority{
+        .host_ = parsed_value->host(),
+        .port_ = port,
+        .same_origin_ = target_scheme == origin.scheme() && port == origin.port() &&
+                        detail::http_uri_host_equals(parsed_value->host(), origin.host()),
+    };
+}
+
 }  // namespace
 
 bool is_http_client_redirect_status(http_status_code status) noexcept {
@@ -187,17 +216,12 @@ http_client_redirect_request_plan plan_http_client_redirect_request(
 
 http_client_origin_authority_status classify_http_client_origin_authority(
     const http_origin_view& origin, std::string_view authority) noexcept {
-    if ((authority.find('@') != std::string_view::npos)) {
-        return http_client_origin_authority_status::invalid_authority;
-    }
-    const auto parsed_value = parse_http_authority(authority);
+    const auto parsed_value = parse_http_client_redirect_authority(origin, origin.scheme(), authority);
     if (!parsed_value) {
         return http_client_origin_authority_status::invalid_authority;
     }
-    return parsed_value->effective_port(detail::http_scheme_default_port(origin.scheme())) == origin.port() &&
-                   detail::http_uri_host_equals(parsed_value->host(), origin.host())
-               ? http_client_origin_authority_status::same_origin
-               : http_client_origin_authority_status::different_origin;
+    return parsed_value->same_origin_ ? http_client_origin_authority_status::same_origin
+                                      : http_client_origin_authority_status::different_origin;
 }
 
 http_origin_view http_client_resolved_redirect::origin() const& {
@@ -262,19 +286,14 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
         const auto authority_end = reference.find_first_of("/?");
         const auto authority =
             authority_end == std::string_view::npos ? reference : reference.substr(0, authority_end);
-        if ((authority.find('@') != std::string_view::npos)) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::invalid_location);
-        }
-        const auto parsed_value = parse_http_authority(authority);
+        const auto parsed_value = parse_http_client_redirect_authority(origin, target_scheme, authority);
         if (!parsed_value) {
             return http_client_redirect_resolution_result::make_failure(
                 http_client_redirect_resolution_error::invalid_location);
         }
-        host.assign(parsed_value->host().data(), parsed_value->host().size());
-        port = parsed_value->effective_port(detail::http_scheme_default_port(target_scheme));
-        cross_origin = cross_origin || port != origin.port() ||
-                       !detail::http_uri_host_equals(parsed_value->host(), origin.host());
+        host.assign(parsed_value->host_.data(), parsed_value->host_.size());
+        port = parsed_value->port_;
+        cross_origin = !parsed_value->same_origin_;
         reference = authority_end == std::string_view::npos ? std::string_view{}
                                                             : reference.substr(authority_end);
     } else {

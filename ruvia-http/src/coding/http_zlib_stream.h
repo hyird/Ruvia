@@ -2,7 +2,11 @@
 
 #include <zlib.h>
 
+#include <algorithm>
+#include <cstddef>
+#include <limits>
 #include <memory_resource>
+#include <string_view>
 
 #include "coding/pmr_codec_allocation.h"
 
@@ -25,6 +29,45 @@ namespace ruvia::detail {
 // zlib's own default; deflate memory is about (1 << (window_bits + 2)) +
 // (1 << (mem_level + 9)) bytes, plus the zlib >= 1.2.12 pending buffer.
 inline constexpr int zlib_default_mem_level = 8;
+
+// zlib window parameters of the gzip (RFC 1952) and deflate (RFC 9110 zlib
+// wrapper) content codings.
+inline constexpr int zlib_gzip_window_bits = 15 + 16;
+inline constexpr int zlib_deflate_window_bits = 15;
+
+// Supplies the next window of `input` once zlib has consumed the previous
+// one: inputs can exceed zlib's 32-bit avail_in, so they are handed over in
+// windows instead of truncated. `supplied` counts the bytes handed over so far.
+inline void zlib_refill_input(z_stream& stream, std::string_view input, std::size_t& supplied) noexcept {
+    if (stream.avail_in != 0 || supplied == input.size()) {
+        return;
+    }
+    const auto count = static_cast<uInt>(
+        std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
+    stream.avail_in = count;
+    supplied += count;
+}
+
+// zlib keeps the caller's input and output pointers in the z_stream. The
+// borrowed buffers only live for one call, so the scope clears them when that
+// call ends, including by exception.
+class zlib_borrow_scope final {
+public:
+    explicit zlib_borrow_scope(z_stream& stream) noexcept
+        : stream_(stream) {}
+    ~zlib_borrow_scope() {
+        stream_.next_in = nullptr;
+        stream_.avail_in = 0;
+        stream_.next_out = nullptr;
+        stream_.avail_out = 0;
+    }
+    zlib_borrow_scope(const zlib_borrow_scope&) = delete;
+    zlib_borrow_scope& operator=(const zlib_borrow_scope&) = delete;
+
+private:
+    z_stream& stream_;
+};
 
 class zlib_inflate_stream final {
 public:

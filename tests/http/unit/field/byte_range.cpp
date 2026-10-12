@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -292,4 +293,23 @@ RUVIA_TEST(byte_range_set_empty_representation_uses_ignore_policy) {
     RUVIA_CHECK(is_ignored_range("bytes=0-99", 0));
     RUVIA_CHECK(is_ignored_range("bytes=-1", 0));
     RUVIA_CHECK(is_ignored_range("BYTES=0-", 0));
+}
+
+RUVIA_TEST(byte_range_set_rejects_out_of_range_index) {
+    const auto resolved = resolve_http_byte_range_set("bytes=0-9", 100);
+    RUVIA_CHECK_EQ(resolved.size(), std::size_t{1});
+    const auto throws_out_of_range = [](auto&& access) {
+        try {
+            (void)access();
+        } catch (const std::out_of_range&) {
+            return true;
+        }
+        return false;
+    };
+    RUVIA_CHECK(!throws_out_of_range([&] { return resolved[0]; }));
+    RUVIA_CHECK(throws_out_of_range([&] { return resolved[1]; }));
+    RUVIA_CHECK(throws_out_of_range([&] { return resolved.resolved_range(1); }));
+    RUVIA_CHECK(throws_out_of_range([&] { return resolved.resolved_range(http_byte_range_set::capacity); }));
+    const auto ignored = resolve_http_byte_range_set("items=0-9", 100);
+    RUVIA_CHECK(throws_out_of_range([&] { return ignored.resolved_range(0); }));
 }

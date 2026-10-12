@@ -1926,3 +1926,66 @@ RUVIA_TEST(http_client_abandoned_queued_request_is_never_written) {
         RUVIA_CHECK_EQ(request_lines[1], "GET /third HTTP/1.1");
     }
 }
+
+// Dropping an exchange whose connection is still being established cancels
+// that connect: the slot frees at once instead of after connect_timeout_.
+RUVIA_TEST(http_client_abandoned_request_cancels_its_connect_in_progress) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+    ruvia::worker_signal peer_done(worker.handle_);
+    // Accepts TCP but never answers the TLS ClientHello, so the client's
+    // connect stays in progress until its connect_timeout_ or a cancellation.
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+        std::array<char, 1024> input{};
+        std::error_code error;
+        while (co_await socket.async_read_some(asio::buffer(input), asio::redirect_error(asio::use_awaitable, error))) {
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    ruvia::http_client_config config{.scheme_ = ruvia::http_scheme::https,
+        .host_ = "127.0.0.1",
+        .port_ = acceptor.local_endpoint().port(),
+        .connection_count_ = 1,
+        .connect_timeout_ = std::chrono::seconds(5),
+        .request_timeout_ = std::chrono::seconds(10),
+        .tls_ = {.mode_ = ruvia::client_tls_mode::skip_verification}};
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        {
+            auto abandoned = co_await client.handle().open_request({.method_ = "POST", .target_ = "/abandoned"}, {});
+            // Let the driver reach the TLS handshake.
+            (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
+            const auto stats = client.stats();
+            RUVIA_CHECK_EQ(stats.in_flight_requests_ + stats.buffered_requests_, std::size_t{1});
+        }
+        const auto started = std::chrono::steady_clock::now();
+        for (;;) {
+            const auto stats = client.stats();
+            if (stats.in_flight_requests_ + stats.buffered_requests_ == 0) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() - started > std::chrono::seconds(2)) {
+                throw std::runtime_error("abandoned connect kept its pool slot leased");
+            }
+            (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(10));
+        }
+        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}

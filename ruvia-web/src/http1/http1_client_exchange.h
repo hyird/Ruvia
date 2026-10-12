@@ -2,9 +2,10 @@
 
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
-#include <string>
+#include <span>
 #include <string_view>
+
+#include <asio/buffer.hpp>
 
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
@@ -40,14 +41,14 @@ public:
         stop_token stop_token_value, http_client_response_state& state_value);
 
 private:
-    [[nodiscard]] task<void> exchange(const http_client_request_storage& request, const operation_timeout& timeout,
-        http_client_response_state& state_value);
     [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_timeout& timeout,
         http_client_response_state& state_value, http1_client_response_parser& parser);
     [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout);
     [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
         http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
     [[nodiscard]] task<void> write(std::string_view bytes, const operation_timeout& timeout);
+    // One transport write of a framed upload chunk: prefix, payload, suffix.
+    [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout);
     // Appends at most `max_bytes` read from the transport to `target`; returns
     // 0 at the peer's end of stream.
     [[nodiscard]] task<std::size_t> read_append(

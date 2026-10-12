@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
-#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -20,12 +19,23 @@ namespace ruvia {
 enum class http1_server_request_parse_failure_source : std::uint8_t { request_line,
     message };
 
-// Cleartext listeners can silently discard inputs that failed before a valid
-// HTTP-version token was recognized (for example, TLS bytes on an HTTP port).
+// Cleartext listeners can silently discard inputs whose request-line failure
+// shows the peer was not speaking HTTP (for example, TLS bytes on an HTTP
+// port): the request-line starts with a byte that cannot begin a method token,
+// or its first CRLF-terminated line carries no HTTP/ version token.
 [[nodiscard]] bool should_drop_invalid_cleartext_http1_input(
     std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept;
 
-class http1_server_need_request_head final {};
+class http1_server_need_request_head final {
+private:
+    friend class http1_server_request_parser;
+
+    // Resumable scan progress: leading empty-line bytes already skipped and,
+    // once accepted, the end of the request-line. Each input byte is thereby
+    // classified once across repeated parse_head calls.
+    std::size_t leading_bytes_{0};
+    std::size_t request_line_end_{0};
+};
 
 class http1_server_request_head_ready final {
 public:
@@ -44,65 +54,6 @@ private:
     }
 
     std::size_t header_bytes_;
-};
-
-class http1_server_need_request_body final {
-public:
-    [[nodiscard]] constexpr std::size_t header_bytes() const noexcept {
-        return header_bytes_;
-    }
-
-    [[nodiscard]] constexpr std::optional<std::size_t> required_total_bytes() const noexcept {
-        return required_total_bytes_;
-    }
-
-private:
-    friend class http1_server_request_parser;
-
-    explicit constexpr http1_server_need_request_body(std::size_t header_bytes) noexcept
-        : header_bytes_(header_bytes) {
-        if (header_bytes_ == 0) {
-            std::terminate();
-        }
-    }
-
-    constexpr http1_server_need_request_body(
-        std::size_t header_bytes, std::size_t required_total_bytes) noexcept
-        : header_bytes_(header_bytes),
-          required_total_bytes_(required_total_bytes) {
-        if (header_bytes_ == 0 || (required_total_bytes_ && *required_total_bytes_ <= header_bytes_)) {
-            std::terminate();
-        }
-    }
-
-    std::size_t header_bytes_;
-    std::optional<std::size_t> required_total_bytes_{};
-};
-
-class http1_server_request_message_ready final {
-public:
-    [[nodiscard]] constexpr std::size_t header_bytes() const noexcept {
-        return header_bytes_;
-    }
-
-    [[nodiscard]] constexpr std::size_t message_bytes() const noexcept {
-        return message_bytes_;
-    }
-
-private:
-    friend class http1_server_request_parser;
-
-    constexpr http1_server_request_message_ready(
-        std::size_t header_bytes, std::size_t message_bytes) noexcept
-        : header_bytes_(header_bytes),
-          message_bytes_(message_bytes) {
-        if (header_bytes_ == 0 || message_bytes_ < header_bytes_) {
-            std::terminate();
-        }
-    }
-
-    std::size_t header_bytes_;
-    std::size_t message_bytes_;
 };
 
 class http1_server_request_parse_failure final {
@@ -141,16 +92,6 @@ public:
     }
     [[nodiscard]] const http1_server_request_head_ready* head_ready() const&& = delete;
 
-    [[nodiscard]] const http1_server_need_request_body* need_request_body() const& noexcept {
-        return std::get_if<http1_server_need_request_body>(&progress_);
-    }
-    [[nodiscard]] const http1_server_need_request_body* need_request_body() const&& = delete;
-
-    [[nodiscard]] const http1_server_request_message_ready* message_ready() const& noexcept {
-        return std::get_if<http1_server_request_message_ready>(&progress_);
-    }
-    [[nodiscard]] const http1_server_request_message_ready* message_ready() const&& = delete;
-
     [[nodiscard]] const http1_server_request_parse_failure* failure() const& noexcept {
         return std::get_if<http1_server_request_parse_failure>(&progress_);
     }
@@ -170,10 +111,10 @@ private:
     friend class http1_server_request_parser;
 
     // The compact request owns its descriptor block across parse attempts.
-    // Only this small progress value changes, so head/message/required/error
-    // metadata exists solely in the alternative where it is meaningful.
+    // Only this small progress value changes, so scan/head/error metadata
+    // exists solely in the alternative where it is meaningful.
     using progress = std::variant<http1_server_need_request_head, http1_server_request_head_ready,
-        http1_server_need_request_body, http1_server_request_message_ready, http1_server_request_parse_failure>;
+        http1_server_request_parse_failure>;
 
     progress progress_{http1_server_need_request_head{}};
     http_response_coding_qualities response_coding_qualities_;
@@ -185,30 +126,16 @@ public:
     // Only state.request_ draws from resource, which must outlive it until the
     // request is reset or reparsed; field text still borrows buffer. Empty
     // lines before the request-line are ignored (RFC 9112 section 2.2) within
-    // max_http_header_bytes and are counted in header_bytes().
+    // max_http_header_bytes and are counted in header_bytes(). Bytes before
+    // header_search_offset were examined by an earlier call on the same state
+    // and buffer prefix. An incomplete head already fails with a request_line
+    // source once its request-line is CRLF-terminated or cannot start a method.
     void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
         std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
 
     template <detail::http_temporary_owning_char_string buffer_type>
     void parse_head(buffer_type&&, http1_server_request_parse_state&, std::size_t = 0,
         std::pmr::memory_resource* = nullptr) const = delete;
-
-    // Stateless whole-message scan: always advances beyond request_head_ready
-    // to an unambiguous message/failure/need-more phase. Allocation failures
-    // propagate; syntax and framing failures are typed. Field text and body
-    // borrow buffer; the framed wire body (chunk lines and trailers included)
-    // is buffer[header_bytes(), message_bytes()) of message_ready().
-    [[nodiscard]] http1_server_request_parse_state parse_message(std::string_view buffer,
-        std::pmr::memory_resource* resource = nullptr) const;
-
-    template <detail::http_temporary_owning_char_string buffer_type>
-    http1_server_request_parse_state parse_message(buffer_type&&, std::pmr::memory_resource* = nullptr) const = delete;
-
-private:
-    static void parse_request_head(std::string_view buffer, std::size_t header_search_offset,
-        http1_server_request_parse_state& state, std::pmr::memory_resource* resource);
-    static void parse_message_body(
-        std::string_view buffer, http1_server_request_parse_state& state) noexcept;
 };
 
 }  // namespace ruvia

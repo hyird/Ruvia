@@ -51,6 +51,13 @@ redis_command_batch& redis_command_batch::command(std::span<const std::string_vi
     return *this;
 }
 
+redis_command_batch& redis_command_batch::append_trusted(
+    std::string_view command_name, std::span<const std::string_view> rest) {
+    require_ready();
+    commands_.emplace_back(make_owned_redis_command(resource(), command_name, rest));
+    return *this;
+}
+
 }  // namespace ruvia::detail
 
 namespace ruvia {

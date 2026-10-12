@@ -99,8 +99,10 @@ void validate_server_limits(const http_server_options& options) {
         "HTTP client in-flight response budget must be greater than zero");
 }
 
+// The limits normalize_server_options copies from server_config were validated
+// there, at configuration; only what other configuration entries set is
+// checked here, at run.
 void validate_http_server_options(const http_server_options& options) {
-    validate_server_limits(options);
     if (!std::has_single_bit(options.rate_limit_capacity_per_worker_)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }

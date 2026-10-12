@@ -32,14 +32,11 @@ namespace ruvia::detail {
            static_cast<std::uint64_t>(milliseconds_per_second);
 }
 
-// A migration table name is a SQL identifier that cannot be parameterized, so it
-// is restricted to the selected backend's identifier byte limit and
-// [A-Za-z0-9_] before being quoted -- the sole defense against SQL injection
-// via a misconfigured table name.
-[[nodiscard]] inline bool is_valid_migration_table_name(
-    std::string_view name, db_driver driver) noexcept {
-    const auto max_bytes = driver == db_driver::postgresql ? 63U : 64U;
-    if (name.empty() || name.size() > max_bytes) {
+// A migration table name is a SQL identifier that cannot be parameterized, so
+// it is restricted to [A-Za-z0-9_] before being quoted -- a configuration
+// policy on top of the dialect's quoting rule, which owns the length limit.
+[[nodiscard]] inline bool is_valid_migration_table_name(std::string_view name) noexcept {
+    if (name.empty()) {
         return false;
     }
     for (const auto ch : name) {
