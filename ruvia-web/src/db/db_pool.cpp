@@ -8,10 +8,10 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/error_text.h"
 #include "ruvia/http/http_number_format.h"
 
 #include "db/db_transaction_start.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {

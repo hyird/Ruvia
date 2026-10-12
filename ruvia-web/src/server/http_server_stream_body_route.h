@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
@@ -25,9 +26,8 @@ namespace ruvia::detail {
 template <typename stream_type>
 task<http1_session_request_completion> dispatch_http_stream_body_route(http1_route_dispatch<stream_type> d,
     const http1_server_request_head_ready& request_head, const route_resolution& route_resolution_value,
-    protocol_byte_limit body_limit, const std::pmr::string& read_buffer, std::size_t used_bytes,
-    std::pmr::string& pipeline_stash) {
-    const auto body_and_pipeline = http_body_and_pipeline(request_head, read_buffer, used_bytes);
+    protocol_byte_limit body_limit, std::string_view request_bytes, std::pmr::string& pipeline_stash) {
+    const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
 
     std::exception_ptr exception;
     std::optional<body_reader_binding<stream_body_reader<stream_type>>> body_reader;
@@ -50,7 +50,7 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
     }
 
     co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
-        d.request_sequence_, body_reader->reader().consumption(), used_bytes, pipeline_stash,
+        d.request_sequence_, body_reader->reader().consumption(), request_bytes.size(), pipeline_stash,
         [&body_reader](std::pmr::string& stash) { return body_reader->reader().take_pipeline(stash); });
 }
 

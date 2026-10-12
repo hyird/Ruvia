@@ -8,6 +8,7 @@
 #include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
+#include "server/http_connection_state.h"
 #include "server/request_body_limit.h"
 
 namespace ruvia::detail {
@@ -48,11 +49,23 @@ void http_response_tail::record_access(const access_log_sink& access_log, http_s
     if (!access_log.callback_) {
         return;
     }
-    const auto micros =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_).count();
-    const access_log_record record(
-        *request_, client_address_, status, micros < 0 ? 0 : static_cast<std::uint64_t>(micros));
-    access_log.invoke(record);
+    access_log.invoke(access_log_record_access::make({
+        .method_ = request_->method(),
+        .known_method_ = request_->known_method(),
+        .path_ = request_->path(),
+        .protocol_version_ = request_->protocol_version(),
+        .remote_address_ = client_address_,
+        .status_ = status,
+        .duration_micros_ = access_log_record_access::duration_since(start_),
+    }));
+}
+
+void http_response_tail::defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred,
+    std::size_t head_end, http_status_code status) const {
+    if (!access_log.callback_) {
+        return;
+    }
+    deferred.defer(head_end, *request_, client_address_, start_, status);
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,

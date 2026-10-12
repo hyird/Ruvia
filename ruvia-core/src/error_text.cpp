@@ -1,7 +1,4 @@
-#include "util/error_code_text.h"
-
-#include "ruvia/core/failure_report.h"
-#include "ruvia/web/error.h"
+#include "ruvia/core/error_text.h"
 
 #ifdef _WIN32
 #include <array>
@@ -15,7 +12,7 @@
 #include <windows.h>
 #endif
 
-namespace ruvia::detail {
+namespace ruvia {
 namespace {
 
 #ifdef _WIN32
@@ -85,43 +82,6 @@ std::string system_error_text(const std::system_error& error) {
     }
 #endif
     return error.what();
-}
-
-void report_unhandled_web_failure(std::string_view context_value, const std::exception_ptr& exception) noexcept {
-    if (exception == nullptr) {
-        return;
-    }
-    try {
-        std::rethrow_exception(exception);
-    } catch (const std::system_error& error) {
-        try {
-            ruvia::report_unhandled_failure(context_value, system_error_text(error));
-            return;
-        } catch (...) {
-            // Formatting failed to allocate; the native text below still reports it.
-        }
-    } catch (...) {
-    }
-    ruvia::report_unhandled_failure(context_value, exception);
-}
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
-std::string exception_text(const std::exception_ptr& exception) {
-    if (exception == nullptr) {
-        return {};
-    }
-    try {
-        std::rethrow_exception(exception);
-    } catch (const std::system_error& error) {
-        return detail::system_error_text(error);
-    } catch (const std::exception& error) {
-        return error.what();
-    } catch (...) {
-        return "non-standard exception";
-    }
 }
 
 }  // namespace ruvia

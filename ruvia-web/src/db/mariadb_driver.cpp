@@ -11,13 +11,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_mysql_runtime.h"
 #include "db/db_pool.h"
 #include "db/db_sql.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {

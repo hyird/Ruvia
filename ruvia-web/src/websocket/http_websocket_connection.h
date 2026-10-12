@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -178,6 +179,46 @@ private:
         websocket_connection* connection_;
     };
 
+    // Submits an application payload by reference. Its owner is the caller of
+    // write_owned(), which releases it once that write ends, so unless
+    // release() records that the flush took the payload off the protocol, the
+    // guard aborts protocol and transport: every exit after the submit,
+    // exceptions and frame destruction included, leaves no view the protocol
+    // could still copy or send.
+    class borrowed_frame_guard_type final {
+    public:
+        borrowed_frame_guard_type(
+            websocket_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress)
+            : connection_(&connection) {
+            if (!connection.accept_submitted_frame(connection.protocol_.submit_borrowed_frame(opcode, payload, compress))) {
+                connection_ = nullptr;
+            }
+        }
+
+        borrowed_frame_guard_type(const borrowed_frame_guard_type&) = delete;
+        borrowed_frame_guard_type& operator=(const borrowed_frame_guard_type&) = delete;
+
+        ~borrowed_frame_guard_type() {
+            if (connection_ != nullptr) {
+                connection_->abort_transport();
+            }
+        }
+
+        // False when the protocol was no longer open and queued nothing.
+        [[nodiscard]] bool submitted() const noexcept {
+            return connection_ != nullptr;
+        }
+
+        // A completed flush drained the payload, or ended the protocol so it
+        // never reads the view again.
+        void release() noexcept {
+            connection_ = nullptr;
+        }
+
+    private:
+        websocket_connection* connection_;
+    };
+
     class read_guard_type final {
     public:
         explicit read_guard_type(websocket_connection& connection)
@@ -230,13 +271,15 @@ private:
         websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress);
     task<void> close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
+    // Callers check write_phase_ first, so an idle lane costs no coroutine frame.
     task<void> wait_for_write_idle();
-    task<void> write_exclusive(websocket_opcode opcode, std::string_view payload, bool compress = true);
-    task<void> write_frame_now(websocket_opcode opcode, std::string_view payload, bool compress = true);
+    // Maps a rejected submit to its exception; false when the protocol is no
+    // longer open and nothing was queued.
+    bool accept_submitted_frame(websocket_frame_submit_status status);
     task<void> flush_protocol_output_exclusive();
     task<void> flush_protocol_output_now();
     task<http_stream_read_result> read_more();
-    task<std::error_code> write_bytes(std::string_view bytes_value);
+    auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
     void abort_transport(bool force_transport = false) noexcept;
     // Aborts the transport and retains the first background write failure.

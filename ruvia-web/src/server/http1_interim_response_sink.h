@@ -14,6 +14,7 @@
 #include "ruvia/http/http_request.h"
 
 #include "context/http_interim_response_output.h"
+#include "server/http1_response_output.h"
 #include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
@@ -21,11 +22,14 @@ template <typename stream_type>
 class http1_interim_response_sink final {
 public:
     // `request` is the session's reused parse target; it is borrowed for every
-    // dispatch that can reach output().
-    http1_interim_response_sink(stream_type& stream, const http_request& request, std::pmr::memory_resource* resource)
+    // dispatch that can reach output(). Pipelined responses still held back in
+    // `pending` precede any interim head on the wire.
+    http1_interim_response_sink(stream_type& stream, const http_request& request, std::pmr::memory_resource* resource,
+        http1_response_output<stream_type>& pending)
         : stream_(stream),
           request_(request),
           resource_(resource),
+          pending_(pending),
           output_(resource, this, write) {}
     [[nodiscard]] http_interim_response_output& output() noexcept {
         return output_;
@@ -49,6 +53,9 @@ private:
             // Interim heads are advisory, so the exchange simply omits it.
             co_return;
         }
+        if (const auto error = co_await self.pending_.flush()) {
+            throw inbound_transport_error(error, "failed to write HTTP/1 responses before an interim response");
+        }
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
             asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
         });
@@ -59,6 +66,7 @@ private:
     stream_type& stream_;
     const http_request& request_;
     std::pmr::memory_resource* resource_;
+    http1_response_output<stream_type>& pending_;
     http_interim_response_output output_;
 };
 }  // namespace ruvia::detail

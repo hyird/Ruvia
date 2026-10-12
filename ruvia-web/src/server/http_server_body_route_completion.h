@@ -57,11 +57,11 @@ inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_
         body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_);
 }
 
+// `request_bytes` is the connection's buffered input from the start of this
+// request: its head, then whatever body and pipelined bytes followed it.
 [[nodiscard]] inline std::string_view http_body_and_pipeline(
-    const http1_server_request_head_ready& request_head, const std::pmr::string& read_buffer,
-    std::size_t used_bytes) noexcept {
-    const auto header_bytes = request_head.header_bytes();
-    return std::string_view(read_buffer.data() + header_bytes, used_bytes - header_bytes);
+    const http1_server_request_head_ready& request_head, std::string_view request_bytes) noexcept {
+    return request_bytes.substr(request_head.header_bytes());
 }
 
 inline task<http1_session_request_completion> complete_failed_http_route(
@@ -77,9 +77,9 @@ inline task<http1_session_request_completion> complete_failed_http_route(
     co_return http1_session_request_completion::make_buffered_closing(connection_plan);
 }
 
-// `read_buffer_used_bytes` is the connection read buffer's used bytes at
-// dispatch, the suffix included. A suffix still in that buffer becomes an
-// in-place compaction; only bytes the body reader over-read go through
+// `request_bytes` is the connection's buffered input at dispatch, from the
+// start of this request, the suffix included. A suffix still in that buffer
+// becomes a consumed prefix; only bytes the body reader over-read go through
 // `pipeline_stash`, request-scoped storage that outlives the returned
 // completion. The read buffer is not touched here -- the response has not been
 // written and the access log not recorded yet, and both still read views that
@@ -88,7 +88,7 @@ template <typename take_pipeline_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
     connection_scanner::entry_type& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
-    http1_request_body_consumption body_consumption, std::size_t read_buffer_used_bytes,
+    http1_request_body_consumption body_consumption, std::size_t request_bytes,
     std::pmr::string& pipeline_stash, take_pipeline_type take_pipeline) {
     connection_plan = apply_request_body_consumption(connection_plan, body_consumption);
     connection_plan = request_sequence.complete_uncommitted_response(connection_plan);
@@ -104,7 +104,7 @@ template <typename take_pipeline_type>
                         committed, pipeline.stashed_);
                 }
                 return http1_session_request_completion::make_buffered_unrestored(
-                    committed, read_buffer_used_bytes - pipeline.read_buffer_suffix_bytes_);
+                    committed, request_bytes - pipeline.read_buffer_suffix_bytes_);
             }
             return http1_session_request_completion::make_buffered_closing(committed);
         });

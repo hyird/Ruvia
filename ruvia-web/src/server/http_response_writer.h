@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <optional>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -39,6 +38,21 @@ private:
     connection_scanner::entry_type* entry_;
 };
 
+// Puts an accepted plain TCP socket into user non-blocking mode once, before
+// its first I/O, so try_plain_tcp_sync_write() can offer bytes without
+// blocking the worker. Asio's own internal non-blocking state is not enough:
+// write_some() polls indefinitely unless the user mode is set. Asynchronous
+// operations are unaffected on every platform: the reactor already runs the
+// descriptor non-blocking, and on Windows asio issues overlapped
+// WSASend/WSARecv/TransmitFile, which ignore FIONBIO, while a synchronous
+// send() on a full send buffer returns WSAEWOULDBLOCK (asio::error::would_block)
+// instead of blocking. A socket left blocking (the call failed) keeps every
+// write on the asynchronous path.
+inline void enable_plain_tcp_sync_write(asio::ip::tcp::socket& socket) noexcept {
+    std::error_code ignored;
+    socket.non_blocking(true, ignored);
+}
+
 // Try one non-blocking plain TCP write before suspending. Returns true when
 // the write completed or hit a hard error (outcome in ec/bytes_written), and
 // false when the remainder must go through async_write.
@@ -46,27 +60,10 @@ template <typename const_buffer_sequence_type>
 [[nodiscard]] inline bool try_plain_tcp_sync_write(asio::ip::tcp::socket& socket,
     const const_buffer_sequence_type& buffers, std::size_t total_bytes, std::error_code& ec,
     std::size_t& bytes_written) noexcept {
-#ifdef _WIN32
-    // Windows async sockets use overlapped I/O without making synchronous
-    // send calls non-blocking. A write_some() here can therefore block the
-    // worker indefinitely when the peer's receive window is exhausted.
-    // Keep all writes on the overlapped async path.
-    (void)socket;
-    (void)buffers;
-    (void)total_bytes;
     ec.clear();
     bytes_written = 0;
-    return false;
-#else
-    ec.clear();
-    // Asio's internal native non-blocking mode is not enough: write_some()
-    // still polls indefinitely unless its user non-blocking mode is enabled.
     if (!socket.non_blocking()) {
-        socket.non_blocking(true, ec);
-        if (ec) {
-            bytes_written = 0;
-            return true;
-        }
+        return false;
     }
     bytes_written = socket.write_some(buffers, ec);
     if (!ec) {
@@ -78,12 +75,12 @@ template <typename const_buffer_sequence_type>
         return false;
     }
     return true;
-#endif
 }
 
-// Writes a committed file or multipart/byteranges body. Plain TCP hands file
-// ranges to the kernel (sendfile/TransmitFile) where the platform has one;
-// TLS, or TCP without a native path, reads through response_file_source.
+// Writes a committed file or multipart/byteranges body after its head. Plain
+// TCP hands file ranges to the kernel (sendfile/TransmitFile) where the
+// platform has one; TLS, or TCP without a native path, reads through
+// response_file_source.
 template <typename stream_type>
 task<std::error_code> write_http1_file_body(stream_type& stream, const http_response& response,
     const response_file_io& file_io, connection_scanner::entry_type& progress) {
@@ -92,8 +89,9 @@ task<std::error_code> write_http1_file_body(stream_type& stream, const http_resp
         for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
             const auto segment = response.body_segment(index);
             if (segment.file_) {
-                if (const auto error = co_await write_http_response_file(stream, *segment.file_, progress)) {
-                    co_return error;
+                if (const auto written = co_await write_http_response_file(stream, {}, *segment.file_, progress);
+                    written.error_) {
+                    co_return written.error_;
                 }
             } else if (!segment.bytes_.empty()) {
                 auto part = co_await ruvia::async_asio<std::size_t>(
@@ -129,97 +127,100 @@ task<std::error_code> write_http1_file_body(stream_type& stream, const http_resp
     }
 }
 
-// The synchronous start of a buffered response write. finished_ is set when
-// that start already settled the outcome; otherwise finish_response_write()
-// sends the remainder.
+// A buffered response serialized into the connection's output.
 struct http1_response_write_start final {
-    std::optional<http1_buffered_response_write_result> finished_;
-    // Serialized head length, excluding any small body coalesced into it.
+    // Output offset at which this response's head is complete. Responses held
+    // back before it precede it; without them this is the head's length.
     std::size_t head_bytes_{};
-    // In-memory body bytes not coalesced into the head.
+    // In-memory body bytes not coalesced into the output.
     std::string_view body_;
-    // Prefix of head-then-body already accepted by the socket.
-    std::size_t written_bytes_{};
+    // The response stays in the output for a later coalesced write.
+    bool held_{false};
 };
 
-// Serializes the head, coalesces a small in-memory body into it and, on plain
-// TCP, offers the bytes to one non-blocking write. A response the socket
-// accepts at once therefore completes without a coroutine frame. File bodies
-// always continue in finish_response_write().
-template <typename stream_type>
-[[nodiscard]] http1_response_write_start start_response_write(stream_type& stream,
-    http_response_head_buffer& head, const http_response& response, const http1_buffered_response_plan& response_plan) {
-    head.reset();
-    append_http1_response_head(response, head, response_plan.head_plan());
+// Appends the response head to `output`, after any pipelined responses held
+// back there, and coalesces an in-memory body that fits the inline head
+// storage. A nonzero `hold_limit` means the connection already holds its next
+// request: the body is then coalesced up to that many output bytes, and a
+// response wholly in the output below the limit is held back instead of
+// written. File bodies are never coalesced or held; the caller writes any
+// held-back output first, then continues in finish_file_response_write().
+[[nodiscard]] inline http1_response_write_start start_response_write(http_response_head_buffer& output,
+    const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit) {
+    append_http1_response_head(response, output, response_plan.head_plan());
     http1_response_write_start start;
-    start.head_bytes_ = head.view().size();
+    start.head_bytes_ = output.view().size();
     if (response.file_body() || response.has_multipart_file_body()) {
         return start;
     }
 
     auto body = response_plan.send_body() ? response.body_bytes() : std::string_view{};
-    if (!body.empty() && head.can_append_on_stack(body.size())) {
-        head.append(body);
+    if (!body.empty() && (output.can_append_on_stack(body.size()) ||
+                             (start.head_bytes_ < hold_limit && body.size() < hold_limit - start.head_bytes_))) {
+        output.append(body);
         body = {};
     }
     start.body_ = body;
-    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
-        const auto head_view = head.view();
-        std::error_code write_ec;
-        const bool write_done = body.empty()
-                                    ? try_plain_tcp_sync_write(stream, asio::buffer(head_view), head_view.size(),
-                                          write_ec, start.written_bytes_)
-                                    : try_plain_tcp_sync_write(stream,
-                                          std::array<asio::const_buffer, 2>{asio::buffer(head_view), asio::buffer(body)},
-                                          head_view.size() + body.size(), write_ec, start.written_bytes_);
-        if (write_done) {
-            start.finished_ = classify_http1_buffered_response_write(
-                response_plan, start.head_bytes_, write_ec, start.written_bytes_);
-        }
-    }
+    start.held_ = body.empty() && output.view().size() < hold_limit;
     return start;
 }
 
-// Completes a write whose start did not finish, with the arguments given to
-// start_response_write(). `progress` is the connection's scanner entry; every
-// partial transfer touches it.
+// Writes a file or multipart/byteranges response whose head start_response_write()
+// serialized into an otherwise empty `head`. `progress` is the connection's
+// scanner entry; every partial transfer touches it. A plain-TCP whole-file body
+// may append its bytes to `head` so that head and body leave in one send.
 template <typename stream_type>
-task<http1_buffered_response_write_result> finish_response_write(stream_type& stream,
-    const http_response_head_buffer& head, const http_response& response,
+task<http1_buffered_response_write_result> finish_file_response_write(stream_type& stream,
+    http_response_head_buffer& head, const http_response& response,
     const http1_buffered_response_plan& response_plan, const http1_response_write_start& start,
     const response_file_io& file_io, connection_scanner::entry_type& progress) {
     const auto response_head_bytes = start.head_bytes_;
-    if (response.file_body() || response.has_multipart_file_body()) {
-        auto write_completion = co_await ruvia::async_asio<std::size_t>(
-            [&stream, &progress, head_view = head.view()](auto handler) mutable {
-                asio::async_write(
-                    stream, asio::buffer(head_view), http_write_progress(progress), std::move(handler));
-            });
-        const auto ec = write_completion.error_code();
-        const auto bytes_transferred = write_completion.result();
-        if (ec || !response_plan.send_body()) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
+                  native_response_file_write_available) {
+        if (response_plan.send_body() && !response.has_multipart_file_body()) {
+            // The file is opened (or its framing handle borrowed) and, when
+            // small, read before any byte is sent: a file that is missing or
+            // changed fails before the head commits a status.
+            const auto file = *response.file_body();
+            if (file.length() > inline_response_file_max_bytes) {
+                const auto written = co_await write_http_response_file(stream, head.view(), file, progress);
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+                    written.error_, written.head_written_ ? response_head_bytes : 0);
+            }
+            if (const auto read_error = append_response_file_bytes(head, file)) {
+                co_return classify_http1_buffered_response_write(
+                    response_plan, response_head_bytes, read_error, 0);
+            }
+            const auto bytes = head.view();
+            std::error_code write_ec;
+            std::size_t written_bytes = 0;
+            if (!try_plain_tcp_sync_write(stream, asio::buffer(bytes), bytes.size(), write_ec, written_bytes)) {
+                auto write_completion = co_await ruvia::async_asio<std::size_t>(
+                    [&stream, &progress, rest = bytes.substr(written_bytes)](auto handler) mutable {
+                        asio::async_write(
+                            stream, asio::buffer(rest), http_write_progress(progress), std::move(handler));
+                    });
+                write_ec = write_completion.error_code();
+                written_bytes += write_completion.result();
+            }
             co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, ec, bytes_transferred);
+                response_plan, response_head_bytes, write_ec, written_bytes);
         }
-        const auto body_error = co_await write_http1_file_body(stream, response, file_io, progress);
-        co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, body_error, response_head_bytes);
     }
-
-    const auto head_view = head.view();
-    const auto body = start.body_;
-    const auto written_bytes = start.written_bytes_;
-    const std::array<asio::const_buffer, 2> remaining =
-        written_bytes < head_view.size()
-            ? std::array<asio::const_buffer, 2>{asio::buffer(head_view.substr(written_bytes)), asio::buffer(body)}
-            : std::array<asio::const_buffer, 2>{
-                  asio::buffer(body.substr(written_bytes - head_view.size())), asio::const_buffer{}};
     auto write_completion = co_await ruvia::async_asio<std::size_t>(
-        [&stream, &progress, &remaining](auto handler) mutable {
-            asio::async_write(stream, remaining, http_write_progress(progress), std::move(handler));
+        [&stream, &progress, head_view = head.view()](auto handler) mutable {
+            asio::async_write(
+                stream, asio::buffer(head_view), http_write_progress(progress), std::move(handler));
         });
-    co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-        write_completion.error_code(), written_bytes + write_completion.result());
+    const auto ec = write_completion.error_code();
+    const auto bytes_transferred = write_completion.result();
+    if (ec || !response_plan.send_body()) {
+        co_return classify_http1_buffered_response_write(
+            response_plan, response_head_bytes, ec, bytes_transferred);
+    }
+    const auto body_error = co_await write_http1_file_body(stream, response, file_io, progress);
+    co_return classify_http1_buffered_response_write(
+        response_plan, response_head_bytes, body_error, response_head_bytes);
 }
 
 }  // namespace ruvia::detail

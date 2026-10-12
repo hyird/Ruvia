@@ -247,8 +247,9 @@ public:
     // Inputs may borrow current header storage. Refresh views after mutation.
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
-    // Name and value may be retained as borrowed views without copying. Keep
-    // their bytes valid and unchanged while this block or any clone retains them.
+    // Validated like header(). Name and value may be retained as borrowed views
+    // without copying. Keep their bytes valid and unchanged while this block or
+    // any clone retains them.
     void header_stable_view(std::string_view key, std::string_view value);
     void remove_header(std::string_view key);
     // Replace cookies with the same name, Domain/Path scope, and Partitioned
@@ -420,12 +421,16 @@ public:
     void owned_body(std::pmr::string&& value);
     void static_body(std::string_view value) noexcept;
     void materialize_body();
-    // Own the path in this response's PMR storage and preserve the runtime's
-    // opaque identity token. Path and range validation precede body replacement.
-    void file_body(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length, http_response_file_identity identity);
-    void multipart_file_body(std::filesystem::path file, std::uint64_t size,
-        http_response_file_identity identity, http_multipart_byte_range_plan&& plan);
+    // Own the native path in this response's PMR storage and preserve the
+    // runtime's opaque identity token. `opened`, when engaged, is the handle the
+    // runtime framed the response from; the body owns it and releases it on
+    // destruction or replacement. Path and range validation precede body
+    // replacement; a rejected call releases `opened`.
+    void file_body(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset,
+        std::uint64_t length, http_response_file_identity identity, http_response_file_handle opened = {});
+    void multipart_file_body(http_native_path_view_type file, std::uint64_t size,
+        http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
+        http_response_file_handle opened = {});
     void content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void content_range_unsatisfied(std::uint64_t size);
     void add_vary_token(std::string_view token);

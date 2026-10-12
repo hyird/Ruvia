@@ -27,14 +27,16 @@ namespace ruvia::detail {
 struct http_server_options;
 
 // The application's one document-root refresher. A single claimed worker walks
-// the root and precompresses changed files once per interval; every worker
-// adopts the published immutable snapshot on its own thread. The runtime graph
-// owns this object, so it outlives every worker and their joined refresh tasks.
+// the root, reads small files into the snapshot and precompresses changed files
+// once per interval; every worker adopts the published immutable snapshot on
+// its own thread. The runtime graph owns this object, so it outlives every
+// worker and their joined refresh tasks.
 class document_root_publisher final {
 public:
     // Builds the initial snapshot; a failure here fails application startup.
     document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config,
-        std::chrono::milliseconds interval, static_root_precompression_options precompression);
+        std::chrono::milliseconds interval, static_root_precompression_options precompression,
+        static_root_resident_options resident);
     ~document_root_publisher();
 
     document_root_publisher(const document_root_publisher&) = delete;
@@ -71,6 +73,7 @@ private:
 
     std::chrono::milliseconds interval_;
     static_root_precompression_options precompression_;
+    static_root_resident_options resident_;
     mutable std::mutex mutex_;
     // Guarded by mutex_ for readers. Only refresh() replaces it, on the
     // claiming worker, so that pass reads it without the lock.

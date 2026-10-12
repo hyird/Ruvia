@@ -34,6 +34,18 @@ struct static_root_precompression_options final {
     }
 };
 
+// Document-root snapshots keep the bytes of files up to max_file_bytes_, within
+// budget_bytes_ for the whole snapshot, so those responses never touch the
+// filesystem. Zero for either disables it.
+struct static_root_resident_options final {
+    std::size_t max_file_bytes_{0};
+    std::size_t budget_bytes_{0};
+
+    [[nodiscard]] constexpr bool enabled() const noexcept {
+        return max_file_bytes_ != 0 && budget_bytes_ != 0;
+    }
+};
+
 // Snapshots built by one refresher reuse an unchanged file's encoded bytes
 // instead of copying them: the buffer is immutable and shared by every
 // snapshot that indexes the same file version.
@@ -70,6 +82,9 @@ struct static_root_entry final {
     std::pmr::string last_modified_;
     bool directly_servable_{true};
     std::pmr::vector<static_root_memory_variant> memory_variants_;
+    // The file's bytes as indexed, when the snapshot keeps it resident. Shared
+    // with later snapshots that index the same file version.
+    std::shared_ptr<const std::pmr::string> resident_bytes_;
 };
 
 struct static_root_state final {
@@ -198,6 +213,11 @@ public:
         return std::nullopt;
     }
 
+    // The file's indexed bytes when the snapshot keeps them in memory.
+    [[nodiscard]] const std::pmr::string* resident_bytes() const noexcept {
+        return resident_bytes_;
+    }
+
 private:
     friend class static_root_access;
 
@@ -206,7 +226,8 @@ private:
         std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token,
         std::time_t modified_seconds, static_range_request_policy range_requests,
         static_response_validator_policy response_validators, bool directly_servable,
-        const std::pmr::vector<static_root_memory_variant>* memory_variants) noexcept
+        const std::pmr::vector<static_root_memory_variant>* memory_variants,
+        const std::pmr::string* resident_bytes) noexcept
         : file_path_(file_path),
           content_type_(content_type_value),
           cache_control_(cache_control_value),
@@ -219,7 +240,8 @@ private:
           range_requests_(range_requests),
           response_validators_(response_validators),
           directly_servable_(directly_servable),
-          memory_variants_(memory_variants) {}
+          memory_variants_(memory_variants),
+          resident_bytes_(resident_bytes) {}
 
     const http_native_path_char_type* file_path_;
     std::string_view content_type_;
@@ -234,6 +256,7 @@ private:
     static_response_validator_policy response_validators_;
     bool directly_servable_;
     const std::pmr::vector<static_root_memory_variant>* memory_variants_;
+    const std::pmr::string* resident_bytes_;
 };
 
 class static_root_access final {
@@ -259,6 +282,11 @@ public:
         const static_root& left, const static_root& right) noexcept;
     static void install_precompressed_variants(static_root& root, const static_root* previous,
         const static_root_precompression_options& options);
+    // Reads eligible files into the snapshot, reusing `previous`'s bytes for
+    // entries whose indexed metadata is unchanged. A file that cannot be read
+    // as indexed stays file-backed and keeps its identity check.
+    static void install_resident_bodies(static_root& root, const static_root* previous,
+        const static_root_resident_options& options);
 
 private:
     [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> construct(

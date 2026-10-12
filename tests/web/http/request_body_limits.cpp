@@ -433,6 +433,30 @@ RUVIA_TEST(buffered_routes_answer_a_pipelined_burst_in_order) {
     RUVIA_CHECK_EQ(position + 4, response.size());
 }
 
+RUVIA_TEST(buffered_known_length_body_read_from_socket_keeps_the_pipelined_request) {
+    // The body follows 100 Continue, so all of it arrives through socket reads
+    // after the head, across several reads and capacity growth steps, with the
+    // next request directly behind its last byte in the same write.
+    std::string body(200 * 1024 + 7, '\0');
+    for (std::size_t index = 0; index < body.size(); ++index) {
+        body[index] = static_cast<char>('a' + index % 23);
+    }
+    const auto response = exchange_raw_request(
+        "POST /server-pipelined-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(body.size()) +
+            "\r\nExpect: 100-continue\r\n\r\n",
+        body + "GET /server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", true, false);
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    const auto echoed = response.find("\r\n\r\n");
+    RUVIA_CHECK(echoed != std::string::npos);
+    if (echoed == std::string::npos) {
+        return;
+    }
+    RUVIA_CHECK(std::string_view(response).substr(echoed + 4, body.size()) == body);
+    const auto second = response.find("HTTP/1.1 200 ", echoed + 4 + body.size());
+    RUVIA_CHECK_EQ(second, echoed + 4 + body.size());
+    RUVIA_CHECK(response.ends_with("next"));
+}
+
 RUVIA_TEST(server_rejects_absolute_form_targets_outside_http_schemes) {
     // A front proxy that only recognises http(s) absolute URIs must not see a
     // different target than the one routed here, so other schemes are a 400.

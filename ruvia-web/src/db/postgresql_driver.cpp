@@ -11,12 +11,12 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_pool.h"
 #include "db/db_postgresql.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {

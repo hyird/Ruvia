@@ -30,6 +30,14 @@
 
 namespace ruvia::detail {
 
+// How submit_frame() holds an outbound payload that is sent as-is: copied into
+// the pending output, or borrowed until that output drains. Masked (client) and
+// compressed payloads are always encoded into owned output.
+enum class ws_payload_storage : std::uint8_t {
+    copy,
+    borrow,
+};
+
 class ws_connection final {
 public:
     explicit ws_connection(std::pmr::string& input,
@@ -62,10 +70,12 @@ public:
 
     // Submit one complete logical message/control payload. Role-correct masking,
     // outbound text UTF-8 validation, optional data-message compression and
-    // wire header encoding stay inside the core.
+    // wire header encoding stay inside the core. A borrowed payload must stay
+    // valid and unchanged until consume_output() drains it or the transport ends.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
-    [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, std::string_view payload, bool compress = true);
+    [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, std::string_view payload,
+        bool compress = true, ws_payload_storage storage = ws_payload_storage::copy);
     [[nodiscard]] websocket_close_submit_status submit_close(std::uint16_t code, std::string_view reason);
 
 private:
@@ -83,7 +93,8 @@ private:
         closed,
     };
 
-    void append_frame(websocket_opcode opcode, std::string_view payload, bool rsv1 = false);
+    void append_frame(websocket_opcode opcode, std::string_view payload, bool rsv1 = false,
+        ws_payload_storage storage = ws_payload_storage::copy);
     void fail(std::uint16_t code, std::string_view reason = {});
     void receive_peer_close() noexcept;
     [[nodiscard]] std::optional<websocket_event> poll_impl() &;
@@ -95,6 +106,10 @@ private:
 
     std::pmr::string out_buffer_;
     std::size_t out_offset_{0};
+    // An unmasked, uncompressed payload that follows out_buffer_ on the wire
+    // without being copied into it. Only the newest frame can borrow; queuing
+    // more output first appends it to out_buffer_.
+    std::string_view borrowed_output_;
 
     websocket_inbound_assembler assembler_;
 

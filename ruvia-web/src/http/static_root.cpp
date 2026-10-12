@@ -8,6 +8,7 @@
 #include <memory>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -232,6 +233,23 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     return bytes;
 }
 
+// Reads an entry through one handle and revalidates that handle afterwards, so
+// the kept bytes are exactly those the indexed metadata describes. A file that
+// changed since it was indexed yields nothing and stays file-backed.
+[[nodiscard]] std::optional<std::pmr::string> read_resident_static_root_entry_bytes(
+    const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
+    const auto size = static_cast<std::size_t>(entry_value.size_);
+    std::pmr::string bytes(resource);
+    bytes.resize(size);
+    detail::response_file_input input(http_response_file_view(
+        entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
+    if (!input || !detail::read_exact(input, bytes.data(), size) ||
+        !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
 void store_precompressed_variant(detail::static_root_entry& entry_value, http_content_coding coding,
     std::pmr::string encoded, bool emit_response_validators, std::pmr::memory_resource* resource) {
     auto bytes = std::allocate_shared<std::pmr::string>(
@@ -311,7 +329,8 @@ std::optional<detail::static_root_entry_view> detail::static_root_access::find_v
     return detail::static_root_entry_view(entry_value->file_path_.c_str(), entry_value->content_type_,
         state_value.config_.cache_control_, entry_value->etag_, entry_value->last_modified_, entry_value->size_, entry_value->identity_,
         entry_value->modified_token_, entry_value->modified_seconds_, state_value.config_.range_requests_,
-        state_value.config_.response_validators_, entry_value->directly_servable_, &entry_value->memory_variants_);
+        state_value.config_.response_validators_, entry_value->directly_servable_, &entry_value->memory_variants_,
+        entry_value->resident_bytes_.get());
 }
 
 bool detail::static_root_access::is_indexed_directory(
@@ -395,6 +414,39 @@ void detail::static_root_access::install_precompressed_variants(
                     emit_response_validators, resource);
             }
         }
+    }
+}
+
+void detail::static_root_access::install_resident_bodies(
+    static_root& root, const static_root* previous, const static_root_resident_options& options) {
+    if (!options.enabled()) {
+        return;
+    }
+    auto& state_value = *root.state_;
+    auto* const resource = process_resource();
+    const auto* previous_state = previous == nullptr ? nullptr : previous->state_.get();
+    std::size_t used = 0;
+    for (auto& entry : state_value.entries_) {
+        if (entry.size_ > options.max_file_bytes_ || entry.size_ > options.budget_bytes_ - used) {
+            continue;
+        }
+        const auto size = static_cast<std::size_t>(entry.size_);
+        if (previous_state != nullptr) {
+            const auto* previous_entry = find_static_root_entry(previous_state->entries_, entry.relative_path_);
+            if (previous_entry != nullptr && previous_entry->resident_bytes_ != nullptr &&
+                same_static_root_entry_metadata(entry, *previous_entry)) {
+                entry.resident_bytes_ = previous_entry->resident_bytes_;
+                used += size;
+                continue;
+            }
+        }
+        auto bytes = read_resident_static_root_entry_bytes(entry, resource);
+        if (!bytes.has_value()) {
+            continue;
+        }
+        entry.resident_bytes_ = std::allocate_shared<std::pmr::string>(
+            std::pmr::polymorphic_allocator<std::pmr::string>(resource), std::move(*bytes));
+        used += size;
     }
 }
 

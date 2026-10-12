@@ -107,12 +107,13 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 示例和测试按 target、协议层级归档；core 单测平铺。
 - 复用根 build 和现有配置，不无故清缓存或全量重编译。按可用 CPU 核心数并行构建（例如 `cmake --build build --config Debug -j <cores>`）。
 - 不修改父项目配置。Windows 使用 MSVC 和静态依赖/runtime。
-- 交付前 Windows（MSVC）与 Linux（GCC，`-Werror`，全功能配置）都必须构建并通过全部测试。
-- 源文件使用 LF 换行（见 .gitattributes）。
+- 交付前 Windows（MSVC）与 Linux（GCC，`-Werror`，全功能配置）都必须构建并通过全部测试，并通过 CI 的 clang-format 检查。
+- 源文件使用 LF 换行（见 .gitattributes）。提交前用 clang-format 21（与 CI 一致）格式化改动的 C++ 源码。
+- 性能测试不在开发机上运行，使用专用测试主机。
 - 单元测试只通过非 detail 公开 API 验证对外行为；不测试内部 API、私有实现或内部状态，不保留结构、安装或 API guard。
 - 修复可经公开 API 确定性复现的缺陷时，补充功能回归测试；无法确定性复现时说明原因。
 - 不新增长期 integration、conformance、benchmark 或 probe。临时验证完成即清理。
 - 生命周期改动验证成功、异常、取消和内存回收。
 - 纯文档只做文档校验。性能结论必须有可复核依据。
-- 准确说明验证范围和限制；多轮修复工作每轮结束汇报结果。
+- 准确说明验证范围和限制；多轮修复工作每轮结束汇报结果并提交推送到 main。
 - build、依赖缓存及本地工具目录保持 ignored。

@@ -40,6 +40,28 @@ void validate_connection_control_field(std::string_view name, std::string_view v
     }
 }
 
+// Every insertion path validates one field line completely, so a serialized
+// head only re-checks the rules that span several lines. Returns the field's
+// known bit.
+[[nodiscard]] std::uint32_t validate_response_header_field(std::string_view key, std::string_view value) {
+    // Check the descriptor's representable storage before any grammar scan;
+    // callers may provide a view over a bounded buffer with a hostile length.
+    detail::validate_response_header_storage_size(key.size(), value.size());
+    if (!is_valid_http_header_name(key)) {
+        throw std::invalid_argument("invalid HTTP header name");
+    }
+    if (!is_valid_http_header_value(value)) {
+        throw std::invalid_argument("invalid HTTP header value");
+    }
+    validate_connection_control_field(key, value);
+    detail::response_field_state fields;
+    if (detail::validate_response_field(detail::classify_request_header(key), value,
+            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
+        throw std::invalid_argument("invalid HTTP response field value");
+    }
+    return detail::classify_response_header_name(key);
+}
+
 [[nodiscard]] bool response_header_mode_appends(http_response_header_mode mode) {
     switch (mode) {
         case http_response_header_mode::replace:
@@ -202,22 +224,7 @@ void http_response_headers::header(std::string_view key, std::string_view value)
 
 void http_response_headers::header(
     std::string_view key, std::string_view value, http_response_header_options options) {
-    // Check the descriptor's representable storage before any grammar scan;
-    // callers may provide a view over a bounded buffer with a hostile length.
-    detail::validate_response_header_storage_size(key.size(), value.size());
-    if (!is_valid_http_header_name(key)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-    if (!is_valid_http_header_value(value)) {
-        throw std::invalid_argument("invalid HTTP header value");
-    }
-    validate_connection_control_field(key, value);
-    const auto known_bit = detail::classify_response_header_name(key);
-    detail::response_field_state fields;
-    if (detail::validate_response_field(detail::classify_request_header(key), value,
-            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
-        throw std::invalid_argument("invalid HTTP response field value");
-    }
+    const auto known_bit = validate_response_header_field(key, value);
     if (response_header_mode_appends(options.mode_)) {
         if (detail::response_header_append_forbidden(known_bit)) {
             throw std::invalid_argument("HTTP response header cannot be appended");
@@ -370,8 +377,7 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
 }
 
 void http_response_headers::header_stable_view(std::string_view key, std::string_view value) {
-    detail::validate_response_header_storage_size(key.size(), value.size());
-    const auto known_bit = detail::classify_response_header_name(key);
+    const auto known_bit = validate_response_header_field(key, value);
     if (auto* const header_value = find_header_for_update(key, known_bit)) {
         const bool was_appended = detail::http_response_header_access::append(*header_value);
         assign_stable_view(*header_value, key, value, known_bit);

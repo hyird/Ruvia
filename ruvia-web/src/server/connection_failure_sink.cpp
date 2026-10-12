@@ -2,9 +2,10 @@
 
 #include <asio/error.hpp>
 
+#include "ruvia/core/failure_report.h"
+
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {
@@ -47,7 +48,7 @@ void connection_failure_sink::invoke(std::string_view remote_address, std::excep
         callback_(connection_failure_record_access::make(remote_address, std::move(exception)));
         return;
     }
-    report_unhandled_web_failure("web connection", exception);
+    ruvia::report_unhandled_failure("web connection", exception);
 }
 
 }  // namespace ruvia::detail

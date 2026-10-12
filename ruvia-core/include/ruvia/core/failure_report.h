@@ -35,11 +35,11 @@ namespace ruvia {
 // `occurrences` > 1 reports that many equivalent failures (see
 // equivalent_failures) as one line, so one root cause shared by several units
 // is not repeated once per unit.
+//
+// A std::system_error is described by system_error_text (ruvia/core/error_text.h),
+// so the line stays UTF-8 on Windows.
 void report_unhandled_failure(
     std::string_view context_value, std::exception_ptr exception, std::size_t occurrences = 1) noexcept;
-// The same report for a failure whose text the caller has already formatted,
-// for example a std::system_error whose native message() is not UTF-8.
-void report_unhandled_failure(std::string_view context_value, std::string_view what) noexcept;
 
 // True for the same exception object, or for two std::exception objects of the
 // same dynamic type with the same what(): the same fault seen by several units.

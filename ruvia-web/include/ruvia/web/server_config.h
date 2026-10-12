@@ -93,7 +93,7 @@ struct trusted_proxy_config final {
 };
 
 namespace detail {
-class http_response_tail;
+struct access_log_record_access;
 struct access_log_sink;
 struct connection_failure_record_access;
 struct connection_failure_sink;
@@ -221,26 +221,34 @@ struct document_root_config final {
     bool precompress_zstd_{false};
     std::size_t precompress_min_bytes_{1024};
     std::size_t precompress_max_bytes_{std::size_t{256} * 1024};
+    // Each snapshot keeps the bytes of files up to resident_max_bytes_ in
+    // memory, at most resident_budget_bytes_ in total (in index order), and
+    // serves them without touching the filesystem. Those bytes are exactly the
+    // ones the snapshot's validators describe, so an edit takes effect with the
+    // next refresh like any other change; larger files are opened per request
+    // and fail closed when they no longer match the snapshot. Zero disables it.
+    // A standalone static_root never keeps file bytes in memory.
+    std::size_t resident_max_bytes_{std::size_t{64} * 1024};
+    std::size_t resident_budget_bytes_{std::size_t{16} * 1024 * 1024};
 };
 
 // One terminal response outcome with a committed final status, passed to the
 // access-log callback after a complete buffered response head has reached the
 // transport, a stream head is committed, or a CONNECT/WebSocket handshake head
 // has reached the transport (before the long-lived handler runs). The record
-// borrows the immutable request and connection-owned remote address; the record
 // and all returned views are valid only for the callback.
 class access_log_record final {
 public:
-    [[nodiscard]] std::string_view method() const noexcept {
-        return request_.method();
+    [[nodiscard]] constexpr std::string_view method() const noexcept {
+        return method_;
     }
 
-    [[nodiscard]] http_known_method known_method() const noexcept {
-        return request_.known_method();
+    [[nodiscard]] constexpr http_known_method known_method() const noexcept {
+        return known_method_;
     }
 
-    [[nodiscard]] std::string_view path() const noexcept {
-        return request_.path();
+    [[nodiscard]] constexpr std::string_view path() const noexcept {
+        return path_;
     }
 
     [[nodiscard]] constexpr std::string_view remote_address() const noexcept {
@@ -255,24 +263,39 @@ public:
         return duration_micros_;
     }
 
-    [[nodiscard]] http_protocol_version protocol_version() const noexcept {
-        return request_.protocol_version();
+    [[nodiscard]] constexpr http_protocol_version protocol_version() const noexcept {
+        return protocol_version_;
     }
 
 private:
-    friend class detail::http_response_tail;
+    friend struct detail::access_log_record_access;
 
-    constexpr access_log_record(const http_request& request, std::string_view remote_address,
-        http_status_code status, std::uint64_t duration_micros) noexcept
-        : request_(request),
-          remote_address_(remote_address),
-          status_(status),
-          duration_micros_(duration_micros) {}
+    struct fields_type final {
+        std::string_view method_;
+        http_known_method known_method_;
+        std::string_view path_;
+        http_protocol_version protocol_version_;
+        std::string_view remote_address_;
+        http_status_code status_;
+        std::uint64_t duration_micros_;
+    };
 
-    const http_request& request_;
+    explicit constexpr access_log_record(const fields_type& fields) noexcept
+        : method_(fields.method_),
+          path_(fields.path_),
+          remote_address_(fields.remote_address_),
+          duration_micros_(fields.duration_micros_),
+          status_(fields.status_),
+          known_method_(fields.known_method_),
+          protocol_version_(fields.protocol_version_) {}
+
+    std::string_view method_;
+    std::string_view path_;
     std::string_view remote_address_;
-    http_status_code status_;
     std::uint64_t duration_micros_;
+    http_status_code status_;
+    http_known_method known_method_;
+    http_protocol_version protocol_version_;
 };
 
 namespace detail {

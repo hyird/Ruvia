@@ -76,6 +76,7 @@ endfunction()
 if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/bytes.cpp
+        core/error_text.cpp
         core/ip_address.cpp
         core/local_ring_queue.cpp
         core/memory_pool.cpp
@@ -130,6 +131,10 @@ if(RUVIA_BUILD_WEB)
     # it cannot share the process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_response_policy_tests 60
         web/http1/response_policy.cpp)
+    # Owns a TLS application with a short write timeout, which must not time
+    # the handler cases of the other server suites.
+    ruvia_add_web_standalone_test(ruvia_interim_phase_timeout_tests 30
+        web/http1/interim_phase_timeout.cpp)
     # Owns an application with a document root shadowing a guarded route.
     ruvia_add_web_standalone_test(ruvia_document_root_tests 60
         web/http/document_root.cpp)

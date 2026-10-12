@@ -8,11 +8,11 @@
 
 #include <openssl/rand.h>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/core/worker_handle.h"
 
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 

@@ -68,6 +68,15 @@ void connection_scanner::entry_type::read_request_head(phase_type timeout_phase)
     set_phase(timeout_phase);
     reading_request_head_ = now_ms_ != nullptr;
 }
+connection_scanner::entry_type::phase_scope_type::~phase_scope_type() {
+    if (entry_.now_ms_ == nullptr) {
+        return;
+    }
+    entry_.last_active_ms_ = *entry_.now_ms_;
+    entry_.phase_started_ms_ = phase_started_ms_;
+    entry_.phase_ = phase_;
+    entry_.reading_request_head_ = reading_request_head_;
+}
 bool connection_scanner::entry_type::enter_long_lived() noexcept {
     const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
     if (draining && !has_drain_check()) {

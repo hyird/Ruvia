@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <exception>
+#include <system_error>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/core/memory/process_resource.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
@@ -126,6 +128,21 @@ http_error_info http_error::info() const& noexcept {
 
 std::string_view default_error_code(http_status_code status) noexcept {
     return default_error_code_value(status);
+}
+
+std::string exception_text(const std::exception_ptr& exception) {
+    if (exception == nullptr) {
+        return {};
+    }
+    try {
+        std::rethrow_exception(exception);
+    } catch (const std::system_error& error) {
+        return system_error_text(error);
+    } catch (const std::exception& error) {
+        return error.what();
+    } catch (...) {
+        return "non-standard exception";
+    }
 }
 
 http_response detail::make_default_error_response(

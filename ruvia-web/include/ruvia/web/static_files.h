@@ -91,8 +91,10 @@ struct static_root_state;
 //
 // These states persist until a new static_root is constructed. application document
 // roots replace it after the next successful refresh (every second by default);
-// a standalone static_root does not.
-// Standalone static_root values never own refresh or compression policy.
+// a standalone static_root does not. A document root may also keep small files'
+// bytes in its snapshot (document_root_config::resident_max_bytes_): those are
+// served as indexed until that refresh instead of failing closed.
+// Standalone static_root values never own refresh, compression or in-memory policy.
 class static_root final {
 public:
     explicit static_root(const std::filesystem::path& root, static_root_options options = {});

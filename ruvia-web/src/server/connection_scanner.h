@@ -97,6 +97,30 @@ public:
         // `timeout_phase`. No request is admitted until a later set_phase(), so
         // draining closes the connection meanwhile; touch() keeps the read open.
         void read_request_head(phase_type timeout_phase) noexcept;
+
+        // Hands the entry back, when it ends, to the phase it had when it
+        // began: same phase, same phase start and request-head state, with
+        // the time of the end as activity. A write nested in another phase
+        // (held output flushed in the middle of a handler) thus leaves that
+        // phase's deadlines, and drain's view of the request, as they were.
+        class phase_scope_type final {
+        public:
+            explicit phase_scope_type(entry_type& entry) noexcept
+                : entry_(entry),
+                  phase_started_ms_(entry.phase_started_ms_),
+                  phase_(entry.phase_),
+                  reading_request_head_(entry.reading_request_head_) {}
+            ~phase_scope_type();
+            phase_scope_type(const phase_scope_type&) = delete;
+            phase_scope_type& operator=(const phase_scope_type&) = delete;
+
+        private:
+            entry_type& entry_;
+            std::int64_t phase_started_ms_;
+            phase_type phase_;
+            bool reading_request_head_;
+        };
+
         // Moves an established upgrade into the untimed long_lived phase. Once
         // the scanner drains, the upgrade is not admitted and false tells the
         // caller not to start the session's handler: an upgrade with a drain

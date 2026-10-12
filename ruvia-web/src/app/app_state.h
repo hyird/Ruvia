@@ -44,6 +44,7 @@ struct app_document_root_config final {
     static_root_config_storage static_options_;
     document_root_runtime_config runtime_;
     static_root_precompression_options precompression_;
+    static_root_resident_options resident_;
 };
 
 struct app_state final {

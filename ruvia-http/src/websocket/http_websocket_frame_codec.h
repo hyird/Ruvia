@@ -3,10 +3,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <span>
 #include <variant>
+
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#include <emmintrin.h>
+#endif
 
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
@@ -176,29 +181,33 @@ private:
     return header_size;
 }
 
+// XORs `payload_value` with the 4-byte key in place, starting at key offset 0.
+// The key is replicated into wider words loaded and stored through memcpy, which
+// is valid at any alignment and aliasing and keeps the byte order intact on any
+// endianness; the tail shorter than a word is masked bytewise.
 inline void decode_masked_websocket_payload(
     char* payload_value, std::size_t payload_size, const char* mask) noexcept {
-    const auto m0 = static_cast<unsigned char>(mask[0]);
-    const auto m1 = static_cast<unsigned char>(mask[1]);
-    const auto m2 = static_cast<unsigned char>(mask[2]);
-    const auto m3 = static_cast<unsigned char>(mask[3]);
+    std::array<char, 8> key_bytes;
+    std::memcpy(key_bytes.data(), mask, 4);
+    std::memcpy(key_bytes.data() + 4, mask, 4);
+    std::uint64_t key;
+    std::memcpy(&key, key_bytes.data(), sizeof(key));
     std::size_t i = 0;
-    for (; i + 4 <= payload_size; i += 4) {
-        payload_value[i] = static_cast<char>(static_cast<unsigned char>(payload_value[i]) ^ m0);
-        payload_value[i + 1] = static_cast<char>(static_cast<unsigned char>(payload_value[i + 1]) ^ m1);
-        payload_value[i + 2] = static_cast<char>(static_cast<unsigned char>(payload_value[i + 2]) ^ m2);
-        payload_value[i + 3] = static_cast<char>(static_cast<unsigned char>(payload_value[i + 3]) ^ m3);
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+    const auto wide_key = _mm_set1_epi64x(static_cast<long long>(key));
+    for (; payload_size - i >= 16; i += 16) {
+        auto* const block = reinterpret_cast<__m128i*>(payload_value + i);
+        _mm_storeu_si128(block, _mm_xor_si128(_mm_loadu_si128(block), wide_key));
     }
-    if (i < payload_size) {
-        payload_value[i] = static_cast<char>(static_cast<unsigned char>(payload_value[i]) ^ m0);
-        ++i;
+#endif
+    for (; payload_size - i >= sizeof(key); i += sizeof(key)) {
+        std::uint64_t word;
+        std::memcpy(&word, payload_value + i, sizeof(word));
+        word ^= key;
+        std::memcpy(payload_value + i, &word, sizeof(word));
     }
-    if (i < payload_size) {
-        payload_value[i] = static_cast<char>(static_cast<unsigned char>(payload_value[i]) ^ m1);
-        ++i;
-    }
-    if (i < payload_size) {
-        payload_value[i] = static_cast<char>(static_cast<unsigned char>(payload_value[i]) ^ m2);
+    for (; i < payload_size; ++i) {
+        payload_value[i] = static_cast<char>(payload_value[i] ^ mask[i & 3U]);
     }
 }
 }  // namespace ruvia::detail

@@ -47,6 +47,13 @@ public:
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
     [[nodiscard]] websocket_frame_submit_status submit_frame(
         websocket_opcode opcode, std::string_view payload, bool compress = true);
+    // submit_frame() without copying an uncompressed payload: output_plan()
+    // then exposes it as borrowed_bytes() after the frame header. The payload
+    // must stay valid and unchanged until consume_output() reports the plan
+    // drained or the transport ends; a later submit or poll() that queues more
+    // output copies it first. A compressed payload is encoded into owned output.
+    [[nodiscard]] websocket_frame_submit_status submit_borrowed_frame(
+        websocket_opcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] websocket_close_submit_status submit_close(
         std::uint16_t code, std::string_view reason);
 

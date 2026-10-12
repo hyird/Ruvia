@@ -89,6 +89,10 @@ application& application::document_root(document_root_config config) {
             http_assign_native_path(replacement.root_, config.root_);
             replacement.runtime_ = config.runtime_;
             replacement.precompression_ = precompression;
+            replacement.resident_ = detail::static_root_resident_options{
+                .max_file_bytes_ = config.resident_max_bytes_,
+                .budget_bytes_ = config.resident_budget_bytes_,
+            };
 
             state_value.document_root_config_ = std::move(replacement);
         });

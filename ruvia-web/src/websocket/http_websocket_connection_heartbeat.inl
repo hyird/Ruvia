@@ -89,7 +89,10 @@ task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
         }
         const auto challenge = sending->challenge();
         const auto payload_value = websocket_heartbeat_payload(challenge);
-        co_await write_frame_now(websocket_opcode::ping, std::string_view(payload_value.data(), payload_value.size()));
+        if (accept_submitted_frame(protocol_.submit_frame(
+                websocket_opcode::ping, std::string_view(payload_value.data(), payload_value.size())))) {
+            co_await flush_protocol_output_now();
+        }
         // Ordinary I/O shares the scanner activity timestamp and may update it
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.

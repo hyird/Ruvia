@@ -422,6 +422,11 @@ public:
 
     // File helpers honor If-Range only for matching strong ETags. Last-Modified
     // dates are weak and do not authorize a partial response.
+    // file() opens the file once and the response owns that handle; plain-TCP
+    // transfers send from it without resolving the path again. The handle is
+    // checked again right before sending: a file changed in place since file()
+    // fails a single plain-TCP body before its head leaves and aborts any
+    // other transfer before its bytes.
     [[nodiscard]] http_response file(file_response_options options) const;
 
     [[nodiscard]] http_response static_file(

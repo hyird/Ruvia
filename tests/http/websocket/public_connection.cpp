@@ -684,6 +684,33 @@ RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
     RUVIA_CHECK_EQ(memory.allocations_, memory.deallocations_);
 }
 
+RUVIA_TEST(ws_server_protocol_reuses_drained_input_for_repeated_large_messages) {
+    counting_resource memory;
+    mask_source mask;
+    auto sender = client(mask);
+    std::pmr::string input(&memory);
+    websocket_server_protocol protocol(input);
+    const auto deliver = [&](std::size_t payload_bytes) {
+        const std::string payload_value(payload_bytes, 'x');
+        RUVIA_CHECK(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+        input.append(drain(sender));
+        const auto event = protocol.poll();
+        RUVIA_CHECK(event && event->message() && event->message()->payload() == payload_value);
+        RUVIA_CHECK(!protocol.poll().has_value());
+    };
+    // Steady 64 KiB traffic allocates input storage once, not once per message.
+    deliver(64 * 1024);
+    const auto allocations = memory.allocations_;
+    const auto steady_live_bytes = memory.live_bytes_;
+    for (int round = 0; round < 8; ++round) {
+        deliver(64 * 1024);
+    }
+    RUVIA_CHECK_EQ(memory.allocations_, allocations);
+    // A drained burst does not stay pinned to the connection.
+    deliver(1024 * 1024);
+    RUVIA_CHECK(memory.live_bytes_ <= steady_live_bytes);
+}
+
 RUVIA_TEST(ws_default_message_limit_rejects_oversized_declared_frame_before_payload) {
     // A masked binary frame declaring 16 MiB + 1 bytes requires no payload to
     // establish that it cannot fit the finite default message policy.
@@ -871,4 +898,116 @@ RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
         RUVIA_CHECK(!connection.next_event());
     }
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
+}
+
+RUVIA_TEST(ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
+    mask_source mask;
+    auto sender = client(mask, protocol_byte_limit::unlimited());
+    websocket_connection receiver({.message_limit_ = protocol_byte_limit::unlimited(), .max_buffered_input_bytes_ = 1U << 20U});
+    for (const std::size_t length : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4},
+             std::size_t{5}, std::size_t{7}, std::size_t{8}, std::size_t{9}, std::size_t{15}, std::size_t{16},
+             std::size_t{17}, std::size_t{31}, std::size_t{33}, std::size_t{125}, std::size_t{126},
+             std::size_t{127}, std::size_t{1021}, std::size_t{65535}, std::size_t{65537}}) {
+        std::string payload_value(length, '\0');
+        for (std::size_t i = 0; i < length; ++i) {
+            payload_value[i] = static_cast<char>((i * 31U + length) & 0xFFU);
+        }
+        // A leading frame of `offset` bytes moves where the payload lands in
+        // the receiver's input, so every alignment is unmasked in place.
+        for (std::size_t offset = 0; offset < 8; ++offset) {
+            const std::string leading(offset, 'L');
+            RUVIA_CHECK(sender.submit_frame(websocket_opcode::binary, leading) == websocket_frame_submit_status::accepted);
+            const auto leading_wire = drain(sender);
+            RUVIA_CHECK(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+            const auto wire = drain(sender);
+
+            // Check the wire against RFC 6455 section 5.3 directly: a mask that
+            // is only self-inverse would still round-trip.
+            const std::size_t header_size = 2 + (length <= 125 ? 0 : (length <= 0xFFFF ? 2 : 8));
+            RUVIA_CHECK_EQ(wire.size(), header_size + 4 + length);
+            if (wire.size() != header_size + 4 + length) {
+                return;
+            }
+            const auto key = std::string_view(wire).substr(header_size, 4);
+            bool masked_on_wire = true;
+            for (std::size_t i = 0; i < length; ++i) {
+                masked_on_wire = masked_on_wire && wire[header_size + 4 + i] == static_cast<char>(payload_value[i] ^ key[i % 4]);
+            }
+            RUVIA_CHECK(masked_on_wire);
+
+            const auto frames = leading_wire + wire;
+            RUVIA_CHECK(receiver.feed(frames) == websocket_feed_status::accepted);
+            const auto leading_event = receiver.next_event();
+            RUVIA_CHECK(leading_event && leading_event->message());
+            if (leading_event && leading_event->message()) {
+                RUVIA_CHECK_EQ(leading_event->message()->payload(), leading);
+            }
+            const auto event = receiver.next_event();
+            RUVIA_CHECK(event && event->message());
+            if (event && event->message()) {
+                RUVIA_CHECK(event->message()->payload() == payload_value);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(ws_server_borrowed_frame_follows_pending_output_until_drained) {
+    std::pmr::string input;
+    websocket_server_protocol protocol(input, protocol_byte_limit::unlimited());
+    const std::string payload_value(300, 'b');
+    RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+    auto plan = protocol.output_plan();
+    RUVIA_CHECK_EQ(plan.bytes().size(), std::size_t{4});
+    RUVIA_CHECK(plan.borrowed_bytes().data() == payload_value.data());
+    RUVIA_CHECK_EQ(plan.size(), std::size_t{304});
+
+    // A partial write may end inside the borrowed payload.
+    RUVIA_CHECK(protocol.consume_output(104) == websocket_output_consume_status::pending);
+    plan = protocol.output_plan();
+    RUVIA_CHECK(plan.bytes().empty());
+    RUVIA_CHECK(plan.borrowed_bytes().data() == payload_value.data() + 100);
+    RUVIA_CHECK_EQ(plan.borrowed_bytes().size(), std::size_t{200});
+    RUVIA_CHECK(protocol.consume_output(201) == websocket_output_consume_status::out_of_range);
+    RUVIA_CHECK(protocol.consume_output(200) == websocket_output_consume_status::drained);
+    RUVIA_CHECK_EQ(protocol.output_plan().size(), std::size_t{0});
+
+    // Output queued behind a borrowed payload copies it first, so the wire
+    // keeps submission order and no longer depends on the caller's bytes.
+    std::string message_value("hello");
+    RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::text, message_value) == websocket_frame_submit_status::accepted);
+    mask_source mask;
+    auto peer = client(mask);
+    RUVIA_CHECK(peer.submit_frame(websocket_opcode::ping, "p") == websocket_frame_submit_status::accepted);
+    input.append(drain(peer));
+    const auto ping = protocol.poll();
+    RUVIA_CHECK(ping && ping->ping());
+    message_value[0] = 'X';
+    plan = protocol.output_plan();
+    RUVIA_CHECK(plan.borrowed_bytes().empty());
+    const std::string wire(plan.bytes());
+    RUVIA_CHECK(protocol.consume_output(wire.size()) == websocket_output_consume_status::drained);
+    RUVIA_CHECK(peer.feed(wire) == websocket_feed_status::accepted);
+    const auto message = peer.next_event();
+    RUVIA_CHECK(message && message->message());
+    if (message && message->message()) {
+        RUVIA_CHECK_EQ(message->message()->payload(), "hello");
+    }
+    const auto pong = peer.next_event();
+    RUVIA_CHECK(pong && pong->pong());
+    if (pong && pong->pong()) {
+        RUVIA_CHECK_EQ(pong->pong()->payload(), "p");
+    }
+}
+
+RUVIA_TEST(ws_server_borrowed_frame_owns_compressed_output) {
+    std::pmr::string input;
+    websocket_server_protocol protocol(input, protocol_byte_limit::unlimited(),
+        websocket_compression{.enabled_ = true});
+    const std::string payload_value(4096, 'x');
+    RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+    const auto plan = protocol.output_plan();
+    RUVIA_CHECK(plan.borrowed_bytes().empty());
+    RUVIA_CHECK(!plan.bytes().empty() && (static_cast<unsigned char>(plan.bytes()[0]) & 0x40U) != 0);
+    RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value, false) == websocket_frame_submit_status::accepted);
+    RUVIA_CHECK(protocol.output_plan().borrowed_bytes().data() == payload_value.data());
 }

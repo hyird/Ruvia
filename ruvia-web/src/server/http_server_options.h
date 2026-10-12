@@ -34,6 +34,23 @@ struct access_log_sink final {
     }
 };
 
+// The one place access-log records are built: from a live request, or from
+// fields a pipelined response kept after its request storage was reused.
+struct access_log_record_access final {
+    using fields_type = access_log_record::fields_type;
+
+    [[nodiscard]] static constexpr access_log_record make(const fields_type& fields) noexcept {
+        return access_log_record(fields);
+    }
+
+    // Microseconds from `start` to now, clamped at zero.
+    [[nodiscard]] static std::uint64_t duration_since(std::chrono::steady_clock::time_point start) noexcept {
+        const auto micros =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+        return micros < 0 ? 0 : static_cast<std::uint64_t>(micros);
+    }
+};
+
 struct connection_failure_record_access final {
     [[nodiscard]] static connection_failure_record make(
         std::string_view remote_address, std::exception_ptr exception) noexcept {

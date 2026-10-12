@@ -27,7 +27,9 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
                 // poll() can queue an automatic Pong/Close. Keep that mutation mutually
                 // exclusive with an in-flight application/heartbeat write so the core's
                 // pending-output storage cannot reallocate under async I/O.
-                co_await wait_for_write_idle();
+                if (write_phase_ != write_phase_type::idle) {
+                    co_await wait_for_write_idle();
+                }
                 const auto event = protocol_.poll();
                 if (!event.has_value()) {
                     const auto read_result_value = co_await read_more();

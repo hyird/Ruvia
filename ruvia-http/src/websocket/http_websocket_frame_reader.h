@@ -18,6 +18,12 @@
 
 namespace ruvia::detail {
 
+// A drained read buffer keeps up to this much capacity, so a connection that
+// streams messages up to 64 KiB reuses one allocation instead of regrowing it
+// (and, with the allocator trimming the freed block, refaulting its pages) for
+// every message. Larger buffers are released so a burst stays unpinned.
+inline constexpr std::size_t websocket_retained_read_buffer_bytes = std::size_t{128} * 1024;
+
 // Drop the bytes a completed frame consumed, compacting the buffer only once the
 // dead prefix is worth the move.
 inline void compact_websocket_read_buffer(
@@ -29,7 +35,7 @@ inline void compact_websocket_read_buffer(
     const auto consumed = std::exchange(pending_compact_until, 0);
     if (consumed >= buffer.size()) {
         buffer.clear();
-        if (buffer.capacity() > 4096) {
+        if (buffer.capacity() > websocket_retained_read_buffer_bytes) {
             std::pmr::string(buffer.get_allocator()).swap(buffer);
         }
         offset = 0;

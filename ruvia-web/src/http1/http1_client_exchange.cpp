@@ -12,6 +12,7 @@
 
 #include <asio/ssl/error.hpp>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
@@ -36,7 +37,6 @@
 #include "client/http_client_transport_error.h"
 #include "http/http_socket_tunnel_transport.h"
 #include "http/tls_tunnel_output.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 

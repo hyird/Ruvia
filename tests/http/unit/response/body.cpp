@@ -130,15 +130,15 @@ RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replac
 
     response.body("preserved");
     RUVIA_CHECK(throws_invalid_argument([&] {
-        response.file_body(std::filesystem::path{}, 10, 0, 10, unchecked);
+        response.file_body(ruvia::http_native_path_view_type{}, 10, 0, 10, unchecked);
     }));
     RUVIA_CHECK(throws_invalid_argument([&] {
-        response.file_body(std::filesystem::path("invalid-range.bin"), 10, 8, 3, unchecked);
+        response.file_body(std::filesystem::path("invalid-range.bin").native(), 10, 8, 3, unchecked);
     }));
     RUVIA_CHECK(!response.file_body().has_value());
     RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("preserved"));
 
-    response.file_body(path, 16, 3, 7, unchecked);
+    response.file_body(path.native(), 16, 3, 7, unchecked);
     auto file = response.file_body();
     RUVIA_CHECK(file.has_value());
     if (file) {
@@ -148,7 +148,7 @@ RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replac
     }
 
     const auto checked = ruvia::http_response_file_identity::checked({11, 22, 33, 44});
-    response.file_body(std::filesystem::path("checked-response.bin"), 16, 3, 7, checked);
+    response.file_body(std::filesystem::path("checked-response.bin").native(), 16, 3, 7, checked);
     file = response.file_body();
     RUVIA_CHECK(file.has_value());
     if (file) {
@@ -157,7 +157,7 @@ RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replac
     }
 
     RUVIA_CHECK(throws_invalid_argument([&] {
-        response.file_body(std::filesystem::path("invalid-range.bin"), 10, 8, 3, checked);
+        response.file_body(std::filesystem::path("invalid-range.bin").native(), 10, 8, 3, checked);
     }));
     file = response.file_body();
     RUVIA_CHECK(file.has_value());
@@ -167,11 +167,72 @@ RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replac
     }
 }
 
+namespace {
+
+std::size_t released_response_file_handles = 0;
+ruvia::http_response_file_handle::native_type last_released_response_file_handle = 0;
+
+void release_counted_response_file_handle(ruvia::http_response_file_handle::native_type value) noexcept {
+    ++released_response_file_handles;
+    last_released_response_file_handle = value;
+}
+
+}  // namespace
+
+RUVIA_TEST(response_file_body_owns_its_opened_handle_until_replacement) {
+    released_response_file_handles = 0;
+    const auto path = std::filesystem::path("opened-response.bin");
+    const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});
+    {
+        http_response response({.resource_ = std::pmr::new_delete_resource()});
+        response.file_body(path.native(), 16, 0, 16, identity,
+            ruvia::http_response_file_handle(7, &release_counted_response_file_handle));
+        const auto file = response.file_body();
+        RUVIA_CHECK(file.has_value());
+        if (file) {
+            RUVIA_CHECK(file->opened_handle() != nullptr);
+            if (file->opened_handle() != nullptr) {
+                RUVIA_CHECK_EQ(file->opened_handle()->native(), ruvia::http_response_file_handle::native_type{7});
+            }
+        }
+
+        // Moving the response moves the handle; nothing is released.
+        http_response target({.resource_ = std::pmr::new_delete_resource()});
+        target = std::move(response);
+        RUVIA_CHECK_EQ(released_response_file_handles, std::size_t{0});
+        RUVIA_CHECK(!response.file_body().has_value());
+
+        // Replacing the body releases the handle exactly once.
+        target.body("replaced");
+        RUVIA_CHECK_EQ(released_response_file_handles, std::size_t{1});
+        RUVIA_CHECK_EQ(last_released_response_file_handle, ruvia::http_response_file_handle::native_type{7});
+
+        // A rejected setter releases the handle it was given and keeps the body.
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            target.file_body(path.native(), 10, 8, 3, identity,
+                ruvia::http_response_file_handle(8, &release_counted_response_file_handle));
+        }));
+        RUVIA_CHECK_EQ(released_response_file_handles, std::size_t{2});
+        RUVIA_CHECK_EQ(target.body_bytes(), std::string_view("replaced"));
+
+        // A path-only file body exposes no opened handle.
+        target.file_body(path.native(), 16, 0, 16, identity);
+        const auto unopened = target.file_body();
+        RUVIA_CHECK(unopened.has_value() && unopened->opened_handle() == nullptr);
+
+        target.file_body(path.native(), 16, 0, 16, identity,
+            ruvia::http_response_file_handle(9, &release_counted_response_file_handle));
+    }
+    // Destroying the response releases the last handle.
+    RUVIA_CHECK_EQ(released_response_file_handles, std::size_t{3});
+    RUVIA_CHECK_EQ(last_released_response_file_handle, ruvia::http_response_file_handle::native_type{9});
+}
+
 RUVIA_TEST(response_file_body_move_preserves_owned_path_and_identity) {
     http_response source_value({.resource_ = std::pmr::new_delete_resource()});
     const auto path = std::filesystem::path("moved-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({9, 8, 7, 6});
-    source_value.file_body(path, 23, 4, 9, identity);
+    source_value.file_body(path.native(), 23, 4, 9, identity);
 
     http_response target;
     target = std::move(source_value);
@@ -197,7 +258,7 @@ RUVIA_TEST(multipart_body_allocation_failure_preserves_previous_body) {
     response_resource.fail_ = true;
     bool threw = false;
     try {
-        response.multipart_file_body("multipart-response-fixture.bin", 10,
+        response.multipart_file_body(std::filesystem::path("multipart-response-fixture.bin").native(), 10,
             ruvia::http_response_file_identity::unchecked(), std::move(plan));
     } catch (const std::bad_alloc&) {
         threw = true;
@@ -254,7 +315,7 @@ RUVIA_TEST(response_byte_body_moves_leave_sources_empty_and_reusable) {
 RUVIA_TEST(response_file_body_moves_leave_sources_empty_and_reusable) {
     const std::filesystem::path path("retained-response-file.bin");
     const auto identity = ruvia::http_response_file_identity::checked({11, 22, 33, 44});
-    check_response_body_moves(ruvia_ctx, [&](http_response& source) { source.file_body(path, 23, 4, 9, identity); }, [&](const http_response& target) {
+    check_response_body_moves(ruvia_ctx, [&](http_response& source) { source.file_body(path.native(), 23, 4, 9, identity); }, [&](const http_response& target) {
         const auto file = target.file_body();
         RUVIA_CHECK(file.has_value());
         if (file) {
@@ -279,7 +340,7 @@ RUVIA_TEST(response_multipart_body_moves_leave_sources_empty_and_reusable) {
     check_response_body_moves(ruvia_ctx, [&](http_response& source) {
         auto plan = ruvia::make_http_multipart_byte_range_plan(
             ranges, 10, "text/plain", "moved_ranges", {}, source.memory_resource());
-        source.multipart_file_body(path, 10, identity, std::move(plan)); }, [&](const http_response& target) {
+        source.multipart_file_body(path.native(), 10, identity, std::move(plan)); }, [&](const http_response& target) {
         RUVIA_CHECK(target.has_multipart_file_body());
         std::string materialized;
         constexpr std::string_view file_bytes = "0123456789";

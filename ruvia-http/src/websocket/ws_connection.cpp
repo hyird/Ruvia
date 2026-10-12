@@ -57,16 +57,14 @@ websocket_output_plan ws_connection::output_plan() const& noexcept {
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
     if (close_phase_ == close_phase_type::transport_end_ready || close_phase_ == close_phase_type::closed) {
-        return websocket_output_plan({}, close_phase_ == close_phase_type::transport_end_ready
-                                             ? websocket_transport_disposition::end_transport
-                                             : websocket_transport_disposition::keep_open);
+        return websocket_output_plan({}, {}, close_phase_ == close_phase_type::transport_end_ready ? websocket_transport_disposition::end_transport : websocket_transport_disposition::keep_open);
     }
     const auto bytes_value =
         std::string_view(out_buffer_.data() + out_offset_, out_buffer_.size() - out_offset_);
     const auto disposition = close_phase_ == close_phase_type::final_output_queued
                                  ? websocket_transport_disposition::end_transport
                                  : websocket_transport_disposition::keep_open;
-    return websocket_output_plan(bytes_value, disposition);
+    return websocket_output_plan(bytes_value, borrowed_output_, disposition);
 }
 
 websocket_output_consume_status ws_connection::consume_output(std::size_t n) noexcept {
@@ -77,17 +75,21 @@ websocket_output_consume_status ws_connection::consume_output(std::size_t n) noe
         (close_phase_ == close_phase_type::transport_end_ready || close_phase_ == close_phase_type::closed)) {
         return websocket_output_consume_status::drained;
     }
-    const auto remaining = out_buffer_.size() - out_offset_;
-    if (n > remaining) {
+    const auto owned = out_buffer_.size() - out_offset_;
+    if (n > owned && n - owned > borrowed_output_.size()) {
         return websocket_output_consume_status::out_of_range;
     }
-    if (n < remaining) {
+    if (n < owned) {
         out_offset_ += n;
         return websocket_output_consume_status::pending;
     }
-
     out_buffer_.clear();
     out_offset_ = 0;
+    if (n - owned < borrowed_output_.size()) {
+        borrowed_output_.remove_prefix(n - owned);
+        return websocket_output_consume_status::pending;
+    }
+    borrowed_output_ = {};
     if (close_phase_ == close_phase_type::local_close_queued) {
         close_phase_ = close_phase_type::awaiting_peer_close;
     } else if (close_phase_ == close_phase_type::final_output_queued) {
@@ -143,13 +145,16 @@ void ws_connection::release_consumed_input() noexcept {
     pending_compact_until_ = 0;
 }
 
-void ws_connection::append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1) {
+void ws_connection::append_frame(
+    websocket_opcode opcode, std::string_view payload_value, bool rsv1, ws_payload_storage storage) {
     std::pmr::string owned_payload(out_buffer_.get_allocator().resource());
     if (http_text_overlaps(payload_value, {out_buffer_.data(), out_buffer_.size() + 1})) {
         // output_plan() exposes a borrowed view. Copy only for this aliasing
-        // case so reserve() below cannot invalidate its own append source.
+        // case so reserve() below cannot invalidate its own append source; the
+        // copy dies here, so it cannot be borrowed either.
         owned_payload.assign(payload_value);
         payload_value = owned_payload;
+        storage = ws_payload_storage::copy;
     }
     websocket_frame_header_type header;
     const bool masked = role_ == websocket_connection_role::client;
@@ -157,23 +162,31 @@ void ws_connection::append_frame(websocket_opcode opcode, std::string_view paylo
     if (masked && !mask_key_generator_(mask_key_context_, mask)) {
         throw std::runtime_error("failed to generate WebSocket client mask key");
     }
+    const bool borrow = storage == ws_payload_storage::borrow && !masked;
     const auto header_size =
         encode_websocket_frame_header(header, opcode, payload_value.size(), rsv1, masked);
     const auto mask_size = masked ? mask.size() : std::size_t{0};
-    if (header_size > out_buffer_.max_size() - out_buffer_.size() ||
-        mask_size > out_buffer_.max_size() - out_buffer_.size() - header_size ||
-        payload_value.size() > out_buffer_.max_size() - out_buffer_.size() - header_size - mask_size) {
-        throw std::length_error("WebSocket output frame size overflow");
+    auto total_size = out_buffer_.size();
+    for (const auto size : {borrowed_output_.size(), header_size, mask_size, borrow ? 0 : payload_value.size()}) {
+        if (size > out_buffer_.max_size() - total_size) {
+            throw std::length_error("WebSocket output frame size overflow");
+        }
+        total_size += size;
     }
-    // One reserve is the transaction boundary. Once it succeeds, neither append
+    // One reserve is the transaction boundary. Once it succeeds, no append
     // can allocate, so an exception can never publish an orphan wire header.
-    out_buffer_.reserve(out_buffer_.size() + header_size + mask_size + payload_value.size());
+    out_buffer_.reserve(total_size);
+    // An earlier borrowed payload precedes this frame on the wire.
+    out_buffer_.append(borrowed_output_);
+    borrowed_output_ = {};
     out_buffer_.append(header.data(), header_size);
     if (masked) {
         out_buffer_.append(mask.data(), mask.size());
         const auto payload_start = out_buffer_.size();
         out_buffer_.append(payload_value.data(), payload_value.size());
         decode_masked_websocket_payload(out_buffer_.data() + payload_start, payload_value.size(), mask.data());
+    } else if (borrow) {
+        borrowed_output_ = payload_value;
     } else {
         out_buffer_.append(payload_value.data(), payload_value.size());
     }
@@ -193,8 +206,9 @@ void ws_connection::fail(std::uint16_t code, std::string_view reason) {
     if (close_phase_ == close_phase_type::local_close_queued) {
         close_phase_ = close_phase_type::final_output_queued;
     } else if (close_phase_ == close_phase_type::awaiting_peer_close) {
-        close_phase_ = out_offset_ < out_buffer_.size() ? close_phase_type::final_output_queued
-                                                        : close_phase_type::transport_end_ready;
+        close_phase_ = out_offset_ < out_buffer_.size() || !borrowed_output_.empty()
+                           ? close_phase_type::final_output_queued
+                           : close_phase_type::transport_end_ready;
     }
 }
 
@@ -202,12 +216,14 @@ void ws_connection::receive_peer_close() noexcept {
     if (close_phase_ == close_phase_type::local_close_queued) {
         close_phase_ = close_phase_type::final_output_queued;
     } else if (close_phase_ == close_phase_type::awaiting_peer_close) {
-        close_phase_ = out_offset_ < out_buffer_.size() ? close_phase_type::final_output_queued
-                                                        : close_phase_type::transport_end_ready;
+        close_phase_ = out_offset_ < out_buffer_.size() || !borrowed_output_.empty()
+                           ? close_phase_type::final_output_queued
+                           : close_phase_type::transport_end_ready;
     }
 }
 
-websocket_frame_submit_status ws_connection::submit_frame(websocket_opcode opcode, std::string_view payload_value, bool compress) {
+websocket_frame_submit_status ws_connection::submit_frame(
+    websocket_opcode opcode, std::string_view payload_value, bool compress, ws_payload_storage storage) {
     if (close_phase_ != close_phase_type::open) {
         return websocket_frame_submit_status::not_open;
     }
@@ -239,7 +255,9 @@ websocket_frame_submit_status ws_connection::submit_frame(websocket_opcode opcod
                 deflate_->discard_compression();
             }
         }
-        append_frame(opcode, payload_value, rsv1);
+        // A compressed payload lives in outbound_deflated_, which the next
+        // message reuses, so only the caller's own bytes can be borrowed.
+        append_frame(opcode, payload_value, rsv1, rsv1 ? ws_payload_storage::copy : storage);
     } catch (...) {
         if (compression_attempted) {
             // The peer never received this trial. Do not let a later message

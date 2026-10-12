@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <utility>
@@ -45,10 +46,20 @@ using websocket_mask_key_type = std::array<char, 4>;
 // the transport: operations may throw and the caller must abort the connection.
 using websocket_mask_key_generator_type = bool (*)(void*, websocket_mask_key_type&) noexcept;
 
+// The pending transport output: bytes() followed by borrowed_bytes(), written in
+// that order. borrowed_bytes() is a payload the driver submitted by reference
+// (websocket_server_protocol::submit_borrowed_frame); it is empty otherwise.
 class websocket_output_plan final {
 public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_;
+    }
+    [[nodiscard]] constexpr std::string_view borrowed_bytes() const noexcept {
+        return borrowed_bytes_;
+    }
+    // Total pending bytes: what consume_output() takes once both are written.
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return bytes_.size() + borrowed_bytes_.size();
     }
     [[nodiscard]] constexpr websocket_transport_disposition disposition() const noexcept {
         return disposition_;
@@ -56,10 +67,13 @@ public:
 
 private:
     friend class detail::ws_connection;
-    constexpr websocket_output_plan(std::string_view bytes_value, websocket_transport_disposition disposition) noexcept
+    constexpr websocket_output_plan(std::string_view bytes_value, std::string_view borrowed_bytes_value,
+        websocket_transport_disposition disposition) noexcept
         : bytes_(bytes_value),
+          borrowed_bytes_(borrowed_bytes_value),
           disposition_(disposition) {}
     std::string_view bytes_;
+    std::string_view borrowed_bytes_;
     websocket_transport_disposition disposition_;
 };
 

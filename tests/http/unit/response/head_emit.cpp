@@ -229,8 +229,8 @@ RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
 RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     const auto rejects = [&ruvia_ctx](std::string_view value) {
         http_response response({.resource_ = std::pmr::new_delete_resource()});
-        response.header_stable_view("Trailer", value);
-        RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(response); }));
+        RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("Trailer", value); }));
+        RUVIA_CHECK(throws_invalid([&] { response.header("Trailer", value); }));
     };
 
     rejects("Content-Length");
@@ -247,21 +247,13 @@ RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     RUVIA_CHECK(!throws_invalid([&] { (void)emit_buffered_head(empty); }));
 }
 
-RUVIA_TEST(http1_response_head_validates_stable_representation_metadata) {
+RUVIA_TEST(stable_view_headers_validate_representation_metadata_on_insertion) {
     for (const auto invalid : {ruvia::http_header_view{"Content-Type", "text plain"},
              ruvia::http_header_view{"Content-Encoding", "gzip;q=1"},
              ruvia::http_header_view{"Trailer", "Content-Length"}}) {
-        for (const bool streaming : {false, true}) {
-            http_response response({.resource_ = std::pmr::new_delete_resource()});
-            response.header_stable_view(invalid.name(), invalid.value());
-            RUVIA_CHECK(throws_invalid([&] {
-                if (streaming) {
-                    (void)emit_chunked_stream_head(response);
-                } else {
-                    (void)emit_buffered_head(response);
-                }
-            }));
-        }
+        http_response response({.resource_ = std::pmr::new_delete_resource()});
+        RUVIA_CHECK(throws_invalid([&] { response.header_stable_view(invalid.name(), invalid.value()); }));
+        RUVIA_CHECK(!response.header(invalid.name()).has_value());
     }
 }
 
@@ -573,18 +565,15 @@ RUVIA_TEST(response_head_rejects_oversized_field_section) {
     }));
 }
 
-RUVIA_TEST(response_head_rejects_malformed_header_name_and_value) {
-    http_response bad_name({.resource_ = std::pmr::new_delete_resource()});
-    bad_name.header_stable_view("Bad Name", "value");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(bad_name); }));
-
-    http_response bad_value({.resource_ = std::pmr::new_delete_resource()});
-    bad_value.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10));
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(bad_value); }));
+RUVIA_TEST(stable_view_headers_reject_malformed_name_and_value) {
+    http_response response({.resource_ = std::pmr::new_delete_resource()});
+    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("Bad Name", "value"); }));
+    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10)); }));
+    RUVIA_CHECK(response.headers().empty());
 }
 
-RUVIA_TEST(response_head_rejects_request_only_te_field) {
+RUVIA_TEST(stable_view_headers_reject_request_only_te_field) {
     http_response response({.resource_ = std::pmr::new_delete_resource()});
-    response.header_stable_view("TE", "trailers");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(response); }));
+    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("TE", "trailers"); }));
+    RUVIA_CHECK(!response.header("TE").has_value());
 }

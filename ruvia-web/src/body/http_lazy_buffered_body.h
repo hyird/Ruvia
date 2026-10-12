@@ -29,7 +29,7 @@ public:
     }
 
     [[nodiscard]] task<std::string_view> read_all() {
-        co_return co_await reader_.read_all(body_);
+        return reader_.read_all(body_);
     }
 
     task<void> discard() {

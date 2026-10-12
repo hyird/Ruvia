@@ -10,10 +10,9 @@
 
 #include <openssl/ssl.h>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/tcp_socket_options.h"
-
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {

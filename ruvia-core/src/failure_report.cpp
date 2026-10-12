@@ -6,7 +6,10 @@
 #include <exception>
 #include <mutex>
 #include <string_view>
+#include <system_error>
 #include <typeinfo>
+
+#include "ruvia/core/error_text.h"
 
 namespace ruvia {
 
@@ -157,17 +160,20 @@ void report_unhandled_failure(
     // unknown-exception line below, so the report never disappears entirely.
     try {
         std::rethrow_exception(exception);
+    } catch (const std::system_error& error) {
+        // On Windows what() carries a system-category message in the ANSI code
+        // page; the line must stay UTF-8.
+        try {
+            const auto text = system_error_text(error);
+            write_line(context_value, text, occurrences, decision.suppressed_);
+        } catch (...) {
+            // Formatting failed to allocate; the native text still reports it.
+            write_line(context_value, error.what(), occurrences, decision.suppressed_);
+        }
     } catch (const std::exception& error) {
         write_line(context_value, error.what(), occurrences, decision.suppressed_);
     } catch (...) {
         write_line(context_value, "unknown exception", occurrences, decision.suppressed_);
-    }
-}
-
-void report_unhandled_failure(std::string_view context_value, std::string_view what) noexcept {
-    const auto decision = admit();
-    if (decision.emit_) {
-        write_line(context_value, what, 1, decision.suppressed_);
     }
 }
 

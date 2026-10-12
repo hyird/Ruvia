@@ -259,6 +259,42 @@ RUVIA_TEST(http1_successful_upgrades_are_access_logged_once_with_their_handshake
     }
 }
 
+// Pipelined responses may leave in one coalesced write, after the requests
+// that produced them were already replaced by later ones; each still gets
+// exactly one record, in request order, with its own method, path and status.
+RUVIA_TEST(http1_pipelined_responses_are_access_logged_in_order) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    static_cast<void>(take_access_entries());
+
+    const auto output = exchange(server.endpoint(),
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "HEAD /policy-plain HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    RUVIA_CHECK(output.has_value());
+    const auto text = output.value_or("");
+    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(text.ends_with("plain"));
+
+    const auto entries = take_access_entries();
+    RUVIA_CHECK_EQ(entries.size(), std::size_t{4});
+    if (entries.size() == 4) {
+        RUVIA_CHECK_EQ(entries[0].method_, std::string("GET"));
+        RUVIA_CHECK_EQ(entries[0].path_, std::string("/policy-plain"));
+        RUVIA_CHECK(entries[0].status_ == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(entries[1].method_, std::string("HEAD"));
+        RUVIA_CHECK_EQ(entries[1].path_, std::string("/policy-plain"));
+        RUVIA_CHECK(entries[1].status_ == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(entries[2].method_, std::string("GET"));
+        RUVIA_CHECK_EQ(entries[2].path_, std::string("/policy-missing"));
+        RUVIA_CHECK(entries[2].status_ == ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(entries[3].path_, std::string("/policy-plain"));
+        RUVIA_CHECK(entries[3].status_ == ruvia::http_status::ok);
+    }
+}
+
 #ifdef RUVIA_ENABLE_REDIS
 RUVIA_TEST(http1_connect_handshake_carries_the_committed_session_cookie) {
     auto& io = ruvia::test::new_test_io_context();

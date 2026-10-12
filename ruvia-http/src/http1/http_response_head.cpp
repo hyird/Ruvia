@@ -14,7 +14,6 @@
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_length.h"
-#include "field/response_field_validation.h"
 #include "response/http_response_header_access.h"
 #include "server/http_date_cache.h"
 #include "util/http_wire_sink.h"
@@ -54,32 +53,28 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
 
 inline constexpr std::string_view content_length_name = "Content-Length";
 
+// Every field line was validated when it was inserted into the response
+// (name, value, per-field grammar, forbidden fields, singletons). Only the
+// rules that span several lines or depend on this head's framing remain.
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
-    bool trailer_header_allowed, response_field_state& fields, http_connection_options& connection_options,
+    std::uint32_t known_bit, bool trailer_header_allowed, http_connection_options& connection_options,
     http_upgrade_protocols& upgrade_protocols) noexcept {
-    if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
-        return false;
-    }
-    if (validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields) !=
-        response_field_status::ok) {
-        return false;
-    }
-    if (http_ascii_equals_ignore_case(name, "Trailer")) {
-        return trailer_header_allowed || http_trim_ows(value).empty();
-    }
-    if (http_ascii_equals_ignore_case(name, "Connection")) {
+    if (known_bit == response_header_connection) {
         return connection_options.parse_field(
                    value, http_field_list_role::sender, [](std::string_view option) noexcept {
                        return !http_connection_option_conflicts_with_managed_field(option);
                    }) == http_field_list_parse_status::ok;
     }
+    if (known_bit != 0) {
+        return true;
+    }
+    if (http_ascii_equals_ignore_case(name, "Trailer")) {
+        return trailer_header_allowed || http_trim_ows(value).empty();
+    }
     if (http_ascii_equals_ignore_case(name, "Upgrade")) {
         return upgrade_protocols.parse_field(value, http_field_list_role::sender,
                    [](const http_upgrade_protocol&) noexcept { return true; }) ==
                http_field_list_parse_status::ok;
-    }
-    if (http_ascii_equals_ignore_case(name, "TE")) {
-        return false;
     }
     return true;
 }
@@ -194,7 +189,6 @@ void append_response_head(
     };
     charge(head_budget.add(9 + http_status_code_token_size + 1 + reason_phrase.size() + 2));
     std::size_t field_count = 0;
-    response_field_state fields;
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
@@ -203,9 +197,8 @@ void append_response_head(
             known_bit == response_header_content_length) {
             continue;
         }
-        if (!is_valid_http1_emitted_response_header(
-                header.name(), header.value(), emit_chunked_transfer_encoding, fields,
-                connection_options, upgrade_protocols)) {
+        if (!is_valid_http1_emitted_response_header(header.name(), header.value(), known_bit,
+                emit_chunked_transfer_encoding, connection_options, upgrade_protocols)) {
             throw std::invalid_argument("invalid HTTP response header");
         }
         ++field_count;

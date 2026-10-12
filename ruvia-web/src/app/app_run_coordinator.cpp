@@ -26,7 +26,6 @@
 #include "http/static_root_index.h"
 #include "router/router_impl.h"
 #include "server/http_server_options_validation.h"
-#include "util/error_code_text.h"
 
 namespace ruvia {
 namespace {
@@ -56,7 +55,7 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
         try {
             hook();
         } catch (...) {
-            detail::report_unhandled_web_failure("app stop hook", std::current_exception());
+            ruvia::report_unhandled_failure("app stop hook", std::current_exception());
         }
     }
 }
@@ -170,7 +169,7 @@ public:
         const auto rethrown = group.join(primary_failure != nullptr ? primary_failure : signal_failure);
         retire_runtime();
         if (signal_failure != nullptr && !ruvia::equivalent_failures(signal_failure, rethrown)) {
-            detail::report_unhandled_web_failure("app signal handling", signal_failure);
+            ruvia::report_unhandled_failure("app signal handling", signal_failure);
         }
         if (rethrown != nullptr) {
             std::rethrow_exception(rethrown);
@@ -213,7 +212,7 @@ private:
                                             : detail::static_root_precompression_options{};
             runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(runtime_resource_,
                 http_make_path_from_native_path(document_root.root_), document_root.static_options_,
-                document_root.runtime_.refresh_interval_, precompression);
+                document_root.runtime_.refresh_interval_, precompression, document_root.resident_);
             prepared_options.document_root_ =
                 detail::http_server_options::document_root_type::refreshing(*runtime->document_root_);
         }

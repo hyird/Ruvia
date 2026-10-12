@@ -31,6 +31,7 @@
 
 namespace ruvia::detail {
 
+class http1_deferred_access_log;
 class route_table;
 
 // The deployment limits that shape admission. Servers build it from their
@@ -154,6 +155,12 @@ public:
     // Records a terminal outcome whose final status was committed. A single
     // null check when no access log is configured.
     void record_access(const access_log_sink& access_log, http_status_code status) const noexcept;
+
+    // Keeps the record of a pipelined response held back for a coalesced
+    // write whose head completes at output offset `head_end`; the log reports
+    // it once that write commits the head. A no-op without an access log.
+    void defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred, std::size_t head_end,
+        http_status_code status) const;
 
 private:
     const http_request* request_;

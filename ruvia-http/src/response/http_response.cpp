@@ -256,8 +256,9 @@ void http_response::materialize_body() {
     body_.materialize(memory_resource());
 }
 
-void http_response::file_body(std::filesystem::path file, std::uint64_t size,
-    std::uint64_t offset, std::uint64_t length, http_response_file_identity identity) {
+void http_response::file_body(http_native_path_view_type file, std::uint64_t size,
+    std::uint64_t offset, std::uint64_t length, http_response_file_identity identity,
+    http_response_file_handle opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -265,12 +266,13 @@ void http_response::file_body(std::filesystem::path file, std::uint64_t size,
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(memory_resource(), file, size, offset, length, identity);
+    body_.set_owned_file(memory_resource(), file, size, offset, length, identity, std::move(opened));
 }
 
-void http_response::multipart_file_body(std::filesystem::path file, std::uint64_t size,
-    http_response_file_identity identity, http_multipart_byte_range_plan&& plan) {
-    body_.set_multipart(memory_resource(), file, size, identity, std::move(plan));
+void http_response::multipart_file_body(http_native_path_view_type file, std::uint64_t size,
+    http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
+    http_response_file_handle opened) {
+    body_.set_multipart(memory_resource(), file, size, identity, std::move(plan), std::move(opened));
 }
 
 void http_response::content_range(

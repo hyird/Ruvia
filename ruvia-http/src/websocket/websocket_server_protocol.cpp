@@ -59,6 +59,10 @@ websocket_liveness_mode websocket_server_protocol::liveness_mode() const noexcep
 websocket_frame_submit_status websocket_server_protocol::submit_frame(websocket_opcode opcode, std::string_view payload_value, bool compress) {
     return impl_->connection_.submit_frame(opcode, payload_value, compress);
 }
+websocket_frame_submit_status websocket_server_protocol::submit_borrowed_frame(
+    websocket_opcode opcode, std::string_view payload_value, bool compress) {
+    return impl_->connection_.submit_frame(opcode, payload_value, compress, detail::ws_payload_storage::borrow);
+}
 websocket_close_submit_status websocket_server_protocol::submit_close(std::uint16_t code, std::string_view reason) {
     return impl_->connection_.submit_close(code, reason);
 }

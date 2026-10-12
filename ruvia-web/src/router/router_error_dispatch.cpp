@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -16,7 +17,6 @@
 #include "http/unsupported_request_content_coding.h"
 #include "router/route_table.h"
 #include "server/inbound_buffer_resource.h"
-#include "util/error_code_text.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
@@ -122,7 +122,7 @@ void assign_exception_error(owned_http_error_info& error_info, const std::except
 void report_unexpected_failure(const owned_http_error_info& error_info, const std::exception_ptr& exception,
     detail::http_error_handler_ref_type error_handler) noexcept {
     if (error_info.unexpected_ && error_handler == nullptr) {
-        detail::report_unhandled_web_failure("request handler", exception);
+        ruvia::report_unhandled_failure("request handler", exception);
     }
 }
 

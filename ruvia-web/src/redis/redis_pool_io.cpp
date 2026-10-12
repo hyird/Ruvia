@@ -8,13 +8,13 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/error_text.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
 
 #include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
-#include "util/error_code_text.h"
 
 namespace ruvia::detail {
 namespace {

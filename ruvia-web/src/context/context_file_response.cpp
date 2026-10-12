@@ -33,26 +33,26 @@ namespace {
 
 inline constexpr std::size_t file_response_header_reserve = 7;
 
-// The path travels by value until http_response takes its own copy. static_root is
-// a public value whose lifetime is not coupled to the returned response, so an
-// indexed entry must never leak its internal native-path pointer into the body.
+// Names the response file by a borrowed native path that outlives
+// make_file_response: a static_root index entry or context::file's options.
+// http_response copies the path into its own storage, so neither borrow
+// reaches the returned body. context::file also passes the handle it framed
+// the response from; the body takes it so the transport never reopens the path.
 class file_response_path final {
 public:
-    [[nodiscard]] static file_response_path copying(
-        std::filesystem::path path, http_response_file_identity identity) {
-        return file_response_path(std::move(path), identity);
-    }
-
-    [[nodiscard]] static file_response_path copying_native(
-        const http_native_path_char_type* path, http_response_file_identity identity) {
-        if (path == nullptr || *path == http_native_path_char_type{}) {
-            throw std::logic_error("static file entry has no native path");
+    // `path` must be NUL-terminated (a c_str() or path::native() view).
+    file_response_path(http_native_path_view_type path, http_response_file_identity identity,
+        http_response_file_handle opened = {})
+        : path_(path),
+          identity_(identity),
+          opened_(std::move(opened)) {
+        if (path_.empty()) {
+            throw std::logic_error("file response has no native path");
         }
-        return copying(std::filesystem::path(path), identity);
     }
 
     [[nodiscard]] std::string_view guessed_content_type() const noexcept {
-        return detail::guess_static_file_content_type(path_);
+        return detail::guess_static_file_content_type_from_path_view(path_);
     }
 
     [[nodiscard]] http_response_file_identity identity() const noexcept {
@@ -64,7 +64,7 @@ public:
             return;
         }
         std::error_code ec;
-        const auto snapshot = detail::snapshot_response_file(path_.c_str(), ec);
+        const auto snapshot = detail::snapshot_response_file(path_.data(), ec);
         if (ec || snapshot.identity_ != identity_ || snapshot.size_ != size) {
             throw http_error({.status_ = ruvia::http_status::internal_server_error,
                 .code_ = "static_file_changed",
@@ -74,7 +74,7 @@ public:
 
     void set_body(
         http_response& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-        response.file_body(take_path(), size, offset, length, identity_);
+        response.file_body(path_, size, offset, length, identity_, std::move(opened_));
     }
 
     void set_full_body(http_response& response, std::uint64_t size) {
@@ -83,26 +83,13 @@ public:
 
     void set_multipart_body(http_response& response, std::uint64_t size,
         http_multipart_byte_range_plan&& plan) {
-        response.multipart_file_body(take_path(), size, identity_, std::move(plan));
+        response.multipart_file_body(path_, size, identity_, std::move(plan), std::move(opened_));
     }
 
 private:
-    explicit file_response_path(
-        std::filesystem::path path, http_response_file_identity identity) noexcept
-        : path_(std::move(path)),
-          identity_(identity) {}
-
-    [[nodiscard]] std::filesystem::path take_path() {
-        if (consumed_) {
-            throw std::logic_error("file response path was consumed more than once");
-        }
-        consumed_ = true;
-        return std::move(path_);
-    }
-
-    std::filesystem::path path_;
+    http_native_path_view_type path_;
     http_response_file_identity identity_;
-    bool consumed_{false};
+    http_response_file_handle opened_;
 };
 
 class file_response_body_source final {
@@ -399,13 +386,16 @@ template <typename apply_response_state_type>
 }  // namespace
 
 http_response context::file(file_response_options options) const {
+    // Open once: the response is framed from this handle's metadata and the
+    // transport sends from the same handle, so no path is resolved twice.
     std::error_code ec;
-    const auto snapshot = detail::snapshot_response_file(options.path_.c_str(), ec);
+    auto opened = detail::open_response_file(options.path_.c_str(), ec);
     if (ec) {
         throw http_error({.status_ = ruvia::http_status::not_found,
             .code_ = "not_found",
             .message_ = "file not found"});
     }
+    const auto& snapshot = opened.snapshot_;
 
     const auto content_type_value = options.content_type_.view();
     const auto apply_state = [this](
@@ -414,8 +404,8 @@ http_response context::file(file_response_options options) const {
     };
     return make_file_response(*this, request_, response_state().metadata().status(),
         file_response_source{
-            .body_ = file_response_body_source::file(
-                file_response_path::copying(std::move(options.path_), snapshot.identity_)),
+            .body_ = file_response_body_source::file(file_response_path(
+                http_native_path_view(options.path_), snapshot.identity_, std::move(opened.handle_))),
             .size_ = snapshot.size_,
             .modified_token_ = snapshot.modified_token_,
             .modified_seconds_ = snapshot.modified_seconds_,
@@ -505,6 +495,9 @@ http_response context::static_file(const static_root& root, static_file_response
     }
     const auto& served_entry = served->entry();
     const auto* const memory_variant = served->memory_variant();
+    // A document-root snapshot keeps small files' bytes; they describe exactly
+    // the indexed metadata, so the response is framed and sent from memory.
+    const auto* const resident_bytes = memory_variant == nullptr ? served_entry.resident_bytes() : nullptr;
     const auto response_size = memory_variant == nullptr ? served_entry.size() : memory_variant->size();
     const auto response_modified_token =
         memory_variant == nullptr ? served_entry.modified_token() : memory_variant->modified_token();
@@ -520,10 +513,11 @@ http_response context::static_file(const static_root& root, static_file_response
     };
     return make_file_response(*this, request_, response_state().metadata().status(),
         file_response_source{
-            .body_ = memory_variant == nullptr
-                         ? file_response_body_source::file(file_response_path::copying_native(
-                               served_entry.file_path(), served_entry.identity()))
-                         : file_response_body_source::bytes_value(memory_variant->bytes()),
+            .body_ = memory_variant != nullptr ? file_response_body_source::bytes_value(memory_variant->bytes())
+                     : resident_bytes != nullptr
+                         ? file_response_body_source::bytes_value(*resident_bytes)
+                         : file_response_body_source::file(file_response_path(
+                               http_native_path_view_type(served_entry.file_path()), served_entry.identity())),
             .size_ = response_size,
             .modified_token_ = response_modified_token,
             .modified_seconds_ = response_modified_seconds,
@@ -536,7 +530,7 @@ http_response context::static_file(const static_root& root, static_file_response
             .content_coding_ = served->content_coding(),
             // static_file negotiates the representation by Accept-Encoding.
             .negotiates_encoding_ = true,
-            .validate_indexed_file_for_bodyless_response_ = memory_variant == nullptr,
+            .validate_indexed_file_for_bodyless_response_ = memory_variant == nullptr && resident_bytes == nullptr,
         },
         apply_state);
 }
