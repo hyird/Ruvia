@@ -340,6 +340,67 @@ private:
     bool complete_{false};
 };
 
+// Answers one request per connection with the next scripted response head and
+// records every request head.
+class scripted_head_peer final {
+public:
+    scripted_head_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, std::vector<std::string> heads)
+        : acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
+          deadline_(io),
+          done_(worker_value),
+          heads_(std::move(heads)),
+          io_(io) {}
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    void start() {
+        deadline_.expires_after(std::chrono::seconds(5));
+        deadline_.async_wait([this](const std::error_code& error) {
+            if (!error) {
+                std::error_code ignored;
+                acceptor_.close(ignored);
+            }
+        });
+        asio::co_spawn(io_, serve(), [this](std::exception_ptr failure) {
+            failure_ = std::move(failure);
+            complete_ = true;
+            deadline_.cancel();
+            done_.notify();
+        });
+    }
+
+    [[nodiscard]] ruvia::task<void> wait() {
+        while (!complete_) {
+            co_await done_.wait();
+        }
+        if (failure_) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+    std::vector<std::string> requests_;
+
+private:
+    asio::awaitable<void> serve() {
+        for (const auto& head : heads_) {
+            auto socket = co_await acceptor_.async_accept(asio::use_awaitable);
+            auto& request = requests_.emplace_back();
+            co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+            co_await asio::async_write(socket, asio::buffer(head), asio::use_awaitable);
+        }
+    }
+
+    asio::ip::tcp::acceptor acceptor_;
+    asio::steady_timer deadline_;
+    ruvia::worker_signal done_;
+    std::vector<std::string> heads_;
+    asio::io_context& io_;
+    std::exception_ptr failure_;
+    bool complete_{false};
+};
+
 [[nodiscard]] std::string large_gzip_response_body() {
     const std::string body(128 * 1024, 'z');
     auto result_value = ruvia::encode_http_content(ruvia::http_content_coding::gzip, body,
@@ -589,6 +650,38 @@ RUVIA_TEST(http_client_retains_final_head_cookies_before_body_completion_and_aft
         };
         run_operation(worker, io, operation);
     }
+}
+
+// RFC 6265 section 5.3 step 11: a Domain cookie replaces the host-only cookie
+// with the same name and path, since a host-only cookie's domain is the host.
+RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\nSet-Cookie: sid=host; Path=/\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n"
+            "Set-Cookie: sid=domain; Domain=localhost; Path=/\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
+    auto config = local_http_client_config(peer.port());
+    config.host_ = "localhost";
+    config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        for (const auto* target : {"/host", "/domain", "/check"}) {
+            auto response = co_await client.handle().send({.target_ = target});
+            RUVIA_CHECK((co_await response.body().read_all()).empty());
+        }
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{3});
+        if (peer.requests_.size() == 3) {
+            RUVIA_CHECK(peer.requests_[2].find("sid=domain") != std::string::npos);
+            RUVIA_CHECK(peer.requests_[2].find("sid=host") == std::string::npos);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
 }
 
 RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_operation_runs) {

@@ -52,13 +52,28 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
         add(head, "sec-websocket-extensions", "permessage-deflate; server_max_window_bits=10");
         RUVIA_CHECK((no_server_window_client.validate_fields(head).index() == 0));
     }
-    // The client window in an offer is a hint; the server may choose a larger one.
+    // The server may select a larger client window than the offered hint, or
+    // none, but the client still never compresses with more than it offered.
     ruvia::websocket_client_negotiation limited_client_window({.deflate_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false, .client_max_window_bits_ = 9}});
+    for (auto extension : std::array{"permessage-deflate; client_max_window_bits=10", "permessage-deflate"}) {
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", extension);
+        auto accepted = limited_client_window.validate_fields(head);
+        RUVIA_CHECK((accepted.index() == 0));
+        if (accepted.index() == 0) {
+            RUVIA_CHECK_EQ(std::get<0>(accepted).compression_.client_max_window_bits_.value_or(15), 9);
+        }
+    }
     {
         std::vector<ruvia::http_header> head;
 
-        add(head, "sec-websocket-extensions", "permessage-deflate; client_max_window_bits=10");
-        RUVIA_CHECK((limited_client_window.validate_fields(head).index() == 0));
+        add(head, "sec-websocket-extensions", "permessage-deflate; client_max_window_bits=8");
+        auto accepted = limited_client_window.validate_fields(head);
+        RUVIA_CHECK((accepted.index() == 0));
+        if (accepted.index() == 0) {
+            RUVIA_CHECK_EQ(std::get<0>(accepted).compression_.client_max_window_bits_.value_or(15), 8);
+        }
     }
     // A client takeover preference in an offer is a hint.
     ruvia::websocket_client_negotiation require_client_no_takeover({.deflate_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = true}});

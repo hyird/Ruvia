@@ -91,6 +91,12 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     if (offer.server_max_window_bits_ && (!result_value.server_max_window_bits_ || *result_value.server_max_window_bits_ > *offer.server_max_window_bits_)) {
         return {};
     }
+    // An offered client window binds this client even when the response omits
+    // it or selects a larger one (RFC 7692 section 7.1.2.2).
+    if (offer.client_max_window_bits_ &&
+        (!result_value.client_max_window_bits_ || *result_value.client_max_window_bits_ > *offer.client_max_window_bits_)) {
+        result_value.client_max_window_bits_ = offer.client_max_window_bits_;
+    }
 
     return result_value;
 }

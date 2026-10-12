@@ -98,11 +98,37 @@ struct redirect_authority_span {
     return false;
 }
 
+// RFC 3986 section 4.2: the first segment of a relative-path reference holds no
+// colon, or it would read as a scheme. Returns where that segment ends, or 0
+// when the location has a scheme or does not start with such a segment.
+[[nodiscard]] std::size_t find_colon_free_segment_end(std::string_view location) noexcept {
+    if (!location.empty() && is_uri_scheme_first(static_cast<unsigned char>(location.front()))) {
+        std::size_t i = 1;
+        while (i < location.size() && is_uri_scheme_rest(static_cast<unsigned char>(location[i]))) {
+            ++i;
+        }
+        if (i < location.size() && location[i] == ':') {
+            return 0;
+        }
+    }
+    const auto end = location.find_first_of("/?#");
+    return end == std::string_view::npos ? location.size() : end;
+}
+
+struct redirect_layout {
+    redirect_authority_span authority_;
+    std::size_t colon_free_end_ = 0;
+};
+
+[[nodiscard]] redirect_layout find_redirect_layout(std::string_view location) noexcept {
+    return {find_redirect_authority(location), find_colon_free_segment_end(location)};
+}
+
 [[nodiscard]] bool encode_uri_keeps_byte(unsigned char ch, std::string_view location,
-    std::size_t index, redirect_authority_span authority, bool& fragment_seen) noexcept;
+    std::size_t index, const redirect_layout& layout, bool& fragment_seen) noexcept;
 
 [[nodiscard]] bool redirect_location_needs_encoding(std::string_view location) noexcept {
-    const auto authority = find_redirect_authority(location);
+    const auto layout = find_redirect_layout(location);
     bool fragment_seen = false;
     for (std::size_t i = 0; i < location.size(); ++i) {
         const auto ch = static_cast<unsigned char>(location[i]);
@@ -113,7 +139,7 @@ struct redirect_authority_span {
             i += 2;
             continue;
         }
-        if (!encode_uri_keeps_byte(ch, location, i, authority, fragment_seen)) {
+        if (!encode_uri_keeps_byte(ch, location, i, layout, fragment_seen)) {
             return true;
         }
     }
@@ -121,21 +147,22 @@ struct redirect_authority_span {
 }
 
 [[nodiscard]] bool encode_uri_keeps_byte(unsigned char ch, std::string_view location,
-    std::size_t index, redirect_authority_span authority, bool& fragment_seen) noexcept {
+    std::size_t index, const redirect_layout& layout, bool& fragment_seen) noexcept {
     if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
         return true;
     }
 
     if (ch == '[' || ch == ']') {
-        return is_ip_literal_bracket_delimiter(location, index, authority);
+        return is_ip_literal_bracket_delimiter(location, index, layout.authority_);
     }
 
     switch (ch) {
+        case ':':
+            return index >= layout.colon_free_end_;
         case ';':
         case ',':
         case '/':
         case '?':
-        case ':':
         case '@':
         case '&':
         case '=':
@@ -165,7 +192,7 @@ struct redirect_authority_span {
     std::string_view location, std::pmr::memory_resource* resource) {
     std::pmr::string encoded(resource);
     encoded.reserve(location.size());
-    const auto authority = find_redirect_authority(location);
+    const auto layout = find_redirect_layout(location);
     bool fragment_seen = false;
     for (std::size_t i = 0; i < location.size(); ++i) {
         const auto ch = static_cast<unsigned char>(location[i]);
@@ -184,7 +211,7 @@ struct redirect_authority_span {
             i += 2;
             continue;
         }
-        if (encode_uri_keeps_byte(ch, location, i, authority, fragment_seen)) {
+        if (encode_uri_keeps_byte(ch, location, i, layout, fragment_seen)) {
             encoded.push_back(static_cast<char>(ch));
             continue;
         }

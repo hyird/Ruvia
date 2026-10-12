@@ -268,6 +268,8 @@ void client_request_policy::retain_response_cookies(
                     std::chrono::system_clock::from_time_t(std::min(*expires_at, expiration_limit));
             }
         }
+        // RFC 6265 section 5.3 step 11: name, domain and path identify a
+        // cookie; a host-only cookie's domain is the request host.
         const auto parsed_identity_domain =
             parsed_domain.empty() ? std::string_view(config_.host_) : parsed_domain;
         const bool parsed_host_only = parsed_domain.empty();
@@ -275,8 +277,7 @@ void client_request_policy::retain_response_cookies(
             const auto cookie_identity_domain = cookie.domain_.empty()
                                                     ? std::string_view(config_.host_)
                                                     : std::string_view(cookie.domain_);
-            return !cookie.persistent_ && cookie.name_ == parsed_name &&
-                   cookie.host_only_ == parsed_host_only && cookie.path_ == path &&
+            return !cookie.persistent_ && cookie.name_ == parsed_name && cookie.path_ == path &&
                    http_ascii_equals_ignore_case(cookie_identity_domain, parsed_identity_domain);
         });
         if (remove) {

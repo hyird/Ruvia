@@ -30,7 +30,7 @@ struct sse_format_options final {
 };
 
 // Build one complete UTF-8 event-stream block. Invalid event/id line syntax
-// throws std::invalid_argument.
+// or a field that is not well-formed UTF-8 throws std::invalid_argument.
 [[nodiscard]] std::pmr::string format_sse_message(
     const sse_message& message, sse_format_options options = {});
 

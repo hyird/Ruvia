@@ -7,6 +7,8 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_number_format.h"
 
+#include "websocket/http_websocket_payload_validation.h"
+
 namespace ruvia {
 namespace {
 
@@ -41,6 +43,12 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
     }
     if (message.retry_.has_value() && message.retry_->count() < 0) {
         throw std::invalid_argument("SSE retry delay must not be negative");
+    }
+    // An event stream is UTF-8 (WHATWG HTML, "Parsing an event stream").
+    if (!detail::is_valid_utf8(message.event_.view()) ||
+        (message.id_.has_value() && !detail::is_valid_utf8(message.id_->view())) ||
+        (message.data_.has_value() && !detail::is_valid_utf8(message.data_->view()))) {
+        throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
     std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));

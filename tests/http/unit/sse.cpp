@@ -57,4 +57,11 @@ RUVIA_TEST(sse_rejects_newline_in_event_or_id_and_nul_in_id) {
     RUVIA_CHECK(throws_for({.id_ = "1\n2"}));
     RUVIA_CHECK(throws_for({.id_ = std::string_view{"a\0b", 3}}));
     RUVIA_CHECK(throws_for({.retry_ = std::chrono::milliseconds{-1}}));
+
+    // Every textual field is UTF-8; a stray byte or a surrogate never reaches the stream.
+    RUVIA_CHECK(throws_for({.data_ = std::string_view("\xff", 1)}));
+    RUVIA_CHECK(throws_for({.event_ = std::string_view("\xc3", 1)}));
+    RUVIA_CHECK(throws_for({.id_ = std::string_view("\xed\xa0\x80", 3)}));
+    RUVIA_CHECK_EQ(render({.data_ = "caf\xc3\xa9", .event_ = "\xe2\x82\xac", .id_ = "\xf0\x9f\x98\x80"}),
+        std::string("event: \xe2\x82\xac\nid: \xf0\x9f\x98\x80\ndata: caf\xc3\xa9\n\n"));
 }

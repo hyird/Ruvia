@@ -133,6 +133,25 @@ RUVIA_TEST(context_redirect_preserves_fragment_separator_and_escapes_fragment_ha
     });
 }
 
+RUVIA_TEST(context_redirect_escapes_colons_that_would_read_as_a_scheme) {
+    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+        constexpr std::pair<std::string_view, std::string_view> cases[]{
+            {"1foo:bar", "1foo%3Abar"},
+            {"a b:c/d:e", "a%20b%3Ac/d:e"},
+            {"page:1?q=a:b#x:y", "page:1?q=a:b#x:y"},
+            {"mailto:user@example.com", "mailto:user@example.com"},
+            {"./a:b", "./a:b"},
+            {"/a:b", "/a:b"},
+            {"?a:b", "?a:b"},
+        };
+        for (const auto& [location, expected] : cases) {
+            const auto response = context.redirect({.location_ = location});
+            RUVIA_CHECK_EQ(response.header("Location").value_or(""), expected);
+        }
+        co_return;
+    });
+}
+
 RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         // A CRLF in the location must not split the response: header-value
