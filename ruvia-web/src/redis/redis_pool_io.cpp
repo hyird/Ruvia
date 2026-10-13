@@ -153,7 +153,14 @@ task<redis_value> redis_pool::read_reply(
 task<void> redis_pool::connect(std::size_t slot, const ruvia::operation_timeout* operation_timeout_value) {
     auto& connection = *connections_[slot];
     if (connection.connected_) {
-        co_return;
+        // A peer that closed the idle connection or sent unsolicited bytes
+        // would desynchronize the next reply; reconnect instead.
+        const bool reader_idle =
+            connection.reader_ == nullptr || connection.reader_->len == connection.reader_->pos;
+        if (reader_idle && connection.transport_.idle_open()) {
+            co_return;
+        }
+        close(slot);
     }
     const auto deadline_value = operation_timeout_value != nullptr
                                     ? operation_timeout_value->constrained_by(config_.connect_timeout_)

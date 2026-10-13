@@ -78,9 +78,7 @@ task<redis_value> redis_pool::execute_with_timeout_impl(arg_source_type args, op
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
     auto& connection = *connections_[slot];
     try {
-        if (!connection.connected_) {
-            co_await connect(slot, &operation_timeout_value);
-        }
+        co_await connect(slot, &operation_timeout_value);
         slots_.throw_if_aborted(slot);
 
         connection.write_buffer_.clear();
@@ -117,9 +115,7 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
     auto& connection = *connections_[slot];
     try {
-        if (!connection.connected_) {
-            co_await connect(slot, &operation_timeout_value);
-        }
+        co_await connect(slot, &operation_timeout_value);
         slots_.throw_if_aborted(slot);
 
         connection.write_buffer_.clear();

@@ -30,6 +30,7 @@
 #include "ruvia/web/redis/redis_client.h"
 #include "ruvia/web/redis/redis_repository.h"
 
+#include "poisoned_retirement_resource.h"
 #include "test_harness.h"
 #include "test_tls_identity.h"
 
@@ -56,7 +57,8 @@ public:
         transaction_exec_error,
         transaction_wrong_exec,
         transaction_queue_error,
-        slow_blocking_connect };
+        slow_blocking_connect,
+        close_after_reply };
 
     explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr)
         : mode_(mode),
@@ -103,6 +105,13 @@ public:
         return batch_commands_.get_future().get();
     }
 
+    void wait_for_closed_connection() {
+        auto closed = closed_.get_future();
+        if (closed.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            throw std::runtime_error("Redis test peer did not close the connection");
+        }
+    }
+
     std::vector<std::string> authentication_command() const {
         return authentication_;
     }
@@ -138,6 +147,16 @@ private:
             if (mode_ != mode_type::reject_then_ping) {
                 throw;
             }
+        }
+        if (mode_ == mode_type::close_after_reply) {
+            std::error_code ignored;
+            socket_.close(ignored);
+            first_connection_ = false;
+            buffer_.consume(buffer_.size());
+            closed_.set_value();
+            co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+            co_await serve_transport();
+            co_return;
         }
         if (mode_ == mode_type::reject_then_ping) {
             first_connection_ = false;
@@ -244,6 +263,9 @@ private:
                 reply.append("+PONG\r\n");
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
+            } else if (args.front() == "NESTED") {
+                reply = "*2\r\n*2\r\n$20\r\n" + std::string(20, 'a') + "\r\n$20\r\n" + std::string(20, 'b') +
+                        "\r\n$1\r\nc\r\n";
             } else if (args.front() == "GET") {
                 reply = "$128\r\n" + std::string(128, 'v') + "\r\n";
             } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
@@ -264,6 +286,9 @@ private:
                 reply = "-ERR test error\r\n";
             }
             co_await asio::async_write(stream, asio::buffer(reply), asio::use_awaitable);
+            if (mode_ == mode_type::close_after_reply && first_connection_) {
+                co_return;
+            }
         }
     }
 
@@ -278,6 +303,7 @@ private:
     asio::streambuf buffer_;
     asio::streambuf blocking_buffer_;
     std::promise<void> blocked_;
+    std::promise<void> closed_;
     // Written before blocked_ is satisfied; read after wait_for_blocked_command().
     std::vector<std::string> authentication_;
     std::promise<std::vector<std::string>> expiration_;
@@ -613,6 +639,55 @@ RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
     }
     RUVIA_CHECK(rejected);
     pool.loop(0).start(check_commands(client, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+ruvia::task<void> check_self_nested_copy(ruvia::redis_client& client, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto redis = client.handle();
+    const auto reply = co_await redis.command("NESTED");
+    ruvia::testing::poisoned_retirement_resource memory;
+    {
+        ruvia::redis_value value(reply, ruvia::redis_value::allocator_type(&memory));
+        // The source is a subtree of the destination; assigning must not read
+        // storage the assignment already released.
+        value = value.array()[0];
+        RUVIA_CHECK(value.kind() == ruvia::redis_value::kind_type::array);
+        RUVIA_CHECK(value.array().size() == 2);
+        RUVIA_CHECK(value.array()[0].string() == std::string(20, 'a'));
+        RUVIA_CHECK(value.array()[1].string() == std::string(20, 'b'));
+    }
+    co_await client.shutdown();
+}
+
+RUVIA_TEST(redis_value_copy_assignment_from_its_own_subtree) {
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
+    pool.start();
+    pool.loop(0).start(check_self_nested_copy(client, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+ruvia::task<void> check_reconnect_after_peer_close(
+    ruvia::redis_client& client, redis_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto redis = client.handle();
+    RUVIA_CHECK(co_await redis.ping("first") == "first");
+    peer.wait_for_closed_connection();
+    // The idle connection the peer closed must be replaced, not written to.
+    RUVIA_CHECK(co_await redis.ping("second") == "second");
+    co_await client.shutdown();
+}
+
+RUVIA_TEST(redis_pool_replaces_an_idle_connection_the_peer_closed) {
+    redis_peer peer(redis_peer::mode_type::close_after_reply);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
+    pool.start();
+    pool.loop(0).start(check_reconnect_after_peer_close(client, peer, ruvia_ctx)).get();
     pool.stop();
     pool.join();
 }

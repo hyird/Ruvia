@@ -534,7 +534,9 @@ public:
         error };
 
     redis_value(const redis_value&) = default;
-    redis_value& operator=(const redis_value&) = default;
+    // The source may be a subtree of this value, and the result keeps this
+    // value's PMR resource.
+    redis_value& operator=(const redis_value& other);
     redis_value(redis_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)

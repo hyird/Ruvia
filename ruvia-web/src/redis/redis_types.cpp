@@ -135,6 +135,17 @@ redis_value::redis_value(redis_value&& other, allocator_type allocator)
     other.array_.clear();
 }
 
+redis_value& redis_value::operator=(const redis_value& other) {
+    if (this != &other) {
+        redis_value owned(other, allocator_type(string_.get_allocator().resource()));
+        string_.swap(owned.string_);
+        array_.swap(owned.array_);
+        kind_ = owned.kind_;
+        integer_ = owned.integer_;
+    }
+    return *this;
+}
+
 redis_value& redis_value::operator=(redis_value&& other) {
     if (this != &other) {
         redis_value owned(std::move(other), allocator_type(string_.get_allocator().resource()));
