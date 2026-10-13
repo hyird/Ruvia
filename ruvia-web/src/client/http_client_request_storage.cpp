@@ -5,9 +5,6 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 
-#include "client/http_client_tunnel_state.h"
-#include "client/http_client_upload_state.h"
-
 namespace ruvia::detail {
 
 http_client_request_storage::http_client_request_storage(
@@ -25,9 +22,7 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
       body_(std::move(other.body_)),
       tunnel_authority_(std::move(other.tunnel_authority_)),
       tunnel_kind_(other.tunnel_kind_),
-      tunnel_(std::exchange(other.tunnel_, nullptr)),
-      has_body_(std::exchange(other.has_body_, false)),
-      upload_(std::exchange(other.upload_, nullptr)) {
+      has_body_(std::exchange(other.has_body_, false)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
@@ -48,8 +43,6 @@ http_client_request_storage http_client_request_storage::into_resource(
     }
     result.body_.assign(body_);
     result.has_body_ = has_body_;
-    result.upload_ = upload_;
-    result.tunnel_ = tunnel_;
     result.tunnel_kind_ = tunnel_kind_;
     result.tunnel_authority_.assign(tunnel_authority_);
     return result;
@@ -58,10 +51,6 @@ http_client_request_storage http_client_request_storage::into_resource(
 void http_client_request_storage::set_tunnel(std::string_view authority, tunnel_kind kind) {
     tunnel_authority_.assign(authority);
     tunnel_kind_ = kind;
-}
-http_client_output_queue* http_client_request_storage::output() const noexcept {
-    return tunnel_ != nullptr ? &tunnel_->output_ : upload_ != nullptr ? &upload_->output_
-                                                                       : nullptr;
 }
 
 http_client_request_storage& http_client_request_storage::append_header(

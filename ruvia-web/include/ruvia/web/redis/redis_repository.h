@@ -15,7 +15,6 @@
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/detail/redis/redis_query_compile.h"
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
-#include "ruvia/web/detail/redis/redis_repository_config.h"
 #include "ruvia/web/detail/redis/redis_repository_mapping.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/redis/redis_entity.h"
@@ -68,7 +67,7 @@ public:
     [[nodiscard]] scoped_operation<entity_rows<entity_type>> find(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
-        auto args = detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory);
+        auto args = detail::compile_redis_find(mapping(), options, memory);
         detail::redis_map_many<entity_type> mapper{std::pmr::string(mapping().prefix_, memory),
             options.take_.has_value() ? std::nullopt : std::optional<std::uint64_t>(options.skip_.value_or(0U))};
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
@@ -79,7 +78,7 @@ public:
         const auto memory = resource();
         const bool plain = options.order_.empty() && !options.skip_ && !options.take_;
         if (plain) {
-            if (const auto id = detail::redis_primary_key(columns, entity_type::prefix(), options.where_, memory)) {
+            if (const auto id = detail::redis_primary_key(mapping(), options.where_, memory)) {
                 auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
                 detail::redis_orm_arguments_type args(memory);
                 args.reserve(2);
@@ -90,7 +89,7 @@ public:
                 return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
-        auto args = detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory, false, 1);
+        auto args = detail::compile_redis_find(mapping(), options, memory, false, 1);
         detail::redis_map_first<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
@@ -98,7 +97,7 @@ public:
     [[nodiscard]] scoped_operation<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
-        auto args = detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory);
+        auto args = detail::compile_redis_find(mapping(), options, memory);
         detail::redis_map_search<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
         return handle_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
             std::move(args), std::move(mapper));
@@ -108,20 +107,20 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         return handle_.template command_mapped<std::uint64_t>(
-            detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory, true), detail::redis_map_count{});
+            detail::compile_redis_find(mapping(), options, memory, true), detail::redis_map_count{});
     }
 
     [[nodiscard]] scoped_operation<bool> exists(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         if (options.order_.empty() && !options.skip_ && !options.take_) {
-            if (const auto id = detail::redis_primary_key(columns, entity_type::prefix(), options.where_, memory)) {
+            if (const auto id = detail::redis_primary_key(mapping(), options.where_, memory)) {
                 const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
                 return handle_.exists(key);
             }
         }
         return handle_.template command_mapped<bool>(
-            detail::compile_redis_find(columns, entity_type::prefix(), options, mapping(), memory, true),
+            detail::compile_redis_find(mapping(), options, memory, true),
             detail::redis_map_exists{});
     }
 
@@ -157,7 +156,7 @@ public:
     [[nodiscard]] scoped_operation<void> create_index() const {
         const auto memory = resource();
         return handle_.template command_mapped<void>(
-            detail::compile_redis_index(columns, mapping(), memory), detail::redis_orm_status_result);
+            detail::compile_redis_index(mapping(), memory), detail::redis_orm_status_result);
     }
 
     [[nodiscard]] scoped_operation<void> drop_index() const {
@@ -175,8 +174,10 @@ private:
 
     explicit redis_repository(const redis_handle& handle, const redis_repository_config& config)
         : handle_(handle),
-          mapping_(detail::normalize_redis_mapping<entity_type>(config, handle.resource_)),
-          registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {}
+          mapping_(detail::normalize_redis_mapping(columns, entity_type::prefix(), config, handle.resource_)),
+          registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {
+        detail::validate_redis_entity<entity_type>();
+    }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const {
         registration_.require_active();
@@ -199,9 +200,9 @@ private:
         repository.mapping_.reset();
     }
 
-    [[nodiscard]] static std::optional<std::pmr::string> require_primary_key(
-        const redis_predicate& predicate, std::pmr::memory_resource* memory) {
-        auto result_value = detail::redis_primary_key(columns, entity_type::prefix(), predicate, memory);
+    [[nodiscard]] std::optional<std::pmr::string> require_primary_key(
+        const redis_predicate& predicate, std::pmr::memory_resource* memory) const {
+        auto result_value = detail::redis_primary_key(mapping(), predicate, memory);
         if (!result_value) {
             throw std::invalid_argument(
                 "Redis repository operation requires an exact primary-key predicate");
@@ -237,9 +238,9 @@ private:
         });
 
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
-            using value_type = std::remove_cvref_t<typename column_type::value_type>;
-            constexpr bool tag_shadow = detail::is_redis_entity_string<value_type> ||
-                                        std::is_same_v<value_type, bool> || std::is_same_v<value_type, bool_value>;
+            constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
+            constexpr bool tag_shadow =
+                value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
             const auto field = column_type::name.view();
             if constexpr (column_type::options.primary_key_) {
                 if (entity.template is_set<column_type::name>() &&

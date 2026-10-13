@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -111,6 +112,27 @@ namespace ruvia::detail {
     return {};
 }
 
+[[nodiscard]] inline std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept {
+    if (cookie_name_starts_with_ignore_case(name, "__Host-")) {
+        return cookie_prefix::host;
+    }
+    if (cookie_name_starts_with_ignore_case(name, "__Secure-")) {
+        return cookie_prefix::secure;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] inline bool cookie_prefix_requirements_met(
+    cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept {
+    switch (prefix) {
+        case cookie_prefix::secure:
+            return secure;
+        case cookie_prefix::host:
+            return secure && path == "/" && domain.empty();
+    }
+    return false;
+}
+
 [[nodiscard]] inline bool cookie_attribute_emitted(cookie_attribute_policy policy) {
     switch (policy) {
         case cookie_attribute_policy::omit:
@@ -180,19 +202,11 @@ inline void validate_cookie(
     // that receive-side rule for literal wire names so every cookie emitted by
     // this sender can actually be stored. A typed prefix is canonical and is the
     // outermost wire prefix, so it takes precedence over bytes in `name`.
-    const bool host_prefixed = options.prefix_ == cookie_prefix::host ||
-                               (!options.prefix_ && cookie_name_starts_with_ignore_case(name, "__Host-"));
-    const bool secure_prefixed =
-        options.prefix_ == cookie_prefix::secure ||
-        (!options.prefix_ && cookie_name_starts_with_ignore_case(name, "__Secure-"));
-    if (host_prefixed) {
-        if (!secure || options.path_ != "/" || !options.domain_.empty()) {
-            throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");
-        }
-    } else if (secure_prefixed) {
-        if (!secure) {
-            throw std::invalid_argument("__Secure- cookie requires Secure");
-        }
+    const auto prefix = options.prefix_ ? options.prefix_ : detail::cookie_name_prefix(name);
+    if (prefix && !detail::cookie_prefix_requirements_met(*prefix, secure, options.path_, options.domain_)) {
+        throw std::invalid_argument(*prefix == cookie_prefix::host
+                                        ? "__Host- cookie requires Secure, Path=/, and no Domain"
+                                        : "__Secure- cookie requires Secure");
     }
 }
 

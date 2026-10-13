@@ -4,10 +4,10 @@
 #include <memory_resource>
 
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_post_counters.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/web_worker.h"
 
+#include "app/worker_post_counters.h"
 #include "integration/worker_client_registry_view.h"
 
 namespace ruvia::detail {

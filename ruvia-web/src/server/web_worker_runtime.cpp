@@ -24,14 +24,14 @@ web_worker_runtime::web_worker_runtime(const validated_http_server_configuration
 web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
     const route_table& routes_value, worker_capability_definitions capabilities,
     http_server_options validated_options)
-    : runtime_({.queue_capacity_ = validated_options.worker_queue_capacity_,
+    : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
           .io_policy_ = ruvia::worker_io_policy::single_owner}),
       io_context_(runtime_.context().io_context()),
       worker_runtime_(runtime_.context()),
       finalize_signal_(worker_runtime_.handle()),
       routes_(routes_value),
-      memory_(validated_options.memory_config_),
-      inbound_budget_(*memory_.resource(), validated_options.max_inbound_buffer_bytes_per_worker_),
+      memory_(validated_options.server_.memory_pool_),
+      inbound_budget_(*memory_.resource(), validated_options.server_.max_inbound_buffer_bytes_per_worker_),
       codecs_(memory_.resource()),
       background_tasks_(worker_runtime_.handle(), {.resource_ = memory_.resource()}),
       options_(std::move(validated_options)),
@@ -42,8 +42,8 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
                                                                    : route_rate_limit_presence::absent,
               .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
-              .max_decoded_body_bytes_ = options_.max_buffered_body_bytes_,
-              .http_client_result_budget_ = options_.http_client_result_budget_,
+              .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+              .http_client_result_budget_ = options_.server_.http_client_result_budget_,
               .blocking_pool_ = options_.blocking_pool_,
               .env_ = options_.env_,
               .trusted_proxies_ =

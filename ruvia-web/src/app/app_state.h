@@ -30,9 +30,6 @@
 namespace ruvia::detail {
 
 struct app_runtime_graph;
-struct app_state;
-
-void apply_server_config(app_state& state_value, const server_config& config);
 
 struct app_document_root_config final {
     app_document_root_config(
@@ -52,9 +49,6 @@ struct app_state final {
     ~app_state();
 
     std::pmr::vector<http_server_listener_definition> listeners_{process_resource()};
-    std::size_t worker_count_{0};
-    process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
-    std::chrono::milliseconds drain_timeout_{0};
     access_log_callback_type access_log_callback_;
     connection_failure_callback_type connection_failure_callback_;
     http_server_options options_{};

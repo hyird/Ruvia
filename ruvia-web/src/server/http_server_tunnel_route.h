@@ -31,13 +31,14 @@ namespace ruvia::detail {
 // the transport; a buffered answer is left to the session's ordinary tail.
 template <typename stream_type>
 [[nodiscard]] task<std::optional<http1_session_request_completion>> dispatch_http_tunnel_route(
-    http1_route_dispatch<stream_type> d, const http_response_tail& tail, const resolved_route& resolved, bool udp,
+    http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved, bool udp,
     std::string_view pending) {
     if (d.parsed_.body_plan_.requires_consumption()) {
+        // A generated rejection does not inherit the negotiated coding promise.
+        tail.disable_response_coding();
         d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
-        co_return http1_session_request_completion::make_buffered_closing(
-            require_http1_final_response_commit(d.response_, d.parsed_.connection_plan_.require_close()));
+        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
     }
     const auto& endpoint = *resolved.route().endpoint().tunnel();
     using session_type = http_tunnel_session<stream_type>;
@@ -80,7 +81,7 @@ template <typename stream_type>
             tls_output->start();
         }
         tunnel.emplace(d.stream_, tls_output ? &*tls_output : nullptr, d.base_route_services_.worker(),
-            *d.memory_.resource(), *d.inbound_buffer_pool_, pending);
+            *d.memory_.resource(), d.inbound_buffer_pool_, pending);
         co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, resolved.stream_handler(), context_value);
     };
     auto finish = [&](session_type& session_value, std::exception_ptr failure) {
@@ -93,7 +94,7 @@ template <typename stream_type>
     std::optional<http_upgrade_route_outcome> outcome;
     std::exception_ptr failure;
     try {
-        outcome.emplace(co_await run_http_upgrade_route(http_upgrade_kind::tunnel, d.routes_, d.parsed_.request_,
+        outcome.emplace(co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
             resolved, d.request_memory_, d.base_route_services_, tunnel, establish, finish));
     } catch (...) {
         failure = std::current_exception();

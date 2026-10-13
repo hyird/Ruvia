@@ -23,16 +23,13 @@ namespace {
 void validate_connection_control_field(std::string_view name, std::string_view value) {
     if (http_ascii_equals_ignore_case(name, "Connection")) {
         detail::http_connection_options options;
-        if (options.parse_field(
-                value, detail::http_field_list_role::sender, [](std::string_view option) noexcept {
-                    return !detail::http_connection_option_conflicts_with_managed_field(option);
-                }) != detail::http_field_list_parse_status::ok) {
+        if (options.parse_field(value, detail::http_field_list_role::sender) !=
+            detail::http_field_list_parse_status::ok) {
             throw std::invalid_argument("invalid HTTP Connection header");
         }
     } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
         detail::http_upgrade_protocols protocols;
-        if (protocols.parse_field(value, detail::http_field_list_role::sender,
-                [](const detail::http_upgrade_protocol&) noexcept { return true; }) !=
+        if (protocols.parse_field(value, detail::http_field_list_role::sender) !=
             detail::http_field_list_parse_status::ok) {
             throw std::invalid_argument("invalid HTTP Upgrade header");
         }

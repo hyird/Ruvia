@@ -10,21 +10,12 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/server_config.h"
 
 #include "server/worker_codecs.h"
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline bool response_has_header_name(
-    const http_response& response, std::string_view name) noexcept {
-    for (const auto& header : response.headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), name)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // Runtime capability is deliberately separate from Accept-Encoding
 // negotiation. A precompressed file sidecar can satisfy a selected coding
@@ -60,42 +51,14 @@ enum class http_response_compression_status : std::uint8_t {
     failed,
 };
 
-class http_response_compression_result final {
-public:
-    [[nodiscard]] static constexpr http_response_compression_result make_compressed() noexcept {
-        return http_response_compression_result(http_response_compression_status::compressed);
-    }
-
-    [[nodiscard]] static constexpr http_response_compression_result make_not_applicable() noexcept {
-        return http_response_compression_result(http_response_compression_status::not_applicable);
-    }
-
-    [[nodiscard]] static constexpr http_response_compression_result make_failed() noexcept {
-        return http_response_compression_result(http_response_compression_status::failed);
-    }
-
-    [[nodiscard]] constexpr http_response_compression_status status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] constexpr bool compressed() const noexcept {
-        return status_ == http_response_compression_status::compressed;
-    }
-
-    [[nodiscard]] constexpr bool not_applicable() const noexcept {
-        return status_ == http_response_compression_status::not_applicable;
-    }
-
-    [[nodiscard]] constexpr bool failed() const noexcept {
-        return status_ == http_response_compression_status::failed;
-    }
-
-private:
-    constexpr explicit http_response_compression_result(http_response_compression_status status) noexcept
-        : status_(status) {}
-
-    http_response_compression_status status_;
-};
+// The 406 every coding-policy path answers when the client accepts none of the
+// codings a response can be sent with. Options rather than http_error_info so
+// a throw site can build an http_error from the same value.
+[[nodiscard]] constexpr http_error_info_options http_not_acceptable_coding_error() noexcept {
+    return {.status_ = http_status::not_acceptable,
+        .code_ = "not_acceptable",
+        .message_ = "no acceptable response content coding"};
+}
 
 // Response negotiation inspects every known coding in application-supplied
 // stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
@@ -109,24 +72,9 @@ private:
             continue;
         }
         http_visit_comma_separated_quoted_field_items(header.value(), [&](std::string_view item) noexcept {
-            if (item.empty()) {
-                saw_unknown_coding = true;
-            } else if (http_ascii_equals_ignore_case(item, "gzip") ||
-                       http_ascii_equals_ignore_case(item, "x-gzip")) {
+            if (const auto coding = http_content_coding_from_token(item)) {
                 saw_known_coding = true;
-                accepted = accepted && selection.accepts(http_content_coding::gzip);
-            } else if (http_ascii_equals_ignore_case(item, "deflate")) {
-                saw_known_coding = true;
-                accepted = accepted && selection.accepts(http_content_coding::deflate);
-            } else if (http_ascii_equals_ignore_case(item, "br")) {
-                saw_known_coding = true;
-                accepted = accepted && selection.accepts(http_content_coding::brotli);
-            } else if (http_ascii_equals_ignore_case(item, "zstd")) {
-                saw_known_coding = true;
-                accepted = accepted && selection.accepts(http_content_coding::zstd);
-            } else if (http_ascii_equals_ignore_case(item, "identity")) {
-                saw_known_coding = true;
-                accepted = accepted && selection.accepts(http_content_coding::identity);
+                accepted = accepted && selection.accepts(*coding);
             } else {
                 // A custom coding (or malformed sender-side list member) is
                 // outside the framework's decoder/registry. Leave that full
@@ -150,7 +98,7 @@ private:
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
-    if (response_has_header_name(response, "Content-Encoding")) {
+    if (response.header("Content-Encoding").has_value()) {
         // Custom and malformed application-managed coding stacks remain the
         // application's responsibility; every fully known stack is negotiated
         // member by member without allocating in this noexcept decision.
@@ -167,7 +115,7 @@ private:
 // eligible body above sync_bytes_ with a blocking pool configured is left as
 // identity and flagged for offload; every other outcome is final here.
 struct http_buffered_compression_step final {
-    http_response_compression_result result_;
+    http_response_compression_status status_;
     bool offload_;
 };
 
@@ -187,7 +135,7 @@ struct http_buffered_compression_step final {
 // worker. Rejection by the pool is an intentional identity fallback;
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
-[[nodiscard]] task<http_response_compression_result> compress_response_offloaded(http_content_coding coding,
+[[nodiscard]] task<http_response_compression_status> compress_response_offloaded(http_content_coding coding,
     http_response& response, blocking_pool& pool, const worker_handle& worker_value);
 
 // Response compression policy. Fixed representations do not vary by coding;

@@ -19,6 +19,7 @@
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
+#include "util/steady_clock.h"
 namespace ruvia::detail {
 // The tunnel over the HTTP/1 connection's byte stream (plain TCP socket or TLS
 // stream); a TLS stream writes its ciphertext through tls_output. Received
@@ -152,9 +153,7 @@ template <typename stream_type>
                 }
             }
         } deadline_value{session_value, 0, {}};
-        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-                             .count();
+        const auto now = steady_now_ms();
         deadline_value.deadline_ = timeout.count() > (std::numeric_limits<std::int64_t>::max)() - now
                                        ? (std::numeric_limits<std::int64_t>::max)()
                                        : now + timeout.count();

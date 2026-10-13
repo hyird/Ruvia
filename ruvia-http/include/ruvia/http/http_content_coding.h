@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -33,6 +34,10 @@ enum class http_content_coding : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view http_content_coding_token(http_content_coding coding) noexcept;
+
+// The coding a trimmed token names, case-insensitively; x-gzip is gzip. Null
+// for any other token, including an empty one.
+[[nodiscard]] std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept;
 
 // Parsing is bounded to prevent attacker-controlled unbounded decode stages: a
 // longer Content-Encoding stack is reported as unsupported.

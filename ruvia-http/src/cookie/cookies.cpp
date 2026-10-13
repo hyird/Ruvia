@@ -157,8 +157,13 @@ bool is_valid_cookie_value(std::string_view value) noexcept {
     return detail::is_valid_cookie_value(value);
 }
 
-bool cookie_name_starts_with_ignore_case(std::string_view name, std::string_view prefix) noexcept {
-    return detail::cookie_name_starts_with_ignore_case(name, prefix);
+std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept {
+    return detail::cookie_name_prefix(name);
+}
+
+bool cookie_prefix_requirements_met(
+    cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept {
+    return detail::cookie_prefix_requirements_met(prefix, secure, path, domain);
 }
 
 std::string_view http_cookie_prefix_text(cookie_prefix prefix) noexcept {

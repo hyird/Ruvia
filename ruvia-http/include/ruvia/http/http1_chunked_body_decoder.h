@@ -6,7 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/parser/http_chunk_framing.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_chunk_decode_error.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -134,12 +133,14 @@ struct http1_chunked_body_decoder_config final {
 };
 
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
-// borrow the supplied input and remain valid only until it is modified. The
-// body limit counts chunk payload bytes, which may still be transfer-encoded.
-// There is no chunk-count or cumulative framing budget: each chunk-size line
-// (including extensions) and the encoded trailer section (including its final
-// empty line) are bounded independently by max_http_header_bytes.
-// An over-long size line or unterminated trailer section
+// borrow the supplied input and remain valid only until it is modified;
+// incomplete framing stays unconsumed for the caller to retain. The body limit
+// counts chunk payload bytes, which may still be transfer-encoded.
+// There is no chunk-count or cumulative framing budget: RFC 9112 places no limit
+// on the chunk count, and a zero-size chunk ends the body, so empty chunks cannot
+// repeat. Each chunk-size line (including extensions) and the encoded trailer
+// section (including its final empty line) are bounded independently by
+// max_http_header_bytes. An over-long size line or unterminated trailer section
 // reports framing_limit_exceeded; a complete oversized trailer section is
 // invalid_framing.
 // Trailer sections of either role must also fit max_http_header_fields and the
@@ -162,7 +163,27 @@ public:
     http1_chunk_decode_result decode(input_type&&, std::size_t) = delete;
 
 private:
-    detail::http_chunk_framing framing_;
+    enum class progress : std::uint8_t {
+        size_line,
+        body,
+        delimiter,
+        trailers,
+        complete,
+    };
+
+    [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
+    [[nodiscard]] bool consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
+    [[nodiscard]] bool trailers_valid(std::string_view trailers) const noexcept;
+
+    protocol_byte_limit body_limit_;
+    http1_chunk_trailer_role trailer_role_;
+    // A failed decoder keeps reporting its error without consuming input.
+    std::variant<progress, http1_chunk_decode_error> state_{progress::size_line};
+    // Bytes of the pending size line or trailer section already scanned for LF.
+    std::size_t size_line_search_offset_{0};
+    std::size_t trailer_search_offset_{0};
+    std::size_t remaining_{0};
+    std::size_t decoded_bytes_{0};
 };
 
 }  // namespace ruvia

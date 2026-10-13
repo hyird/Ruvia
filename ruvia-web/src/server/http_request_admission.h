@@ -110,7 +110,7 @@ private:
 
     explicit http_response_preparation(prepared_application_response ready) noexcept
         : ready_(ready),
-          first_pass_{http_response_compression_result::make_not_applicable(), false} {}
+          first_pass_{http_response_compression_status::not_applicable, false} {}
     explicit http_response_preparation(http_buffered_compression_step first_pass) noexcept
         : first_pass_(first_pass) {}
 

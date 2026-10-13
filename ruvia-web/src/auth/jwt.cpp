@@ -1,16 +1,219 @@
 #include "ruvia/web/auth/jwt.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
+#include <limits>
+#include <ratio>
+#include <span>
 #include <stdexcept>
 
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_base64.h"
 #include "ruvia/web/detail/json/json_escape.h"
 
+#include "auth/hmac.h"
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
 #include "util/pmr_owned_storage.h"
 
 namespace ruvia {
+
+namespace detail {
+namespace {
+
+// Split without subtracting a rounded time_point: floor(seconds) at the
+// clock's minimum can itself lie below the representable clock range.
+using jwt_clock_second_ratio_type = std::ratio_divide<std::chrono::seconds::period,
+    std::chrono::system_clock::period>;
+static_assert(jwt_clock_second_ratio_type::den == 1 && jwt_clock_second_ratio_type::num > 1,
+    "JWT time arithmetic requires an integral subsecond system clock");
+static_assert(std::numeric_limits<std::chrono::system_clock::rep>::is_integer &&
+                  std::numeric_limits<std::chrono::system_clock::rep>::is_signed &&
+                  std::numeric_limits<std::chrono::system_clock::rep>::digits <=
+                      std::numeric_limits<std::chrono::seconds::rep>::digits,
+    "JWT whole-second distances must fit in the signed seconds representation");
+
+struct jwt_clock_parts final {
+    std::chrono::seconds whole_seconds_{};
+    std::chrono::system_clock::duration fraction_{};
+};
+
+[[nodiscard]] jwt_clock_parts jwt_split_clock_time(std::chrono::system_clock::time_point value) noexcept {
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch());
+    auto remainder = value.time_since_epoch().count() % jwt_clock_second_ratio_type::num;
+    if (remainder < 0) {
+        seconds -= std::chrono::seconds{1};
+        remainder += jwt_clock_second_ratio_type::num;
+    }
+    return {seconds, std::chrono::system_clock::duration{remainder}};
+}
+
+[[nodiscard]] std::chrono::system_clock::time_point jwt_time_with_offset(
+    std::chrono::system_clock::time_point value, std::chrono::seconds offset) noexcept {
+    using clock_type = std::chrono::system_clock;
+    const auto parts = jwt_split_clock_time(value);
+    const auto minimum = jwt_split_clock_time(clock_type::time_point::min());
+    const auto maximum = jwt_split_clock_time(clock_type::time_point::max());
+    if (offset > maximum.whole_seconds_ - parts.whole_seconds_) {
+        return clock_type::time_point::max();
+    }
+    if (offset < minimum.whole_seconds_ - parts.whole_seconds_) {
+        return clock_type::time_point::min();
+    }
+    const auto target = parts.whole_seconds_ + offset;
+    if (target == minimum.whole_seconds_) {
+        if (parts.fraction_ < minimum.fraction_) {
+            return clock_type::time_point::min();
+        }
+        // Do not convert the minimum's floored seconds back into clock ticks:
+        // that intermediate can underflow even when the final value fits.
+        return clock_type::time_point::min() + (parts.fraction_ - minimum.fraction_);
+    }
+    if (target == maximum.whole_seconds_ && parts.fraction_ > maximum.fraction_) {
+        return clock_type::time_point::max();
+    }
+    return clock_type::time_point(std::chrono::duration_cast<clock_type::duration>(target) + parts.fraction_);
+}
+
+[[nodiscard]] std::int64_t jwt_epoch_seconds(std::chrono::system_clock::time_point value) {
+    return std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch()).count();
+}
+
+// RFC 7519 §4.1.4: a token is valid only while the current time is *before*
+// "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
+// accepted window past exp.
+[[nodiscard]] bool jwt_token_expired(std::chrono::system_clock::time_point now,
+    std::chrono::system_clock::time_point expires_at, std::chrono::seconds leeway) noexcept {
+    const auto now_parts = jwt_split_clock_time(now);
+    const auto expires_parts = jwt_split_clock_time(expires_at);
+    // Subsecond clock resolution keeps the whole-second distance representable
+    // even when subtracting time_points directly would overflow their duration.
+    const auto distance = now_parts.whole_seconds_ - expires_parts.whole_seconds_;
+    return distance > leeway ||
+           (distance == leeway && now_parts.fraction_ >= expires_parts.fraction_);
+}
+
+// RFC 7519 §4.1.5: a token is valid only when the current time is *after or
+// equal to* "nbf"; leeway widens the accepted window earlier. Rejected while
+// now (plus leeway) is still strictly before nbf.
+[[nodiscard]] bool jwt_token_not_yet_valid(std::chrono::system_clock::time_point now,
+    std::chrono::system_clock::time_point not_before, std::chrono::seconds leeway) noexcept {
+    const auto now_parts = jwt_split_clock_time(now);
+    const auto not_before_parts = jwt_split_clock_time(not_before);
+    const auto distance = not_before_parts.whole_seconds_ - now_parts.whole_seconds_;
+    return distance > leeway ||
+           (distance == leeway && not_before_parts.fraction_ > now_parts.fraction_);
+}
+
+[[nodiscard]] bool jwt_is_reserved_claim(std::string_view name) noexcept {
+    return name == "iss" || name == "sub" || name == "aud" || name == "exp" || name == "nbf" ||
+           name == "iat" || name == "jti";
+}
+
+// Views into the caller's token.
+struct jwt_token_parts final {
+    std::string_view header_;
+    std::string_view payload_;
+    std::string_view signature_;
+    std::string_view signing_input_;
+};
+
+[[nodiscard]] jwt_token_parts jwt_split_token(std::string_view token) {
+    const auto first = token.find('.');
+    const auto second =
+        first == std::string_view::npos ? std::string_view::npos : token.find('.', first + 1);
+    if (first == std::string_view::npos || second == std::string_view::npos ||
+        token.find('.', second + 1) != std::string_view::npos) {
+        throw std::invalid_argument("JWT token must have three sections");
+    }
+    return jwt_token_parts{token.substr(0, first), token.substr(first + 1, second - first - 1),
+        token.substr(second + 1), token.substr(0, second)};
+}
+
+// Throws std::length_error when the encoded capacity cannot be represented by
+// std::size_t before allocating the result.
+[[nodiscard]] std::pmr::string jwt_base64_url_encode(std::string_view input, std::pmr::memory_resource* resource) {
+    std::pmr::string out(pmr_resource_or_default(resource));
+    out.resize(http_base64_encoded_size(input.size(), http_base64_padding::forbidden));
+    http_base64_encode(out.data(),
+        std::span(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
+        http_base64_charset::url_safe, http_base64_padding::forbidden);
+    return out;
+}
+
+[[nodiscard]] std::pmr::string jwt_base64_url_decode(std::string_view input, std::pmr::memory_resource* resource) {
+    std::pmr::string out(pmr_resource_or_default(resource));
+    out.resize(http_base64_decoded_size_bound(input.size()));
+    const auto decoded_size = http_base64_decode(input,
+        std::span(reinterpret_cast<std::uint8_t*>(out.data()), out.size()),
+        http_base64_charset::url_safe, http_base64_padding::forbidden);
+    if (!decoded_size) {
+        throw std::invalid_argument("JWT base64url value is invalid");
+    }
+    out.resize(*decoded_size);
+    return out;
+}
+
+[[nodiscard]] hmac_digest jwt_hmac_digest(jwt_algorithm algorithm) {
+    switch (algorithm) {
+        case jwt_algorithm::hs256:
+            return hmac_digest::sha256;
+        case jwt_algorithm::hs384:
+            return hmac_digest::sha384;
+        case jwt_algorithm::hs512:
+            return hmac_digest::sha512;
+    }
+    throw std::invalid_argument("unsupported JWT algorithm");
+}
+
+[[nodiscard]] std::string_view jwt_algorithm_name(jwt_algorithm algorithm) {
+    switch (algorithm) {
+        case jwt_algorithm::hs256:
+            return "HS256";
+        case jwt_algorithm::hs384:
+            return "HS384";
+        case jwt_algorithm::hs512:
+            return "HS512";
+    }
+    return {};
+}
+
+// Returns the base64url signature. Throws std::invalid_argument for a key
+// shorter than the selected digest and std::length_error when the secret or
+// signing input exceeds OpenSSL's HMAC length parameters.
+[[nodiscard]] std::pmr::string jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
+    std::string_view data, std::pmr::memory_resource* resource) {
+    const auto digest = jwt_hmac_digest(algorithm);
+    const auto digest_size = hmac_digest_size(digest);
+    if (secret.size() > hmac_max_input_size) {
+        throw std::length_error("JWT secret is too large");
+    }
+    // RFC 7518 section 3.2: the key must be at least as large as the hash output.
+    if (secret.size() < digest_size) {
+        throw std::invalid_argument("JWT secret is shorter than the selected algorithm's digest");
+    }
+    if (data.size() > hmac_max_input_size) {
+        throw std::length_error("JWT signing input is too large");
+    }
+    std::array<std::uint8_t, hmac_max_digest_size> mac{};
+    if (!compute_hmac(digest, secret, data, mac)) {
+        throw std::runtime_error("JWT HMAC signing failed");
+    }
+    return jwt_base64_url_encode(std::string_view(reinterpret_cast<const char*>(mac.data()), digest_size), resource);
+}
+
+}  // namespace
+
+std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value) {
+    // Use the same saturating conversion for integer NumericDates and offsets.
+    // Converting unbounded seconds directly to clock ticks would overflow.
+    return jwt_time_with_offset(std::chrono::system_clock::time_point{}, std::chrono::seconds{value});
+}
+
+}  // namespace detail
+
 namespace {
 
 [[nodiscard]] std::pmr::string move_claim_text(
@@ -281,16 +484,9 @@ jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
 
 std::optional<std::string_view> jwt_bearer_token(std::string_view authorization) noexcept {
     constexpr std::string_view scheme = "Bearer";
-    if (authorization.size() <= scheme.size()) {
+    if (authorization.size() <= scheme.size() ||
+        !http_ascii_equals_ignore_case(authorization.substr(0, scheme.size()), scheme)) {
         return std::nullopt;
-    }
-    for (std::size_t i = 0; i < scheme.size(); ++i) {
-        const auto left = authorization[i] >= 'A' && authorization[i] <= 'Z' ? authorization[i] + 32
-                                                                             : authorization[i];
-        const auto right = scheme[i] >= 'A' && scheme[i] <= 'Z' ? scheme[i] + 32 : scheme[i];
-        if (left != right) {
-            return std::nullopt;
-        }
     }
     if (authorization[scheme.size()] != ' ') {
         return std::nullopt;

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <barrier>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <future>
@@ -310,7 +311,7 @@ ruvia::task<void> receive_through_timer_stop(
 }
 
 ruvia::task<void> acquire_after_timer_stop(
-    ruvia::pool_lease_scheduler& pool, std::optional<ruvia::pool_waiter_result>& result) {
+    ruvia::pool_lease_scheduler& pool, std::optional<ruvia::worker_wait_result<std::size_t>>& result) {
     result.emplace(co_await pool.acquire(std::chrono::milliseconds(1)));
 }
 
@@ -366,17 +367,17 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::worker_runtime_context& runti
     // A timed acquire keeps waiting without a timer and ends with the pool.
     ruvia::pool_lease_scheduler pool(1, worker_value);
     const auto held = co_await pool.acquire(std::nullopt);
-    if (!held.acquired()) {
+    if (!held.has_value()) {
         co_return;
     }
-    std::optional<ruvia::pool_waiter_result> waiting_result;
+    std::optional<ruvia::worker_wait_result<std::size_t>> waiting_result;
     {
         ruvia::task_scope scope(worker_value);
         scope.spawn(acquire_after_timer_stop(pool, waiting_result));
         static_cast<void>(pool.close());
         co_await scope.join();
     }
-    success = waiting_result.has_value() && waiting_result->closed() != nullptr;
+    success = waiting_result.has_value() && waiting_result->status() == ruvia::worker_wait_status::closed;
 }
 
 bool timed_primitives_report_timer_stop() {

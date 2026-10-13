@@ -10,7 +10,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 #include "client/http_client_config_validation.h"
 #include "integration/named_capability.h"
 

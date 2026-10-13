@@ -20,41 +20,6 @@ validated_http_server_configuration::validated_http_server_configuration(
     }
 }
 
-const server_config& server_config_defaults() noexcept {
-    static const server_config defaults;
-    return defaults;
-}
-
-http_server_options normalize_server_options(const server_config& config, http_server_options options) {
-    detail::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
-    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
-        config.process_signal_handlers_ != process_signal_handler_policy::install) {
-        throw std::invalid_argument("process signal handler policy is invalid");
-    }
-    if (config.drain_timeout_.count() < 0) {
-        throw std::invalid_argument("drain timeout must not be negative");
-    }
-    options.worker_queue_capacity_ = config.worker_queue_capacity_;
-    options.idle_timeout_ = config.idle_timeout_;
-    options.scan_interval_ = config.connection_scan_interval_;
-    options.request_header_timeout_ = config.request_header_timeout_;
-    options.request_body_timeout_ = config.request_body_timeout_;
-    options.write_timeout_ = config.write_timeout_;
-    options.max_connections_ = config.max_connections_per_worker_;
-    options.max_requests_per_connection_ = config.max_requests_per_connection_;
-    options.max_buffered_body_bytes_ = config.max_buffered_body_bytes_;
-    options.max_inbound_buffer_bytes_per_worker_ = config.max_inbound_buffer_bytes_per_worker_;
-    options.max_inbound_buffer_bytes_per_connection_ = config.max_inbound_buffer_bytes_per_connection_;
-    options.header_completion_timeout_ = config.header_completion_timeout_;
-    options.body_completion_timeout_ = config.body_completion_timeout_;
-    options.max_stream_body_bytes_ = config.max_stream_body_bytes_;
-    options.max_websocket_message_bytes_ = config.max_websocket_message_bytes_;
-    options.memory_config_ = config.memory_pool_;
-    options.http_client_result_budget_ = config.http_client_result_budget_;
-    validate_server_limits(options);
-    return options;
-}
-
 // Interval and precompression thresholds are validated when the document root
 // is configured; only the blocking-pool dependency is known at run time.
 void validate_document_root_runtime_config(const http_server_options& options) {
@@ -71,37 +36,45 @@ void validate_worker_queue_capacity(std::size_t capacity) {
     }
 }
 
-void validate_server_limits(const http_server_options& options) {
+void validate_server_limits(const server_config& config) {
+    detail::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
+    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
+        config.process_signal_handlers_ != process_signal_handler_policy::install) {
+        throw std::invalid_argument("process signal handler policy is invalid");
+    }
+    if (config.drain_timeout_.count() < 0) {
+        throw std::invalid_argument("drain timeout must not be negative");
+    }
     detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
-        options.idle_timeout_, options.request_header_timeout_, options.request_body_timeout_,
-        options.write_timeout_);
-    detail::ensure_positive_duration(options.scan_interval_, "connection scan interval must be greater than 0");
-    validate_worker_queue_capacity(options.worker_queue_capacity_);
-    ruvia::validate_memory_pool_config(options.memory_config_);
-    detail::ensure_positive_size(options.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
+        config.idle_timeout_, config.request_header_timeout_, config.request_body_timeout_,
+        config.write_timeout_);
+    detail::ensure_positive_duration(
+        config.connection_scan_interval_, "connection scan interval must be greater than 0");
+    validate_worker_queue_capacity(config.worker_queue_capacity_);
+    ruvia::validate_memory_pool_config(config.memory_pool_);
+    detail::ensure_positive_size(config.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
     detail::ensure_positive_optional_size(
-        options.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
+        config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
     detail::ensure_positive_size(
-        options.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
+        config.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
     detail::ensure_positive_optional_size(
-        options.max_connections_, "configured connection limit must be greater than zero");
-    detail::ensure_positive_optional_size(options.max_requests_per_connection_,
+        config.max_connections_per_worker_, "configured connection limit must be greater than zero");
+    detail::ensure_positive_optional_size(config.max_requests_per_connection_,
         "configured requests-per-connection limit must be greater than zero");
-    detail::ensure_positive_size(options.max_inbound_buffer_bytes_per_worker_,
+    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_worker_,
         "worker inbound buffer budget must be greater than zero");
-    detail::ensure_positive_size(options.max_inbound_buffer_bytes_per_connection_,
+    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_connection_,
         "connection inbound buffer budget must be greater than zero");
     detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
-        options.header_completion_timeout_, options.body_completion_timeout_);
-    detail::ensure_positive_size(options.http_client_result_budget_.max_retained_bytes_,
+        config.header_completion_timeout_, config.body_completion_timeout_);
+    detail::ensure_positive_size(config.http_client_result_budget_.max_retained_bytes_,
         "HTTP client retained result byte budget must be greater than zero");
-    detail::ensure_positive_size(options.http_client_result_budget_.max_in_flight_bytes_,
+    detail::ensure_positive_size(config.http_client_result_budget_.max_in_flight_bytes_,
         "HTTP client in-flight response budget must be greater than zero");
 }
 
-// The limits normalize_server_options copies from server_config were validated
-// there, at configuration; only what other configuration entries set is
-// checked here, at run.
+// server_ was validated by validate_server_limits when application::server()
+// accepted it; only what other configuration entries set is checked here, at run.
 void validate_http_server_options(const http_server_options& options) {
     if (!std::has_single_bit(options.rate_limit_capacity_per_worker_)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");

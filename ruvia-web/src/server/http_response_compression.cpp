@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -99,22 +98,6 @@ http_response_compression_decision prepare_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
     http_response& response, http_response_compression_source source_value,
     http_response_coding_availability availability) {
-    switch (source_value) {
-        case http_response_compression_source::buffered:
-        case http_response_compression_source::stream:
-        case http_response_compression_source::sse:
-            break;
-        default:
-            throw std::invalid_argument("invalid response compression source");
-    }
-    switch (availability) {
-        case http_response_coding_availability::identity_only:
-        case http_response_coding_availability::identity_and_compression:
-            break;
-        default:
-            throw std::invalid_argument("invalid response coding availability");
-    }
-
     if (source_value == http_response_compression_source::buffered && response.file_body().has_value()) {
         return http_response_compression_decision::fixed_representation;
     }
@@ -123,8 +106,7 @@ http_response_compression_decision prepare_response_compression(
     }
     const auto status_code = response.status();
     if (status_code == http_status::partial_content || status_code == http_status::reset_content ||
-        response_has_header_name(response, "Content-Encoding") ||
-        response_has_header_name(response, "Content-Range") ||
+        response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
         (source_value != http_response_compression_source::sse &&
             response_content_type_skips_compression(
                 response.header("Content-Type").value_or(std::string_view{}))) ||
@@ -143,8 +125,7 @@ http_response_compression_decision prepare_response_compression(
 http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection,
     http_known_method request_method, http_response& response, const compression_config& options,
     worker_codecs& codecs, bool offload_available) {
-    constexpr http_buffered_compression_step not_applicable{
-        http_response_compression_result::make_not_applicable(), false};
+    constexpr http_buffered_compression_step not_applicable{http_response_compression_status::not_applicable, false};
     const auto body = response.body_bytes();
 
     const auto decision = prepare_response_compression(selection, request_method, response,
@@ -157,7 +138,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     // Without a blocking pool there is no offload boundary, only the
     // configured policy: everything through max_bytes_ encodes in line.
     if (offload_available && body.size() > options.sync_bytes_) {
-        return {http_response_compression_result::make_not_applicable(), true};
+        return {http_response_compression_status::not_applicable, true};
     }
 
     const auto coding = selection.coding();
@@ -167,7 +148,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         encoding.emplace(codecs.encoder(coding).encode(
             body, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()}));
     } catch (...) {
-        return {http_response_compression_result::make_failed(), false};
+        return {http_response_compression_status::failed, false};
     }
     auto* encoded = encoding->encoded();
     if (encoded == nullptr) {
@@ -176,7 +157,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
             failure->error() == http_content_encode_error::encoded_size_exceeded) {
             return not_applicable;
         }
-        return {http_response_compression_result::make_failed(), false};
+        return {http_response_compression_status::failed, false};
     }
 
     try {
@@ -187,12 +168,12 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         // publishing the owned body. A request-resource failure therefore
         // leaves the identity response usable for the typed 500 path instead
         // of exposing a mixed body/metadata state.
-        return {http_response_compression_result::make_failed(), false};
+        return {http_response_compression_status::failed, false};
     }
-    return {http_response_compression_result::make_compressed(), false};
+    return {http_response_compression_status::compressed, false};
 }
 
-task<http_response_compression_result> compress_response_offloaded(http_content_coding coding,
+task<http_response_compression_status> compress_response_offloaded(http_content_coding coding,
     http_response& response, blocking_pool& pool, const worker_handle& worker_value) {
     try {
         std::pmr::string plain(response.body_bytes(), process_resource());
@@ -201,32 +182,32 @@ task<http_response_compression_result> compress_response_offloaded(http_content_
                 return encode_buffered_body(coding, std::move(plain));
             });
         if (result_value.failed()) {
-            co_return http_response_compression_result::make_failed();
+            co_return http_response_compression_status::failed;
         }
         if (!result_value.completed()) {
             // Queue saturation and shutdown are overload/lifecycle outcomes,
             // not broken encoders. Preserve the identity representation.
-            co_return http_response_compression_result::make_not_applicable();
+            co_return http_response_compression_status::not_applicable;
         }
         auto attempt_value = std::move(result_value).value();
         if (attempt_value.status_ == buffered_compression_attempt_status::not_smaller) {
-            co_return http_response_compression_result::make_not_applicable();
+            co_return http_response_compression_status::not_applicable;
         }
         if (attempt_value.status_ != buffered_compression_attempt_status::compressed ||
             attempt_value.bytes_.empty()) {
-            co_return http_response_compression_result::make_failed();
+            co_return http_response_compression_status::failed;
         }
         try {
             response.replace_body_with_content_encoding(
                 std::move(attempt_value.bytes_), http_content_coding_token(coding));
         } catch (...) {
-            co_return http_response_compression_result::make_failed();
+            co_return http_response_compression_status::failed;
         }
-        co_return http_response_compression_result::make_compressed();
+        co_return http_response_compression_status::compressed;
     } catch (...) {
         // Failure to allocate/copy the request-owned input or create the
         // one-shot transport leaves the original identity body intact.
-        co_return http_response_compression_result::make_failed();
+        co_return http_response_compression_status::failed;
     }
 }
 

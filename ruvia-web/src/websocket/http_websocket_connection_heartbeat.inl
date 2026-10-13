@@ -46,7 +46,7 @@ task<void> websocket_connection<stream_type>::write_going_away_close() {
             co_return;
         }
         // Same deadline as a locally initiated close(); it covers this write.
-        liveness_state_ = websocket_awaiting_peer_close(websocket_steady_now_ms());
+        liveness_state_ = websocket_awaiting_peer_close(steady_now_ms());
         co_await flush_protocol_output_now();
     } catch (...) {
         fail_background(std::current_exception());
@@ -96,7 +96,7 @@ task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
         // Ordinary I/O shares the scanner activity timestamp and may update it
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.
-        const auto ping_sent_at_ms = websocket_steady_now_ms();
+        const auto ping_sent_at_ms = steady_now_ms();
         if (protocol_.liveness_mode() == websocket_liveness_mode::open &&
             std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
             liveness_state_ = websocket_awaiting_pong(ping_sent_at_ms, challenge);

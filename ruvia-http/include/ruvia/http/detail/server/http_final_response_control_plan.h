@@ -123,18 +123,15 @@ static_assert(sizeof(http1_final_response_control_plan_result_type) <= 8);
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
         if (http_ascii_equals_ignore_case(header.name(), "Connection")) {
-            if (connection_options.parse_field(header.value(), http_field_list_role::sender,
-                    [](std::string_view option) noexcept {
-                        return !http_connection_option_conflicts_with_managed_field(option);
-                    }) != http_field_list_parse_status::ok) {
+            if (connection_options.parse_field(header.value(), http_field_list_role::sender) !=
+                http_field_list_parse_status::ok) {
                 return http1_final_response_control_plan_result_type(http1_final_response_control_plan_failure(
                     http1_final_response_control_plan_error::invalid_connection_field));
             }
             continue;
         }
         if (http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
-            if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender,
-                    [](const http_upgrade_protocol&) noexcept { return true; }) !=
+            if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) !=
                 http_field_list_parse_status::ok) {
                 return http1_final_response_control_plan_result_type(http1_final_response_control_plan_failure(
                     http1_final_response_control_plan_error::invalid_upgrade_field));

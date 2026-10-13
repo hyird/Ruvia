@@ -165,20 +165,7 @@ struct one_shot_awaiter final {
             return true;
         }
         assert(std::holds_alternative<one_shot_pending>(owner_value.lifecycle_));
-        if (wait_.get_stop_token().stop_requested()) {
-            (void)wait_.complete_status(worker_wait_status::cancelled);
-            return true;
-        }
-        const auto& timeout = wait_.timeout();
-        if (timeout.has_value() && timeout.value() <= std::chrono::steady_clock::duration::zero()) {
-            (void)wait_.complete_status(worker_wait_status::timed_out);
-            return true;
-        }
-        if (owner_value.wait_slot_.occupied()) {
-            throw std::logic_error("one-shot supports one pending receiver");
-        }
-        wait_.publish();
-        return false;
+        return wait_.complete_or_publish("one-shot supports one pending receiver");
     }
 
     bool await_suspend(std::coroutine_handle<> handle) {
@@ -349,11 +336,8 @@ template <typename t_type>
 // transferring the stable dispatcher endpoint into the one-shot state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_one_shot(worker_handle worker_value, one_shot_options options = {}) {
-    auto* resolved = pmr_resource_or_default(options.resource_);
-    std::pmr::polymorphic_allocator<detail::one_shot_state<t_type>> allocator(resolved);
-    auto state_value = std::allocate_shared<detail::one_shot_state<t_type>>(allocator, std::move(worker_value));
-    detail::worker_handle_access::register_shutdown_hook(
-        state_value->worker_, state_value, &detail::one_shot_state<t_type>::shutdown_hook_);
+    auto state_value = detail::make_worker_bound_state<detail::one_shot_state<t_type>>(
+        pmr_resource_or_default(options.resource_), std::move(worker_value));
     return std::pair(one_shot_completion<t_type>(state_value), one_shot_receiver<t_type>(state_value));
 }
 

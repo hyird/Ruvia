@@ -102,133 +102,6 @@ bool db_query::has_where() const {
 bool db_query::has_grouping() const {
     return !storage().groups_.empty() || storage().having_ != no_db_node;
 }
-bool db_query::uses_source_name(std::string_view name) const {
-    const auto matches = [name](const detail::db_query_source& source_value) {
-        if (!source_value.alias_.empty()) {
-            return source_value.alias_ == name;
-        }
-        const auto full = std::string_view(source_value.name_);
-        const auto dot = full.rfind('.');
-        return full == name || full.substr(dot == std::string_view::npos ? 0 : dot + 1) == name;
-    };
-    const auto& s = storage();
-    return (s.source_ && matches(*s.source_)) || std::ranges::any_of(s.joins_,
-                                                     [&](const auto& join) { return matches(join.source_); });
-}
-bool db_query::uses_projection_name(std::string_view name) const {
-    const auto& s = storage();
-    return std::ranges::any_of(s.projections_, [&](auto index) {
-        const auto& node_value = s.nodes_[index];
-        return (node_value.kind_ == db_node_kind::column || node_value.kind_ == db_node_kind::alias) && node_value.text_ == name;
-    });
-}
-
-std::optional<db_query> db_query::prepare_entity_read(
-    std::span<const std::string_view> primary_key, std::string_view root_alias,
-    db_driver driver) const {
-    const auto& s = storage();
-    if (s.kind_ != db_query_kind::select || primary_key.empty()) {
-        throw std::invalid_argument("relation loading requires an entity SELECT with a primary key");
-    }
-    const bool paginated = s.limit_.has_value() || s.offset_.has_value();
-    const bool scope_lock = driver == db_driver::postgresql && s.lock_ && s.lock_->tables_.empty();
-    if (!paginated && !scope_lock) {
-        return std::nullopt;
-    }
-    auto result_value = clone(s.resource_);
-    if (scope_lock) {
-        result_value.storage().lock_->tables_.emplace_back(root_alias);
-    }
-    if (!paginated) {
-        return result_value;
-    }
-    if (has_grouping() || !s.set_operations_.empty() || !s.distinct_on_.empty()) {
-        throw std::invalid_argument("paged relation loading requires an ungrouped SELECT without set operations or DISTINCT ON");
-    }
-    if (s.lock_ && s.lock_->skip_locked_) {
-        throw std::invalid_argument("paged relation loading cannot combine SKIP LOCKED with collection expansion");
-    }
-
-    // Select a page of root identities before filtering the expanded result.
-    // Ranking makes joined ordering deterministic for each root, and avoids
-    // applying LIMIT to child rows or truncating a loaded collection.
-    auto ranked = clone(s.resource_);
-    auto& rank_storage = ranked.storage();
-    // Refer to the outer WITH bindings. Copying their declarations into the
-    // page would evaluate volatile CTEs twice and relocate DML CTEs illegally.
-    rank_storage.ctes_.clear();
-    auto orders = std::move(rank_storage.orders_);
-    rank_storage.limit_.reset();
-    rank_storage.offset_.reset();
-    rank_storage.lock_.reset();
-    rank_storage.distinct_ = false;
-    for (auto& order : orders) {
-        const auto& node_value = rank_storage.nodes_[order.expression_];
-        if (node_value.kind_ == db_node_kind::column && node_value.qualifier_.empty()) {
-            for (const auto index : rank_storage.projections_) {
-                const auto& projection = rank_storage.nodes_[index];
-                if (projection.kind_ == db_node_kind::alias && projection.text_ == node_value.text_) {
-                    order.expression_ = projection.left_;
-                    break;
-                }
-            }
-        }
-    }
-    rank_storage.projections_.clear();
-    detail::db_query_node window(db_node_kind::window, s.resource_);
-    window.left_ = ranked.require_expression(ranked.call("row_number"));
-    std::pmr::vector<std::pmr::string> key_names(s.resource_), order_names(s.resource_);
-    for (std::size_t i = 0; i < primary_key.size(); ++i) {
-        auto& name = key_names.emplace_back("__ruvia_page_key_");
-        detail::append_db_number(name, static_cast<std::uint64_t>(i));
-        const auto key = ranked.column(primary_key[i], root_alias);
-        window.args_.push_back(ranked.require_expression(key));
-        ranked.add_select(ranked.alias(key, name));
-    }
-    if (orders.empty()) {
-        for (const auto key : window.args_) {
-            orders.push_back({key, db_order_direction::asc, db_nulls_order::default_value});
-        }
-    }
-    // Give the outer result the same stable tie order as its page.
-    for (const auto key : primary_key) {
-        result_value.add_order_by(result_value.column(key, root_alias));
-    }
-    for (std::size_t i = 0; i < orders.size(); ++i) {
-        auto& name = order_names.emplace_back("__ruvia_page_order_");
-        detail::append_db_number(name, static_cast<std::uint64_t>(i));
-        ranked.add_select(ranked.alias(expr_type(&rank_storage, orders[i].expression_), name));
-    }
-    window.orders_ = orders;
-    rank_storage.nodes_.push_back(std::move(window));
-    ranked.add_select(ranked.alias(expr_type(&rank_storage, rank_storage.nodes_.size() - 1), "__ruvia_page_rank"));
-
-    db_query page(s.resource_);
-    for (const auto& key : key_names) {
-        page.add_select(page.column(key, "__ruvia_ranked"));
-    }
-    page.from(ranked, "__ruvia_ranked");
-    page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"),
-        db_binary_operator::equal, page.value(1)));
-    for (std::size_t i = 0; i < orders.size(); ++i) {
-        page.add_order_by(page.column(order_names[i], "__ruvia_ranked"), orders[i].direction_, orders[i].nulls_);
-    }
-    // Break ordering ties using the complete primary key, including composite keys.
-    for (const auto& key : key_names) {
-        page.add_order_by(page.column(key, "__ruvia_ranked"));
-    }
-    page.limit(s.limit_).offset(s.offset_);
-    db_query included(s.resource_);
-    const auto page_alias = root_alias == "__ruvia_page" ? "__ruvia_page_1" : "__ruvia_page";
-    included.select(included.value(1)).from(page, page_alias);
-    for (std::size_t i = 0; i < primary_key.size(); ++i) {
-        included.and_where(included.binary(included.column(key_names[i], page_alias),
-            db_binary_operator::equal, included.column(primary_key[i], root_alias)));
-    }
-    result_value.limit(std::nullopt).offset(std::nullopt);
-    result_value.and_where(result_value.exists(included));
-    return result_value;
-}
 std::size_t db_query::require_expression(expr_type expression) const {
     if (expression.owner_ != storage_.get() || expression.node_ >= storage().nodes_.size()) {
         throw std::invalid_argument("database expression belongs to another query; import it first");
@@ -347,202 +220,163 @@ db_query& db_query::cache(std::string_view id, std::optional<std::chrono::millis
     return *this;
 }
 
+detail::db_query_node db_query::make_node(db_node_kind kind, std::span<const expr_type> args) const {
+    detail::db_query_node node_value(kind, resource());
+    for (const auto arg : args) {
+        node_value.args_.push_back(require_expression(arg));
+    }
+    return node_value;
+}
+db_query::expr_type db_query::push_node(detail::db_query_node&& node_value) {
+    auto& s = storage();
+    s.nodes_.push_back(std::move(node_value));
+    return expr_type(&s, s.nodes_.size() - 1);
+}
+
 db_query::expr_type db_query::column(std::string_view name, std::string_view table_value) {
     detail::require_name(name);
     if (!table_value.empty()) {
         detail::require_name(table_value, true);
     }
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::column, s.resource_);
+    auto node_value = make_node(db_node_kind::column);
     node_value.text_ = name;
     node_value.qualifier_ = table_value;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::star(std::string_view table_value) {
     if (!table_value.empty()) {
         detail::require_name(table_value, true);
     }
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::star, s.resource_);
+    auto node_value = make_node(db_node_kind::star);
     node_value.qualifier_ = table_value;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::value(const db_value& value) {
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::value, s.resource_);
-    auto owned = detail::clone_db_value_for_resource(value, s.resource_);
+    auto node_value = make_node(db_node_kind::value);
+    auto owned = detail::clone_db_value_for_resource(value, resource());
     std::destroy_at(&node_value.value_);
     std::construct_at(&node_value.value_, std::move(owned));
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::null_value() {
     return value(db_value(nullptr));
 }
 db_query::expr_type db_query::excluded(std::string_view column) {
-    auto result_value = this->column(column);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::excluded;
-    return result_value;
+    detail::require_name(column);
+    auto node_value = make_node(db_node_kind::excluded);
+    node_value.text_ = column;
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::default_value() {
-    auto& s = storage();
-    s.nodes_.emplace_back(db_node_kind::default_value, s.resource_);
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(make_node(db_node_kind::default_value));
 }
 db_query::expr_type db_query::sql(std::span<const std::string_view> parts, std::span<const expr_type> args) {
     if (parts.size() != args.size() + 1 || (args.empty() && parts.front().empty())) {
         throw std::invalid_argument("SQL expression requires one more syntax part than arguments");
     }
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::sql, s.resource_);
+    auto node_value = make_node(db_node_kind::sql);
     for (auto part : parts) {
         if (part.find('\0') != std::string_view::npos) {
             throw std::invalid_argument("SQL expression cannot contain NUL");
         }
     }
     for (std::size_t i = 0; i < args.size(); ++i) {
-        node_value.named_.emplace_back(parts[i], require_expression(args[i]), s.resource_);
+        node_value.named_.emplace_back(parts[i], require_expression(args[i]), resource());
     }
     node_value.text_ = parts.back();
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::call(std::string_view function, std::span<const expr_type> args, std::span<const db_named_argument> named) {
     detail::require_name(function, true);
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::function, s.resource_);
+    auto node_value = make_node(db_node_kind::function, args);
     node_value.text_ = function;
-    for (const auto arg : args) {
-        node_value.args_.push_back(require_expression(arg));
-    }
     for (const auto& arg : named) {
         detail::require_name(arg.name_);
         if (std::ranges::any_of(node_value.named_, [&](const auto& existing) { return std::string_view(existing.name_) == arg.name_; })) {
             throw std::invalid_argument("duplicate named database function argument");
         }
-        node_value.named_.emplace_back(arg.name_, require_expression(arg.value_), s.resource_);
+        node_value.named_.emplace_back(arg.name_, require_expression(arg.value_), resource());
     }
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::coalesce(std::span<const expr_type> args) {
     if (args.empty()) {
         throw std::invalid_argument("COALESCE requires an argument");
     }
-    auto result_value = call("coalesce", args);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::coalesce;
-    return result_value;
+    return push_node(make_node(db_node_kind::coalesce, args));
 }
 db_query::expr_type db_query::null_if(expr_type value, expr_type other) {
     const std::array args{value, other};
-    auto result_value = call("nullif", args);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::null_if;
-    return result_value;
+    return push_node(make_node(db_node_kind::null_if, args));
 }
 db_query::expr_type db_query::greatest(std::span<const expr_type> args) {
     if (args.empty()) {
         throw std::invalid_argument("GREATEST requires an argument");
     }
-    auto result_value = call("greatest", args);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::greatest;
-    return result_value;
+    return push_node(make_node(db_node_kind::greatest, args));
 }
 db_query::expr_type db_query::least(std::span<const expr_type> args) {
     if (args.empty()) {
         throw std::invalid_argument("LEAST requires an argument");
     }
-    auto result_value = call("least", args);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::least;
-    return result_value;
+    return push_node(make_node(db_node_kind::least, args));
 }
 db_query::expr_type db_query::binary(expr_type lhs, db_binary_operator op, expr_type rhs) {
-    auto& s = storage();
-    const auto left = require_expression(lhs), right = require_expression(rhs);
-    detail::db_query_node node_value(db_node_kind::binary, s.resource_);
-    node_value.left_ = left;
-    node_value.right_ = right;
+    auto node_value = make_node(db_node_kind::binary);
+    node_value.left_ = require_expression(lhs);
+    node_value.right_ = require_expression(rhs);
     node_value.binary_ = op;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::unary(db_unary_operator op, expr_type value) {
-    auto& s = storage();
-    const auto child_value = require_expression(value);
-    detail::db_query_node node_value(db_node_kind::unary, s.resource_);
-    node_value.left_ = child_value;
+    auto node_value = make_node(db_node_kind::unary);
+    node_value.left_ = require_expression(value);
     node_value.unary_ = op;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::between(expr_type value, expr_type lower, expr_type upper, bool negate) {
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::between, s.resource_);
-    node_value.args_ = {require_expression(value), require_expression(lower), require_expression(upper)};
+    const std::array args{value, lower, upper};
+    auto node_value = make_node(db_node_kind::between, args);
     node_value.flag_ = negate;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::tuple(std::span<const expr_type> values) {
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::tuple, s.resource_);
-    for (const auto value : values) {
-        node_value.args_.push_back(require_expression(value));
-    }
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(make_node(db_node_kind::tuple, values));
 }
 db_query::expr_type db_query::list(std::span<const expr_type> values) {
-    auto result_value = tuple(values);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::list;
-    return result_value;
+    return push_node(make_node(db_node_kind::list, values));
 }
 db_query::expr_type db_query::array(std::span<const expr_type> values) {
-    auto result_value = tuple(values);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::array;
-    return result_value;
+    return push_node(make_node(db_node_kind::array, values));
 }
 db_query::expr_type db_query::any(expr_type array_value) {
-    auto result_value = unary(db_unary_operator::not_value, array_value);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::any;
-    return result_value;
+    auto node_value = make_node(db_node_kind::any);
+    node_value.left_ = require_expression(array_value);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::all(expr_type array_value) {
-    auto result_value = any(array_value);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::all;
-    return result_value;
+    auto node_value = make_node(db_node_kind::all);
+    node_value.left_ = require_expression(array_value);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::cast(expr_type value, const db_type_definition& type) {
-    const auto child_value = require_expression(value);
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::cast, s.resource_);
-    node_value.left_ = child_value;
-    node_value.type_.data_type_ = type.data_type_;
-    node_value.type_.custom_name_ = type.custom_name_;
-    node_value.type_.length_ = type.length_;
-    node_value.type_.precision_ = type.precision_;
-    node_value.type_.scale_ = type.scale_;
-    node_value.type_.array_ = type.array_;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    auto node_value = make_node(db_node_kind::cast);
+    node_value.left_ = require_expression(value);
+    node_value.type_ = detail::db_stored_type(type, resource());
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::alias(expr_type value, std::string_view name) {
     detail::require_name(name);
-    const auto child_value = require_expression(value);
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::alias, s.resource_);
-    node_value.left_ = child_value;
+    auto node_value = make_node(db_node_kind::alias);
+    node_value.left_ = require_expression(value);
     node_value.text_ = name;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::case_when(std::span<const db_case_branch> branches, expr_type otherwise) {
     if (branches.empty()) {
         throw std::invalid_argument("CASE requires a branch");
     }
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::case_value, s.resource_);
+    auto node_value = make_node(db_node_kind::case_value);
     for (const auto& branch : branches) {
         node_value.args_.push_back(require_expression(branch.when_));
         node_value.args_.push_back(require_expression(branch.then_));
@@ -550,83 +384,84 @@ db_query::expr_type db_query::case_when(std::span<const db_case_branch> branches
     if (!otherwise.empty()) {
         node_value.left_ = require_expression(otherwise);
     }
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
-db_query::expr_type db_query::subquery(const db_query& query) {
+std::size_t db_query::add_subquery(const db_query& query) {
     query.require_select_query();
     auto snapshot = query.clone(resource());
     auto& s = storage();
-    const auto index = s.queries_.size();
     s.queries_.push_back(std::move(snapshot));
-    detail::db_query_node node_value(db_node_kind::subquery, s.resource_);
-    node_value.query_ = index;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return s.queries_.size() - 1;
+}
+db_query::expr_type db_query::subquery(const db_query& query) {
+    const auto query_index = add_subquery(query);
+    auto node_value = make_node(db_node_kind::subquery);
+    node_value.query_ = query_index;
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::exists(const db_query& query) {
-    auto result_value = subquery(query);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::exists;
-    return result_value;
+    const auto query_index = add_subquery(query);
+    auto node_value = make_node(db_node_kind::exists);
+    node_value.query_ = query_index;
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::aggregate(std::string_view function, std::span<const expr_type> args, bool distinct, std::span<const db_order_term> order) {
-    auto result_value = call(function, args);
-    auto& node_value = storage().nodes_[result_value.node_];
-    node_value.kind_ = db_node_kind::aggregate;
+    detail::require_name(function, true);
+    auto node_value = make_node(db_node_kind::aggregate, args);
+    node_value.text_ = function;
     node_value.flag_ = distinct;
     for (const auto& term : order) {
         node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
     }
-    return result_value;
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::filter(expr_type aggregate, expr_type predicate) {
-    auto result_value = binary(aggregate, db_binary_operator::and_value, predicate);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::filter;
-    return result_value;
+    auto node_value = make_node(db_node_kind::filter);
+    node_value.left_ = require_expression(aggregate);
+    node_value.right_ = require_expression(predicate);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::over(expr_type function, const db_window_options& window) {
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::window, s.resource_);
-    node_value.left_ = require_expression(function);
-    for (const auto expression : window.partition_by_) {
-        node_value.args_.push_back(require_expression(expression));
-    }
+    const auto function_node = require_expression(function);
+    auto node_value = make_node(db_node_kind::window, window.partition_by_);
+    node_value.left_ = function_node;
     for (const auto& term : window.order_by_) {
         node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
     }
     node_value.frame_ = window.frame_;
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::within_group(expr_type function, std::span<const db_order_term> order) {
     if (order.empty()) {
         throw std::invalid_argument("WITHIN GROUP requires ordering");
     }
-    auto& s = storage();
-    detail::db_query_node node_value(db_node_kind::within_group, s.resource_);
+    auto node_value = make_node(db_node_kind::within_group);
     node_value.left_ = require_expression(function);
     for (const auto& term : order) {
         node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
     }
-    s.nodes_.push_back(std::move(node_value));
-    return expr_type(&s, s.nodes_.size() - 1);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::extract(db_date_part part, expr_type value) {
-    auto result_value = unary(db_unary_operator::not_value, value);
-    auto& node_value = storage().nodes_[result_value.node_];
-    node_value.kind_ = db_node_kind::extract;
+    auto node_value = make_node(db_node_kind::extract);
+    node_value.left_ = require_expression(value);
     node_value.date_part_ = part;
-    return result_value;
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::subscript(expr_type array_value, expr_type index) {
-    auto result_value = binary(array_value, db_binary_operator::add, index);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::subscript;
-    return result_value;
+    auto node_value = make_node(db_node_kind::subscript);
+    node_value.left_ = require_expression(array_value);
+    node_value.right_ = require_expression(index);
+    return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::collate(expr_type value, std::string_view collation) {
-    auto result_value = alias(value, collation);
-    storage().nodes_[result_value.node_].kind_ = db_node_kind::collate;
-    return result_value;
+    // Collation names follow the unqualified alias-name rules, although the
+    // compiler renders them as qualified identifiers.
+    detail::require_name(collation);
+    auto node_value = make_node(db_node_kind::collate);
+    node_value.left_ = require_expression(value);
+    node_value.text_ = collation;
+    return push_node(std::move(node_value));
 }
 
 db_query::expr_type db_query::import_expression(expr_type expression, std::string_view source_qualifier, std::string_view target_qualifier) {

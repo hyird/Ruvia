@@ -8,20 +8,13 @@
 #include <stdexcept>
 #include <string>
 
-#include <openssl/evp.h>
-
 #include "ruvia/http/http_base64.h"
+
+#include "auth/hmac.h"
 
 namespace ruvia::detail {
 
-namespace {
-
-inline constexpr std::size_t hmac_sha256_size = 32;
-inline constexpr std::size_t max_hmac_parameter_bytes =
-    static_cast<std::size_t>((std::numeric_limits<int>::max)());
-static_assert(cookie_signature_size == http_base64_encoded_size(hmac_sha256_size));
-
-}  // namespace
+static_assert(cookie_signature_size == http_base64_encoded_size(hmac_digest_size(hmac_digest::sha256)));
 
 void write_cookie_signature(
     char* output, std::string_view secret, std::string_view name, std::string_view value,
@@ -31,7 +24,7 @@ void write_cookie_signature(
     }
     constexpr auto max_cookie_name_bytes =
         static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
-    if (secret.size() > max_hmac_parameter_bytes) {
+    if (secret.size() > hmac_max_input_size) {
         throw std::length_error("signed cookie secret is too large");
     }
     if (name.size() > max_cookie_name_bytes) {
@@ -58,7 +51,7 @@ void write_cookie_signature(
     std::pmr::monotonic_buffer_resource message_arena(message_buffer.data(), message_buffer.size(), resource);
     std::pmr::string message(&message_arena);
     const auto message_size = name_len_bytes.size() + name.size() + value.size();
-    if (message_size > max_hmac_parameter_bytes) {
+    if (message_size > hmac_max_input_size) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
     message.reserve(message_size);
@@ -66,15 +59,11 @@ void write_cookie_signature(
     message.append(name.data(), name.size());
     message.append(value.data(), value.size());
 
-    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    std::size_t digest_size = 0;
-    if (EVP_Q_mac(nullptr, "HMAC", nullptr, "SHA256", nullptr, secret.data(), secret.size(),
-            reinterpret_cast<const unsigned char*>(message.data()), message.size(), digest.data(),
-            digest.size(), &digest_size) == nullptr ||
-        digest_size != hmac_sha256_size) {
+    std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest{};
+    if (!compute_hmac(hmac_digest::sha256, secret, message, digest)) {
         throw std::runtime_error("signed cookie HMAC failed");
     }
-    http_base64_encode(output, std::span<const std::uint8_t>(digest.data(), digest_size));
+    http_base64_encode(output, std::span<const std::uint8_t>(digest));
 }
 
 }  // namespace ruvia::detail

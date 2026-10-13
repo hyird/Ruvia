@@ -7,14 +7,10 @@
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/socket.h"
 
+#include "util/steady_clock.h"
+
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] std::int64_t steady_now_ms() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
 
 [[nodiscard]] worker_handle require_scanner_worker(worker_handle worker_value) {
     if (!worker_value.valid()) {

@@ -1,8 +1,10 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <exception>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -43,9 +45,20 @@ constexpr auto phase_timeout = std::chrono::milliseconds(200);
         .request_body_timeout_ = phase_timeout};
 }
 
-[[maybe_unused]] const bool rate_limit_configured = [] {
+// Error-handler calls of the request in flight; the server worker writes, the
+// client coroutine reads after the response arrives.
+std::atomic<int> error_handler_calls{0};
+
+ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_error_info error) {
+    ++error_handler_calls;
+    c.status(error.status());
+    co_return c.text("rejected");
+}
+
+[[maybe_unused]] const bool application_configured = [] {
     ruvia::app().get_rate_limit(ruvia::rate_limit_config{
         .rule_ = {.max_requests_ = admitted_requests, .window_ = std::chrono::minutes(10)}});
+    ruvia::app().on_error(&counted_error);
     return true;
 }();
 
@@ -122,22 +135,33 @@ RUVIA_TEST(http1_clients_share_406_admission_and_rate_limit_budget) {
         try {
             // A response stream commits its representation before a status can
             // be inspected, so a client that accepts no coding gets 406 first.
+            // The rejection is a terminal error: the error handler runs once
+            // and its answer is not negotiated again.
             for (auto* client : clients) {
+                error_handler_calls = 0;
                 auto response = co_await client->handle().send({.target_ = "/events", .headers_ = refuse_every_coding});
                 RUVIA_CHECK(response.status() == ruvia::http_status::not_acceptable);
-                (void)co_await collect_text(response);
+                RUVIA_CHECK((co_await collect_text(response)) == "rejected");
+                RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
             }
             for (auto* client : clients) {
                 auto response = co_await client->handle().send({.target_ = "/plain"});
                 RUVIA_CHECK(response.status() == ruvia::http_status::ok);
                 RUVIA_CHECK((co_await collect_text(response)) == "plain");
             }
-            // Both connections drew on the same client-address budget; it is spent.
+            // Both connections drew on the same client-address budget; it is
+            // spent. A client that accepts no coding still learns why.
+            const std::array<std::span<const ruvia::http_header_view>, 2> header_sets{
+                std::span<const ruvia::http_header_view>{}, refuse_every_coding};
             for (auto* client : clients) {
-                auto response = co_await client->handle().send({.target_ = "/plain"});
-                RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
-                RUVIA_CHECK(response.header("Retry-After").has_value());
-                (void)co_await collect_text(response);
+                for (const auto headers : header_sets) {
+                    error_handler_calls = 0;
+                    auto response = co_await client->handle().send({.target_ = "/plain", .headers_ = headers});
+                    RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
+                    RUVIA_CHECK(response.header("Retry-After").has_value());
+                    RUVIA_CHECK((co_await collect_text(response)) == "rejected");
+                    RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
+                }
             }
         } catch (...) {
             failure = std::current_exception();

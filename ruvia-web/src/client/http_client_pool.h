@@ -40,7 +40,7 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 struct http_client_slot_policy final {
     using owner_type = http_client_pool;
     enum class deadline_kind_type : std::uint8_t { request };
-    [[noreturn]] static void throw_acquire_failure(const http_client_pool& pool, const pool_waiter_result& result);
+    [[noreturn]] static void throw_acquire_failure(const http_client_pool& pool, worker_wait_status status);
     [[noreturn]] static void throw_aborted(const http_client_pool& pool, pool_slot_abort_reason reason);
     static void expire_slot(http_client_pool&, std::size_t, deadline_kind_type) noexcept {}
     static void cancel_slot(http_client_pool&, std::size_t) noexcept {}

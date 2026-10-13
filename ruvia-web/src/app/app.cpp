@@ -19,7 +19,6 @@ app_state::app_state()
     if (OPENSSL_init_ssl(0, nullptr) != 1) {
         throw std::runtime_error("failed to initialize OpenSSL");
     }
-    apply_server_config(*this, server_config{});
 }
 
 app_state::~app_state() = default;

@@ -135,7 +135,7 @@ private:
         using owner_type = redis_pool;
         enum class deadline_kind_type : std::uint8_t { none };
 
-        [[noreturn]] static void throw_acquire_failure(const redis_pool& pool, const pool_waiter_result& result);
+        [[noreturn]] static void throw_acquire_failure(const redis_pool& pool, worker_wait_status status);
         [[noreturn]] static void throw_aborted(const redis_pool& pool, pool_slot_abort_reason reason);
         static void expire_slot(redis_pool&, std::size_t, deadline_kind_type) noexcept {}
         static void cancel_slot(redis_pool& pool, std::size_t slot) noexcept;

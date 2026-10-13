@@ -31,10 +31,7 @@ class env;
 
 namespace ruvia::detail {
 
-struct steady_rate_limiter_clock;
-template <typename clock_type>
 class rate_limiter;
-using rate_limiter_type = rate_limiter<steady_rate_limiter_clock>;
 class http_interim_response_output;
 class route_table;
 class worker_state_registry;
@@ -42,7 +39,7 @@ class worker_state_registry;
 struct context_worker_services final {
     std::reference_wrapper<const worker_handle> worker_;
     worker_client_registry_view clients_{worker_client_registry_view::detached()};
-    rate_limiter_type* rate_limiter_{};
+    rate_limiter* rate_limiter_{};
     const ruvia::env* env_{};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
     std::pmr::memory_resource* inbound_buffer_pool_{};
@@ -92,7 +89,7 @@ public:
         return worker_services_.clients_;
     }
 
-    [[nodiscard]] rate_limiter_type* rate_limiter() const noexcept {
+    [[nodiscard]] detail::rate_limiter* rate_limiter() const noexcept {
         return worker_services_.rate_limiter_;
     }
 

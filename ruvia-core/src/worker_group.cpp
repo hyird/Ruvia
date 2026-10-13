@@ -220,16 +220,9 @@ bool worker_group::launch(worker_runtime& member) {
             return false;
         }
     }
-    try {
-        member.start();
-    } catch (const std::logic_error&) {
-        // A concurrent group stop can win the runtime's launch transition.
-        if (stop_requested() && member.state() != runtime_lifecycle::state_type::running) {
-            return false;
-        }
-        throw;
-    }
-    return true;
+    // A concurrent stop (group-wide or of this member) can win the runtime's
+    // launch transition; start() then reports it instead of launching.
+    return member.start();
 }
 
 void worker_group::wait_for_stop_dispatch() noexcept {

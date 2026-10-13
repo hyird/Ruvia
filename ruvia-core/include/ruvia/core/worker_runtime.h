@@ -62,7 +62,9 @@ public:
 
     // Configure once, before publishing the runtime or starting/stopping it.
     void configure(worker_runtime_hooks hooks);
-    void start();
+    // Launches the owner thread. Returns false when a stop already closed the
+    // runtime before launch; a second start throws std::logic_error.
+    [[nodiscard]] bool start();
     // Two-phase startup barrier. Owner-published readiness; a stop first aborts
     // it. wait_until_ready() returns false once stopped before readiness and
     // rethrows the first failure. request_serve() requires readiness and runs
@@ -94,7 +96,6 @@ public:
     // throws logic_error instead of waiting on itself.
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
-    void rethrow_failure() const;
     [[nodiscard]] runtime_lifecycle::state_type state() const noexcept;
     [[nodiscard]] bool started() const noexcept;
     [[nodiscard]] worker_runtime_context& context() & noexcept;

@@ -74,6 +74,9 @@ struct server_config final {
     // response stream) is being written: a reader that accepts nothing for
     // this long loses the connection.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
+    // Bounded by default so a connection flood cannot exhaust FDs or memory.
+    // Excess accepted sockets are closed before TLS or HTTP protocol
+    // detection, so admission never fabricates a response.
     std::optional<std::size_t> max_connections_per_worker_{1024};
     // Cumulative request cap for each connection.
     std::optional<std::size_t> max_requests_per_connection_{1000};
@@ -365,7 +368,7 @@ private:
 // request failures and on_connection_failure sees lost connections, but neither
 // answers "how many, since when".
 struct http_server_stats final {
-    // Connections held right now, against http_server_options::max_connections.
+    // Connections held right now, against server_config::max_connections_per_worker_.
     std::size_t active_connections_{0};
     // Connections closed on accept because that budget was full. A rising
     // count means the server is shedding load rather than queueing it.

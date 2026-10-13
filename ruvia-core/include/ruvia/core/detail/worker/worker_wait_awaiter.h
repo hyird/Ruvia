@@ -4,7 +4,9 @@
 #include <coroutine>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/detail/suspend_race_state.h"
@@ -107,6 +109,18 @@ private:
     std::uint64_t next_generation_{0};
 };
 
+// Allocates a worker-bound domain state from resource and registers its
+// shutdown hook, so the worker's stopping notification reaches every state
+// whose endpoints are still alive.
+template <typename state_type, typename... arg_types>
+[[nodiscard]] std::shared_ptr<state_type> make_worker_bound_state(
+    std::pmr::memory_resource* resource, arg_types&&... args) {
+    auto state_value = std::allocate_shared<state_type>(
+        std::pmr::polymorphic_allocator<state_type>(resource), std::forward<arg_types>(args)...);
+    worker_handle_access::register_shutdown_hook(state_value->worker_, state_value, &state_type::shutdown_hook_);
+    return state_value;
+}
+
 // Shared storage and transition machinery for one worker-bound waiter. Domain
 // awaiters own this component by value and publish its typed address directly,
 // without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
@@ -130,15 +144,6 @@ public:
         return *state_;
     }
 
-    [[nodiscard]] const stop_token& get_stop_token() const noexcept {
-        return stop_token_;
-    }
-
-    [[nodiscard]] const std::optional<std::chrono::steady_clock::duration>& timeout()
-        const noexcept {
-        return timeout_;
-    }
-
     [[nodiscard]] bool complete_result(worker_wait_result<t_type>&& result_value) {
         return completion_.complete(std::move(result_value));
     }
@@ -147,12 +152,24 @@ public:
         return completion_.complete(worker_wait_result_access::outcome<t_type>(status));
     }
 
-    // Called with the state's lock held, only when the wait is about to
-    // suspend: the cancellation generation exists only for a pending wait.
-    void publish() noexcept {
-        auto& slot = state().wait_slot_;
-        generation_ = stop_token_.stoppable() ? slot.reserve_generation() : 0;
-        slot.publish(*this, generation_);
+    // The pending-receiver step shared by every domain awaiter, called with the
+    // state's lock held once the domain found nothing to deliver: completes an
+    // already stopped or expired wait, otherwise publishes it as the single
+    // pending receiver. Returns true when the wait completed without pending.
+    [[nodiscard]] bool complete_or_publish(const char* occupied_message) {
+        if (stop_token_.stop_requested()) {
+            (void)complete_status(worker_wait_status::cancelled);
+            return true;
+        }
+        if (timeout_.has_value() && *timeout_ <= std::chrono::steady_clock::duration::zero()) {
+            (void)complete_status(worker_wait_status::timed_out);
+            return true;
+        }
+        if (state().wait_slot_.occupied()) {
+            throw std::logic_error(occupied_message);
+        }
+        publish();
+        return false;
     }
 
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
@@ -214,6 +231,13 @@ public:
 
 private:
     friend class worker_wait_slot<t_type, state_type>;
+
+    // The cancellation generation exists only for a pending wait.
+    void publish() noexcept {
+        auto& slot = state().wait_slot_;
+        generation_ = stop_token_.stoppable() ? slot.reserve_generation() : 0;
+        slot.publish(*this, generation_);
+    }
 
     // Completion has already detached the intrusive waiter before wake() runs.
     // A failed continuation dispatch is therefore unrecoverable and shares the

@@ -8,13 +8,13 @@
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
 
 #include "client/client_host.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_file_paths.h"
+#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 

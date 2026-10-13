@@ -21,7 +21,7 @@ namespace {
                 *options.codecs_, options.blocking_pool_ != nullptr);
         }
     }
-    return {http_response_compression_result::make_not_applicable(), false};
+    return {http_response_compression_status::not_applicable, false};
 }
 
 }  // namespace
@@ -33,7 +33,7 @@ http_response_preparation http_response_tail::prepare(
     if (!first_pass.offload_) {
         auto policy = coding_policy_;
         buffered_response_recovery recovery;
-        if (recovery.advance(policy, request, response, first_pass.result_).action_ ==
+        if (recovery.advance(policy, request, response, first_pass.status_).action_ ==
             buffered_response_recovery_action::ready) {
             return http_response_preparation(prepared_application_response{
                 plan_buffered_http_response_write(request.known_method(), response), false});
@@ -53,7 +53,7 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
     // recovery state re-derives exactly the step that pass stopped at.
     auto pass = preparation.first_pass_;
     for (;;) {
-        auto compression = pass.result_;
+        auto compression = pass.status_;
         if (pass.offload_) {
             compression = co_await compress_response_offloaded(
                 policy.selection()->coding(), response, *options.blocking_pool_, services.worker());

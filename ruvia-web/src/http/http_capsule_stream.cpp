@@ -60,7 +60,7 @@ http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_confi
     state_ = make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
 }
 http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
-    if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain()->worker().is_current()) {
+    if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain().worker().is_current()) {
         throw std::logic_error("capsule stream requires a live tunnel on its worker");
     }
     // Validate before consuming the caller's owner.

@@ -65,7 +65,7 @@ private:
         for (std::size_t index = 0; index < count; ++index) {
             storage.nodes_.emplace_back(right.storage_->nodes_[index], storage.resource_, offset);
         }
-        storage.root_ = storage.add(detail::redis_expression_inspection::kind_type::binary);
+        storage.root_ = storage.add(detail::redis_predicate_node::kind_type::binary);
         auto& root = storage.nodes_[storage.root_];
         root.binary_ = operation;
         root.operands_ = {left_root, right_root};
@@ -76,8 +76,9 @@ private:
 
 namespace detail {
 struct redis_predicate_access final {
-    static redis_expression root(const redis_predicate& predicate) noexcept {
-        return predicate.empty() ? redis_expression{} : redis_expression(*predicate.storage_, predicate.storage_->root_);
+    // Null for an empty predicate.
+    static const redis_predicate_storage* storage(const redis_predicate& predicate) noexcept {
+        return predicate.storage_.get();
     }
 };
 }  // namespace detail
@@ -87,7 +88,7 @@ class redis_field_reference final {
     static_assert(detail::redis_entity_schema<entity_type>, "Redis field references require a Redis entity");
     static_assert(entity_type::template column_index<name>() < std::tuple_size_v<typename entity_type::columns_type>);
     using operation = detail::redis_binary_operator;
-    using kind = detail::redis_expression_inspection::kind_type;
+    using kind = detail::redis_predicate_node::kind_type;
 
 public:
     template <detail::redis_predicate_argument value_type>

@@ -9,10 +9,6 @@
 
 namespace ruvia::detail {
 
-class http_client_upload_state;
-class http_client_tunnel_state;
-class http_client_output_queue;
-
 class http_client_request_storage final {
 public:
     enum class tunnel_kind : unsigned char { none,
@@ -35,13 +31,6 @@ public:
     http_client_request_storage& set_body(std::string_view body);
 
     void set_tunnel(std::string_view authority, tunnel_kind kind);
-    void bind_tunnel(http_client_tunnel_state& tunnel) noexcept {
-        tunnel_ = &tunnel;
-    }
-    [[nodiscard]] http_client_tunnel_state* tunnel() const noexcept {
-        return tunnel_;
-    }
-    [[nodiscard]] http_client_output_queue* output() const noexcept;
     [[nodiscard]] bool is_tunnel() const noexcept {
         return tunnel_kind_ != tunnel_kind::none;
     }
@@ -51,12 +40,6 @@ public:
     std::string_view tunnel_authority() const&& = delete;
     [[nodiscard]] bool udp_tunnel() const noexcept {
         return tunnel_kind_ == tunnel_kind::udp;
-    }
-    void bind_upload(http_client_upload_state& upload) noexcept {
-        upload_ = &upload;
-    }
-    [[nodiscard]] http_client_upload_state* upload() const noexcept {
-        return upload_;
     }
     [[nodiscard]] std::string_view method() const& noexcept {
         return method_;
@@ -84,9 +67,7 @@ private:
     std::pmr::string body_;
     std::pmr::string tunnel_authority_;
     tunnel_kind tunnel_kind_{};
-    http_client_tunnel_state* tunnel_{};
     bool has_body_{false};
-    http_client_upload_state* upload_{};
 };
 
 }  // namespace ruvia::detail

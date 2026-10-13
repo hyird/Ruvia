@@ -5,7 +5,7 @@
 
 #include <asio/ssl/context.hpp>
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 #include "redis/redis_registry.h"
 
 namespace ruvia::detail {

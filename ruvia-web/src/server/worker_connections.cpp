@@ -17,6 +17,7 @@
 
 #include "context/context_services.h"
 #include "integration/worker_capabilities.h"
+#include "server/accepted_socket.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
@@ -59,13 +60,14 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
 // The scanner also trims the worker's memory after an idle interval.
 [[nodiscard]] connection_scanner_options make_connection_scanner_options(
     const http_server_options& options, worker_memory& memory) noexcept {
-    return connection_scanner_options{.scan_interval_ = options.scan_interval_,
-        .idle_timeout_ = options.idle_timeout_,
-        .initial_read_timeout_ = options.request_header_timeout_,
-        .payload_read_timeout_ = options.request_body_timeout_,
-        .write_timeout_ = options.write_timeout_,
-        .initial_read_completion_timeout_ = options.header_completion_timeout_,
-        .payload_read_completion_timeout_ = options.body_completion_timeout_,
+    const auto& server = options.server_;
+    return connection_scanner_options{.scan_interval_ = server.connection_scan_interval_,
+        .idle_timeout_ = server.idle_timeout_,
+        .initial_read_timeout_ = server.request_header_timeout_,
+        .payload_read_timeout_ = server.request_body_timeout_,
+        .write_timeout_ = server.write_timeout_,
+        .initial_read_completion_timeout_ = server.header_completion_timeout_,
+        .payload_read_completion_timeout_ = server.body_completion_timeout_,
         .trim_when_idle_ = &memory};
 }
 
@@ -137,7 +139,8 @@ void worker_connections::retire_tls() noexcept {
 }
 bool worker_connections::available() const noexcept {
     return serving_.load(std::memory_order_acquire) &&
-           (!options_.max_connections_ || drain_.active() < *options_.max_connections_);
+           (!options_.server_.max_connections_per_worker_ ||
+               drain_.active() < *options_.server_.max_connections_per_worker_);
 }
 http_server_stats worker_connections::stats() const noexcept {
     http_server_stats result;
@@ -273,7 +276,8 @@ void worker_connections::report_session_failure(
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
-    if (options_.max_connections_.has_value() && drain_.active() >= *options_.max_connections_) {
+    const auto& max_connections = options_.server_.max_connections_per_worker_;
+    if (max_connections.has_value() && drain_.active() >= *max_connections) {
         refused_.fetch_add(1, std::memory_order_relaxed);
         return;
     }

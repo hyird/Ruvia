@@ -52,7 +52,7 @@ void websocket_client_state::arm_heartbeat_timer(std::chrono::milliseconds delay
 }
 
 void websocket_client_state::touch_activity() noexcept {
-    last_active_ms_ = websocket_steady_now_ms();
+    last_active_ms_ = steady_now_ms();
     if (!protocol_open() || !config_.heartbeat_.ping_interval_.has_value() ||
         !std::holds_alternative<websocket_liveness_idle>(liveness_state_)) {
         return;
@@ -69,7 +69,7 @@ void websocket_client_state::resume_pong_deadline() noexcept {
     if (pong == nullptr || !protocol_open()) {
         return;
     }
-    const auto now = websocket_steady_now_ms();
+    const auto now = steady_now_ms();
     if (now - pong->sent_at_ms() < config_.heartbeat_.pong_timeout_->count()) {
         // The window is still open and its timer armed.
         return;
@@ -83,7 +83,7 @@ void websocket_client_state::resume_pong_deadline() noexcept {
 }
 
 bool websocket_client_state::heartbeat_ping_due() noexcept {
-    const auto now = websocket_steady_now_ms();
+    const auto now = steady_now_ms();
     const websocket_lifecycle_options options{
         .heartbeat_ = config_.heartbeat_, .close_handshake_timeout_ = config_.close_handshake_timeout_};
     // A write holding the lane defers the Ping; a stalled write is aborted
@@ -147,7 +147,7 @@ task<void> websocket_client_state::heartbeat() {
                     "failed to submit WebSocket client heartbeat");
             }
             co_await flush_output();
-            const auto ping_sent_at_ms = websocket_steady_now_ms();
+            const auto ping_sent_at_ms = steady_now_ms();
             if (protocol_open() && std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
                 liveness_state_ = websocket_awaiting_pong(ping_sent_at_ms, challenge);
                 arm_heartbeat_timer(*config_.heartbeat_.pong_timeout_);

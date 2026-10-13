@@ -112,10 +112,8 @@ namespace {
             }
             break;
         case request_header_kind::connection:
-            if (block.connection_options_.parse_field(
-                    value, http_field_list_role::recipient, [](std::string_view option) noexcept {
-                        return !http_connection_option_conflicts_with_managed_field(option);
-                    }) != http_field_list_parse_status::ok) {
+            if (block.connection_options_.parse_field(value, http_field_list_role::recipient) !=
+                http_field_list_parse_status::ok) {
                 return http_parse_error::invalid_connection;
             }
             break;
@@ -128,8 +126,7 @@ namespace {
             // generic field value, but Upgrade-specific grammar must not
             // turn an otherwise valid HTTP/1.0 request into a 400.
             if (!ignore_upgrade &&
-                block.upgrade_protocols_.parse_field(value, http_field_list_role::recipient,
-                    [](const http_upgrade_protocol&) noexcept { return true; }) !=
+                block.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
                     http_field_list_parse_status::ok) {
                 return http_parse_error::invalid_upgrade;
             }

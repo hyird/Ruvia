@@ -16,8 +16,8 @@ namespace ruvia::detail {
 http_request_admission_policy http_request_admission_policy::server(const http_server_options& options) noexcept {
     return {
         .handler_deadline_ = options.deadline_ ? std::optional{options.deadline_->handler_} : std::nullopt,
-        .max_stream_body_bytes_ = options.max_stream_body_bytes_,
-        .max_buffered_body_bytes_ = options.max_buffered_body_bytes_,
+        .max_stream_body_bytes_ = options.server_.max_stream_body_bytes_,
+        .max_buffered_body_bytes_ = options.server_.max_buffered_body_bytes_,
         .coding_availability_ = options.compression_.has_value()
                                     ? http_response_coding_availability::identity_and_compression
                                     : http_response_coding_availability::identity_only,
@@ -158,9 +158,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         // status can be inspected, so a failed negotiation is final here.
         if (admission.tail_.coding_policy().negotiation_failed()) {
             return reject(http_request_endpoint::not_acceptable,
-                http_request_rejection::error(http_error_info({.status_ = http_status::not_acceptable,
-                    .code_ = "not_acceptable",
-                    .message_ = "no acceptable response content coding"})));
+                http_request_rejection::error(http_error_info(http_not_acceptable_coding_error())));
         }
         admission.endpoint_ = http_request_endpoint::response_stream;
         return admission;

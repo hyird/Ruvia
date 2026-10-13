@@ -19,6 +19,7 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 
+#include "context/context_access.h"
 #include "context/context_response_state.h"
 #include "context/context_services.h"
 #include "http/secure_token.h"
@@ -27,6 +28,7 @@
 #include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
 #include "server/http_native_file.h"
+#include "server/http_response_compression.h"
 
 namespace ruvia {
 namespace {
@@ -265,16 +267,19 @@ struct file_response_source final {
     bool validate_indexed_file_for_bodyless_response_{false};
 };
 
-template <typename apply_response_state_type>
-[[nodiscard]] http_response make_file_response(const context& context_value, const http_request& request,
-    http_status_code normal_status, file_response_source source_value, apply_response_state_type apply_response_state) {
-    std::pmr::string etag_storage(context_value.pool());
-    std::array<char, http_imf_fixdate_size> last_modified_storage{};
-    std::string_view etag;
-    std::string_view last_modified;
-    const bool honor_range_requests = source_value.range_requests_ == static_range_request_policy::honor;
-    const bool emit_response_validators =
-        source_value.response_validators_ == static_response_validator_policy::emit;
+// The validators one file response sends and evaluates preconditions
+// against. The views borrow the caller's storage or the source's precomputed
+// values.
+struct file_validators final {
+    std::string_view etag_;
+    // Empty when the date is unavailable.
+    std::string_view last_modified_;
+    std::time_t modified_seconds_{0};
+};
+
+[[nodiscard]] file_validators compute_file_validators(const file_response_source& source_value,
+    std::pmr::string& etag_storage, std::array<char, http_imf_fixdate_size>& last_modified_storage) {
+    file_validators validators;
     // RFC 9110 §8.8.2.1 forbids an origin server from emitting a
     // Last-Modified value later than the message origination time. Filesystems
     // can legitimately contain future mtimes (clock skew, archives, or an
@@ -285,63 +290,73 @@ template <typename apply_response_state_type>
     const auto response_seconds = std::time(nullptr);
     const bool has_response_time = response_seconds != std::time_t{-1};
     const bool last_modified_is_actual = has_response_time && source_value.modified_seconds_ <= response_seconds;
-    const auto validator_modified_seconds =
-        last_modified_is_actual ? source_value.modified_seconds_ : response_seconds;
-    if (emit_response_validators) {
+    validators.modified_seconds_ = last_modified_is_actual ? source_value.modified_seconds_ : response_seconds;
+    if (source_value.response_validators_ == static_response_validator_policy::emit) {
         if (source_value.precomputed_etag_.empty()) {
-            etag_storage = detail::make_static_file_snapshot_etag(
-                context_value.pool(), source_value.size_, source_value.modified_token_, source_value.body_.identity());
-            etag = etag_storage;
+            etag_storage = detail::make_static_file_snapshot_etag(etag_storage.get_allocator().resource(),
+                source_value.size_, source_value.modified_token_, source_value.body_.identity());
+            validators.etag_ = etag_storage;
         } else {
-            etag = source_value.precomputed_etag_;
+            validators.etag_ = source_value.precomputed_etag_;
         }
     }
     // Date preconditions also apply when response validators are not emitted.
     // An unrepresentable date is unavailable, not a truncated wire validator.
     if (has_response_time) {
         if (source_value.precomputed_last_modified_.empty() || !last_modified_is_actual) {
-            if (const auto date = format_http_date(validator_modified_seconds)) {
+            if (const auto date = format_http_date(validators.modified_seconds_)) {
                 last_modified_storage = *date;
-                last_modified = std::string_view(last_modified_storage.data(), last_modified_storage.size());
+                validators.last_modified_ =
+                    std::string_view(last_modified_storage.data(), last_modified_storage.size());
             }
         } else {
-            last_modified = source_value.precomputed_last_modified_;
+            validators.last_modified_ = source_value.precomputed_last_modified_;
         }
     }
+    return validators;
+}
 
-    // RFC 9110 15.4.5: a 304 carries the validators and cache-guiding fields a
-    // 200 would, but no other representation metadata. Last-Modified guides the
-    // cache update only when no ETag is sent.
-    auto add_file_headers = [&](http_response& response, bool not_modified = false) {
-        response.reserve_headers(file_response_header_reserve);
-        if (!not_modified) {
-            if (source_value.content_type_.empty()) {
-                response.header("Content-Type", source_value.body_.guessed_content_type());
-            } else {
-                response.header("Content-Type", source_value.content_type_);
-            }
+// RFC 9110 15.4.5: a 304 carries the validators and cache-guiding fields a
+// 200 would, but no other representation metadata. Last-Modified guides the
+// cache update only when no ETag is sent.
+void add_file_headers(http_response& response, const file_response_source& source_value,
+    const file_validators& validators, bool not_modified = false) {
+    response.reserve_headers(file_response_header_reserve);
+    if (!not_modified) {
+        if (source_value.content_type_.empty()) {
+            response.header("Content-Type", source_value.body_.guessed_content_type());
+        } else {
+            response.header("Content-Type", source_value.content_type_);
         }
-        if (!source_value.cache_control_.empty()) {
-            response.header("Cache-Control", source_value.cache_control_);
+    }
+    if (!source_value.cache_control_.empty()) {
+        response.header("Cache-Control", source_value.cache_control_);
+    }
+    // A precompressed variant carries the original Content-Type with the
+    // encoding declared here.
+    if (!not_modified && source_value.content_coding_ != http_content_coding::identity) {
+        response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
+    }
+    if (!not_modified && source_value.range_requests_ == static_range_request_policy::honor) {
+        response.header("Accept-Ranges", "bytes");
+    }
+    if (source_value.response_validators_ == static_response_validator_policy::emit) {
+        response.header("ETag", validators.etag_);
+        if (!not_modified && !validators.last_modified_.empty()) {
+            response.header("Last-Modified", validators.last_modified_);
         }
-        // A precompressed variant carries the original Content-Type with the
-        // encoding declared here.
-        if (!not_modified && source_value.content_coding_ != http_content_coding::identity) {
-            response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
-        }
-        if (!not_modified && honor_range_requests) {
-            response.header("Accept-Ranges", "bytes");
-        }
-        if (emit_response_validators) {
-            response.header("ETag", etag);
-            if (!not_modified && !last_modified.empty()) {
-                response.header("Last-Modified", last_modified);
-            }
-        }
-    };
+    }
+}
+
+[[nodiscard]] http_response make_file_response(const context& context_value, file_response_source source_value) {
+    const auto& request = detail::context_access::request(context_value);
+    std::pmr::string etag_storage(context_value.pool());
+    std::array<char, http_imf_fixdate_size> last_modified_storage{};
+    const auto validators = compute_file_validators(source_value, etag_storage, last_modified_storage);
+    const bool honor_range_requests = source_value.range_requests_ == static_range_request_policy::honor;
     auto apply_file_response_state = [&](http_response& response,
                                          std::optional<http_status_code> status_code) {
-        apply_response_state(response, status_code);
+        detail::context_access::apply_response_state(context_value, response, status_code);
         // Declare the negotiation dimension after context response metadata is
         // applied. A caller-provided Vary value must be merged, not allowed to
         // overwrite Accept-Encoding and make differently encoded variants share
@@ -369,13 +384,13 @@ template <typename apply_response_state_type>
     auto make_not_modified_response = [&](http_status_code status_code) {
         validate_indexed_file_for_bodyless_response();
         http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response, true);
+        add_file_headers(response, source_value, validators, true);
         apply_file_response_state(response, status_code);
         return response;
     };
     auto make_full_file_response = [&](std::optional<http_status_code> status_code) {
         http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response);
+        add_file_headers(response, source_value, validators);
         set_full_file_body(response);
         apply_file_response_state(response, status_code);
         return response;
@@ -389,7 +404,7 @@ template <typename apply_response_state_type>
         }
         std::pmr::string boundary(token->value(), context_value.arena());
         http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response);
+        add_file_headers(response, source_value, validators);
         apply_file_response_state(response, http_status::partial_content);
         const auto media_type = response.header("Content-Type");
         const auto selected_media_type = media_type.value_or(source_value.body_.guessed_content_type());
@@ -415,14 +430,15 @@ template <typename apply_response_state_type>
     const auto plan = plan_http_representation_response(request,
         http_selected_representation_metadata{
             .length_ = source_value.size_,
-            .etag_ = etag,
-            .last_modified_ = last_modified.empty() ? std::nullopt : std::optional(validator_modified_seconds),
+            .etag_ = validators.etag_,
+            .last_modified_ = validators.last_modified_.empty() ? std::nullopt
+                                                                : std::optional(validators.modified_seconds_),
             // Filesystem mtime cannot establish that a representation changed
             // at most once during the second in its Last-Modified value.
             .strong_date_validator_ = false,
         },
         http_representation_response_options{
-            .normal_status_ = normal_status,
+            .normal_status_ = detail::context_access::response_status(context_value),
             .range_policy_ = honor_range_requests ? http_range_request_policy::honor_byte_ranges
                                                   : http_range_request_policy::ignore,
         });
@@ -439,7 +455,7 @@ template <typename apply_response_state_type>
         validate_indexed_file_for_bodyless_response();
         http_response response({.resource_ = context_value.arena()});
         response.content_range_unsatisfied(source_value.size_);
-        add_file_headers(response);
+        add_file_headers(response, source_value, validators);
         apply_file_response_state(response, plan.status());
         return response;
     }
@@ -448,7 +464,7 @@ template <typename apply_response_state_type>
     }
     if (const auto* range = plan.partial()) {
         http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response);
+        add_file_headers(response, source_value, validators);
         response.content_range(range->offset(), range->length(), source_value.size_);
         set_file_body(response, range->offset(), range->length());
         apply_file_response_state(response, plan.status());
@@ -486,11 +502,7 @@ http_response context::file(file_response_options options) const {
     const auto& snapshot = opened.snapshot_;
 
     const auto content_type_value = options.content_type_.view();
-    const auto apply_state = [this](
-                                 http_response& response, std::optional<http_status_code> status_code) {
-        apply_response_state(response, status_code);
-    };
-    return make_file_response(*this, request_, response_state().metadata().status(),
+    return make_file_response(*this,
         file_response_source{
             .body_ = file_response_body_source::file(file_response_path(
                 native_path, snapshot.identity_, std::move(opened.handle_), read_policy)),
@@ -505,8 +517,7 @@ http_response context::file(file_response_options options) const {
             .precomputed_last_modified_ = {},
             .content_coding_ = http_content_coding::identity,
             .negotiates_encoding_ = false,
-        },
-        apply_state);
+        });
 }
 
 http_response context::static_file(const static_root& root, static_file_response_options options) const {
@@ -577,9 +588,7 @@ http_response context::static_file(const static_root& root, static_file_response
     const auto served =
         select_static_file_representation(root, relative, request_, pool(), base_entry, mode);
     if (!served.has_value()) {
-        throw http_error({.status_ = ruvia::http_status::not_acceptable,
-            .code_ = "not_acceptable",
-            .message_ = "no acceptable response content coding"});
+        throw http_error(detail::http_not_acceptable_coding_error());
     }
     const auto& served_entry = served->entry();
     const auto* const memory_variant = served->memory_variant();
@@ -595,11 +604,7 @@ http_response context::static_file(const static_root& root, static_file_response
     const auto response_last_modified =
         memory_variant == nullptr ? served_entry.last_modified() : memory_variant->last_modified();
 
-    const auto apply_state = [this](
-                                 http_response& response, std::optional<http_status_code> status_code) {
-        apply_response_state(response, status_code);
-    };
-    return make_file_response(*this, request_, response_state().metadata().status(),
+    return make_file_response(*this,
         file_response_source{
             .body_ = memory_variant != nullptr ? file_response_body_source::bytes_value(memory_variant->bytes())
                      : resident_bytes != nullptr
@@ -620,8 +625,7 @@ http_response context::static_file(const static_root& root, static_file_response
             // static_file negotiates the representation by Accept-Encoding.
             .negotiates_encoding_ = true,
             .validate_indexed_file_for_bodyless_response_ = memory_variant == nullptr && resident_bytes == nullptr,
-        },
-        apply_state);
+        });
 }
 
 }  // namespace ruvia

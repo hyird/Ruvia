@@ -17,6 +17,7 @@
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait_result.h"
 
 // The connection-slot bookkeeping every pooled client shares: lease scheduling,
 // stop-token cancellation addressed by operation id, and one deadline timer per
@@ -34,7 +35,7 @@ enum class pool_slot_abort_reason : std::uint8_t {
 // policy_type supplies:
 //   using owner_type = ...;          // the driver pool that owns the connections
 //   using deadline_kind_type = ...;  // scoped enum naming what a deadline guards
-//   [[noreturn]] static void throw_acquire_failure(const owner_type&, const pool_waiter_result&);
+//   [[noreturn]] static void throw_acquire_failure(const owner_type&, worker_wait_status);
 //   [[noreturn]] static void throw_aborted(const owner_type&, pool_slot_abort_reason);
 //   static void expire_slot(owner_type&, std::size_t slot, deadline_kind_type) noexcept;
 //   static void cancel_slot(owner_type&, std::size_t slot) noexcept;
@@ -82,10 +83,10 @@ public:
         std::optional<std::chrono::milliseconds> acquire_timeout, stop_token stop_token_value) {
         const auto result_value = co_await scheduler_.acquire(
             timeout.constrained_by(acquire_timeout).remaining(), std::move(stop_token_value));
-        if (const auto* acquired = result_value.acquired()) {
-            co_return acquired->index();
+        if (result_value.has_value()) {
+            co_return result_value.value();
         }
-        policy_type::throw_acquire_failure(owner_, result_value);
+        policy_type::throw_acquire_failure(owner_, result_value.status());
     }
 
     // A release that names no live lease is a caller bug and cannot be

@@ -12,7 +12,7 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline rate_limit_decision decide_request_rate_limit(
-    rate_limiter_type* limiter, std::string_view remote_address) noexcept {
+    rate_limiter* limiter, std::string_view remote_address) noexcept {
     if (limiter == nullptr || !limiter->has_default_rule()) {
         return rate_limit_decision::allow();
     }

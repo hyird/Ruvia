@@ -33,6 +33,25 @@ std::string_view http_content_coding_token(http_content_coding coding) noexcept 
     return {};
 }
 
+std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept {
+    if (http_ascii_equals_ignore_case(token, "identity")) {
+        return http_content_coding::identity;
+    }
+    if (http_is_gzip_coding_token(token)) {
+        return http_content_coding::gzip;
+    }
+    if (http_ascii_equals_ignore_case(token, "deflate")) {
+        return http_content_coding::deflate;
+    }
+    if (http_ascii_equals_ignore_case(token, "br")) {
+        return http_content_coding::brotli;
+    }
+    if (http_ascii_equals_ignore_case(token, "zstd")) {
+        return http_content_coding::zstd;
+    }
+    return std::nullopt;
+}
+
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -73,18 +92,8 @@ void http_content_coding_field_parser::update(std::string_view value) {
         return;
     }
     invalid_ = !visit_content_coding_members(value, role_, [this](std::string_view token) noexcept {
-        http_content_coding coding = http_content_coding::identity;
-        if (http_ascii_equals_ignore_case(token, "identity")) {
-            coding = http_content_coding::identity;
-        } else if (http_is_gzip_coding_token(token)) {
-            coding = http_content_coding::gzip;
-        } else if (http_ascii_equals_ignore_case(token, "deflate")) {
-            coding = http_content_coding::deflate;
-        } else if (http_ascii_equals_ignore_case(token, "br")) {
-            coding = http_content_coding::brotli;
-        } else if (http_ascii_equals_ignore_case(token, "zstd")) {
-            coding = http_content_coding::zstd;
-        } else {
+        const auto coding = http_content_coding_from_token(token);
+        if (!coding.has_value()) {
             unsupported_ = true;
             return;
         }
@@ -92,7 +101,7 @@ void http_content_coding_field_parser::update(std::string_view value) {
             // Keep scanning: later malformed members still invalidate the field.
             unsupported_ = true;
         } else {
-            codings_.push_back(coding);
+            codings_.push_back(*coding);
         }
     });
 }

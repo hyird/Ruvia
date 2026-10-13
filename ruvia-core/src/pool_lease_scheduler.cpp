@@ -20,8 +20,10 @@ namespace ruvia {
 
 class pool_lease_scheduler::impl_type final {
 public:
-    impl_type(std::size_t pool_size, const worker_handle* worker_value, std::pmr::memory_resource* resource)
-        : worker_(worker_value != nullptr ? std::optional<worker_handle>(*worker_value) : std::nullopt),
+    using acquire_result_type = worker_wait_result<std::size_t>;
+
+    impl_type(std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
+        : worker_(worker_value),
           free_slots_(pmr_resource_or_default(resource)),
           busy_(pmr_resource_or_default(resource)),
           waiter_state_(std::allocate_shared<waiter_state_type>(
@@ -62,20 +64,15 @@ public:
         }
     };
 
-    [[nodiscard]] std::optional<pool_waiter_result> try_acquire(
-        const std::optional<std::chrono::milliseconds>& timeout, const stop_token& stop_token_value) {
-        const auto* const worker_value = worker();
-        if (stop_token_value.stoppable() && (worker_value == nullptr || !worker_value->valid())) {
+    [[nodiscard]] std::optional<acquire_result_type> try_acquire(const stop_token& stop_token_value) {
+        if (stop_token_value.stoppable() && !worker_.valid()) {
             throw std::logic_error("cancellable pool acquire requires a valid worker");
         }
-        if (timeout.has_value() && worker_value == nullptr) {
-            throw std::logic_error("timed pool acquire requires a worker");
-        }
         if (closing_) {
-            return pool_waiter_result::make_closed();
+            return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::closed);
         }
         if (stop_token_value.stop_requested()) {
-            return pool_waiter_result::make_cancelled();
+            return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::cancelled);
         }
         if (free_slots_.empty()) {
             return std::nullopt;
@@ -83,14 +80,14 @@ public:
         const auto slot = free_slots_.back();
         free_slots_.pop_back();
         busy_[slot] = 1;
-        return pool_waiter_result::make_acquired(slot);
+        return detail::worker_wait_result_access::value(slot);
     }
 
     // The waiting path only: the caller holds the reservation that keeps this
     // scheduler alive, and try_acquire() has just found the pool saturated.
-    [[nodiscard]] static task<pool_waiter_result> acquire_waiting(impl_type& owner_value,
+    [[nodiscard]] static task<acquire_result_type> acquire_waiting(impl_type& owner_value,
         std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) {
-        const auto* const worker_value = owner_value.worker();
+        const auto& worker_value = owner_value.worker_;
         auto waiter_id = ++owner_value.next_waiter_id_;
         if (waiter_id == 0) {
             waiter_id = ++owner_value.next_waiter_id_;
@@ -110,16 +107,16 @@ public:
         // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
         // pending deadline: the waiter still completes on release, close(), or
         // its stop token.
-        if (timeout.has_value() && worker_value != nullptr && worker_value->valid()) {
-            (*worker_value).schedule_timer(deadline_timer, ::ruvia::worker_timer_deadline_after(*timeout), [waiter_state, waiter_id](::ruvia::worker_timer_outcome outcome) noexcept {
+        if (timeout.has_value() && worker_value.valid()) {
+            worker_value.schedule_timer(deadline_timer, ::ruvia::worker_timer_deadline_after(*timeout), [waiter_state, waiter_id](::ruvia::worker_timer_outcome outcome) noexcept {
                 if (outcome == ::ruvia::worker_timer_outcome::expired) {
                     (void)waiter_state->queue_.expire(waiter_id);
                 }
             });
         }
 
-        auto stop_registration_value = stop_token_value.register_callback([worker_value, waiter_state, waiter_id] {
-            waiter_state->request_cancellation(*worker_value, waiter_id);
+        auto stop_registration_value = stop_token_value.register_callback([&worker_value, waiter_state, waiter_id] {
+            waiter_state->request_cancellation(worker_value, waiter_id);
         });
         if (stop_token_value.stoppable() && stop_token_value.stop_requested()) {
             (void)waiter_state->queue_.cancel(waiter_id);
@@ -155,11 +152,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] const worker_handle* worker() const noexcept {
-        return worker_ ? &*worker_ : nullptr;
-    }
-
-    std::optional<worker_handle> worker_;
+    worker_handle worker_;
     std::pmr::vector<std::size_t> free_slots_;
     std::pmr::vector<std::uint8_t> busy_;
     std::shared_ptr<waiter_state_type> waiter_state_;
@@ -168,16 +161,12 @@ public:
     bool closing_{false};
 };
 
-pool_lease_scheduler::pool_lease_scheduler(
-    std::size_t pool_size, std::pmr::memory_resource* resource)
-    : impl_(std::make_unique<impl_type>(pool_size, nullptr, resource)) {}
-
 pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_handle& worker_value,
     std::pmr::memory_resource* resource) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("pool lease scheduler requires a valid worker");
     }
-    impl_ = std::make_unique<impl_type>(pool_size, &worker_value, resource);
+    impl_ = std::make_unique<impl_type>(pool_size, worker_value, resource);
 }
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;
@@ -211,7 +200,7 @@ pool_lease_acquire::~pool_lease_acquire() {
 }
 
 bool pool_lease_acquire::await_ready() {
-    result_ = owner_->try_acquire(timeout_, stop_token_);
+    result_ = owner_->try_acquire(stop_token_);
     return result_.has_value();
 }
 
@@ -222,7 +211,7 @@ std::coroutine_handle<> pool_lease_acquire::await_suspend(std::coroutine_handle<
     return awaiter.await_suspend(continuation);
 }
 
-pool_waiter_result pool_lease_acquire::await_resume() {
+worker_wait_result<std::size_t> pool_lease_acquire::await_resume() {
     if (waiting_.has_value()) {
         return waiting_->await_resume();
     }

@@ -63,9 +63,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     if (auto* recovered = result_value.recovered_failure()) {
         d.response_ = std::move(*recovered).take_response();
         d.scanner_entry_.touch();
-        connection_plan = require_http1_final_response_commit(
-            d.response_, stream_plan.request_connection_plan().require_close());
-        co_return http1_session_request_completion::make_buffered_closing(connection_plan);
+        co_return close_with_framework_response(d.response_, stream_plan.request_connection_plan());
     }
     if (auto* route_response = result_value.route_response()) {
         d.response_ = std::move(*route_response).take_response();

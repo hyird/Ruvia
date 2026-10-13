@@ -182,9 +182,18 @@ private:
         drain_output,
         ended };
     [[nodiscard]] result_type step(std::string_view available, std::span<char> scratch, bool eof);
+    [[nodiscard]] result_type step_fixed(std::string_view available, std::span<char> scratch, bool eof);
+    [[nodiscard]] result_type step_close_delimited(std::string_view available, std::span<char> scratch, bool eof);
+    [[nodiscard]] result_type step_chunked(std::string_view available, std::span<char> scratch, bool eof);
+    [[nodiscard]] std::optional<result_type> drain_pending_chunk(
+        std::string_view available, std::size_t& consumed, std::span<char> scratch, bool eof);
+    void consume_pending_delimiter(std::string_view available, std::size_t& consumed) noexcept;
     [[nodiscard]] result_type replay_terminal() const noexcept;
     [[nodiscard]] result_type need_input(std::size_t consumed = 0) const noexcept;
-    [[nodiscard]] result_type emit(std::size_t consumed, std::string_view bytes) const noexcept;
+    [[nodiscard]] result_type need_input_or_incomplete(std::size_t consumed, bool eof);
+    [[nodiscard]] result_type emit(std::size_t consumed, std::string_view bytes);
+    [[nodiscard]] result_type emit_transfer_output(std::size_t consumed, std::string_view bytes);
+    [[nodiscard]] static result_type with_consumed(const result_type& result, std::size_t consumed) noexcept;
     [[nodiscard]] result_type validated_trailers(std::size_t consumed, std::string_view bytes);
     [[nodiscard]] result_type complete(std::size_t consumed);
     [[nodiscard]] result_type fail(http1_client_response_body_error error, std::size_t consumed = 0);

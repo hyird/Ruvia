@@ -56,7 +56,7 @@ struct http_lazy_buffered_body_route_state final {
 template <typename stream_type>
 inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_state<stream_type>& state_value,
     http1_route_dispatch<stream_type> d, protocol_byte_limit body_limit_value, std::string_view body_and_pipeline) {
-    auto* resource = d.inbound_buffer_pool_ != nullptr ? d.inbound_buffer_pool_ : d.memory_.resource();
+    auto* resource = &d.inbound_buffer_pool_;
     state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
         body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_);
 }
@@ -76,9 +76,7 @@ inline task<http1_session_request_completion> complete_failed_http_route(
         parsed_value.request_, request_memory_value, exception, exception_services);
     response.materialize_body();
     scanner_entry.touch();
-    const auto connection_plan =
-        require_http1_final_response_commit(response, parsed_value.connection_plan_.require_close());
-    co_return http1_session_request_completion::make_buffered_closing(connection_plan);
+    co_return close_with_framework_response(response, parsed_value.connection_plan_);
 }
 
 // `request_bytes` is the connection's buffered input at dispatch, from the

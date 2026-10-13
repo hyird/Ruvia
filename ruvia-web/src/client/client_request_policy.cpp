@@ -17,11 +17,25 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
 
 namespace ruvia::detail {
+
+// A Set-Cookie accepted for this origin. Views borrow the response header
+// value and the request target.
+struct client_received_cookie final {
+    std::string_view name_;
+    std::string_view value_;
+    std::string_view path_;
+    std::string_view domain_;
+    std::optional<std::chrono::system_clock::time_point> expires_;
+    bool secure_{false};
+    // Max-Age <= 0 or an Expires in the past: deletes the stored match.
+    bool expired_{false};
+};
+
 namespace {
 
 bool cookie_domain_matches(std::string_view host, std::string_view domain) noexcept {
@@ -83,6 +97,55 @@ std::chrono::system_clock::time_point cookie_expiration(
     return now + std::chrono::duration_cast<clock_type::duration>(std::chrono::seconds(max_age_seconds));
 }
 
+bool satisfies_name_prefix(const http_set_cookie_view& cookie, bool secure) noexcept {
+    // RFC 6265bis: a nameless cookie must not carry a prefix in its value,
+    // which servers may read as a prefixed name that never met the requirements.
+    if (cookie.name().empty() && ::ruvia::cookie_name_prefix(cookie.value())) {
+        return false;
+    }
+    const auto prefix = ::ruvia::cookie_name_prefix(cookie.name());
+    return !prefix || ::ruvia::cookie_prefix_requirements_met(*prefix, secure, cookie.path(), cookie.domain());
+}
+
+// RFC 6265 section 5.3 storage acceptance for this client's fixed origin.
+// Secure cookies are only accepted over https, which also covers the secure
+// origin that the __Secure-/__Host- prefixes require.
+std::optional<client_received_cookie> accept_set_cookie(const http_set_cookie_view& parsed,
+    const http_client_config_storage& config, std::string_view request_target,
+    std::chrono::system_clock::time_point now) {
+    const bool secure = parsed.has(http_set_cookie_attribute::secure);
+    if ((secure && config.scheme_ != http_scheme::https) || !cookie_domain_matches(config.host_, parsed.domain()) ||
+        !can_serialize_received_cookie(parsed.name(), parsed.value()) ||
+        (parsed.has(http_set_cookie_attribute::same_site_none) && !secure) ||
+        !satisfies_name_prefix(parsed, secure)) {
+        return std::nullopt;
+    }
+
+    client_received_cookie cookie{
+        .name_ = parsed.name(),
+        .value_ = parsed.value(),
+        .path_ = parsed.path().empty() || parsed.path().front() != '/' ? default_cookie_path(request_target)
+                                                                       : parsed.path(),
+        .domain_ = parsed.domain(),
+        .expires_ = std::nullopt,
+        .secure_ = secure,
+    };
+    if (const auto max_age_seconds = parsed.max_age_seconds()) {
+        cookie.expired_ = *max_age_seconds <= 0;
+        if (!cookie.expired_) {
+            cookie.expires_ = cookie_expiration(now, *max_age_seconds);
+        }
+    } else if (const auto expires_at = parsed.expires()) {
+        cookie.expired_ = *expires_at <= std::chrono::system_clock::to_time_t(now);
+        if (!cookie.expired_) {
+            const auto expiration_limit =
+                std::chrono::system_clock::to_time_t(cookie_expiration(now, max_cookie_age_seconds));
+            cookie.expires_ = std::chrono::system_clock::from_time_t(std::min(*expires_at, expiration_limit));
+        }
+    }
+    return cookie;
+}
+
 }  // namespace
 
 client_request_policy::client_request_policy(const http_client_config_storage& config,
@@ -100,7 +163,7 @@ void client_request_policy::add_cookie(std::string_view name, std::string_view v
         throw std::invalid_argument("invalid HTTP client cookie");
     }
     const auto match = std::ranges::find_if(cookies_, [name](const stored_cookie& cookie) {
-        return cookie.persistent_ && cookie.name_ == name && cookie.path_ == "/" &&
+        return cookie.configured_ && cookie.name_ == name && cookie.path_ == "/" &&
                cookie.domain_.empty();
     });
     const auto replacement_bytes = storage_bytes(name, value, "/", {});
@@ -190,15 +253,16 @@ void client_request_policy::append_headers(const http_client_request_storage& re
     discard_expired(std::chrono::system_clock::now());
     const auto path = request_path_only(request.target());
     for (const auto& cookie : cookies_) {
-        if (!cookie.persistent_ &&
+        if (!cookie.configured_ &&
             config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
             continue;
         }
         if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
             continue;
         }
-        if (!cookie_domain_matches(config_.host_, cookie.domain_) ||
-            !cookie_path_matches(path, cookie.path_)) {
+        // Domain matching is settled at storage: every stored domain is empty or
+        // matched the same fixed origin host.
+        if (!cookie_path_matches(path, cookie.path_)) {
             continue;
         }
         append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
@@ -223,111 +287,55 @@ void client_request_policy::retain_response_cookies(
         if (!parsed_cookie) {
             continue;
         }
-        const auto parsed_name = parsed_cookie->name();
-        const auto parsed_value = parsed_cookie->value();
-        const auto parsed_path = parsed_cookie->path();
-        const auto parsed_domain = parsed_cookie->domain();
-        const bool parsed_secure = parsed_cookie->has(http_set_cookie_attribute::secure);
-        const bool parsed_has_path = parsed_cookie->has(http_set_cookie_attribute::path);
-        const bool parsed_same_site_none = parsed_cookie->has(http_set_cookie_attribute::same_site_none);
-        if ((parsed_secure && config_.scheme_ != http_scheme::https) ||
-            !cookie_domain_matches(config_.host_, parsed_domain) ||
-            !can_serialize_received_cookie(parsed_name, parsed_value)) {
-            continue;
+        if (const auto accepted = accept_set_cookie(*parsed_cookie, config_, request.target(), now)) {
+            store_received_cookie(*accepted);
         }
-
-        const auto path = parsed_path.empty() || parsed_path.front() != '/'
-                              ? default_cookie_path(request.target())
-                              : parsed_path;
-        const bool secure_prefixed = ::ruvia::cookie_name_starts_with_ignore_case(parsed_name, "__Secure-");
-        const bool host_prefixed = ::ruvia::cookie_name_starts_with_ignore_case(parsed_name, "__Host-");
-        const bool nameless_prefix =
-            parsed_name.empty() && (::ruvia::cookie_name_starts_with_ignore_case(parsed_value, "__Secure-") ||
-                                       ::ruvia::cookie_name_starts_with_ignore_case(parsed_value, "__Host-"));
-        if (nameless_prefix || (parsed_same_site_none && !parsed_secure) ||
-            (secure_prefixed && (!parsed_secure || config_.scheme_ != http_scheme::https)) ||
-            (host_prefixed && (!parsed_secure || config_.scheme_ != http_scheme::https ||
-                                  !parsed_has_path || parsed_path != "/" || !parsed_domain.empty()))) {
-            continue;
-        }
-        std::optional<std::chrono::system_clock::time_point> expires;
-        bool remove = false;
-        const auto max_age_seconds = parsed_cookie->max_age_seconds();
-        const auto expires_at = parsed_cookie->expires();
-        if (max_age_seconds) {
-            remove = *max_age_seconds <= 0;
-            if (!remove) {
-                expires = cookie_expiration(now, *max_age_seconds);
-            }
-        } else if (expires_at) {
-            remove = *expires_at <= std::chrono::system_clock::to_time_t(now);
-            if (!remove) {
-                const auto expiration_limit = std::chrono::system_clock::to_time_t(
-                    cookie_expiration(now, max_cookie_age_seconds));
-                expires =
-                    std::chrono::system_clock::from_time_t(std::min(*expires_at, expiration_limit));
-            }
-        }
-        // RFC 6265 section 5.3 step 11: name, domain and path identify a
-        // cookie; a host-only cookie's domain is the request host.
-        const auto parsed_identity_domain =
-            parsed_domain.empty() ? std::string_view(config_.host_) : parsed_domain;
-        const bool parsed_host_only = parsed_domain.empty();
-        const auto match = std::ranges::find_if(cookies_, [&](const stored_cookie& cookie) {
-            const auto cookie_identity_domain = cookie.domain_.empty()
-                                                    ? std::string_view(config_.host_)
-                                                    : std::string_view(cookie.domain_);
-            return !cookie.persistent_ && cookie.name_ == parsed_name && cookie.path_ == path &&
-                   http_ascii_equals_ignore_case(cookie_identity_domain, parsed_identity_domain);
-        });
-        if (remove) {
-            if (match != cookies_.end()) {
-                cookie_bytes_ -=
-                    storage_bytes(match->name_, match->value_, match->path_, match->domain_);
-                cookies_.erase(match);
-            }
-            continue;
-        }
-        const auto replacement_bytes =
-            storage_bytes(parsed_name, parsed_value, path, parsed_domain);
-        const auto replaced_bytes =
-            match == cookies_.end()
-                ? 0
-                : storage_bytes(match->name_, match->value_, match->path_, match->domain_);
-        if (!has_capacity(replaced_bytes, replacement_bytes, match == cookies_.end())) {
-            continue;
-        }
-        auto make_stored_cookie = [&]() {
-            stored_cookie cookie(parsed_name, parsed_value, resource_);
-            cookie.path_.assign(path);
-            cookie.domain_.assign(parsed_domain);
-            cookie.expires_ = expires;
-            cookie.secure_ = parsed_secure;
-            cookie.host_only_ = parsed_host_only;
-            cookie.persistent_ = false;
-            return cookie;
-        };
-        if (match == cookies_.end()) {
-            const auto insertion = std::ranges::find_if(cookies_,
-                [path](const stored_cookie& cookie) { return cookie.path_.size() < path.size(); });
-            const auto insertion_index = static_cast<std::size_t>(insertion - cookies_.begin());
-            auto cookie = make_stored_cookie();
-            reserve_cookie_slot();
-            cookies_.emplace(
-                cookies_.begin() + static_cast<std::ptrdiff_t>(insertion_index), std::move(cookie));
-        } else {
-            auto replacement = make_stored_cookie();
-            match->name_.swap(replacement.name_);
-            match->value_.swap(replacement.value_);
-            match->path_.swap(replacement.path_);
-            match->domain_.swap(replacement.domain_);
-            std::swap(match->expires_, replacement.expires_);
-            std::swap(match->secure_, replacement.secure_);
-            std::swap(match->host_only_, replacement.host_only_);
-            std::swap(match->persistent_, replacement.persistent_);
-        }
-        cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
     }
+}
+
+void client_request_policy::store_received_cookie(const client_received_cookie& cookie) {
+    // RFC 6265 section 5.3 step 11: name, domain and path identify a cookie;
+    // a host-only cookie's domain is the request host.
+    const auto identity_domain = [this](std::string_view domain) {
+        return domain.empty() ? std::string_view(config_.host_) : domain;
+    };
+    const auto match = std::ranges::find_if(cookies_, [&](const stored_cookie& stored) {
+        return !stored.configured_ && stored.name_ == cookie.name_ && stored.path_ == cookie.path_ &&
+               http_ascii_equals_ignore_case(identity_domain(stored.domain_), identity_domain(cookie.domain_));
+    });
+    const auto replaced_bytes =
+        match == cookies_.end() ? 0 : storage_bytes(match->name_, match->value_, match->path_, match->domain_);
+    if (cookie.expired_) {
+        if (match != cookies_.end()) {
+            cookie_bytes_ -= replaced_bytes;
+            cookies_.erase(match);
+        }
+        return;
+    }
+    const auto replacement_bytes = storage_bytes(cookie.name_, cookie.value_, cookie.path_, cookie.domain_);
+    if (!has_capacity(replaced_bytes, replacement_bytes, match == cookies_.end())) {
+        return;
+    }
+
+    stored_cookie replacement(cookie.name_, cookie.value_, resource_);
+    replacement.path_.assign(cookie.path_);
+    replacement.domain_.assign(cookie.domain_);
+    replacement.expires_ = cookie.expires_;
+    replacement.secure_ = cookie.secure_;
+    replacement.configured_ = false;
+    if (match == cookies_.end()) {
+        // Longer paths first, so more specific cookies lead the Cookie header
+        // (RFC 6265 section 5.4 step 2).
+        const auto insertion = std::ranges::find_if(cookies_,
+            [&cookie](const stored_cookie& stored) { return stored.path_.size() < cookie.path_.size(); });
+        const auto insertion_index = insertion - cookies_.begin();
+        reserve_cookie_slot();
+        cookies_.emplace(cookies_.begin() + insertion_index, std::move(replacement));
+    } else {
+        // Every string shares resource_, so the move steals buffers and cannot throw.
+        *match = std::move(replacement);
+    }
+    cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
 }
 
 }  // namespace ruvia::detail

@@ -40,7 +40,7 @@ struct http1_route_dispatch final {
     const http_server_options& options_;
     http_response& response_;
     http1_request_sequence& request_sequence_;
-    std::pmr::memory_resource* inbound_buffer_pool_{};
+    std::pmr::memory_resource& inbound_buffer_pool_;
 };
 
 }  // namespace ruvia::detail

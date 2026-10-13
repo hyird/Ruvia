@@ -97,8 +97,6 @@ struct worker_failure_sink final {
 
 // Fully normalized, worker-owned runtime options. Public callers configure application
 // with server_config.h values; only the Web runtime constructs this state.
-[[nodiscard]] const server_config& server_config_defaults() noexcept;
-
 struct http_server_options final {
     // The application's document root: one app-scoped publisher shared by
     // every worker, plus this worker's current generation. Validated
@@ -138,41 +136,11 @@ struct http_server_options final {
         document_root_generation* current_{nullptr};
     };
 
-    // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
-    // max_requests_per_connection caps requests per reused connection.
-    std::optional<std::chrono::milliseconds> idle_timeout_{server_config_defaults().idle_timeout_};
-    std::chrono::milliseconds scan_interval_{server_config_defaults().connection_scan_interval_};
-    // Capacity of the explicit cross-thread queue for this Web worker.
-    std::size_t worker_queue_capacity_{server_config_defaults().worker_queue_capacity_};
-    memory_pool_config memory_config_{server_config_defaults().memory_pool_};
-    http_client_result_budget_config http_client_result_budget_{server_config_defaults().http_client_result_budget_};
-    std::optional<std::chrono::milliseconds> request_header_timeout_{server_config_defaults().request_header_timeout_};
-    std::optional<std::chrono::milliseconds> request_body_timeout_{server_config_defaults().request_body_timeout_};
-    // Absolute phase deadlines: progress does not renew these limits.
-    std::optional<std::chrono::milliseconds> header_completion_timeout_{server_config_defaults().header_completion_timeout_};
-    std::optional<std::chrono::milliseconds> body_completion_timeout_{server_config_defaults().body_completion_timeout_};
-    std::optional<std::chrono::milliseconds> write_timeout_{server_config_defaults().write_timeout_};
-    // Per worker. Defaults to a bounded cap so an unconfigured server cannot be
-    // driven to FD/memory exhaustion by a connection flood; set std::nullopt to
-    // opt back into unlimited. Excess accepted sockets are closed before TLS or
-    // HTTP protocol detection, so admission never fabricates a response.
-    std::optional<std::size_t> max_connections_{server_config_defaults().max_connections_per_worker_};
-    std::optional<std::size_t> max_requests_per_connection_{server_config_defaults().max_requests_per_connection_};
-    // Buffered routes materialize body data; the same cap applies again after
-    // Content-Encoding is decoded. This limit must be greater than 0.
-    std::size_t max_buffered_body_bytes_{server_config_defaults().max_buffered_body_bytes_};
-    // Live inbound buffer allocations across HTTP bodies, streamed request
-    // bodies, CONNECT tunnel reads and websocket sessions. Includes capacity and
-    // reallocation overlap; the limits cannot be disabled.
-    std::size_t max_inbound_buffer_bytes_per_worker_{server_config_defaults().max_inbound_buffer_bytes_per_worker_};
-    std::size_t max_inbound_buffer_bytes_per_connection_{server_config_defaults().max_inbound_buffer_bytes_per_connection_};
+    // The validated application server configuration, one copy per worker.
+    server_config server_{};
     // Borrowed from the worker runtime, whose shutdown joins every connection;
     // each connection charges its inbound_buffer_resource against it.
     inbound_buffer_budget* inbound_budget_{nullptr};
-    // Stream routes are explicit; absence disables the stream body limit.
-    std::optional<std::size_t> max_stream_body_bytes_{server_config_defaults().max_stream_body_bytes_};
-    // websocket messages are assembled before delivery; this must be greater than 0.
-    std::size_t max_websocket_message_bytes_{server_config_defaults().max_websocket_message_bytes_};
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<compression_config> compression_{};

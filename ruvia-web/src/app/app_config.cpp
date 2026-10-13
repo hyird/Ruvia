@@ -13,17 +13,6 @@
 
 namespace ruvia {
 
-namespace detail {
-void apply_server_config(app_state& state_value, const server_config& config) {
-    auto options = normalize_server_options(config, state_value.options_);
-    state_value.worker_count_ = config.worker_count_;
-    state_value.process_signal_handlers_ = config.process_signal_handlers_;
-    state_value.drain_timeout_ = config.drain_timeout_;
-    state_value.options_ = std::move(options);
-}
-
-}  // namespace detail
-
 application& application::load_dotenv(dotenv_options options) {
     return detail::mutate_stopped_app(
         *this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
@@ -84,7 +73,10 @@ application& application::listen(listen_config config) {
 application& application::server(server_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change server config while app is running",
-        [config](detail::app_state& state_value) { detail::apply_server_config(state_value, config); });
+        [&config](detail::app_state& state_value) {
+            detail::validate_server_limits(config);
+            state_value.options_.server_ = config;
+        });
 }
 
 application& application::deadline(deadline_config config) {

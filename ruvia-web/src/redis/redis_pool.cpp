@@ -24,15 +24,17 @@ namespace {
 
 }  // namespace
 
-void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, const pool_waiter_result& result) {
-    if (result.timed_out() != nullptr) {
-        throw redis_error(redis_error::code_type::timeout, "redis connection pool acquire timed out");
-    }
-    if (result.cancelled() != nullptr) {
-        throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
-    }
-    if (result.closed() != nullptr) {
-        throw redis_error(redis_error::code_type::closing, "redis pool is closing");
+void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, worker_wait_status status) {
+    switch (status) {
+        case worker_wait_status::timed_out:
+            throw redis_error(redis_error::code_type::timeout, "redis connection pool acquire timed out");
+        case worker_wait_status::cancelled:
+            throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
+        case worker_wait_status::closed:
+            throw redis_error(redis_error::code_type::closing, "redis pool is closing");
+        case worker_wait_status::value:
+        case worker_wait_status::worker_stopping:
+            break;
     }
     std::terminate();
 }

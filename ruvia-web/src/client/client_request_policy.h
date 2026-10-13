@@ -14,6 +14,7 @@
 namespace ruvia::detail {
 struct http_client_config_storage;
 class http_client_request_storage;
+struct client_received_cookie;
 
 // Origin policy owns cookies and automatic headers independently of connection
 // negotiation, cancellation, and transport retirement.
@@ -38,10 +39,12 @@ private:
         std::pmr::string domain_;
         std::optional<std::chrono::system_clock::time_point> expires_;
         bool secure_{false};
-        bool host_only_{true};
-        bool persistent_{true};
+        // From the client configuration rather than a Set-Cookie: sent even
+        // when received cookies are ignored, never replaced by a response.
+        bool configured_{true};
     };
     void add_cookie(std::string_view name, std::string_view value);
+    void store_received_cookie(const client_received_cookie& cookie);
     void reserve_cookie_slot();
     void discard_expired(std::chrono::system_clock::time_point now);
     [[nodiscard]] static std::size_t storage_bytes(std::string_view name,

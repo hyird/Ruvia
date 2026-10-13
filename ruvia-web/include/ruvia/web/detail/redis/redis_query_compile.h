@@ -9,27 +9,15 @@
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <type_traits>
 #include <vector>
 
 #include "ruvia/web/detail/entity/value_storage.h"
-#include "ruvia/web/detail/model/traits.h"
-#include "ruvia/web/detail/redis/redis_predicate_storage.h"
+#include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
-#include "ruvia/web/detail/redis/redis_repository_config.h"
 #include "ruvia/web/redis/redis_find_options.h"
+#include "ruvia/web/redis/redis_repository_types.h"
 
 namespace ruvia::detail {
-
-enum class redis_column_kind : std::uint8_t {
-    unsupported,
-    text,
-    bool_value,
-    signed_value,
-    unsigned_value,
-    float32,
-    float64,
-};
 
 // What the RediSearch compiler needs to know about one entity column.
 struct redis_column_info final {
@@ -37,32 +25,6 @@ struct redis_column_info final {
     redis_column_kind kind_{redis_column_kind::unsupported};
     bool primary_key_{false};
 };
-
-template <typename t_type>
-consteval redis_column_kind redis_column_value_kind() {
-    using value_type = std::remove_cvref_t<t_type>;
-    if constexpr (std::is_same_v<value_type, string> ||
-                  std::is_same_v<value_type, std::pmr::string> ||
-                  std::is_same_v<value_type, std::string>) {
-        return redis_column_kind::text;
-    } else if constexpr (std::is_same_v<value_type, bool_value> || std::is_same_v<value_type, bool>) {
-        return redis_column_kind::bool_value;
-    } else if constexpr (is_ruvia_scalar<value_type>) {
-        return redis_column_value_kind<model_scalar_value_t_type<value_type>>();
-    } else if constexpr (std::is_integral_v<value_type>) {
-        if constexpr (std::is_signed_v<value_type>) {
-            return redis_column_kind::signed_value;
-        } else {
-            return redis_column_kind::unsigned_value;
-        }
-    } else if constexpr (std::is_same_v<value_type, float>) {
-        return redis_column_kind::float32;
-    } else if constexpr (std::is_same_v<value_type, double>) {
-        return redis_column_kind::float64;
-    } else {
-        return redis_column_kind::unsupported;
-    }
-}
 
 // The per-entity column table every compiler entry point below consumes.
 template <typename entity_type>
@@ -75,23 +37,61 @@ inline constexpr auto redis_query_columns = [] {
     return columns;
 }();
 
+struct redis_index_definition final {
+    std::pmr::string field_;
+    redis_index_kind kind_{redis_index_kind::none};
+    bool sortable_{false};
+};
+
+// A repository's validated storage and index layout. Only
+// normalize_redis_mapping builds one, so every index column exists, is a safe
+// identifier outside the reserved __ruvia_ namespace, is unique, and has an
+// index kind that fits its value kind. `columns_` and `entity_prefix_` view the
+// entity's static schema: `entity_prefix_` is the declared prefix predicates
+// are bound to, `prefix_` names the index and storage keys.
+struct redis_mapping final {
+    std::span<const redis_column_info> columns_;
+    std::string_view entity_prefix_;
+    std::pmr::string prefix_;
+    std::pmr::vector<redis_index_definition> indexes_;
+
+    [[nodiscard]] redis_index_kind index_kind(std::string_view column) const noexcept {
+        for (const auto& index : indexes_) {
+            if (index.field_ == column) {
+                return index.kind_;
+            }
+        }
+        return redis_index_kind::none;
+    }
+    [[nodiscard]] bool sortable(std::string_view column) const noexcept {
+        for (const auto& index : indexes_) {
+            if (index.field_ == column) {
+                return index.sortable_;
+            }
+        }
+        return false;
+    }
+};
+
+// `columns` and `entity_prefix` must outlive the mapping.
+[[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns,
+    std::string_view entity_prefix, const redis_repository_config& config, std::pmr::memory_resource* resource);
+
 // A TAG value is kept in a shadow hash field. The leading x makes an empty
 // value distinct from a missing field, and hexadecimal encoding keeps every
 // byte outside RediSearch's TAG grammar.
 [[nodiscard]] std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resource* resource);
 
-// `entity_prefix` is the declared entity prefix that predicates are bound to;
-// the mapping prefix names the index and storage keys.
-[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_find(std::span<const redis_column_info> columns,
-    std::string_view entity_prefix, const redis_find_options& options, const redis_mapping& mapping,
-    std::pmr::memory_resource* resource, bool count_only = false, std::optional<std::uint64_t> take_override = {});
+[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mapping,
+    const redis_find_options& options, std::pmr::memory_resource* resource, bool count_only = false,
+    std::optional<std::uint64_t> take_override = {});
 
-[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_index(std::span<const redis_column_info> columns,
+[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_index(
     const redis_mapping& mapping, std::pmr::memory_resource* resource);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
-[[nodiscard]] std::optional<std::pmr::string> redis_primary_key(std::span<const redis_column_info> columns,
-    std::string_view entity_prefix, const redis_predicate& predicate, std::pmr::memory_resource* resource);
+[[nodiscard]] std::optional<std::pmr::string> redis_primary_key(
+    const redis_mapping& mapping, const redis_predicate& predicate, std::pmr::memory_resource* resource);
 
 // Appends the write-script triples for one entity field: the value (or its
 // deletion when absent), its presence marker and, for TAG-encodable columns,

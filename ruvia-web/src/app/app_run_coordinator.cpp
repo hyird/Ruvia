@@ -89,7 +89,9 @@ public:
                     owner.stop();
                 }
             });
-            runtime_.start();
+            // Nothing else can reach this freshly built runtime, so no stop
+            // can precede its launch.
+            (void)runtime_.start();
         } catch (...) {
             stop();
             throw;
@@ -233,8 +235,8 @@ private:
         detail::controller_store first_controllers(controller_registrars);
         runtime->route_plan_ = detail::compile_route_plan(
             runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
-        runtime->workers_.reserve(state_.worker_count_);
-        for (std::size_t i = 0; i < state_.worker_count_; ++i) {
+        runtime->workers_.reserve(state_.options_.server_.worker_count_);
+        for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
             auto controllers =
                 i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
             auto routes_value = make_pmr_object<detail::route_table>(
@@ -296,7 +298,7 @@ private:
     }
 
     void start_signal_handling() {
-        if (state_.process_signal_handlers_ == process_signal_handler_policy::install) {
+        if (state_.options_.server_.process_signal_handlers_ == process_signal_handler_policy::install) {
             signals_.emplace(owner_);
         }
     }
@@ -335,10 +337,10 @@ private:
     // which closes every connection at once instead.
     void drain() noexcept {
         auto& runtime = *state_.runtime_;
-        if (state_.drain_timeout_.count() == 0 || runtime.group_.stop_requested()) {
+        if (state_.options_.server_.drain_timeout_.count() == 0 || runtime.group_.stop_requested()) {
             return;
         }
-        const auto deadline = worker_timer_deadline_after(state_.drain_timeout_);
+        const auto deadline = worker_timer_deadline_after(state_.options_.server_.drain_timeout_);
         runtime.ingress_->close_admission();
         for (auto& slot : runtime.workers_) {
             slot.runtime_->request_drain();

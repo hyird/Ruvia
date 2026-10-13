@@ -81,7 +81,6 @@ public:
     context_services make_context_services(stop_token&&) = delete;
     [[nodiscard]] worker_client_registry_view client_registries() noexcept;
     [[nodiscard]] const worker_state_registry& worker_states() const noexcept;
-    [[nodiscard]] rate_limiter_type& rate_limiter() noexcept;
     [[nodiscard]] blocking_pool* get_blocking_pool() const noexcept;
 
 private:
@@ -91,7 +90,7 @@ private:
     std::shared_ptr<http_client_result_budget_domain> http_client_result_budget_domain_;
     http_client_registry http_clients_;
     worker_state_registry worker_states_;
-    rate_limiter_type rate_limiter_;
+    rate_limiter rate_limiter_;
     worker_capability_options options_;
 };
 

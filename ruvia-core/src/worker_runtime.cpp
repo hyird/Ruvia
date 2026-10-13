@@ -122,10 +122,13 @@ public:
         configured_ = true;
     }
 
-    void start() {
+    [[nodiscard]] bool start() {
         std::unique_lock lock(mutex_);
         if (!lifecycle_.start()) {
-            throw std::logic_error("worker runtime can only be started once");
+            if (started_) {
+                throw std::logic_error("worker runtime can only be started once");
+            }
+            return false;
         }
         try {
             thread_ = std::thread([this] { run(true); });
@@ -137,6 +140,7 @@ public:
             request_stop();
             std::rethrow_exception(failure);
         }
+        return true;
     }
 
     void mark_ready() noexcept {
@@ -397,8 +401,8 @@ void worker_runtime::unbind_group(worker_group& group) noexcept {
     impl_->unbind_group(group);
 }
 
-void worker_runtime::start() {
-    impl_->start();
+bool worker_runtime::start() {
+    return impl_->start();
 }
 
 void worker_runtime::mark_ready() noexcept {
@@ -440,12 +444,6 @@ void worker_runtime::join() {
 std::exception_ptr worker_runtime::failure() const noexcept {
     const std::lock_guard lock(impl_->mutex_);
     return impl_->failure_.observe();
-}
-
-void worker_runtime::rethrow_failure() const {
-    if (const auto error = failure()) {
-        std::rethrow_exception(error);
-    }
 }
 
 runtime_lifecycle::state_type worker_runtime::state() const noexcept {

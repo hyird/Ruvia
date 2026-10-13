@@ -35,7 +35,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
     // A ok parse_field always populates the state's value, and a Content-Length
     // that fails to parse throws below, so the accumulated optional already
     // encodes presence: empty means no Content-Length line was seen.
-    http_content_length_state<> state;
+    http_content_length_state state;
     for (const auto& header : response.headers()) {
         if (http_response_header_access::known_bit(header) != response_header_content_length) {
             continue;
@@ -60,10 +60,7 @@ inline constexpr std::string_view content_length_name = "Content-Length";
     std::uint32_t known_bit, bool trailer_header_allowed, http_connection_options& connection_options,
     http_upgrade_protocols& upgrade_protocols) noexcept {
     if (known_bit == response_header_connection) {
-        return connection_options.parse_field(
-                   value, http_field_list_role::sender, [](std::string_view option) noexcept {
-                       return !http_connection_option_conflicts_with_managed_field(option);
-                   }) == http_field_list_parse_status::ok;
+        return connection_options.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
     }
     if (known_bit != 0) {
         return true;
@@ -72,9 +69,7 @@ inline constexpr std::string_view content_length_name = "Content-Length";
         return trailer_header_allowed || http_trim_ows(value).empty();
     }
     if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-        return upgrade_protocols.parse_field(value, http_field_list_role::sender,
-                   [](const http_upgrade_protocol&) noexcept { return true; }) ==
-               http_field_list_parse_status::ok;
+        return upgrade_protocols.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
     }
     return true;
 }

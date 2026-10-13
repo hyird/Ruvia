@@ -176,7 +176,7 @@ public:
     struct slot_policy final {
         using owner_type = db_pool;
         using deadline_kind_type = db_deadline_kind;
-        [[noreturn]] static void throw_acquire_failure(const db_pool& pool, const pool_waiter_result& result);
+        [[noreturn]] static void throw_acquire_failure(const db_pool& pool, worker_wait_status status);
         [[noreturn]] static void throw_aborted(const db_pool& pool, pool_slot_abort_reason reason);
         static void expire_slot(db_pool& pool, std::size_t slot, db_deadline_kind kind) noexcept;
         static void cancel_slot(db_pool& pool, std::size_t slot) noexcept;

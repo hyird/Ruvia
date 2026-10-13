@@ -110,17 +110,13 @@ enum class http_connection_option : std::uint8_t {
 
 // Incremental parser for the logical Connection field value. Repeated field
 // lines extend the same state, so a caller cannot accidentally let a later
-// occurrence erase an earlier close/Upgrade/TE signal.
+// occurrence erase an earlier close/Upgrade/TE signal. Options naming a field
+// the protocol layer manages are rejected for both roles: a hop-by-hop
+// declaration must not strip framing or end-to-end metadata from the message.
 class http_connection_options final {
 public:
     [[nodiscard]] http_field_list_parse_status parse_field(
         std::string_view field_value, http_field_list_role role) noexcept {
-        return parse_field(field_value, role, [](std::string_view) noexcept { return true; });
-    }
-
-    template <typename visitor_type>
-    [[nodiscard]] http_field_list_parse_status parse_field(
-        std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {
         auto parsed_bits = state_;
         std::size_t start = 0;
         while (start <= field_value.size()) {
@@ -139,7 +135,7 @@ public:
                 if (!is_valid_http_header_name(option)) {
                     return http_field_list_parse_status::malformed;
                 }
-                if (!visitor(option)) {
+                if (http_connection_option_conflicts_with_managed_field(option)) {
                     return http_field_list_parse_status::rejected;
                 }
                 if (http_ascii_equals_ignore_case(option, "close")) {
@@ -242,6 +238,11 @@ enum class http_upgrade_field_state : std::uint8_t {
 
 class http_upgrade_protocols final {
 public:
+    [[nodiscard]] http_field_list_parse_status parse_field(
+        std::string_view field_value, http_field_list_role role) noexcept {
+        return parse_field(field_value, role, [](const http_upgrade_protocol&) noexcept { return true; });
+    }
+
     template <typename visitor_type>
     [[nodiscard]] http_field_list_parse_status parse_field(
         std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {

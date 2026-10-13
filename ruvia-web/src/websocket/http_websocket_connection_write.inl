@@ -54,7 +54,7 @@ task<void> websocket_connection<stream_type>::close_owned(::ruvia::websocket_clo
                 case websocket_close_submit_status::accepted:
                     // The deadline covers the Close write too: a peer that stops
                     // reading must not hold the flush below open past the timeout.
-                    liveness_state_ = websocket_awaiting_peer_close(websocket_steady_now_ms());
+                    liveness_state_ = websocket_awaiting_peer_close(steady_now_ms());
                     flush_output = true;
                     break;
                 case websocket_close_submit_status::already_closing:

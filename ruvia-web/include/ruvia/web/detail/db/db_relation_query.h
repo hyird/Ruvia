@@ -79,7 +79,7 @@ public:
             }
             auto normalized = normalize(root_alias, path);
             validate_path<entity_type>(normalized, 0);
-            if (!alias.empty() && query.uses_source_name(alias)) {
+            if (!alias.empty() && uses_source_name(query, alias)) {
                 bool same = false;
                 for (const auto& node : nodes_) {
                     same |= node.path_ == normalized && node.alias_ == alias && node.join_ == join;
@@ -99,11 +99,17 @@ public:
     [[nodiscard]] std::optional<db_query> prepare(const db_query& query,
         std::string_view root_alias, db_driver driver) const {
         constexpr auto keys = db_primary_key_columns<entity_type>();
-        return query.prepare_entity_read(keys, root_alias, driver);
+        return prepare_entity_read(query, keys, root_alias, driver);
     }
 
 private:
     [[nodiscard]] std::pmr::string normalize(std::string_view root_alias, std::string_view path) const;
+    [[nodiscard]] static bool uses_source_name(const db_query& query, std::string_view name);
+    [[nodiscard]] static bool uses_projection_name(const db_query& query, std::string_view name);
+    // Returns the rewritten query, or nullopt when the original query can
+    // load relations unchanged.
+    [[nodiscard]] static std::optional<db_query> prepare_entity_read(const db_query& query,
+        std::span<const std::string_view> primary_key, std::string_view root_alias, db_driver driver);
 
     template <typename entity_type>
     static void validate_path(std::string_view path, std::size_t depth) {

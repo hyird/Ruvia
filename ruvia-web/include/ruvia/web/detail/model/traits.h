@@ -69,21 +69,9 @@ template <>
 struct ruvia_scalar_traits<bool_value> : std::true_type {
     using value_type = bool;
 };
-template <>
-struct ruvia_scalar_traits<int8> : std::true_type {
-    using value_type = std::int8_t;
-};
-template <>
-struct ruvia_scalar_traits<uint8> : std::true_type {
-    using value_type = std::uint8_t;
-};
-template <>
-struct ruvia_scalar_traits<int16> : std::true_type {
-    using value_type = std::int16_t;
-};
-template <>
-struct ruvia_scalar_traits<uint16> : std::true_type {
-    using value_type = std::uint16_t;
+template <typename value_t_type>
+struct ruvia_scalar_traits<integer_value<value_t_type>> : std::true_type {
+    using value_type = value_t_type;
 };
 template <>
 struct ruvia_scalar_traits<float_value> : std::true_type {
@@ -92,22 +80,6 @@ struct ruvia_scalar_traits<float_value> : std::true_type {
 template <>
 struct ruvia_scalar_traits<double_value> : std::true_type {
     using value_type = double;
-};
-template <>
-struct ruvia_scalar_traits<int32> : std::true_type {
-    using value_type = std::int32_t;
-};
-template <>
-struct ruvia_scalar_traits<uint32> : std::true_type {
-    using value_type = std::uint32_t;
-};
-template <>
-struct ruvia_scalar_traits<int64> : std::true_type {
-    using value_type = std::int64_t;
-};
-template <>
-struct ruvia_scalar_traits<uint64> : std::true_type {
-    using value_type = std::uint64_t;
 };
 
 template <typename t_type>

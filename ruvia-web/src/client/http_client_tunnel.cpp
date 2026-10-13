@@ -17,15 +17,13 @@ void require_output(detail::http_client_response_state* state_value, bool finish
     if (state_value == nullptr) {
         throw std::logic_error("HTTP client tunnel is empty");
     }
-    if (auto* domain = state_value->memory_domain(); domain != nullptr && !domain->worker().is_current()) {
-        throw std::logic_error("HTTP client tunnel requires its owner worker");
-    }
+    state_value->require_owner_worker("HTTP client tunnel requires its owner worker");
     // Normal retirement stops the queue after both directions complete, but
     // cannot invalidate a finish that has already succeeded. Writes and failed
     // or abandoned tunnels still reject terminal output operations.
     const bool completed_finish = finishing && state_value->tunnel_ && state_value->tunnel_->output_.ended_ && state_value->complete_;
     if (!state_value->tunnel_ || (state_value->pool_ == nullptr && !completed_finish) || (state_value->tunnel_->output_.stopped_ && !completed_finish) || !state_value->tunnel_->accepted_ ||
-        state_value->abandoned_ || state_value->failure_ || state_value->error_code_) {
+        state_value->abandoned_ || state_value->failure_ || state_value->pool_closed_) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel is closed");
     }
     auto& output = state_value->tunnel_->output_;
@@ -58,8 +56,8 @@ struct tunnel_output_policy final {
         if (state_value.failure_) {
             std::rethrow_exception(state_value.failure_);
         }
-        if (state_value.error_code_) {
-            throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP client tunnel failed");
+        if (state_value.pool_closed_) {
+            throw http_client_error(http_client_error::code_type::closing, "HTTP client tunnel failed");
         }
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel output stopped");
     }
@@ -91,7 +89,7 @@ void http_client_tunnel::abort() & noexcept {
         if (!state->tunnel_ || state->tunnel_->output_.stopped_ || state->pool_ == nullptr) {
             return;
         }
-        if (!state->memory_domain()->worker().is_current()) {
+        if (!state->memory_domain().worker().is_current()) {
             std::terminate();
         }
         state->tunnel_->output_.stop();

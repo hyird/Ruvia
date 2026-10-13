@@ -15,11 +15,8 @@ enum class http_content_length_parse_status : std::uint8_t { ok,
     invalid,
     conflicting };
 
-// Incremental Content-Length accumulator. Receiving boundaries accept
-// comma-combined values with OWS; sending boundaries parse a single untrimmed
-// decimal value. Both commit only when every repeated value agrees. The value
-// type preserves each protocol boundary's size_t or uint64_t range.
-template <typename value_type = std::size_t>
+// Incremental Content-Length accumulator. Accepts comma-combined values with
+// OWS and commits only when every repeated value agrees.
 class http_content_length_state final {
 public:
     [[nodiscard]] http_content_length_parse_status parse_field(std::string_view field_value) noexcept {
@@ -41,26 +38,17 @@ public:
         return status;
     }
 
-    [[nodiscard]] http_content_length_parse_status parse_single_value(std::string_view field_value) noexcept {
-        auto parsed_value = value_;
-        const auto status = accumulate(field_value, parsed_value);
-        if (status == http_content_length_parse_status::ok) {
-            value_ = parsed_value;
-        }
-        return status;
-    }
-
-    [[nodiscard]] std::optional<value_type> value() const noexcept {
+    [[nodiscard]] std::optional<std::size_t> value() const noexcept {
         return value_;
     }
 
 private:
     [[nodiscard]] static http_content_length_parse_status accumulate(
-        std::string_view item, std::optional<value_type>& value) noexcept {
+        std::string_view item, std::optional<std::size_t>& value) noexcept {
         if (item.empty()) {
             return http_content_length_parse_status::invalid;
         }
-        value_type parsed_value = 0;
+        std::size_t parsed_value = 0;
         const auto [end, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed_value);
         if (ec != std::errc{} || end != item.data() + item.size()) {
             return http_content_length_parse_status::invalid;
@@ -72,7 +60,7 @@ private:
         return http_content_length_parse_status::ok;
     }
 
-    std::optional<value_type> value_;
+    std::optional<std::size_t> value_;
 };
 
 }  // namespace ruvia::detail

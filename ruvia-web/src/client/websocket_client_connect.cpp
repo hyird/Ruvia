@@ -1,6 +1,7 @@
 #include <array>
 #include <cstdint>
 #include <exception>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -14,8 +15,8 @@
 #include "ruvia/http/http1_websocket_client_handshake.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 
+#include "client/http1_request_head.h"
 #include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 
@@ -46,8 +47,7 @@ task<void> websocket_client_state::establish() {
     if (!result.ok()) {
         throw_transport_failure(result);
     }
-    const auto alpn = transport_.alpn();
-    if (transport_.secure() && !alpn.empty() && alpn != "http/1.1") {
+    if (!transport_.alpn_allows_http11()) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "upstream negotiated an unsupported WebSocket HTTP protocol");
     }
@@ -64,7 +64,7 @@ task<void> websocket_client_state::establish() {
     // From here input_ is the transport read buffer, sized once per connection.
     input_.clear();
     input_.resize(websocket_client_transport_buffer_bytes);
-    last_active_ms_ = websocket_steady_now_ms();
+    last_active_ms_ = steady_now_ms();
     liveness_state_ = websocket_liveness_idle{};
     if (config_.heartbeat_.ping_interval_.has_value()) {
         arm_heartbeat_timer(*config_.heartbeat_.ping_interval_);
@@ -86,21 +86,12 @@ task<void> websocket_client_state::perform_handshake() {
         memory_.resource());
 
     // Uninitialized worker storage, released when the handshake ends: the
-    // frame stays small and no buffer is zero-filled. A head larger than the
-    // shared retention size asks for exactly its size once, up to the limit.
+    // frame stays small and no buffer is zero-filled.
     constexpr std::size_t max_request_head_bytes =
         max_http_header_bytes + websocket_client_handshake_request_buffer_extra_bytes;
     http_io_buffer request_buffer(memory_.resource());
-    auto prepared_result = [&] {
-        auto first = handshake.prepare_request(
-            config_.origin_, config_.target_, request_buffer.prepare(http_retained_pmr_string_bytes));
-        const auto* too_small = first.buffer_too_small();
-        if (too_small == nullptr || too_small->required_head_bytes() > max_request_head_bytes) {
-            return first;
-        }
-        return handshake.prepare_request(
-            config_.origin_, config_.target_, request_buffer.prepare(too_small->required_head_bytes()));
-    }();
+    auto prepared_result = prepare_http1_request_head(request_buffer, max_request_head_bytes,
+        [&](std::span<char> buffer) { return handshake.prepare_request(config_.origin_, config_.target_, buffer); });
     const auto* prepared = prepared_result.prepared();
     if (prepared == nullptr) {
         const auto message = prepared_result.failure()

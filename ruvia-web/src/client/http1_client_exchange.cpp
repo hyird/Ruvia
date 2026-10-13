@@ -1,17 +1,17 @@
-#include "http1/http1_client_exchange.h"
+#include "client/http1_client_exchange.h"
 
 #include <algorithm>
 #include <array>
 #include <exception>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 #include <asio/buffer.hpp>
-#include <asio/ssl/error.hpp>
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/task_scope.h"
@@ -20,18 +20,16 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_body_decoder.h"
-#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_body_decoding.h"
 
 #include "body/http_body_buffer.h"
+#include "client/http1_request_head.h"
 #include "client/http_client_connection.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_decoding.h"
@@ -46,16 +44,75 @@ namespace {
 // The largest request head the client sends: the header limit plus the
 // request line and generated fields.
 constexpr std::size_t max_client_request_head_bytes = max_http_header_bytes + 1024;
+constexpr std::size_t response_read_chunk_bytes = 16384;
 
-}  // namespace
+// One contiguous write() part. A temporary argument outlives the write: it is
+// destroyed only at the end of the full-expression that awaits it.
+[[nodiscard]] std::array<asio::const_buffer, 1> single_part(std::string_view bytes) noexcept {
+    return {asio::buffer(bytes.data(), bytes.size())};
+}
 
-task<void> http1_client_exchange::write(std::string_view bytes_value, const operation_timeout& timeout) {
-    const auto written =
-        co_await connection_.transport_.write(bytes_value, timeout.constrained_by(pool_.config().write_timeout_));
-    if (!written.ok()) {
-        throw_http_client_transport_error(written, "upstream closed while receiving the HTTP request");
+[[noreturn]] void throw_body_timeout() {
+    throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
+}
+
+// True when the final head accepts the request's CONNECT or CONNECT-UDP
+// tunnel; a CONNECT-UDP head is validated before it is accepted.
+[[nodiscard]] bool accepts_tunnel(const http_client_request_storage& request,
+    const http_client_response_state& state_value, const http1_parsed_client_response_head& head) {
+    if (!request.is_tunnel()) {
+        return false;
+    }
+    if (!request.udp_tunnel()) {
+        return head.plan().connect_tunnel() != nullptr;
+    }
+    if (head.plan().connect_tunnel() == nullptr && head.plan().protocol_upgrade() == nullptr) {
+        return false;
+    }
+    std::pmr::vector<http_header_view> fields(state_value.resource_);
+    fields.reserve(state_value.headers_.size());
+    for (const auto& field : state_value.headers_) {
+        fields.emplace_back(field.name(), field.value());
+    }
+    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), fields).index() != 0) {
+        throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
+    }
+    return true;
+}
+
+// Publishes one decoder step's body bytes or trailers to the consumer, or
+// throws its failure.
+void publish_body_progress(http_client_response_state& state_value,
+    const http1_client_response_body_decoder::result_type& decoded, std::size_t max_response_bytes) {
+    if (const auto* body = decoded.output()) {
+        const auto bytes_value = body->bytes();
+        const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
+        if (state_value.collect_all_ &&
+            bytes_value.size() > max_response_bytes - std::min(retained, max_response_bytes)) {
+            throw http_client_error(
+                http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
+        }
+        // The consumer's last borrowed view lives in buffered, not pending.
+        // Appending producer output must never relocate that view.
+        state_value.pending_.append(bytes_value);
+        state_value.data_signal_.notify();
+    } else if (const auto* trailers = decoded.trailers()) {
+        const auto ok = visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
+            state_value.trailers_.push_back(http_header::copy_of(name, value, state_value.resource_));
+            return true;
+        });
+        if (!ok) {
+            throw std::logic_error("HTTP decoder published invalid response trailers");
+        }
+    } else if (const auto* failure = decoded.protocol_failure()) {
+        throw http_client_error(http_client_error::code_type::protocol_error,
+            std::string(http1_client_response_body_error_message(failure->error())));
+    } else if (decoded.decoder_failure() != nullptr) {
+        throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/1 response body decoder failed");
     }
 }
+
+}  // namespace
 
 task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout) {
     const auto written =
@@ -118,32 +175,29 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
                                                               : http_origin_view::http(options);
     }
 
+    auto* const upload = state_value.upload_ ? &*state_value.upload_ : nullptr;
     http1_client_request_writer writer({.resource_ = response_resource});
     const auto prepare_head = [&](std::span<char> buffer) {
-        return connect_udp           ? writer.prepare_connect_udp(origin, source_value.target_, headers, buffer)
-               : request.is_tunnel() ? writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer)
-               : request.upload() != nullptr
-                   ? writer.prepare_streaming(origin,
-                         {.method_ = source_value.method_,
-                             .target_ = source_value.target_,
-                             .headers_ = headers,
-                             .content_length_ = request.upload()->config_.content_length_},
-                         buffer, {.expectation_ = request.upload()->config_.expectation_})
-                   : writer.prepare(origin, source_value, buffer);
+        if (connect_udp) {
+            return writer.prepare_connect_udp(origin, source_value.target_, headers, buffer);
+        }
+        if (request.is_tunnel()) {
+            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer);
+        }
+        if (upload != nullptr) {
+            return writer.prepare_streaming(origin,
+                {.method_ = source_value.method_,
+                    .target_ = source_value.target_,
+                    .headers_ = headers,
+                    .content_length_ = upload->config_.content_length_},
+                buffer, {.expectation_ = upload->config_.expectation_});
+        }
+        return writer.prepare(origin, source_value, buffer);
     };
-    // The head is written into the connection's retained, uninitialized
-    // buffer; a larger head asks for exactly its size once, up to the limit.
+    // The head is written into the connection's retained, uninitialized buffer.
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
-    auto prepared_result = [&] {
-        auto first =
-            prepare_head(write_buffer.prepare((std::max)(write_buffer.capacity(), http_retained_pmr_string_bytes)));
-        const auto* too_small = first.buffer_too_small();
-        if (too_small == nullptr || too_small->required_head_bytes() > max_client_request_head_bytes) {
-            return first;
-        }
-        return prepare_head(write_buffer.prepare(too_small->required_head_bytes()));
-    }();
+    auto prepared_result = prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare_head);
     const auto* prepared = prepared_result.prepared();
     if (!prepared) {
         throw http_client_error(http_client_error::code_type::invalid_request,
@@ -152,18 +206,17 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
                 : "HTTP request head is too large");
     }
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = response_resource});
-    co_await write(prepared->head(), timeout);
+    co_await write(single_part(prepared->head()), timeout);
     // The head is on the wire; the content plan borrows only request storage.
     write_buffer.clear_retaining_small();
     if (const auto* content = prepared->content_plan().immediate()) {
-        co_await write(content->bytes(), timeout);
+        co_await write(single_part(content->bytes()), timeout);
         if (!content->bytes().empty() &&
             parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
             std::terminate();
         }
     }
 
-    auto* upload = request.upload();
     if (upload == nullptr) {
         co_await receive(request, timeout, state_value, parser);
         co_return;
@@ -193,10 +246,100 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
 
 task<void> http1_client_exchange::receive(const http_client_request_storage& request, const operation_timeout& timeout,
     http_client_response_state& state_value, http1_client_response_parser& parser) {
-    auto* const response_resource = state_value.resource_;
-    const auto max_response_bytes = pool_.config().max_response_bytes_;
     auto& read_buffer = connection_.read_buffer_;
-    constexpr std::size_t read_chunk_bytes = 16384;
+    // The parsed head is move-constructible only, so it is emplaced once.
+    std::optional<http1_parsed_client_response_head> head;
+    while (!head) {
+        if (auto next = take_final_head(state_value, parser)) {
+            head.emplace(std::move(*next));
+        } else if (co_await read_append(read_buffer, response_read_chunk_bytes, timeout) == 0) {
+            throw http_client_error(
+                http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
+        }
+    }
+    publish_final_head(request, state_value, *head);
+    if (accepts_tunnel(request, state_value, *head)) {
+        state_value.tunnel_->accepted_ = true;
+        state_value.head_ready_ = true;
+        state_value.head_signal_.notify();
+        co_await run_tunnel(state_value, timeout);
+        co_return;
+    }
+    if (state_value.tunnel_) {
+        state_value.tunnel_->output_.stop();
+    }
+    const auto& plan = head->plan();
+    if (plan.connect_tunnel() != nullptr || plan.protocol_upgrade() != nullptr) {
+        throw http_client_error(http_client_error::code_type::protocol_error,
+            "HTTP tunnel and protocol upgrade responses require a dedicated API");
+    }
+    http1_client_response_body_decoder body_decoder(plan, state_value.resource_);
+    const bool content_semantics_present = plan.without_content() == nullptr;
+    configure_http_client_response_decoding(state_value);
+    state_value.head_ready_ = true;
+    state_value.head_signal_.notify();
+
+    // The body loop stays in this frame: one exchange costs one receive frame.
+    const auto max_response_bytes = pool_.config().max_response_bytes_;
+    // Decoder output scratch, borrowed from the worker for this body only:
+    // the frame stays small enough for the frame cache, and nothing is
+    // zero-filled.
+    http_io_buffer output_storage(pool_.resource());
+    const auto output = output_storage.prepare(http_body_buffer_bytes);
+    bool eof = false;
+    http1_close_policy persistence = http1_close_policy::close_after_response;
+    for (;;) {
+        // Backpressure applies to decoding buffered compressed input too,
+        // not just to the next transport read. One step cannot overfill the
+        // producer queue; read_all retains its separate total byte policy.
+        // The wait is a coroutine only for the rare full queue.
+        if (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
+            co_await wait_for_body_space(state_value, timeout);
+        }
+        connection_.throw_if_aborted();
+        const auto capacity = state_value.collect_all_
+                                  ? output.size()
+                                  : std::min(output.size(), max_response_bytes - state_value.pending_.size());
+        const auto scratch = output.first(capacity);
+        const auto decoded = eof ? body_decoder.finish_input(read_buffer.view(), scratch)
+                                 : body_decoder.decode(read_buffer.view(), scratch);
+        const auto consumed = decoded.consumed_bytes();
+        publish_body_progress(state_value, decoded, max_response_bytes);
+        // Output/trailers have been owned before their source is compacted.
+        read_buffer.consume(consumed);
+        if (const auto* complete = decoded.complete()) {
+            persistence = complete->persistence();
+            break;
+        }
+        if (decoded.need_input() == nullptr || (consumed != 0 && !read_buffer.empty())) {
+            continue;
+        }
+        if (eof) {
+            throw std::logic_error("HTTP body decoder requested input after EOF");
+        }
+        eof = co_await read_append(read_buffer, response_read_chunk_bytes, timeout) == 0;
+    }
+    if (!read_buffer.empty()) {
+        throw http_client_error(http_client_error::code_type::protocol_error, "unexpected bytes after HTTP response");
+    }
+    if (timeout.expired()) {
+        throw_body_timeout();
+    }
+    decode_http_client_response_body(state_value, content_semantics_present, max_response_bytes);
+    if (timeout.expired()) {
+        throw_body_timeout();
+    }
+    // A rejected CONNECT delivers its response, but the proxy may follow
+    // it with bytes of unknown ownership: the connection is never reused.
+    if (persistence == http1_close_policy::close_after_response || request.is_tunnel()) {
+        connection_.close();
+    }
+    connection_.retain_idle_buffers();
+}
+
+std::optional<http1_parsed_client_response_head> http1_client_exchange::take_final_head(
+    http_client_response_state& state_value, http1_client_response_parser& parser) {
+    auto& read_buffer = connection_.read_buffer_;
     for (;;) {
         auto parse_result = parser.parse(read_buffer.view());
         if (parse_result.failure()) {
@@ -207,204 +350,79 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             if (read_buffer.size() >= max_http_header_bytes) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
             }
-            const auto bytes_value = co_await read_append(read_buffer, read_chunk_bytes, timeout);
-            if (bytes_value == 0) {
-                throw http_client_error(
-                    http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
-            }
-            continue;
+            return std::nullopt;
         }
         auto* parsed_value = parse_result.parsed();
         if (!parsed_value) {
             std::terminate();
         }
-        const auto consumed_head = parsed_value->consumed_bytes();
-        if (parsed_value->plan().informational()) {
-            state_value.retain_informational(parsed_value->head().status(), parsed_value->head().headers());
-            if (request.upload() != nullptr &&
-                parsed_value->plan().request_content_signal() == http_client_request_content_signal::continue_value) {
-                request.upload()->content_released_ = true;
-                request.upload()->output_.notify_data();
-            }
-            const bool closes_exchange =
-                parsed_value->plan().informational()->persistence() == http1_close_policy::close_after_response;
-            read_buffer.consume(consumed_head);
-            if (closes_exchange) {
-                connection_.close();
-                throw http_client_error(http_client_error::code_type::protocol_error,
-                    "upstream closed the HTTP exchange after an informational response");
-            }
-            continue;
+        const auto* informational = parsed_value->plan().informational();
+        if (informational == nullptr) {
+            return std::move(*parsed_value);
         }
-        if (request.upload() != nullptr && !request.upload()->output_.ended_) {
-            request.upload()->output_.stop();
+        state_value.retain_informational(parsed_value->head().status(), parsed_value->head().headers());
+        if (state_value.upload_ &&
+            parsed_value->plan().request_content_signal() == http_client_request_content_signal::continue_value) {
+            state_value.upload_->content_released_ = true;
+            state_value.upload_->output_.notify_data();
         }
-        state_value.status_ = parsed_value->head().status();
-        state_value.protocol_version_ = parsed_value->head().protocol_version();
-        state_value.request_method_ = classify_http_method(request.method());
-        state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_);
-        state_value.headers_.reserve(parsed_value->head().headers().size());
-        for (const auto& header : parsed_value->head().headers()) {
-            state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), response_resource));
-        }
-        // A received final head changes the jar before consumers can issue
-        // another request, regardless of body completion or abandonment.
-        pool_.policy().retain_response_cookies(request, state_value.headers_);
-        read_buffer.consume(consumed_head);
-        if (request.is_tunnel() && (parsed_value->plan().connect_tunnel() != nullptr ||
-                                       (request.udp_tunnel() &&
-                                           parsed_value->plan().protocol_upgrade() != nullptr))) {
-            if (request.udp_tunnel()) {
-                std::pmr::vector<http_header_view> fields(response_resource);
-                fields.reserve(state_value.headers_.size());
-                for (const auto& field : state_value.headers_) {
-                    fields.emplace_back(field.name(), field.value());
-                }
-                if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), fields)
-                        .index() != 0) {
-                    throw http_client_error(
-                        http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
-                }
-            }
-            state_value.tunnel_->accepted_ = true;
-            state_value.head_ready_ = true;
-            state_value.head_signal_.notify();
-            co_await run_tunnel(state_value, timeout);
-            co_return;
-        }
-        if (request.tunnel() != nullptr) {
-            request.tunnel()->output_.stop();
-        }
-        if (parsed_value->plan().connect_tunnel() != nullptr || parsed_value->plan().protocol_upgrade() != nullptr) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
-                "HTTP tunnel and protocol upgrade responses require a dedicated API");
-        }
-        http1_client_response_body_decoder body_decoder(parsed_value->plan(), response_resource);
-        const bool content_semantics_present = parsed_value->plan().without_content() == nullptr;
-        configure_http_client_response_decoding(state_value);
-        state_value.head_ready_ = true;
-        state_value.head_signal_.notify();
-
-        const auto append_output = [&](std::string_view bytes_value) {
-            const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
-            if (state_value.collect_all_ &&
-                bytes_value.size() > max_response_bytes - std::min(retained, max_response_bytes)) {
-                throw http_client_error(
-                    http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
-            }
-            // The consumer's last borrowed view lives in buffered, not pending.
-            // Appending producer output must never relocate that view.
-            state_value.pending_.append(bytes_value);
-            state_value.data_signal_.notify();
-        };
-        const auto retain_trailers = [&](std::string_view trailer_block) {
-            const auto ok = visit_http_response_trailers(trailer_block, [&](std::string_view name, std::string_view value) {
-                state_value.trailers_.push_back(http_header::copy_of(name, value, response_resource));
-                return true;
-            });
-            if (!ok) {
-                throw std::logic_error("HTTP decoder published invalid response trailers");
-            }
-        };
-        const auto wait_for_buffer_space = [&]() -> task<void> {
-            while (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
-                connection_.throw_if_aborted();
-                const auto remaining = timeout.remaining();
-                if (remaining && remaining->count() == 0) {
-                    throw http_client_error(
-                        http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
-                }
-                bool expired = false;
-                worker_timer_registration timer;
-                if (remaining) {
-                    (void)pool_.worker().schedule_timer(timer, worker_timer_deadline_after(*remaining),
-                        [&expired, &state_value](worker_timer_outcome outcome) noexcept {
-                            if (outcome == worker_timer_outcome::expired) {
-                                expired = true;
-                                state_value.space_signal_.notify();
-                            }
-                        });
-                }
-                co_await state_value.space_signal_.wait();
-                timer.cancel();
-                connection_.throw_if_aborted();
-                if (expired || timeout.expired()) {
-                    throw http_client_error(
-                        http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
-                }
-                if (state_value.abandoned_) {
-                    throw http_client_error(http_client_error::code_type::cancelled, "HTTP response body was abandoned");
-                }
-            }
-        };
-
-        // Decoder output scratch, borrowed from the worker for this body only:
-        // the frame stays small enough for the frame cache, and nothing is
-        // zero-filled.
-        http_io_buffer output_storage(pool_.resource());
-        const auto output = output_storage.prepare(http_body_buffer_bytes);
-        bool eof = false;
-        http1_close_policy persistence = http1_close_policy::close_after_response;
-        for (;;) {
-            // Backpressure applies to decoding buffered compressed input too,
-            // not just to the next transport read. One step cannot overfill the
-            // producer queue; read_all retains its separate total byte policy.
-            // The wait is a coroutine only for the rare full queue.
-            if (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
-                co_await wait_for_buffer_space();
-            }
-            connection_.throw_if_aborted();
-            const auto capacity = state_value.collect_all_
-                                      ? output.size()
-                                      : std::min(output.size(), max_response_bytes - state_value.pending_.size());
-            const auto scratch = output.first(capacity);
-            const auto decoded = eof ? body_decoder.finish_input(read_buffer.view(), scratch)
-                                     : body_decoder.decode(read_buffer.view(), scratch);
-            const auto consumed = decoded.consumed_bytes();
-            if (const auto* body = decoded.output()) {
-                append_output(body->bytes());
-            } else if (const auto* trailers = decoded.trailers()) {
-                retain_trailers(trailers->bytes());
-            } else if (const auto* failure = decoded.protocol_failure()) {
-                throw http_client_error(http_client_error::code_type::protocol_error,
-                    std::string(http1_client_response_body_error_message(failure->error())));
-            } else if (decoded.decoder_failure() != nullptr) {
-                throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/1 response body decoder failed");
-            }
-            // Output/trailers have been owned before their source is compacted.
-            read_buffer.consume(consumed);
-            if (const auto* complete = decoded.complete()) {
-                persistence = complete->persistence();
-                break;
-            }
-            if (decoded.need_input() == nullptr || (consumed != 0 && !read_buffer.empty())) {
-                continue;
-            }
-            if (eof) {
-                throw std::logic_error("HTTP body decoder requested input after EOF");
-            }
-            const auto bytes_value = co_await read_append(read_buffer, read_chunk_bytes, timeout);
-            if (bytes_value == 0) {
-                eof = true;
-            }
-        }
-        if (!read_buffer.empty()) {
-            throw http_client_error(http_client_error::code_type::protocol_error, "unexpected bytes after HTTP response");
-        }
-        if (timeout.expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
-        }
-        decode_http_client_response_body(state_value, content_semantics_present, max_response_bytes);
-        if (timeout.expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
-        }
-        // A rejected CONNECT delivers its response, but the proxy may follow
-        // it with bytes of unknown ownership: the connection is never reused.
-        if (persistence == http1_close_policy::close_after_response || request.is_tunnel()) {
+        read_buffer.consume(parsed_value->consumed_bytes());
+        if (informational->persistence() == http1_close_policy::close_after_response) {
             connection_.close();
+            throw http_client_error(http_client_error::code_type::protocol_error,
+                "upstream closed the HTTP exchange after an informational response");
         }
-        connection_.retain_idle_buffers();
-        co_return;
+    }
+}
+
+void http1_client_exchange::publish_final_head(const http_client_request_storage& request,
+    http_client_response_state& state_value, const http1_parsed_client_response_head& head) {
+    if (state_value.upload_ && !state_value.upload_->output_.ended_) {
+        state_value.upload_->output_.stop();
+    }
+    state_value.status_ = head.head().status();
+    state_value.protocol_version_ = head.head().protocol_version();
+    state_value.response_body_plan_ =
+        plan_http_response_body(classify_http_method(request.method()), state_value.status_);
+    state_value.headers_.reserve(head.head().headers().size());
+    for (const auto& header : head.head().headers()) {
+        state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), state_value.resource_));
+    }
+    // A received final head changes the jar before consumers can issue
+    // another request, regardless of body completion or abandonment.
+    pool_.policy().retain_response_cookies(request, state_value.headers_);
+    connection_.read_buffer_.consume(head.consumed_bytes());
+}
+
+task<void> http1_client_exchange::wait_for_body_space(
+    http_client_response_state& state_value, const operation_timeout& timeout) {
+    const auto max_response_bytes = pool_.config().max_response_bytes_;
+    while (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
+        connection_.throw_if_aborted();
+        const auto remaining = timeout.remaining();
+        if (remaining && remaining->count() == 0) {
+            throw_body_timeout();
+        }
+        bool expired = false;
+        worker_timer_registration timer;
+        if (remaining) {
+            (void)pool_.worker().schedule_timer(timer, worker_timer_deadline_after(*remaining),
+                [&expired, &state_value](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        expired = true;
+                        state_value.space_signal_.notify();
+                    }
+                });
+        }
+        co_await state_value.space_signal_.wait();
+        timer.cancel();
+        connection_.throw_if_aborted();
+        if (expired || timeout.expired()) {
+            throw_body_timeout();
+        }
+        if (state_value.abandoned_) {
+            throw http_client_error(http_client_error::code_type::cancelled, "HTTP response body was abandoned");
+        }
     }
 }
 
@@ -457,10 +475,8 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                 write_timer.cancel();
                 connection.throw_if_aborted();
                 if (error) {
-                    const bool tls_error = secure && (error.category() == asio::error::get_ssl_category() ||
-                                                         error == asio::ssl::error::stream_truncated);
-                    throw http_client_error(
-                        tls_error ? http_client_error::code_type::tls_failed : http_client_error::code_type::io_error,
+                    throw http_client_error(secure && is_tls_error(error) ? http_client_error::code_type::tls_failed
+                                                                          : http_client_error::code_type::io_error,
                         error_code_text(error));
                 }
                 pool_.wire_counters().sent_ += bytes_value.size();
@@ -594,7 +610,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                     upload_.output_.space_.notify();
                 }
             } completion(upload);
-            co_await write(std::get<0>(ending), timeout);
+            co_await write(single_part(std::get<0>(ending)), timeout);
             if (writer.commit_finish().index() != 0) {
                 std::terminate();
             }

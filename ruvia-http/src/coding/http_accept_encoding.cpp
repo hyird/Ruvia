@@ -14,6 +14,22 @@ namespace {
            http_ascii_equals_ignore_case(token, "x-compress");
 }
 
+[[nodiscard]] int& explicit_quality(http_response_coding_qualities& qualities, http_content_coding coding) noexcept {
+    switch (coding) {
+        case http_content_coding::gzip:
+            return qualities.gzip_.explicit_quality_;
+        case http_content_coding::deflate:
+            return qualities.deflate_.explicit_quality_;
+        case http_content_coding::brotli:
+            return qualities.brotli_.explicit_quality_;
+        case http_content_coding::zstd:
+            return qualities.zstd_.explicit_quality_;
+        case http_content_coding::identity:
+            break;
+    }
+    return qualities.identity_.explicit_quality_;
+}
+
 }  // namespace
 
 void http_accepted_encoding_quality::update(
@@ -51,21 +67,9 @@ void http_response_coding_qualities::update(std::string_view accept_encoding) no
     detail::http_visit_comma_separated_quoted(accept_encoding, [this](std::string_view item) noexcept {
         const auto token = detail::http_header_token_before_parameters(item);
         has_non_empty_item_ = true;
-        if (http_is_gzip_coding_token(token)) {
+        if (const auto coding = http_content_coding_from_token(token)) {
             detail::http_accumulate_accepted_quality(
-                detail::http_weight_parameter(item), gzip_.explicit_quality_);
-        } else if (http_ascii_equals_ignore_case(token, "deflate")) {
-            detail::http_accumulate_accepted_quality(
-                detail::http_weight_parameter(item), deflate_.explicit_quality_);
-        } else if (http_ascii_equals_ignore_case(token, "br")) {
-            detail::http_accumulate_accepted_quality(
-                detail::http_weight_parameter(item), brotli_.explicit_quality_);
-        } else if (http_ascii_equals_ignore_case(token, "zstd")) {
-            detail::http_accumulate_accepted_quality(
-                detail::http_weight_parameter(item), zstd_.explicit_quality_);
-        } else if (http_ascii_equals_ignore_case(token, "identity")) {
-            detail::http_accumulate_accepted_quality(
-                detail::http_weight_parameter(item), identity_.explicit_quality_);
+                detail::http_weight_parameter(item), explicit_quality(*this, *coding));
         } else if (token == "*") {
             const auto wildcard = detail::http_weight_parameter(item);
             detail::http_accumulate_accepted_quality(wildcard, gzip_.wildcard_quality_);

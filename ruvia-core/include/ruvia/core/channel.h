@@ -69,11 +69,6 @@ public:
     t_type* rejected() && = delete;
     const t_type* rejected() const&& = delete;
 
-    [[nodiscard]] std::optional<t_type> take_rejected() && noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) {
-        return std::move(rejected_);
-    }
-
 private:
     friend class channel_sender<t_type>;
 
@@ -172,19 +167,7 @@ struct channel_receive_awaiter final {
             return true;
         }
         assert(std::holds_alternative<channel_open>(owner_value.lifecycle_));
-        if (wait_.get_stop_token().stop_requested()) {
-            (void)wait_.complete_status(worker_wait_status::cancelled);
-            return true;
-        }
-        if (wait_.timeout() && *wait_.timeout() <= std::chrono::steady_clock::duration::zero()) {
-            (void)wait_.complete_status(worker_wait_status::timed_out);
-            return true;
-        }
-        if (owner_value.wait_slot_.occupied()) {
-            throw std::logic_error("channel supports one pending receiver");
-        }
-        wait_.publish();
-        return false;
+        return wait_.complete_or_publish("channel supports one pending receiver");
     }
 
     bool await_suspend(std::coroutine_handle<> handle) {
@@ -389,11 +372,8 @@ template <typename t_type>
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_channel(worker_handle worker_value, channel_options options) {
     auto* resolved = pmr_resource_or_default(options.resource_);
-    std::pmr::polymorphic_allocator<detail::channel_state<t_type>> allocator(resolved);
-    auto state_value = std::allocate_shared<detail::channel_state<t_type>>(
-        allocator, std::move(worker_value), options.capacity_, resolved);
-    detail::worker_handle_access::register_shutdown_hook(
-        state_value->worker_, state_value, &detail::channel_state<t_type>::shutdown_hook_);
+    auto state_value = detail::make_worker_bound_state<detail::channel_state<t_type>>(
+        resolved, std::move(worker_value), options.capacity_, resolved);
     return std::pair(channel_sender<t_type>(state_value), channel_receiver<t_type>(state_value));
 }
 

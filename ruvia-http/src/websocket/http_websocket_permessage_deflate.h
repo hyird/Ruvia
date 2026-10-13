@@ -169,80 +169,99 @@ private:
     return digits != 0 && parsed_value >= 8 && parsed_value <= 15 ? std::optional<int>(parsed_value) : std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<websocket_compression> websocket_parse_deflate_offer(
-    std::string_view offer, bool context_takeover = false) noexcept {
-    const auto first_semicolon = http_find_unquoted_delimiter(offer, 0, ';');
-    const auto name = http_trim_ows(offer.substr(0, first_semicolon));
+// RFC 7692 section 7.1 parameters of one permessage-deflate extension element.
+// client_max_window_bits may appear without a value; whether that is
+// acceptable depends on the role, so its presence is kept apart from its value.
+struct permessage_deflate_params final {
+    bool server_no_context_takeover_{false};
+    bool client_no_context_takeover_{false};
+    std::optional<int> server_max_window_bits_;
+    bool client_max_window_bits_present_{false};
+    std::optional<int> client_max_window_bits_;
+};
+
+// Grammar shared by offers and responses: every parameter is defined, appears
+// at most once and carries a value exactly where RFC 7692 defines one (an
+// undefined or malformed parameter cannot be negotiated). Returns nullopt for
+// another extension or a malformed element; role policy is left to callers.
+[[nodiscard]] inline std::optional<permessage_deflate_params> parse_permessage_deflate_params(
+    std::string_view element) noexcept {
+    const auto first_semicolon = http_find_unquoted_delimiter(element, 0, ';');
+    const auto name = http_trim_ows(element.substr(0, first_semicolon));
     if (!http_ascii_equals_ignore_case(name, "permessage-deflate")) {
         return std::nullopt;
     }
 
-    bool server_no_context_takeover = false;
-    bool client_no_context_takeover = false;
-    bool server_window_seen = false;
-    bool client_window_seen = false;
-    int server_window = 15;
+    permessage_deflate_params params;
     std::size_t start = first_semicolon;
-    while (start < offer.size()) {
+    while (start < element.size()) {
         ++start;
-        const auto end = start + http_find_unquoted_delimiter(offer.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(offer.substr(start, end - start));
-        if (parameter.empty()) {
-            return std::nullopt;
-        }
+        const auto end = start + http_find_unquoted_delimiter(element.substr(start), 0, ';');
+        const auto parameter = http_trim_ows(element.substr(start, end - start));
         const auto equals = parameter.find('=');
         const bool has_value = equals != std::string_view::npos;
-        const auto parameter_name = http_trim_ows(has_value ? parameter.substr(0, equals) : parameter);
+        const auto parameter_name = http_trim_ows(parameter.substr(0, equals));
         const auto parameter_value =
             has_value ? http_trim_ows(parameter.substr(equals + 1)) : std::string_view{};
 
         if (http_ascii_equals_ignore_case(parameter_name, "server_no_context_takeover")) {
-            if (server_no_context_takeover || has_value) {
+            if (params.server_no_context_takeover_ || has_value) {
                 return std::nullopt;
             }
-            server_no_context_takeover = true;
+            params.server_no_context_takeover_ = true;
         } else if (http_ascii_equals_ignore_case(parameter_name, "client_no_context_takeover")) {
-            if (client_no_context_takeover || has_value) {
+            if (params.client_no_context_takeover_ || has_value) {
                 return std::nullopt;
             }
-            client_no_context_takeover = true;
+            params.client_no_context_takeover_ = true;
         } else if (http_ascii_equals_ignore_case(parameter_name, "server_max_window_bits")) {
-            if (server_window_seen || !has_value) {
+            // A missing or empty value fails window decoding.
+            if (params.server_max_window_bits_.has_value()) {
                 return std::nullopt;
             }
-            const auto parsed_value = websocket_deflate_window_bits(parameter_value);
-            if (!parsed_value.has_value()) {
+            params.server_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+            if (!params.server_max_window_bits_.has_value()) {
                 return std::nullopt;
             }
-            server_window_seen = true;
-            server_window = *parsed_value;
         } else if (http_ascii_equals_ignore_case(parameter_name, "client_max_window_bits")) {
-            if (client_window_seen) {
+            if (params.client_max_window_bits_present_) {
                 return std::nullopt;
             }
-            if (has_value && !websocket_deflate_window_bits(parameter_value).has_value()) {
-                return std::nullopt;
+            params.client_max_window_bits_present_ = true;
+            if (has_value) {
+                params.client_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+                if (!params.client_max_window_bits_.has_value()) {
+                    return std::nullopt;
+                }
             }
-            client_window_seen = true;
         } else {
-            // RFC 7692 section 7.1: an offer containing an undefined or
-            // malformed permessage-deflate parameter cannot be negotiated.
+            // Includes an empty parameter, such as a trailing ';'.
             return std::nullopt;
         }
 
         start = end;
     }
+    return params;
+}
 
-    if (context_takeover && !server_no_context_takeover && !client_no_context_takeover) {
-        return server_window_seen ? (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false, .server_max_window_bits_ = server_window})
-                                  : (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false});
+// Server role: an offered client_max_window_bits, with or without a value, is
+// accepted but never echoed in the response.
+[[nodiscard]] inline std::optional<websocket_compression> websocket_parse_deflate_offer(
+    std::string_view offer, bool context_takeover) noexcept {
+    const auto params = parse_permessage_deflate_params(offer);
+    if (!params.has_value()) {
+        return std::nullopt;
     }
-    return server_window_seen ? (websocket_compression{.enabled_ = true, .server_max_window_bits_ = server_window})
-                              : (websocket_compression{.enabled_ = true});
+    websocket_compression accepted{.enabled_ = true, .server_max_window_bits_ = params->server_max_window_bits_};
+    if (context_takeover && !params->server_no_context_takeover_ && !params->client_no_context_takeover_) {
+        accepted.server_no_context_takeover_ = false;
+        accepted.client_no_context_takeover_ = false;
+    }
+    return accepted;
 }
 
 [[nodiscard]] inline websocket_compression websocket_scan_deflate_offers(
-    std::string_view offers, bool context_takeover = false) noexcept {
+    std::string_view offers, bool context_takeover) noexcept {
     std::optional<websocket_compression> accepted;
     http_visit_comma_separated_quoted_field_items(offers, [&accepted, context_takeover](std::string_view offer) noexcept {
         if (offer.empty()) {

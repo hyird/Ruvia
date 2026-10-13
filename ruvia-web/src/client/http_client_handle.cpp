@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
@@ -31,7 +30,7 @@ constexpr std::size_t response_body_read_chunk_bytes = std::size_t{16} * 1024;
 
 void check_response_operation_affinity(void* target) noexcept {
     const auto& state_value = *static_cast<const detail::http_client_response_state*>(target);
-    if (auto* domain = state_value.memory_domain(); domain != nullptr && !domain->worker().is_current()) {
+    if (!state_value.memory_domain().worker().is_current()) {
         std::terminate();
     }
 }
@@ -142,11 +141,7 @@ void detail::http_client_response_state::release_reference() noexcept {
         std::terminate();
     }
     if (--references_ == 0) {
-        if (auto* domain = memory_domain()) {
-            domain->destroy_state(this);
-        } else {
-            destroy_pmr_object(this, resource_);
-        }
+        memory_domain_.destroy_state(this);
     }
 }
 
@@ -155,14 +150,14 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
 }
 
 task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
-    while (!head_ready_ && !failure_ && !error_code_) {
+    while (!head_ready_ && !failure_ && !pool_closed_) {
         co_await head_signal_.wait();
     }
     if (failure_) {
         std::rethrow_exception(failure_);
     }
-    if (error_code_) {
-        throw http_client_error(static_cast<http_client_error::code_type>(*error_code_), head_message);
+    if (pool_closed_) {
+        throw http_client_error(http_client_error::code_type::closing, head_message);
     }
     if ((tunnel_ && tunnel_->accepted_) || !body_decode_required_) {
         co_return;
@@ -174,9 +169,8 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     if (failure_) {
         std::rethrow_exception(failure_);
     }
-    if (error_code_) {
-        throw http_client_error(
-            static_cast<http_client_error::code_type>(*error_code_), "HTTP client encoded response failed");
+    if (pool_closed_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client encoded response failed");
     }
 }
 
@@ -254,7 +248,6 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         // Reclaim a returned borrow only at the next consumption step. A pipe
         // commits its cursor only after the downstream write succeeds.
         state_value.release_consumed_body_prefix();
-        state_value.incremental_read_ = true;
         while ((state_value.body_decode_required_ && !state_value.receive_complete()) ||
                (state_value.buffered_.empty() && state_value.pending_.empty() && !state_value.receive_complete())) {
             co_await state_value.data_signal_.wait();
@@ -264,9 +257,9 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
             if (state_value.failure_) {
                 std::rethrow_exception(state_value.failure_);
             }
-            if (state_value.error_code_) {
+            if (state_value.pool_closed_) {
                 constexpr auto message = std::is_void_v<view> ? "HTTP response body forwarding failed" : "HTTP response body read failed";
-                throw http_client_error(static_cast<http_client_error::code_type>(*state_value.error_code_), message);
+                throw http_client_error(http_client_error::code_type::closing, message);
             }
             state_value.discard_response_body();
             if constexpr (std::is_void_v<view>) {
@@ -313,9 +306,8 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     if (state_value.failure_) {
         std::rethrow_exception(state_value.failure_);
     }
-    if (state_value.error_code_) {
-        throw http_client_error(
-            static_cast<http_client_error::code_type>(*state_value.error_code_), "HTTP response body read failed");
+    if (state_value.pool_closed_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed");
     }
     const auto remaining = state_value.buffered_.size() - state_value.offset_;
     const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
@@ -325,11 +317,8 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
             "HTTP response body exceeds read_all byte limit");
     }
     const auto total_remaining = remaining + state_value.pending_.size();
-    if (state_value.result_budget_domain_ == nullptr) {
-        throw std::logic_error("HTTP client response has no result byte budget");
-    }
     auto reservation = detail::http_client_result_budget_lease::try_acquire(
-        *state_value.result_budget_domain_, total_remaining);
+        state_value.memory_domain_.result_budget_domain_, total_remaining);
     if (!reservation) {
         throw http_client_error(http_client_error::code_type::result_budget_exceeded,
             "HTTP client retained result byte budget is exhausted");

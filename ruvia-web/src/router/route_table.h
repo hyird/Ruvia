@@ -75,10 +75,6 @@ public:
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
 
-    task<std::optional<http_response>> dispatch_tunnel(const http_request& request,
-        const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
-        context_services services) const;
-
     // Tokens of the extension routes registered on `path`, for the Allow header
     // of a 405. Written into caller storage so no allocation outlives the call.
     [[nodiscard]] std::span<const std::string_view> extension_methods_for(
@@ -111,7 +107,9 @@ public:
     task<std::optional<http_response>> dispatch_response_stream(const http_request& request,
         const resolved_route& route, request_memory& memory, response_stream_writer& response_stream,
         context_services services) const;
-    task<std::optional<http_response>> dispatch_websocket(const http_request& request,
+    // A CONNECT tunnel or WebSocket upgrade: `handler` is the terminal that
+    // commits the upgrade. Absence means the terminal took the request.
+    task<std::optional<http_response>> dispatch_upgrade(const http_request& request,
         const resolved_route& route, request_memory& memory, const route_stream_handler_type& handler,
         context_services services) const;
     // The not-found handler that applies to `path`: the tightest prefix scope

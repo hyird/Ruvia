@@ -73,20 +73,12 @@ task<std::optional<http_response>> detail::route_table::dispatch_response_stream
         request, resolved, memory, resolved.stream_handler(), services.with_response_stream(response_stream));
 }
 
-task<std::optional<http_response>> detail::route_table::dispatch_websocket(const http_request& request,
+task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const http_request& request,
     const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
     context_services services) const {
-    if (resolved.route().endpoint().get_websocket() == nullptr) {
-        throw std::logic_error("route is not a websocket route");
-    }
-    return dispatch_stream_route(request, resolved, memory, handler, services);
-}
-
-task<std::optional<http_response>> detail::route_table::dispatch_tunnel(const http_request& request,
-    const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
-    context_services services) const {
-    if (resolved.route().endpoint().tunnel() == nullptr) {
-        throw std::logic_error("route is not a CONNECT tunnel route");
+    const auto& endpoint = resolved.route().endpoint();
+    if (endpoint.tunnel() == nullptr && endpoint.get_websocket() == nullptr) {
+        throw std::logic_error("route is not an upgrade route");
     }
     return dispatch_stream_route(request, resolved, memory, handler, services);
 }

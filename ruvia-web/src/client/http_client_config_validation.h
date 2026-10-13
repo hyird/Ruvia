@@ -7,7 +7,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 #include "util/config_validation.h"
 
 namespace ruvia::detail {

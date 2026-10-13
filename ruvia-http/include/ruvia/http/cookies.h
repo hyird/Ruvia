@@ -83,11 +83,16 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
     append_input(value, value_offset);
 }
 
-// Cookie octet validation and name-prefix parsing are protocol rules shared by
+// Cookie octet validation and name-prefix rules are protocol rules shared by
 // the Set-Cookie writer and outbound cookie jar.
 [[nodiscard]] bool is_valid_cookie_value(std::string_view value) noexcept;
-[[nodiscard]] bool cookie_name_starts_with_ignore_case(
-    std::string_view name, std::string_view prefix) noexcept;
+// The prefix a wire cookie name starts with, matched ASCII case-insensitively
+// as user agents do (RFC 6265bis 4.1.3); nullopt when it carries none.
+[[nodiscard]] std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept;
+// RFC 6265bis 4.1.3: __Secure- requires Secure; __Host- also requires Path=/
+// and no Domain. `path` is the Path attribute value, empty when absent.
+[[nodiscard]] bool cookie_prefix_requirements_met(
+    cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept;
 [[nodiscard]] std::string_view http_cookie_prefix_text(cookie_prefix prefix) noexcept;
 
 struct cookie_options final {

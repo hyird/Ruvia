@@ -23,6 +23,8 @@ namespace ruvia {
 
 namespace detail {
 class db_query_storage;
+struct db_query_node;
+enum class db_node_kind : std::uint8_t;
 class db_query_compiler;
 class db_relation_plan;
 struct db_query_plan;
@@ -156,6 +158,7 @@ public:
 private:
     friend class db_query;
     friend class detail::db_query_compiler;
+    friend class detail::db_relation_plan;
     db_expression(const detail::db_query_storage* owner_value, std::size_t node_value) noexcept
         : owner_(owner_value),
           node_(node_value) {}
@@ -467,11 +470,11 @@ private:
     [[nodiscard]] const detail::db_query_storage& storage() const;
     [[nodiscard]] std::size_t require_expression(expr_type expression) const;
     void require_select_query() const;
-    [[nodiscard]] bool uses_source_name(std::string_view name) const;
-    [[nodiscard]] bool uses_projection_name(std::string_view name) const;
-    [[nodiscard]] std::optional<db_query> prepare_entity_read(
-        std::span<const std::string_view> primary_key, std::string_view root_alias,
-        db_driver driver) const;
+    // Every expression builder constructs exactly its own node kind and
+    // appends it here; the returned handle addresses the appended node.
+    [[nodiscard]] detail::db_query_node make_node(detail::db_node_kind kind, std::span<const expr_type> args = {}) const;
+    expr_type push_node(detail::db_query_node&& node);
+    [[nodiscard]] std::size_t add_subquery(const db_query& query);
     storage_owner_type storage_;
 };
 

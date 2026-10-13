@@ -14,9 +14,7 @@ void validate_document_root_runtime_config(const http_server_options& options);
 
 void validate_worker_queue_capacity(std::size_t capacity);
 
-void validate_server_limits(const http_server_options& options);
-
-[[nodiscard]] http_server_options normalize_server_options(const server_config& config, http_server_options options);
+void validate_server_limits(const server_config& config);
 
 void validate_http_server_options(const http_server_options& options);
 

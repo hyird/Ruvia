@@ -15,7 +15,7 @@
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/web/websocket_client.h"
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 #include "client/websocket_client_config_validation.h"
 
 namespace ruvia::detail {

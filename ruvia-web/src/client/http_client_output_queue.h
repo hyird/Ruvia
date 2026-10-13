@@ -18,9 +18,6 @@ public:
           chunk_(resource) {}
     void notify_data() noexcept {
         data_.notify();
-        if (wake_ != nullptr) {
-            wake_(wake_target_);
-        }
     }
     void acknowledge_chunk() noexcept {
         chunk_ready_ = false;
@@ -38,9 +35,6 @@ public:
         stopped_ = true;
         data_.notify();
         space_.notify();
-        if (wake_ != nullptr) {
-            wake_(wake_target_);
-        }
     }
     worker_signal data_;
     worker_signal space_;
@@ -51,8 +45,6 @@ public:
     bool ended_{};
     bool stopped_{};
     bool operation_active_{};
-    void* wake_target_{};
-    void (*wake_)(void*) noexcept {};
     ::ruvia::operation_scope output_scope_;
 };
 }  // namespace ruvia::detail

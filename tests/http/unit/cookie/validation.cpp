@@ -30,8 +30,14 @@ bool rejects(const ruvia::cookie_options& options) {
 RUVIA_TEST(cookie_public_validation_and_prefix_parsing) {
     RUVIA_CHECK(ruvia::is_valid_cookie_value("session-token"));
     RUVIA_CHECK(!ruvia::is_valid_cookie_value("invalid;value"));
-    RUVIA_CHECK(ruvia::cookie_name_starts_with_ignore_case("__secure-id", "__Secure-"));
-    RUVIA_CHECK(!ruvia::cookie_name_starts_with_ignore_case("id", "__Host-"));
+    RUVIA_CHECK(ruvia::cookie_name_prefix("__secure-id") == ruvia::cookie_prefix::secure);
+    RUVIA_CHECK(ruvia::cookie_name_prefix("__HOST-id") == ruvia::cookie_prefix::host);
+    RUVIA_CHECK(!ruvia::cookie_name_prefix("id").has_value());
+    RUVIA_CHECK(ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::secure, true, "/a", "example.com"));
+    RUVIA_CHECK(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::secure, false, "/", ""));
+    RUVIA_CHECK(ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "/", ""));
+    RUVIA_CHECK(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "", ""));
+    RUVIA_CHECK(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "/", "example.com"));
     RUVIA_CHECK_EQ(ruvia::http_cookie_prefix_text(ruvia::cookie_prefix::host),
         std::string_view("__Host-"));
 }

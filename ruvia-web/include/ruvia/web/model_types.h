@@ -309,149 +309,35 @@ struct double_value final {
     }
 };
 
-struct int8 final {
-    std::int8_t value_{0};
-    constexpr int8() noexcept = default;
-    constexpr int8(std::int8_t input) noexcept
+// Accepts its exact integer type unchecked, other integers after a range
+// check, and rejects every non-integer type at compile time.
+template <typename t_type>
+struct integer_value final {
+    t_type value_{0};
+    constexpr integer_value() noexcept = default;
+    constexpr integer_value(t_type input) noexcept
         : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::int8_t>)
-    constexpr int8(t_type input)
-        : value_(detail::checked_model_integer<std::int8_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    int8(t_type) = delete;
-    [[nodiscard]] constexpr operator std::int8_t() const noexcept {
+    template <typename input_type>
+        requires(detail::is_model_integer<input_type> &&
+                 !std::is_same_v<std::remove_cv_t<input_type>, t_type>)
+    constexpr integer_value(input_type input)
+        : value_(detail::checked_model_integer<t_type>(input)) {}
+    template <typename input_type>
+        requires(!detail::is_model_integer<input_type>)
+    integer_value(input_type) = delete;
+    [[nodiscard]] constexpr operator t_type() const noexcept {
         return value_;
     }
 };
 
-struct uint8 final {
-    std::uint8_t value_{0};
-    constexpr uint8() noexcept = default;
-    constexpr uint8(std::uint8_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint8_t>)
-    constexpr uint8(t_type input)
-        : value_(detail::checked_model_integer<std::uint8_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    uint8(t_type) = delete;
-    [[nodiscard]] constexpr operator std::uint8_t() const noexcept {
-        return value_;
-    }
-};
-
-struct int16 final {
-    std::int16_t value_{0};
-    constexpr int16() noexcept = default;
-    constexpr int16(std::int16_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::int16_t>)
-    constexpr int16(t_type input)
-        : value_(detail::checked_model_integer<std::int16_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    int16(t_type) = delete;
-    [[nodiscard]] constexpr operator std::int16_t() const noexcept {
-        return value_;
-    }
-};
-
-struct uint16 final {
-    std::uint16_t value_{0};
-    constexpr uint16() noexcept = default;
-    constexpr uint16(std::uint16_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint16_t>)
-    constexpr uint16(t_type input)
-        : value_(detail::checked_model_integer<std::uint16_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    uint16(t_type) = delete;
-    [[nodiscard]] constexpr operator std::uint16_t() const noexcept {
-        return value_;
-    }
-};
-
-struct int32 final {
-    std::int32_t value_{0};
-    constexpr int32() noexcept = default;
-    constexpr int32(std::int32_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::int32_t>)
-    constexpr int32(t_type input)
-        : value_(detail::checked_model_integer<std::int32_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    int32(t_type) = delete;
-    [[nodiscard]] constexpr operator std::int32_t() const noexcept {
-        return value_;
-    }
-};
-
-struct uint32 final {
-    std::uint32_t value_{0};
-    constexpr uint32() noexcept = default;
-    constexpr uint32(std::uint32_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint32_t>)
-    constexpr uint32(t_type input)
-        : value_(detail::checked_model_integer<std::uint32_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    uint32(t_type) = delete;
-    [[nodiscard]] constexpr operator std::uint32_t() const noexcept {
-        return value_;
-    }
-};
-
-struct int64 final {
-    std::int64_t value_{0};
-    constexpr int64() noexcept = default;
-    constexpr int64(std::int64_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::int64_t>)
-    constexpr int64(t_type input)
-        : value_(detail::checked_model_integer<std::int64_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    int64(t_type) = delete;
-    [[nodiscard]] constexpr operator std::int64_t() const noexcept {
-        return value_;
-    }
-};
-
-struct uint64 final {
-    std::uint64_t value_{0};
-    constexpr uint64() noexcept = default;
-    constexpr uint64(std::uint64_t input) noexcept
-        : value_(input) {}
-    template <typename t_type>
-        requires(detail::is_model_integer<t_type> &&
-                 !std::is_same_v<std::remove_cv_t<t_type>, std::uint64_t>)
-    constexpr uint64(t_type input)
-        : value_(detail::checked_model_integer<std::uint64_t>(input)) {}
-    template <typename t_type>
-        requires(!detail::is_model_integer<t_type>)
-    uint64(t_type) = delete;
-    [[nodiscard]] constexpr operator std::uint64_t() const noexcept {
-        return value_;
-    }
-};
+using int8 = integer_value<std::int8_t>;
+using uint8 = integer_value<std::uint8_t>;
+using int16 = integer_value<std::int16_t>;
+using uint16 = integer_value<std::uint16_t>;
+using int32 = integer_value<std::int32_t>;
+using uint32 = integer_value<std::uint32_t>;
+using int64 = integer_value<std::int64_t>;
+using uint64 = integer_value<std::uint64_t>;
 
 class bytes final {
 public:

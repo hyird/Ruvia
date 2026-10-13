@@ -125,7 +125,7 @@ task<void> http_client_connection::ensure_connected(
     if (!connected.ok()) {
         throw_http_client_transport_error(connected, "upstream closed while connecting");
     }
-    if (transport_.secure() && !transport_.alpn().empty() && transport_.alpn() != "http/1.1") {
+    if (!transport_.alpn_allows_http11()) {
         throw http_client_error(http_client_error::code_type::protocol_unavailable,
             "upstream negotiated an unsupported HTTP protocol");
     }

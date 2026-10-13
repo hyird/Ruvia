@@ -251,6 +251,10 @@ public:
     [[nodiscard]] redis_pipeline pipeline() const;
     [[nodiscard]] redis_transaction transaction() const;
 
+    // Validates `config` against the entity schema: the prefix must be
+    // non-empty without NUL bytes, and each index column must be a unique,
+    // identifier-named entity column whose type fits the index kind.
+    // Violations throw std::invalid_argument.
     template <typename entity_type>
     [[nodiscard]] redis_repository<entity_type> get_repository(
         const redis_repository_config& config = {}) const;

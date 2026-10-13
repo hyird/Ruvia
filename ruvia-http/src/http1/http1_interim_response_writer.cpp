@@ -69,17 +69,13 @@ struct http1_interim_header_facts final {
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         if (http_ascii_equals_ignore_case(name, "Connection")) {
-            if (facts.connection_options_.parse_field(header.value(),
-                    detail::http_field_list_role::sender, [](std::string_view option) noexcept {
-                        return !detail::http_connection_option_conflicts_with_managed_field(option);
-                    }) != detail::http_field_list_parse_status::ok) {
+            if (facts.connection_options_.parse_field(header.value(), detail::http_field_list_role::sender) !=
+                detail::http_field_list_parse_status::ok) {
                 error = http1_interim_response_prepare_error::invalid_connection;
                 return false;
             }
         } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-            if (facts.upgrade_protocols_.parse_field(header.value(),
-                    detail::http_field_list_role::sender,
-                    [](const detail::http_upgrade_protocol&) noexcept { return true; }) !=
+            if (facts.upgrade_protocols_.parse_field(header.value(), detail::http_field_list_role::sender) !=
                 detail::http_field_list_parse_status::ok) {
                 error = http1_interim_response_prepare_error::invalid_upgrade;
                 return false;

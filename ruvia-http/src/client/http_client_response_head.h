@@ -40,7 +40,7 @@ struct http1_client_parsed_response_head final {
     bool non_empty_trailer_header_present_{false};
     http_connection_options connection_options_;
     http_upgrade_protocols upgrade_protocols_;
-    http_content_length_state<> content_length_;
+    http_content_length_state content_length_;
     http_transfer_encoding_state transfer_encoding_;
 };
 

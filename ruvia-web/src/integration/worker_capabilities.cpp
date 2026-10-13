@@ -95,10 +95,6 @@ const worker_state_registry& worker_capabilities::worker_states() const noexcept
     return worker_states_;
 }
 
-rate_limiter_type& worker_capabilities::rate_limiter() noexcept {
-    return rate_limiter_;
-}
-
 blocking_pool* worker_capabilities::get_blocking_pool() const noexcept {
     return options_.blocking_pool_;
 }

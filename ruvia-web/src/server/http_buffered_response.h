@@ -95,9 +95,9 @@ private:
 
 [[nodiscard]] inline std::optional<http_error_info> http_buffered_response_preparation_error(
     const http_response_coding_policy& policy, const http_request& request,
-    const http_response& response, const http_response_compression_result& compression_result) noexcept {
+    const http_response& response, http_response_compression_status compression) noexcept {
     const auto* selection = policy.selection();
-    if (selection != nullptr && compression_result.failed() &&
+    if (selection != nullptr && compression == http_response_compression_status::failed &&
         selection->coding() != http_content_coding::identity && !selection->identity_accepted() &&
         plan_http_response_body(request.known_method(), response.status()).status_allows_body()) {
         return http_error_info({.status_ = http_status::internal_server_error,
@@ -105,9 +105,7 @@ private:
             .message_ = "response compression failed"});
     }
     if (http_response_needs_not_acceptable(policy, request, response)) {
-        return http_error_info({.status_ = http_status::not_acceptable,
-            .code_ = "not_acceptable",
-            .message_ = "no acceptable response content coding"});
+        return http_error_info(http_not_acceptable_coding_error());
     }
     return std::nullopt;
 }
@@ -131,11 +129,11 @@ public:
 
     [[nodiscard]] buffered_response_recovery_step advance(http_response_coding_policy& policy,
         const http_request& request, const http_response& response,
-        const http_response_compression_result& compression_result) noexcept {
+        http_response_compression_status compression) noexcept {
         if (stage_ == stage::terminal) {
             return {};
         }
-        auto error = http_buffered_response_preparation_error(policy, request, response, compression_result);
+        auto error = http_buffered_response_preparation_error(policy, request, response, compression);
         if (!error.has_value()) {
             return {};
         }

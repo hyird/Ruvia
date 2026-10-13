@@ -187,7 +187,12 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
         const auto parsed_value = parse_http_content_coding(token);
         RUVIA_CHECK_EQ(parsed_value.codings().size(), 1U);
         RUVIA_CHECK(parsed_value.codings().front() == coding);
+        RUVIA_CHECK(ruvia::http_content_coding_from_token(token) == coding);
     }
+    RUVIA_CHECK(ruvia::http_content_coding_from_token("X-GZIP") == http_content_coding::gzip);
+    RUVIA_CHECK(ruvia::http_content_coding_from_token("BR") == http_content_coding::brotli);
+    RUVIA_CHECK(!ruvia::http_content_coding_from_token("compress").has_value());
+    RUVIA_CHECK(!ruvia::http_content_coding_from_token("").has_value());
 
     const auto unsupported = parse_http_content_coding("compress");
     const auto stacked = parse_http_content_coding("gzip, br");

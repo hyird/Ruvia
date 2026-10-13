@@ -161,7 +161,6 @@ http_client_response_state* http_client_response_memory_domain::create_state(htt
     auto* state_value = construct_pmr_object<http_client_response_state>(
         resource(), *this);
     state_value->pool_ = &pool;
-    state_value->result_budget_domain_ = &result_budget_domain_;
     attach_state(*state_value);
     return state_value;
 }
@@ -178,7 +177,7 @@ void http_client_response_memory_domain::attach_state(http_client_response_state
 
 void http_client_response_memory_domain::destroy_state(http_client_response_state* state_value) noexcept {
     require_current();
-    if (state_value == nullptr || state_value->memory_domain_ != this) {
+    if (state_value == nullptr || &state_value->memory_domain_ != this) {
         std::terminate();
     }
     if (state_value->pool_ != nullptr) {
@@ -221,26 +220,34 @@ void http_client_response_memory_domain::detach_transport_bindings(http_client_p
 }
 
 http_client_response_state::http_client_response_state(http_client_response_memory_domain& memory_domain)
-    : http_client_response_state(memory_domain.worker(), memory_domain.resource()) {
-    memory_domain_ = &memory_domain;
+    : head_signal_(memory_domain.worker()),
+      data_signal_(memory_domain.worker()),
+      space_signal_(memory_domain.worker()),
+      resource_(memory_domain.resource()),
+      informational_(resource_),
+      headers_(resource_),
+      trailers_(resource_),
+      buffered_(resource_),
+      pending_(resource_),
+      memory_domain_(memory_domain) {}
+
+void http_client_response_state::require_owner_worker(const char* message) const {
+    if (!memory_domain_.worker().is_current()) {
+        throw std::logic_error(message);
+    }
 }
 
 void http_client_response_state::detach_transport_bindings() noexcept {
     if (tunnel_) {
-        tunnel_->output_.wake_ = nullptr;
-        tunnel_->output_.wake_target_ = nullptr;
         tunnel_->output_.stop();
     }
     if (upload_) {
-        upload_->output_.wake_ = nullptr;
-        upload_->output_.wake_target_ = nullptr;
         upload_->output_.stop();
     }
-    connection_index_ = 0;
     cancellation_id_ = 0;
     pool_ = nullptr;
     if (!complete_) {
-        error_code_ = static_cast<std::uint8_t>(http_client_error::code_type::closing);
+        pool_closed_ = true;
         complete_ = true;
     }
     head_signal_.notify();

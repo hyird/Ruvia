@@ -7,12 +7,14 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/pool_lease_scheduler.h"
+#include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia::detail {
 
 struct pool_waiter_idle final {};
 struct pool_waiter_queued final {};
+
+using pool_waiter_result_type = worker_wait_result<std::size_t>;
 
 // One coroutine waiting for a free connection slot in a per-worker connection
 // pool. The node lives on the waiting coroutine's frame; the queue owns only
@@ -28,15 +30,15 @@ public:
     pool_waiter& operator=(const pool_waiter&) = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return std::holds_alternative<pool_waiter_result>(state_);
+        return std::holds_alternative<pool_waiter_result_type>(state_);
     }
 
     void await_suspend(std::coroutine_handle<> handle) noexcept {
         handle_ = handle;
     }
 
-    [[nodiscard]] const pool_waiter_result& await_resume() const noexcept {
-        const auto* result_value = std::get_if<pool_waiter_result>(&state_);
+    [[nodiscard]] const pool_waiter_result_type& await_resume() const noexcept {
+        const auto* result_value = std::get_if<pool_waiter_result_type>(&state_);
         if (result_value == nullptr) {
             std::terminate();
         }
@@ -46,27 +48,15 @@ public:
 private:
     friend class pool_waiter_queue;
 
-    void complete(pool_waiter_result result_value) noexcept {
+    void complete(pool_waiter_result_type result_value) noexcept {
         if (!std::holds_alternative<pool_waiter_idle>(state_)) {
             std::terminate();
         }
-        state_.template emplace<pool_waiter_result>(result_value);
+        state_.template emplace<pool_waiter_result_type>(result_value);
     }
 
-    void complete_acquired(std::size_t index) noexcept {
-        complete(pool_waiter_result::make_acquired(index));
-    }
-
-    void complete_timed_out() noexcept {
-        complete(pool_waiter_result::make_timed_out());
-    }
-
-    void complete_closed() noexcept {
-        complete(pool_waiter_result::make_closed());
-    }
-
-    void complete_cancelled() noexcept {
-        complete(pool_waiter_result::make_cancelled());
+    void complete(worker_wait_status status) noexcept {
+        complete(worker_wait_result_access::outcome<std::size_t>(status));
     }
 
     void resume() noexcept {
@@ -80,7 +70,7 @@ private:
         return std::exchange(handle_, {});
     }
 
-    using state_type = std::variant<pool_waiter_idle, pool_waiter_queued, pool_waiter_result>;
+    using state_type = std::variant<pool_waiter_idle, pool_waiter_queued, pool_waiter_result_type>;
 
     state_type state_;
     std::uint64_t id_{0};
@@ -140,7 +130,7 @@ public:
         }
         auto* waiter = head_;
         remove(*waiter);
-        waiter->complete_acquired(index);
+        waiter->complete(worker_wait_result_access::value(index));
         waiter->resume();
         return true;
     }
@@ -176,7 +166,7 @@ public:
             return false;
         }
         remove(*waiter);
-        waiter->complete_timed_out();
+        waiter->complete(worker_wait_status::timed_out);
         waiter->resume();
         return true;
     }
@@ -191,7 +181,7 @@ public:
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
-            waiter->complete_closed();
+            waiter->complete(worker_wait_status::closed);
             if (closed_tail != nullptr) {
                 closed_tail->next_ = waiter;
             } else {
@@ -215,7 +205,7 @@ private:
             return false;
         }
         remove(waiter);
-        waiter.complete_cancelled();
+        waiter.complete(worker_wait_status::cancelled);
         continuation = waiter.take_continuation();
         return true;
     }

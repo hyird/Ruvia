@@ -96,9 +96,10 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
     const auto admission_policy = http_request_admission_policy::server(options_);
     const response_file_io file_output{.pool_ = options_.blocking_pool_, .worker_ = worker_, .stop_ = stop_token_};
-    inbound_buffer_resource connection_buffers(*options_.inbound_budget_, options_.max_inbound_buffer_bytes_per_connection_);
+    inbound_buffer_resource connection_buffers(
+        *options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
     base_route_services = base_route_services.with_inbound_buffer_pool(connection_buffers);
-    http1_request_sequence request_sequence(options_.max_requests_per_connection_, state_);
+    http1_request_sequence request_sequence(options_.server_.max_requests_per_connection_, state_);
     http1_connection_session<stream_type> session{
         .listener_ = listener_value,
         .stream_ = stream,
@@ -293,23 +294,11 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         parsed_value.request_, request_memory_value, redirect->https_port_);
                     if (http_response_needs_not_acceptable(
                             admission->tail().coding_policy(), parsed_value.request_, response)) {
-                        response = co_await routes_value.handle_error(parsed_value.request_, request_memory_value,
-                            http_error_info({
-                                .status_ = ruvia::http_status::not_acceptable,
-                                .code_ = "not_acceptable",
-                                .message_ = "no acceptable response content coding",
-                            }),
-                            admission->services());
-                        // The redirect branch commits directly because its
-                        // connection is intentionally closing; make the
-                        // generated policy error terminal rather than letting
-                        // it inherit the original negotiated coding promise.
-                        admission->tail().disable_response_coding();
+                        closing_rejection =
+                            http_request_rejection::error(http_error_info(http_not_acceptable_coding_error()));
+                        break;
                     }
-                    const auto connection_plan = require_http1_final_response_commit(
-                        response, parsed_value.connection_plan_.require_close());
-                    request_completion.emplace(
-                        http1_session_request_completion::make_buffered_closing(connection_plan));
+                    request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan_));
                     scanner_entry.touch();
                     break;
                 }
@@ -358,7 +347,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         .options_ = options_,
                         .response_ = response,
                         .request_sequence_ = request_sequence,
-                        .inbound_buffer_pool_ = &connection_buffers,
+                        .inbound_buffer_pool_ = connection_buffers,
                     };
                 };
 
@@ -500,12 +489,17 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         // keeps one set of call temporaries in the frame instead of one per
         // rejection branch. A request rejected before admission (malformed
         // head) runs with the connection's services and no coding promise.
+        // A rejection is a generated terminal error: it must not inherit the
+        // negotiated coding promise, or a client that accepts no coding would
+        // see it replaced by a 406 through a second error-handler call.
         if (closing_rejection) {
+            if (admission) {
+                admission->tail().disable_response_coding();
+            }
             response = co_await respond_http_request_rejection(routes_value, parsed_value.request_,
                 request_memory_value, *closing_rejection,
                 admission ? admission->services() : request_services);
-            request_completion.emplace(http1_session_request_completion::make_buffered_closing(
-                require_http1_final_response_commit(response, parsed_value.connection_plan_.require_close())));
+            request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan_));
         }
 
         if (!request_completion) {
@@ -573,10 +567,10 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         response_plan, write_start.head_bytes_, written.error_, written.bytes_));
                 }
                 scanner_entry.set_phase(connection_scanner::phase_type::idle);
-                if (const auto committed_status = write_result->committed_status()) {
+                if (const auto committed_status = write_result->committed_status_) {
                     tail.record_access(options_.access_log_, *committed_status);
                 }
-                if (write_result->completed() == nullptr) {
+                if (!write_result->completed_) {
                     co_return http_connection_close::abort;
                 }
             }

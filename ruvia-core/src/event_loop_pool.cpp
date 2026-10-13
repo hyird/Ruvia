@@ -149,18 +149,7 @@ struct event_loop_pool::impl_type {
     // lifecycle before it stops any loop, and can win a cold loop's launch
     // transition. Launching then ends; join() reports the stop's outcome.
     [[nodiscard]] bool launch(worker_runtime& runtime) {
-        if (owner_->stop_requested()) {
-            return false;
-        }
-        try {
-            runtime.start();
-        } catch (const std::logic_error&) {
-            if (owner_->stop_requested() && runtime.state() != runtime_lifecycle::state_type::running) {
-                return false;
-            }
-            throw;
-        }
-        return true;
+        return !owner_->stop_requested() && runtime.start();
     }
 
     void join_loops() {

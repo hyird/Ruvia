@@ -19,8 +19,8 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/client_tcp_config.h"
 
+#include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
-#include "client/client_transport.h"
 
 namespace ruvia::detail {
 
@@ -71,6 +71,9 @@ struct client_tcp_endpoint final {
     client_alpn alpn_;
 };
 
+// True for an OpenSSL failure or a TLS stream truncated without close_notify.
+[[nodiscard]] bool is_tls_error(const std::error_code& error) noexcept;
+
 // The one outbound TCP/TLS byte transport shared by the HTTP/1, WebSocket and
 // Redis clients. Protocol-neutral: callers map results onto their error
 // types. One worker owns the socket; the read lane (resolve, connect, TLS
@@ -95,6 +98,15 @@ public:
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
+    // HTTP/1 clients offer only http/1.1: a TLS peer either skips ALPN or
+    // must select it.
+    [[nodiscard]] bool alpn_allows_http11() noexcept {
+        if (!secure()) {
+            return true;
+        }
+        const auto selected = alpn();
+        return selected.empty() || selected == "http/1.1";
+    }
     [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_timeout& timeout);
     // Writes every byte under the write lane's own deadline. The buffer
     // sequence form sends framed parts (chunk prefix, payload, suffix) as one

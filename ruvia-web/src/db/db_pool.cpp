@@ -65,17 +65,18 @@ std::array<char, 6> format_db_port(std::uint16_t port) {
 }
 
 template <typename driver_type>
-void db_pool<driver_type>::slot_policy::throw_acquire_failure(
-    const db_pool& pool, const pool_waiter_result& result) {
-    if (result.timed_out() != nullptr) {
-        throw db_error(db_error::code_type::timeout, pool.config_.driver_,
-            "database connection pool acquire timed out");
-    }
-    if (result.cancelled() != nullptr) {
-        throw db_error(db_error::code_type::cancelled, pool.config_.driver_, "database operation cancelled");
-    }
-    if (result.closed() != nullptr) {
-        throw pool.closing_error();
+void db_pool<driver_type>::slot_policy::throw_acquire_failure(const db_pool& pool, worker_wait_status status) {
+    switch (status) {
+        case worker_wait_status::timed_out:
+            throw db_error(db_error::code_type::timeout, pool.config_.driver_,
+                "database connection pool acquire timed out");
+        case worker_wait_status::cancelled:
+            throw db_error(db_error::code_type::cancelled, pool.config_.driver_, "database operation cancelled");
+        case worker_wait_status::closed:
+            throw pool.closing_error();
+        case worker_wait_status::value:
+        case worker_wait_status::worker_stopping:
+            break;
     }
     std::terminate();
 }

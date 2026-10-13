@@ -113,22 +113,18 @@ concept redis_predicate_argument = requires(value_type&& value, std::pmr::memory
     redis_literal(std::forward<value_type>(value), resource);
 };
 
-struct redis_expression_inspection final {
-    enum class kind_type : std::uint8_t { unsupported,
-        field,
+// Only redis_field_reference creates leaves, and only redis_predicate combines
+// them, so the tree has exactly these shapes: a comparison or IN is a binary
+// node {field, literal} or {field, list}, BETWEEN is {field, lower, upper}, a
+// list holds literals, and logical AND/OR is a binary node of two predicates.
+struct redis_predicate_node final {
+    enum class kind_type : std::uint8_t { field,
         literal,
         binary,
         between,
         list };
-    kind_type kind_{kind_type::unsupported};
-    redis_binary_operator binary_{redis_binary_operator::equal};
-    std::string_view field_{};
-    std::string_view entity_prefix_{};
-    const redis_literal* value_{nullptr};
-};
 
-struct redis_predicate_node final {
-    explicit redis_predicate_node(redis_expression_inspection::kind_type kind, std::pmr::memory_resource* resource)
+    explicit redis_predicate_node(kind_type kind, std::pmr::memory_resource* resource)
         : kind_(kind),
           field_(resource),
           entity_prefix_(resource),
@@ -149,7 +145,7 @@ struct redis_predicate_node final {
     redis_predicate_node& operator=(redis_predicate_node&&) = delete;
     redis_predicate_node(const redis_predicate_node&) = delete;
     redis_predicate_node& operator=(const redis_predicate_node&) = delete;
-    redis_expression_inspection::kind_type kind_;
+    kind_type kind_;
     redis_binary_operator binary_{redis_binary_operator::equal};
     std::pmr::string field_;
     std::pmr::string entity_prefix_;
@@ -164,77 +160,18 @@ struct redis_predicate_storage final {
     std::pmr::memory_resource* resource_;
     std::pmr::vector<redis_predicate_node> nodes_;
     std::size_t root_{};
-    std::size_t add(redis_expression_inspection::kind_type kind) {
+    std::size_t add(redis_predicate_node::kind_type kind) {
         nodes_.emplace_back(kind, resource_);
         return nodes_.size() - 1;
     }
     template <redis_predicate_argument value_type>
     std::size_t add_value(value_type&& value) {
-        const auto index = add(redis_expression_inspection::kind_type::literal);
+        const auto index = add(redis_predicate_node::kind_type::literal);
         // Reconstruct only after the owning value has been successfully created.
         redis_literal literal(std::forward<value_type>(value), resource_);
         std::destroy_at(&nodes_[index].literal_);
         std::construct_at(&nodes_[index].literal_, std::move(literal));
         return index;
-    }
-};
-
-class redis_expression final {
-public:
-    redis_expression() noexcept = default;
-    redis_expression(const redis_predicate_storage& storage, std::size_t index) noexcept
-        : storage_(&storage),
-          index_(index) {}
-    bool empty() const noexcept {
-        return storage_ == nullptr;
-    }
-    const redis_predicate_node& node() const {
-        if (storage_ == nullptr || index_ >= storage_->nodes_.size()) {
-            throw std::logic_error("invalid Redis predicate expression");
-        }
-        return storage_->nodes_[index_];
-    }
-    redis_expression operand(std::size_t index) const {
-        const auto operand_index = node().operands_.at(index);
-        return redis_expression(*storage_, operand_index);
-    }
-
-private:
-    const redis_predicate_storage* storage_{};
-    std::size_t index_{};
-};
-
-struct redis_expression_access final {
-    static redis_expression_inspection inspect(redis_expression expression) {
-        const auto& node_value = expression.node();
-        return {.kind_ = node_value.kind_, .binary_ = node_value.binary_, .field_ = node_value.field_, .entity_prefix_ = node_value.entity_prefix_, .value_ = &node_value.literal_};
-    }
-    static redis_expression operand(redis_expression expression, std::size_t index) {
-        return expression.operand(index);
-    }
-    static std::size_t operand_count(redis_expression expression) {
-        return expression.node().operands_.size();
-    }
-};
-
-struct redis_literal_access final {
-    static redis_literal_kind type(const redis_literal& value) noexcept {
-        return value.kind();
-    }
-    static std::string_view text(const redis_literal& value) noexcept {
-        return value.text();
-    }
-    static std::int64_t signed_value(const redis_literal& value) noexcept {
-        return value.signed_value();
-    }
-    static std::uint64_t unsigned_value(const redis_literal& value) noexcept {
-        return value.unsigned_value();
-    }
-    static double real_value(const redis_literal& value) noexcept {
-        return value.real_value();
-    }
-    static bool boolean_value(const redis_literal& value) noexcept {
-        return value.boolean_value();
     }
 };
 

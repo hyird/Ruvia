@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http_limits.h"
 
 namespace ruvia {
@@ -57,7 +56,7 @@ private:
 // generates also fits the decoders' limit on the complete encoded section.
 [[nodiscard]] constexpr http_field_section_budget http_trailer_section_budget() noexcept {
     http_field_section_budget budget;
-    (void)budget.add(http1_trailer_section_terminator.size());
+    (void)budget.add(std::string_view("\r\n").size());
     return budget;
 }
 

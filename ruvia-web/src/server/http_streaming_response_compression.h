@@ -63,9 +63,7 @@ public:
             selection_, request_method, response, source, availability_);
         if (decision != http_response_compression_decision::encode) {
             if (http_response_coding_fallback_forbidden(selection_, request_method, response)) {
-                throw http_error({.status_ = ruvia::http_status::not_acceptable,
-                    .code_ = "not_acceptable",
-                    .message_ = "no acceptable response content coding"});
+                throw http_error(http_not_acceptable_coding_error());
             }
             state_.emplace<identity_type>();
             return;

@@ -1,4 +1,4 @@
-#include "client/client_transport.h"
+#include "client/client_tls.h"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +12,6 @@
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/tcp_socket_options.h"
 
 namespace ruvia::detail {
 namespace {

@@ -157,10 +157,8 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         } else if (http_ascii_equals_ignore_case(name, "TE")) {
             return http1_client_response_parse_error::invalid_header;
         } else if (http_ascii_equals_ignore_case(name, "Connection")) {
-            if (output.connection_options_.parse_field(
-                    value, http_field_list_role::recipient, [](std::string_view option) noexcept {
-                        return !http_connection_option_conflicts_with_managed_field(option);
-                    }) != http_field_list_parse_status::ok) {
+            if (output.connection_options_.parse_field(value, http_field_list_role::recipient) !=
+                http_field_list_parse_status::ok) {
                 return http1_client_response_parse_error::invalid_connection;
             }
         } else if (http_ascii_equals_ignore_case(name, "Transfer-Encoding")) {
@@ -178,8 +176,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 }
             }
         } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-            if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient,
-                    [](const http_upgrade_protocol&) noexcept { return true; }) !=
+            if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
                 http_field_list_parse_status::ok) {
                 return http1_client_response_parse_error::invalid_upgrade;
             }

@@ -7,11 +7,11 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/worker_cancellation.h"
 
-#include "client/client_transport.h"
+#include "client/client_tls.h"
+#include "client/http1_client_exchange.h"
 #include "client/http_client_connection.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
-#include "http1/http1_client_exchange.h"
 
 namespace ruvia::detail {
 namespace {
@@ -37,16 +37,18 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 
 static_assert(worker_cancellation_post_is_inline<http_client_cancellation_target>);
 
-void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, const pool_waiter_result& result) {
-    if (result.timed_out() != nullptr) {
-        throw http_client_error(
-            http_client_error::code_type::timeout, "http client connection pool acquire timed out");
-    }
-    if (result.cancelled() != nullptr) {
-        throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
-    }
-    if (result.closed() != nullptr) {
-        throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
+void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
+    switch (status) {
+        case worker_wait_status::timed_out:
+            throw http_client_error(
+                http_client_error::code_type::timeout, "http client connection pool acquire timed out");
+        case worker_wait_status::cancelled:
+            throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
+        case worker_wait_status::closed:
+            throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
+        case worker_wait_status::value:
+        case worker_wait_status::worker_stopping:
+            break;
     }
     std::terminate();
 }
@@ -161,12 +163,11 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
     auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    state_value.tunnel_.emplace(state_value.memory_domain()->worker(), state_value.resource_, config);
+    state_value.tunnel_.emplace(state_value.memory_domain().worker(), state_value.resource_, config);
     state_value.tunnel_->udp_ = owned_request.udp_tunnel();
     if (state_value.tunnel_->udp_) {
         state_value.tunnel_->config_.datagrams_ = true;
     }
-    owned_request.bind_tunnel(*state_value.tunnel_);
     spawn_request(std::move(owned_request), std::move(options), state_value);
     co_await state_value.await_head("CONNECT handshake failed");
     if (state_value.tunnel_->accepted_) {
@@ -181,9 +182,8 @@ task<http_client_exchange> http_client_pool::open_request(
     auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    state_value.upload_.emplace(state_value.memory_domain()->worker(), state_value.resource_, upload);
+    state_value.upload_.emplace(state_value.memory_domain().worker(), state_value.resource_, upload);
     state_value.upload_->content_released_ = upload.expectation_ == http_client_request_expectation::none;
-    owned_request.bind_upload(*state_value.upload_);
     spawn_request(std::move(owned_request), std::move(options), state_value);
     co_return http_client_exchange(std::move(response));
 }
@@ -252,7 +252,6 @@ task<void> http_client_pool::execute_request_into(
         // close_now() may already have retired every connection.
         slots_.throw_if_aborted(index);
         auto& tcp_connection = connection(index);
-        state_value->connection_index_ = index;
         // Abandonment before the exchange starts leaves no request bytes on
         // the connection, so it stays reusable.
         throw_if_abandoned(*state_value);

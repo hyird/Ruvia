@@ -20,54 +20,23 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     if (!offer.enabled_) {
         return {};
     }
-    auto first = http_find_unquoted_delimiter(text, 0, ';');
-    if (!http_ascii_equals_ignore_case(http_trim_ows(text.substr(0, first)), "permessage-deflate")) {
+    const auto params = detail::parse_permessage_deflate_params(text);
+    if (!params.has_value()) {
         return {};
     }
-    // The client's own takeover opt-out binds its deflater even when the server does not echo it.
-    websocket_compression result_value{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = offer.client_no_context_takeover_};
-    std::uint8_t seen = 0;
-    for (auto start = first; start < text.size();) {
-        ++start;
-        auto end = start + http_find_unquoted_delimiter(text.substr(start), 0, ';');
-        auto part = http_trim_ows(text.substr(start, end - start));
-        auto equals = part.find('=');
-        auto name = http_trim_ows(part.substr(0, equals));
-        auto value = equals == std::string_view::npos ? std::string_view{} : http_trim_ows(part.substr(equals + 1));
-        std::uint8_t bit = 0;
-        if (http_ascii_equals_ignore_case(name, "server_no_context_takeover")) {
-            bit = 1;
-            if (equals != std::string_view::npos) {
-                return {};
-            }
-            result_value.server_no_context_takeover_ = true;
-        } else if (http_ascii_equals_ignore_case(name, "client_no_context_takeover")) {
-            bit = 2;
-            if (equals != std::string_view::npos) {
-                return {};
-            }
-            result_value.client_no_context_takeover_ = true;
-        } else if (http_ascii_equals_ignore_case(name, "server_max_window_bits")) {
-            bit = 4;
-            result_value.server_max_window_bits_ = detail::websocket_deflate_window_bits(value);
-            if (!result_value.server_max_window_bits_) {
-                return {};
-            }
-        } else if (http_ascii_equals_ignore_case(name, "client_max_window_bits")) {
-            bit = 8;
-            result_value.client_max_window_bits_ = detail::websocket_deflate_window_bits(value);
-            if (!result_value.client_max_window_bits_ || (!offer.offer_client_max_window_bits_ && !offer.client_max_window_bits_)) {
-                return {};
-            }
-        } else {
-            return {};
-        }
-        if (seen & bit) {
-            return {};
-        }
-        seen |= bit;
-        start = end;
+    // A response must give client_max_window_bits a value, and may only send it
+    // when the offer included it (RFC 7692 section 7.1.2.2).
+    if (params->client_max_window_bits_present_ &&
+        (!params->client_max_window_bits_.has_value() ||
+            (!offer.offer_client_max_window_bits_ && !offer.client_max_window_bits_))) {
+        return {};
     }
+    websocket_compression result_value{.enabled_ = true,
+        .server_no_context_takeover_ = params->server_no_context_takeover_,
+        // The client's own takeover opt-out binds its deflater even when the server does not echo it.
+        .client_no_context_takeover_ = offer.client_no_context_takeover_ || params->client_no_context_takeover_,
+        .server_max_window_bits_ = params->server_max_window_bits_,
+        .client_max_window_bits_ = params->client_max_window_bits_};
     if (offer.server_no_context_takeover_ && !result_value.server_no_context_takeover_) {
         return {};
     }

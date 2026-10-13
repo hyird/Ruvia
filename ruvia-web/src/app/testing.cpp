@@ -98,8 +98,8 @@ struct test_app::impl_type final {
                                               ? detail::route_rate_limit_presence::present
                                               : detail::route_rate_limit_presence::absent,
                     .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
-                    .max_decoded_body_bytes_ = options_.max_buffered_body_bytes_,
-                    .http_client_result_budget_ = options_.http_client_result_budget_,
+                    .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+                    .http_client_result_budget_ = options_.server_.http_client_result_budget_,
                     .env_ = &env_,
                 });
             event_loop_pool_.start();
@@ -198,7 +198,9 @@ test_response test_app::request(const test_request& request) {
                 },
                 detail::http_request_admission_policy::server(options), services, request_deadline));
             if (const auto* admitted_rejection = admission->rejection()) {
+                // As in the server: a rejection does not inherit the coding promise.
                 rejection = *admitted_rejection;
+                admission->tail().disable_response_coding();
             }
         }
         const auto& request_services = admission ? admission->services() : services;

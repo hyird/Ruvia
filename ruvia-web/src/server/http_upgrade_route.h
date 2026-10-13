@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <exception>
 #include <optional>
 #include <utility>
@@ -23,11 +22,6 @@
 // back to the ordinary buffered tail.
 
 namespace ruvia::detail {
-
-enum class http_upgrade_kind : std::uint8_t {
-    tunnel,
-    websocket,
-};
 
 class http_upgrade_route_outcome final {
 public:
@@ -75,7 +69,7 @@ private:
 // established session and reports a handler failure; it always runs once a
 // session exists, before any handler exception is surfaced.
 template <typename session_type, typename establish_type, typename finish_type>
-[[nodiscard]] task<http_upgrade_route_outcome> run_http_upgrade_route(http_upgrade_kind kind,
+[[nodiscard]] task<http_upgrade_route_outcome> run_http_upgrade_route(
     const route_table& routes, const http_request& request, const resolved_route& resolved, request_memory& memory,
     context_services services, std::optional<session_type>& session, establish_type& establish,
     finish_type& finish) {
@@ -83,11 +77,7 @@ template <typename session_type, typename establish_type, typename finish_type>
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
-        if (kind == http_upgrade_kind::tunnel) {
-            buffered = co_await routes.dispatch_tunnel(request, resolved, memory, terminal, std::move(services));
-        } else {
-            buffered = co_await routes.dispatch_websocket(request, resolved, memory, terminal, std::move(services));
-        }
+        buffered = co_await routes.dispatch_upgrade(request, resolved, memory, terminal, std::move(services));
     } catch (...) {
         failure = std::current_exception();
     }

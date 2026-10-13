@@ -11,19 +11,16 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/tcp_socket_options.h"
 #include "ruvia/http/http_number_format.h"
 
 #include "tls/tls_stream_end.h"
+#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
-namespace {
 
-[[nodiscard]] bool is_tls_error(const std::error_code& error) noexcept {
+bool is_tls_error(const std::error_code& error) noexcept {
     return error.category() == asio::error::get_ssl_category() || error == asio::ssl::error::stream_truncated;
 }
-
-}  // namespace
 
 client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
     const worker_handle& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)

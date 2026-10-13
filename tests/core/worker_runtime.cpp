@@ -43,7 +43,7 @@ RUVIA_TEST(worker_runtime_drains_accepted_work_before_start) {
     RUVIA_CHECK_EQ(runtime.state(), state::stopped);
     RUVIA_CHECK(!worker_value.valid());
     RUVIA_CHECK(!worker_value.post([] {}).accepted());
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { runtime.start(); }));
+    RUVIA_CHECK(!runtime.start());
 }
 
 RUVIA_TEST(worker_runtime_keeps_owner_until_external_producers_quiesce) {
@@ -70,7 +70,7 @@ RUVIA_TEST(worker_runtime_keeps_owner_until_external_producers_quiesce) {
             phases.push_back(4);
             shutdown_on_owner = worker_value.is_current(); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     ready.get_future().get();
     runtime.request_stop();
     admission_stopped.get_future().get();
@@ -116,13 +116,14 @@ RUVIA_TEST(worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
             shutdown_after_completion = completion_on_owner && worker_value.is_current();
             phases.push_back(4); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     runtime.join();
     RUVIA_CHECK(failure_on_owner);
     RUVIA_CHECK(shutdown_after_completion);
     RUVIA_CHECK_EQ(reported, runtime.failure());
     RUVIA_CHECK_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { runtime.rethrow_failure(); }));
+    RUVIA_CHECK(runtime.failure() != nullptr);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)runtime.start(); }));
 }
 
 RUVIA_TEST(worker_runtime_concurrent_stop_and_join_share_one_barrier) {
@@ -136,7 +137,7 @@ RUVIA_TEST(worker_runtime_concurrent_stop_and_join_share_one_barrier) {
                 runtime.finalize(); },
             .shutdown_ = [&] { ++shutdowns; },
         });
-        runtime.start();
+        RUVIA_CHECK(runtime.start());
         std::thread first([&] {
             runtime.request_stop();
             runtime.join();
@@ -180,7 +181,7 @@ RUVIA_TEST(worker_runtime_rejects_self_join_without_losing_cleanup) {
     runtime.configure({
         .startup_ = [&] { rejected = ruvia::testing::throws_on([&] { runtime.join(); }); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     runtime.join();
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(runtime.state(), state::stopped);
@@ -226,7 +227,7 @@ RUVIA_TEST(worker_runtime_serves_only_after_owner_published_readiness) {
             ++serves;
             served_on_owner.store(worker_value.is_current()); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     RUVIA_CHECK(runtime.wait_until_ready());
     RUVIA_CHECK_EQ(serves.load(), 0);
     runtime.request_serve();
@@ -246,7 +247,7 @@ RUVIA_TEST(worker_runtime_stop_before_readiness_aborts_startup) {
         .serve_ = [&] { served = true; },
         .abandon_ = [&] { abandoned.store(true); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     runtime.request_stop();
     RUVIA_CHECK(!runtime.wait_until_ready());
     RUVIA_CHECK(!runtime.wait_until_serving());
@@ -274,7 +275,7 @@ RUVIA_TEST(worker_runtime_first_failure_wakes_waiters_and_reaches_hook_once) {
             (void)runtime.fail(std::make_exception_ptr(std::runtime_error("second"))); },
         .failure_ = [&](std::exception_ptr) noexcept { ++reports; },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     std::string message;
     try {
         (void)runtime.wait_until_ready();
@@ -293,7 +294,7 @@ RUVIA_TEST(worker_runtime_serve_failure_fails_the_runtime) {
         .startup_ = [&] { runtime.mark_ready(); },
         .serve_ = [] { throw std::runtime_error("serve failed"); },
     });
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     RUVIA_CHECK(runtime.wait_until_ready());
     runtime.request_serve();
     RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)runtime.wait_until_serving(); }));
@@ -879,7 +880,7 @@ RUVIA_TEST(worker_runtime_retains_control_payload_until_owner_completion) {
         initialized.set_value();
         release.wait();
     }});
-    runtime.start();
+    RUVIA_CHECK(runtime.start());
     initialized.get_future().get();
     auto payload_value = std::make_shared<int>(7);
     std::weak_ptr<int> lifetime = payload_value;

@@ -21,6 +21,14 @@ namespace ruvia::detail {
     return *result_value.committed();
 }
 
+// Commits a framework response that ends the connection: a rejection, a
+// failed route, or a route response the connection cannot outlive.
+[[nodiscard]] inline http1_session_request_completion close_with_framework_response(
+    http_response& response, http1_request_connection_plan connection_plan) {
+    return http1_session_request_completion::make_buffered_closing(
+        require_http1_final_response_commit(response, connection_plan.require_close()));
+}
+
 // Commits a route's buffered response. A response that breaks the HTTP/1
 // final-response rules becomes a rejected completion that the session answers
 // through the exception handler instead of the route response.

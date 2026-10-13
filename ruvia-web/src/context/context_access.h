@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #include "ruvia/web/context.h"
@@ -43,7 +44,7 @@ struct context_access final {
         return context_value.request_;
     }
 
-    [[nodiscard]] static rate_limiter_type* rate_limiter(context& context_value) noexcept {
+    [[nodiscard]] static detail::rate_limiter* rate_limiter(context& context_value) noexcept {
         return context_value.services().rate_limiter();
     }
 
@@ -62,6 +63,16 @@ struct context_access final {
     [[nodiscard]] static bool has_response_header(
         const context& context_value, std::string_view name) noexcept {
         return context_value.response_state().active_response().header(name).has_value();
+    }
+
+    // The status the handler set; a file response sends it for the full body.
+    [[nodiscard]] static http_status_code response_status(const context& context_value) noexcept {
+        return context_value.response_state().metadata().status();
+    }
+
+    static void apply_response_state(const context& context_value, http_response& response,
+        std::optional<http_status_code> status_code) {
+        context_value.apply_response_state(response, status_code);
     }
 
     // Called by a driver right before it hands the upgrade/CONNECT handshake
