@@ -16,7 +16,39 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime_context.h"
 
+#include "test_harness.h"
 #include "worker_task_fixture.h"
+
+namespace ruvia::test::blocking_pool_tests {
+
+struct yielding_result final {
+    explicit yielding_result(int value) noexcept
+        : value_(value) {}
+
+    yielding_result(const yielding_result&) = delete;
+    yielding_result& operator=(const yielding_result&) = delete;
+    yielding_result(yielding_result&& other) noexcept
+        : value_(std::exchange(other.value_, -1)) {
+        // Moving a user result may yield while completion and suspension race.
+        std::this_thread::yield();
+    }
+
+    int value_;
+};
+
+task<void> exercise_completion_during_suspend(
+    blocking_pool& pool, worker_handle worker, bool& success) {
+    for (int value = 0; value < 1024; ++value) {
+        auto result = co_await try_run_blocking(pool, worker,
+            [value] { return yielding_result(value); });
+        if (!result.completed() || std::move(result).value().value_ != value) {
+            co_return;
+        }
+    }
+    success = true;
+}
+
+}  // namespace ruvia::test::blocking_pool_tests
 
 namespace {
 
@@ -541,7 +573,7 @@ bool test_stop_drains_without_running_queued_tasks() {
 
 }  // namespace
 
-int main() {
+RUVIA_TEST(blocking_pool_results_and_worker_progress) {
     bool results = false;
     bool worker_stays_free = false;
     {
@@ -555,7 +587,23 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(results);
+    RUVIA_CHECK(worker_stays_free);
+}
 
+RUVIA_TEST(blocking_pool_cross_thread_completion_preserves_results) {
+    bool success = false;
+    blocking_pool pool({.thread_count_ = 1});
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    ruvia::test::run_worker_tasks(runtime,
+        ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(pool, runtime.handle(), success));
+    pool.join();
+    runtime.detach();
+    RUVIA_CHECK(success);
+}
+
+RUVIA_TEST(blocking_pool_cancellation_releases_the_waiter) {
     bool cancelled = false;
     std::atomic_bool cancelled_callable_finished{false};
     {
@@ -575,8 +623,11 @@ int main() {
         pool.join();
         runtime.detach();
     }
-    cancelled = cancelled && cancelled_callable_finished.load(std::memory_order_acquire);
+    RUVIA_CHECK(cancelled);
+    RUVIA_CHECK(cancelled_callable_finished.load(std::memory_order_acquire));
+}
 
+RUVIA_TEST(blocking_pool_timeout_releases_the_waiter) {
     bool timeout = false;
     {
         thread_gate gate;
@@ -588,7 +639,10 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(timeout);
+}
 
+RUVIA_TEST(blocking_pool_timeout_saturates) {
     bool saturating_timeout = false;
     {
         thread_gate gate;
@@ -602,7 +656,10 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(saturating_timeout);
+}
 
+RUVIA_TEST(blocking_pool_stop_releases_queued_waiters) {
     bool stopped_pool = false;
     {
         thread_gate gate;
@@ -616,7 +673,10 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(stopped_pool);
+}
 
+RUVIA_TEST(blocking_pool_full_queue_rejects_work) {
     bool queue_full = false;
     {
         thread_gate gate;
@@ -629,7 +689,10 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(queue_full);
+}
 
+RUVIA_TEST(blocking_pool_worker_stop_releases_the_waiter) {
     bool worker_stopping = false;
     {
         thread_gate gate;
@@ -643,7 +706,10 @@ int main() {
         pool.join();
         runtime.detach();
     }
+    RUVIA_CHECK(worker_stopping);
+}
 
+RUVIA_TEST(blocking_pool_stopped_worker_rejects_work) {
     bool stopped_worker = false;
     std::atomic_bool stopped_worker_task_ran{false};
     {
@@ -659,7 +725,10 @@ int main() {
         stopped_worker =
             stopped_worker && !stopped_worker_task_ran.load() && pool.stats().completed_ == 0;
     }
+    RUVIA_CHECK(stopped_worker);
+}
 
+RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
     bool settled_before_submit = false;
     std::atomic_bool settled_task_ran{false};
     {
@@ -677,7 +746,10 @@ int main() {
         settled_before_submit =
             settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
     }
+    RUVIA_CHECK(settled_before_submit);
+}
 
+RUVIA_TEST(blocking_pool_rejects_empty_tasks) {
     bool rejects_empty_task = false;
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
@@ -691,18 +763,33 @@ int main() {
         rejects_empty_task =
             rejects_empty_task && pool.submit([] {}) == blocking_submit_status::pool_stopped;
     }
+    RUVIA_CHECK(rejects_empty_task);
+}
 
-    const bool default_sizing = blocking_pool_defaults_are_bounded_by_cpu_policy();
-    const bool destruction_does_not_join = test_destruction_does_not_join_running_callable();
-    const bool join_stops_and_waits = test_join_stops_and_waits_for_running_callable();
-    const bool join_rejects_pool_thread = test_join_rejects_pool_thread_before_stopping();
-    const bool stop_drains_without_running = test_stop_drains_without_running_queued_tasks();
-    const bool callable_reentry = test_callable_moves_and_destruction_can_query_pool();
-    const bool stop_during_move = test_callable_move_can_stop_pool_before_publication();
-    const bool all_passed = default_sizing && results && worker_stays_free &&
-                            cancelled && timeout && saturating_timeout && stopped_pool && queue_full &&
-                            worker_stopping && stopped_worker && settled_before_submit && rejects_empty_task &&
-                            destruction_does_not_join && join_stops_and_waits && join_rejects_pool_thread &&
-                            stop_drains_without_running && callable_reentry && stop_during_move;
-    return all_passed ? 0 : 1;
+RUVIA_TEST(blocking_pool_default_sizing_is_bounded) {
+    RUVIA_CHECK(blocking_pool_defaults_are_bounded_by_cpu_policy());
+}
+
+RUVIA_TEST(blocking_pool_destruction_does_not_join_running_work) {
+    RUVIA_CHECK(test_destruction_does_not_join_running_callable());
+}
+
+RUVIA_TEST(blocking_pool_join_waits_for_running_work) {
+    RUVIA_CHECK(test_join_stops_and_waits_for_running_callable());
+}
+
+RUVIA_TEST(blocking_pool_join_rejects_its_own_thread) {
+    RUVIA_CHECK(test_join_rejects_pool_thread_before_stopping());
+}
+
+RUVIA_TEST(blocking_pool_stop_discards_queued_work_without_running_it) {
+    RUVIA_CHECK(test_stop_drains_without_running_queued_tasks());
+}
+
+RUVIA_TEST(blocking_pool_callable_moves_and_destruction_allow_reentry) {
+    RUVIA_CHECK(test_callable_moves_and_destruction_can_query_pool());
+}
+
+RUVIA_TEST(blocking_pool_callable_move_can_stop_before_publication) {
+    RUVIA_CHECK(test_callable_move_can_stop_pool_before_publication());
 }

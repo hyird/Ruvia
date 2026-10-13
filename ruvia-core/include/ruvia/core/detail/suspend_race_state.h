@@ -19,6 +19,7 @@ struct suspend_race_pending final {};
 //
 // Payload moves may throw; complete() rolls the state back to pending so the
 // awaiter can retry or propagate the failure from the original call site.
+// Calls must be serialized by the owner, either on one thread or under its lock.
 template <typename t_type>
 class suspend_race_state final {
 public:

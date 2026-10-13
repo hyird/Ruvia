@@ -158,6 +158,7 @@ public:
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
         auto& owner_value = state();
         auto* waiter = this;
+        bool suspended = false;
         {
             auto lock = owner_value.lock_state();
             auto& slot = owner_value.wait_slot_;
@@ -193,15 +194,18 @@ public:
                         worker_wait_result_access::outcome<t_type>(worker_wait_status::worker_stopping));
                 }
             }
+            // Completion may arrive from another thread. Publish the
+            // continuation under the same lock as the result transition.
+            suspended = completion_.suspend(handle);
         }
         // Registered only once the wait really suspends. A stop requested since
         // await_ready runs the callback inline, which defers the cancellation
         // to this worker behind the suspension. The callback fits the inline
         // storage of move_only_function, so registration cannot fail.
-        if (generation_ != 0) {
+        if (suspended && generation_ != 0) {
             register_cancellation();
         }
-        return completion_.suspend(handle);
+        return suspended;
     }
 
     [[nodiscard]] worker_wait_result<t_type> take_result() {
