@@ -22,7 +22,6 @@
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_media_type.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/util/fnv1a.h"
 
 #include "http/static_file_metadata.h"

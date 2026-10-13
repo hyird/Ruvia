@@ -154,10 +154,9 @@ public:
 
 private:
     friend struct detail::jwt_payload_access;
-    friend jwt_payload jwt_decode_unverified(jwt_decode_unverified_options);
     friend jwt_payload jwt_verify(const jwt_verify_options&);
 
-    explicit jwt_payload(jwt_payload_options options = {});
+    explicit jwt_payload(jwt_payload_options options);
     jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource);
     jwt_payload(jwt_payload&& other, std::pmr::memory_resource* resource);
     void swap_values(jwt_payload& other) noexcept;

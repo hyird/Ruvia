@@ -29,7 +29,8 @@ struct date_cache final {
 
 }  // namespace
 
-std::string_view cached_date_header(std::time_t now) noexcept {
+std::string_view cached_date_header() noexcept {
+    const auto now = std::time(nullptr);
     auto& cache = worker_date_cache();
     if (!cache.initialized_ || cache.second_ != now) {
         cache.second_ = now;

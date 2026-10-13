@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cstring>
 #include <utility>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -82,7 +81,7 @@ void multipart_input_lifecycle::feed(std::string_view chunk) {
         // borrowed input, so either failure leaves that input retryable.
         open->bytes_.reserve(remaining + chunk.size());
     }
-    compact_consumed_prefix(compact_consumed_prefix_bytes);
+    compact_consumed_prefix();
     open = std::get_if<multipart_streaming_input_open>(&value_);
     open->bytes_.append(chunk.data(), chunk.size());
 }
@@ -106,10 +105,10 @@ void multipart_input_lifecycle::consume(std::size_t bytes_value) noexcept {
     }
 }
 
-void multipart_input_lifecycle::compact_consumed_prefix(std::size_t threshold) {
+void multipart_input_lifecycle::compact_consumed_prefix() {
     auto* owned = owned_bytes();
     if (owned != nullptr) {
-        detail::compact_consumed_prefix(*owned, offset_, threshold);
+        detail::compact_consumed_prefix(*owned, offset_, compact_consumed_prefix_bytes);
     }
 }
 

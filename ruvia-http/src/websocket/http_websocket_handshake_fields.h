@@ -3,8 +3,6 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/http/http_header.h"
-
 namespace ruvia {
 
 class http_request;

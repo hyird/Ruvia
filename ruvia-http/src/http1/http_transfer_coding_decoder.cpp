@@ -37,14 +37,13 @@ private:
     struct active final {};
     struct gzip_member_boundary final {};
     struct completed final {};
-    struct decoder_failed final {};
-    using state = std::variant<active, gzip_member_boundary, completed, http_transfer_coding_decode_error, decoder_failed>;
+    using state = std::variant<active, gzip_member_boundary, completed>;
     [[nodiscard]] inflate_step_result inflate_step(std::string_view input, std::span<char> output) noexcept;
     [[nodiscard]] static http_transfer_coding_decode_result need_input(std::size_t consumed) noexcept;
     [[nodiscard]] static http_transfer_coding_decode_result output(std::size_t consumed, std::string_view bytes) noexcept;
     [[nodiscard]] static http_transfer_coding_decode_result complete(std::size_t consumed) noexcept;
-    [[nodiscard]] http_transfer_coding_decode_result fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept;
-    [[nodiscard]] http_transfer_coding_decode_result fail_decoder(std::size_t consumed) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result fail_decoder(std::size_t consumed) noexcept;
     zlib_inflate_stream stream_;
     state state_{active{}};
     protocol_byte_limit body_limit_;
@@ -81,17 +80,8 @@ transfer_coding_decoder::transfer_coding_decoder(
 
 http_transfer_coding_decode_result transfer_coding_decoder::decode(
     std::string_view input, std::span<char> output_buffer) noexcept {
-    if (std::holds_alternative<decoder_failed>(state_)) {
-        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
-    }
-    if (const auto* failure = std::get_if<http_transfer_coding_decode_error>(&state_)) {
-        return fail(0, *failure);
-    }
     if (std::holds_alternative<completed>(state_)) {
         return input.empty() ? complete(0) : fail(0, http_transfer_coding_decode_error::invalid_content);
-    }
-    if (output_buffer.empty()) {
-        return fail_decoder(0);
     }
 
     std::size_t consumed = 0;
@@ -158,17 +148,11 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexcept {
-    if (std::holds_alternative<decoder_failed>(state_)) {
-        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
-    }
     if (std::holds_alternative<completed>(state_) ||
         std::holds_alternative<gzip_member_boundary>(state_) ||
         (std::holds_alternative<active>(state_) && !received_input_)) {
         state_.emplace<completed>();
         return complete(0);
-    }
-    if (const auto* failure = std::get_if<http_transfer_coding_decode_error>(&state_)) {
-        return fail(0, *failure);
     }
     return fail(0, http_transfer_coding_decode_error::invalid_content);
 }
@@ -210,12 +194,10 @@ http_transfer_coding_decode_result transfer_coding_decoder::complete(std::size_t
 
 http_transfer_coding_decode_result transfer_coding_decoder::fail(
     std::size_t consumed, http_transfer_coding_decode_error error) noexcept {
-    state_.emplace<http_transfer_coding_decode_error>(error);
     return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, error));
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::fail_decoder(std::size_t consumed) noexcept {
-    state_.emplace<decoder_failed>();
     return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
 }
 
@@ -378,9 +360,6 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
             if (decoded.complete() != nullptr) {
                 stage.complete_ = true;
                 progressed = true;
-            } else if (decoded.need_input() == nullptr) {
-                impl_->decoder_failed_ = true;
-                return failed(wire_consumed);
             }
         }
 
@@ -425,9 +404,6 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
         if (finished.decoder_failure() != nullptr) {
             impl_->decoder_failed_ = true;
             return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
-        }
-        if (finished.complete() == nullptr) {
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(0));
         }
         stage.complete_ = true;
     }

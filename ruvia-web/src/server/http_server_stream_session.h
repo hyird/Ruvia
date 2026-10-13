@@ -260,10 +260,10 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             }
             if (const auto* request_head = ready_head) {
                 // Reset phase so request_header_timeout stops counting against dispatch
-                // time. Body readers will set reading_payload on their own; the
-                // streaming/websocket paths set their own phases below; the
-                // buffered write path sets writing before responding. Until
-                // one of those transitions, idle_timeout governs as the
+                // time. Body readers will set reading_payload on their own; upgraded
+                // sessions enter long_lived; a response stream's sink times its own
+                // writes; the buffered write path sets writing before responding.
+                // Until one of those transitions, idle_timeout governs as the
                 // deadman switch for hung handlers.
                 scanner_entry.set_phase(connection_scanner::phase_type::idle);
                 const auto expectation_plan =

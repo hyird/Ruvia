@@ -60,7 +60,6 @@ public:
 
 private:
     friend class http_client_response;
-    friend class detail::http_client_pool;
 
     ~http_client_response_body() = default;
 
@@ -107,12 +106,11 @@ private:
     friend class http_client_exchange;
     friend class http_client_tunnel;
     friend class http_capsule_stream;
-    friend class http_datagram_stream;
     friend class detail::http_capsule_stream_state;
     friend class http_client_request_body_writer;
 
     explicit http_client_response(detail::http_client_pool& pool);
-    http_client_response(detail::http_client_response_state* state_value, bool retain) noexcept;
+    explicit http_client_response(detail::http_client_response_state* state_value) noexcept;
     void release() noexcept;
 
     detail::http_client_response_state* state_{nullptr};

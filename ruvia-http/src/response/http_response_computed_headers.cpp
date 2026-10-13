@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/http_known_method.h"
@@ -23,10 +22,6 @@ inline constexpr std::size_t allow_header_method_slots = static_cast<std::size_t
 
 void write_content_range_header_value(
     http_response_header& header_value, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
-    if (length == 0) {
-        throw std::logic_error("file response byte range length must not be zero");
-    }
-
     detail::http_raw_wire_sink sink(detail::http_response_header_access::value_begin(header_value));
     sink.append("bytes ");
     sink.append_unsigned(offset);

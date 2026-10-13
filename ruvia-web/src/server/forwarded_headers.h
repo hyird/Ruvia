@@ -73,7 +73,6 @@ inline void visit_comma_separated(std::string_view value, fn_type&& fn) {
 }
 
 inline void parse_forwarded_element(std::string_view element, forwarded_client& hop) noexcept {
-    hop = {};
     // RFC 7239 values are token / quoted-string; a ';' inside quotes is data.
     http_visit_semicolon_parameters_quoted_field(
         element, [&](std::string_view name, std::string_view value) {

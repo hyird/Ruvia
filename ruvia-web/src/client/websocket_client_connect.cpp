@@ -101,7 +101,7 @@ task<void> websocket_client_state::perform_handshake() {
         throw websocket_client_error(websocket_client_error::code_type::invalid_config, message);
     }
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = memory_.resource()});
-    co_await write_transport(prepared->head(), config_.write_timeout_);
+    co_await write_transport(prepared->head());
 
     // The response head is read into the request buffer's storage.
     request_buffer.clear();

@@ -47,9 +47,6 @@ app_configuration::app_configuration(std::pmr::memory_resource* resource)
 
 void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
     const auto& value = descriptor.descriptor();
-    if (!value.valid() || value.create() == nullptr || value.destroy() == nullptr) {
-        throw std::invalid_argument("app middleware must be constructible and invocable");
-    }
     if (value.validated_model_type_key() != nullptr) {
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
     }

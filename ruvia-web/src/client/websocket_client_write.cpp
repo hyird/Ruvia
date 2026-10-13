@@ -1,7 +1,5 @@
-#include <chrono>
 #include <exception>
 #include <memory_resource>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,14 +45,13 @@ task<void> websocket_client_state::wait_for_write_idle(write_wait_type type) {
     }
 }
 
-task<void> websocket_client_state::write_transport(
-    std::string_view bytes_value, std::optional<std::chrono::milliseconds> configured_timeout) {
+task<void> websocket_client_state::write_transport(std::string_view bytes_value) {
     if (bytes_value.empty()) {
         co_return;
     }
     // The transport write lane owns the deadline. Its timeout result retires
     // the whole connection like any other transport failure.
-    const operation_timeout timeout(configured_timeout);
+    const operation_timeout timeout(config_.write_timeout_);
     const auto result_value = co_await transport_.write(bytes_value, timeout);
     if (!result_value.ok()) {
         throw_transport_failure(result_value);
@@ -68,7 +65,7 @@ task<void> websocket_client_state::flush_output() {
         auto& protocol = require_protocol();
         const auto plan = protocol.output_plan();
         if (!plan.bytes().empty()) {
-            co_await write_transport(plan.bytes(), config_.write_timeout_);
+            co_await write_transport(plan.bytes());
             if (protocol.consume_output(plan.bytes().size()) == websocket_output_consume_status::out_of_range) {
                 std::terminate();
             }

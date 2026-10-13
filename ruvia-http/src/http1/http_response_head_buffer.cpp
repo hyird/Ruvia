@@ -18,13 +18,8 @@ void http_response_head_buffer::reset() noexcept {
 }
 
 void http_response_head_buffer::spill_to_heap(std::size_t min_capacity) {
-    const auto* const stack_state = std::get_if<stack_state_type>(&state_);
-    if (stack_state == nullptr) {
-        return;
-    }
-
     heap_.reserve(std::max(stack_.size() * 2, min_capacity));
-    heap_.assign(stack_.data(), stack_state->used_);
+    heap_.assign(stack_.data(), std::get<stack_state_type>(state_).used_);
     state_.emplace<heap_state_type>();
 }
 

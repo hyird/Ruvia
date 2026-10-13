@@ -281,9 +281,8 @@ private:
         alignas(http_response_header) std::byte bytes_[sizeof(http_response_header)];
     };
 
-    // Stages up to `capacity` owned descriptors without touching the table and
+    // Stages up to three owned descriptors without touching the table and
     // publishes them later without allocation or failure.
-    template <std::size_t capacity>
     class descriptor_stage;
 
     http_response_headers(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
@@ -352,11 +351,11 @@ private:
         std::string_view value, std::uint32_t known_bit) noexcept;
     http_response_header& append_header(http_response_header header);
     http_response_header& add_stable_view(
-        std::string_view name, std::string_view value, std::uint32_t known_bit = 0);
+        std::string_view name, std::string_view value, std::uint32_t known_bit);
     http_response_header& add_uninitialized_value(
-        std::string_view name, std::size_t value_size, std::uint32_t known_bit = 0);
+        std::string_view name, std::size_t value_size, std::uint32_t known_bit);
     http_response_header& add(
-        std::string_view name, std::string_view value, std::uint32_t known_bit = 0);
+        std::string_view name, std::string_view value, std::uint32_t known_bit);
     void assign(http_response_header& header, std::string_view name, std::string_view value,
         std::uint32_t known_bit);
     http_response_header& assign_uninitialized_value(http_response_header& header, std::string_view name,

@@ -1,7 +1,5 @@
 #include "ruvia/http/multipart_parser.h"
 
-#include <algorithm>
-#include <cstring>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -319,9 +317,6 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
             return failure->parse_error();
         }
         const auto* part_headers = parsed_headers.headers();
-        if (part_headers == nullptr) {
-            return multipart_parse_error::invalid_content_disposition;
-        }
 
         current_name_.clear();
         detail::http_append_decoded_quoted_pairs(current_name_, part_headers->name());

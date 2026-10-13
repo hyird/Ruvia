@@ -91,7 +91,7 @@ void http_content_coding_field_parser::update(std::string_view value) {
     if (invalid_) {
         return;
     }
-    invalid_ = !visit_content_coding_members(value, role_, [this](std::string_view token) noexcept {
+    invalid_ = !visit_content_coding_members(value, http_field_list_role::recipient, [this](std::string_view token) noexcept {
         const auto coding = http_content_coding_from_token(token);
         if (!coding.has_value()) {
             unsupported_ = true;
@@ -126,7 +126,7 @@ namespace ruvia {
 
 http_content_coding_field_result parse_http_content_coding(
     std::string_view value, std::pmr::memory_resource* resource) {
-    detail::http_content_coding_field_parser parser(detail::http_field_list_role::recipient, resource);
+    detail::http_content_coding_field_parser parser(resource);
     parser.update(value);
     return std::move(parser).finish();
 }

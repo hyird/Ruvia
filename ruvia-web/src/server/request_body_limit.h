@@ -16,7 +16,7 @@ namespace ruvia::detail {
 // bound, and it makes an otherwise unlimited stream route bounded.
 [[nodiscard]] inline protocol_byte_limit request_body_byte_limit(request_body_mode body_mode,
     const std::optional<std::size_t>& max_stream_body_bytes, std::size_t max_buffered_body_bytes,
-    std::size_t route_limit = 0) {
+    std::size_t route_limit) {
     if (body_mode != request_body_mode::stream) {
         const auto limit = route_limit != 0 && route_limit < max_buffered_body_bytes
                                ? route_limit

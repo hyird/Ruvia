@@ -46,7 +46,7 @@ worker_submission_view worker_runtime_context::submission() const& noexcept {
 }
 
 void worker_runtime_context::run() {
-    impl_->dispatcher_->run_context();
+    impl_->dispatcher_->run_context({}, {}, {});
 }
 
 void worker_runtime_context::run(move_only_function<void()> startup_handler,

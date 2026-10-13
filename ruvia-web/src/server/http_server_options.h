@@ -8,9 +8,6 @@
 #include <optional>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/web/rate_limit_rule.h"
 #include "ruvia/web/server_config.h"
 
@@ -151,10 +148,10 @@ struct http_server_options final {
     worker_codecs* codecs_{nullptr};
     std::optional<cors_options> cors_{};
     document_root_type document_root_{};
-    // Peers whose forwarding headers may be believed. Empty by default, so an
-    // unconfigured server treats every direct peer as the client.
     // Absent means no handler deadline anywhere, and nothing is armed.
     std::optional<deadline_config> deadline_{};
+    // Peers whose forwarding headers may be believed. Empty by default, so an
+    // unconfigured server treats every direct peer as the client.
     trusted_proxy_set trusted_proxies_{};
     access_log_sink access_log_{};
     const env* env_{nullptr};

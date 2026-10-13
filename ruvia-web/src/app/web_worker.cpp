@@ -17,7 +17,7 @@ web_worker_context::web_worker_context(const worker_handle& worker_value, std::p
     const detail::worker_state_registry* worker_states, blocking_pool* blocking_pool_value,
     const stop_token& stop_token_value) noexcept
     : capabilities_(worker_value, stop_token_value, worker_states, blocking_pool_value),
-      resource_(pmr_resource_or_default(resource)),
+      resource_(resource),
       client_registries_(client_registries) {}
 
 const worker_handle& web_worker_context::worker() const& noexcept {

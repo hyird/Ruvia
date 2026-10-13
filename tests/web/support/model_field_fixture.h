@@ -17,8 +17,6 @@ namespace model_field_test {
 
 RUVIA_MODEL(accessor_surface_request, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
-RUVIA_MODEL(accessor_surface_response, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
-
 RUVIA_MODEL(nested_model_item, RUVIA_REQUIRED_FIELD(id, ruvia::uint32),
     RUVIA_OPTIONAL_FIELD(label, ruvia::string));
 

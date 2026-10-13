@@ -32,7 +32,7 @@ void http_client_result_budget_domain::release_in_flight(std::size_t bytes_value
 bool http_client_result_budget_domain::try_reserve(std::size_t bytes_value) noexcept {
     auto retained = retained_bytes_.load(std::memory_order_relaxed);
     for (;;) {
-        if (retained > max_retained_bytes_ || bytes_value > max_retained_bytes_ - retained) {
+        if (bytes_value > max_retained_bytes_ - retained) {
             return false;
         }
         if (retained_bytes_.compare_exchange_weak(
@@ -60,23 +60,17 @@ http_client_result_budget_lease::http_client_result_budget_lease(
       bytes_(std::exchange(other.bytes_, 0)) {}
 
 http_client_result_budget_lease::~http_client_result_budget_lease() {
-    reset();
+    if (domain_ != nullptr) {
+        domain_->release(bytes_);
+    }
 }
 
 std::optional<http_client_result_budget_lease> http_client_result_budget_lease::try_acquire(
     const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept {
-    if (domain == nullptr || !domain->try_reserve(bytes_value)) {
+    if (!domain->try_reserve(bytes_value)) {
         return std::nullopt;
     }
     return http_client_result_budget_lease(domain, bytes_value);
-}
-
-void http_client_result_budget_lease::reset() noexcept {
-    if (domain_ != nullptr) {
-        domain_->release(bytes_);
-        bytes_ = 0;
-        domain_.reset();
-    }
 }
 
 }  // namespace ruvia::detail

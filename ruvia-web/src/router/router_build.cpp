@@ -95,11 +95,6 @@ detail::route_table::route_table(
       handler_targets_(resource_),
       middleware_instances_(resource_),
       middleware_frames_(resource_) {
-    // Structural guard: the plan's controller slots index this worker's
-    // instances, which must come from the same registrars.
-    if (controllers.size() != plan.controller_count_) {
-        throw std::logic_error("worker controllers do not match the compiled route plan");
-    }
     handler_targets_.reserve(plan.routes_.size());
     for (const auto& route : plan.routes_) {
         handler_targets_.push_back(controllers.instance(route.controller()));

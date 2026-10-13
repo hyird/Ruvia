@@ -222,9 +222,6 @@ public:
     [[nodiscard]] http_response_tail& tail() noexcept {
         return tail_;
     }
-    [[nodiscard]] const http_response_tail& tail() const noexcept {
-        return tail_;
-    }
 
 private:
     friend http_request_admission admit_http_request(const http_request_admission_input& input,

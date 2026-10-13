@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <variant>
 
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 
 namespace ruvia {
@@ -49,11 +48,8 @@ public:
     // keeps writing yields the worker thread each pass instead of hard-spinning
     // the event loop -- other connections on the worker keep being served.
     [[nodiscard]] bool body_suppressed_complete() const noexcept {
-        if (!ended()) {
-            return false;
-        }
-        const auto* plan = commit_plan();
-        return plan != nullptr && plan->body_plan().body_suppressed();
+        // An ended stream always holds its commit plan.
+        return ended() && commit_plan()->body_plan().body_suppressed();
     }
 
     [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
@@ -147,8 +143,7 @@ public:
             // directly, so the handler's first write arrives here. Writing
             // the body a GET would have is correct handler behavior, not a
             // sequencing bug -- signal head-only completion instead.
-            const auto* plan = commit_plan();
-            if (plan != nullptr && plan->body_plan().body_suppressed()) {
+            if (commit_plan()->body_plan().body_suppressed()) {
                 throw response_stream_head_only_complete();
             }
             throw std::logic_error("response stream is already ended");

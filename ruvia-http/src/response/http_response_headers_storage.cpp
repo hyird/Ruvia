@@ -83,10 +83,6 @@ void http_response_headers::clear() noexcept {
 }
 
 void http_response_headers::spill(std::size_t min_capacity) {
-    if (spilled_) {
-        return;
-    }
-
     // Reserve is the only allocation step. Populate the new table only after
     // it succeeds, and publish `spilled_`/`size_` last. The descriptors are
     // trivially copyable and the vector has enough capacity, so a hypothetical

@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -80,9 +79,6 @@ private:
         write_guard_type(websocket_client_state& state_value, write_phase_type phase)
             : state_(state_value),
               phase_(phase) {
-            if (phase_ == write_phase_type::idle) {
-                std::terminate();
-            }
             if (state_.write_phase_ != write_phase_type::idle) {
                 throw std::logic_error("concurrent WebSocket client writes are not supported");
             }
@@ -175,8 +171,7 @@ private:
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
     void feed_input(std::string_view bytes);
-    [[nodiscard]] task<void> write_transport(std::string_view bytes,
-        std::optional<std::chrono::milliseconds> configured_timeout);
+    [[nodiscard]] task<void> write_transport(std::string_view bytes);
     void arm(worker_timer_registration& timer, std::optional<std::chrono::milliseconds> timeout,
         client_abort_reason reason);
     void disarm(worker_timer_registration& timer) noexcept;

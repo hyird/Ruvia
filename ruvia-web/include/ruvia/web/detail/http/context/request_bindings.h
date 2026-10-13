@@ -128,20 +128,9 @@ public:
     }
 
     template <typename t_type>
-        requires(!std::is_lvalue_reference_v<t_type>)
-    [[nodiscard]] request_binding_handle<std::remove_cvref_t<t_type>> bind_validated(
-        t_type&&, std::string_view = {}) = delete;
-
-    template <typename t_type>
     [[nodiscard]] request_binding_handle<t_type> bind_state(const t_type& value) {
         return request_binding_handle<t_type>(*this, value, request_binding_kind::request_state, {});
     }
-
-    // The node stores the value by address, so a temporary would leave the
-    // binding dangling the moment the full expression ends.
-    template <typename t_type>
-        requires(!std::is_lvalue_reference_v<t_type>)
-    [[nodiscard]] request_binding_handle<std::remove_cvref_t<t_type>> bind_state(t_type&&) = delete;
 
 private:
     template <typename t_type>

@@ -18,7 +18,6 @@
 #include "ruvia/http/http_status.h"
 
 #include "router/route_resolution.h"
-#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 

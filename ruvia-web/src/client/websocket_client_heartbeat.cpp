@@ -39,9 +39,6 @@ std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t n
 }
 
 void websocket_client_state::arm_heartbeat_timer(std::chrono::milliseconds delay) {
-    if (!config_.heartbeat_.ping_interval_.has_value()) {
-        return;
-    }
     heartbeat_timer_.cancel();
     // close_now() cancels this state-owned timer before retirement.
     (void)worker_.schedule_timer(heartbeat_timer_, worker_timer_deadline_after(std::max(delay, std::chrono::milliseconds{1})), [this](worker_timer_outcome outcome) noexcept {
@@ -114,8 +111,7 @@ void websocket_client_state::heartbeat_timer_fired() noexcept {
     // A heartbeat in flight sends its Ping once the write lane is idle, so a
     // due Ping spawns nothing. The evaluation still runs: a Ping write stalled
     // by a peer that stopped reading is aborted like any other stalled write.
-    if (!protocol_open() || !config_.heartbeat_.ping_interval_.has_value() || !heartbeat_ping_due() ||
-        heartbeat_in_flight_) {
+    if (!protocol_open() || !heartbeat_ping_due() || heartbeat_in_flight_) {
         return;
     }
 

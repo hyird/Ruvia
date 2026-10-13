@@ -15,7 +15,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/web_worker.h"
 
 #include "server/connection_drain.h"
 #include "server/connection_scanner.h"

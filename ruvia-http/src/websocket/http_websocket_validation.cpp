@@ -2,7 +2,6 @@
 #include <cstddef>
 #include <cstring>
 #include <optional>
-#include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"

@@ -106,7 +106,7 @@ scoped_operation<void> http_client_request_body_writer::write(std::string_view b
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_, true), std::pmr::string(bytes_value, state_->resource_)}));
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_)}));
 }
 scoped_operation<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value) & {
     if (state_ == nullptr) {
@@ -124,7 +124,7 @@ scoped_operation<void> http_client_request_body_writer::end(std::span<const http
         }
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_, true), std::move(validation).take_fields()}));
+        detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_), std::move(validation).take_fields()}));
 }
 bool http_client_request_body_writer::complete() const noexcept {
     return state_ == nullptr || state_->upload_->output_.ended_;
@@ -136,7 +136,7 @@ scoped_operation<http_client_response> http_client_exchange::response() & {
         throw std::logic_error("HTTP exchange response has already been transferred");
     }
     state_value->require_owner_worker("HTTP exchange must run on its owner worker");
-    return ::ruvia::make_scoped_operation(state_value->upload_->response_scope_, receive_owned(http_client_response(state_value, true)));
+    return ::ruvia::make_scoped_operation(state_value->upload_->response_scope_, receive_owned(http_client_response(state_value)));
 }
 task<http_client_response> http_client_exchange::receive_owned(http_client_response pin) {
     auto& state_value = *pin.state_;

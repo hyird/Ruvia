@@ -39,8 +39,8 @@ application& application::database(std::nullptr_t) {
 application& application::redis(redis_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
         [&](detail::app_state& state_value) {
-            detail::upsert_named_capability_definition(state_value.redis_, config.alias_, config.config_,
-                "redis alias must not be empty", process_resource());
+            detail::upsert_named_capability_definition(
+                state_value.redis_, config.alias_, config.config_, "redis alias must not be empty");
         });
 }
 
@@ -54,7 +54,7 @@ application& application::get_http_client(http_client_registration_config config
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_, config.config_,
-                "HTTP client alias must not be empty", process_resource());
+                "HTTP client alias must not be empty");
         });
 }
 

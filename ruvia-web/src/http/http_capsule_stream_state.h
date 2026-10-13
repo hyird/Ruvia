@@ -39,7 +39,7 @@ public:
     http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config)
         : worker_(tunnel.response_.state_->memory_domain().worker()),
           resource_(tunnel.response_.state_->resource_),
-          memory_pin_(http_client_response(tunnel.response_.state_, true)),
+          memory_pin_(http_client_response(tunnel.response_.state_)),
           client_(std::move(tunnel)),
           decoder_(config),
           config_(config),

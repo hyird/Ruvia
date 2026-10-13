@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <stdexcept>
 
 #include "ruvia/http/http_pmr_string.h"
@@ -190,12 +189,9 @@ void ws_connection::append_frame(
 
 void ws_connection::fail(std::uint16_t code) {
     if (close_phase_ == close_phase_type::open) {
+        // Every protocol failure code is a valid Close code, so encoding succeeds.
         const auto payload_value = encode_websocket_close_payload(code, {});
-        const auto* encoded = payload_value.encoded();
-        if (encoded == nullptr) {
-            return;
-        }
-        append_frame(websocket_opcode::close, encoded->bytes());
+        append_frame(websocket_opcode::close, payload_value.encoded()->bytes());
         close_phase_ = close_phase_type::final_output_queued;
         return;
     }
@@ -366,21 +362,19 @@ std::optional<websocket_event> ws_connection::poll_impl() & {
             if (control->opcode() == websocket_opcode::pong) {
                 return websocket_event::pong(payload_value);
             }
-            if (control->opcode() == websocket_opcode::close) {
-                std::uint16_t code = 1005;
-                if (payload_value.size() >= 2) {
-                    code = read_websocket_uint16(payload_value.data());
-                }
-                const auto reason = payload_value.size() > 2 ? payload_value.substr(2) : std::string_view{};
-                if (close_phase_ == close_phase_type::open) {
-                    append_frame(websocket_opcode::close, payload_value);
-                    close_phase_ = close_phase_type::final_output_queued;
-                } else {
-                    receive_peer_close();
-                }
-                return websocket_event::close(code, reason);
+            // Close: the frame reader admits no other control opcode.
+            std::uint16_t code = 1005;
+            if (payload_value.size() >= 2) {
+                code = read_websocket_uint16(payload_value.data());
             }
-            return protocol_failure_event(websocket_protocol_failure::protocol_error);
+            const auto reason = payload_value.size() > 2 ? payload_value.substr(2) : std::string_view{};
+            if (close_phase_ == close_phase_type::open) {
+                append_frame(websocket_opcode::close, payload_value);
+                close_phase_ = close_phase_type::final_output_queued;
+            } else {
+                receive_peer_close();
+            }
+            return websocket_event::close(code, reason);
         }
 
         const auto& inbound_message = *inbound.message();
@@ -398,9 +392,8 @@ std::optional<websocket_event> ws_connection::poll_impl() & {
         // still here. Inheriting them would make the next message's UTF-8 check read
         // the concatenation, and would charge its decompression-bomb limit for both.
         inbound_inflated_.clear();
-        const auto inflate_result = deflate_.has_value() ? deflate_->decompress(message.payload(),
-                                                               inbound_inflated_, message_limit_)
-                                                         : websocket_inflate_result::error;
+        // Only a negotiated deflate admits RSV1, so a compressed message implies deflate_.
+        const auto inflate_result = deflate_->decompress(message.payload(), inbound_inflated_, message_limit_);
         if (inflate_result == websocket_inflate_result::too_large) {
             return protocol_failure_event(websocket_protocol_failure::message_too_large);
         }

@@ -209,13 +209,10 @@ private:
     value_type value_;
 };
 
+// Only called once sink_value.committed() holds.
 template <typename sink>
 [[nodiscard]] http_status_code committed_response_stream_status(const sink& sink_value) {
-    const auto* plan = sink_value.commit_plan();
-    if (plan == nullptr) {
-        throw std::logic_error("response stream has no committed protocol plan");
-    }
-    return plan->response_status();
+    return sink_value.commit_plan()->response_status();
 }
 
 // Drives a response-stream route over an already-constructed sink. Connection
@@ -245,9 +242,6 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         exception = std::current_exception();
     }
 
-    if (exception == nullptr) {
-        throw std::logic_error("response stream dispatch left no terminal result");
-    }
     if (sink_value.committed()) {
         // Past the point of no return: the status cannot be changed and no
         // error body can be appended, so the exception is handed to the

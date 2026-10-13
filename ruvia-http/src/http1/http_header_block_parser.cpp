@@ -7,7 +7,6 @@
 
 #include "field/field_value_scan.h"
 #include "field/http_request_field_validation.h"
-#include "parser/http_request_target.h"
 
 namespace ruvia::detail {
 namespace {

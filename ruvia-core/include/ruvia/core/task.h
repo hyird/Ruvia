@@ -68,10 +68,8 @@ private:
         : handle_(handle) {}
 
     void start() noexcept {
-        if (handle_ != nullptr) {
-            handle_.promise().control_.mark_started();
-            handle_.resume();
-        }
+        handle_.promise().control_.mark_started();
+        handle_.resume();
     }
 
     void reset() noexcept {

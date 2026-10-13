@@ -1,21 +1,16 @@
 #pragma once
 
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http1_server_semantics.h"
-#include "ruvia/http/http_response.h"
 
 #include "router/route_table.h"
-#include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
-#include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"
 #include "server/http_response_stream_sink.h"
 #include "server/http_server_body_route_completion.h"
@@ -72,10 +67,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
             d.response_, connection_plan, d.request_sequence_, request_head.header_bytes());
     }
 
+    // Only the committed alternatives remain, and both carry a status.
     const auto committed_status = result_value.committed_status();
-    if (!committed_status.has_value()) {
-        throw std::logic_error("response stream dispatch returned no committed terminal alternative");
-    }
 
     connection_plan = response_sink.connection_plan();
     if (result_value.completed() != nullptr) {

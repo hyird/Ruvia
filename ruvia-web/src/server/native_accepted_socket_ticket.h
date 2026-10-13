@@ -21,9 +21,7 @@ namespace ruvia::detail {
 class native_accepted_socket_ticket final {
 public:
     using native_handle_type = asio::ip::tcp::socket::native_handle_type;
-    static constexpr std::size_t invalid_listener = static_cast<std::size_t>(-1);
 
-    native_accepted_socket_ticket() noexcept = default;
     native_accepted_socket_ticket(asio::ip::tcp protocol, std::size_t listener_index,
         native_handle_type native) noexcept
         : protocol_(protocol),
@@ -38,13 +36,6 @@ public:
     native_accepted_socket_ticket& operator=(const native_accepted_socket_ticket&) = delete;
     native_accepted_socket_ticket(native_accepted_socket_ticket&& other) noexcept {
         take(other);
-    }
-    native_accepted_socket_ticket& operator=(native_accepted_socket_ticket&& other) noexcept {
-        if (this != &other) {
-            reset();
-            take(other);
-        }
-        return *this;
     }
 
     [[nodiscard]] bool valid() const noexcept {
@@ -96,7 +87,7 @@ private:
     }
 
     asio::ip::tcp protocol_{asio::ip::tcp::v4()};
-    std::size_t listener_index_{invalid_listener};
+    std::size_t listener_index_{};
     native_handle_type native_{invalid_native()};
     bool valid_{false};
 };

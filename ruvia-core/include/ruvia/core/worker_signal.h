@@ -175,7 +175,7 @@ inline void worker_signal::notify() noexcept {
 
 inline void worker_signal::resume_scheduled(
     awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept {
-    if (!worker_.is_current() || waiter == nullptr || waiter->state_ != await_state_type::scheduled ||
+    if (!worker_.is_current() || waiter->state_ != await_state_type::scheduled ||
         waiter->continuation_ != continuation || scheduled_waiters_ == 0) {
         std::terminate();
     }

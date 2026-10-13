@@ -11,7 +11,6 @@
 #include "ruvia/web/websocket.h"
 
 #include "context/context_capabilities.h"
-#include "http/streaming_access.h"
 #include "util/operation_lane_lease.h"
 
 namespace {

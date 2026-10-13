@@ -50,7 +50,7 @@ namespace ruvia::detail {
 inline void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered,
     int& best_specificity, int& best_quality) noexcept {
     http_media_type_parts offered_parts;
-    if (!http_parse_media_type(offered, false, offered_parts)) {
+    if (!http_parse_media_type(offered, offered_parts)) {
         return;
     }
     http_visit_comma_separated_quoted(accept,

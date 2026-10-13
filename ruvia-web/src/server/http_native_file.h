@@ -35,11 +35,6 @@
 
 namespace ruvia::detail {
 
-struct native_file_open_options final {
-    bool overlapped_{false};
-    bool sequential_scan_{false};
-};
-
 struct response_file_snapshot final {
     http_response_file_identity identity_{http_response_file_identity::unchecked()};
     std::uint64_t size_{0};
@@ -122,11 +117,11 @@ public:
         return std::exchange(fd_, -1);
     }
 
-    void reset(int fd = -1) noexcept {
+    void reset() noexcept {
         if (fd_ >= 0) {
             ::close(fd_);
         }
-        fd_ = fd;
+        fd_ = -1;
     }
 
 private:
@@ -294,7 +289,7 @@ struct native_directory_identity final {
 }
 
 [[nodiscard]] inline native_file_handle open_native_file_for_read(
-    http_response_file_view file, std::error_code& ec, native_file_open_options = {}) noexcept {
+    http_response_file_view file, std::error_code& ec) noexcept {
     native_file_handle input(::open(file.native_path_c_str(), native_file_open_flags));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -338,11 +333,11 @@ public:
         return std::exchange(handle_, INVALID_HANDLE_VALUE);
     }
 
-    void reset(HANDLE handle = INVALID_HANDLE_VALUE) noexcept {
+    void reset() noexcept {
         if (handle_ != INVALID_HANDLE_VALUE) {
             ::CloseHandle(handle_);
         }
-        handle_ = handle;
+        handle_ = INVALID_HANDLE_VALUE;
     }
 
 private:
@@ -452,17 +447,9 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
 }
 
 [[nodiscard]] inline native_file_handle open_native_file_for_read(
-    http_response_file_view file, std::error_code& ec, native_file_open_options options = {}) noexcept {
-    DWORD flags = FILE_ATTRIBUTE_NORMAL;
-    if (options.overlapped_) {
-        flags |= FILE_FLAG_OVERLAPPED;
-    }
-    if (options.sequential_scan_) {
-        flags |= FILE_FLAG_SEQUENTIAL_SCAN;
-    }
-
+    http_response_file_view file, std::error_code& ec) noexcept {
     native_file_handle input(::CreateFileW(file.native_path_c_str(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, flags,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
         nullptr));
     if (input.get() == INVALID_HANDLE_VALUE) {
         ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());

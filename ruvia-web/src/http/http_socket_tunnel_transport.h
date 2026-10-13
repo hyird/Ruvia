@@ -22,7 +22,7 @@ namespace ruvia::detail {
 template <typename stream_type>
 class http_socket_tunnel_transport final {
 public:
-    explicit http_socket_tunnel_transport(stream_type& stream, tls_tunnel_output* tls_output = nullptr)
+    explicit http_socket_tunnel_transport(stream_type& stream, tls_tunnel_output* tls_output)
         : stream_(stream),
           tls_output_(tls_output) {
         if constexpr (requires { stream_.next_layer(); }) {

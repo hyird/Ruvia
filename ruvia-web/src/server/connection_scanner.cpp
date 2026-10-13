@@ -102,9 +102,6 @@ void connection_scanner::entry_type::register_periodic_check(periodic_check_regi
         periodic_checks_->prev_ = &registration;
     }
     periodic_checks_ = &registration;
-    if (scanner_ != nullptr) {
-        scanner_->periodic_check_added();
-    }
 }
 void connection_scanner::entry_type::remove_periodic_check(
     periodic_check_registration_type& registration) noexcept {
@@ -121,9 +118,6 @@ void connection_scanner::entry_type::remove_periodic_check(
     }
     if (periodic_scan_next_ == &registration) {
         periodic_scan_next_ = registration.next_;
-    }
-    if (scanner_ != nullptr) {
-        scanner_->periodic_check_removed();
     }
     registration.entry_ = nullptr;
     registration.prev_ = registration.next_ = nullptr;
@@ -232,12 +226,6 @@ void connection_scanner::detach_entry(entry_type& entry_value) noexcept {
         entry_value.scanner_->impl_->unregister_entry(entry_value);
     }
 }
-void connection_scanner::periodic_check_added() noexcept {
-    impl_->periodic_check_added();
-}
-void connection_scanner::periodic_check_removed() noexcept {
-    impl_->periodic_check_removed();
-}
 
 void connection_scanner::impl_type::start() {
     if (running_) {
@@ -270,10 +258,6 @@ void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio
     entry_value.prev_ = &sentinel_;
     sentinel_.next_->prev_ = &entry_value;
     sentinel_.next_ = &entry_value;
-    for (auto* registration = entry_value.periodic_checks_; registration != nullptr;
-        registration = registration->next_) {
-        periodic_check_added();
-    }
 }
 void connection_scanner::impl_type::unregister_entry(entry_type& entry_value) noexcept {
     if (entry_value.scanner_ != owner_ || !entry_value.linked()) {
@@ -313,21 +297,6 @@ void connection_scanner::impl_type::drain() noexcept {
         current = next;
     }
 }
-void connection_scanner::impl_type::periodic_check_added() noexcept {
-    ++periodic_check_count_;
-}
-void connection_scanner::impl_type::periodic_check_removed() noexcept {
-    if (periodic_check_count_ > 0) {
-        --periodic_check_count_;
-    }
-}
-bool connection_scanner::impl_type::has_scanning_work() const noexcept {
-    return options_.idle_timeout_.has_value() || options_.initial_read_timeout_.has_value() ||
-           options_.payload_read_timeout_.has_value() || options_.write_timeout_.has_value() ||
-           options_.initial_read_completion_timeout_.has_value() ||
-           options_.payload_read_completion_timeout_.has_value() ||
-           options_.trim_when_idle_ != nullptr || periodic_check_count_ != 0;
-}
 void connection_scanner::impl_type::schedule() {
     if (!running_) {
         return;
@@ -353,20 +322,18 @@ void connection_scanner::impl_type::schedule() {
         // previous tick's time.
         const auto interval_start = scanner->cached_now_ms_;
         scanner->cached_now_ms_ = steady_now_ms();
-        if (scanner->has_scanning_work()) {
-            scanner->scanning_ = true;
-            const bool idle = scanner->scan(interval_start);
-            scanner->scanning_ = false;
-            if (scanner->release_after_scan_) {
-                // A callback destroyed the scanner; its teardown already ran.
-                delete scanner;
-                return;
-            }
-            // Never during an exchange or a burst: only after a whole interval
-            // without either. The timer runs on the worker that owns the memory.
-            if (idle && scanner->retired_activity_ms_ < interval_start && scanner->options_.trim_when_idle_ != nullptr) {
-                scanner->options_.trim_when_idle_->trim(scanner->worker_);
-            }
+        scanner->scanning_ = true;
+        const bool idle = scanner->scan(interval_start);
+        scanner->scanning_ = false;
+        if (scanner->release_after_scan_) {
+            // A callback destroyed the scanner; its teardown already ran.
+            delete scanner;
+            return;
+        }
+        // Never during an exchange or a burst: only after a whole interval
+        // without either. The timer runs on the worker that owns the memory.
+        if (idle && scanner->retired_activity_ms_ < interval_start) {
+            scanner->options_.trim_when_idle_->trim(scanner->worker_);
         }
         if (!scanner->timer_.registered()) {
             scanner->schedule();

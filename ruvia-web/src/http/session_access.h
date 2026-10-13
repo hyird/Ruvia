@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // Privileged access to a context's session slot, used by the session middleware
 // to load the stored blob and read what the handler left behind.
 struct session_access final {
-    static void bind(context& context_value, const session_middleware* owner = nullptr) {
+    static void bind(context& context_value, const session_middleware* owner) {
         context_value.session_state().bind(owner);
     }
 

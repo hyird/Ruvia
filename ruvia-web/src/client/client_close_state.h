@@ -105,11 +105,9 @@ public:
             std::terminate();
         }
         failure_ = std::move(failure);
-        const bool report = failure_ != nullptr && !failure_reported_;
-        failure_reported_ = failure_reported_ || report;
         complete_ = true;
         signal_.notify();
-        if (report) {
+        if (failure_ != nullptr) {
             loop_.report_failure(failure_);
         }
     }
@@ -125,7 +123,6 @@ private:
     worker_signal signal_;
     bool task_started_{false};
     bool complete_{false};
-    bool failure_reported_{false};
     std::exception_ptr failure_;
 };
 

@@ -31,7 +31,6 @@
 #include "http/http_cors.h"
 #include "server/connection_scanner.h"
 #include "server/http_response_stream_state.h"
-#include "server/http_server_response_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
@@ -144,12 +143,7 @@ private:
             if (const auto* failure = prepare_result.failure()) {
                 throw failure->exception();
             }
-            auto* prepared = prepare_result.prepared();
-            if (prepared == nullptr) {
-                throw std::logic_error(
-                    "HTTP/1 stream preparation returned no terminal alternative");
-            }
-            auto stream_head = std::move(*prepared);
+            auto stream_head = std::move(*prepare_result.prepared());
             compression_.activate(stream_head.commit_plan().body_plan());
 
             head_.reset();

@@ -41,9 +41,6 @@ public:
     // Keeps the first failure for join() while the pool observes its loops;
     // after pool retirement nobody can rethrow, so failures are reported.
     void record_failure(std::exception_ptr failure) noexcept {
-        if (!failure) {
-            return;
-        }
         {
             const std::lock_guard lock(failure_mutex_);
             if (observed_) {

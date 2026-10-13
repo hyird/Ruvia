@@ -38,9 +38,6 @@ public:
     [[nodiscard]] reader_type& reader() noexcept {
         return reader_;
     }
-    [[nodiscard]] const reader_type& reader() const noexcept {
-        return reader_;
-    }
     [[nodiscard]] body_reader& facade() noexcept {
         return facade_;
     }

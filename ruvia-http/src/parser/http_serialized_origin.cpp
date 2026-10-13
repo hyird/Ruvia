@@ -118,7 +118,7 @@ namespace {
 }
 
 [[nodiscard]] bool parse_serialized_origin_ipv6_groups(std::string_view side,
-    std::array<std::uint16_t, 8>& pieces, std::size_t start, std::size_t& count) noexcept {
+    std::array<std::uint16_t, 8>& pieces, std::size_t& count) noexcept {
     count = 0;
     if (side.empty()) {
         return true;
@@ -129,10 +129,10 @@ namespace {
         const auto group = side.substr(offset,
             separator == std::string_view::npos ? std::string_view::npos : separator - offset);
         const auto value = parse_serialized_origin_h16(group);
-        if (!value.has_value() || start + count >= pieces.size()) {
+        if (!value.has_value() || count >= pieces.size()) {
             return false;
         }
-        pieces[start + count] = *value;
+        pieces[count] = *value;
         ++count;
         if (separator == std::string_view::npos) {
             return true;
@@ -244,7 +244,7 @@ namespace {
     const auto compression = literal.find("::");
     if (compression == std::string_view::npos) {
         std::size_t groups = 0;
-        return parse_serialized_origin_ipv6_groups(literal, pieces, 0, groups) &&
+        return parse_serialized_origin_ipv6_groups(literal, pieces, groups) &&
                groups == pieces.size() && is_canonical_serialized_origin_ipv6(literal, pieces);
     }
     if (literal.find("::", compression + 2) != std::string_view::npos) {
@@ -253,9 +253,8 @@ namespace {
     std::size_t left_groups = 0;
     std::size_t right_groups = 0;
     std::array<std::uint16_t, 8> right_pieces{};
-    if (!parse_serialized_origin_ipv6_groups(literal.substr(0, compression), pieces, 0, left_groups) ||
-        !parse_serialized_origin_ipv6_groups(
-            literal.substr(compression + 2), right_pieces, 0, right_groups) ||
+    if (!parse_serialized_origin_ipv6_groups(literal.substr(0, compression), pieces, left_groups) ||
+        !parse_serialized_origin_ipv6_groups(literal.substr(compression + 2), right_pieces, right_groups) ||
         left_groups + right_groups > 7) {
         return false;
     }

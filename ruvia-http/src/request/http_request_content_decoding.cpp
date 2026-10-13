@@ -12,7 +12,7 @@ namespace ruvia {
 
 http_content_coding_field_result request_content_coding(
     const http_request& request, std::pmr::memory_resource* resource) {
-    detail::http_content_coding_field_parser parser(detail::http_field_list_role::recipient, resource);
+    detail::http_content_coding_field_parser parser(resource);
     if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
         return std::move(parser).finish();
     }

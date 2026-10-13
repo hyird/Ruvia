@@ -142,16 +142,15 @@ void jwt_append_json_member(
 }
 
 std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
-    std::pmr::string algorithm(resolved);
+    std::pmr::string algorithm(resource);
     bool algorithm_seen = false;
     bool algorithm_valid = false;
     bool unsupported_extension = false;
     const bool valid = visit_unique_jwt_json_object_fields(
-        json, resolved, [&](std::string_view name, std::string_view value) {
+        json, resource, [&](std::string_view name, std::string_view value) {
             if (name == "alg") {
                 algorithm_seen = true;
-                if (auto decoded = jwt_decode_json_string_value(value, resolved)) {
+                if (auto decoded = jwt_decode_json_string_value(value, resource)) {
                     algorithm = std::move(*decoded);
                     algorithm_valid = true;
                 }
@@ -219,8 +218,7 @@ namespace {
 }  // namespace
 
 jwt_payload detail::jwt_payload_access::decode_payload_json(
-    std::string_view json, std::pmr::memory_resource* resource) {
-    auto* resolved = pmr_resource_or_default(resource);
+    std::string_view json, std::pmr::memory_resource* resolved) {
     jwt_payload payload_value({.resource_ = resolved});
 
     bool claim_invalid = false;

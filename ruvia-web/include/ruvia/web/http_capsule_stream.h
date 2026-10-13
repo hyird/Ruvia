@@ -41,7 +41,6 @@ public:
 
 private:
     friend class http_capsule_stream;
-    friend class http_udp_tunnel;
     friend class http_datagram_stream;
     http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::pmr::string payload_value) noexcept;
     void release() noexcept;

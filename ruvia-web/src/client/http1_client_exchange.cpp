@@ -159,7 +159,7 @@ task<void> http1_client_exchange::run(
     source_value.headers_ = std::span<const http_header_view>(headers);
 
     auto origin = pool_.origin();
-    const bool connect_udp = request.is_tunnel() && request.udp_tunnel();
+    const bool connect_udp = request.udp_tunnel();
     if (connect_udp) {
         const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));
         if (!authority) {
@@ -464,7 +464,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                     http_socket_tunnel_transport transport(stream, &*tls);
                     error = co_await transport.write_bytes(bytes_value, ending);
                 } else {
-                    http_socket_tunnel_transport transport(stream.next_layer());
+                    http_socket_tunnel_transport transport(stream.next_layer(), nullptr);
                     error = co_await transport.write_bytes(bytes_value, ending);
                 }
                 write_timer.cancel();

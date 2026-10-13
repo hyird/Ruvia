@@ -144,7 +144,6 @@ public:
     }
 
 private:
-    friend class http_response_body;
     std::unique_ptr<http_native_path_string_type, http_pmr_object_deleter<http_native_path_string_type>> native_path_;
     http_multipart_byte_range_plan plan_;
     std::uint64_t size_{};
@@ -268,7 +267,6 @@ private:
         http_multipart_byte_range_plan plan, http_response_file_handle opened) {
         http_multipart_response_body replacement(
             resource, file, size, identity, std::move(plan), std::move(opened));
-        static_assert(std::is_nothrow_move_constructible_v<http_multipart_response_body>);
         value_.emplace<http_multipart_response_body>(std::move(replacement));
     }
 

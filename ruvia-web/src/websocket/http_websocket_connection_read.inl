@@ -21,7 +21,6 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
     {
         read_guard_type active_read(std::move(read_guard_value));
         active_read.start();
-        static_cast<void>(active_read);
         try {
             for (;;) {
                 // poll() can queue an automatic Pong/Close. Keep that mutation mutually

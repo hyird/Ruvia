@@ -17,10 +17,6 @@ enum class http1_final_response_control_plan_error : std::uint8_t {
     te_field_forbidden,
 };
 
-class http1_final_response_control;
-class http1_final_response_commit_failure;
-class http1_final_response_control_plan_failure;
-
 class http1_final_response_control_plan_result_type;
 [[nodiscard]] http1_final_response_control_plan_result_type http1_final_response_control_plan(
     const http_response& response) noexcept;
@@ -55,8 +51,6 @@ public:
     }
 
 private:
-    friend class http1_final_response_commit_failure;
-    friend class http1_final_response_control_plan_result_type;
     friend http1_final_response_control_plan_result_type http1_final_response_control_plan(
         const http_response&) noexcept;
 

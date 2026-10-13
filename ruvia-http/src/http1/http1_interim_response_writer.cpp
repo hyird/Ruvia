@@ -4,7 +4,6 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
 
 #include "field/http_interim_response_validation.h"

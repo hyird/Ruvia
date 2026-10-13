@@ -13,7 +13,6 @@
 #include "server/http1_request_sequence.h"
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
-#include "server/inbound_buffer_resource.h"
 
 // What every HTTP/1 route dispatch needs from the session that owns the
 // request: the transport, the worker's memory and scanner entry, the parsed

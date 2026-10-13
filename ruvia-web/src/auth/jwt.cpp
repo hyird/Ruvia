@@ -135,7 +135,7 @@ struct jwt_token_parts final {
 // Throws std::length_error when the encoded capacity cannot be represented by
 // std::size_t before allocating the result.
 [[nodiscard]] std::pmr::string jwt_base64_url_encode(std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string out(pmr_resource_or_default(resource));
+    std::pmr::string out(resource);
     out.resize(http_base64_encoded_size(input.size(), http_base64_padding::forbidden));
     http_base64_encode(out.data(),
         std::span(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
@@ -144,7 +144,7 @@ struct jwt_token_parts final {
 }
 
 [[nodiscard]] std::pmr::string jwt_base64_url_decode(std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string out(pmr_resource_or_default(resource));
+    std::pmr::string out(resource);
     out.resize(http_base64_decoded_size_bound(input.size()));
     const auto decoded_size = http_base64_decode(input,
         std::span(reinterpret_cast<std::uint8_t*>(out.data()), out.size()),

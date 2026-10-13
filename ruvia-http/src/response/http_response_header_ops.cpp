@@ -329,7 +329,6 @@ void http_response_headers::remove_header(std::string_view key) {
 
 void http_response_headers::set_header_validated(
     std::string_view key, std::string_view value, std::uint32_t known_bit) {
-    detail::validate_response_header_storage_size(key.size(), value.size());
     if (auto* const header_value = find_header_for_update(key, known_bit)) {
         const bool was_appended = detail::http_response_header_access::append(*header_value);
         assign(*header_value, key, value, known_bit);
@@ -375,12 +374,12 @@ http_response_header& http_response_headers::append_header_uninitialized_value(
     if (existing_index) {
         // Appending may move the descriptor table. Preserve an index, not a pointer,
         // to mark the existing entry without repeating the header lookup.
-        detail::http_response_header_access::set_append(data()[*existing_index], true);
+        detail::http_response_header_access::set_append(data()[*existing_index]);
     }
     // Mark the append flag so a later merge of this block keeps every appended
     // value instead of treating the field as single-valued and dropping all but the
     // first.
-    detail::http_response_header_access::set_append(header_value, true);
+    detail::http_response_header_access::set_append(header_value);
     record_known_header_index(known_bit, index);
     return header_value;
 }

@@ -20,20 +20,11 @@ class worker_codecs;
 // way buffered responses reuse the worker's whole-buffer contexts.
 class stream_encoder_lease final {
 public:
-    stream_encoder_lease() noexcept = default;
     stream_encoder_lease(const stream_encoder_lease&) = delete;
     stream_encoder_lease& operator=(const stream_encoder_lease&) = delete;
     stream_encoder_lease(stream_encoder_lease&& other) noexcept
         : codecs_(std::exchange(other.codecs_, nullptr)),
           encoder_(std::exchange(other.encoder_, nullptr)) {}
-    stream_encoder_lease& operator=(stream_encoder_lease&& other) noexcept {
-        if (this != &other) {
-            release();
-            codecs_ = std::exchange(other.codecs_, nullptr);
-            encoder_ = std::exchange(other.encoder_, nullptr);
-        }
-        return *this;
-    }
     ~stream_encoder_lease() {
         release();
     }

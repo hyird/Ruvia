@@ -1,7 +1,5 @@
 #include "ruvia/http/websocket_client_negotiation.h"
 
-#include <array>
-#include <charconv>
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
@@ -133,7 +131,7 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
             .client_no_context_takeover_ = config.deflate_.client_no_context_takeover_,
             .server_max_window_bits_ = config.deflate_.server_max_window_bits_,
             .client_max_window_bits_ = config.deflate_.client_max_window_bits_};
-        const auto encoded = detail::get_websocket_compression_extension(parameters);
+        const detail::websocket_compression_extension encoded(parameters);
         constexpr std::size_t client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
         const std::size_t offer_bytes = encoded.view().size() +
                                         ((config.deflate_.offer_client_max_window_bits_ && !config.deflate_.client_max_window_bits_)
@@ -147,11 +145,11 @@ void websocket_client_negotiation::validate_configuration(websocket_client_negot
     validate_and_visit_config(config, [](std::string_view) {}, [](std::string_view, std::string_view, std::size_t) {});
 }
 websocket_client_negotiation::websocket_client_negotiation(websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
-    : resource_(resource ? resource : std::pmr::get_default_resource()),
-      deflate_(config.deflate_),
-      protocols_(resource_),
-      fields_(resource_) {
-    std::pmr::string joined(resource_);
+    : deflate_(config.deflate_),
+      protocols_(resource ? resource : std::pmr::get_default_resource()),
+      fields_(protocols_.get_allocator().resource()) {
+    auto* const memory = protocols_.get_allocator().resource();
+    std::pmr::string joined(memory);
     validate_and_visit_config(config, [&](std::string_view protocol_view) {
             protocols_.emplace_back(protocol_view);
             if (!joined.empty()) {
@@ -159,13 +157,13 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
             }
             joined.append(protocol_view); }, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
             if (name == "Sec-WebSocket-Protocol") {
-                fields_.push_back(http_header::copy_with_lowercase_name(name, joined, resource_));
+                fields_.push_back(http_header::copy_with_lowercase_name(name, joined, memory));
             } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
-                std::pmr::string offer(value, resource_);
+                std::pmr::string offer(value, memory);
                 offer.append("; client_max_window_bits");
-                fields_.push_back(http_header::copy_with_lowercase_name(name, offer, resource_));
+                fields_.push_back(http_header::copy_with_lowercase_name(name, offer, memory));
             } else {
-                fields_.push_back(http_header::copy_with_lowercase_name(name, value, resource_));
+                fields_.push_back(http_header::copy_with_lowercase_name(name, value, memory));
             } });
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {

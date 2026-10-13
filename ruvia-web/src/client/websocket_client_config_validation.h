@@ -9,7 +9,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/websocket_client.h"
 
-#include "client/client_tls.h"
+#include "client/client_tls_config_storage.h"
 #include "websocket/websocket_heartbeat_config_validation.h"
 
 namespace ruvia::detail {

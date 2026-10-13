@@ -72,8 +72,8 @@ struct http_response_header_access final {
         return header_value.append_;
     }
 
-    static void set_append(http_response_header& header_value, bool value) noexcept {
-        header_value.append_ = value;
+    static void set_append(http_response_header& header_value) noexcept {
+        header_value.append_ = true;
     }
 };
 

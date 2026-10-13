@@ -1,11 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"

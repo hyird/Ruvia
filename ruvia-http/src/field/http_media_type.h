@@ -206,19 +206,18 @@ template <typename visitor_type>
 template <http_temporary_owning_char_string value_type>
 bool http_parse_media_type_parts(value_type&&, bool, http_media_type_parts&) = delete;
 
-[[nodiscard]] inline bool http_parse_media_type(
-    std::string_view value, bool allow_wildcard, http_media_type_parts& parts) noexcept {
-    return http_parse_media_type_parts(value, allow_wildcard, parts) &&
+[[nodiscard]] inline bool http_parse_media_type(std::string_view value, http_media_type_parts& parts) noexcept {
+    return http_parse_media_type_parts(value, false, parts) &&
            http_visit_media_type_parameters(
                value, false, [](std::string_view, std::string_view) noexcept { return true; });
 }
 
 template <http_temporary_owning_char_string value_type>
-bool http_parse_media_type(value_type&&, bool, http_media_type_parts&) = delete;
+bool http_parse_media_type(value_type&&, http_media_type_parts&) = delete;
 
 [[nodiscard]] inline bool is_valid_http_content_type_field_value(std::string_view value) noexcept {
     http_media_type_parts parts;
-    return http_parse_media_type(value, false, parts);
+    return http_parse_media_type(value, parts);
 }
 
 template <http_temporary_owning_char_string value_type>

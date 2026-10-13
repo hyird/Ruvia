@@ -43,7 +43,6 @@ public:
     }
 
 private:
-    friend class http_content_encode_result;
     friend struct detail::http_content_encode_result_access;
 
     explicit http_encoded_content(std::pmr::string bytes_value) noexcept
@@ -59,7 +58,6 @@ public:
     }
 
 private:
-    friend class http_content_encode_result;
     friend struct detail::http_content_encode_result_access;
 
     explicit constexpr http_content_encode_failure(http_content_encode_error error) noexcept
@@ -176,7 +174,6 @@ public:
     }
 
 private:
-    friend class http_content_decode_result;
     friend struct detail::http_content_decode_result_access;
 
     explicit http_decoded_content(std::pmr::string bytes_value) noexcept
@@ -192,7 +189,6 @@ public:
     }
 
 private:
-    friend class http_content_decode_result;
     friend struct detail::http_content_decode_result_access;
 
     explicit constexpr http_content_decode_failure(http_content_decode_error error) noexcept

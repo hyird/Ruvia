@@ -2,7 +2,6 @@
 
 #include <exception>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
 #include <asio/bind_allocator.hpp>

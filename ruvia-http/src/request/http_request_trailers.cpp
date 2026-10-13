@@ -3,7 +3,6 @@
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_limits.h"
 
 namespace ruvia {
 http_request_trailers::http_request_trailers(std::pmr::memory_resource* resource)

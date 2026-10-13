@@ -122,13 +122,13 @@ void apply_security_headers_to(target_type& target, const security_headers_polic
         target.header(name, value);
     };
 
-    const auto set_secure_transport_header = [&set_header, secure_transport](std::string_view name,
-                                                 std::string_view value, bool skip_empty) {
+    const auto set_secure_transport_header = [&set_header, secure_transport](
+                                                 std::string_view name, std::string_view value) {
         if (!secure_transport &&
             http_ascii_equals_ignore_case(name, "Strict-Transport-Security")) {
             return;
         }
-        set_header(name, value, skip_empty);
+        set_header(name, value, false);
     };
 
     if (policy.flags_.emit_content_type_options_) {
@@ -152,7 +152,7 @@ void apply_security_headers_to(target_type& target, const security_headers_polic
 
     for (const auto& header : custom_headers) {
         const auto field = custom_header_view(header);
-        set_secure_transport_header(field.name(), field.value(), false);
+        set_secure_transport_header(field.name(), field.value());
     }
 }
 

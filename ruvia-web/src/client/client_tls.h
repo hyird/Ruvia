@@ -10,7 +10,6 @@
 #include <asio/ssl/stream.hpp>
 #include <openssl/types.h>
 
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/client_tls_config.h"
 
 #include "client/client_tls_config_storage.h"

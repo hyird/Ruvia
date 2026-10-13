@@ -6,7 +6,6 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -125,9 +124,6 @@ struct http_request_access final {
 
     static void set_body(http_request& request, std::span<const std::byte> body) noexcept {
         request.body_ = body;
-    }
-    static void set_body(http_request& request, std::string_view body) noexcept {
-        set_body(request, std::as_bytes(std::span<const char>(body.data(), body.size())));
     }
 };
 

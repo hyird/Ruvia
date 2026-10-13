@@ -9,7 +9,6 @@
 #include "ruvia/http/http_set_cookie_plan.h"
 
 #include "response/http_response_header_access.h"
-#include "response/response_header_index_cache.h"
 
 // Set-Cookie is the one response field that neither replaces nor appends by
 // field name: a second cookie for the same storage key (name, domain, path)
@@ -72,7 +71,7 @@ void http_response_headers::set_cookie(const set_cookie_plan& plan) {
             *retained, "Set-Cookie", plan.size(), detail::response_header_set_cookie);
         written = plan.write_fields(detail::http_response_header_access::value_begin(*retained));
     }
-    detail::http_response_header_access::set_append(*retained, true);
+    detail::http_response_header_access::set_append(*retained);
     erase_later_set_cookie_headers(*retained, written.wire_name_, !written.path_.empty(),
         written.path_, written.domain_, plan.partitioned_);
 }
@@ -104,7 +103,7 @@ void http_response_headers::upsert_set_cookie_header_validated(std::string_view 
     const auto domain_offset = parsed_value->domain().empty() ? std::size_t{0}
                                                               : static_cast<std::size_t>(parsed_value->domain().data() - value.data());
     assign(*retained, "Set-Cookie", value, detail::response_header_set_cookie);
-    detail::http_response_header_access::set_append(*retained, true);
+    detail::http_response_header_access::set_append(*retained);
     const auto copied_value = retained->value();
     erase_later_set_cookie_headers(*retained, copied_value.substr(name_offset, name_size), has_path,
         copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size), partitioned);

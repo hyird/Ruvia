@@ -1,8 +1,6 @@
 #pragma once
 
 #include <memory_resource>
-#include <optional>
-#include <span>
 #include <utility>
 
 #include "ruvia/core/stop_token.h"

@@ -34,14 +34,10 @@ private:
 
     constexpr websocket_frame_view(
         const websocket_frame_start& start, std::string_view payload_value) noexcept
-        : websocket_frame_view(start.kind(), payload_value, start.final(), start.compressed()) {}
-
-    constexpr websocket_frame_view(
-        websocket_frame_kind kind, std::string_view payload_value, bool final, bool compressed) noexcept
-        : kind_(kind),
+        : kind_(start.kind()),
           payload_(payload_value),
-          final_(final),
-          compressed_(compressed) {}
+          final_(start.final()),
+          compressed_(start.compressed()) {}
 
     websocket_frame_kind kind_;
     std::string_view payload_;

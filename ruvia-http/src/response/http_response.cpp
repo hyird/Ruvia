@@ -15,7 +15,6 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_coding.h"
 #include "field/http_entity_tag.h"
 #include "field/response_field_validation.h"
 #include "response/http_response_descriptor_stage.h"
@@ -235,7 +234,7 @@ void http_response::apply_encoded_representation(
     const auto weak_etag = weak_etag_for_new_representation(
         headers_.known_header_value(detail::response_header_etag), memory_resource());
 
-    http_response_headers::descriptor_stage<3> update(headers_);
+    http_response_headers::descriptor_stage update(headers_);
     update.stage("Content-Encoding", content_encoding, detail::response_header_content_encoding);
     if (!weak_etag.empty()) {
         update.stage("ETag", weak_etag, detail::response_header_etag);

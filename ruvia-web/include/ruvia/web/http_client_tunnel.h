@@ -73,7 +73,6 @@ private:
     friend class detail::http_client_pool;
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
-    friend class http_datagram_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
     void release() noexcept;
     http_client_response response_;

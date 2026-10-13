@@ -5,19 +5,15 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/streaming.h"
 
-#include "client/http_client_config_validation.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_request_storage.h"
-#include "client/http_client_response_decoding.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "context/context_services.h"
@@ -41,11 +37,11 @@ http_client_response::http_client_response(detail::http_client_pool& pool)
     : state_(pool.response_memory().create_state(pool)),
       body_(state_) {}
 
-http_client_response::http_client_response(detail::http_client_response_state* state_value, bool retain) noexcept
+http_client_response::http_client_response(detail::http_client_response_state* state_value) noexcept
     : state_(state_value),
       body_(state_value),
       consumer_(false) {
-    if (retain && state_ != nullptr) {
+    if (state_ != nullptr) {
         state_->retain_reference();
     }
 }
@@ -383,8 +379,7 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 scoped_operation<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
     registration_.require_active();
-    detail::http_client_request_storage request(
-        view.method_.view(), view.target_.view(), pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request(view.method_.view(), view.target_.view(), resource_);
     for (const auto& header : view.headers_) {
         request.append_header(header.name(), header.value());
     }
@@ -403,7 +398,7 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
         (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
-    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), resource_);
     for (const auto& field : head.headers_) {
         request.append_header(field.name(), field.value());
     }
@@ -416,7 +411,7 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(
         config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
     }
-    detail::http_client_request_storage request("GET", head.target_, pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request("GET", head.target_, resource_);
     request.set_tunnel(pool_->config().authority_, detail::http_client_request_storage::tunnel_kind::udp);
     for (const auto& field : head.headers_) {
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
@@ -434,7 +429,7 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
         !is_valid_http_connect_authority(head.authority_)) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    detail::http_client_request_storage request("CONNECT", "", pmr_resource_or_default(resource_));
+    detail::http_client_request_storage request("CONNECT", "", resource_);
     request.set_tunnel(head.authority_, detail::http_client_request_storage::tunnel_kind::connect);
     for (const auto& field : head.headers_) {
         request.append_header(field.name(), field.value());

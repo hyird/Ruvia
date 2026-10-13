@@ -43,7 +43,7 @@ public:
     explicit context_session_state(std::pmr::memory_resource* resource) noexcept
         : resource_(resource) {}
 
-    void bind(const session_middleware* owner = nullptr);
+    void bind(const session_middleware* owner);
     [[nodiscard]] bool available() const noexcept {
         return available_;
     }

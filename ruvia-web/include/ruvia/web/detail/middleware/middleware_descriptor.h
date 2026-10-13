@@ -33,10 +33,6 @@ public:
     using create_type = void* (*)(const void* args);
     using destroy_type = void (*)(void*) noexcept;
 
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
     [[nodiscard]] invoke_type invoke() const noexcept {
         return invoke_;
     }
@@ -96,11 +92,9 @@ private:
     template <middleware middleware_t_type, typename args_t_type>
     friend controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
-    constexpr controller_middleware_descriptor() noexcept = default;
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
         const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,
-        bool runs_on_unmatched_requests = false, std::size_t request_body_limit = 0,
-        std::int64_t deadline_ms = 0) noexcept
+        bool runs_on_unmatched_requests, std::size_t request_body_limit, std::int64_t deadline_ms) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),

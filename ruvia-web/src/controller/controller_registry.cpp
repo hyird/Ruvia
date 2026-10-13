@@ -12,43 +12,20 @@ namespace {
 
 struct controller_lifetime final {
     void* target_{nullptr};
-    void (*destroy_)(void*, std::pmr::memory_resource*) noexcept {nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
+    void (*destroy_)(void*) noexcept {nullptr};
 
-    controller_lifetime() noexcept = default;
-    controller_lifetime(void* target_value,
-        void (*destroy_value)(void*, std::pmr::memory_resource*) noexcept,
-        std::pmr::memory_resource* resource_value) noexcept
+    controller_lifetime(void* target_value, void (*destroy_value)(void*) noexcept) noexcept
         : target_(target_value),
-          destroy_(destroy_value),
-          resource_(resource_value) {}
+          destroy_(destroy_value) {}
     controller_lifetime(const controller_lifetime&) = delete;
     controller_lifetime& operator=(const controller_lifetime&) = delete;
     controller_lifetime(controller_lifetime&& other) noexcept
         : target_(std::exchange(other.target_, nullptr)),
-          destroy_(std::exchange(other.destroy_, nullptr)),
-          resource_(std::exchange(other.resource_, nullptr)) {}
-    controller_lifetime& operator=(controller_lifetime&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        reset();
-        target_ = std::exchange(other.target_, nullptr);
-        destroy_ = std::exchange(other.destroy_, nullptr);
-        resource_ = std::exchange(other.resource_, nullptr);
-        return *this;
-    }
+          destroy_(std::exchange(other.destroy_, nullptr)) {}
     ~controller_lifetime() {
-        reset();
-    }
-
-    void reset() noexcept {
-        if (target_ != nullptr && destroy_ != nullptr) {
-            destroy_(target_, resource_);
+        if (target_ != nullptr) {
+            destroy_(target_);
         }
-        target_ = nullptr;
-        destroy_ = nullptr;
-        resource_ = nullptr;
     }
 };
 
@@ -102,15 +79,11 @@ void* controller_store::instance(std::size_t slot) const noexcept {
     return state_->lifetimes_[slot].target_;
 }
 
-void controller_store::add_lifetime(
-    void* target, destroy_type destroy, std::pmr::memory_resource* resource) {
-    state_->lifetimes_.emplace_back(target, destroy, resource);
+void controller_store::add_lifetime(void* target, destroy_type destroy) {
+    state_->lifetimes_.emplace_back(target, destroy);
 }
 
 bool add_controller_registrar(controller_registrar_type registrar_value) {
-    if (registrar_value.create_ == nullptr || registrar_value.register_routes_ == nullptr) {
-        throw std::invalid_argument("controller registrar must not be null");
-    }
     auto& state_value = controller_registry();
     std::lock_guard lock(state_value.mutex_);
     if (state_value.sealed_) {

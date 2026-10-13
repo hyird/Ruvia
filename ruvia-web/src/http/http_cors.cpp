@@ -7,7 +7,6 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_name_list.h"

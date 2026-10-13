@@ -111,9 +111,7 @@ struct trusted_proxy_config final {
 
 namespace detail {
 struct access_log_record_access;
-struct access_log_sink;
 struct connection_failure_record_access;
-struct connection_failure_sink;
 }  // namespace detail
 
 enum class tls_client_certificate_requirement : std::uint8_t {

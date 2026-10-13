@@ -1,6 +1,5 @@
 #include "websocket/http_websocket_handshake_fields.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
@@ -42,7 +41,7 @@ namespace {
     if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
-    const auto extension = get_websocket_compression_extension(compression);
+    const websocket_compression_extension extension(compression);
     if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension.view())) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
@@ -185,7 +184,16 @@ void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_va
     }
 }
 
-[[nodiscard]] bool websocket_extension_header_offers_valid(const http_request& request) noexcept {
+}  // namespace
+
+bool websocket_subprotocol_offers_valid(const http_request& request) noexcept {
+    websocket_subprotocol_set protocols;
+    bool present = false;
+    return append_websocket_subprotocol_offers(request, protocols, present) &&
+           (!present || !protocols.empty());
+}
+
+bool websocket_extension_offers_valid(const http_request& request) noexcept {
     bool present = false;
     bool has_extension = false;
     const auto headers = request.headers();
@@ -200,19 +208,6 @@ void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_va
         }
     }
     return !present || has_extension;
-}
-
-}  // namespace
-
-bool websocket_subprotocol_offers_valid(const http_request& request) noexcept {
-    websocket_subprotocol_set protocols;
-    bool present = false;
-    return append_websocket_subprotocol_offers(request, protocols, present) &&
-           (!present || !protocols.empty());
-}
-
-bool websocket_extension_offers_valid(const http_request& request) noexcept {
-    return websocket_extension_header_offers_valid(request);
 }
 
 std::string_view choose_websocket_subprotocol(

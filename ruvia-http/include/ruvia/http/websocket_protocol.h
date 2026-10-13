@@ -93,9 +93,6 @@ private:
     std::array<char, 160> bytes_{};
     std::size_t size_{0};
 };
-[[nodiscard]] constexpr websocket_compression_extension get_websocket_compression_extension(websocket_compression compression) noexcept {
-    return websocket_compression_extension(compression);
-}
 
 }  // namespace detail
 
@@ -135,8 +132,6 @@ public:
     }
 
 private:
-    constexpr websocket_message() noexcept = default;
-
     constexpr websocket_message(websocket_opcode opcode, std::string_view payload_value) noexcept
         : opcode_(opcode),
           payload_(payload_value) {}

@@ -21,13 +21,12 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
 
 }  // namespace
 
-http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
+http_client_connection::http_client_connection(http_client_pool& pool)
     : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool.config()),
           pool.wire_counters()),
       read_buffer_(pool.resource()),
       write_buffer_(pool.resource()),
-      pool_(pool),
-      index_(index) {}
+      pool_(pool) {}
 
 http_client_connection::~http_client_connection() = default;
 

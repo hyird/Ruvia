@@ -44,9 +44,6 @@ public:
         return http_clients_ != nullptr;
     }
 
-    friend constexpr bool operator==(
-        const worker_client_registry_view&, const worker_client_registry_view&) noexcept = default;
-
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_handle db(
         ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;

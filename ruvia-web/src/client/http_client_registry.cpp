@@ -1,7 +1,6 @@
 #include "client/http_client_registry.h"
 
 #include <exception>
-#include <stdexcept>
 
 #include "ruvia/core/memory/pmr_resource.h"
 
@@ -13,19 +12,10 @@ namespace {
 
 // This runs in the first member initializer so invalid input is rejected before
 // even implementation-specific PMR container bookkeeping can touch owner memory.
-[[nodiscard]] std::pmr::memory_resource* validated_http_client_resource(std::pmr::memory_resource* resource,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    if (!result_budget_domain) {
-        throw std::invalid_argument("HTTP client result budget domain must not be null");
-    }
-    return pmr_resource_or_default(resource);
-}
-
-[[nodiscard]] std::pmr::memory_resource* validated_http_client_resource(std::pmr::memory_resource* resource,
-    std::span<const http_client_definition_type> definitions,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
+[[nodiscard]] std::pmr::memory_resource* validated_http_client_resource(
+    std::pmr::memory_resource* resource, std::span<const http_client_definition_type> definitions) {
     validate_capability_aliases(definitions, "HTTP client alias must not be empty", "duplicate HTTP client alias");
-    return validated_http_client_resource(resource, result_budget_domain);
+    return pmr_resource_or_default(resource);
 }
 
 }  // namespace
@@ -34,7 +24,7 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
     std::pmr::memory_resource* resource, http_client_response_storage response_storage,
     const http_client_config& default_config,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : resource_(validated_http_client_resource(resource, result_budget_domain)),
+    : resource_(pmr_resource_or_default(resource)),
       response_storage_(response_storage),
       pools_(resource_),
       alias_index_(resource_) {
@@ -47,7 +37,7 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
     std::pmr::memory_resource* resource, http_client_response_storage response_storage,
     std::span<const http_client_definition_type> definitions,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : resource_(validated_http_client_resource(resource, definitions, result_budget_domain)),
+    : resource_(validated_http_client_resource(resource, definitions)),
       response_storage_(response_storage),
       pools_(resource_),
       alias_index_(resource_) {

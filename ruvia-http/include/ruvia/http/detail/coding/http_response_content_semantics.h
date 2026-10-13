@@ -1,7 +1,5 @@
 #pragma once
 
-#include <string_view>
-
 #include "ruvia/http/http_response.h"
 
 namespace ruvia::detail {
@@ -22,11 +20,6 @@ namespace ruvia::detail {
         return http_response_content_semantics::without_content;
     }
     return http_response_content_semantics::with_content;
-}
-
-[[nodiscard]] inline http_response_content_semantics classify_http_response_content_semantics(
-    std::string_view request_method, http_status_code status_code) noexcept {
-    return classify_http_response_content_semantics(classify_http_method(request_method), status_code);
 }
 
 }  // namespace ruvia::detail

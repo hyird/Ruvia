@@ -8,7 +8,6 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
@@ -442,9 +441,8 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_connect
 
 http1_client_request_prepare_result http1_client_request_writer::prepare_connect(borrowed_text authority,
     std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    detail::request_target_view target;
     const auto parsed_value = parse_http_authority(authority.view());
-    if (!detail::parse_request_target(http_known_method::connect, authority.view(), target) || !parsed_value || !parsed_value->port() || *parsed_value->port() == 0) {
+    if (!parsed_value || !parsed_value->port() || *parsed_value->port() == 0) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
     }
     return prepare_connect(http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()}), headers, head_buffer, policy);

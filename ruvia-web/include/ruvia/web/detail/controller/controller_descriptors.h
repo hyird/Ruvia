@@ -8,7 +8,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -66,26 +65,25 @@ private:
     template <typename controller_t_type>
     friend void* create_controller(controller_store& controllers);
 
-    template <typename t_type, typename... args_type>
-    t_type& emplace(args_type&&... args) {
-        auto* resource = registration_resource();
-        auto* raw = construct_pmr_object<t_type>(resource, std::forward<args_type>(args)...);
+    template <typename t_type>
+    t_type& emplace() {
+        auto* raw = construct_pmr_object<t_type>(registration_resource());
         try {
-            add_lifetime(raw, &controller_store::destroy<t_type>, resource);
+            add_lifetime(raw, &controller_store::destroy<t_type>);
         } catch (...) {
-            destroy_pmr_object(raw, resource);
+            destroy_pmr_object(raw, registration_resource());
             throw;
         }
         return *raw;
     }
 
-    using destroy_type = void (*)(void*, std::pmr::memory_resource*) noexcept;
+    using destroy_type = void (*)(void*) noexcept;
 
-    void add_lifetime(void* target, destroy_type destroy, std::pmr::memory_resource* resource);
+    void add_lifetime(void* target, destroy_type destroy);
 
     template <typename t_type>
-    static void destroy(void* target, std::pmr::memory_resource* resource) noexcept {
-        destroy_pmr_object(static_cast<t_type*>(target), resource);
+    static void destroy(void* target) noexcept {
+        destroy_pmr_object(static_cast<t_type*>(target), registration_resource());
     }
 
     std::unique_ptr<controller_store_state, controller_store_state_deleter> state_;

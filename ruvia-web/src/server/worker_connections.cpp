@@ -205,7 +205,7 @@ task<void> worker_connections::run_session(
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
         if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
-            co_await close_http_connection_gracefully(socket, scanner_, worker_, close_mode);
+            co_await close_http_connection_gracefully(socket, scanner_, worker_);
         }
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
@@ -264,7 +264,7 @@ void worker_connections::report_session_failure(
     tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {
     // Last-resort safety net: any exception that escapes the session
     // body (including bad_alloc, error-handler failures, or framework
-    // bugs) must not propagate into asio::detached, which terminates.
+    // bugs) must not reach tasks_, where a child failure stops the scope.
     // Socket state may be partially written or completely fine; we
     // cannot safely emit anything new, so just drop the connection.
     //

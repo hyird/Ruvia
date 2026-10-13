@@ -92,8 +92,7 @@ public:
     void retire_source() noexcept {
         flags_.fetch_and(static_cast<std::uint8_t>(~source_flag), std::memory_order_acq_rel);
     }
-    // Returns false when stop was already requested.
-    bool request_stop() noexcept;
+    void request_stop() noexcept;
 
 private:
     friend class stop_callback_node;
@@ -448,7 +447,7 @@ public:
     // this source, so the request holds its own reference to the state.
     void request_stop() noexcept {
         const auto state_value = state_;
-        (void)state_value->request_stop();
+        state_value->request_stop();
     }
 
     [[nodiscard]] bool stop_requested() const noexcept {

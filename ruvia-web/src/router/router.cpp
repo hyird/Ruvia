@@ -42,15 +42,6 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
     stored = std::move(normalized);
 }
 
-void validate_middleware_descriptor(const controller_middleware_descriptor& descriptor) {
-    if (!descriptor.valid()) {
-        throw std::invalid_argument("middleware must be invocable");
-    }
-    if (descriptor.create() == nullptr || descriptor.destroy() == nullptr) {
-        throw std::invalid_argument("middleware must be constructible");
-    }
-}
-
 }  // namespace
 
 detail::router_impl::router_impl(router& router_value, std::pmr::memory_resource* plan_resource)
@@ -89,7 +80,6 @@ void detail::router_impl::set_prefix_not_found_handlers(
 
 void detail::router_impl::set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors) {
     for (const auto& descriptor : descriptors) {
-        validate_middleware_descriptor(descriptor);
         plan_->has_route_rate_limit_ = plan_->has_route_rate_limit_ || descriptor.uses_route_rate_limit();
     }
     global_middleware_descriptors_.assign(descriptors.begin(), descriptors.end());
@@ -102,7 +92,6 @@ void detail::router_impl::append_route_middlewares(
     route_middleware_descriptors_.reserve(offset + controller_middlewares.size() + route_middlewares.size());
     for (const auto middlewares : {controller_middlewares, route_middlewares}) {
         for (const auto& descriptor : middlewares) {
-            validate_middleware_descriptor(descriptor);
             const auto* const key = descriptor.validated_model_type_key();
             if (key != nullptr &&
                 std::ranges::any_of(std::span(route_middleware_descriptors_).subspan(offset),
@@ -118,16 +107,12 @@ void detail::router_impl::append_route_middlewares(
 
 void detail::router_impl::declare_controllers(
     std::span<const controller_registrar_type> registrars, const controller_store& controllers) {
-    if (controllers.size() != registrars.size()) {
-        throw std::logic_error("controller instances do not match the controller registrars");
-    }
     for (std::size_t slot = 0; slot < registrars.size(); ++slot) {
         controller_slot_ = slot;
         controller_target_ = controllers.instance(slot);
         registrars[slot].register_routes_(controller_target_, owner_);
     }
     controller_target_ = nullptr;
-    plan_->controller_count_ = registrars.size();
 }
 
 void detail::router_impl::validate_route_target(

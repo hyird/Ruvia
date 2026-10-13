@@ -39,7 +39,7 @@ void worker_timer_registration::unregister(bool notify) noexcept {
     slot_state_ = nullptr;
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
-    if (dispatcher == nullptr || generation == 0) {
+    if (dispatcher == nullptr) {
         return;
     }
     dispatcher->request_timer_cancellation(slot, generation, notify);
@@ -159,9 +159,6 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
 
 void worker_dispatcher::request_timer_cancellation(
     std::size_t slot, std::uint64_t generation, bool notify) noexcept {
-    if (generation == 0) {
-        return;
-    }
     if (current_worker_dispatcher() != this) {
         std::lock_guard lock(impl_->mutex_);
         if (impl_->timers_stopping_.load(std::memory_order_acquire) || !impl_->context_attached_) {

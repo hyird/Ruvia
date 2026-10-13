@@ -120,12 +120,12 @@ scoped_operation<void> http_client_tunnel::write(std::string_view bytes_value) &
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
-        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value, true), std::pmr::string(bytes_value, state_value.resource_)}));
+        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::pmr::string(bytes_value, state_value.resource_)}));
 }
 scoped_operation<void> http_client_tunnel::finish() & {
     require_output(response_.state_, true);
     auto& state_value = *response_.state_;
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
-        detail::finish_client_output<tunnel_output_policy>(&state_value, http_client_response(&state_value, true)));
+        detail::finish_client_output<tunnel_output_policy>(&state_value, http_client_response(&state_value)));
 }
 }  // namespace ruvia

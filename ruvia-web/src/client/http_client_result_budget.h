@@ -35,7 +35,6 @@ private:
 // independently of the client and releases its exact charge at destruction.
 class http_client_result_budget_lease final {
 public:
-    http_client_result_budget_lease() noexcept = default;
     http_client_result_budget_lease(const http_client_result_budget_lease&) = delete;
     http_client_result_budget_lease& operator=(const http_client_result_budget_lease&) = delete;
     http_client_result_budget_lease(http_client_result_budget_lease&& other) noexcept;
@@ -47,7 +46,6 @@ public:
 private:
     http_client_result_budget_lease(
         const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept;
-    void reset() noexcept;
 
     // Keep the domain alive until after releasing the reservation.
     std::shared_ptr<http_client_result_budget_domain> domain_;

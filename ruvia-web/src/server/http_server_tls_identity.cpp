@@ -111,7 +111,7 @@ http_server_listener_definition::tls_type load_http_server_tls(
     sni_files.reserve(config.sni_.size());
     for (std::size_t i = 0; i < config.sni_.size(); ++i) {
         const auto& sni = config.sni_[i];
-        ensure_sni_host(sni.host_, "SNI host must not be empty", "SNI host is invalid");
+        ensure_sni_host(sni.host_);
         sni_files.push_back(make_tls_identity_files(
             sni.certificate_chain_file_, sni.private_key_file_, sni.private_key_password_, target_resource));
         for (std::size_t j = 0; j < i; ++j) {

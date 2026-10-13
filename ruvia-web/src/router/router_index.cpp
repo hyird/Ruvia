@@ -190,9 +190,6 @@ std::span<const std::string_view> detail::route_table::extension_methods_for(
 
 detail::route_resolution detail::route_table::resolve(
     http_known_method method, std::string_view path) const noexcept {
-    if (method == http_known_method::connect) {
-        return resolve_connect({}, path);
-    }
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
     // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the

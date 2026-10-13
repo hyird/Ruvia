@@ -5,7 +5,6 @@
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/process_resource.h"
 
 namespace ruvia::detail {
 
@@ -51,16 +51,16 @@ void upsert_named_capability_definition(
 }
 
 // Validates and normalizes the replacement before mutating retained application
-// state; the new definition takes one owned PMR copy of the name and configuration.
+// state; the new definition takes one owned process-resource copy of the name
+// and configuration.
 template <typename definition_type, typename source_config_type>
 void upsert_named_capability_definition(std::pmr::vector<definition_type>& definitions,
-    std::string_view alias, const source_config_type& source_config, const char* empty_message,
-    std::pmr::memory_resource* resource) {
+    std::string_view alias, const source_config_type& source_config, const char* empty_message) {
     validate_capability_alias(alias, empty_message);
-    auto* const resolved = pmr_resource_or_default(resource);
+    auto* const resource = process_resource();
     upsert_named_capability_definition(definitions,
-        definition_type{std::pmr::string(alias, resolved),
-            typename definition_type::config_storage_type(source_config, resolved)});
+        definition_type{std::pmr::string(alias, resource),
+            typename definition_type::config_storage_type(source_config, resource)});
 }
 
 // Validates the complete startup alias set without allocating. Capability
@@ -124,9 +124,6 @@ private:
 
     template <typename entries_type, typename alias_projection_type>
     void build_aliases(const entries_type& entries, alias_projection_type alias_projection) {
-        if (built_) {
-            throw std::logic_error("named capability index may only be built once");
-        }
         auto* const resource = aliases_.get_allocator().resource();
         std::pmr::vector<indexed_alias_type> aliases(resource);
         aliases.reserve(entries.size());
@@ -143,12 +140,10 @@ private:
         std::ranges::sort(aliases, {}, &named_capability_index::alias_view);
         aliases_.swap(aliases);
         default_index_ = default_index;
-        built_ = true;
     }
 
     std::pmr::vector<indexed_alias_type> aliases_;
     std::optional<std::size_t> default_index_;
-    bool built_{false};
 };
 
 }  // namespace ruvia::detail

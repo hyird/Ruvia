@@ -225,7 +225,6 @@ test_response test_app::request(const test_request& request) {
                                   : co_await tail.finish_prepare(
                                         preparation, response, options, routes_value, request_memory_value,
                                         request_services);
-        tail.record_access(options.access_log_, response.status());
 
         // Copy everything out while the request arena is still alive.
         test_response result_value(response.status());

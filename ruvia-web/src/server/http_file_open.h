@@ -34,8 +34,8 @@ public:
         return !error_;
     }
 
-    void seekg(std::streamoff offset, std::ios::seekdir direction) noexcept {
-        if (error_ || direction != std::ios::beg || offset < 0) {
+    void seekg(std::streamoff offset) noexcept {
+        if (error_ || offset < 0) {
             error_ = std::make_error_code(std::errc::invalid_seek);
             return;
         }
@@ -119,8 +119,8 @@ public:
         return static_cast<bool>(input_);
     }
 
-    void seekg(std::streamoff offset, std::ios::seekdir direction) {
-        input_.seekg(offset, direction);
+    void seekg(std::streamoff offset) {
+        input_.seekg(offset, std::ios::beg);
     }
 
     void read(char* output, std::streamsize size) {

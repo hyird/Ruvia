@@ -26,22 +26,18 @@ struct http_content_coding_field_result_access final {
     }
 };
 
-// Accumulates list grammar across every Content-Encoding field line. Recipients
-// ignore empty list members, while senders cannot generate them.
+// Accumulates recipient list grammar across every Content-Encoding field line;
+// empty list members are ignored.
 class http_content_coding_field_parser final {
 public:
-    explicit http_content_coding_field_parser(
-        http_field_list_role role = http_field_list_role::recipient,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : role_(role),
-          codings_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
+    explicit http_content_coding_field_parser(std::pmr::memory_resource* resource)
+        : codings_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
     void update(std::string_view value);
 
     [[nodiscard]] http_content_coding_field_result finish() &&;
 
 private:
-    http_field_list_role role_;
     std::pmr::vector<http_content_coding> codings_;
     bool unsupported_{false};
     bool invalid_{false};
@@ -53,7 +49,7 @@ private:
 template <typename headers_type>
 [[nodiscard]] inline http_content_coding_field_result http_content_coding_from_headers(
     const headers_type& headers, std::pmr::memory_resource* resource) {
-    http_content_coding_field_parser parser(http_field_list_role::recipient, resource);
+    http_content_coding_field_parser parser(resource);
     for (const auto& header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
             parser.update(header.value());

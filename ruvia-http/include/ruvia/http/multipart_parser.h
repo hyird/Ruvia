@@ -486,7 +486,7 @@ public:
     void feed(std::string_view chunk);
     void finish_input() noexcept;
     void consume(std::size_t bytes) noexcept;
-    void compact_consumed_prefix(std::size_t threshold);
+    void compact_consumed_prefix();
 
 private:
     static constexpr std::size_t compact_consumed_prefix_bytes = std::size_t{64} * 1024;

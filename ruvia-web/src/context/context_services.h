@@ -216,12 +216,11 @@ public:
         return request_services_.dispatch_depth_;
     }
 
-    // Subrequests inherit the parent connection identity.
-    [[nodiscard]] context_services for_subrequest(const conn_info& connection,
-        std::size_t depth, const stop_token& stop_token_value) const {
+    // Subrequests inherit the parent connection identity, one dispatch level deeper.
+    [[nodiscard]] context_services for_subrequest(const stop_token& stop_token_value) const {
         context_services services(worker_services_, stop_token_value);
-        services.connection_services_.info_ = connection;
-        services.request_services_.dispatch_depth_ = depth;
+        services.connection_services_.info_ = connection_services_.info_;
+        services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         return services;
     }
 

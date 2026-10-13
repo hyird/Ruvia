@@ -96,12 +96,8 @@ task<bool> send_tls_close_notify(asio::ssl::stream<asio::ip::tcp::socket&>& stre
 
 }  // namespace
 
-task<void> close_http_connection_gracefully(asio::ip::tcp::socket& socket, connection_scanner& scanner,
-    const worker_handle& worker_value, http_connection_close mode) {
-    // Plain TCP has no close alert: only a server-initiated close needs work.
-    if (mode != http_connection_close::after_response) {
-        co_return;
-    }
+task<void> close_http_connection_gracefully(
+    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_handle& worker_value) {
     const graceful_close_bounds bounds(socket, scanner, worker_value);
     if (!bounds.armed()) {
         co_return;
@@ -111,9 +107,6 @@ task<void> close_http_connection_gracefully(asio::ip::tcp::socket& socket, conne
 
 task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
     connection_scanner& scanner, const worker_handle& worker_value, http_connection_close mode) {
-    if (mode == http_connection_close::abort) {
-        co_return;
-    }
     auto& socket = stream.next_layer();
     const graceful_close_bounds bounds(socket, scanner, worker_value);
     if (!bounds.armed()) {

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <limits>
 #include <memory_resource>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -44,11 +43,6 @@ void decode_http_client_response_body(http_client_response_state& state_value,
         return;
     }
     auto* const resource = state_value.resource_;
-    if (resource == nullptr || state_value.offset_ > state_value.buffered_.size() ||
-        !state_value.content_coding_.has_value()) {
-        throw std::invalid_argument("HTTP response decoder requires a configured worker-owned response");
-    }
-
     try {
         const auto& parsed_coding = *state_value.content_coding_;
         if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {

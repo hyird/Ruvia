@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <string_view>
 #include <system_error>
 
@@ -11,7 +10,6 @@
 #include "ruvia/http/http_response_head_buffer.h"
 
 #include "server/connection_scanner.h"
-#include "server/http_native_file.h"
 
 namespace ruvia::detail {
 

@@ -13,7 +13,6 @@
 
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"

@@ -70,7 +70,7 @@ void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool
     }
     auto& input = *state.input_;
     if (state.reposition_) {
-        input.seekg(static_cast<std::streamoff>(state.position_), std::ios::beg);
+        input.seekg(static_cast<std::streamoff>(state.position_));
         state.reposition_ = false;
         if (!input) {
             state.error_ = std::make_error_code(std::errc::invalid_seek);

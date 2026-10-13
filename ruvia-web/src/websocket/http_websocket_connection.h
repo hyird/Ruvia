@@ -14,7 +14,6 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
@@ -38,13 +37,13 @@ class websocket_connection final {
 public:
     websocket_connection(stream_type& stream, const worker_handle& worker_value,
         connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
-        protocol_byte_limit message_limit, std::pmr::memory_resource* resource,
-        std::string_view initial_bytes = {}, websocket_server_protocol_options protocol_options = {})
+        protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
+        websocket_server_protocol_options protocol_options)
         : stream_(stream),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
-          buffer_(std::pmr::polymorphic_allocator<char>(pmr_resource_or_default(resource))),
+          buffer_(std::pmr::polymorphic_allocator<char>(resource)),
           protocol_(buffer_, message_limit, protocol_options),
           background_write_signal_(worker_value),
           reader_done_signal_(worker_value) {
@@ -53,9 +52,8 @@ public:
             &websocket_connection::drain_thunk);
     }
 
-    websocket_connection(stream_type&, worker_handle&&, connection_scanner::entry_type&,
-        websocket_lifecycle_options, protocol_byte_limit, std::pmr::memory_resource*,
-        std::string_view = {}, websocket_server_protocol_options = {}) = delete;
+    websocket_connection(stream_type&, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
+        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_server_protocol_options) = delete;
 
     ~websocket_connection() = default;
 
@@ -71,7 +69,7 @@ public:
     }
 
     [[nodiscard]] task<std::optional<websocket_message>> read();
-    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress = true);
+    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress);
     task<void> close(::ruvia::websocket_close_options options = {});
     void abort() noexcept {
         if (!worker_->is_current()) {
@@ -247,11 +245,8 @@ private:
                 if (!connection_->worker_->is_current()) {
                     std::terminate();
                 }
-                const bool started = connection_->read_phase_ == read_phase_type::active;
                 connection_->read_phase_ = read_phase_type::idle;
-                if (started || connection_->worker_->is_current()) {
-                    connection_->reader_done_signal_.notify();
-                }
+                connection_->reader_done_signal_.notify();
             }
         }
 

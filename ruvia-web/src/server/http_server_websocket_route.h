@@ -4,7 +4,6 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
@@ -12,7 +11,6 @@
 
 #include "http/http_protocol_error_info.h"
 #include "router/route_table.h"
-#include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
 #include "server/http_request_admission.h"

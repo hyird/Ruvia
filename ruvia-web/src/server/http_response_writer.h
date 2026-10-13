@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <string_view>
 #include <system_error>
@@ -9,7 +8,6 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"

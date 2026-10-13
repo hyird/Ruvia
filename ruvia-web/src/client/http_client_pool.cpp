@@ -1,7 +1,6 @@
 #include "client/http_client_pool.h"
 
 #include <exception>
-#include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
@@ -14,14 +13,6 @@
 
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] std::shared_ptr<http_client_result_budget_domain> require_http_client_result_budget_domain(
-    std::shared_ptr<http_client_result_budget_domain> result_budget_domain) {
-    if (!result_budget_domain) {
-        throw std::invalid_argument("HTTP client result budget domain must not be null");
-    }
-    return result_budget_domain;
-}
 
 // An abandoned response may still be queued for a slot, before its lease
 // publishes a cancellation id: it must not write a request.
@@ -70,7 +61,7 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       config_(std::move(config)),
       origin_(config_.origin()),
       policy_(config_, resource_),
-      result_budget_domain_(require_http_client_result_budget_domain(std::move(result_budget_domain))),
+      result_budget_domain_(std::move(result_budget_domain)),
       tls_context_(asio::ssl::context::tls_client),
       slots_(*this, config_.connection_count_, worker_, resource_),
       background_tasks_(worker_, {.resource_ = resource_}),
@@ -80,7 +71,7 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
     }
     connections_.reserve(config_.connection_count_);
     for (std::size_t index = 0; index < config_.connection_count_; ++index) {
-        connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this, index));
+        connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this));
     }
     response_memory_ = response_storage == http_client_response_storage::worker_resource
                            ? http_client_response_memory_domain::create(worker_, result_budget_domain_, *resource_)
@@ -189,7 +180,7 @@ task<http_client_response> http_client_pool::execute(http_client_request_storage
 
 task<void> http_client_pool::execute_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
-    http_client_response keep_alive(state_value, true);
+    http_client_response keep_alive(state_value);
     try {
         throw_if_abandoned(*state_value);
         co_await execute_request_into(std::move(request), std::move(options), state_value);

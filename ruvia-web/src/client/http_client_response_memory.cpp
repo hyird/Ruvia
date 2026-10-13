@@ -82,9 +82,6 @@ http_client_response_memory_domain::owner http_client_response_memory_domain::al
     const worker_handle& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
     std::pmr::memory_resource* worker_resource, std::pmr::memory_resource& storage) {
-    if (!result_budget_domain) {
-        throw std::invalid_argument("HTTP client response memory requires a result budget");
-    }
     auto* const object = storage.allocate(sizeof(http_client_response_memory_domain),
         alignof(http_client_response_memory_domain));
     try {

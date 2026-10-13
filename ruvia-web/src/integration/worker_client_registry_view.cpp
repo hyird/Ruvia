@@ -3,7 +3,6 @@
 #include <optional>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_client_handle.h"
 
 #include "client/http_client_registry.h"

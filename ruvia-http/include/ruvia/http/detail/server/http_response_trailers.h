@@ -114,7 +114,6 @@ public:
     }
 
 private:
-    friend class http_response_trailer_section_result;
     friend http_response_trailer_section_result check_http_response_trailer_section(
         std::span<const http_header_view>) noexcept;
 

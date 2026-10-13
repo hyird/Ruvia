@@ -134,12 +134,11 @@ public:
     // worker-affine hot paths do not lock merely to prove their current worker.
     // External owners that run an attached context directly retain the safe
     // executor-based fallback in is_current().
-    // Rethrows the first escaping handler exception after the drain ends.
-    void run_context();
     // Invokes failure_handler exactly once for the first escaping handler
     // exception while worker identity is still active, then re-enters run() to
     // drain shutdown continuations. A successfully returning handler consumes
-    // the failure; a throwing handler is rethrown only after the drain ends.
+    // the failure; a throwing handler, or the first failure when no handler is
+    // given, is rethrown only after the drain ends.
     // Runs startup after worker identity is established and shutdown after the
     // context has drained but before that identity is cleared. Startup failures
     // enter the same first-failure path as handler failures. Shutdown is a

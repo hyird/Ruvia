@@ -138,7 +138,7 @@ websocket_client_error websocket_client_state::transport_error(const client_tran
         return websocket_client_error::code_type::io_error;
     }();
     if (result.status_ == client_transport_status::aborted) {
-        return abort_error(abort_reason_ == client_abort_reason::none ? result.abort_ : abort_reason_);
+        return abort_error(abort_reason_);
     }
     if (result.status_ == client_transport_status::eof) {
         return websocket_client_error(code, "WebSocket transport ended");

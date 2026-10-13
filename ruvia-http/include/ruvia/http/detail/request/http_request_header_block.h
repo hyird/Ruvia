@@ -83,7 +83,7 @@ public:
         capacity_ = static_cast<std::uint8_t>(count);
     }
 
-    void append(http_header_view field, std::uint8_t kind = 0) {
+    void append(http_header_view field, std::uint8_t kind) {
         if (size_ == max_http_header_fields) {
             throw std::logic_error("request header block is full");
         }

@@ -126,7 +126,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .coding_ = http_response_coding_selection_for(request),
             .resource_ = memory.resource(),
         },
-        policy, services().for_subrequest(conn_info_, services().dispatch_depth() + 1, stop), deadline);
+        policy, services().for_subrequest(stop), deadline);
     const auto* rejection = admission.rejection();
     auto response = rejection != nullptr
                         ? co_await detail::respond_http_request_rejection(

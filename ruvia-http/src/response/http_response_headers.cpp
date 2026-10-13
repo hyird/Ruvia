@@ -101,7 +101,6 @@ http_response_header& http_response_headers::add(
 
 http_response_header& http_response_headers::add_stable_view(
     std::string_view name, std::string_view value, std::uint32_t known_bit) {
-    detail::validate_response_header_storage_size(name.size(), value.size());
     const auto static_header = make_static_header(name, value, known_bit);
     return append_header(static_header ? *static_header : make_owned_header(name, value, known_bit));
 }
@@ -165,7 +164,6 @@ void http_response_headers::assign(http_response_header& header_value, std::stri
 
 void http_response_headers::assign_stable_view(http_response_header& header_value, std::string_view name,
     std::string_view value, std::uint32_t known_bit) {
-    detail::validate_response_header_storage_size(name.size(), value.size());
     const auto static_header = make_static_header(name, value, known_bit);
     if (static_header) {
         release_header(header_value);

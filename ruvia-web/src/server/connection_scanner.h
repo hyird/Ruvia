@@ -32,10 +32,10 @@ struct connection_scanner_options final {
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<std::chrono::milliseconds> initial_read_completion_timeout_{};
     std::optional<std::chrono::milliseconds> payload_read_completion_timeout_{};
-    // When set, a tick that follows a whole scan interval in which no entry
-    // carried a request exchange and none had activity (I/O, registration or
-    // retirement) trims this memory on the worker. Must belong to the worker.
-    worker_memory* trim_when_idle_{nullptr};
+    // A tick that follows a whole scan interval in which no entry carried a
+    // request exchange and none had activity (I/O, registration or retirement)
+    // trims this memory on the worker. Must belong to the worker.
+    worker_memory* trim_when_idle_;
 };
 
 // Worker-affine connection timeout owner. Its implementation is allocated once
@@ -203,8 +203,6 @@ private:
     friend class guard_type;
     friend struct impl_type;
     static void detach_entry(entry_type& entry) noexcept;
-    void periodic_check_added() noexcept;
-    void periodic_check_removed() noexcept;
     std::unique_ptr<impl_type> impl_;
 };
 
@@ -222,9 +220,6 @@ struct connection_scanner::impl_type final {
     void unregister_entry(entry_type& entry) noexcept;
     void close_all() noexcept;
     void drain() noexcept;
-    void periodic_check_added() noexcept;
-    void periodic_check_removed() noexcept;
-    [[nodiscard]] bool has_scanning_work() const noexcept;
     void schedule();
     // Visits every entry; returns whether none was in a request exchange or
     // active since `interval_start`.
@@ -250,7 +245,6 @@ struct connection_scanner::impl_type final {
     entry_type sentinel_{};
     entry_type* scan_current_{nullptr};
     entry_type* scan_next_{nullptr};
-    std::size_t periodic_check_count_{0};
     std::atomic_bool running_{false};
     // Worker-local: set only by the timer callback while scan() runs callbacks.
     bool scanning_{false};

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <exception>
 #include <memory_resource>
 #include <optional>
@@ -9,16 +8,13 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 #include "body/http_request_body_facade.h"
 #include "body/http_stream_body_reader.h"
 #include "router/route_table.h"
-#include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http_server_body_route_completion.h"
-#include "server/http_server_options.h"
 
 namespace ruvia::detail {
 

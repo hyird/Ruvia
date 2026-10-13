@@ -8,7 +8,6 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/error.h"
 
 #include "server/http_response_compression.h"

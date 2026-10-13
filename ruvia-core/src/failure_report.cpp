@@ -73,32 +73,28 @@ struct rate_decision final {
     return decision;
 }
 
-// Holds the stdio lock of `stream`, so the pieces of one line reach it
-// together, without interleaving with any concurrent stdio writer.
+// Holds the stdio lock of stderr, so the pieces of one line reach it together,
+// without interleaving with any concurrent stdio writer.
 class stream_lock final {
 public:
-    explicit stream_lock(std::FILE* stream) noexcept
-        : stream_(stream) {
+    stream_lock() noexcept {
 #if defined(_WIN32)
-        _lock_file(stream_);
+        _lock_file(stderr);
 #else
-        flockfile(stream_);
+        flockfile(stderr);
 #endif
     }
 
     ~stream_lock() {
 #if defined(_WIN32)
-        _unlock_file(stream_);
+        _unlock_file(stderr);
 #else
-        funlockfile(stream_);
+        funlockfile(stderr);
 #endif
     }
 
     stream_lock(const stream_lock&) = delete;
     stream_lock& operator=(const stream_lock&) = delete;
-
-private:
-    std::FILE* stream_;
 };
 
 void write_text(std::string_view text) noexcept {
@@ -117,7 +113,7 @@ void write_line(std::string_view context_value, std::string_view what, std::size
     }
     // Views are written by their exact length: they need not be NUL-terminated
     // and may be longer than printf's int precision can express.
-    const stream_lock lock(stderr);
+    const stream_lock lock;
     write_text("ruvia: ");
     write_text(context_value);
     write_text(" failed: ");

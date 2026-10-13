@@ -1,8 +1,6 @@
 #pragma once
 
-#include <chrono>
 #include <condition_variable>
-#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -14,7 +12,6 @@
 #include "ruvia/web/app.h"
 
 #include "app/app_lifecycle.h"
-#include "router/router.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_config_storage.h"
 #endif

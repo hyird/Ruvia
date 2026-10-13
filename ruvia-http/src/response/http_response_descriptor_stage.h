@@ -14,7 +14,6 @@ namespace ruvia {
 // Owns only newly staged descriptors, never copies the existing header block.
 // Staging and reservation may throw and leave the block unchanged; publication
 // transfers every descriptor without allocation; unwinding releases the rest.
-template <std::size_t capacity>
 class http_response_headers::descriptor_stage final {
 public:
     explicit descriptor_stage(http_response_headers& owner_value) noexcept
@@ -71,6 +70,8 @@ public:
     }
 
 private:
+    static constexpr std::size_t capacity = 3;
+
     http_response_headers& owner_;
     std::array<http_response_header, capacity> prepared_{};
     std::size_t count_{0};

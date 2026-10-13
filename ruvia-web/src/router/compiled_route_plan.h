@@ -104,9 +104,6 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<route_entry> routes_;
-    // Workers construct one controller instance per registrar, in order;
-    // route_entry::controller() indexes them.
-    std::size_t controller_count_{0};
     // One descriptor per middleware instance a worker materializes. Frames
     // name their instance by index, so an app-wide middleware is one instance
     // shared by every route of a worker.

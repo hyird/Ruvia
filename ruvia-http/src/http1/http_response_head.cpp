@@ -9,7 +9,6 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 

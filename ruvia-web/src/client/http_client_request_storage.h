@@ -49,10 +49,6 @@ public:
         return target_;
     }
     [[nodiscard]] std::string_view target() const&& = delete;
-    [[nodiscard]] std::string_view body() const& noexcept {
-        return body_;
-    }
-    [[nodiscard]] std::string_view body() const&& = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return method_.get_allocator().resource();
     }

@@ -198,7 +198,6 @@ public:
 
 private:
     friend class context;
-    friend struct detail::streaming_access;
 
     explicit sse_writer(response_stream_writer& writer) noexcept;
     [[nodiscard]] response_stream_writer& writer() const;

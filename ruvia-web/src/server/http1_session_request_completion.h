@@ -13,8 +13,6 @@
 
 namespace ruvia::detail {
 
-class http1_session_request_completion;
-
 // The connection is closing, so no bytes from this request can be reused.
 class http1_request_buffer_discarded final {
 private:

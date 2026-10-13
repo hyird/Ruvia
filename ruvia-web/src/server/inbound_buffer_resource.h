@@ -15,8 +15,6 @@ public:
     }
 };
 
-class inbound_buffer_resource;
-
 // A worker's live inbound buffer bytes, shared by the inbound_buffer_resource of
 // each of its connections. Worker-affine, no synchronization. The upstream
 // resource and this owner must outlive every connection resource.

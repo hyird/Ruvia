@@ -301,14 +301,6 @@ void worker_dispatcher::notify_idle(idle_callbacks_type callbacks) noexcept {
     }
 }
 
-void worker_dispatcher::run_context() {
-    std::exception_ptr failure;
-    run_context({}, [&failure](std::exception_ptr value) noexcept { failure = std::move(value); }, {});
-    if (failure != nullptr) {
-        std::rethrow_exception(failure);
-    }
-}
-
 void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
     move_only_function<void(std::exception_ptr)> failure_handler,
     move_only_function<void()> shutdown_handler) {

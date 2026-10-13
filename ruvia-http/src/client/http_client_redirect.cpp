@@ -25,12 +25,10 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
     path.erase(slash);
 }
 
-[[nodiscard]] bool normalize_http_client_absolute_path(
-    std::string_view path, std::pmr::string& normalized) {
-    if (path.empty() || path.front() != '/') {
-        return false;
-    }
-
+// `path` is always absolute: every caller builds it from a '/'-prefixed
+// reference path or base directory, so only the '/'-led dot-segment cases of
+// RFC 3986 section 5.2.4 can occur.
+void normalize_http_client_absolute_path(std::string_view path, std::pmr::string& normalized) {
     normalized.clear();
     normalized.reserve(path.size());
     auto remaining = path;
@@ -39,11 +37,7 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
         // time. Empty segments are significant: reducing the path to a stack
         // of non-dot segments would turn "/a//." into "/a/" instead of the
         // required "/a//".
-        if (remaining.starts_with("../")) {
-            remaining.remove_prefix(3);
-        } else if (remaining.starts_with("./")) {
-            remaining.remove_prefix(2);
-        } else if (remaining.starts_with("/./")) {
+        if (remaining.starts_with("/./")) {
             remaining.remove_prefix(2);
         } else if (remaining == "/.") {
             remaining = "/";
@@ -53,11 +47,8 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
         } else if (remaining == "/..") {
             remaining = "/";
             remove_http_client_last_path_segment(normalized);
-        } else if (remaining == "." || remaining == "..") {
-            remaining = {};
         } else {
-            const auto next_slash =
-                remaining.front() == '/' ? remaining.find('/', 1) : remaining.find('/');
+            const auto next_slash = remaining.find('/', 1);
             const auto segment_bytes =
                 next_slash == std::string_view::npos ? remaining.size() : next_slash;
             normalized.append(remaining.substr(0, segment_bytes));
@@ -68,7 +59,6 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
     if (normalized.empty()) {
         normalized.push_back('/');
     }
-    return true;
 }
 
 // Merges the reference's path/query with the current origin-form target per
@@ -129,8 +119,8 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
     if (!has_authority && reference_path.empty()) {
         // RFC 3986 section 5.2.2 copies the base path for an empty reference path.
         resolved = std::move(merged_path);
-    } else if (!normalize_http_client_absolute_path(merged_path, resolved)) {
-        return false;
+    } else {
+        normalize_http_client_absolute_path(merged_path, resolved);
     }
     if (has_selected_query) {
         resolved.push_back('?');
@@ -233,8 +223,7 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
     const http_origin_view& origin, http_client_redirect_target_options options) {
     const auto current_target = options.current_target_;
     auto location = options.location_;
-    if (current_target.empty() || current_target.front() != '/' ||
-        !is_valid_http_origin_form_target(current_target)) {
+    if (!is_valid_http_origin_form_target(current_target)) {
         return http_client_redirect_resolution_result::make_failure(
             http_client_redirect_resolution_error::invalid_current_target);
     }

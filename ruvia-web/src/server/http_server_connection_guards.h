@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstddef>
-#include <exception>
 #include <utility>
 
 #include <asio/ip/tcp.hpp>
@@ -15,8 +13,8 @@ namespace ruvia::detail {
 
 // Owns one admitted socket and its per-worker connection-count lease as one
 // linear value. The lease is acquired only after socket configuration succeeds,
-// then moves into the lazy session task before co_spawn initiation. If coroutine
-// allocation or co_spawn throws, destroying that cold ownership chain closes the
+// then moves into the lazy session task before task_scope::spawn. If coroutine
+// allocation or spawn throws, destroying that cold ownership chain closes the
 // socket first and releases the count second; the last release completes a
 // begun worker drain.
 class accepted_connection_lease final {

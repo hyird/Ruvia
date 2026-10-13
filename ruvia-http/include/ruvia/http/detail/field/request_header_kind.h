@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <utility>
 
 namespace ruvia::detail {
 

@@ -68,12 +68,8 @@ namespace ruvia {
         response.header_stable_view("Transfer-Encoding", "chunked");
     }
     if (needs_sse_cache_control) {
-        // Gate on the guard that was already computed for the reserve count above,
-        // which includes !detail::response_has_known_header(...Cache-Control). Re-inlining only
-        // the mode/framing condition here (as before) dropped that guard and
-        // overwrote a handler's own Cache-Control -- e.g. the recommended SSE
-        // "no-cache" -- with "no-store". This mirrors the Content-Type path, which
-        // uses needs_sse_content_type, so a caller-provided value is honored.
+        // Like Content-Type, a handler's own Cache-Control (for example the SSE
+        // "no-cache") is honored; needs_sse_cache_control excludes it.
         response.header_stable_view("Cache-Control", "no-store");
     }
 

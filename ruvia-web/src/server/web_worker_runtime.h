@@ -8,18 +8,14 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_submission_view.h"
 #include "ruvia/web/web_worker.h"
 
 #include "integration/worker_capabilities.h"
-#include "server/connection_scanner.h"
-#include "server/http_connection_state.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"

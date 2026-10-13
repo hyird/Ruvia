@@ -1,6 +1,5 @@
 #include <optional>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/field/header_token_utils.h"
@@ -198,16 +197,14 @@ struct http1_client_response_plan_access final {
             request_content_signal);
     }
 
-    [[nodiscard]] static http1_client_response_plan connect_tunnel(
-        request_content_signal_type request_content_signal) noexcept {
+    [[nodiscard]] static http1_client_response_plan connect_tunnel() noexcept {
         return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_connect_tunnel()), request_content_signal);
+            http1_client_response_plan::state_type(http1_client_connect_tunnel()), std::nullopt);
     }
 
-    [[nodiscard]] static http1_client_response_plan protocol_upgrade(
-        request_content_signal_type request_content_signal) noexcept {
+    [[nodiscard]] static http1_client_response_plan protocol_upgrade() noexcept {
         return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_protocol_upgrade()), request_content_signal);
+            http1_client_response_plan::state_type(http1_client_protocol_upgrade()), std::nullopt);
     }
 };
 
@@ -223,7 +220,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
             !request_allows_protocol_switch(exchange_state, response, request_content_phase)) {
             return http1_client_response_parse_error::invalid_protocol_switch;
         }
-        return http1_client_response_plan_access::protocol_upgrade(std::nullopt);
+        return http1_client_response_plan_access::protocol_upgrade();
     }
     if (content_semantics == http_response_content_semantics::informational) {
         const auto persistence = response_persistence(response);
@@ -232,7 +229,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
                              persistence == http1_close_policy::close_after_response));
     }
     if (content_semantics == http_response_content_semantics::connect_tunnel) {
-        return http1_client_response_plan_access::connect_tunnel(std::nullopt);
+        return http1_client_response_plan_access::connect_tunnel();
     }
 
     const bool reset_content_requires_empty = response.status_code_ == http_status::reset_content;

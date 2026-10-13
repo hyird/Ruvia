@@ -1,7 +1,6 @@
 #include "server/http_connection_state.h"
 
 #include <algorithm>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <new>

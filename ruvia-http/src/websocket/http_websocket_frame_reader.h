@@ -175,9 +175,8 @@ private:
         return websocket_frame_read_result::make_failure(websocket_protocol_failure::message_too_large);
     }
     const auto mask_bytes = expect_masked ? std::size_t{4} : std::size_t{0};
-    if (header_size > (std::numeric_limits<std::size_t>::max)() - mask_bytes ||
-        length > static_cast<std::uint64_t>(
-                     (std::numeric_limits<std::size_t>::max)() - header_size - mask_bytes)) {
+    // header_size is at most 10, so only the payload length can overflow.
+    if (length > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)() - header_size - mask_bytes)) {
         return websocket_frame_read_result::make_failure(websocket_protocol_failure::protocol_error);
     }
     const auto total_frame_bytes = header_size + mask_bytes + static_cast<std::size_t>(length);

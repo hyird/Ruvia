@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdint>
 #include <string_view>
 #include <variant>
 

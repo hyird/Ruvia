@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
-#include <span>
 #include <system_error>
 #include <vector>
 

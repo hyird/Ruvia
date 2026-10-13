@@ -16,12 +16,6 @@ private:
     constexpr response_normal_write() noexcept = default;
 };
 
-class response_body_forbidden_write final {
-private:
-    friend class response_write_policy;
-    constexpr response_body_forbidden_write() noexcept = default;
-};
-
 class response_zero_length_write final {
 private:
     friend class response_write_policy;
@@ -43,11 +37,6 @@ public:
         return state_ == state_type::normal ? &normal_value : nullptr;
     }
     const response_normal_write* normal() const&& = delete;
-
-    [[nodiscard]] constexpr const response_body_forbidden_write* body_forbidden() const& noexcept {
-        return state_ == state_type::body_forbidden ? &body_forbidden_value : nullptr;
-    }
-    const response_body_forbidden_write* body_forbidden() const&& = delete;
 
     [[nodiscard]] constexpr const response_zero_length_write* zero_length() const& noexcept {
         return state_ == state_type::zero_length ? &zero_length_value : nullptr;
@@ -103,7 +92,6 @@ private:
     }
 
     static inline constexpr response_normal_write normal_value{};
-    static inline constexpr response_body_forbidden_write body_forbidden_value{};
     static inline constexpr response_zero_length_write zero_length_value{};
     static inline constexpr response_not_modified_write not_modified_value{};
 

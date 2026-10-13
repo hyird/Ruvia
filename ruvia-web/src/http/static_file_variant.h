@@ -63,6 +63,6 @@ private:
 [[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
     const static_root& root, std::string_view relative, const http_request& request,
     std::pmr::memory_resource* resource, detail::static_root_entry_view identity,
-    detail::static_file_selection_mode mode = detail::static_file_selection_mode::identity_only);
+    detail::static_file_selection_mode mode);
 
 }  // namespace ruvia

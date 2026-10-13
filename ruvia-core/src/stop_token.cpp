@@ -19,10 +19,10 @@ void stop_state::destroy() noexcept {
     resource->deallocate(this, sizeof(stop_state), alignof(stop_state));
 }
 
-bool stop_state::request_stop() noexcept {
+void stop_state::request_stop() noexcept {
     std::unique_lock lock(mutex_);
     if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
-        return false;
+        return;
     }
     flags_.fetch_or(requested_flag, std::memory_order_release);
     requester_ = std::this_thread::get_id();
@@ -48,7 +48,6 @@ bool stop_state::request_stop() noexcept {
         lock.lock();
         running_ = nullptr;
     }
-    return true;
 }
 
 bool stop_state::link(stop_callback_node& node) noexcept {

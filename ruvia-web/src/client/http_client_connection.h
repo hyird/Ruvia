@@ -1,11 +1,8 @@
 #pragma once
 
-#include <cstddef>
-
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
 
@@ -19,14 +16,10 @@ class http_client_response_state;
 // Worker-affine and address-stable.
 class http_client_connection final {
 public:
-    http_client_connection(http_client_pool& pool, std::size_t index);
+    explicit http_client_connection(http_client_pool& pool);
     ~http_client_connection();
     http_client_connection(const http_client_connection&) = delete;
     http_client_connection& operator=(const http_client_connection&) = delete;
-
-    [[nodiscard]] std::size_t index() const noexcept {
-        return index_;
-    }
 
     // Called while the pool slot is exclusively leased, under the lease's
     // cancellation; reuses a live connection and replaces one the peer
@@ -65,7 +58,6 @@ public:
 
 private:
     http_client_pool& pool_;
-    std::size_t index_;
 };
 
 }  // namespace ruvia::detail

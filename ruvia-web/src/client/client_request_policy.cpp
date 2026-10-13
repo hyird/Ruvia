@@ -17,7 +17,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "client/client_tls.h"
+#include "client/client_host.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
 
@@ -199,9 +199,6 @@ std::size_t client_request_policy::storage_bytes(std::string_view name, std::str
 bool client_request_policy::has_capacity(
     std::size_t replaced_bytes, std::size_t replacement_bytes, bool adding) const noexcept {
     if (adding && cookies_.size() >= config_.max_cookies_) {
-        return false;
-    }
-    if (replaced_bytes > cookie_bytes_) {
         return false;
     }
     const auto retained_bytes = cookie_bytes_ - replaced_bytes;

@@ -95,9 +95,6 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step(
     std::string_view available, std::span<char> scratch, bool eof) {
-    if (terminal_) {
-        return replay_terminal();
-    }
     if (trailers_reported_) {
         return finish_transfer(0, scratch);
     }

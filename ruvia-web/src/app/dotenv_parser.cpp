@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <istream>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 

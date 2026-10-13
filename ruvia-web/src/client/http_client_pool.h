@@ -11,7 +11,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"

@@ -58,7 +58,6 @@ public:
     validate_fields(std::span<const http_header> fields) const;
 
 private:
-    std::pmr::memory_resource* resource_;
     websocket_client_deflate_offer deflate_;
     std::pmr::vector<std::pmr::string> protocols_;
     std::pmr::vector<http_header> fields_;

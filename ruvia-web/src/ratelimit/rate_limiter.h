@@ -103,8 +103,7 @@ static_assert(sizeof(rate_limit_slot) <= 112, "worker rate-limit slots must stay
 class rate_limiter final {
 public:
     rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
-        route_rate_limit_presence route_rules, std::size_t capacity_value,
-        std::pmr::memory_resource* resource = nullptr);
+        route_rate_limit_presence route_rules, std::size_t capacity_value, std::pmr::memory_resource* resource);
 
     rate_limiter(const rate_limiter&) = delete;
     rate_limiter& operator=(const rate_limiter&) = delete;
