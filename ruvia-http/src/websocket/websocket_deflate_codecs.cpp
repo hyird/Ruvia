@@ -6,6 +6,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "coding/http_zlib_stream.h"
+#include "util/http_text_overlap.h"
 #include "websocket/websocket_deflate_message.h"
 
 namespace ruvia {
@@ -69,6 +70,18 @@ private:
     std::pmr::memory_resource* resource_;
 };
 
+// Codec output is appended to `out` while zlib still reads `payload`, so an
+// append that reallocates would free unread input. Own only that aliasing
+// case; independent input keeps the direct path.
+[[nodiscard]] std::string_view own_aliased_payload(
+    std::string_view payload, const std::pmr::string& out, std::pmr::string& owned) {
+    if (!detail::http_text_overlaps(payload, {out.data(), out.size() + 1})) {
+        return payload;
+    }
+    owned.assign(payload);
+    return owned;
+}
+
 }  // namespace
 
 websocket_deflate_codecs::websocket_deflate_codecs(std::pmr::memory_resource* resource) noexcept
@@ -96,7 +109,8 @@ bool websocket_deflate_codecs::deflate_message(
         return false;
     }
     const reset_after_message reset_guard(slot, resource_);
-    return detail::websocket_deflate_message(codec->stream_, payload, out);
+    std::pmr::string owned(out.get_allocator().resource());
+    return detail::websocket_deflate_message(codec->stream_, own_aliased_payload(payload, out, owned), out);
 }
 
 websocket_inflate_result websocket_deflate_codecs::inflate_message(
@@ -106,7 +120,9 @@ websocket_inflate_result websocket_deflate_codecs::inflate_message(
         return websocket_inflate_result::error;
     }
     const reset_after_message reset_guard(inflater_, resource_);
-    return detail::websocket_inflate_message(codec->stream_, payload, out, message_limit);
+    std::pmr::string owned(out.get_allocator().resource());
+    return detail::websocket_inflate_message(
+        codec->stream_, own_aliased_payload(payload, out, owned), out, message_limit);
 }
 
 }  // namespace ruvia

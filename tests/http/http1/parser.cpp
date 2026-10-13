@@ -423,11 +423,15 @@ RUVIA_TEST(http1_parse_valid_request) {
 RUVIA_TEST(http1_parser_maps_wire_versions_to_typed_control_data) {
     const auto http11 = parse_http1_request_message("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
     const auto http10 = parse_http1_request_message("GET / HTTP/1.0\r\n\r\n");
+    // RFC 9110 6.2: a higher minor version is processed as HTTP/1.1.
+    const auto http19 = parse_http1_request_message("GET / HTTP/1.9\r\nHost: example.com\r\n\r\n");
 
     RUVIA_CHECK(http11.complete());
     RUVIA_CHECK(http10.complete());
+    RUVIA_CHECK(http19.complete());
     RUVIA_CHECK(http11.state_.request_.protocol_version() == http_protocol_version::http11);
     RUVIA_CHECK(http10.state_.request_.protocol_version() == http_protocol_version::http10);
+    RUVIA_CHECK(http19.state_.request_.protocol_version() == http_protocol_version::http11);
 }
 
 RUVIA_TEST(http1_parse_incomplete_head) {

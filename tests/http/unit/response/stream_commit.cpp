@@ -66,6 +66,7 @@ RUVIA_TEST(response_stream_commit_rejects_trailers_for_bodyless_statuses) {
         http_response_stream_framing::http1_chunked};
     constexpr std::array statuses{
         ruvia::http_status::no_content,
+        ruvia::http_status::reset_content,
         ruvia::http_status::not_modified};
     for (const auto framing : framings) {
         for (const auto status : statuses) {

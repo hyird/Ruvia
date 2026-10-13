@@ -24,8 +24,10 @@ namespace {
         return http1_client_response_parse_error::invalid_status_line;
     }
 
+    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
+    // HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
     const auto version = status_line.substr(0, separator);
-    if (version != "HTTP/1.0" && version != "HTTP/1.1") {
+    if (version.size() != 8 || !version.starts_with("HTTP/1.") || version[7] < '0' || version[7] > '9') {
         return http1_client_response_parse_error::unsupported_http_version;
     }
 
@@ -53,8 +55,7 @@ namespace {
     }
 
     return http1_client_parsed_status_line{.status_code_ = *parsed_status,
-        .protocol_version_ =
-            version == "HTTP/1.1" ? http_protocol_version::http11 : http_protocol_version::http10};
+        .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
 // RFC 9112 section 6.3 rule 1: a 1xx ends at its header section, so the

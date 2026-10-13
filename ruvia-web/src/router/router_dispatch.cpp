@@ -3,9 +3,11 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/static_files.h"
 
 #include "context/context_access.h"
+#include "http/static_path_normalization.h"
 #include "router/route_context.h"
 #include "router/route_table.h"
 
@@ -37,8 +39,18 @@ http_response make_allow_no_content_response(request_memory& memory, std::uint32
 
     // resolve() rejects every target that is not an origin path naming a
     // resource, so a probed path here is origin-form and dot-segment free.
+    // static_file takes a decoded file path: decode it here, once, so a name
+    // holding an encoded octet ("%20", UTF-8) resolves (RFC 3986 2.1, 6.2.2.2).
     auto relative = request.path();
     relative.remove_prefix(1);
+    std::optional<std::pmr::string> decoded;
+    if (has_url_encoding(relative, url_decode_mode::percent)) {
+        decoded = detail::decode_request_path(relative, memory.resource());
+        if (!decoded) {
+            return std::nullopt;
+        }
+        relative = *decoded;
+    }
 
     auto context_value = detail::context_access::make(memory, request, services);
     try {

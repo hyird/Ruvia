@@ -198,19 +198,23 @@ RUVIA_TEST(static_root_serves_utf8_file_and_directory_urls) {
     ruvia::static_root root(dir, {.index_file_ = "index.html"});
     struct case_value final {
         std::string_view relative_url_;
+        std::string_view relative_path_;
         std::string_view body_;
         std::string_view content_type_;
     };
+    // static_file takes the decoded path the encoded URL names.
     const case_value cases[]{
-        {"%E6%96%87%E6%A1%A3-%F0%9F%93%84.txt", "unicode-file-body", "text/plain; charset=utf-8"},
-        {"%E7%9B%AE%E5%BD%95-%F0%9F%93%81/", "unicode-index-body", "text/html; charset=utf-8"},
+        {"%E6%96%87%E6%A1%A3-%F0%9F%93%84.txt", "\xE6\x96\x87\xE6\xA1\xA3-\xF0\x9F\x93\x84.txt", "unicode-file-body",
+            "text/plain; charset=utf-8"},
+        {"%E7%9B%AE%E5%BD%95-%F0%9F%93%81/", "\xE7\x9B\xAE\xE5\xBD\x95-\xF0\x9F\x93\x81/", "unicode-index-body",
+            "text/html; charset=utf-8"},
     };
     for (const auto& item : cases) {
         static_file_test_request request;
         const std::string target = "/" + std::string(item.relative_url_);
         request.set_target(target);
         with_static_context(request, [&](ruvia::context& context_value) {
-            const auto response = context_value.static_file(root, {.relative_path_ = item.relative_url_});
+            const auto response = context_value.static_file(root, {.relative_path_ = item.relative_path_});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
             RUVIA_CHECK_EQ(response.header("Content-Type"), std::optional<std::string_view>{item.content_type_});
             const auto file = response.file_body();
@@ -448,7 +452,7 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
+RUVIA_TEST(static_file_takes_decoded_path_and_stays_traversal_safe) {
     namespace fs = std::filesystem;
     using ruvia::static_root;
     using ruvia::static_root_options;
@@ -485,26 +489,20 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
         });
     };
 
-    // "%20" resolves to the space in the real on-disk name (RFC 3986 percent
-    // equivalence). Before decoding this 404'd: the raw bytes "my%20report.txt"
-    // were compared against the decoded index key "my report.txt".
-    RUVIA_CHECK_EQ(serve("my%20report.txt"), ruvia::http_status::ok);
-
-    // Decoding must not open a traversal hole: "%2e%2e%2f" -> "../" is still
-    // clamped at the root (403), and encoded separators plus dot-segments cannot
-    // ascend past it either.
-    RUVIA_CHECK_EQ(serve("%2e%2e%2fetc%2fpasswd"), ruvia::http_status::forbidden);
-    RUVIA_CHECK_EQ(serve("sub%2f%2e%2e%2f%2e%2e%2fetc"), ruvia::http_status::forbidden);
-
-    // An encoded separator is not a path boundary to routing or to path-scoped
-    // middleware, so it must not become one here: "sub%2Finner.txt" is a single
-    // segment and never names "sub/inner.txt".
+    // relative_path_ is already a decoded file path: the real name resolves,
+    // and an escape is the literal bytes of a name, never decoded a second time.
+    RUVIA_CHECK_EQ(serve("my report.txt"), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(serve("my%20report.txt"), ruvia::http_status::not_found);
+    RUVIA_CHECK_EQ(serve("sub%2Finner.txt"), ruvia::http_status::not_found);
     RUVIA_CHECK_EQ(serve("sub/inner.txt"), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(serve("sub%2Finner.txt"), ruvia::http_status::forbidden);
-    RUVIA_CHECK_EQ(serve("sub%5Cinner.txt"), ruvia::http_status::forbidden);
 
-    // A decoded NUL ("%00") cannot occur in a filename and is rejected outright.
-    RUVIA_CHECK_EQ(serve("my%00report.txt"), ruvia::http_status::forbidden);
+    // ".." is clamped at the root (403) however it is reached.
+    RUVIA_CHECK_EQ(serve("../etc/passwd"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub/../../etc"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub\\..\\..\\etc"), ruvia::http_status::forbidden);
+
+    // A NUL cannot occur in a filename and is rejected outright.
+    RUVIA_CHECK_EQ(serve(std::string_view("my\0report.txt", 13)), ruvia::http_status::forbidden);
 
     fs::remove_all(dir);
 }

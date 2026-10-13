@@ -29,6 +29,7 @@
 #include "http/request_body_loader.h"
 #include "http/request_field_parsing.h"
 #include "http/request_query_values.h"
+#include "http/static_path_normalization.h"
 #include "http/unsupported_request_content_coding.h"
 #include "util/constant_time.h"
 
@@ -231,8 +232,12 @@ void context::ensure_route_params() const {
     for (std::size_t i = 0; i < param_count_; ++i) {
         auto value = param_values_[i];
         if (has_url_encoding(value, url_decode_mode::percent)) {
-            auto decoded = decode_url_component(
-                value, {.mode_ = url_decode_mode::percent, .resource_ = arena()});
+            // The wildcard capture is a path tail handed to static_file as is,
+            // so it decodes under the same request-path rule as the document
+            // root: no escape may reveal a separator the router never split on.
+            auto decoded = param_names_[i] == "*"
+                               ? detail::decode_request_path(value, arena())
+                               : decode_url_component(value, {.mode_ = url_decode_mode::percent, .resource_ = arena()});
             if (!decoded) {
                 request_storage_->route_params_invalid_ = true;
                 detail::throw_invalid_param();

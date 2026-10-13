@@ -130,6 +130,25 @@ RUVIA_TEST(websocket_deflate_codecs_append_to_existing_output) {
     RUVIA_CHECK(std::string_view(inflated) == "prefix" + payload);
 }
 
+RUVIA_TEST(websocket_deflate_codecs_accept_payload_aliasing_output) {
+    // Appending output reallocates a full string while zlib still reads the
+    // payload, so a payload viewing `out` must behave like an independent copy.
+    websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
+    const auto payload = sample_message(std::size_t{1} << 20U, 9);
+    const auto compressed = deflate(ruvia_ctx, codecs, payload, 6, 15);
+
+    std::pmr::string deflated(payload.data(), payload.size(), std::pmr::new_delete_resource());
+    deflated.shrink_to_fit();
+    RUVIA_CHECK(codecs.deflate_message(deflated, deflated, 6, 15));
+    RUVIA_CHECK(std::string_view(deflated) == payload + compressed);
+
+    std::pmr::string inflated(compressed.data(), compressed.size(), std::pmr::new_delete_resource());
+    inflated.shrink_to_fit();
+    RUVIA_CHECK(codecs.inflate_message(inflated, inflated, protocol_byte_limit::unlimited()) ==
+                websocket_inflate_result::ok);
+    RUVIA_CHECK(std::string_view(inflated) == compressed + payload);
+}
+
 RUVIA_TEST(websocket_deflate_codecs_reset_after_failed_messages) {
     websocket_deflate_codecs reference(std::pmr::new_delete_resource());
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());

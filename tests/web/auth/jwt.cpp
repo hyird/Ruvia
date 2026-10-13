@@ -238,6 +238,20 @@ RUVIA_TEST(jwt_sign_rejects_duplicate_custom_claim_names) {
     auto reserved = sign_options(secret);
     reserved.claims_.push_back(jwt_claim({.name_ = "iss", .value_ = "forbidden"}));
     RUVIA_CHECK(throws_on([&] { (void)jwt_sign(reserved); }));
+
+    // Ill-formed names would serialize to the same U+FFFD-substituted name,
+    // signing a token whose duplicate claims jwt_verify rejects.
+    auto ill_formed = sign_options(secret);
+    ill_formed.claims_.push_back(jwt_claim({.name_ = "a\xFF", .value_ = "1"}));
+    ill_formed.claims_.push_back(jwt_claim({.name_ = "a\xFE", .value_ = "2"}));
+    RUVIA_CHECK(throws_on([&] { (void)jwt_sign(ill_formed); }));
+
+    auto non_ascii = sign_options(secret);
+    non_ascii.claims_.push_back(jwt_claim({.name_ = "r\xC3\xB4le", .value_ = "admin"}));
+    const auto token = sign(non_ascii);
+    const auto payload_value = verify_jwt(token, verify_options(secret));
+    const auto role = payload_value.claim("r\xC3\xB4le");
+    RUVIA_CHECK(role.has_value() && *role == std::string_view("admin"));
 }
 
 RUVIA_TEST(jwt_verify_rejects_wrong_secret) {

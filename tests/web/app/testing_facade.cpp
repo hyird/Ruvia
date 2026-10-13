@@ -390,7 +390,7 @@ private:
         };
         static constexpr std::string_view cases[][2] = {{"/t/users/:id", "."}, {"/t/users/:id", ".."},
             {"/t/tree/*", "."}, {"/t/tree/*", ".."}, {"/t/tree/*", "./a"}, {"/t/tree/*", "a/../b"},
-            {"/t/tree/*", "a/."}};
+            {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}};
         std::pmr::string reply(c.arena());
         for (const auto& entry : cases) {
             reply.push_back(rejects(entry[0], entry[1]) ? 'x' : '-');
@@ -1254,9 +1254,34 @@ RUVIA_TEST(testing_facade_reverse_routes_reject_dot_segments) {
 
     const auto links = app.request(ruvia::test_request::get("/t/dot-links"));
     RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(links.body(), "xxxxxxx /t/tree/a.b/..c/.d");
+    RUVIA_CHECK_EQ(links.body(), "xxxxxxxx /t/tree/a.b/..c/.d");
 
     const auto tree = app.request(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
     RUVIA_CHECK_EQ(tree.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(tree.body(), "a.b/..c/.d");
+}
+
+RUVIA_TEST(testing_facade_wildcard_capture_rejects_encoded_separators) {
+    // Routing and path-scoped middleware split the wildcard tail on raw '/'
+    // only, so a decoded "%2F" or "%5C" would forge a boundary they never saw.
+    ruvia::test_app app;
+
+    const auto spaced = app.request(ruvia::test_request::get("/t/tree/a%20b/c"));
+    RUVIA_CHECK_EQ(spaced.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(spaced.body(), "a b/c");
+
+    for (const auto* target : {"/t/tree/secret%2Fkey.txt", "/t/tree/x%2F..%2Fsecret", "/t/tree/a%5Cb"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(target)).status(), ruvia::http_status::bad_request);
+    }
+
+    // Decoded exactly once: a doubly encoded "%252E%252E" stays the literal
+    // name "%2E%2E" that static_file looks up as is, never a ".." segment.
+    const auto doubled = app.request(ruvia::test_request::get("/t/tree/public/%252E%252E/private"));
+    RUVIA_CHECK_EQ(doubled.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(doubled.body(), "public/%2E%2E/private");
+
+    // A single named segment has no boundary to forge and still decodes.
+    const auto named = app.request(ruvia::test_request::get("/t/users/a%2Fb"));
+    RUVIA_CHECK_EQ(named.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(named.body(), "a/b");
 }

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/error.h"
 
 namespace ruvia::detail {
@@ -23,32 +26,40 @@ namespace ruvia::detail {
         .message_ = "invalid static file path"});
 }
 
-// A client path normalized against a document root. `path_` borrows the input
-// when it is already canonical ('/'-separated, no empty or dot segment) -- the
-// common case -- and otherwise points into the caller's storage.
-struct static_relative_path final {
-    std::string_view path_;
-    // '/' and '\\' bytes the input carried; a separator that percent-decoding
-    // revealed changes this count against the raw request path.
-    std::size_t separator_count_;
-};
+[[nodiscard]] inline std::size_t count_path_separators(std::string_view path) noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(path, [](char c) noexcept { return c == '/' || c == '\\'; }));
+}
 
-// Web static-file path policy: normalize a client path relative to the
+// Percent-decodes an encoded request path, or a wildcard tail of one, exactly
+// once into the file path it names. Routing and path-scoped middleware split
+// request paths on raw '/' only, so an escape revealing '/' or '\\' would
+// forge a segment boundary they never saw; that, like a malformed escape,
+// yields nullopt.
+[[nodiscard]] inline std::optional<std::pmr::string> decode_request_path(
+    std::string_view path, std::pmr::memory_resource* resource) {
+    auto decoded = decode_url_component(path, {.mode_ = url_decode_mode::percent, .resource_ = resource});
+    if (decoded && count_path_separators(*decoded) != count_path_separators(path)) {
+        decoded.reset();
+    }
+    return decoded;
+}
+
+// Web static-file path policy: normalize a decoded file path relative to the
 // configured document root and reject every attempt to ascend above it. One
-// forward scan: the canonical prefix is borrowed and only the bytes from the
-// first rewrite on ('\\', an empty segment, "." or "..") are rebuilt in
-// `storage`. A NUL cannot occur in a filename and is rejected.
-[[nodiscard]] inline static_relative_path normalize_static_relative_path(
+// forward scan: the canonical prefix ('/'-separated, no empty or dot segment)
+// is borrowed and only the bytes from the first rewrite on ('\\', an empty
+// segment, "." or "..") are rebuilt in `storage`. A NUL cannot occur in a
+// filename and is rejected.
+[[nodiscard]] inline std::string_view normalize_static_relative_path(
     std::string_view input, std::pmr::string& storage) {
     if (input.empty()) {
-        return {input, 0};
+        return input;
     }
     if (input.front() == '/' || input.front() == '\\' || is_windows_drive_path(input)) {
         throw_invalid_static_file_path();
     }
 
     constexpr std::string_view stop_bytes("/\\\0", 3);
-    std::size_t separator_count = 0;
     std::size_t cursor_value = 0;
     for (;;) {
         const auto stop = input.find_first_of(stop_bytes, cursor_value);
@@ -62,9 +73,8 @@ struct static_relative_path final {
             break;
         }
         if (stop == std::string_view::npos) {
-            return {input, separator_count};
+            return input;
         }
-        ++separator_count;
         cursor_value = stop + 1;
     }
 
@@ -102,11 +112,10 @@ struct static_relative_path final {
         if (stop == std::string_view::npos) {
             break;
         }
-        ++separator_count;
         cursor_value = stop + 1;
     }
 
-    return {storage, separator_count};
+    return storage;
 }
 
 }  // namespace ruvia::detail

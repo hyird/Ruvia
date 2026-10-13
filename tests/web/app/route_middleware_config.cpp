@@ -329,3 +329,24 @@ RUVIA_TEST(test_app_releases_registered_middleware_arguments_with_the_app) {
     RUVIA_CHECK_EQ(observation->live_, 0U);
     RUVIA_CHECK_EQ(observation.use_count(), 1L);
 }
+
+RUVIA_TEST(app_wide_route_declarations_are_rejected_instead_of_ignored) {
+    // Admission reads body_limit and deadline from route and controller lists
+    // only, so an app-wide registration would silently bound nothing.
+    ruvia::test_app app;
+    const auto rejects = [](auto&& register_value) {
+        try {
+            register_value();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    RUVIA_CHECK(rejects([&app] { app.use<ruvia::body_limit<16>>(); }));
+    RUVIA_CHECK(rejects([&app] { app.use_at<ruvia::body_limit<16>>({.prefix_ = "/route-config"}); }));
+    RUVIA_CHECK(rejects([&app] { app.use<ruvia::deadline<100>>(); }));
+    RUVIA_CHECK(rejects([&app] { app.use_at<ruvia::deadline<100>>({.prefix_ = "/route-config"}); }));
+
+    const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+}

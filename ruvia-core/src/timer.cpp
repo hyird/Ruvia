@@ -64,17 +64,16 @@ private:
 
 }  // namespace
 
-task<timer_sleep_result> sleep_for(
-    const worker_handle& worker_value, std::chrono::steady_clock::duration duration) {
-    return sleep_for(worker_value, duration, stop_token{});
-}
+namespace detail {
 
-task<timer_sleep_result> sleep_for(
+task<timer_sleep_result> sleep_on_worker(
     const worker_handle& worker_value, std::chrono::steady_clock::duration duration, stop_token stop_token_value) {
     if (!worker_value.is_current()) {
         throw std::logic_error("sleep_for must run on its bound worker");
     }
     co_return co_await sleep_awaiter(worker_value, duration, std::move(stop_token_value));
 }
+
+}  // namespace detail
 
 }  // namespace ruvia

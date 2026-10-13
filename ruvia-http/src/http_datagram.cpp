@@ -58,7 +58,9 @@ std::variant<bool, http_capsule_codec_error> parse_http_capsule_protocol(std::st
     if (!parser.item(item) || !parser.parameters()) {
         return http_capsule_codec_error::value_out_of_range;
     }
-    parser.ows();
+    // RFC 8941 4.2: only SP surrounds a top-level Item; OWS (with HTAB)
+    // belongs between List and Dictionary members.
+    parser.spaces();
     if (!parser.empty() || item.kind_ != detail::http_structured_item::kind_type::boolean) {
         return http_capsule_codec_error::value_out_of_range;
     }

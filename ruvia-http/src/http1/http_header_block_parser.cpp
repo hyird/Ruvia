@@ -66,15 +66,16 @@ namespace {
     cursor_value += 2;
 
     // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3); only
-    // HTTP/1.0 and HTTP/1.1 are served.
+    // HTTP/1.x is served. A higher minor version is processed as HTTP/1.1,
+    // the highest minor version implemented (RFC 9110 section 6.2).
     if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' ||
         version[6] != '.' || version[7] < '0' || version[7] > '9') {
         return http_parse_error::invalid_request_line;
     }
-    if (version[5] != '1' || (version[7] != '0' && version[7] != '1')) {
+    if (version[5] != '1') {
         return http_parse_error::unsupported_http_version;
     }
-    block.protocol_version_ = version[7] == '1' ? http_protocol_version::http11 : http_protocol_version::http10;
+    block.protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11;
     return std::nullopt;
 }
 

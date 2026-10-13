@@ -16,7 +16,6 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_representation_response_plan.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 
 #include "context/context_access.h"
@@ -528,35 +527,15 @@ http_response context::static_file(const static_root& root, static_file_response
 
 http_response context::static_file(const static_root& root, static_file_response_options options,
     detail::static_file_selection_mode mode) const {
-    const auto relative_path = options.relative_path_.view();
+    // relative_path_ is a decoded file path -- a wildcard capture from
+    // req().param("*") is passed as is -- so it is never percent-decoded here:
+    // a second decode would turn "%252E%252E" into a ".." no route or path
+    // scope ever saw. normalize_static_relative_path clamps ".." at the root
+    // and rejects absolute paths and NUL, and the lookup is a byte-exact
+    // index compare that never joins the path onto the filesystem.
     const auto content_type_value = options.content_type_.view();
-    // Percent-decode the request path before matching it against the static index,
-    // whose keys are the real (decoded) on-disk names -- so a file whose name holds
-    // an encoded octet (a space "%20", UTF-8, parentheses, ...) resolves instead of
-    // 404ing, per RFC 3986 2.1 / 6.2.2.2 percent-encoding equivalence. Decoding is
-    // safe here: normalize_static_relative_path still clamps ".." at the root and
-    // rejects absolute paths, and the lookup is a byte-exact index compare that
-    // never joins the client path onto the filesystem, so the worst case is a miss
-    // (404). A "%00" would inject a NUL that cannot occur in a filename, so reject
-    // it; a malformed escape falls back to the raw bytes (which simply miss).
-    // An encoded '/' or '\' would split one request path segment into several
-    // file path segments, so the file served would differ from the path every
-    // route and path-scoped middleware matched; reject it like the NUL.
-    std::optional<std::pmr::string> decoded_path;
-    if (has_url_encoding(relative_path, url_decode_mode::percent)) {
-        decoded_path = decode_url_component(
-            relative_path, {.mode_ = url_decode_mode::percent, .resource_ = pool()});
-    }
-    const std::string_view lookup_path =
-        decoded_path.has_value() ? std::string_view(*decoded_path) : relative_path;
     std::pmr::string relative_storage(pool());
-    const auto normalized = detail::normalize_static_relative_path(lookup_path, relative_storage);
-    if (decoded_path.has_value() &&
-        normalized.separator_count_ != static_cast<std::size_t>(std::ranges::count_if(
-                                           relative_path, [](char c) noexcept { return c == '/' || c == '\\'; }))) {
-        detail::throw_invalid_static_file_path();
-    }
-    auto relative = normalized.path_;
+    auto relative = detail::normalize_static_relative_path(options.relative_path_.view(), relative_storage);
 
     if (relative.empty() && !detail::static_root_access::has_directory_index(root)) {
         detail::throw_invalid_static_file_path();

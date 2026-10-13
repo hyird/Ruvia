@@ -87,17 +87,17 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             if (has_url_for_dot_segment(value)) {
                 throw std::invalid_argument("url_for '*' value must not contain a '.' or '..' segment");
             }
+            // The router refuses a wildcard capture whose decoding adds a
+            // separator, so neither '\' nor a leading '/' at the root (which
+            // could only be spelled "%2F" to avoid a network-path "//") would
+            // ever route back to this value.
+            if (value.find('\\') != std::string_view::npos || (url.empty() && value.starts_with('/'))) {
+                throw std::invalid_argument("url_for '*' value has a separator the route cannot capture");
+            }
             // An empty capture addresses the bare mount path itself, which is
             // exactly what the wildcard route matches for it.
             if (!value.empty()) {
-                const bool at_root = url.empty();
                 url.push_back('/');
-                if (at_root && value.front() == '/') {
-                    // "//" would start a network-path reference naming another
-                    // host; the router decodes "%2F" back to the same capture.
-                    url.append("%2F");
-                    value.remove_prefix(1);
-                }
                 append_url_for_value(url, value, /*keep_slashes=*/true);
             } else if (url.empty()) {
                 url.push_back('/');

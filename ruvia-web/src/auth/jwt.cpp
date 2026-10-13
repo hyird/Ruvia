@@ -231,11 +231,32 @@ namespace {
         source);
 }
 
+// The payload writer replaces each ill-formed UTF-8 subpart with U+FFFD, so
+// two distinct ill-formed names could serialize as one; only well-formed
+// names keep the raw uniqueness check equal to the signed one.
+[[nodiscard]] bool is_well_formed_utf8(std::string_view text) noexcept {
+    for (std::size_t i = 0; i < text.size();) {
+        if (static_cast<unsigned char>(text[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        const auto sequence = detail::scan_json_utf8_sequence(text, i);
+        if (!sequence.well_formed_) {
+            return false;
+        }
+        i += sequence.length_;
+    }
+    return true;
+}
+
 void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
     for (std::size_t i = 0; i < claims.size(); ++i) {
         const auto name = claims[i].name();
         if (name.empty() || detail::jwt_is_reserved_claim(name)) {
             throw std::invalid_argument("JWT custom claim name is empty or reserved");
+        }
+        if (!is_well_formed_utf8(name)) {
+            throw std::invalid_argument("JWT custom claim name must be well-formed UTF-8");
         }
         for (std::size_t j = 0; j < i; ++j) {
             if (claims[j].name() == name) {

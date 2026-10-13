@@ -258,6 +258,15 @@ ruvia::task<void> exercise_stoppable_sleep(const ruvia::worker_handle& worker_va
         co_return;
     }
 
+    // An unbounded delay saturates instead of overflowing into a negative
+    // duration that would report elapsed without ever suspending.
+    ruvia::stop_source unbounded;
+    static_cast<void>(worker_value.post([&unbounded] { unbounded.request_stop(); }));
+    if (co_await ruvia::sleep_for(worker_value, std::chrono::hours::max(), unbounded.token()) !=
+        ruvia::timer_sleep_result::stop_requested) {
+        co_return;
+    }
+
     // Cancellation from another thread must resume the sleeping task with the
     // public stop_requested outcome.
     ruvia::stop_source cross_thread;

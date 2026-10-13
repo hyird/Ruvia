@@ -35,10 +35,14 @@ RUVIA_TEST(http_capsule_protocol_byte_parameters_accept_optional_padding_and_val
     if ((disabled.index() == 0)) {
         RUVIA_CHECK(!std::get<0>(disabled));
     }
+    // RFC 8941 4.2 discards only SP around a top-level Item.
     for (const auto value : {"?1;bytes=:Y:", "?1;bytes=:Y=:", "?1;bytes=:YWJj=:", "?1;bytes=:YWJ==:",
-             "?1;bytes=:YQ===:", "?1;bytes=:Y=Q:", "?1;bytes=:YQ$:", "?1;bytes=:YQ\n:", "?1;bytes=:YQ"}) {
+             "?1;bytes=:YQ===:", "?1;bytes=:Y=Q:", "?1;bytes=:YQ$:", "?1;bytes=:YQ\n:", "?1;bytes=:YQ", "?1\t",
+             "?1 \t", "\t?1"}) {
         RUVIA_CHECK((ruvia::parse_http_capsule_protocol(value).index() != 0));
     }
+    const auto padded = ruvia::parse_http_capsule_protocol(" ?1  ");
+    RUVIA_CHECK((padded.index() == 0 && std::get<0>(padded)));
 }
 
 RUVIA_TEST(http_udp_datagram_context_prefix_roundtrips) {

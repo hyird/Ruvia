@@ -54,6 +54,7 @@ class document_root_routes final {
     fs::create_directories(dir / "private");
     std::ofstream(dir / "private" / "file.txt") << "secret";
     std::ofstream(dir / "public.txt") << "public";
+    std::ofstream(dir / "my report.txt") << "spaced";
     return dir;
 }
 
@@ -101,6 +102,17 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
     // reaches neither the route nor the document root's normalized lookup.
     for (const std::string_view target :
         {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt"}) {
+        const auto response = exchange(io, server.endpoint(), target);
+        RUVIA_CHECK(has_status(response, "404"));
+        RUVIA_CHECK(response.find("secret") == std::string::npos);
+    }
+
+    // The request path is decoded exactly once into the file name, and no
+    // escape may reveal a separator routing never split on.
+    const auto spaced = exchange(io, server.endpoint(), "/my%20report.txt");
+    RUVIA_CHECK(has_status(spaced, "200"));
+    RUVIA_CHECK(spaced.ends_with("spaced"));
+    for (const std::string_view target : {"/my%2520report.txt", "/private%2Ffile.txt", "/private%5Cfile.txt"}) {
         const auto response = exchange(io, server.endpoint(), target);
         RUVIA_CHECK(has_status(response, "404"));
         RUVIA_CHECK(response.find("secret") == std::string::npos);

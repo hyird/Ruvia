@@ -53,7 +53,8 @@ namespace ruvia {
 // Composition follows the one rule every policy with an app-wide and a
 // route-level form follows: the narrower scope may only TIGHTEN. A route cannot
 // extend application::deadline()'s handler deadline, and where a controller-wide and
-// a route-specific declaration both exist the stricter wins.
+// a route-specific declaration both exist the stricter wins. use() and use_at()
+// reject it with std::invalid_argument; the app-wide form is application::deadline().
 template <std::int64_t milliseconds>
 class deadline final {
 public:

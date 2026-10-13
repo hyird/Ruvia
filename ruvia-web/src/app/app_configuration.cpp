@@ -50,6 +50,12 @@ void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
     if (value.validated_model_type_key() != nullptr) {
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
     }
+    // Route admission reads these declarations from the route and controller
+    // lists only; app-wide they would silently bound nothing. The app-wide
+    // forms are server_config::max_buffered_body_bytes_ and application::deadline().
+    if (value.request_body_limit() != 0 || value.deadline_ms() != 0) {
+        throw std::invalid_argument("body_limit and deadline bind to a route or controller and cannot be app-wide");
+    }
     middlewares_.push_back(std::move(descriptor));
 }
 

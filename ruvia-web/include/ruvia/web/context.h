@@ -354,12 +354,12 @@ public:
     // the route's identity: c.url_for("/users/:id", {"42"}) -> "/users/42".
     // ":name" values are percent-encoded path segments and must be non-empty;
     // the value for a trailing "*" keeps its slashes and may be empty. The
-    // result never starts with "//" (a root "*" value's leading slash becomes
-    // "%2F") and never carries a "." or ".." segment. Throws
-    // std::invalid_argument for an unregistered pattern, a value-count
-    // mismatch, a "."/".." segment, or a pattern starting with an empty
-    // segment, and std::logic_error when the context carries no route table
-    // (for example a hand-built test context).
+    // result never starts with "//" and never carries a "." or ".." segment.
+    // Throws std::invalid_argument for an unregistered pattern, a value-count
+    // mismatch, a "."/".." segment, a pattern starting with an empty segment,
+    // or a "*" value the route cannot capture back (one holding '\', or
+    // starting with '/' at the root), and std::logic_error when the context
+    // carries no route table (for example a hand-built test context).
     [[nodiscard]] std::pmr::string url_for(
         std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
@@ -476,6 +476,10 @@ public:
     // other transfer before its bytes.
     [[nodiscard]] http_response file(file_response_options options) const;
 
+    // relative_path_ is a decoded file path below the root, such as
+    // req().param("*") of a wildcard route; it is never percent-decoded again.
+    // ".." is clamped at the root; an absolute path, a NUL, or an ascent above
+    // the root is 403, and an unindexed name 404.
     [[nodiscard]] http_response static_file(
         const static_root& root, static_file_response_options options) const;
 

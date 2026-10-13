@@ -29,7 +29,8 @@ namespace ruvia {
 // that runs in the chain -- by the time a middleware's handle() runs, the bytes
 // it would have rejected are already buffered. Registering it on a controller
 // applies it to that controller's routes, and where both a controller-wide and
-// a route-specific one exist the stricter wins.
+// a route-specific one exist the stricter wins. use() and use_at() reject it
+// with std::invalid_argument; the app-wide bound is max_buffered_body_bytes_.
 template <std::size_t max_bytes>
 class body_limit final {
 public:

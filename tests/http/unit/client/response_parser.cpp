@@ -166,6 +166,11 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     RUVIA_CHECK_EQ(upper_boundary.head().status(), ruvia::http_status_code::from_value(599));
     RUVIA_CHECK(parse_failure_error("GET", "HTTP/2 200 OK") ==
                 http1_client_response_parse_error::unsupported_http_version);
+    RUVIA_CHECK(parse_failure_error("GET", "HTTP/2.0 200 OK") ==
+                http1_client_response_parse_error::unsupported_http_version);
+    // RFC 9110 6.2: a higher HTTP/1 minor version is processed as HTTP/1.1.
+    const auto higher_minor = parse_head("GET", "HTTP/1.2 200 OK\r\nContent-Length: 0");
+    RUVIA_CHECK(higher_minor.head().protocol_version() == http_protocol_version::http11);
     RUVIA_CHECK(parse_failure_error("GET", "HTTP/1.1 99 Too Small") ==
                 http1_client_response_parse_error::invalid_status_code);
     RUVIA_CHECK(parse_failure_error("GET", "HTTP/1.1 abc Bad") ==
