@@ -234,6 +234,42 @@ RUVIA_TEST(http_client_authority_matches_typed_origin) {
     RUVIA_CHECK(is(future, "[V1.FUTURE]:") == http_client_origin_authority_status::same_origin);
 }
 
+RUVIA_TEST(http_client_ipv6_origin_compares_addresses_not_spellings) {
+    struct equivalent_pair final {
+        std::string_view compressed_;
+        std::string_view expanded_;
+    };
+    constexpr equivalent_pair equivalents[]{
+        {"[::]", "[0:0:0:0:0:0:0:0]"},
+        {"[::1]", "[0:0:0:0:0:0:0:1]"},
+        {"[::1]", "[::0.0.0.1]"},
+        {"[1::]", "[1:0:0:0:0:0:0:0]"},
+        {"[1:2:3:4:5:6:7::]", "[1:2:3:4:5:6:7:0]"},
+        {"[1::2:3:4:5:6:7]", "[1:0:2:3:4:5:6:7]"},
+        {"[2001:db8:0:1::2:3]", "[2001:0DB8:0:1:0:0:2:3]"},
+        {"[::ffff:c000:201]", "[::ffff:192.0.2.1]"},
+        {"[1:2:3:4:5:6:c000:201]", "[1:2:3:4:5:6:192.0.2.1]"}};
+    for (const auto& pair : equivalents) {
+        for (const bool reverse : {false, true}) {
+            const auto source = reverse ? pair.expanded_ : pair.compressed_;
+            const auto destination = reverse ? pair.compressed_ : pair.expanded_;
+            const auto origin = http_origin_view::http({.host_ = source});
+            RUVIA_CHECK(classify_http_client_origin_authority(origin, destination) ==
+                        http_client_origin_authority_status::same_origin);
+            const auto location = std::string("http://") + std::string(destination) + "/next";
+            check_resolved_target(ruvia_ctx, origin, "/previous", location, "/next");
+            RUVIA_CHECK(classify_http_client_origin_authority(origin, std::string(destination) + ":81") ==
+                        http_client_origin_authority_status::different_origin);
+        }
+    }
+    const auto origin = http_origin_view::http({.host_ = "[::ffff:192.0.2.1]"});
+    for (const auto different : {"[::ffff:192.0.2.2]", "[::192.0.2.1]", "192.0.2.1", "[v1.future]"}) {
+        RUVIA_CHECK(classify_http_client_origin_authority(origin, different) ==
+                    http_client_origin_authority_status::different_origin);
+    }
+    check_cross_origin_redirect(ruvia_ctx, origin, "/", "https://[::ffff:c000:201]/");
+}
+
 RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
     const auto origin = http_origin_view::http({.host_ = "example.com"});
     constexpr std::string_view current = "/base/dir/page?old=1";

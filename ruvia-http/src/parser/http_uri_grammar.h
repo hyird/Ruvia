@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <variant>
@@ -34,9 +36,10 @@ namespace ruvia::detail {
 [[nodiscard]] bool is_valid_uri_component(
     std::string_view value, bool allow_slash, bool allow_question) noexcept;
 
-[[nodiscard]] bool parse_ipv4_address(std::string_view value) noexcept;
-// Both take the literal without its surrounding brackets.
-[[nodiscard]] bool is_valid_ipv6_literal(std::string_view literal) noexcept;
+// Address octets/groups in wire order; no allocation or platform IP parser.
+// IPv6 and IPvFuture literals are supplied without surrounding brackets.
+[[nodiscard]] std::optional<std::array<std::uint8_t, 4>> parse_ipv4_address(std::string_view value) noexcept;
+[[nodiscard]] std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_ipv_future(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_reg_name(std::string_view value) noexcept;
 

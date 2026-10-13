@@ -29,3 +29,22 @@ RUVIA_TEST(http_authority_host_public_parse_distinguishes_empty_host_from_invali
         RUVIA_CHECK(!ruvia::parse_http_authority_host(invalid));
     }
 }
+
+RUVIA_TEST(http_ip_literal_validation_preserves_compression_and_tail_bounds) {
+    for (const auto valid : {"::", "1::", "::1", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::",
+             "1::2:3:4:5:6:7", "::ffff:192.0.2.1", "1:2:3:4:5:6:192.0.2.1"}) {
+        RUVIA_CHECK(ruvia::is_valid_http_ipv6_literal(valid));
+    }
+    for (const auto invalid : {"", ":", ":::1", "1:::2", "1::2::3", "1:2:3:4:5:6:7",
+             "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::", "1:2:3:4:5:6::7:8",
+             "1:2:3:4:5:6:7:192.0.2.1", "1:2:3:4:5::6:192.0.2.1",
+             "::ffff:192.00.2.1", "::ffff:192.0.2.256", "::ffff:192.0.2.1:",
+             "::ffff:192.0.2", "::ffff:192.0.2.1suffix", "12345::", "::1%zone", "[::1]"}) {
+        RUVIA_CHECK(!ruvia::is_valid_http_ipv6_literal(invalid));
+    }
+    for (const auto invalid : {"", "1.2.3", "1.2.3.4.5", "01.2.3.4", "1.2.3.256", "1.2.3.4suffix"}) {
+        RUVIA_CHECK(!ruvia::is_valid_http_ipv4_literal(invalid));
+    }
+    RUVIA_CHECK(ruvia::is_valid_http_ipv4_literal("0.0.0.0"));
+    RUVIA_CHECK(ruvia::is_valid_http_ipv4_literal("255.255.255.255"));
+}

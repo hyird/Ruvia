@@ -25,11 +25,11 @@ bool is_valid_http_connect_authority(std::string_view authority) noexcept {
 }
 
 bool is_valid_http_ipv4_literal(std::string_view value) noexcept {
-    return detail::parse_ipv4_address(value);
+    return detail::parse_ipv4_address(value).has_value();
 }
 
 bool is_valid_http_ipv6_literal(std::string_view value) noexcept {
-    return detail::is_valid_ipv6_literal(value);
+    return detail::parse_ipv6_address(value).has_value();
 }
 
 std::optional<http_authority_view> parse_http_authority(borrowed_text text) noexcept {

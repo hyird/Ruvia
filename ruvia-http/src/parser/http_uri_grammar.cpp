@@ -45,9 +45,16 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
     return reg_name_char_table[byte] || byte == ':';
 }
 
-[[nodiscard]] bool parse_ipv6_hex_group(std::string_view literal, std::size_t& offset) noexcept {
+[[nodiscard]] bool parse_ipv6_hex_group(std::string_view literal, std::size_t& offset,
+    std::uint16_t& group) noexcept {
+    group = 0;
     std::size_t digits = 0;
-    while (offset < literal.size() && digits < 4 && http_decode_hex_nibble(literal[offset]) >= 0) {
+    while (offset < literal.size() && digits < 4) {
+        const auto nibble = http_decode_hex_nibble(literal[offset]);
+        if (nibble < 0) {
+            break;
+        }
+        group = static_cast<std::uint16_t>((group << 4) | nibble);
         ++offset;
         ++digits;
     }
@@ -102,11 +109,12 @@ std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) 
     });
 }
 
-[[nodiscard]] bool parse_ipv4_address(std::string_view value) noexcept {
+std::optional<std::array<std::uint8_t, 4>> parse_ipv4_address(std::string_view value) noexcept {
+    std::array<std::uint8_t, 4> octets;
     std::size_t offset = 0;
-    for (int part = 0; part < 4; ++part) {
+    for (std::size_t part = 0; part < octets.size(); ++part) {
         if (offset >= value.size() || !is_decimal_digit(value[offset])) {
-            return false;
+            return std::nullopt;
         }
         const auto part_begin = offset;
         unsigned int octet = 0;
@@ -116,86 +124,88 @@ std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) 
             ++offset;
             ++digits;
             if (digits > 3 || octet > 255) {
-                return false;
+                return std::nullopt;
             }
         }
         if (digits > 1 && value[part_begin] == '0') {
-            return false;
+            return std::nullopt;
         }
-        if (part == 3) {
-            return offset == value.size();
+        octets[part] = static_cast<std::uint8_t>(octet);
+        if (part + 1 == octets.size()) {
+            return offset == value.size() ? std::optional(octets) : std::nullopt;
         }
         if (offset >= value.size() || value[offset] != '.') {
-            return false;
+            return std::nullopt;
         }
         ++offset;
     }
-    return false;
+    return std::nullopt;
 }
 
-[[nodiscard]] bool is_valid_ipv6_literal(std::string_view literal) noexcept {
+std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view literal) noexcept {
     if (literal.empty()) {
-        return false;
+        return std::nullopt;
     }
 
+    std::array<std::uint16_t, 8> groups;
     std::size_t offset = 0;
-    int groups = 0;
-    bool compressed = false;
-
+    std::size_t size = 0;
+    auto compression = std::string_view::npos;
     if (literal.starts_with("::")) {
-        compressed = true;
+        compression = 0;
         offset = 2;
-        if (offset == literal.size()) {
-            return true;
-        }
     }
 
     while (offset < literal.size()) {
-        if (groups >= 8) {
-            return false;
+        if (size == groups.size()) {
+            return std::nullopt;
         }
-
         const auto next_dot = literal.find('.', offset);
         const auto next_colon = literal.find(':', offset);
         if (is_decimal_digit(literal[offset]) && next_dot != std::string_view::npos &&
             (next_colon == std::string_view::npos || next_dot < next_colon)) {
-            if (!parse_ipv4_address(literal.substr(offset))) {
-                return false;
+            const auto tail = parse_ipv4_address(literal.substr(offset));
+            if (!tail || size > groups.size() - 2) {
+                return std::nullopt;
             }
-            groups += 2;
-            offset = literal.size();
+            groups[size++] = static_cast<std::uint16_t>((*tail)[0] << 8 | (*tail)[1]);
+            groups[size++] = static_cast<std::uint16_t>((*tail)[2] << 8 | (*tail)[3]);
             break;
         }
-
-        if (!parse_ipv6_hex_group(literal, offset)) {
-            return false;
+        if (!parse_ipv6_hex_group(literal, offset, groups[size])) {
+            return std::nullopt;
         }
-        ++groups;
-
+        ++size;
         if (offset == literal.size()) {
             break;
         }
         if (literal[offset] != ':') {
-            return false;
+            return std::nullopt;
         }
         if (offset + 1 < literal.size() && literal[offset + 1] == ':') {
-            if (compressed) {
-                return false;
+            if (compression != std::string_view::npos) {
+                return std::nullopt;
             }
-            compressed = true;
+            compression = size;
             offset += 2;
-            if (offset == literal.size()) {
-                break;
-            }
         } else {
             ++offset;
             if (offset == literal.size()) {
-                return false;
+                return std::nullopt;
             }
         }
     }
 
-    return compressed ? groups < 8 : groups == 8;
+    if (compression == std::string_view::npos) {
+        return size == groups.size() ? std::optional(groups) : std::nullopt;
+    }
+    if (size == groups.size()) {
+        return std::nullopt;
+    }
+    // Expand the omitted zero groups without changing the suffix's order.
+    std::move_backward(groups.begin() + compression, groups.begin() + size, groups.end());
+    std::fill_n(groups.begin() + compression, groups.size() - size, std::uint16_t{0});
+    return groups;
 }
 
 [[nodiscard]] bool is_valid_ipv_future(std::string_view literal) noexcept {

@@ -5,7 +5,7 @@
 // These values contain no transport policy: redirect limits, cross-origin
 // authorization, connection selection, and retries remain owned by the external
 // I/O runtime. The helpers only classify HTTP response fields, apply the RFC
-// method/content rewrite rules, and resolve one same-origin URI-reference.
+// method/content rewrite rules, and resolve one HTTP(S) URI-reference.
 
 #include <cstdint>
 #include <memory_resource>
@@ -156,6 +156,9 @@ enum class http_client_origin_authority_status : std::uint8_t {
     invalid_authority,
 };
 
+// Compares effective ports and URI hosts. IPv6 literals compare by address,
+// independent of zero compression, leading zeros or an embedded IPv4 tail.
+// Other hosts retain URI case/percent-encoding equivalence; no DNS lookup.
 [[nodiscard]] http_client_origin_authority_status classify_http_client_origin_authority(
     const http_origin_view& origin, std::string_view authority) noexcept;
 

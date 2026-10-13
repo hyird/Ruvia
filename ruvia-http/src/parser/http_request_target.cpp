@@ -118,12 +118,22 @@ bool is_valid_http_host(std::string_view value) noexcept {
             return false;
         }
         const auto literal = value.substr(1, value.size() - 2);
-        return is_valid_ipv6_literal(literal) || is_valid_ipv_future(literal);
+        return parse_ipv6_address(literal).has_value() || is_valid_ipv_future(literal);
     }
     return !(value.find(':') != std::string_view::npos) && is_valid_reg_name(value);
 }
 
 bool http_uri_host_equals(std::string_view left, std::string_view right) noexcept {
+    if (left == right) {
+        return true;
+    }
+    if (left.size() > 2 && right.size() > 2 && left.front() == '[' && right.front() == '[') {
+        const auto left_address = parse_ipv6_address(left.substr(1, left.size() - 2));
+        const auto right_address = parse_ipv6_address(right.substr(1, right.size() - 2));
+        if (left_address || right_address) {
+            return left_address && right_address && *left_address == *right_address;
+        }
+    }
     std::size_t left_cursor = 0;
     std::size_t right_cursor = 0;
     for (;;) {

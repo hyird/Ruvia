@@ -17,7 +17,7 @@ namespace {
 constexpr std::string_view prefix{"/.well-known/masque/udp/"};
 bool valid_host(std::string_view host) {
     return !host.empty() && host.find('%') == std::string_view::npos &&
-           (host.find(':') != std::string_view::npos ? detail::is_valid_ipv6_literal(host) : detail::is_valid_reg_name(host));
+           (host.find(':') != std::string_view::npos ? detail::parse_ipv6_address(host).has_value() : detail::is_valid_reg_name(host));
 }
 struct handshake_fields {
     bool capsule_{false}, upgrade_{false}, connection_{false}, host_{false}, forbidden_{false};
