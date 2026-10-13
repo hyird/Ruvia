@@ -152,6 +152,13 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     reuse.select(reuse_projections).from("items");
     const auto reuse_statement = reuse.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK_EQ(reuse_statement.sql(), "SELECT ($1 || $2), CAST($3 AS DECIMAL), (- $3) FROM \"items\"");
+    db_query maria_cast;
+    maria_cast.select(maria_cast.cast(maria_cast.value("1.5"), db_type_definition{.data_type_ = db_data_type::numeric}));
+    RUVIA_CHECK(testing::throws_on([&] { (void)maria_cast.compile(db_driver::mariadb, nullptr); }));
+    db_query maria_time;
+    maria_time.select(maria_time.cast(maria_time.value("2026-01-01 00:00:00.5"), db_type_definition{.data_type_ = db_data_type::timestamp}));
+    const auto maria_time_statement = maria_time.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK_EQ(maria_time_statement.sql(), "SELECT CAST(? AS DATETIME(6))");
     // Unsigned values span beyond bigint, so their category is numeric:
     // COALESCE over UINT64_MAX must not narrow it to int8.
     db_query wide;

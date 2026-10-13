@@ -151,6 +151,13 @@ RUVIA_TEST(db_schema_char_entity_and_column_operations_render_with_dialect_limit
         db_schema invalid({.driver_ = db_driver::postgresql});
         invalid.create_table({.name_ = "invalid_char", .columns_ = {{.name_ = "code", .type_ = {.data_type_ = db_data_type::text, .length_ = 8}}}});
     }));
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::mariadb});
+        invalid.create_table({.name_ = "invalid_decimal", .columns_ = {{.name_ = "amount", .type_ = {.data_type_ = db_data_type::numeric}}}});
+    }));
+    db_schema timestamps({.driver_ = db_driver::mariadb});
+    timestamps.create_table({.name_ = "events", .columns_ = {{.name_ = "at", .type_ = {.data_type_ = db_data_type::timestamp}}}});
+    RUVIA_CHECK(timestamps.compile("timestamps")[0].sql().find("`at` DATETIME(6)") != std::string_view::npos);
 }
 
 RUVIA_TEST(db_schema_entity_computed_columns_render_and_validate) {

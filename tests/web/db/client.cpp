@@ -179,6 +179,16 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     }
 }
 
+RUVIA_TEST(db_migrator_rejects_nul_bytes_in_credentials) {
+    using namespace std::string_literals;
+    for (const auto field : {&ruvia::db_config::username_, &ruvia::db_config::password_, &ruvia::db_config::database_}) {
+        auto config = test_db_config();
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        config.*field = "app\0suffix"s;
+        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+    }
+}
+
 RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
     const std::array<ruvia::db_migration, 2> migrations{{
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},

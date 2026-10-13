@@ -235,13 +235,17 @@ inline void append_db_type_name(std::pmr::string& output, db_data_type type,
                 output.push_back(',');
                 append_db_number(output, static_cast<std::uint64_t>(scale));
                 output.push_back(')');
+            } else if (!pg) {
+                // MariaDB's bare DECIMAL is DECIMAL(10,0) and silently rounds.
+                throw std::invalid_argument("MariaDB DECIMAL requires an explicit precision");
             }
             break;
         case db_data_type::date:
             output += "DATE";
             break;
         case db_data_type::timestamp:
-            output += pg ? "TIMESTAMP" : "DATETIME";
+            // Match PostgreSQL's microsecond precision; bare DATETIME truncates.
+            output += pg ? "TIMESTAMP" : "DATETIME(6)";
             break;
         case db_data_type::json:
             if (maria_cast) {
