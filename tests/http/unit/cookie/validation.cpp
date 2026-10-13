@@ -185,6 +185,26 @@ RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
     ruvia::cookie_options bad_path;
     bad_path.path_ = "a;b";
     RUVIA_CHECK(rejects_cookie("sid", "value", bad_path));  // ';' in path attribute
+    // Inputs the Set-Cookie parser would trim, drop, or ignore cannot be found
+    // again for same-name replacement.
+    for (const std::string_view path : {" /", "/ ", " "}) {
+        ruvia::cookie_options spaced_path;
+        spaced_path.path_ = path;
+        RUVIA_CHECK(rejects_cookie("sid", "value", spaced_path));
+    }
+    const std::string long_path(1025, 'p');
+    ruvia::cookie_options oversized_path;
+    oversized_path.path_ = long_path;
+    RUVIA_CHECK(rejects_cookie("sid", "value", oversized_path));
+    oversized_path.path_ = std::string_view(long_path).substr(1);
+    RUVIA_CHECK(!rejects_cookie("sid", "value", oversized_path));
+    const std::string long_value(4093, 'v');
+    RUVIA_CHECK(!rejects_cookie("sid", long_value, clean));
+    RUVIA_CHECK(rejects_cookie("sidx", long_value, clean));
+    ruvia::cookie_options typed_prefix;
+    typed_prefix.secure_ = ruvia::cookie_attribute_policy::emit;
+    typed_prefix.prefix_ = ruvia::cookie_prefix::secure;
+    RUVIA_CHECK(rejects_cookie("sid", long_value, typed_prefix));
     ruvia::cookie_options bad_priority;
     bad_priority.priority_ = static_cast<ruvia::cookie_priority>(255);
     RUVIA_CHECK(rejects_cookie("sid", "value", bad_priority));

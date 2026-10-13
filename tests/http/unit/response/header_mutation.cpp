@@ -195,6 +195,23 @@ RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocati
     RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/csv");
 }
 
+RUVIA_TEST(response_vary_token_ignores_surrounding_whitespace) {
+    ruvia::http_response fresh;
+    fresh.add_vary_token(" Origin ");
+    fresh.add_vary_token("Origin");
+    fresh.add_vary_token("  ");
+    RUVIA_CHECK_EQ(fresh.headers().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(fresh.header("Vary").value_or(""), "Origin");
+
+    ruvia::http_response existing;
+    existing.header("Vary", "Origin");
+    existing.add_vary_token(" Origin");
+    existing.add_vary_token("\t");
+    existing.add_vary_token(" Accept\t");
+    RUVIA_CHECK_EQ(existing.headers().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(existing.header("Vary").value_or(""), "Origin, Accept");
+}
+
 RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
     auto* const resource = std::pmr::new_delete_resource();
     const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};

@@ -41,14 +41,15 @@ inline void add_vary_token(http_response& response, std::string_view token) {
     // comma-joined value in wire order. Inspect every line: the O(1) known-header
     // lookup intentionally returns only the first occurrence and cannot decide
     // wildcard or token membership for this list-based field.
-    if (response_vary_has_token(response, "*")) {
+    token = http_trim_ows(token);
+    if (token.empty() || response_vary_has_token(response, "*")) {
         return;
     }
-    if (http_trim_ows(token) == "*") {
+    if (token == "*") {
         response.header_stable_view("Vary", "*");
         return;
     }
-    if (token.empty() || response_vary_has_token(response, token)) {
+    if (response_vary_has_token(response, token)) {
         return;
     }
 

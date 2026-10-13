@@ -14,9 +14,6 @@
 namespace ruvia {
 namespace {
 
-constexpr std::size_t max_received_cookie_bytes = 4096;
-constexpr std::size_t max_received_cookie_attribute_bytes = 1024;
-
 std::pair<std::string_view, std::string_view> split_attribute(std::string_view value) noexcept {
     const auto equals = value.find('=');
     if (equals == std::string_view::npos) {
@@ -199,8 +196,8 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
         name = fields_value.first;
         cookie_value = fields_value.second;
     }
-    if ((name.empty() && cookie_value.empty()) || name.size() > max_received_cookie_bytes ||
-        cookie_value.size() > max_received_cookie_bytes - name.size() ||
+    if ((name.empty() && cookie_value.empty()) || name.size() > detail::max_cookie_name_value_bytes ||
+        cookie_value.size() > detail::max_cookie_name_value_bytes - name.size() ||
         contains_rejected_received_cookie_control(name) ||
         contains_rejected_received_cookie_control(cookie_value)) {
         return std::nullopt;
@@ -212,7 +209,7 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
         const auto end = value.find(';', offset);
         const auto [attribute, argument] = split_attribute(value.substr(
             offset, end == std::string_view::npos ? value.size() - offset : end - offset));
-        if (argument.size() > max_received_cookie_attribute_bytes) {
+        if (argument.size() > detail::max_cookie_attribute_value_bytes) {
             // Ignore this cookie-av and continue with later attributes.
         } else if (http_ascii_equals_ignore_case(attribute, "Path")) {
             if (!detail::is_valid_cookie_attribute(argument)) {

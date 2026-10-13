@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -9,9 +10,16 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
+
+// RFC 6265bis section 5.6 storage limits. The sender rejects anything the
+// receiving parser would truncate or drop, so set_cookie can find and replace
+// cookies it emitted earlier by re-parsing them.
+inline constexpr std::size_t max_cookie_name_value_bytes = 4096;
+inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
 
 [[nodiscard]] inline bool is_valid_cookie_value(std::string_view value) noexcept {
     for (const auto c : value) {
@@ -155,7 +163,15 @@ inline void validate_cookie(
     if (!is_valid_cookie_value(value)) {
         throw std::invalid_argument("invalid cookie value");
     }
-    if (!is_valid_cookie_attribute(options.path_)) {
+    const auto prefix_size = options.prefix_ ? cookie_prefix_text(*options.prefix_).size() : 0;
+    if (prefix_size + name.size() + value.size() > max_cookie_name_value_bytes) {
+        throw std::invalid_argument("cookie name and value exceed 4096 bytes");
+    }
+    // Receivers trim OWS around Path, so edge spaces would not round-trip and
+    // trailing SP would end the Set-Cookie field value in whitespace.
+    const std::string_view path = options.path_;
+    if (!is_valid_cookie_attribute(path) || path.size() > max_cookie_attribute_value_bytes ||
+        http_trim_ows(path).size() != path.size()) {
         throw std::invalid_argument("invalid cookie attribute");
     }
     if (!is_valid_cookie_domain(options.domain_)) {

@@ -25,6 +25,19 @@ RUVIA_TEST(response_cookie_plan_and_raw_headers_share_replacement_semantics) {
     RUVIA_CHECK_EQ(response.header("Set-Cookie").value_or(""), "final=three");
 }
 
+RUVIA_TEST(response_cookie_plan_replaces_itself_at_parser_limits) {
+    ruvia::http_response response;
+    const std::string path(1024, '/');
+    const std::string value(4096 - 9 - 3, 'v');
+    ruvia::cookie_options options;
+    options.secure_ = ruvia::cookie_attribute_policy::emit;
+    options.prefix_ = ruvia::cookie_prefix::secure;
+    options.path_ = path;
+    response.set_cookie(ruvia::set_cookie_plan("sid", value, options));
+    response.set_cookie(ruvia::set_cookie_plan("sid", value, options));
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+}
+
 RUVIA_TEST(response_cookie_partitioned_and_unpartitioned_storage_keys_are_distinct) {
     ruvia::http_response response;
     const ruvia::cookie_options partitioned{
@@ -173,7 +186,7 @@ RUVIA_TEST(response_cookie_plan_keeps_prefixed_keys_with_large_values) {
     {
         ruvia::http_response response({.resource_ = &resource});
         response.header("Set-Cookie", "__Host-sid=first; Path=/; Secure");
-        const std::string value(5000, 'v');
+        const std::string value(4096 - 10, 'v');
         const ruvia::cookie_options options{
             .path_ = "/", .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
         const ruvia::set_cookie_plan plan("sid", value, options);
