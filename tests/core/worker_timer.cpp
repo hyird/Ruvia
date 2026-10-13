@@ -1,9 +1,12 @@
+#include "ruvia/core/worker_timer.h"
+
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <exception>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -29,6 +32,30 @@
 #include "worker_task_fixture.h"
 
 namespace {
+
+bool timer_duration_conversions_preserve_integer_ticks_and_saturate() {
+    using namespace std::chrono;
+    for (const nanoseconds value : {nanoseconds(9'000'000'000'000'000'001LL),
+             nanoseconds(-9'000'000'000'000'000'001LL), nanoseconds(1), nanoseconds(-1)}) {
+        if (ruvia::worker_timer_saturating_duration_cast(value) != duration_cast<steady_clock::duration>(value)) {
+            return false;
+        }
+    }
+    const milliseconds coarse(9'000'000'000'001LL);
+    using picoseconds_type = duration<std::int64_t, std::pico>;
+    const picoseconds_type fine(9'223'000'000'000'001'000LL);
+    if (ruvia::worker_timer_saturating_duration_cast(coarse) != duration_cast<steady_clock::duration>(coarse) ||
+        ruvia::worker_timer_saturating_duration_cast(fine) != duration_cast<steady_clock::duration>(fine) ||
+        ruvia::worker_timer_saturating_duration_cast(seconds::max()) != steady_clock::duration::max() ||
+        ruvia::worker_timer_saturating_duration_cast(seconds::min()) != steady_clock::duration::min() ||
+        ruvia::worker_timer_saturating_duration_cast(duration<std::uint64_t, std::nano>((std::numeric_limits<std::uint64_t>::max)())) != steady_clock::duration::max()) {
+        return false;
+    }
+    return ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(9'000'000'000'000'000'001LL))) == milliseconds(9'000'000'000'001LL) &&
+           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(milliseconds(1))) == milliseconds(1) &&
+           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(1))) == milliseconds(1) &&
+           ruvia::worker_timer_ceil_milliseconds(steady_clock::duration::min()) == milliseconds::zero();
+}
 
 bool timer_immediate_shutdown_works() {
     asio::io_context io_context;
@@ -559,7 +586,8 @@ bool self_rescheduling_due_timer_preserves_other_expirations() {
 }
 
 int main() {
-    if (!timer_immediate_shutdown_works() ||
+    if (!timer_duration_conversions_preserve_integer_ticks_and_saturate() ||
+        !timer_immediate_shutdown_works() ||
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
         !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
         !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||

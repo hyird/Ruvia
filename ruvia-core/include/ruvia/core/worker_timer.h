@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <ratio>
+#include <type_traits>
 #include <utility>
 
 namespace ruvia::detail {
@@ -57,10 +60,27 @@ enum class worker_timer_schedule_status : std::uint8_t {
     worker_stopping,
 };
 
+// Converts to steady-clock ticks with saturation at both bounds. Integral
+// whole-factor scaling/division of counts up to uintmax_t width stays exact.
+// Other conversions use long double; NaN maps to zero, infinities saturate.
 template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::duration worker_timer_saturating_duration_cast(
     std::chrono::duration<rep_type, period_type> value) {
     using target_type = std::chrono::steady_clock::duration;
+    using factor = std::ratio_divide<period_type, typename target_type::period>;
+    if constexpr (std::is_integral_v<rep_type> &&
+                  std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits &&
+                  (factor::num == 1 || factor::den == 1)) {
+        using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
+        const auto count = static_cast<count_type>(value.count()) / factor::den;
+        if (std::cmp_greater(count, target_type::max().count() / factor::num)) {
+            return target_type::max();
+        }
+        if (std::cmp_less(count, target_type::min().count() / factor::num)) {
+            return target_type::min();
+        }
+        return target_type(static_cast<typename target_type::rep>(count) * factor::num);
+    }
     using wide_type = std::chrono::duration<long double, typename target_type::period>;
     const auto count = std::chrono::duration_cast<wide_type>(value).count();
     if (std::isnan(count)) {
@@ -94,11 +114,27 @@ template <typename rep_type, typename period_type>
     return worker_timer_saturating_deadline(std::chrono::steady_clock::now(), delay);
 }
 
+// Non-positive delays map to zero; positive delays round up to whole
+// milliseconds and saturate at the representable maximum.
 [[nodiscard]] inline std::chrono::milliseconds worker_timer_ceil_milliseconds(
     std::chrono::steady_clock::duration value) noexcept {
     using milliseconds_type = std::chrono::milliseconds;
     if (value <= std::chrono::steady_clock::duration::zero()) {
         return milliseconds_type::zero();
+    }
+
+    using factor = std::ratio_divide<std::chrono::steady_clock::duration::period, milliseconds_type::period>;
+    if constexpr (factor::num == 1) {
+        const auto count = value.count() / factor::den;
+        if (std::cmp_greater_equal(count, milliseconds_type::max().count())) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(count) + (value.count() % factor::den != 0));
+    } else if constexpr (factor::den == 1) {
+        if (std::cmp_greater(value.count(), milliseconds_type::max().count() / factor::num)) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(value.count()) * factor::num);
     }
 
     using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
