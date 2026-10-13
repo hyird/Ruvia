@@ -23,6 +23,24 @@ using ruvia::detail::parsed_request_header_block;
 using ruvia::detail::request_header_kind;
 using ruvia::detail::request_target_view;
 
+// The head cap hit before the request-line ended. Bytes past the method's SP
+// with no further SP or line end are all request-target, which RFC 9112
+// section 3 answers with 414 rather than a header-size rejection.
+[[nodiscard]] http_parse_error classify_head_cap(std::string_view buffer, std::size_t leading_bytes,
+    std::size_t request_line_end) noexcept {
+    buffer = buffer.substr(0, ruvia::max_http_header_bytes);
+    if (request_line_end != 0 || leading_bytes >= buffer.size()) {
+        return http_parse_error::header_too_large;
+    }
+    const auto line = buffer.substr(leading_bytes);
+    const auto method_end = line.find(' ');
+    if (method_end == std::string_view::npos ||
+        line.find_first_of(" \r\n", method_end + 1) != std::string_view::npos) {
+        return http_parse_error::header_too_large;
+    }
+    return http_parse_error::uri_too_long;
+}
+
 }  // namespace
 
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
@@ -65,7 +83,7 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
             }
         }
         if (buffer.size() >= max_http_header_bytes) {
-            return fail(http_parse_error::header_too_large);
+            return fail(classify_head_cap(buffer, scan.leading_bytes_, scan.request_line_end_));
         }
         state_value.progress_ = scan;
         return;

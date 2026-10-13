@@ -454,10 +454,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                                                 : connection_scanner::phase_type::reading_initial);
             const auto read_space = read_buffer.prepare_read();
             if (read_space.empty()) {
-                const auto error = http_parse_protocol_error(http_parse_error::header_too_large);
-                closing_rejection = http_request_rejection::error(
-                    copy_http_protocol_error_info(request_memory_value.resource(), error));
-                break;
+                // The buffer only fills at max_http_header_bytes, where
+                // parse_head has already classified and rejected the head.
+                throw std::logic_error("HTTP/1 request head filled the read buffer unrejected");
             }
 
             auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, read_space](auto handler) mutable {
@@ -516,7 +515,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                                     http_response_coding_policy::disabled(), remote_address, request_start);
         auto connection_plan = request_completion->connection_plan();
         if (request_completion->buffered_response() != nullptr) {
-            scanner_entry.set_phase(connection_scanner::phase_type::writing);
+            // Preparation may still run handler-side work (error recovery,
+            // offloaded compression); it stays timed as idle. Only the socket
+            // writes below run as `writing` (write_remaining() sets it).
             const auto& services = admission ? admission->services() : request_services;
             std::optional<http1_buffered_response_plan> planned_response;
             std::optional<http1_response_write_start> started_write;
@@ -587,6 +588,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             } else {
                 std::optional<http1_buffered_response_write_result> write_result;
                 if (file_response) {
+                    scanner_entry.set_phase(connection_scanner::phase_type::writing);
                     write_result.emplace(co_await finish_file_response_write(stream, response_head, response,
                         response_plan, write_start, file_output, scanner_entry));
                     response_head.reset();

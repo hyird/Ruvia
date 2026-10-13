@@ -1271,6 +1271,21 @@ RUVIA_TEST(http1_parse_header_block_too_large_rejected) {
     RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::header_too_large));
 }
 
+RUVIA_TEST(http1_parse_request_target_reaching_head_cap_is_uri_too_long) {
+    // The cap hit inside the request-target is 414, not 431 (RFC 9112 section 3).
+    std::string request = "\r\nGET /";
+    request += std::string(ruvia::max_http_header_bytes, 'a');
+    RUVIA_CHECK(is_failure(parse_http1_request_message(request).state_, http_parse_error::uri_too_long));
+    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
+
+    // A long method token or a capped request-line version stays a head-size failure.
+    RUVIA_CHECK(is_failure(parse_http1_request_message(std::string(ruvia::max_http_header_bytes, 'G')).state_,
+        http_parse_error::header_too_large));
+    RUVIA_CHECK(is_failure(
+        parse_http1_request_message("GET / " + std::string(ruvia::max_http_header_bytes, 'H')).state_,
+        http_parse_error::header_too_large));
+}
+
 RUVIA_TEST(http1_parse_invalid_request_target_rejected) {
     // An origin-form target must begin with '/'; a bare word is not a valid
     // request target for GET.

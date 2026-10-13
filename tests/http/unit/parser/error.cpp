@@ -71,6 +71,8 @@ RUVIA_TEST(parse_error_status_mapping) {
     // Size limits map to their specific statuses.
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::header_too_large).status(),
         ruvia::http_status::request_header_fields_too_large);
+    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(),
+        ruvia::http_status::uri_too_long);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::too_many_headers).status(),
         ruvia::http_status::request_header_fields_too_large);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding).status(),

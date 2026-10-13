@@ -8,6 +8,7 @@ namespace ruvia {
 
 enum class http_parse_error : std::uint8_t {
     header_too_large,
+    uri_too_long,
     invalid_request_line,
     unsupported_http_version,
     invalid_request_target,

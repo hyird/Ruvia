@@ -31,6 +31,7 @@
 #include "http/http_cors.h"
 #include "server/connection_scanner.h"
 #include "server/http_response_stream_state.h"
+#include "server/http_response_writer.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
@@ -173,13 +174,15 @@ private:
     }
 
     // One socket write, timed as `writing` for exactly its own duration; the
-    // handler's phase and its deadlines resume once it settles.
+    // handler's phase and its deadlines resume once it settles. Each partial
+    // transfer refreshes the deadline: write_timeout bounds inactivity, not
+    // the time a large chunk takes to drain to a slow reader.
     template <typename buffers_type>
     task<std::error_code> write_to_stream(const buffers_type& buffers) {
         const connection_scanner::entry_type::phase_scope_type handler_phase(scanner_entry_);
         scanner_entry_.set_phase(connection_scanner::phase_type::writing);
         const auto write_completion = co_await ruvia::async_asio([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
+            asio::async_write(stream_, buffers, http_write_progress(scanner_entry_), std::move(handler));
         });
         co_return write_completion.error_code();
     }

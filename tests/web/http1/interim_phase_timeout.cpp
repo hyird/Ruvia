@@ -41,12 +41,15 @@ using namespace std::chrono_literals;
 constexpr auto write_timeout = 100ms;
 // Several write timeouts, far inside the default idle timeout.
 constexpr auto handler_pause = 400ms;
+// One stream write that takes many write timeouts to drain to a slow reader.
+constexpr std::size_t bulk_bytes = std::size_t{8} * 1024 * 1024;
 
 class interim_phase_routes final {
     RUVIA_ROUTES_BEGIN(interim_phase_routes)
     RUVIA_GET("/interim-phase/item", item);
     RUVIA_GET("/interim-phase/hinted", hinted);
     RUVIA_GET_STREAM("/interim-phase/stream", stream);
+    RUVIA_GET_STREAM("/interim-phase/bulk", bulk);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {
@@ -64,14 +67,24 @@ class interim_phase_routes final {
         (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
         co_await c.stream().write("second-chunk");
     }
+
+    ruvia::task<void> bulk(ruvia::context& c) {
+        co_await c.stream().write(std::string(bulk_bytes, 'b'));
+    }
 };
 
-// Sends `requests` in one TLS record, then reads until the server closes.
-std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view requests) {
+// Sends `requests` in one TLS record, then reads until the server closes,
+// pausing `read_pause` between reads. The small receive window keeps the
+// server's send buffer small, so a paced reader frees space, and so lets the
+// server's write progress, steadily rather than in rare large bursts.
+std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view requests,
+    std::chrono::milliseconds read_pause = 0ms) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     asio::error_code error;
+    stream.next_layer().open(endpoint.protocol());
+    stream.next_layer().set_option(asio::socket_base::receive_buffer_size(64 * 1024));
     stream.next_layer().connect(endpoint, error);
     if (!error) {
         stream.handshake(asio::ssl::stream_base::client, error);
@@ -80,10 +93,11 @@ std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& en
         asio::write(stream, asio::buffer(requests), error);
     }
     std::string response;
-    std::array<char, 1024> buffer;
+    std::array<char, 16 * 1024> buffer;
     while (!error) {
         const auto size = stream.read_some(asio::buffer(buffer), error);
         response.append(buffer.data(), size);
+        std::this_thread::sleep_for(read_pause);
     }
     return response;
 }
@@ -110,6 +124,13 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
+    // Error handling runs while the response is prepared; it is handler work,
+    // timed by idle_timeout, not by write_timeout.
+    app.on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+        (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
+        c.status(error.status());
+        co_return c.text("refused");
+    });
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout})
         .listen({
             .address_ = "127.0.0.1",
@@ -143,6 +164,19 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
         RUVIA_CHECK(streamed.find("first-chunk") != std::string::npos);
         RUVIA_CHECK(streamed.find("second-chunk") != std::string::npos);
         RUVIA_CHECK(streamed.ends_with("0\r\n\r\n"));
+
+        // A steadily draining single write is not inactivity.
+        const auto bulk = exchange_tls(io, endpoint,
+            "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 1ms);
+        RUVIA_CHECK(bulk.size() > bulk_bytes);
+        RUVIA_CHECK(bulk.ends_with("0\r\n\r\n"));
+
+        // No acceptable coding: the 406 recovery runs on_error after the route.
+        const auto refused = exchange_tls(io, endpoint,
+            "GET /interim-phase/item HTTP/1.1\r\nHost: localhost\r\n"
+            "Accept-Encoding: identity;q=0, *;q=0\r\nConnection: close\r\n\r\n");
+        RUVIA_CHECK(refused.starts_with("HTTP/1.1 406 "));
+        RUVIA_CHECK(refused.ends_with("refused"));
     }
     app.stop();
     runner.join();
