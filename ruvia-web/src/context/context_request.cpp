@@ -398,8 +398,8 @@ task<std::string_view> context::request_body() const {
     if (const auto* invalid = parsed_coding.invalid()) {
         throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
     }
-    if (const auto* unsupported = parsed_coding.unsupported()) {
-        throw detail::unsupported_request_content_coding(*unsupported);
+    if (parsed_coding.unsupported() != nullptr) {
+        throw detail::unsupported_request_content_coding(http_supported_request_content_codings());
     }
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
@@ -485,8 +485,19 @@ body_reader& context::request_body_reader() const {
 }
 
 multipart_reader context::request_multipart_reader() const {
-    return multipart_reader(
-        request_body_reader(), {.boundary_ = get_multipart_boundary(), .resource_ = pool()});
+    const auto boundary = get_multipart_boundary();
+    // The reader parses raw body bytes as they arrive and decodes no content
+    // coding, so only an identity body is accepted.
+    const auto parsed_coding = request_content_coding(request_, pool());
+    if (const auto* invalid = parsed_coding.invalid()) {
+        throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
+    }
+    const auto coded = std::ranges::any_of(
+        parsed_coding.codings(), [](http_content_coding coding) { return coding != http_content_coding::identity; });
+    if (parsed_coding.unsupported() != nullptr || coded) {
+        throw detail::unsupported_request_content_coding("identity");
+    }
+    return multipart_reader(request_body_reader(), {.boundary_ = boundary, .resource_ = pool()});
 }
 
 multipart_boundary context::get_multipart_boundary() const {

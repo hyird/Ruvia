@@ -107,13 +107,22 @@ public:
         return status_;
     }
 
+    // The handler failed after the head was on the wire. A close-delimited or
+    // TLS body ended by a clean close would read as complete (RFC 9112 §9.8),
+    // so the connection is aborted rather than closed gracefully.
+    [[nodiscard]] constexpr bool truncated() const noexcept {
+        return truncated_;
+    }
+
 private:
     friend class http1_session_request_completion;
 
-    explicit constexpr http1_committed_stream_response(http_status_code status) noexcept
-        : status_(status) {}
+    constexpr http1_committed_stream_response(http_status_code status, bool truncated) noexcept
+        : status_(status),
+          truncated_(truncated) {}
 
     http_status_code status_;
+    bool truncated_;
 };
 
 // A route's buffered response broke the HTTP/1 final-response rules, so it
@@ -166,7 +175,7 @@ public:
     [[nodiscard]] static http1_session_request_completion make_committed_stream(
         http1_request_connection_plan connection_plan, http_status_code status,
         std::size_t consumed_bytes) noexcept {
-        return http1_session_request_completion(http1_committed_stream_response(status), connection_plan,
+        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan,
             unshifted_buffer_completion(connection_plan, consumed_bytes));
     }
 
@@ -175,8 +184,14 @@ public:
         if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
             std::terminate();
         }
-        return http1_session_request_completion(http1_committed_stream_response(status), connection_plan,
+        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan,
             http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
+    }
+
+    [[nodiscard]] static http1_session_request_completion make_truncated_stream(
+        http1_request_connection_plan connection_plan, http_status_code status) noexcept {
+        return http1_session_request_completion(http1_committed_stream_response(status, true),
+            connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
     }
 
     [[nodiscard]] static http1_session_request_completion make_rejected_final_response(

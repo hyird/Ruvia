@@ -43,6 +43,7 @@ struct body_lane_observation final {
     std::atomic<bool> truncated_read_failed_{};
     std::atomic<bool> truncated_reread_rejected_{};
     std::atomic<bool> truncated_reread_yielded_{};
+    std::atomic<unsigned> multipart_reader_parts_{};
 };
 
 const auto body_lane_observed = std::make_shared<body_lane_observation>();
@@ -55,11 +56,23 @@ class body_lane_routes final {
     RUVIA_ROUTES_BEGIN(body_lane_routes)
     RUVIA_POST_STREAM("/server-lazy-body-read", read);
     RUVIA_POST_STREAM("/server-lazy-multipart-read", read_multipart);
+    RUVIA_POST_STREAM("/server-multipart-reader", read_multipart_reader);
     RUVIA_POST_STREAM("/server-truncated-body-reread", reread_truncated);
     RUVIA_POST_STREAM("/server-small-chunk-body", read_small_chunks);
     RUVIA_GET("/server-small-chunk-next", small_chunk_next);
     RUVIA_POST("/server-pipelined-echo", pipelined_echo);
     RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> read_multipart_reader(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        auto reader = context_value.req().get_multipart_reader();
+        std::pmr::string body(context_value.allocator<char>());
+        while (auto part = co_await reader.read()) {
+            observed.multipart_reader_parts_.fetch_add(1);
+            body.append(part->body());
+        }
+        co_return context_value.text(std::move(body));
+    }
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
@@ -490,4 +503,33 @@ RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
             const auto body = co_await context_value.req().text();
             RUVIA_CHECK_EQ(body, std::string_view(plain));
         });
+}
+
+// The streaming multipart reader decodes no content coding, so it refuses a
+// coded body before any part reaches the handler, advertising only identity
+// (RFC 9110 §15.5.16); a malformed Content-Encoding field is a 400.
+RUVIA_TEST(streamed_multipart_reader_refuses_content_coded_bodies) {
+    constexpr std::string_view body = "--lazy\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--lazy--\r\n";
+    const auto exchange = [](std::string_view coding_field, std::string_view payload) {
+        const std::string head =
+            "POST /server-multipart-reader HTTP/1.1\r\nHost: localhost\r\n"
+            "Content-Type: multipart/form-data; boundary=lazy\r\n" +
+            std::string(coding_field) + "Content-Length: " + std::to_string(payload.size()) +
+            "\r\nConnection: close\r\n\r\n";
+        return exchange_raw_request(head, payload, false, false);
+    };
+    body_lane_observed->multipart_reader_parts_ = 0;
+    const auto identity = exchange("Content-Encoding: identity\r\n", body);
+    RUVIA_CHECK(identity.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(identity.ends_with("\r\n\r\nvalue"));
+    RUVIA_CHECK_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
+
+    const auto gzip = exchange("Content-Encoding: gzip\r\n", gzip_compress(std::string(body)));
+    RUVIA_CHECK(gzip.starts_with("HTTP/1.1 415 "));
+    RUVIA_CHECK(gzip.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
+    const auto unknown = exchange("Content-Encoding: x-unknown\r\n", body);
+    RUVIA_CHECK(unknown.starts_with("HTTP/1.1 415 "));
+    RUVIA_CHECK(unknown.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
+    RUVIA_CHECK(exchange("Content-Encoding: gzip;level=9\r\n", body).starts_with("HTTP/1.1 400 "));
+    RUVIA_CHECK_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
 }

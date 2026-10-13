@@ -612,6 +612,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         } else if (const auto* committed = request_completion->committed_stream()) {
             scanner_entry.set_phase(connection_scanner::phase_type::idle);
             tail.record_access(options_.access_log_, committed->status());
+            if (committed->truncated()) {
+                co_return http_connection_close::abort;
+            }
         } else {
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }

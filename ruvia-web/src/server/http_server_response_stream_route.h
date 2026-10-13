@@ -71,17 +71,14 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto committed_status = result_value.committed_status();
 
     connection_plan = response_sink.connection_plan();
-    if (result_value.completed() != nullptr) {
-        d.request_sequence_.complete_committed_response(connection_plan);
-    } else {
-        if (const auto* failed = result_value.failed_after_commit()) {
-            // The client only learns of this as a truncated response; this is
-            // the one place the reason for the truncation still exists.
-            d.options_.connection_failure_.invoke(
-                d.base_route_services_.get_conn_info().remote().address(), failed->exception());
-        }
-        connection_plan = connection_plan.require_close();
+    if (const auto* failed = result_value.failed_after_commit()) {
+        // The client only learns of this as a truncated response; this is
+        // the one place the reason for the truncation still exists.
+        d.options_.connection_failure_.invoke(
+            d.base_route_services_.get_conn_info().remote().address(), failed->exception());
+        co_return http1_session_request_completion::make_truncated_stream(connection_plan, *committed_status);
     }
+    d.request_sequence_.complete_committed_response(connection_plan);
     if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
         co_return http1_session_request_completion::make_committed_stream(
             connection_plan, *committed_status, request_head.header_bytes());

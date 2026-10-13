@@ -118,9 +118,11 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
-    # A conflicting route pair makes every application in its executable fail
-    # startup, so it cannot share the process-wide controller registry.
+    # A conflicting route pair, like a route for an unsupported CONNECT
+    # protocol, makes every application in its executable fail startup, so
+    # neither can share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         web/http1/connect.cpp
         web/http1/websocket.cpp

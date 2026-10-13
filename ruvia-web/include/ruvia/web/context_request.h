@@ -153,6 +153,9 @@ public:
 
     // Multipart remains a flat protocol representation, without dotted paths
     // or implicit array/group interpretation. Streaming is explicit-route only.
+    // multipart() decodes a supported Content-Encoding; get_multipart_reader()
+    // decodes none, so a coded body is refused with 415 and an invalid
+    // Content-Encoding field with 400.
     [[nodiscard]] scoped_operation<std::pmr::vector<multipart_part>> multipart() const;
     [[nodiscard]] body_reader& get_body_reader() const;
     [[nodiscard]] multipart_reader get_multipart_reader() const;

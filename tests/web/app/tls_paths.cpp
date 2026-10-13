@@ -26,6 +26,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
 #include "test_tls_crypto.h"
@@ -39,10 +40,17 @@ class tls_path_controller final {
 public:
     RUVIA_ROUTES_BEGIN(tls_path_controller)
     RUVIA_GET("/tls", secure);
+    RUVIA_GET_STREAM("/tls-truncated", truncated);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> secure(ruvia::context& context) {
         co_return context.text(std::string_view("secure"));
+    }
+
+    // Commits the response, then fails before the body is complete.
+    ruvia::task<void> truncated(ruvia::context& context) {
+        co_await context.stream_text().write("partial");
+        throw std::runtime_error("upstream failed");
     }
 };
 
@@ -147,6 +155,35 @@ bool serves_secure_body(const std::string& response) {
     const auto body_start = response.find("\r\n\r\n");
     return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
            std::string_view(response).substr(body_start + 4) == "secure";
+}
+
+// RFC 9112 §9.8: an HTTP/1.0 response body is delimited by the close, so a
+// stream that fails after its head must end without close_notify; a clean TLS
+// close would make the truncated body read as complete.
+bool truncated_close_delimited_stream_lacks_close_notify(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    constexpr std::string_view request = "GET /tls-truncated HTTP/1.0\r\nHost: localhost\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(request), error);
+    }
+    if (error) {
+        return false;
+    }
+    std::string response;
+    std::array<char, 1024> buffer;
+    while (!error) {
+        const auto size = stream.read_some(asio::buffer(buffer), error);
+        response.append(buffer.data(), size);
+    }
+    return response.starts_with("HTTP/1.0 200 ") && response.ends_with("\r\n\r\npartial") &&
+           error == asio::ssl::error::stream_truncated;
 }
 
 struct alpn_handshake final {
@@ -257,6 +294,7 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
             RUVIA_CHECK(!negotiated.error_);
             RUVIA_CHECK_EQ(negotiated.selected_, std::string("http/1.1"));
+            RUVIA_CHECK(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
         }
         app.stop();
         runner.join();

@@ -149,9 +149,10 @@ private:                                                                        
         ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),        \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
-// Ordinary CONNECT uses an exact host:port authority or "*". Group prefixes
-// apply only to upgrade-protocol tunnel paths (connect-udp); controller/group
-// middleware always runs.
+// Ordinary CONNECT uses an exact host:port authority or "*". The only
+// upgrade protocol is "connect-udp"; any other fails registration with
+// std::invalid_argument. Group prefixes apply only to upgrade-protocol tunnel
+// paths; controller/group middleware always runs.
 #define RUVIA_CONNECT(authority, handler, ...)                                                     \
     ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, {}, authority,               \
         ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \

@@ -51,12 +51,7 @@ detail::route_resolution detail::route_table::resolved(
 }
 
 detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
-    // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
-    // among the connect-udp tunnel routes; a plain CONNECT routes by its
-    // authority-form target.
-    if (is_http_connect_udp_upgrade_request(request)) {
-        return resolve_connect("connect-udp", request.path());
-    }
+    // A plain CONNECT routes by its authority-form target.
     if (request.known_method() == http_known_method::connect) {
         return resolve_connect({}, request.path());
     }
@@ -81,10 +76,19 @@ detail::route_resolution detail::route_table::resolve(const http_request& reques
         has_dot_segment(path)) {
         return route_resolution::reject();
     }
-    if (request.known_method() == http_known_method::unknown) {
-        return resolve_extension_method(request.method(), request.path());
+    // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
+    // among the connect-udp tunnel routes. Without one, the Upgrade is ignored
+    // (RFC 9110 §7.8) and the GET routes as usual, as a WebSocket upgrade does.
+    if (is_http_connect_udp_upgrade_request(request)) {
+        auto tunnel = resolve_connect("connect-udp", path);
+        if (tunnel.resolved() != nullptr) {
+            return tunnel;
+        }
     }
-    return resolve(request.known_method(), request.path());
+    if (request.known_method() == http_known_method::unknown) {
+        return resolve_extension_method(request.method(), path);
+    }
+    return resolve(request.known_method(), path);
 }
 
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {

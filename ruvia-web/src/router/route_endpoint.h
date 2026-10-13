@@ -205,8 +205,10 @@ public:
 
     [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
         route_stream_handler_type::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
-        if (!protocol.empty() && !is_valid_http_method_token(protocol)) {
-            throw std::invalid_argument("invalid CONNECT protocol token");
+        // Requests reach a protocol tunnel only through `Upgrade: connect-udp`;
+        // any other protocol would register a route nothing can resolve.
+        if (!protocol.empty() && protocol != "connect-udp") {
+            throw std::invalid_argument("unsupported CONNECT protocol; only connect-udp is routable");
         }
         if (protocol == "connect-udp") {
             config.datagrams_ = true;

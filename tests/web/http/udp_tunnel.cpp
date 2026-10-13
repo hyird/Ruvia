@@ -30,6 +30,7 @@ struct udp_tunnel_observation {
     std::atomic<bool> read_overlap_rejected_{};
     std::atomic<bool> write_overlap_rejected_{};
     std::atomic<bool> failed_{};
+    std::atomic<bool> dynamic_invoked_{};
 };
 
 const auto udp_observation = std::make_shared<udp_tunnel_observation>();
@@ -43,8 +44,15 @@ class udp_tunnel_routes final {
     RUVIA_ROUTES_BEGIN(udp_tunnel_routes)
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/target.test/53/", echo);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/cancel.test/53/", delayed);
+    RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp-tunnel/:host/:port", dynamic);
     RUVIA_GET("/udp-tunnel-sibling", sibling);
     RUVIA_ROUTES_END
+
+    ruvia::task<void> dynamic(ruvia::context& c) {
+        c.worker_state<std::shared_ptr<udp_tunnel_observation>>()->dynamic_invoked_ = true;
+        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        co_await tunnel.finish();
+    }
 
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
@@ -208,4 +216,38 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+// A connect-udp upgrade target is an origin path like any other: dot segments
+// are refused before any tunnel route can capture them, and a path with no
+// connect-udp route serves its GET route with the Upgrade ignored (RFC 9110 §7.8).
+RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    udp_observation->dynamic_invoked_ = false;
+    const auto exchange = [&](std::string_view path) {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const auto request = std::string("GET ") + std::string(path) +
+                             " HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
+                             "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        std::string response;
+        std::array<char, 1024> input{};
+        std::error_code ec;
+        while (!ec) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
+        }
+        return response;
+    };
+    RUVIA_CHECK(exchange("/udp-tunnel/../53").starts_with("HTTP/1.1 404 "));
+    RUVIA_CHECK(exchange("/udp-tunnel/%2E%2E/53").starts_with("HTTP/1.1 404 "));
+    RUVIA_CHECK(!udp_observation->dynamic_invoked_);
+    const auto sibling = exchange("/udp-tunnel-sibling");
+    RUVIA_CHECK(sibling.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(sibling.ends_with("\r\n\r\nsibling"));
+    RUVIA_CHECK(exchange("/udp-tunnel/target.test/53").starts_with("HTTP/1.1 101 "));
+    RUVIA_CHECK(udp_observation->dynamic_invoked_);
+    server.finish();
 }

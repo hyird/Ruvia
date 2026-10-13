@@ -146,23 +146,16 @@ void rethrow_inbound_transport_error(const std::exception_ptr& exception) {
     }
 }
 
-[[nodiscard]] bool is_unsupported_request_content_coding(const std::exception_ptr& exception) noexcept {
+void apply_exception_response_metadata(http_response& response, const std::exception_ptr& exception) {
     try {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
         }
-    } catch (const detail::unsupported_request_content_coding&) {
-        return true;
+    } catch (const detail::unsupported_request_content_coding& error) {
+        response.header("Accept-Encoding", error.accepted_codings());
         // Classification only; the caller still owns and dispatches the exception.
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (...) {
-    }
-    return false;
-}
-
-void apply_exception_response_metadata(http_response& response, const std::exception_ptr& exception) {
-    if (is_unsupported_request_content_coding(exception)) {
-        response.header("Accept-Encoding", http_supported_request_content_codings());
     }
 }
 
