@@ -135,7 +135,7 @@ public:
         if (!start()) {
             const connection_scanner::entry_type::phase_scope_type caller_phase(*progress_);
             auto completion = co_await async_asio<std::size_t>(
-                [this](auto handler) { write_remaining(std::move(handler)); });
+                [this](auto handler) { this->write_remaining(std::move(handler)); });
             finish(completion.error_code(), completion.result());
         }
         co_return complete().error_;

@@ -40,7 +40,7 @@
         t_type& operator=(const t_type&) = delete;                                                         \
         t_type(t_type&&) noexcept = default;                                                               \
         t_type& operator=(t_type&&) = default;                                                             \
-        friend bool operator==(const t_type&, const t_type&) = default;                                    \
+        [[maybe_unused]] friend bool operator==(const t_type&, const t_type&) = default;                   \
         template <::ruvia::fixed_string field>                                                             \
         [[nodiscard]] decltype(auto) get() const& RUVIA_LIFETIMEBOUND {                                    \
             return fields_.template get<field>();                                                          \

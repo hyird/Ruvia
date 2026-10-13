@@ -56,10 +56,13 @@ inline constexpr std::array<bool, 256> http_field_value_char_table = [] {
     std::size_t index = 0;
     while (value.size() - index >= 4) {
         const auto* bytes_value = value.data() + index;
-        if (!(is_http_token_char(static_cast<unsigned char>(bytes_value[0])) &
-                is_http_token_char(static_cast<unsigned char>(bytes_value[1])) &
-                is_http_token_char(static_cast<unsigned char>(bytes_value[2])) &
-                is_http_token_char(static_cast<unsigned char>(bytes_value[3])))) {
+        // Plain bool operands keep the bitwise '&' branchless without the
+        // short-circuit warning on call operands.
+        const bool first = is_http_token_char(static_cast<unsigned char>(bytes_value[0]));
+        const bool second = is_http_token_char(static_cast<unsigned char>(bytes_value[1]));
+        const bool third = is_http_token_char(static_cast<unsigned char>(bytes_value[2]));
+        const bool fourth = is_http_token_char(static_cast<unsigned char>(bytes_value[3]));
+        if (!(first & second & third & fourth)) {
             break;
         }
         index += 4;
