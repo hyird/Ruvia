@@ -153,7 +153,9 @@ public:
     // caller pick its own rate-limit key and claim a secure scheme. Configure
     // this ONLY with the addresses of proxies you operate. The client is the
     // last untrusted hop in the forwarding list, not the leftmost value the
-    // caller can prepend.
+    // caller can prepend. A hop that names no IP address (no RFC 7239 `for`,
+    // `unknown`, an obfuscated name) ends the walk without naming a client:
+    // client() is then the nearest trusted address after it, or remote().
     application& trusted_proxies(trusted_proxy_config config);
     application& trusted_proxies(std::nullptr_t);
 

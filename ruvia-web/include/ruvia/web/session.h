@@ -63,6 +63,8 @@ struct session_config final {
     std::string redis_alias_{"default"};
     std::string cookie_name_{"sid"};
     std::string key_prefix_{"sess:"};
+    // Must be positive and representable in milliseconds; session_middleware
+    // throws std::invalid_argument otherwise.
     std::chrono::seconds ttl_{std::chrono::hours(24)};
 };
 

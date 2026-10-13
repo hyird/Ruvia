@@ -45,4 +45,12 @@ std::filesystem::path dotenv_executable_directory() {
 #endif
 }
 
+std::pmr::string dotenv_path_message(std::string_view prefix, const std::filesystem::path& path) {
+    const auto name = path.string<char8_t, std::char_traits<char8_t>, std::pmr::polymorphic_allocator<char8_t>>(
+        std::pmr::polymorphic_allocator<char8_t>(process_resource()));
+    std::pmr::string result_value(prefix, process_resource());
+    result_value.append(reinterpret_cast<const char*>(name.data()), name.size());
+    return result_value;
+}
+
 }  // namespace ruvia::detail

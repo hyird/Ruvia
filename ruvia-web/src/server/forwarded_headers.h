@@ -23,10 +23,14 @@
 // would let the caller pick the client and claim TLS.
 //
 // A client can prepend hops to these lists. The trusted peer is the hop that
-// delivered the request, so the client is the last untrusted address. Scheme is
-// the proto on that hop, not a proto from an earlier
-// prepended element -- taking the last proto in the whole list would let the
-// caller claim TLS whenever the real hop omitted proto.
+// delivered the request, so walking from the right, the first element whose
+// node is not trusted is the client hop -- including an element with no node,
+// `unknown` or an obfuscated name (HAProxy appends a bare `proto=`), since its
+// writer did not vouch for anything further left. Such a hop names no client,
+// so the client is the nearest trusted address to its right, or the transport
+// peer when the hop is the rightmost. Scheme is the proto on the client hop,
+// not one from an earlier prepended element -- taking the last proto in the
+// whole list would let the caller claim TLS whenever the real hop omitted it.
 
 namespace ruvia::detail {
 
@@ -65,14 +69,18 @@ struct forwarded_client final {
 template <typename fn_type>
 inline void visit_comma_separated(std::string_view value, fn_type&& fn) {
     // RFC 7239 quoted-string values may contain commas; a quote-blind split
-    // would invent hops from inside a single `for="..."` element.
+    // would invent hops from inside a single `for="..."` element. Empty list
+    // elements are not hops (RFC 9110 §5.6.1).
     http_visit_comma_separated_quoted_field_items(value, [&](std::string_view item) {
-        fn(item);
+        if (!item.empty()) {
+            fn(item);
+        }
         return true;
     });
 }
 
-inline void parse_forwarded_element(std::string_view element, forwarded_client& hop) noexcept {
+[[nodiscard]] inline forwarded_client parse_forwarded_element(std::string_view element) noexcept {
+    forwarded_client hop;
     // RFC 7239 values are token / quoted-string; a ';' inside quotes is data.
     http_visit_semicolon_parameters_quoted_field(
         element, [&](std::string_view name, std::string_view value) {
@@ -84,61 +92,86 @@ inline void parse_forwarded_element(std::string_view element, forwarded_client& 
             }
             return true;
         });
+    return hop;
 }
 
-inline void accumulate_forwarded_chain(std::string_view value, const trusted_proxy_set& trusted,
-    forwarded_client& leftmost, forwarded_client& client) noexcept {
-    visit_comma_separated(value, [&](std::string_view element) {
-        forwarded_client hop;
-        parse_forwarded_element(element, hop);
-        if (hop.address_.empty() && hop.scheme_.empty()) {
-            return;
+// One forwarding list, folded left to right across same-name fields.
+class forwarding_chain final {
+public:
+    void append(const trusted_proxy_set& trusted, forwarded_client hop) noexcept {
+        if (size_ == 0) {
+            leftmost_ = hop;
         }
-        if (leftmost.address_.empty() && !hop.address_.empty()) {
-            leftmost.address_ = hop.address_;
-            leftmost.scheme_ = hop.scheme_;
+        const auto trust = trusted.classify(hop.address_);
+        if (trust == trusted_proxy_set::hop_trust::trusted) {
+            if (awaiting_nearest_trusted_) {
+                nearest_trusted_ = hop.address_;
+                awaiting_nearest_trusted_ = false;
+            }
+        } else {
+            client_hop_ = hop;
+            client_index_ = size_;
+            client_identified_ = trust == trusted_proxy_set::hop_trust::untrusted;
+            has_client_hop_ = true;
+            nearest_trusted_ = {};
+            awaiting_nearest_trusted_ = true;
         }
-        if (!hop.address_.empty() && !trusted.trusts(hop.address_)) {
-            // A new client hop discards proto claimed by a prepended hop.
-            client.address_ = hop.address_;
-            client.scheme_ = hop.scheme_;
+        ++size_;
+    }
+
+    // Every hop trusted: the leftmost is as far as the trusted proxies reach.
+    [[nodiscard]] forwarded_client client() const noexcept {
+        if (!has_client_hop_) {
+            return leftmost_;
         }
-    });
-}
+        return {client_identified_ ? client_hop_.address_ : nearest_trusted_, client_hop_.scheme_};
+    }
+
+    [[nodiscard]] std::size_t client_index() const noexcept {
+        return client_index_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_;
+    }
+
+private:
+    forwarded_client leftmost_;
+    forwarded_client client_hop_;
+    std::string_view nearest_trusted_;
+    std::size_t client_index_{0};
+    std::size_t size_{0};
+    bool has_client_hop_{false};
+    bool client_identified_{false};
+    bool awaiting_nearest_trusted_{false};
+};
 
 // Resolves what a trusted proxy says about the client. Fields it did not send
 // stay empty and the caller keeps what the transport already knows.
 [[nodiscard]] inline forwarded_client resolve_forwarded_client(
     const http_request& request, const trusted_proxy_set& trusted) noexcept {
-    forwarded_client forwarded_leftmost;
-    forwarded_client forwarded_peer;
-    std::string_view x_address{};
-    std::size_t address_count = 0;
-    std::size_t client_index = 0;
+    forwarding_chain forwarded;
+    forwarding_chain x_forwarded_for;
     bool has_x_for = false;
     const auto headers = request.headers();
     for (const auto& header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Forwarded")) {
-            accumulate_forwarded_chain(
-                header.value(), trusted, forwarded_leftmost, forwarded_peer);
+            visit_comma_separated(header.value(), [&](std::string_view element) {
+                forwarded.append(trusted, parse_forwarded_element(element));
+            });
         } else if (http_ascii_equals_ignore_case(header.name(), "X-Forwarded-For")) {
             has_x_for = true;
             visit_comma_separated(header.value(), [&](std::string_view element) {
-                const auto address = forwarded_node_address(element);
-                if (address_count == 0 || !trusted.trusts(address)) {
-                    x_address = address;
-                    client_index = address_count;
-                }
-                ++address_count;
+                x_forwarded_for.append(trusted, {forwarded_node_address(element), {}});
             });
         }
     }
     if (!has_x_for) {
-        return forwarded_peer.address_.empty() ? forwarded_leftmost : forwarded_peer;
+        return forwarded.client();
     }
     // Never combine an XFF address with proto from an unrelated Forwarded
     // chain. XFP is usable only under an explicit sanitizing-proxy contract.
-    forwarded_client result_value{x_address, {}};
+    forwarded_client result_value{x_forwarded_for.client().address_, {}};
     if (!trusted.trusts_x_forwarded_proto()) {
         return result_value;
     }
@@ -146,14 +179,14 @@ inline void accumulate_forwarded_chain(std::string_view value, const trusted_pro
     for (const auto& header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "X-Forwarded-Proto")) {
             visit_comma_separated(header.value(), [&](std::string_view element) {
-                if (proto_count == client_index) {
+                if (proto_count == x_forwarded_for.client_index()) {
                     result_value.scheme_ = forwarded_http_scheme_token(element);
                 }
                 ++proto_count;
             });
         }
     }
-    if (address_count != proto_count) {
+    if (x_forwarded_for.size() != proto_count) {
         result_value.scheme_ = {};
     }
     return result_value;

@@ -62,7 +62,17 @@ public:
         return blocks_.empty();
     }
 
-    [[nodiscard]] bool trusts(std::string_view peer_address) const noexcept;
+    // How a forwarding node name relates to this set. A name that is not an IP
+    // literal ("unknown", an obfuscated "_hidden", garbage) identifies no one:
+    // it can be neither trusted nor reported as the client.
+    enum class hop_trust : std::uint8_t { unidentified,
+        untrusted,
+        trusted };
+    [[nodiscard]] hop_trust classify(std::string_view address) const noexcept;
+
+    [[nodiscard]] bool trusts(std::string_view peer_address) const noexcept {
+        return !blocks_.empty() && classify(peer_address) == hop_trust::trusted;
+    }
 
 private:
     trusted_proxy_set(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)

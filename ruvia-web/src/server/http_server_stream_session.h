@@ -286,7 +286,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         closing_rejection = *admission->rejection();
                         break;
                     }
-                    if (parsed_value.request_.header("Host").value_or(std::string_view{}).empty()) {
+                    if (auto_https_redirect_authority(parsed_value.request_).empty()) {
                         closing_rejection = http_request_rejection::error(http_error_info(
                             {.status_ = ruvia::http_status::bad_request, .message_ = "missing Host header"}));
                         break;

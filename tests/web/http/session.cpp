@@ -32,6 +32,15 @@ RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
     config = ruvia::session_config{};
     config.ttl_ = std::chrono::seconds::zero();
     RUVIA_CHECK_EQ(rejection(config), std::string_view("session TTL must be greater than zero"));
+
+    // A new session is written with a millisecond expiry.
+    constexpr auto max_ttl = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max());
+    config.ttl_ = max_ttl + std::chrono::seconds(1);
+    RUVIA_CHECK_EQ(rejection(config), std::string_view("session TTL must be representable in milliseconds"));
+    config.ttl_ = std::chrono::seconds::max();
+    RUVIA_CHECK_EQ(rejection(config), std::string_view("session TTL must be representable in milliseconds"));
+    config.ttl_ = max_ttl;
+    RUVIA_CHECK_EQ(rejection(config), std::string_view{});
 }
 
 #endif

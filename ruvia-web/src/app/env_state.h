@@ -39,6 +39,9 @@ struct dotenv_entry final {
 [[nodiscard]] std::pmr::vector<dotenv_entry> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenv_executable_directory();
+// prefix followed by path in UTF-8. path::string() narrows a Windows wide path
+// through the ANSI code page, which throws or yields non-UTF-8 error text.
+[[nodiscard]] std::pmr::string dotenv_path_message(std::string_view prefix, const std::filesystem::path& path);
 void load_env_from_executable_directory(env& env_value, dotenv_options options);
 void load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options);
 

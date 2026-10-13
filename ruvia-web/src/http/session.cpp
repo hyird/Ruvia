@@ -89,6 +89,11 @@ session_middleware::config_storage_type::validated_config_type session_middlewar
     if (source_value.ttl_.count() <= 0) {
         throw std::invalid_argument("session TTL must be greater than zero");
     }
+    // New sessions expire through SET PX in milliseconds; rotation sends the
+    // same TTL as EX seconds, which Redis likewise converts to milliseconds.
+    if (source_value.ttl_ > std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max())) {
+        throw std::invalid_argument("session TTL must be representable in milliseconds");
+    }
     return validated_config_type{.source_ = &source_value};
 }
 

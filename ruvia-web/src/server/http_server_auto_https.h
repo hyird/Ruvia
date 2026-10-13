@@ -22,13 +22,21 @@ inline void append_https_port(std::pmr::string& location, std::uint16_t https_po
     http_append_unsigned(location, https_port);
 }
 
+// RFC 9112 §3.2.2: an absolute-form target's authority is the request's host,
+// and an HTTP/1.0 request may carry it without any Host field.
+[[nodiscard]] inline std::string_view auto_https_redirect_authority(const http_request& request) noexcept {
+    if (!request.authority().empty()) {
+        return request.authority();
+    }
+    return request.header("Host").value_or(std::string_view{});
+}
+
 inline http_response make_auto_https_redirect_response(
     const http_request& request, request_memory& memory, std::uint16_t https_port) {
     http_response response({.resource_ = memory.resource()});
     response.status(ruvia::http_status::permanent_redirect);
 
-    const auto host_field = request.header("Host").value_or(std::string_view{});
-    const auto host = parse_http_authority_host(host_field).value_or(std::string_view{});
+    const auto host = parse_http_authority_host(auto_https_redirect_authority(request)).value_or(std::string_view{});
     auto path = request.path();
     if (path.empty() || path.front() != '/') {
         path = "/";

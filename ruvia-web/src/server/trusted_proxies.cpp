@@ -89,17 +89,15 @@ std::variant<trusted_proxy_block, trusted_proxy_parse_error> parse_trusted_proxy
     return trusted_proxy_block{std::get<0>(address).bytes_, static_cast<std::uint8_t>(std::get<0>(address).was_v4_ ? bits + 96 : bits)};
 }
 
-bool trusted_proxy_set::trusts(std::string_view peer_address) const noexcept {
-    if (blocks_.empty() || peer_address.empty()) {
-        return false;
-    }
-    const auto peer = to_mapped_bytes(peer_address);
+trusted_proxy_set::hop_trust trusted_proxy_set::classify(std::string_view address) const noexcept {
+    const auto peer = to_mapped_bytes(address);
     if ((peer.index() != 0)) {
-        return false;
+        return hop_trust::unidentified;
     }
-    return std::ranges::any_of(blocks_, [&](const trusted_proxy_block& block) noexcept {
+    const auto trusted = std::ranges::any_of(blocks_, [&](const trusted_proxy_block& block) noexcept {
         return contains_mapped_address(block, std::get<0>(peer).bytes_);
     });
+    return trusted ? hop_trust::trusted : hop_trust::untrusted;
 }
 
 }  // namespace ruvia::detail

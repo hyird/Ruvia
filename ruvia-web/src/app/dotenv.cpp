@@ -94,10 +94,10 @@ void detail::load_env_from_file(env& env_value, const std::filesystem::path& pat
     if (!input) {
         std::error_code error;
         if (std::filesystem::exists(path, error) || error) {
-            throw std::runtime_error("failed to read dotenv file: " + path.string());
+            throw std::runtime_error(detail::dotenv_path_message("failed to read dotenv file: ", path).c_str());
         }
         if (options.missing_file_ == dotenv_missing_file_policy::require) {
-            throw std::runtime_error("dotenv file not found: " + path.string());
+            throw std::runtime_error(detail::dotenv_path_message("dotenv file not found: ", path).c_str());
         }
         return;
     }

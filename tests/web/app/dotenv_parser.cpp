@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/app.h"
@@ -114,4 +115,35 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
 
     std::filesystem::remove(first);
     std::filesystem::remove(second);
+}
+
+RUVIA_TEST(dotenv_errors_name_non_ascii_paths_in_utf8) {
+    const auto directory = std::filesystem::temp_directory_path() /
+                           std::filesystem::path(u8"ruvia-dotenv-\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");
+    std::filesystem::create_directories(directory);
+    const auto missing = directory / "missing.env";
+    const auto invalid = directory / "invalid.env";
+    {
+        std::ofstream out(invalid, std::ios::binary | std::ios::trunc);
+        out << "KEY=\"unterminated\n";
+    }
+    const auto utf8_path = [](const std::filesystem::path& path) {
+        const auto text = path.u8string();
+        return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+    };
+    auto& app = ruvia::app();
+    const auto failure = [&app](const std::filesystem::path& path, ruvia::dotenv_options options) {
+        try {
+            app.load_dotenv(path, options);
+        } catch (const std::exception& error) {
+            return std::string(error.what());
+        }
+        return std::string{};
+    };
+
+    RUVIA_CHECK_EQ(failure(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require}),
+        "dotenv file not found: " + utf8_path(missing));
+    RUVIA_CHECK(failure(invalid, {}).starts_with("invalid dotenv entry in " + utf8_path(invalid) + ":1: "));
+
+    std::filesystem::remove_all(directory);
 }

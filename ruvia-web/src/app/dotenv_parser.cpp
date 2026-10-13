@@ -54,8 +54,7 @@ namespace {
 
 [[nodiscard]] std::pmr::string location_message(
     const std::filesystem::path& path, std::size_t line_number, std::string_view message) {
-    std::pmr::string result_value("invalid dotenv entry in ", process_resource());
-    result_value += path.string();
+    auto result_value = dotenv_path_message("invalid dotenv entry in ", path);
     result_value += ':';
     result_value += std::to_string(line_number);
     result_value += ": ";
@@ -227,7 +226,7 @@ std::pmr::vector<dotenv_entry> read_dotenv_entries(
     }
 
     if (input.bad()) {
-        throw std::runtime_error("failed to read dotenv file: " + path.string());
+        throw std::runtime_error(dotenv_path_message("failed to read dotenv file: ", path).c_str());
     }
 
     return entries;

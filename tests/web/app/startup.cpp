@@ -552,6 +552,22 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
                 "128.3.4.5:proxy:http"));
+            // RFC 7239: the rightmost untrusted element is the client hop even
+            // when it names no address; a client-written `for` left of it is
+            // never believed, and the trusted hop's proto still applies.
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9\r\nForwarded: proto=https\r\n", "127.0.0.1:proxy:https"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9, for=unknown;proto=https\r\n", "127.0.0.1:proxy:https"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9;proto=http, for=_hidden;proto=https, for=127.0.0.2\r\n",
+                "127.0.0.2:proxy:https"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=192.0.2.1;proto=https, for=\"[2001:db8::1]:4711\";proto=http, for=127.0.0.2\r\n",
+                "2001:db8::1:proxy:http"));
+            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 198.51.100.7, unknown, 127.3.4.5\r\nX-Forwarded-Proto: http, https, http\r\n",
+                "127.3.4.5:proxy:https"));
             // Optional client-certificate verification must not turn session
             // resumption into a fatal handshake error, and every resumption
             // succeeds whichever of the two workers accepts it.
