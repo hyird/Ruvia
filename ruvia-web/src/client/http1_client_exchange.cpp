@@ -12,6 +12,7 @@
 #include <variant>
 
 #include <asio/buffer.hpp>
+#include <asio/ssl/error.hpp>
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/task_scope.h"
@@ -121,7 +122,7 @@ task<void> http1_client_exchange::write(std::span<const asio::const_buffer> part
     }
 }
 
-task<std::size_t> http1_client_exchange::read_append(
+task<client_transport_result> http1_client_exchange::read_append(
     http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout) {
     const auto read_space = target.prepare(max_bytes);
     const auto read = co_await connection_.transport_.read_some(read_space, timeout);
@@ -130,11 +131,8 @@ task<std::size_t> http1_client_exchange::read_append(
     if (connection_.connected_) {
         target.commit(read.bytes_);
     }
-    if (read.ok()) {
-        co_return read.bytes_;
-    }
-    if (read.status_ == client_transport_status::eof) {
-        co_return 0;
+    if (read.ok() || read.status_ == client_transport_status::eof) {
+        co_return read;
     }
     throw_http_client_transport_error(read, "upstream closed the HTTP connection");
 }
@@ -247,7 +245,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     while (!head) {
         if (auto next = take_final_head(state_value, parser)) {
             head.emplace(std::move(*next));
-        } else if (co_await read_append(read_buffer, response_read_chunk_bytes, timeout) == 0) {
+        } else if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout)).ok()) {
             throw http_client_error(
                 http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
         }
@@ -312,9 +310,21 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         if (eof) {
             throw std::logic_error("HTTP body decoder requested input after EOF");
         }
-        eof = co_await read_append(read_buffer, response_read_chunk_bytes, timeout) == 0;
+        const auto read = co_await read_append(read_buffer, response_read_chunk_bytes, timeout);
+        // A TLS peer that drops TCP without close_notify leaves the message end
+        // unauthenticated: an attacker could cut a close-delimited body short
+        // (RFC 9112 §9.8). Every other framing still needed bytes here too.
+        if (read.error_ == asio::ssl::error::stream_truncated) {
+            throw http_client_error(http_client_error::code_type::io_error,
+                "upstream closed the TLS connection without close_notify");
+        }
+        eof = !read.ok();
     }
-    if (!read_buffer.empty()) {
+    // A connection that is not reused takes any bytes after the response with
+    // it (RFC 9112 §9.6); a rejected CONNECT may be followed by bytes of unknown
+    // ownership. Only a reusable connection would parse them as the next response.
+    const bool reusable = persistence == http1_close_policy::allow_reuse && !request.is_tunnel();
+    if (reusable && !read_buffer.empty()) {
         throw http_client_error(http_client_error::code_type::protocol_error, "unexpected bytes after HTTP response");
     }
     if (timeout.expired()) {
@@ -324,9 +334,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     if (timeout.expired()) {
         throw_body_timeout();
     }
-    // A rejected CONNECT delivers its response, but the proxy may follow
-    // it with bytes of unknown ownership: the connection is never reused.
-    if (persistence == http1_close_policy::close_after_response || request.is_tunnel()) {
+    if (!reusable) {
         connection_.close();
     }
     connection_.retain_idle_buffers();
@@ -510,7 +518,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             }
             // The consumer may swap pending_ away while a read is in flight, so
             // reads land in the connection buffer and move on the next pass.
-            if (co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout) == 0) {
+            if (!(co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout)).ok()) {
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
                 break;

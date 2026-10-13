@@ -1699,6 +1699,115 @@ struct acceptor_closer final {
 };
 }  // namespace
 
+// RFC 9112 §9.8: only close_notify ends a close-delimited body over TLS; a TCP
+// close without it may be an attacker truncating the response.
+RUVIA_TEST(http1_tls_close_delimited_response_requires_close_notify) {
+    for (const bool close_notify : {true, false}) {
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        ruvia::test::tls_identity identity("localhost");
+        asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+        std::exception_ptr peer_failure;
+        ruvia::worker_signal peer_done(worker.handle_);
+        bool peer_finished = false;
+        const auto serve = [&]() -> asio::awaitable<void> {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(
+                co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            asio::streambuf request;
+            co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+            constexpr std::string_view response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npartial";
+            co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+            std::error_code ignored;
+            if (close_notify) {
+                co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, ignored));
+            } else {
+                // A FIN rather than a close: unread client bytes would turn it into a reset.
+                stream.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+                std::array<char, 256> discarded;
+                while (co_await stream.next_layer().async_read_some(
+                    asio::buffer(discarded), asio::redirect_error(asio::use_awaitable, ignored))) {
+                }
+            }
+        };
+        asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+            peer_failure = failure;
+            peer_finished = true;
+            peer_done.notify();
+        });
+        auto config = local_http_client_config(acceptor.local_endpoint().port());
+        config.scheme_ = ruvia::http_scheme::https;
+        config.host_ = "localhost";
+        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.request_timeout_ = std::chrono::seconds(3);
+        ruvia::http_client client(worker.attachment_.loop(), config);
+        auto operation = [&]() -> ruvia::task<void> {
+            const acceptor_closer closer{acceptor};
+            auto response = co_await client.handle().send({.target_ = "/close-delimited"});
+            std::optional<std::string> body;
+            bool truncated = false;
+            try {
+                const auto bytes_value = co_await response.body().read_all();
+                body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
+            } catch (const ruvia::http_client_error& error) {
+                truncated = error.code() == ruvia::http_client_error::code_type::io_error;
+            }
+            if (close_notify) {
+                RUVIA_CHECK(body == std::optional<std::string>("partial"));
+            } else {
+                RUVIA_CHECK(!body.has_value());
+                RUVIA_CHECK(truncated);
+            }
+            co_await client.shutdown();
+            while (!peer_finished) {
+                co_await peer_done.wait();
+            }
+            if (peer_failure) {
+                std::rethrow_exception(peer_failure);
+            }
+        };
+        run_operation(worker, io, operation);
+    }
+}
+
+// A response on a connection that is not reused completes even when trailing
+// bytes arrive with it: they are discarded with the connection, not parsed.
+RUVIA_TEST(http1_response_on_a_closing_connection_discards_trailing_bytes) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhelloXjunk",
+            "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\n\r\ndeniedHTTP/1.1 200 OK\r\n\r\n"});
+    peer.start();
+    auto config = local_http_client_config(peer.port());
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        {
+            auto response = co_await client.handle().send({.target_ = "/closing"});
+            const auto bytes_value = co_await response.body().read_all();
+            RUVIA_CHECK_EQ(
+                std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "hello");
+        }
+        {
+            auto result = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
+            auto* response = result.response();
+            RUVIA_CHECK(response != nullptr);
+            if (response != nullptr) {
+                RUVIA_CHECK_EQ(response->status().value(), std::uint16_t{407});
+                const auto bytes_value = co_await response->body().read_all();
+                RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()),
+                                   bytes_value.size()),
+                    "denied");
+            }
+        }
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{0});
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http_client_replaces_a_keep_alive_connection_the_peer_closed_while_idle) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);

@@ -12,6 +12,8 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_io_buffer.h"
 
+#include "client/client_tcp_transport.h"
+
 namespace ruvia {
 class http1_request_content_writer;
 }  // namespace ruvia
@@ -61,8 +63,9 @@ private:
     // prefix, payload, suffix) under the write timeout.
     [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout);
     // Appends at most `max_bytes` read from the transport to `target`; returns
-    // 0 at the peer's end of stream.
-    [[nodiscard]] task<std::size_t> read_append(
+    // the read, which is not ok() at the peer's end of stream, and throws any
+    // other transport failure.
+    [[nodiscard]] task<client_transport_result> read_append(
         http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout);
 
     http_client_pool& pool_;
