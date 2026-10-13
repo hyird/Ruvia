@@ -13,6 +13,8 @@
 #include "ruvia/web/detail/db/db_sql_scan.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
+#include "db/db_sql_format.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -73,7 +75,7 @@ void append_value_literal(st_mysql& connection, std::pmr::string& output, const 
             append_db_number(output, db_value_access::unsigned_value(value));
             break;
         case db_value_type::double_value:
-            append_db_number(output, db_value_access::get_double_value(value));
+            append_db_double_literal(output, db_value_access::get_double_value(value), db_driver::mariadb);
             break;
         case db_value_type::bool_value:
             output.push_back(db_value_access::get_bool_value(value) ? '1' : '0');

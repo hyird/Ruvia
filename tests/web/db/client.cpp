@@ -1,9 +1,12 @@
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <exception>
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -80,6 +83,30 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
     }
     RUVIA_CHECK(rejected);
 }
+
+#ifdef RUVIA_ENABLE_MARIADB
+RUVIA_TEST(db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
+    // Nothing listens on port 1, so validation is the only step that can
+    // reject the list with std::invalid_argument; a connect failure is not one.
+    const auto validation_error = [](std::string_view sql) {
+        const std::array<ruvia::db_migration, 1> migrations{{
+            ruvia::db_migration{{.id_ = "001", .sql_ = std::string(sql)}},
+        }};
+        auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb, .port_ = std::uint16_t{1}};
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        try {
+            (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(migrations));
+        } catch (const std::invalid_argument& error) {
+            return std::string(error.what());
+        } catch (const std::exception&) {
+        }
+        return std::string();
+    };
+    RUVIA_CHECK_EQ(validation_error("CREATE TABLE t (a INT);--"), std::string());
+    RUVIA_CHECK_EQ(validation_error("--"), std::string("database migration SQL must not be empty"));
+    RUVIA_CHECK_EQ(validation_error("SELECT 1;--x"), std::string("database migration must contain exactly one SQL statement"));
+}
+#endif
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {

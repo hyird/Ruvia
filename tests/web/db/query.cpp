@@ -170,6 +170,23 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     RUVIA_CHECK_EQ(maria_statement.sql(), "SELECT left(`name`, ?) FROM `items` WHERE (`ratio` > ?)");
 }
 
+RUVIA_TEST(db_query_literal_doubles_keep_the_bound_double_type) {
+    // Bound doubles are float8/DOUBLE; a literal 2 would make "qty / 2" integer
+    // division and a literal 2.5 is exact NUMERIC/DECIMAL in both dialects.
+    db_query query;
+    query.select({query.binary(query.column("qty"), op_type::divide, query.value(2.0)),
+                     query.value(2.5), query.value(-0.5), query.value(1e20)})
+        .from("items");
+    const auto postgres = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK_EQ(postgres.sql(),
+        "SELECT (\"qty\" / CAST('2' AS DOUBLE PRECISION)), CAST('2.5' AS DOUBLE PRECISION), "
+        "CAST('-0.5' AS DOUBLE PRECISION), CAST('1e+20' AS DOUBLE PRECISION) FROM \"items\"");
+    const auto maria = query.compile(db_driver::mariadb, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK_EQ(maria.sql(), "SELECT (`qty` / 2e0), 2.5e0, -0.5e0, 1e+20 FROM `items`");
+    RUVIA_CHECK_EQ(db_query::render_expression(query.unary(db_unary_operator::negate, query.value(-2.0)), db_driver::mariadb, nullptr),
+        "(- -2e0)");
+}
+
 RUVIA_TEST(db_query_postgresql_bitwise_parameters_use_integer_overloads) {
     struct integer_case final {
         db_value value_;
@@ -437,6 +454,24 @@ RUVIA_TEST(db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     overlong_query.select(overlong_query.call(overlong)).from("events");
     RUVIA_CHECK(testing::throws_on([&] { (void)overlong_query.compile(db_driver::postgresql, nullptr); }));
     RUVIA_CHECK(testing::throws_on([&] { (void)overlong_query.compile(db_driver::mariadb, nullptr); }));
+
+    // MariaDB counts characters, PostgreSQL counts bytes: 64 two-byte "é"
+    // fit MariaDB but not PostgreSQL's 63 bytes.
+    std::string accented;
+    for (int i = 0; i < 64; ++i) {
+        accented += "\xC3\xA9";
+    }
+    db_query accented_query;
+    accented_query.select(accented_query.call(accented)).from("events");
+    const auto accented_statement = accented_query.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK(accented_statement.sql().find(accented) != std::string_view::npos);
+    RUVIA_CHECK(testing::throws_on([&] { (void)accented_query.compile(db_driver::postgresql, nullptr); }));
+    db_query too_many_characters;
+    too_many_characters.select(too_many_characters.call(accented + "x")).from("events");
+    RUVIA_CHECK(testing::throws_on([&] { (void)too_many_characters.compile(db_driver::mariadb, nullptr); }));
+    db_query ill_formed;
+    ill_formed.select(ill_formed.call("bad\xC3name")).from("events");
+    RUVIA_CHECK(testing::throws_on([&] { (void)ill_formed.compile(db_driver::mariadb, nullptr); }));
 }
 
 RUVIA_TEST(db_query_dml_sources_distinct_and_query_joins_compile) {

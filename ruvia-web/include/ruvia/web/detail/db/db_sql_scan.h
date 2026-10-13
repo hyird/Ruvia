@@ -30,10 +30,15 @@ namespace ruvia::detail {
     return character == ' ' || character == '\t' || character == '\r' || character == '\n';
 }
 
+// MariaDB's lexer peeks at the byte after "--" and sees its terminating NUL at
+// the end of the statement, so a final "--" is a comment as well.
 [[nodiscard]] inline constexpr bool is_mariadb_double_dash_comment(
     std::string_view sql, std::size_t index) noexcept {
-    if (index + 2 >= sql.size() || sql[index] != '-' || sql[index + 1] != '-') {
+    if (index + 2 > sql.size() || sql[index] != '-' || sql[index + 1] != '-') {
         return false;
+    }
+    if (index + 2 == sql.size()) {
+        return true;
     }
     const auto byte = static_cast<unsigned char>(sql[index + 2]);
     return byte <= 0x20 || byte == 0x7f;

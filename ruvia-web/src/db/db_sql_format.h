@@ -9,6 +9,7 @@
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/json/json_byte_scan.h"
 
 namespace ruvia::detail {
 
@@ -18,10 +19,31 @@ inline void require_db_dialect(db_driver driver) {
     }
 }
 
+// MariaDB limits identifiers to 64 characters and PostgreSQL to 63 bytes
+// (NAMEDATALEN - 1). Counting characters requires well-formed UTF-8, so an
+// ill-formed MariaDB name is rejected rather than measured by guesswork.
+[[nodiscard]] inline bool fits_db_identifier_limit(std::string_view name, db_driver driver) noexcept {
+    if (driver == db_driver::postgresql) {
+        return name.size() <= 63;
+    }
+    std::size_t characters = 0;
+    for (std::size_t i = 0; i < name.size(); ++characters) {
+        if (static_cast<unsigned char>(name[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        const auto sequence = scan_json_utf8_sequence(name, i);
+        if (!sequence.well_formed_) {
+            return false;
+        }
+        i += sequence.length_;
+    }
+    return characters <= 64;
+}
+
 inline void append_db_identifier(std::pmr::string& output, std::string_view name, db_driver driver) {
     require_db_dialect(driver);
-    const auto limit = driver == db_driver::postgresql ? std::size_t{63} : std::size_t{64};
-    if (name.empty() || name.size() > limit || name.find('\0') != std::string_view::npos) {
+    if (name.empty() || name.find('\0') != std::string_view::npos || !fits_db_identifier_limit(name, driver)) {
         throw std::invalid_argument("invalid or overlong database identifier");
     }
     const char quote = driver == db_driver::postgresql ? '"' : '`';
@@ -70,6 +92,27 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
     output.push_back('\'');
 }
 
+// Bound doubles travel as float8/DOUBLE, so a literal must keep that type: an
+// unadorned 2 is an integer and 2.5 is exact NUMERIC/DECIMAL in both dialects,
+// which changes division and overload resolution. PostgreSQL gets an explicit
+// cast of a quoted constant (valid in DEFAULT, CHECK, generated columns and
+// views, and immune to a preceding '-' forming a comment); MariaDB reads any
+// literal with an exponent as DOUBLE.
+inline void append_db_double_literal(std::pmr::string& output, double value, db_driver driver) {
+    require_db_dialect(driver);
+    if (driver == db_driver::postgresql) {
+        output += "CAST('";
+        append_db_number(output, value);
+        output += "' AS DOUBLE PRECISION)";
+        return;
+    }
+    const auto start = output.size();
+    append_db_number(output, value);
+    if (output.find_first_of("eE", start) == std::string::npos) {
+        output += "e0";
+    }
+}
+
 inline void append_db_literal(std::pmr::string& output, const db_value& value, db_driver driver) {
     require_db_dialect(driver);
     switch (db_value_access::type(value)) {
@@ -86,7 +129,7 @@ inline void append_db_literal(std::pmr::string& output, const db_value& value, d
             append_db_number(output, db_value_access::unsigned_value(value));
             return;
         case db_value_type::double_value:
-            append_db_number(output, db_value_access::get_double_value(value));
+            append_db_double_literal(output, db_value_access::get_double_value(value), driver);
             return;
         case db_value_type::bool_value:
             output += db_value_access::get_bool_value(value) ? "TRUE" : "FALSE";

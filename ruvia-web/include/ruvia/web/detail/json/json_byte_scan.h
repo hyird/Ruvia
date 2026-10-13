@@ -105,8 +105,9 @@ struct json_utf8_sequence final {
 // under the Unicode 3.9 Table 3-7 constraints: no overlong forms (C0/C1, E0 80-9F,
 // F0 80-8F), no UTF-16 surrogate code points (ED A0-BF), nothing above U+10FFFF
 // (F4 90-.., F5+), and no stray or truncated continuation bytes. The single owner
-// of UTF-8 well-formedness for JSON parsing (which rejects ill-formed input) and
-// JSON writing (which substitutes one U+FFFD per maximal subpart).
+// of UTF-8 well-formedness for JSON parsing (which rejects ill-formed input), JSON
+// writing (which substitutes one U+FFFD per maximal subpart) and MariaDB
+// identifier length checks (which count characters).
 [[nodiscard]] inline json_utf8_sequence scan_json_utf8_sequence(std::string_view input, std::size_t i) noexcept {
     const auto lead = static_cast<unsigned char>(input[i]);
     std::size_t trail = 0;
