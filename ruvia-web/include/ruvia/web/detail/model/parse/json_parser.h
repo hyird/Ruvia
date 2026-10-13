@@ -255,35 +255,33 @@ private:
             [&value, resource, encoding, fields_value, case_insensitive, string_storage](
                 std::string_view key, std::string_view field_value) {
                 auto bind = [&](auto& slot) {
-                    using slot_type = std::remove_cvref_t<decltype(slot)>;
-                    if constexpr (is_form_field<typename slot_type::value_type>) {
-                        if (slot.is_present()) {
-                            slot.mark_duplicate();
-                            return;
-                        }
-                        using value_type = typename slot_type::value_type;
+                    if (slot.is_present()) {
+                        slot.mark_duplicate();
+                        return;
+                    }
+                    using value_type = typename std::remove_cvref_t<decltype(slot)>::value_type;
+                    // Name/value inputs only carry strings and scalars. A value for any
+                    // other field is a type error, never an absence that a default fills.
+                    if constexpr (is_form_field<value_type>) {
                         auto parsed_value = parse_form_value<value_type>(resolved_pmr_resource_tag{},
                             field_value, encoding, resource, string_storage);
                         if (parsed_value) {
                             model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
-                        } else {
-                            slot.mark_invalid_type();
+                            return;
                         }
                     }
+                    slot.mark_invalid_type();
                 };
                 if (case_insensitive) {
                     bool matched = false;
                     model::visit_model_fields(value, model::model_access::schema<model_type>(),
                         [&](const auto&, auto& slot) {
-                            using slot_type = std::remove_cvref_t<decltype(slot)>;
-                            if constexpr (is_form_field<typename slot_type::value_type>) {
-                                if (matched || !request_name_value_list_access::names_equal(
-                                                   *fields_value, key, slot.wire_name())) {
-                                    return;
-                                }
-                                matched = true;
-                                bind(slot);
+                            if (matched || !request_name_value_list_access::names_equal(
+                                               *fields_value, key, slot.wire_name())) {
+                                return;
                             }
+                            matched = true;
+                            bind(slot);
                         });
                     return true;
                 }

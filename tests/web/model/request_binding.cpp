@@ -28,6 +28,8 @@ RUVIA_MODEL(dynamic_binding_body,
     RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
     RUVIA_OPTIONAL_FIELD(numbers, ruvia::array<ruvia::uint32>));
 
+RUVIA_MODEL(tags_binding_input, RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
+
 namespace {
 
 ruvia::task<request_binding_out> make_response(std::string_view id, std::string_view name,
@@ -49,7 +51,14 @@ public:
     RUVIA_POST("/request-binding-echo", echo, ruvia::json_body<request_binding_body>);
     RUVIA_POST("/request-binding-dynamic", dynamic, ruvia::json_body<dynamic_binding_body>);
     RUVIA_POST("/request-binding-form", echo, ruvia::form_body<request_binding_body>);
+    RUVIA_GET("/request-binding-query-tags", tags, ruvia::query_model<tags_binding_input>);
+    RUVIA_GET("/request-binding-header-tags", tags, ruvia::header_model<tags_binding_input>);
     RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> tags(ruvia::context& c) {
+        const bool present = c.req().validated<tags_binding_input>().is_present<"tags">();
+        co_return c.text(std::string_view(present ? "present" : "absent"));
+    }
 
     ruvia::task<ruvia::http_response> dynamic(ruvia::context& c) {
         co_return c.json(c.req().validated<dynamic_binding_body>());
@@ -180,4 +189,23 @@ RUVIA_TEST(request_binding_large_wrong_type_arrays_report_field_validation) {
         RUVIA_CHECK(response.body().find("invalid_type") != std::string_view::npos);
         RUVIA_CHECK(response.body().find("invalid json body") == std::string_view::npos);
     }
+}
+
+RUVIA_TEST(request_binding_rejects_query_and_header_values_for_array_fields) {
+    ruvia::test_app app;
+    for (const auto target : {"/request-binding-query-tags", "/request-binding-header-tags"}) {
+        const auto absent = app.request(ruvia::test_request::get(target));
+        RUVIA_CHECK(absent.status() == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(absent.body(), std::string_view("absent"));
+    }
+    for (const auto& [target, code] : {
+             std::pair{"/request-binding-query-tags?tags=a", "invalid_type"},
+             std::pair{"/request-binding-query-tags?tags=a&tags=b", "duplicate"}}) {
+        const auto response = app.request(ruvia::test_request::get(target));
+        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
+        RUVIA_CHECK(response.body().find(code) != std::string_view::npos);
+    }
+    const auto header = app.request(ruvia::test_request::get("/request-binding-header-tags").header("Tags", "a"));
+    RUVIA_CHECK(header.status() == ruvia::http_status::bad_request);
+    RUVIA_CHECK(header.body().find("invalid_type") != std::string_view::npos);
 }

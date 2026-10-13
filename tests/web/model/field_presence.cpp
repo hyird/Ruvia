@@ -55,6 +55,13 @@ RUVIA_MODEL(nullable_response,
     RUVIA_REQUIRED_FIELD(required, ruvia::string, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(optional, ruvia::string, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(dynamic, ruvia::json_value, RUVIA_NULLABLE));
+RUVIA_MODEL(form_unrepresentable_values,
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>),
+    RUVIA_OPTIONAL_FIELD(data, ruvia::bytes),
+    RUVIA_OPTIONAL_FIELD(child, required_value),
+    RUVIA_OPTIONAL_FIELD(payload, ruvia::json_value),
+    RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
+    RUVIA_OPTIONAL_FIELD(note, ruvia::string));
 
 template <typename model_type>
 void check_presence_matrix(ruvia::testing::test_context& ruvia_ctx, bool required, bool nullable_value) {
@@ -164,6 +171,14 @@ RUVIA_TEST(model_named_form_and_nested_fields_keep_input_presence) {
     RUVIA_CHECK(children[2].is_present<"value">() && !children[2].is_null<"value">());
 }
 
+RUVIA_TEST(model_form_rejects_values_for_fields_without_form_representation) {
+    auto absent = ruvia::from_form<form_unrepresentable_values>("note=a&unknown=b");
+    RUVIA_CHECK(absent && absent->is_present<"note">() && !absent->is_present<"tags">());
+    for (const auto body : {"tags=a", "tags=a&tags=b", "data=a", "child=a", "payload=1", "object=%7B%7D"}) {
+        RUVIA_CHECK(!ruvia::from_form<form_unrepresentable_values>(body));
+    }
+}
+
 RUVIA_TEST(model_nullable_applies_to_scalar_container_nested_and_dynamic_types) {
     auto parsed_value = ruvia::from_json<nullable_kinds>(
         R"({"flag":null,"number":null,"child":null,"items":null,"boxes":null,"payload":null,"object":null})");
@@ -204,6 +219,27 @@ RUVIA_TEST(model_nonnullable_dynamic_assignment_rejects_null_without_changing_va
     RUVIA_CHECK(!model->is_null<"value">());
     RUVIA_CHECK_EQ(model->get<"value">()->view(), std::string_view("1"));
     RUVIA_CHECK(null->is_null());
+}
+
+RUVIA_TEST(model_nonnullable_dynamic_ensure_rejects_fabricating_null) {
+    dynamic_value model;
+    bool rejected = false;
+    try {
+        (void)model.ensure<"value">();
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(!model.get<"value">().has_value());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(model)), std::string_view("{}"));
+    auto parsed_value = ruvia::from_json<dynamic_value>(R"({"value":1})");
+    RUVIA_CHECK(parsed_value.has_value());
+    if (!parsed_value) {
+        return;
+    }
+    RUVIA_CHECK_EQ(parsed_value->ensure<"value">().view(), std::string_view("1"));
+    nullable_response response;
+    RUVIA_CHECK(response.ensure<"dynamic">().is_null());
 }
 
 RUVIA_TEST(model_nullable_response_emits_explicit_null_without_emitting_absence) {

@@ -70,8 +70,14 @@ public:
         requires required
     = delete;
 
+    // Materializes an empty value when none is held. The empty json_value is
+    // the token null, which a non-nullable field cannot hold (matching assign),
+    // so ensure on such a field without a value throws and leaves it unchanged.
     [[nodiscard]] value_t_type& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {
+            if constexpr (detail::is_ruvia_json_value<value_t_type> && !nullable) {
+                throw std::invalid_argument("ensuring an absent JSON value requires RUVIA_NULLABLE");
+            }
             value_.emplace(
                 detail::make_request_value<value_t_type>(resolved_pmr_resource_tag{}, resource));
         }
