@@ -462,6 +462,11 @@ public:
         return *this;
     }
 
+    // User-provided, not defaulted: a defaulted destructor would be constexpr
+    // and clang instantiates the vector destructor at first use, while a
+    // forward-declared element type may still be incomplete.
+    ~array() {}
+
     [[nodiscard]] bool empty() const noexcept {
         return items_.empty();
     }
