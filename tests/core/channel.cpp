@@ -159,6 +159,55 @@ ruvia::task<void> receive_throwing_move(
     success = result_value.has_value() && result_value.value().value() == 6;
 }
 
+// Counts moves down to a failure, so a receive can fail after its first move
+// has already emptied the queued value.
+class late_throwing_move final {
+public:
+    explicit late_throwing_move(int value) noexcept
+        : value_(value) {}
+
+    late_throwing_move(const late_throwing_move&) = delete;
+    late_throwing_move& operator=(const late_throwing_move&) = delete;
+    // This fixture intentionally models a move that can throw.
+    late_throwing_move(late_throwing_move&& other) noexcept(false) {
+        if (moves_before_throw_ == 0) {
+            moves_before_throw_ = -1;
+            throw std::runtime_error("requested late move failure");
+        }
+        if (moves_before_throw_ > 0) {
+            --moves_before_throw_;
+        }
+        value_ = std::exchange(other.value_, 0);
+    }
+
+    [[nodiscard]] int value() const noexcept {
+        return value_;
+    }
+
+    // Negative disables failures; only the worker thread touches it.
+    static inline int moves_before_throw_{-1};
+
+private:
+    int value_{0};
+};
+
+ruvia::task<void> receive_after_late_move_failure(ruvia::channel_sender<late_throwing_move> sender,
+    ruvia::channel_receiver<late_throwing_move>& receiver, bool& success) {
+    bool move_failed = false;
+    late_throwing_move::moves_before_throw_ = 1;
+    try {
+        static_cast<void>(co_await receiver.receive());
+    } catch (const std::runtime_error&) {
+        move_failed = true;
+    }
+    late_throwing_move::moves_before_throw_ = -1;
+    const auto next = co_await receiver.receive();
+    sender.close();
+    const auto closed = co_await receiver.receive();
+    success = move_failed && next.has_value() && next.value().value() == 2 &&
+              closed.status() == ruvia::worker_wait_status::closed;
+}
+
 ruvia::task<void> receive_after_late_cancellation(
     ruvia::channel_receiver<int>& receiver, ruvia::stop_token stop_token_value,
     ruvia::stop_token next_stop_token, bool& success) {
@@ -565,10 +614,23 @@ int main() {
         runtime.detach();
     }
 
+    bool late_move_consumed_once = false;
+    {
+        asio::io_context io_context;
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        auto [sender, receiver] = ruvia::make_channel<late_throwing_move>(runtime.handle(), {.capacity_ = 2});
+        if (!sender.send(late_throwing_move(1)).accepted() || !sender.send(late_throwing_move(2)).accepted()) {
+            return 1;
+        }
+        ruvia::test::run_worker_tasks(
+            runtime, receive_after_late_move_failure(std::move(sender), receiver, late_move_consumed_once));
+        runtime.detach();
+    }
+
     const bool all_passed = success && cold_receiver_tasks_safe && buffered_cold_receiver_tasks_safe &&
                             channel_side_closure && retired_receiver_stopping &&
                             worker_stopping && stopping_send &&
-                            move_failed && recovered_value && recovered_send &&
+                            move_failed && recovered_value && recovered_send && late_move_consumed_once &&
                             test_rejected_payload_moves_can_close_the_channel() &&
                             test_retired_receiver_storage_is_released() &&
                             test_retired_payload_destructors_can_tear_down_the_channel();

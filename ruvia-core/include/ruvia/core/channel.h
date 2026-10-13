@@ -150,9 +150,17 @@ struct channel_receive_awaiter final {
             return true;
         }
         if (auto* item = queue.front()) {
+            // Building the result moves the item several times; a later move may
+            // throw after an earlier one emptied it, so the front is consumed on
+            // every exit rather than left for the next receive.
+            struct front_consumption final {
+                typename mpsc_ring_queue<t_type>::locked_access& queue_;
+                ~front_consumption() {
+                    queue_.pop();
+                }
+            } consumption{queue};
             (void)wait_.complete_result(
                 worker_wait_result_access::value(std::move(*item)));
-            queue.pop();
             return true;
         }
         if (std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)) {
