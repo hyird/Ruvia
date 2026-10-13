@@ -80,21 +80,24 @@ template <typename rep_type, typename period_type>
             return target_type::min();
         }
         return target_type(static_cast<typename target_type::rep>(count) * factor::num);
+    } else {
+        // Discard this alternative for whole-factor integer conversions so
+        // MSVC /WX does not reject an emitted unreachable fallback.
+        using wide_type = std::chrono::duration<long double, typename target_type::period>;
+        const auto count = std::chrono::duration_cast<wide_type>(value).count();
+        if (std::isnan(count)) {
+            return target_type::zero();
+        }
+        const auto maximum = static_cast<long double>(target_type::max().count());
+        if (count >= maximum) {
+            return target_type::max();
+        }
+        const auto minimum = static_cast<long double>(target_type::min().count());
+        if (count <= minimum) {
+            return target_type::min();
+        }
+        return target_type(static_cast<typename target_type::rep>(count));
     }
-    using wide_type = std::chrono::duration<long double, typename target_type::period>;
-    const auto count = std::chrono::duration_cast<wide_type>(value).count();
-    if (std::isnan(count)) {
-        return target_type::zero();
-    }
-    const auto maximum = static_cast<long double>(target_type::max().count());
-    if (count >= maximum) {
-        return target_type::max();
-    }
-    const auto minimum = static_cast<long double>(target_type::min().count());
-    if (count <= minimum) {
-        return target_type::min();
-    }
-    return target_type(static_cast<typename target_type::rep>(count));
 }
 
 [[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_saturating_deadline(
@@ -135,19 +138,19 @@ template <typename rep_type, typename period_type>
             return milliseconds_type::max();
         }
         return milliseconds_type(static_cast<milliseconds_type::rep>(value.count()) * factor::num);
+    } else {
+        using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
+        const auto count = std::chrono::duration_cast<millisecond_float_type>(value).count();
+        if (std::isnan(count)) {
+            return milliseconds_type::zero();
+        }
+        const auto maximum = static_cast<long double>(milliseconds_type::max().count());
+        const auto rounded = std::ceil(count);
+        if (rounded >= maximum) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(rounded));
     }
-
-    using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
-    const auto count = std::chrono::duration_cast<millisecond_float_type>(value).count();
-    if (std::isnan(count)) {
-        return milliseconds_type::zero();
-    }
-    const auto maximum = static_cast<long double>(milliseconds_type::max().count());
-    const auto rounded = std::ceil(count);
-    if (rounded >= maximum) {
-        return milliseconds_type::max();
-    }
-    return milliseconds_type(static_cast<milliseconds_type::rep>(rounded));
 }
 
 template <typename rep_type, typename period_type>
