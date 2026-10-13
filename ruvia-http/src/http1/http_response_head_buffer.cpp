@@ -1,10 +1,12 @@
 #include "ruvia/http/http_response_head_buffer.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <stdexcept>
 #include <variant>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
 
 namespace ruvia {
@@ -42,6 +44,22 @@ void http_response_head_buffer::append(std::string_view value) {
         spill_to_heap(stack_state->used_ + value.size());
     }
     heap_.append(value);
+}
+
+void http_response_head_buffer::append(char value) {
+    if (auto* const stack_state = std::get_if<stack_state_type>(&state_)) {
+        if (stack_state->used_ < stack_.size()) {
+            stack_[stack_state->used_++] = value;
+            return;
+        }
+        spill_to_heap(stack_state->used_ + 1);
+    }
+    heap_.push_back(value);
+}
+
+void http_response_head_buffer::append_unsigned(std::uint64_t value) {
+    std::array<char, http_max_unsigned_decimal_size> digits;
+    append(http_format_unsigned(digits, value));
 }
 
 void http_response_head_buffer::reserve_additional(std::size_t size) {

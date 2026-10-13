@@ -1,6 +1,7 @@
 #include "ruvia/core/event_loop_pool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -40,6 +41,9 @@ public:
     // Keeps the first failure for join() while the pool observes its loops;
     // after pool retirement nobody can rethrow, so failures are reported.
     void record_failure(std::exception_ptr failure) noexcept {
+        if (!failure) {
+            return;
+        }
         {
             const std::lock_guard lock(failure_mutex_);
             if (observed_) {
@@ -156,6 +160,7 @@ struct event_loop_pool::impl_type {
 
     std::pmr::vector<std::shared_ptr<detail::event_loop_state>> loops_{process_resource()};
     std::shared_ptr<event_loop_pool_owner> owner_;
+    std::atomic<std::size_t> next_index_{0};
 };
 
 event_loop_pool::event_loop_pool(event_loop_pool_options options)
@@ -223,6 +228,11 @@ event_loop event_loop_pool::loop(std::size_t index) const {
         throw std::out_of_range("event loop index is out of range");
     }
     return event_loop(impl_->loops_[index]);
+}
+
+event_loop event_loop_pool::next_loop() noexcept {
+    const auto index = impl_->next_index_.fetch_add(1, std::memory_order_relaxed);
+    return event_loop(impl_->loops_[index % impl_->loops_.size()]);
 }
 
 event_loop event_loop_pool::loop_for(std::uint64_t key) const noexcept {

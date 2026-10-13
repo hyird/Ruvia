@@ -53,6 +53,9 @@ public:
     [[nodiscard]] bool finished() const noexcept {
         return finished_;
     }
+    [[nodiscard]] std::uint64_t committed_payload_bytes() const noexcept {
+        return committed_;
+    }
 
 private:
     std::optional<std::uint64_t> length_;

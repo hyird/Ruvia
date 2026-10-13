@@ -89,7 +89,8 @@ private:
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,
     preserve_upgrade };
 
-inline void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy) {
+inline void http1_mark_connection_close(http_response& response,
+    http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only) {
     // A runtime close verdict dominates keep-alive. Collapse repeated fields
     // after the socket lifecycle is decided, while preserving the Upgrade
     // option required by any retained Upgrade field.

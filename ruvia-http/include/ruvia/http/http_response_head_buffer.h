@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -27,6 +28,8 @@ public:
 
     void reset() noexcept;
     void append(std::string_view value);
+    void append(char value);
+    void append_unsigned(std::uint64_t value);
     void reserve_additional(std::size_t size);
     [[nodiscard]] std::string_view view() const& noexcept;
     [[nodiscard]] std::string_view view() const&& = delete;
