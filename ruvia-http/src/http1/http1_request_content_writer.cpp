@@ -13,13 +13,14 @@
 namespace ruvia {
 namespace {
 
-void write_chunked_trailers(char* output, std::span<const http_header_view> trailers) noexcept {
+[[nodiscard]] char* write_chunked_trailers(char* output, std::span<const http_header_view> trailers) noexcept {
     detail::http_raw_wire_sink sink(output);
     sink.append(http1_last_chunk_prefix);
     for (const auto& field : trailers) {
         detail::emit_http1_field_line(sink, field.name(), field.value());
     }
     sink.append(http1_trailer_section_terminator);
+    return sink.position();
 }
 
 }  // namespace
@@ -118,7 +119,7 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
         const auto output = buffer.first(required);
         detail::write_http_wire(output,
             detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), trailers),
-            [trailers](char* destination) noexcept { write_chunked_trailers(destination, trailers); });
+            [trailers](char* destination) noexcept { return write_chunked_trailers(destination, trailers); });
     }
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};

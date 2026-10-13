@@ -455,9 +455,9 @@ db_query::expr_type db_query::subscript(expr_type array_value, expr_type index) 
     return push_node(std::move(node_value));
 }
 db_query::expr_type db_query::collate(expr_type value, std::string_view collation) {
-    // Collation names follow the unqualified alias-name rules, although the
-    // compiler renders them as qualified identifiers.
-    detail::require_name(collation);
+    // Collation names may be schema-qualified (the dot separates components),
+    // so they follow the same rule as every other qualified name.
+    detail::require_name(collation, true);
     auto node_value = make_node(db_node_kind::collate);
     node_value.left_ = require_expression(value);
     node_value.text_ = collation;

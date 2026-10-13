@@ -100,8 +100,9 @@ public:
     }
 
     // Refuses new leases and marks every slot without an abort reason as
-    // closing. Returns false when the pool was already closed; the owner then
-    // has nothing left to tear down.
+    // closing; on true the owner must abort every connection, since a later
+    // stop no longer reaches cancel_slot(). Returns false when the pool was
+    // already closed; the owner then has nothing left to tear down.
     [[nodiscard]] bool close() noexcept {
         if (!scheduler_.close()) {
             return false;
@@ -141,7 +142,8 @@ public:
     // cancel_operation_by_id(), which marks the slot cancelled and lets the
     // policy abort the driver connection. A cancellation belongs to the
     // operation it ended; closing is permanent, so an operation still holding
-    // a lease after close() (an open stream or transaction) observes it.
+    // a lease after close() (an open stream or transaction) observes it, even
+    // when its stop arrives later.
     class cancellation_guard final {
     public:
         cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value)
@@ -160,11 +162,18 @@ public:
             registration_.reset();
         }
 
+        // The operation's id; cancel_operation_by_id() with it acts as a stop.
+        [[nodiscard]] std::uint64_t id() const noexcept {
+            return registration_.id();
+        }
+
     private:
         worker_cancellation_registration<cancellation_target_type> registration_;
     };
 
-    // worker_cancellation_target hook; runs on the worker.
+    // worker_cancellation_target hook; runs on the worker. A closing slot
+    // keeps reporting closing: its owner aborts every connection right after
+    // close(), so a later stop has nothing left to cancel.
     void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
         if (cancellation_id == 0) {
             return;
@@ -175,10 +184,16 @@ public:
                 continue;
             }
             slot.cancellation_id_ = 0;
-            slot.abort_reason_ = pool_slot_abort_reason::cancelled;
-            policy_type::cancel_slot(owner_, index);
+            if (slot.abort_reason_ != pool_slot_abort_reason::closing) {
+                slot.abort_reason_ = pool_slot_abort_reason::cancelled;
+                policy_type::cancel_slot(owner_, index);
+            }
             return;
         }
+    }
+
+    [[nodiscard]] bool aborted(std::size_t slot) const noexcept {
+        return slots_[slot].abort_reason_ != pool_slot_abort_reason::none;
     }
 
     void throw_if_aborted(std::size_t slot) const {

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <initializer_list>
 #include <memory_resource>
 #include <span>
@@ -112,6 +113,15 @@ void emit_http1_field_line(sink_type& sink, std::string_view name, std::string_v
     return false;
 }
 
+// A pre-measured encoder that ended anywhere but `expected` has already written
+// past the measured bytes or left some of them unwritten; neither the memory
+// nor the output can be trusted, and the noexcept writers cannot report it.
+inline void check_http_wire_end(const char* end, const char* expected) noexcept {
+    if (end != expected) {
+        std::terminate();
+    }
+}
+
 // Keep the bounded stack snapshot off the ordinary non-overlapping call path.
 template <typename encode_type>
 #if defined(_MSC_VER)
@@ -121,21 +131,22 @@ __attribute__((noinline))
 #endif
 void write_http_wire_snapshot(std::span<char> output, const encode_type& encode) noexcept {
     std::array<char, max_http_header_bytes> scratch;
-    encode(scratch.data());
+    check_http_wire_end(encode(scratch.data()), scratch.data() + output.size());
     std::memcpy(output.data(), scratch.data(), output.size());
 }
 
 // The single overlap-safe writer. `encode(char*)` writes exactly output.size()
-// bytes, which validation bounded to max_http_header_bytes. When its inputs
-// overlap `output` (see http_wire_inputs_overlap) the bytes are encoded into a
-// bounded snapshot first, so every borrowed input, including the field
-// descriptors, is consumed before any output byte is overwritten.
+// bytes, which validation bounded to max_http_header_bytes, and returns its end
+// position. When its inputs overlap `output` (see http_wire_inputs_overlap) the
+// bytes are encoded into a bounded snapshot first, so every borrowed input,
+// including the field descriptors, is consumed before any output byte is
+// overwritten.
 template <typename encode_type>
 void write_http_wire(std::span<char> output, bool inputs_overlap, const encode_type& encode) noexcept {
     if (inputs_overlap) {
         write_http_wire_snapshot(output, encode);
     } else {
-        encode(output.data());
+        check_http_wire_end(encode(output.data()), output.data() + output.size());
     }
 }
 

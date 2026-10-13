@@ -5,9 +5,11 @@
 #include <exception>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
@@ -67,6 +69,7 @@ class admission_routes final {
     RUVIA_GET("/plain", plain);
     RUVIA_POST("/upload", upload);
     RUVIA_GET_STREAM("/events", events);
+    RUVIA_GET("/boom", boom);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
@@ -76,6 +79,11 @@ class admission_routes final {
     ruvia::task<ruvia::http_response> upload(ruvia::context& context_value) {
         (void)co_await context_value.req().text();
         co_return context_value.text("uploaded");
+    }
+
+    ruvia::task<ruvia::http_response> boom(ruvia::context&) {
+        throw std::runtime_error("boom");
+        co_return ruvia::http_response{};
     }
 
     ruvia::task<void> events(ruvia::context& context_value) {
@@ -197,5 +205,32 @@ RUVIA_TEST(http1_server_closes_connections_stalled_past_request_phase_timeouts) 
     RUVIA_CHECK(upload.has_value());
     RUVIA_CHECK(upload.value_or("").find("uploaded") == std::string::npos);
     RUVIA_CHECK(upload.value_or("").find(" 429 ") == std::string::npos);
+    server.finish();
+}
+
+RUVIA_TEST(http1_failed_handler_error_response_is_not_renegotiated_into_406) {
+    // The 500 for a throwing handler carries no representation of the target
+    // resource, so a refused coding must neither replace it with a 406 nor run
+    // the error handler again. No compression is configured, so
+    // "gzip, identity;q=0" cannot be satisfied either. Distinct loopback source
+    // addresses keep these requests outside the other cases' rate-limit budgets.
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, admission_server_config());
+    const std::array<std::pair<std::string_view, std::string_view>, 2> cases{{
+        {"127.0.0.3", "identity;q=0, *;q=0"},
+        {"127.0.0.4", "gzip, identity;q=0"},
+    }};
+    for (const auto& [source, refused] : cases) {
+        error_handler_calls = 0;
+        std::string request("GET /boom HTTP/1.1\r\nHost: a\r\nConnection: close\r\nAccept-Encoding: ");
+        request.append(refused);
+        request.append("\r\n\r\n");
+        const auto output =
+            stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(std::string(source)), request);
+        RUVIA_CHECK(output.has_value());
+        RUVIA_CHECK(output.value_or("").starts_with("HTTP/1.1 500 "));
+        RUVIA_CHECK(output.value_or("").find("rejected") != std::string::npos);
+        RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
+    }
     server.finish();
 }

@@ -1,7 +1,5 @@
 #include "client/http_client_connection.h"
 
-#include "ruvia/core/worker_cancellation.h"
-
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
@@ -72,35 +70,21 @@ void http_client_connection::shutdown() noexcept {
     close();
 }
 
-void http_client_connection::begin_operation() {
+void http_client_connection::begin_lease() {
     if (retired_) {
         throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
     }
     transport_.reset_abort();
-    generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
 }
 
-void http_client_connection::cancel(std::uint64_t generation, client_abort_reason reason) noexcept {
-    if (generation_ != generation) {
-        return;
-    }
+void http_client_connection::cancel(client_abort_reason reason) noexcept {
     transport_.abort(reason);
     abort_http1_response();
     transport_.close();
     connected_ = false;
 }
 
-bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcept {
-    if (cancellation_id_ != cancellation_id) {
-        return false;
-    }
-    cancellation_id_ = 0;
-    cancel(generation_, client_abort_reason::cancelled);
-    return true;
-}
-
-task<void> http_client_connection::ensure_connected(
-    const operation_timeout& operation_timeout_value, stop_token stop_token_value, http_client_response_state& state_value) {
+task<void> http_client_connection::ensure_connected(const operation_timeout& operation_timeout_value) {
     if (connected_) {
         if (transport_.idle_open()) {
             co_return;
@@ -109,16 +93,8 @@ task<void> http_client_connection::ensure_connected(
         // the request into a closed stream.
         close();
     }
-    begin_operation();
-    struct connect_generation final {
-        http_client_connection& connection_;
-        ~connect_generation() {
-            ++connection_.generation_;
-        }
-    } generation{*this};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), cancellation_id_);
-    state_value.cancellation_id_ = cancellation.id();
-    cancellation.arm(stop_token_value);
+    // A stop already requested when the lease armed its cancellation closed
+    // the transport; it must not reconnect.
     throw_if_aborted();
     const auto timeout = operation_timeout_value.constrained_by(pool_.config().connect_timeout_);
     const auto connected = co_await transport_.connect(timeout);

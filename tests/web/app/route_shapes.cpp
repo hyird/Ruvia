@@ -329,9 +329,9 @@ RUVIA_TEST(route_shapes_error_responses_survive_an_unfinished_unmatched_chain) {
     ruvia::test_app app;
     app.use<route_shapes_unfinished>();
 
-    // The 404 and then the 406 for the unacceptable coding both run the
-    // unmatched chain, which never finalizes; each must still yield a response
-    // rather than an exception escaping the server.
+    // The 404 runs the unmatched chain, which never finalizes; it must still
+    // yield a response rather than an exception escaping the server, and that
+    // error response is not renegotiated into a 406 for the refused coding.
     const auto response =
         app.request(ruvia::test_request::get("/missing").header("Accept-Encoding", "*;q=0"));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::internal_server_error);

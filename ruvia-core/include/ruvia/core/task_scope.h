@@ -113,7 +113,6 @@ private:
     std::pmr::memory_resource* resource_;
     mutable std::optional<stop_source> stop_source_;
     bool stop_requested_{false};
-    node_type* head_{nullptr};
     std::size_t active_{0};
     lifecycle_type lifecycle_;
     outcome_type outcome_;

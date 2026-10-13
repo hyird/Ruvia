@@ -873,7 +873,7 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
         http1_client_request_wire_policy{.close_policy_ = http1_close_policy::close_after_response});
     RUVIA_CHECK(generated_close.result_.prepared() != nullptr);
     if (generated_close.result_.prepared() != nullptr) {
-        RUVIA_CHECK(generated_close.result_.prepared()->head().find("Connection: close\r\n") !=
-                    std::string_view::npos);
+        RUVIA_CHECK_EQ(generated_close.result_.prepared()->head(),
+            std::string_view("GET / HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n"));
     }
 }

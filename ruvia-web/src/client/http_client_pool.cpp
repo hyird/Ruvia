@@ -5,7 +5,6 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/worker_cancellation.h"
 
 #include "client/client_tls.h"
 #include "client/http1_client_exchange.h"
@@ -24,8 +23,8 @@ namespace {
     return result_budget_domain;
 }
 
-// An abandoned response may still be queued for a slot or connecting, before
-// its exchange registers a cancellation id: it must not write a request.
+// An abandoned response may still be queued for a slot, before its lease
+// publishes a cancellation id: it must not write a request.
 void throw_if_abandoned(const http_client_response_state& state_value) {
     if (state_value.abandoned_) {
         throw http_client_error(
@@ -35,9 +34,7 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 
 }  // namespace
 
-static_assert(worker_cancellation_post_is_inline<http_client_cancellation_target>);
-
-void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
+void http_client_pool::slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
     switch (status) {
         case worker_wait_status::timed_out:
             throw http_client_error(
@@ -53,11 +50,15 @@ void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, wor
     std::terminate();
 }
 
-void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
+void http_client_pool::slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
     if (reason == pool_slot_abort_reason::cancelled) {
         throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
     }
     throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
+}
+
+void http_client_pool::slot_policy::cancel_slot(http_client_pool& pool, std::size_t slot) noexcept {
+    pool.connection(slot).cancel(client_abort_reason::cancelled);
 }
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
@@ -72,7 +73,6 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       result_budget_domain_(require_http_client_result_budget_domain(std::move(result_budget_domain))),
       tls_context_(asio::ssl::context::tls_client),
       slots_(*this, config_.connection_count_, worker_, resource_),
-      cancellation_target_(make_worker_cancellation_target(*this, worker_)),
       background_tasks_(worker_, {.resource_ = resource_}),
       connections_(resource_) {
     if (config_.scheme_ == http_scheme::https) {
@@ -92,7 +92,6 @@ http_client_pool::~http_client_pool() {
 }
 
 void http_client_pool::close_now() noexcept {
-    cancellation_target_->detach(*this);
     if (!slots_.close()) {
         return;
     }
@@ -131,17 +130,6 @@ task<void> http_client_pool::join() {
 
 http_client_stats http_client_pool::stats() const noexcept {
     return {requests_buffered_, requests_in_flight_, completed_requests_, failed_requests_, wire_counters_.sent_, wire_counters_.received_};
-}
-
-void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
-    if (cancellation_id == 0) {
-        return;
-    }
-    for (auto& connection_value : connections_) {
-        if (connection_value->cancel_by_id(cancellation_id)) {
-            return;
-        }
-    }
 }
 
 void http_client_pool::require_accepting() const {
@@ -234,35 +222,40 @@ task<void> http_client_pool::execute_request_into(
     }
     --requests_buffered_;
     ++requests_in_flight_;
-    struct lease_type final {
-        http_client_pool& pool_;
-        std::size_t index_;
-        // Set while a transport operation may leave request bytes or a
-        // half-written connect on the connection.
-        http_client_connection* discard_{nullptr};
-        ~lease_type() {
-            if (discard_ != nullptr) {
-                discard_->close();
+    const slot_pool_type::lease_guard lease(slots_, index);
+    // Declared after the lease so it is destroyed first: a connect or exchange
+    // that did not finish may leave a half-finished handshake or request bytes
+    // on the connection, which must close before its slot is released.
+    struct discard_type final {
+        http_client_connection* connection_{nullptr};
+        ~discard_type() {
+            if (connection_ != nullptr) {
+                connection_->close();
             }
-            pool_.slots_.release(index_);
         }
-    } lease{*this, index};
+    } discard;
     try {
-        // A slot transferred by a releasing lease resumes its waiter after
-        // close_now() may already have retired every connection.
-        slots_.throw_if_aborted(index);
         auto& tcp_connection = connection(index);
+        // Clears the previous lease's abort before the guard is armed: a stop
+        // already requested is delivered at arm and must hold for the whole
+        // lease. A slot transferred after close_now() refuses here.
+        tcp_connection.begin_lease();
         // Abandonment before the exchange starts leaves no request bytes on
         // the connection, so it stays reusable.
         throw_if_abandoned(*state_value);
-        lease.discard_ = &tcp_connection;
-        co_await tcp_connection.ensure_connected(timeout, options.stop_token_, *state_value);
-        lease.discard_ = nullptr;
-        throw_if_abandoned(*state_value);
-        lease.discard_ = &tcp_connection;
+        slot_pool_type::cancellation_guard cancellation(slots_, index, options.stop_token_);
+        state_value->cancellation_id_ = cancellation.id();
+        discard.connection_ = &tcp_connection;
+        co_await tcp_connection.ensure_connected(timeout);
+        slots_.throw_if_aborted(index);
         http1_client_exchange exchange(*this, tcp_connection);
-        co_await exchange.run(request, timeout, options.stop_token_, *state_value);
-        lease.discard_ = nullptr;
+        co_await exchange.run(request, timeout, *state_value);
+        // The response is already complete: an abort landing after the
+        // exchange only poisons the connection, so the discard guard closes it
+        // instead of failing a delivered response.
+        if (!slots_.aborted(index)) {
+            discard.connection_ = nullptr;
+        }
         --requests_in_flight_;
         ++completed_requests_;
     } catch (...) {
@@ -277,9 +270,9 @@ void http_client_pool::abandon_response(http_client_response_state& state_value)
         return;
     }
     state_value.abandoned_ = true;
-    // A connect or exchange in progress published its id; a response still
-    // queued for a slot has none and fails at admission.
-    cancel_operation_by_id(state_value.cancellation_id_);
+    // A lease in progress published its id; a response still queued for a
+    // slot has none and fails at admission.
+    slots_.cancel_operation_by_id(state_value.cancellation_id_);
     if (auto* output = state_value.output()) {
         output->stop();
     }

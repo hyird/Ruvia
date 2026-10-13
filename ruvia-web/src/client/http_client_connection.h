@@ -1,10 +1,8 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 
 #include "ruvia/core/operation_timeout.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/web/http_client_types.h"
@@ -31,29 +29,26 @@ public:
         return index_;
     }
 
-    // Called while the pool slot is exclusively leased; reuses a live connection
-    // and replaces one the peer retired while it was idle. The connect is
-    // published as `state_value`'s cancellable operation so an abandoned
-    // response stops a connect in progress.
-    [[nodiscard]] task<void> ensure_connected(
-        const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
-    // Starts a connect or HTTP/1 exchange: the previous operation's abort is
-    // cleared and a new generation opens. A retired connection refuses with
-    // closing, so a request admitted after shutdown never reconnects.
-    void begin_operation();
+    // Called while the pool slot is exclusively leased, under the lease's
+    // cancellation; reuses a live connection and replaces one the peer
+    // retired while it was idle. An aborted lease never starts a connect.
+    [[nodiscard]] task<void> ensure_connected(const operation_timeout& timeout);
+    // Starts a pool lease before its cancellation is armed: the previous
+    // lease's abort is cleared. A retired connection refuses with closing, so
+    // a request admitted after shutdown never reconnects.
+    void begin_lease();
     // Close the current transport and discard its buffered wire bytes. Storage
     // is kept: a cancelled read or write may still target it.
     void close() noexcept;
     // Applies the retention policy to both buffers. Only between exchanges,
     // when no transport operation borrows their storage.
     void retain_idle_buffers() noexcept;
-    // Pool shutdown: permanently refuses new connects and HTTP/1 exchanges,
-    // then closes.
+    // Pool shutdown: permanently refuses new leases, aborts the connect or
+    // HTTP/1 exchange in progress with closing, then closes.
     void shutdown() noexcept;
-    // Cancels the connect or HTTP/1 exchange of `generation`.
-    void cancel(std::uint64_t generation, client_abort_reason reason) noexcept;
-    // True when the id names an operation of this connection.
-    [[nodiscard]] bool cancel_by_id(std::uint64_t cancellation_id) noexcept;
+    // Lease cancellation: aborts the connect or HTTP/1 exchange in progress
+    // with `reason` and closes the transport.
+    void cancel(client_abort_reason reason) noexcept;
     // Stops the bound HTTP/1 response's output and wakes its producer waits.
     void abort_http1_response() noexcept;
     // Throws the HTTP client error of the transport's abort reason, if any.
@@ -66,10 +61,6 @@ public:
     http_io_buffer write_buffer_;
     // Borrowed only while one serialized HTTP/1 exchange is active.
     http_client_response_state* http1_response_{nullptr};
-    // Bumped around every connect and HTTP/1 exchange so stale cancellations
-    // cannot reach a later operation.
-    std::uint64_t generation_{0};
-    std::uint64_t cancellation_id_{0};
     bool connected_{false};
     bool retired_{false};
 

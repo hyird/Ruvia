@@ -34,7 +34,8 @@ RUVIA_TEST(http1_streaming_request_chunked_upload_and_trailers) {
     RUVIA_CHECK(prepared.prepared() != nullptr);
     auto* plan = prepared.prepared()->content_plan().streaming();
     RUVIA_CHECK(plan != nullptr);
-    RUVIA_CHECK((prepared.prepared()->head().find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
+    RUVIA_CHECK_EQ(prepared.prepared()->head(),
+        std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
     ruvia::http1_request_content_writer writer(*plan);
     const std::string payload_value = "hello";
     auto chunk = writer.plan_chunk(payload_value);

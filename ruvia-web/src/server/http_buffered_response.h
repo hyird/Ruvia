@@ -120,7 +120,11 @@ struct buffered_response_recovery_step final {
 };
 
 // A secondary failure preserves the error handler's representation and
-// disables coding instead of invoking it again.
+// disables coding instead of invoking it again. An error response (4xx/5xx)
+// goes straight to that terminal path: it is not a representation of the
+// target resource (RFC 9110 15.5.7), so the server may disregard
+// Accept-Encoding for it (RFC 9110 12.4.1). Replacing it with a 406 would
+// disguise the original failure and run the error handler a second time.
 class buffered_response_recovery final {
 public:
     [[nodiscard]] bool recovered() const noexcept {
@@ -137,7 +141,7 @@ public:
         if (!error.has_value()) {
             return {};
         }
-        if (stage_ == stage::application) {
+        if (stage_ == stage::application && !response.status().is_error()) {
             stage_ = stage::negotiated_error;
             return {buffered_response_recovery_action::handle_error, std::move(error)};
         }

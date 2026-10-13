@@ -17,8 +17,6 @@ struct task_scope::node_type {
 
     task_scope& scope_;
     task<void> task_;
-    node_type* previous_{nullptr};
-    node_type* next_{nullptr};
 };
 
 task_scope::task_scope(const worker_handle& worker_value, task_scope_options options)
@@ -63,11 +61,6 @@ void task_scope::spawn(task<void> task_value) & {
         allocator.delete_object(node_value);
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
-    node_value->next_ = head_;
-    if (head_ != nullptr) {
-        head_->previous_ = node_value;
-    }
-    head_ = node_value;
     ++active_;
     lifecycle_.template emplace<task_scope_open_type>();
 
@@ -157,14 +150,6 @@ void task_scope::finish(node_type* node_value) noexcept {
         }
     }
 
-    if (node_value->previous_ != nullptr) {
-        node_value->previous_->next_ = node_value->next_;
-    } else {
-        head_ = node_value->next_;
-    }
-    if (node_value->next_ != nullptr) {
-        node_value->next_->previous_ = node_value->previous_;
-    }
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);
     allocator.delete_object(node_value);
     --active_;

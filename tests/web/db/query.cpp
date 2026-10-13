@@ -205,6 +205,23 @@ RUVIA_TEST(db_query_postgresql_bitwise_parameters_use_integer_overloads) {
     }
 }
 
+RUVIA_TEST(db_query_collate_validates_qualified_collation_names) {
+    for (const std::string_view invalid : {"a..b", "a.", ".b"}) {
+        db_query query;
+        bool rejected = false;
+        try {
+            (void)query.collate(query.column("name"), invalid);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    db_query query;
+    const auto collated = query.collate(query.column("name"), "pg_catalog.C");
+    RUVIA_CHECK_EQ(db_query::render_expression(collated, db_driver::postgresql, nullptr),
+        std::string_view(R"(("name" COLLATE "pg_catalog"."C"))"));
+}
+
 RUVIA_TEST(db_query_postgresql_bitwise_parameters_reject_unsigned_overflow_in_both_modes) {
     const std::array values{
         static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1,

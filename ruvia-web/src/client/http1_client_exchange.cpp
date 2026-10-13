@@ -15,7 +15,6 @@
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_client_request_writer.h"
@@ -140,21 +139,17 @@ task<std::size_t> http1_client_exchange::read_append(
     throw_http_client_transport_error(read, "upstream closed the HTTP connection");
 }
 
-task<void> http1_client_exchange::run(const http_client_request_storage& request, const operation_timeout& timeout,
-    stop_token stop_token_value, http_client_response_state& state_value) {
-    auto& connection = connection_;
-    connection.begin_operation();
-    struct exchange_generation final {
+task<void> http1_client_exchange::run(
+    const http_client_request_storage& request, const operation_timeout& timeout, http_client_response_state& state_value) {
+    // Bound for the exchange so a cancellation or shutdown stops the
+    // response's output and wakes its producer waits.
+    struct response_binding final {
         http_client_connection& connection_;
-        ~exchange_generation() {
-            ++connection_.generation_;
+        ~response_binding() {
             connection_.http1_response_ = nullptr;
         }
-    } exchange_generation_value{connection};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), connection.cancellation_id_);
-    state_value.cancellation_id_ = cancellation.id();
-    cancellation.arm(stop_token_value);
-    connection.http1_response_ = &state_value;
+    } response_binding_value{connection_};
+    connection_.http1_response_ = &state_value;
 
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());

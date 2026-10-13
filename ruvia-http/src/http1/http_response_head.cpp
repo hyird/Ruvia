@@ -1,5 +1,6 @@
 #include "server/http_response_head.h"
 
+#include <exception>
 #include <optional>
 #include <stdexcept>
 
@@ -30,6 +31,10 @@ struct response_head_flags {
 };
 
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
+inline constexpr std::string_view http10_status_prefix = "HTTP/1.0 ";
+inline constexpr std::string_view http11_status_prefix = "HTTP/1.1 ";
+// The head is measured before the protocol version is chosen for emission.
+static_assert(http10_status_prefix.size() == http11_status_prefix.size());
 
 [[nodiscard]] std::optional<std::uint64_t> explicit_content_length(const http_response& response) {
     // A ok parse_field always populates the state's value, and a Content-Length
@@ -76,9 +81,8 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
     std::string_view reason_phrase, std::string_view date_header, response_head_flags flags) noexcept {
-    sink_value.append(flags.protocol_version_ == http_protocol_version::http10
-                          ? std::string_view("HTTP/1.0 ")
-                          : std::string_view("HTTP/1.1 "));
+    sink_value.append(
+        flags.protocol_version_ == http_protocol_version::http10 ? http10_status_prefix : http11_status_prefix);
     const auto status_token = http_status_code_token(response_status);
     sink_value.append(http_status_code_token_view(status_token));
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
@@ -182,7 +186,8 @@ void append_response_head(
             throw std::length_error("HTTP response head is too large");
         }
     };
-    charge(head_budget.add(9 + http_status_code_token_size + 1 + reason_phrase.size() + 2));
+    charge(head_budget.add(
+        http11_status_prefix.size() + http_status_code_token_size + 1 + reason_phrase.size() + 2));
     std::size_t field_count = 0;
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
@@ -223,6 +228,12 @@ void append_response_head(
     head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
         http_raw_wire_sink sink_value(cursor_value);
         emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags);
+        // A mismatch has already overrun or under-filled the reserved bytes; the
+        // writer is noexcept and the heap path has already grown the buffer, so
+        // failing here cannot leave the output unchanged or the memory trusted.
+        if (sink_value.position() != cursor_value + head_budget.bytes()) {
+            std::terminate();
+        }
     });
 }
 

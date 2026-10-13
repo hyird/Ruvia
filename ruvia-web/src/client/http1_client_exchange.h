@@ -8,7 +8,6 @@
 #include <asio/buffer.hpp>
 
 #include "ruvia/core/operation_timeout.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -27,7 +26,7 @@ class http_client_response_state;
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
 // request head and content, a full-duplex streaming upload, the response head,
 // body and Content-Encoding, or an accepted CONNECT tunnel. The caller holds
-// the connection's HTTP/1 exchange slot for the whole run.
+// the connection's pool lease, and its cancellation, for the whole run.
 class http1_client_exchange final {
 public:
     http1_client_exchange(http_client_pool& pool, http_client_connection& connection) noexcept
@@ -38,7 +37,7 @@ public:
     http1_client_exchange& operator=(const http1_client_exchange&) = delete;
 
     [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_timeout& timeout,
-        stop_token stop_token_value, http_client_response_state& state_value);
+        http_client_response_state& state_value);
 
 private:
     // Receives the final response head, then the body or an accepted tunnel.

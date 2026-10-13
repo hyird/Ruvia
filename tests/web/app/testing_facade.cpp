@@ -701,6 +701,38 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
     RUVIA_CHECK_EQ(failed.body(), std::string_view("tenant-a:error"));
 }
 
+RUVIA_TEST(testing_facade_error_responses_are_not_renegotiated_into_406) {
+    // An error response is not a representation of the target resource, so a
+    // refused coding must neither turn the 500 into a 406 nor run the error
+    // handler a second time. A successful response still becomes a 406.
+    int calls = 0;
+    ruvia::test_app app;
+    app.on_error([counter = &calls](ruvia::context& c,
+                     ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+        ++*counter;
+        c.status(error.status());
+        co_return c.text("err");
+    });
+
+    // The test app configures no compression, so "gzip, identity;q=0" cannot be
+    // satisfied either.
+    for (const std::string_view refused : {std::string_view("identity;q=0, *;q=0"),
+             std::string_view("gzip, identity;q=0")}) {
+        calls = 0;
+        const auto failed =
+            app.request(ruvia::test_request::get("/t/boom").header("Accept-Encoding", refused));
+        RUVIA_CHECK_EQ(failed.status(), ruvia::http_status::internal_server_error);
+        RUVIA_CHECK_EQ(failed.body(), std::string_view("err"));
+        RUVIA_CHECK_EQ(calls, 1);
+
+        calls = 0;
+        const auto refused_ok =
+            app.request(ruvia::test_request::get("/t/hello").header("Accept-Encoding", refused));
+        RUVIA_CHECK_EQ(refused_ok.status(), ruvia::http_status::not_acceptable);
+        RUVIA_CHECK_EQ(calls, 1);
+    }
+}
+
 RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     ruvia::test_app not_found_app;
     not_found_app.on_not_found({.prefix_ = "/api", .handler_ = &api_scoped_miss});

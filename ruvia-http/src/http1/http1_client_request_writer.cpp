@@ -108,7 +108,7 @@ struct request_head_write_plan final {
     bool generate_connection_close_;
 };
 
-void write_request_head(char* output, const request_head_write_plan& plan) noexcept {
+[[nodiscard]] char* write_request_head(char* output, const request_head_write_plan& plan) noexcept {
     detail::http_raw_wire_sink sink(output);
     sink.append(plan.method_);
     sink.append(' ');
@@ -140,6 +140,7 @@ void write_request_head(char* output, const request_head_write_plan& plan) noexc
         sink.append(connection_close);
     }
     sink.append(crlf);
+    return sink.position();
 }
 
 [[nodiscard]] bool is_valid_http1_close_policy(http1_close_policy policy) noexcept {
@@ -275,7 +276,7 @@ void write_request_head(char* output, const request_head_write_plan& plan) noexc
     detail::write_http_wire(output,
         detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), headers,
             {method, target, origin.host()}),
-        [&write_plan](char* destination) noexcept { write_request_head(destination, write_plan); });
+        [&write_plan](char* destination) noexcept { return write_request_head(destination, write_plan); });
     const auto head = std::string_view(head_buffer.data(), head_bytes);
     if (streaming) {
         return detail::http1_client_request_prepare_result_access::prepared_streaming_content(head, length, expect_continue, std::move(exchange_state));

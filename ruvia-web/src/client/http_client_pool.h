@@ -14,7 +14,6 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/http_client_handle.h"
@@ -30,21 +29,6 @@
 namespace ruvia::detail {
 
 class http_client_connection;
-
-class http_client_pool;
-using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
-
-// Request admission over the pool's fixed lease slots, with HTTP client
-// errors for every non-acquired outcome. Slot deadlines and slot cancellation
-// are unused: an active connection owns its operation deadline and cancellation.
-struct http_client_slot_policy final {
-    using owner_type = http_client_pool;
-    enum class deadline_kind_type : std::uint8_t { request };
-    [[noreturn]] static void throw_acquire_failure(const http_client_pool& pool, worker_wait_status status);
-    [[noreturn]] static void throw_aborted(const http_client_pool& pool, pool_slot_abort_reason reason);
-    static void expire_slot(http_client_pool&, std::size_t, deadline_kind_type) noexcept {}
-    static void cancel_slot(http_client_pool&, std::size_t) noexcept {}
-};
 
 // One origin client on one worker. Fixed TCP slots exclusively lease each
 // connection to one HTTP/1 exchange, with shared cookie policy and statistics.
@@ -85,8 +69,6 @@ public:
     [[nodiscard]] http_client_response_memory_domain& response_memory() noexcept {
         return *response_memory_;
     }
-    // worker_cancellation_target hook for the active TCP operation.
-    void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept;
 
     // Origin services shared by the pool's connections and exchange drivers.
     [[nodiscard]] asio::io_context& io_context() noexcept {
@@ -107,9 +89,6 @@ public:
     [[nodiscard]] client_request_policy& policy() noexcept {
         return policy_;
     }
-    [[nodiscard]] const std::shared_ptr<http_client_cancellation_target>& cancellation_target() const noexcept {
-        return cancellation_target_;
-    }
     [[nodiscard]] asio::ssl::context& tls_context() noexcept {
         return tls_context_;
     }
@@ -118,7 +97,21 @@ public:
     }
 
 private:
+    // Request admission over the pool's fixed lease slots, with HTTP client
+    // errors for every non-acquired outcome. A cancelled lease aborts its
+    // connection; slot deadlines are unused because the transport owns every
+    // connect, write and read deadline.
+    struct slot_policy final {
+        using owner_type = http_client_pool;
+        enum class deadline_kind_type : std::uint8_t { request };
+        [[noreturn]] static void throw_acquire_failure(const http_client_pool& pool, worker_wait_status status);
+        [[noreturn]] static void throw_aborted(const http_client_pool& pool, pool_slot_abort_reason reason);
+        static void expire_slot(http_client_pool&, std::size_t, deadline_kind_type) noexcept {}
+        static void cancel_slot(http_client_pool& pool, std::size_t slot) noexcept;
+    };
+    using slot_pool_type = slot_pool<slot_policy>;
     using connection_owner_type = std::unique_ptr<http_client_connection, pmr_object_deleter<http_client_connection>>;
+
     // Rejects new requests with closing once join() has started.
     void require_accepting() const;
     [[nodiscard]] task<void> execute_into(
@@ -143,8 +136,7 @@ private:
     http_client_response_memory_domain::owner response_memory_{};
     client_wire_counters wire_counters_;
     asio::ssl::context tls_context_;
-    slot_pool<http_client_slot_policy> slots_;
-    std::shared_ptr<http_client_cancellation_target> cancellation_target_;
+    slot_pool_type slots_;
     task_scope background_tasks_;
     std::pmr::vector<connection_owner_type> connections_;
     std::size_t requests_buffered_{0};

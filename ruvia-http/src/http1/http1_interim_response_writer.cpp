@@ -97,7 +97,7 @@ struct http1_interim_header_facts final {
     return true;
 }
 
-void write_interim_response_head(char* output, const http_interim_response_head& response,
+[[nodiscard]] char* write_interim_response_head(char* output, const http_interim_response_head& response,
     std::string_view status_token, std::string_view reason_phrase) noexcept {
     detail::http_raw_wire_sink sink(output);
     sink.append(http11_status_prefix);
@@ -109,6 +109,7 @@ void write_interim_response_head(char* output, const http_interim_response_head&
         detail::emit_http1_field_line(sink, header.name(), header.value());
     }
     sink.append(crlf);
+    return sink.position();
 }
 
 }  // namespace
@@ -177,7 +178,7 @@ http1_interim_response_prepare_result http1_interim_response_writer::prepare(
     detail::write_http_wire(output,
         detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()),
         [&](char* destination) noexcept {
-            write_interim_response_head(destination, response, status_text, reason_phrase);
+            return write_interim_response_head(destination, response, status_text, reason_phrase);
         });
 
     return detail::http1_interim_response_prepare_result_access::prepared(
