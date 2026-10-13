@@ -130,6 +130,8 @@ public:
     // header_search_offset were examined by an earlier call on the same state
     // and buffer prefix. An incomplete head already fails with a request_line
     // source once its request-line is CRLF-terminated or cannot start a method.
+    // Expect extensions follow RFC 9110 sections 10.1.1 and 5.6.6: OWS
+    // around ';' is allowed, but whitespace around '=' is invalid.
     void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
         std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
 

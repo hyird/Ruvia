@@ -380,6 +380,32 @@ RUVIA_TEST(http1_parse_rejects_malformed_expect_field) {
     }
 }
 
+RUVIA_TEST(http1_parse_expect_equals_whitespace_is_not_parameter_whitespace) {
+    constexpr std::string_view invalid[]{
+        "custom =value", "custom= value", "custom\t=value", "custom=\tvalue",
+        "custom=value; a =b", "custom=value; a= b",
+        "custom=value; a\t=b", "custom=value; a=\tb",
+        "custom=value; a= \"b\"", "custom=value; a=\"b\"extra"};
+    for (const auto field : invalid) {
+        const auto wire = std::string("POST / HTTP/1.1\r\nHost: example.test\r\nExpect: ") +
+                          std::string(field) + "\r\nContent-Length: 1\r\n\r\nx";
+        const auto result = parse_http1_request_message(wire);
+        RUVIA_CHECK(is_failure(result.state_, http_parse_error::invalid_header));
+    }
+
+    constexpr std::string_view valid[]{
+        "custom=value \t; \ta=b", "custom=\"a b\"; a=\" b \"",
+        "custom=value; ; a=b;", "custom=\"a=b\"; a=\"x=y\""};
+    for (const auto field : valid) {
+        const auto wire = std::string("POST / HTTP/1.1\r\nHost: example.test\r\nExpect: ") +
+                          std::string(field) + "\r\nContent-Length: 1\r\n\r\nx";
+        const auto result = parse_http1_request_message(wire);
+        RUVIA_CHECK(result.complete());
+        RUVIA_CHECK_EQ(result.body_, std::string_view("x"));
+        RUVIA_CHECK(result.state_.body_plan_.expectations().has_unsupported());
+    }
+}
+
 RUVIA_TEST(http1_parse_valid_request) {
     const auto result_value = parse_http1_request_message("GET /path?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n");
     RUVIA_CHECK(result_value.complete());

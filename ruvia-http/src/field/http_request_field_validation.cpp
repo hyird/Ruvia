@@ -51,8 +51,8 @@ namespace {
         return parameters_start == item.size() && http_expectation_token(leading);
     }
 
-    const auto name = http_trim_ows(leading.substr(0, equals));
-    const auto value = http_trim_ows(leading.substr(equals + 1));
+    const auto name = leading.substr(0, equals);
+    const auto value = leading.substr(equals + 1);
     if (!http_expectation_token(name) || !http_expectation_value(value)) {
         return false;
     }
@@ -71,8 +71,8 @@ namespace {
         if (parameter_equals == std::string_view::npos) {
             return false;
         }
-        const auto parameter_name = http_trim_ows(parameter.substr(0, parameter_equals));
-        const auto parameter_value = http_trim_ows(parameter.substr(parameter_equals + 1));
+        const auto parameter_name = parameter.substr(0, parameter_equals);
+        const auto parameter_value = parameter.substr(parameter_equals + 1);
         if (!http_expectation_token(parameter_name) || !http_expectation_value(parameter_value)) {
             return false;
         }
