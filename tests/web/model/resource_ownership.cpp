@@ -256,3 +256,28 @@ RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
+
+RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
+    const auto check = [&ruvia_ctx]<typename sequence_type>() {
+        reject_after_resource resource;
+        {
+            sequence_type source({.resource_ = &resource});
+            sequence_type target({.resource_ = &resource});
+            for (int index = 0; index < 64; ++index) {
+                source.push_back(ruvia::int32(index));
+            }
+            target.push_back(ruvia::int32(-1));
+            resource.remaining_ = 0;
+            target = std::move(source);
+            resource.remaining_.reset();
+            RUVIA_CHECK(source.empty());
+            RUVIA_CHECK_EQ(target.size(), std::size_t{64});
+            for (std::size_t index = 0; index < target.size(); ++index) {
+                RUVIA_CHECK_EQ(target[index].value_, static_cast<int>(index));
+            }
+        }
+        RUVIA_CHECK_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+    };
+    check.template operator()<ruvia::array<ruvia::int32>>();
+    check.template operator()<ruvia::boxed_array<ruvia::int32>>();
+}

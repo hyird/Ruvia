@@ -533,6 +533,10 @@ private:
     std::pmr::vector<std::uint8_t> items_;
 };
 
+// array and boxed_array keep the destination resource on move assignment and
+// leave a distinct source empty on success. Scalars on the same resource transfer storage;
+// strings and models are rebound to own their data. A source that owns the
+// destination is rejected; failed rebinding preserves the destination.
 template <typename t_type>
 class array final {
 public:
@@ -706,6 +710,12 @@ private:
 
     [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) && {
         array rebound(resolved_pmr_resource_tag{}, resource);
+        if constexpr (!detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+            if (resource == resource_) {
+                rebound.items_ = std::move(items_);
+                return rebound;
+            }
+        }
         rebound.reserve(size());
         for (auto& value : items_) {
             (void)rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
@@ -953,6 +963,13 @@ private:
 
     [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) && {
         boxed_array rebound(resolved_pmr_resource_tag{}, resource);
+        if constexpr (!detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+            if (resource == resource_) {
+                rebound.items_ = std::move(items_);
+                items_.clear();
+                return rebound;
+            }
+        }
         rebound.reserve(size());
         for (auto& value : *this) {
             rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
