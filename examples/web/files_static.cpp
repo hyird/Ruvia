@@ -81,7 +81,7 @@ int main() {
             .precompress_gzip_ = true,
         };
         // Document roots refresh every second by default. To tune the interval:
-        // .runtime = {
+        // .runtime_ = {
         //     .refresh_interval_ = std::chrono::milliseconds(500),
         // },
         // .precompress_gzip_ refresh-builds gzip variants for changed text assets.

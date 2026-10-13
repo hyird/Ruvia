@@ -21,10 +21,10 @@
 #include "ruvia/web/db/db_client.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/error.h"
 
 #include "backend_tls.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis_client.h"
 #endif
 

@@ -90,8 +90,7 @@ int main() {
         // registration and materialized separately on each worker.
         app.use_at<scoped_header_middleware>({.prefix_ = "/runtime"}, "configured");
 
-        const auto http_port = app.env()
-                                   .get<std::uint16_t>("RUVIA_HTTP_PORT")
+        const auto http_port = env_value.get<std::uint16_t>("RUVIA_HTTP_PORT")
                                    .value_or(env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8087));
         app.server({
             .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -100,25 +101,31 @@ private:
         if (const auto authorization = c.req().header("authorization")) {
             headers[header_count++] = {"authorization", *authorization};
         }
+        // Only a failure before the stream starts can still become an error
+        // response. Once pipe_to has sent the head, an upstream failure must
+        // propagate so the server aborts the stream instead of ending a 200
+        // whose body is silently truncated.
+        std::optional<ruvia::http_client_response> response;
         std::string_view error_body;
         try {
-            auto response = co_await client.send({
+            response.emplace(co_await client.send({
                 .target_ = "/features/download",
                 .headers_ = std::span(headers).first(header_count),
-            });
-            c.status(response.status());
-            if (const auto content_type = response.header("content-type")) {
-                c.header("content-type", *content_type);
-            }
-            co_await response.body().pipe_to(c.stream());
+            }));
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
             c.status(failure.status_);
             error_body = failure.message_;
         }
-        if (!error_body.empty()) {
+        if (!response) {
             co_await c.stream_text().write(error_body);
+            co_return;
         }
+        c.status(response->status());
+        if (const auto content_type = response->header("content-type")) {
+            c.header("content-type", *content_type);
+        }
+        co_await response->body().pipe_to(c.stream());
     }
 };
 
@@ -137,7 +144,6 @@ int main() {
                         .port_ = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
                         .connection_count_ = 4,
                         .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
-                        .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
                     },
             })
             .run();

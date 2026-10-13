@@ -288,16 +288,21 @@ bool should_drop_invalid_cleartext_http1_input(
         return false;
     }
 
+    // Any whitespace-separated token naming an HTTP/ version shows the peer
+    // speaks HTTP and earns a 400; a line without one (including a line with
+    // no separator at all, such as an SSH banner) is dropped silently.
     auto line = buffer.substr(0, line_end);
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
-        line.remove_suffix(1);
+    while (!line.empty()) {
+        const auto token_end = line.find_first_of(" \t");
+        if (line.substr(0, token_end).starts_with("HTTP/")) {
+            return false;
+        }
+        if (token_end == std::string_view::npos) {
+            return true;
+        }
+        line.remove_prefix(token_end + 1);
     }
-
-    const auto version_start = line.find_last_of(" \t");
-    if (version_start == std::string_view::npos || version_start + 1 >= line.size()) {
-        return false;
-    }
-    return !line.substr(version_start + 1).starts_with("HTTP/");
+    return true;
 }
 
 }  // namespace ruvia

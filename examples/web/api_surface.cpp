@@ -263,7 +263,6 @@ private:
     ruvia::task<ruvia::http_response> binary_body(ruvia::context& c) {
         static constexpr std::array<std::byte, 3> bytes_value{
             std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
-        c.status(ruvia::http_status::partial_content);
         c.header("X-Binary-Body", "true");
         co_return c.body(std::span<const std::byte>(bytes_value));
     }

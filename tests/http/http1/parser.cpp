@@ -1361,6 +1361,12 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
         "\r\nGET / NOT-HTTP\r\nHost: x\r\n", http1_server_request_parse_failure_source::request_line));
     RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
         "GET / HTTP/9.0\r\n", http1_server_request_parse_failure_source::request_line));
+    // A line naming an HTTP/ version anywhere is HTTP and gets a 400; a line
+    // without one, separator or not, is not.
+    RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
+        "GET / HTTP/1.1 extra\r\n", http1_server_request_parse_failure_source::request_line));
+    RUVIA_CHECK(ruvia::should_drop_invalid_cleartext_http1_input(
+        "SSH-2.0-OpenSSH_9.6\r\n", http1_server_request_parse_failure_source::request_line));
 
     {
         http1_server_request_parse_state state;
