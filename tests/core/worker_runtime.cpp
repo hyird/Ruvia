@@ -457,6 +457,29 @@ RUVIA_TEST(worker_group_retirement_waits_for_abandon_dispatch) {
     RUVIA_CHECK_EQ(consumer.state(), state::stopped);
 }
 
+RUVIA_TEST(worker_group_repeat_stop_closes_every_member_while_winner_is_blocked) {
+    ruvia::worker_runtime first;
+    ruvia::worker_runtime second;
+    ruvia::worker_group group;
+    std::binary_semaphore abandon_started{0};
+    std::binary_semaphore finish_abandon{0};
+    first.configure({.abandon_ = [&] {
+        abandon_started.release();
+        finish_abandon.acquire();
+    }});
+    group.add(first, 0);
+    group.add(second, 0);
+    std::thread winner([&] { group.request_stop(); });
+    abandon_started.acquire();
+    group.request_stop();
+    const bool second_accepting = second.context().handle().accepting();
+    finish_abandon.release();
+    winner.join();
+    (void)group.join();
+
+    RUVIA_CHECK(!second_accepting);
+}
+
 RUVIA_TEST(worker_group_stop_closes_admission_and_joins_external_abandon_dispatch) {
     ruvia::worker_runtime producer;
     ruvia::worker_runtime consumer;

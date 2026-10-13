@@ -1404,6 +1404,41 @@ bool test_pool_failure_handoff_during_destructor_report() {
            second_failure_calls->load(std::memory_order_relaxed) == 1;
 }
 
+bool test_pool_reports_distinct_failure_from_another_loop() {
+    auto second_failure_calls = std::make_shared<std::atomic_size_t>(0);
+    std::exception_ptr second_failure;
+    try {
+        throw counted_failure(second_failure_calls);
+    } catch (...) {
+        second_failure = std::current_exception();
+    }
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 1});
+    loops.loop(0).report_failure(std::make_exception_ptr(std::runtime_error("first loop failure")));
+    loops.loop(1).report_failure(second_failure);
+    bool first_rethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        first_rethrown = std::string_view(error.what()) == "first loop failure";
+    }
+    return first_rethrown && second_failure_calls->load(std::memory_order_relaxed) == 1;
+}
+
+bool test_worker_run_reports_failure_after_delivered_one() {
+    auto second_failure_calls = std::make_shared<std::atomic_size_t>(0);
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    asio::post(io_context, [] { throw std::runtime_error("first handler failed"); });
+    asio::post(io_context, [second_failure_calls] { throw counted_failure(second_failure_calls); });
+    bool first_rethrown = false;
+    try {
+        attachment.run();
+    } catch (const std::runtime_error& error) {
+        first_rethrown = std::string_view(error.what()) == "first handler failed";
+    }
+    return first_rethrown && second_failure_calls->load(std::memory_order_relaxed) == 1;
+}
+
 bool test_pool_failure_report_works_after_queue_closure() {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
@@ -2172,6 +2207,10 @@ int main() {
                        test_pool_reported_failure_stops_every_loop_and_join_rethrows) &&
                    run("pool_failure_handoff_during_destructor_report",
                        test_pool_failure_handoff_during_destructor_report) &&
+                   run("pool_reports_distinct_failure_from_another_loop",
+                       test_pool_reports_distinct_failure_from_another_loop) &&
+                   run("worker_run_reports_failure_after_delivered_one",
+                       test_worker_run_reports_failure_after_delivered_one) &&
                    run("pool_failure_report_works_after_queue_closure",
                        test_pool_failure_report_works_after_queue_closure) &&
                    run("attachment_report_failure_preserves_native_run_ownership",

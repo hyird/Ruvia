@@ -22,6 +22,10 @@ public:
         return true;
     }
 
+    [[nodiscard]] const std::exception_ptr& first() const noexcept {
+        return first_;
+    }
+
     [[nodiscard]] bool failed() const noexcept {
         return first_ != nullptr;
     }

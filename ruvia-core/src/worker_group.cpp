@@ -126,18 +126,24 @@ void worker_group::member_stopping() noexcept {
 }
 
 void worker_group::request_stop() noexcept {
+    bool dispatch = false;
     {
         const std::lock_guard lock(mutex_);
-        if (stopping_) {
-            return;
+        if (!stopping_) {
+            stopping_ = true;
+            stop_dispatching_ = true;
+            dispatch = true;
         }
-        stopping_ = true;
-        stop_dispatching_ = true;
     }
     // Runtime stop may synchronously call an unlaunched member's abandon hook.
     // Publish the group stop first, then let hooks query/reenter it unlocked.
+    // The winner may still be blocked in an earlier member's hook, so every
+    // caller closes admission on all members; repeats are nonwaiting.
     for (const auto& member : members_) {
         member.runtime_->request_stop();
+    }
+    if (!dispatch) {
+        return;
     }
     const std::lock_guard lock(mutex_);
     stop_dispatching_ = false;

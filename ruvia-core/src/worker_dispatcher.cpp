@@ -7,6 +7,8 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
+#include "ruvia/core/failure_report.h"
+
 #include "worker_dispatcher_impl.h"
 namespace ruvia::detail {
 namespace {
@@ -307,12 +309,14 @@ void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
     current_worker_guard current(*this);
     bool failure_delivered = false;
     std::exception_ptr deferred_failure;
-    const auto handle_failure = [this, &failure_delivered, &deferred_failure, &failure_handler](
+    std::exception_ptr delivered_failure;
+    const auto handle_failure = [this, &failure_delivered, &deferred_failure, &delivered_failure, &failure_handler](
                                     std::exception_ptr failure) {
         notify_stopping(begin_stopping(true));
         abandon_queued();
         if (!failure_delivered) {
             failure_delivered = true;
+            delivered_failure = failure;
             try {
                 if (failure_handler) {
                     failure_handler(failure);
@@ -322,6 +326,9 @@ void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
             } catch (...) {
                 deferred_failure = std::current_exception();
             }
+        } else if (!equivalent_failures(failure, delivered_failure)) {
+            // Only the first failure is delivered; later ones would vanish.
+            report_unhandled_failure("additional worker failure", failure);
         }
         stop_timers();
     };

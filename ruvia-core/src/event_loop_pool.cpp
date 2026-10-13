@@ -39,16 +39,25 @@ public:
     }
 
     // Keeps the first failure for join() while the pool observes its loops;
-    // after pool retirement nobody can rethrow, so failures are reported.
+    // join() rethrows only that one, so distinct later failures are reported.
+    // After pool retirement nobody can rethrow, so failures are reported.
     void record_failure(std::exception_ptr failure) noexcept {
+        std::exception_ptr first;
         {
             const std::lock_guard lock(failure_mutex_);
-            if (observed_) {
-                (void)failure_.record(std::move(failure), false);
+            if (!observed_) {
+                first = nullptr;
+            } else if (failure_.record(failure, false)) {
                 return;
+            } else {
+                first = failure_.first();
             }
         }
-        report_unhandled_failure("event loop failure after pool retirement", failure);
+        if (first == nullptr) {
+            report_unhandled_failure("event loop failure after pool retirement", failure);
+        } else if (!equivalent_failures(failure, first)) {
+            report_unhandled_failure("additional event loop failure", failure);
+        }
     }
 
     void report_failure(std::exception_ptr failure) noexcept {

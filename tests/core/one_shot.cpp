@@ -173,6 +173,23 @@ ruvia::task<void> wait_for_worker_stopping(ruvia::worker_runtime_context& runtim
     success = result_value.status() == ruvia::worker_wait_status::worker_stopping && !result_value.has_value();
 }
 
+ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::worker_runtime_context& runtime,
+    ruvia::one_shot_completion<int> delivered_completion, ruvia::one_shot_receiver<int>& delivered_receiver,
+    ruvia::one_shot_completion<int> closed_completion, ruvia::one_shot_receiver<int>& closed_receiver,
+    bool& success) {
+    const bool completed = delivered_completion.complete(1).accepted();
+    const auto delivered = co_await delivered_receiver.wait();
+    closed_receiver.close();
+    runtime.close();
+    const auto duplicate = delivered_completion.complete(2);
+    const auto after_consumed = co_await delivered_receiver.wait();
+    const auto after_close = closed_completion.complete(3);
+    success = completed && delivered.has_value() && delivered.value() == 1 &&
+              duplicate.status() == ruvia::one_shot_complete_status::already_completed &&
+              after_consumed.status() == ruvia::worker_wait_status::closed &&
+              after_close.status() == ruvia::one_shot_complete_status::receiver_closed;
+}
+
 ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, bool& success) {
     const auto result_value = co_await receiver.wait_for(std::chrono::seconds(1));
     success = result_value.status() == ruvia::worker_wait_status::closed;
@@ -379,6 +396,19 @@ int main() {
         runtime.detach();
     }
 
+    bool settled_outcomes_kept = false;
+    {
+        asio::io_context io_context;
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto worker_value = runtime.handle();
+        auto [delivered_completion, delivered_receiver] = ruvia::make_one_shot<int>(worker_value);
+        auto [closed_completion, closed_receiver] = ruvia::make_one_shot<int>(worker_value);
+        ruvia::test::run_worker_tasks(runtime,
+            settled_outcomes_survive_worker_stopping(runtime, std::move(delivered_completion), delivered_receiver,
+                std::move(closed_completion), closed_receiver, settled_outcomes_kept));
+        runtime.detach();
+    }
+
     bool cross_thread_value = false;
     bool cross_thread_completed = false;
     {
@@ -396,7 +426,7 @@ int main() {
         completer.join();
         runtime.detach();
     }
-    const bool all_passed = success && cold_receiver_tasks_safe && payload_retirement_safe && worker_stopping && cross_thread_value &&
+    const bool all_passed = success && cold_receiver_tasks_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
                             cross_thread_completed;
     return all_passed ? 0 : 1;
 }

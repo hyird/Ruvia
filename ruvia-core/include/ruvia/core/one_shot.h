@@ -189,7 +189,9 @@ template <typename t_type>
 template <typename t_type>
 void one_shot_state<t_type>::worker_stopping() noexcept {
     std::lock_guard lock(mutex_);
-    if (!std::holds_alternative<one_shot_ready>(lifecycle_)) {
+    // Delivered, consumed and closed outcomes stay terminal; only an
+    // unresolved exchange is ended by worker shutdown.
+    if (std::holds_alternative<one_shot_pending>(lifecycle_)) {
         lifecycle_.template emplace<one_shot_worker_stopping>();
     }
     wait_slot_.complete(worker_wait_status::worker_stopping);
