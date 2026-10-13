@@ -38,6 +38,16 @@ constexpr std::chrono::seconds observation_timeout{10};
     return fs::temp_directory_path() / "ruvia_document_root_refresh_test";
 }
 
+// The application is configured through this symlink where the platform
+// creates one unprivileged, as an atomic-deploy layout would.
+[[nodiscard]] fs::path configured_root() {
+#ifdef _WIN32
+    return document_root_dir();
+#else
+    return fs::temp_directory_path() / "ruvia_document_root_refresh_link";
+#endif
+}
+
 [[nodiscard]] fs::path version_file() {
     return document_root_dir() / "version.txt";
 }
@@ -87,9 +97,13 @@ template <typename fn_type>
         fs::remove_all(document_root_dir(), ignored);
         fs::create_directories(document_root_dir());
         std::ofstream(version_file(), std::ios::binary) << "initial";
+#ifndef _WIN32
+        fs::remove(configured_root(), ignored);
+        fs::create_directory_symlink(document_root_dir(), configured_root());
+#endif
 
         ruvia::document_root_config config;
-        config.root_ = document_root_dir();
+        config.root_ = configured_root();
         config.static_options_.file_types_ =
             ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
         config.runtime_.refresh_interval_ = refresh_interval;
@@ -148,6 +162,36 @@ RUVIA_TEST(document_root_refresh_reaches_every_worker) {
     RUVIA_CHECK(every_worker_serves(io, server.endpoint(), "second, longer version"));
     server.finish();
 }
+
+#ifndef _WIN32
+RUVIA_TEST(document_root_refresh_follows_a_retargeted_symlink_root) {
+    static_cast<void>(configure_application());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, multi_worker_config());
+
+    const auto release = fs::temp_directory_path() / "ruvia_document_root_refresh_release";
+    const auto staged_link = fs::temp_directory_path() / "ruvia_document_root_refresh_link.next";
+    std::error_code ignored;
+    fs::remove_all(release, ignored);
+    fs::remove(staged_link, ignored);
+    fs::create_directories(release);
+    std::ofstream(release / "version.txt", std::ios::binary) << "retargeted release";
+
+    // Swap the link atomically, as `ln -sfn` deploys do.
+    const auto retarget = [&](const fs::path& target) {
+        fs::create_directory_symlink(target, staged_link);
+        fs::rename(staged_link, configured_root());
+    };
+    retarget(release);
+    RUVIA_CHECK(every_worker_serves(io, server.endpoint(), "retargeted release"));
+
+    retarget(document_root_dir());
+    RUVIA_CHECK(write_version("back on the original root"));
+    RUVIA_CHECK(every_worker_serves(io, server.endpoint(), "back on the original root"));
+    fs::remove_all(release, ignored);
+    server.finish();
+}
+#endif
 
 RUVIA_TEST(document_root_refresh_failures_count_once_per_application) {
     static_cast<void>(configure_application());

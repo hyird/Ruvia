@@ -227,6 +227,66 @@ RUVIA_TEST(static_root_serves_utf8_file_and_directory_urls) {
     }
 }
 
+RUVIA_TEST(static_root_serves_every_default_file_type_with_its_media_type) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() /
+                     ("ruvia_static_default_types_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(dir);
+    struct cleanup_dir final {
+        fs::path path_;
+        ~cleanup_dir() {
+            std::error_code error;
+            fs::remove_all(path_, error);
+        }
+    } cleanup{dir};
+
+    const std::pair<std::string_view, std::string_view> cases[]{
+        {"apng", "image/apng"},
+        {"avif", "image/avif"},
+        {"bmp", "image/bmp"},
+        {"css", "text/css; charset=utf-8"},
+        {"cur", "image/vnd.microsoft.icon"},
+        {"eot", "application/vnd.ms-fontobject"},
+        {"gif", "image/gif"},
+        {"htm", "text/html; charset=utf-8"},
+        {"html", "text/html; charset=utf-8"},
+        {"ico", "image/vnd.microsoft.icon"},
+        {"jpeg", "image/jpeg"},
+        {"jpg", "image/jpeg"},
+        {"js", "text/javascript; charset=utf-8"},
+        {"json", "application/json; charset=utf-8"},
+        {"map", "application/json; charset=utf-8"},
+        {"mjs", "text/javascript; charset=utf-8"},
+        {"otf", "font/otf"},
+        {"png", "image/png"},
+        {"svg", "image/svg+xml"},
+        {"ttf", "font/ttf"},
+        {"txt", "text/plain; charset=utf-8"},
+        {"wasm", "application/wasm"},
+        {"webmanifest", "application/manifest+json; charset=utf-8"},
+        {"webp", "image/webp"},
+        {"woff", "font/woff"},
+        {"woff2", "font/woff2"},
+        {"xml", "text/xml; charset=utf-8"},
+        {"xsl", "text/xml; charset=utf-8"},
+    };
+    for (const auto& [extension, content_type] : cases) {
+        std::ofstream(dir / ("file." + std::string(extension)), std::ios::binary) << "body";
+    }
+
+    ruvia::static_root root(dir, {});
+    for (const auto& [extension, content_type] : cases) {
+        const auto relative_path = "file." + std::string(extension);
+        static_file_test_request request;
+        request.set_target("/" + relative_path);
+        with_static_context(request, [&](ruvia::context& context_value) {
+            const auto response = context_value.static_file(root, {.relative_path_ = relative_path});
+            RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+            RUVIA_CHECK_EQ(response.header("Content-Type"), std::optional<std::string_view>{content_type});
+        });
+    }
+}
+
 RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_conditions) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() /

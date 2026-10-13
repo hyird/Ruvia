@@ -29,7 +29,8 @@ using snapshot_owner = std::unique_ptr<static_root, pmr_object_deleter<static_ro
 document_root_publisher::document_root_publisher(const std::filesystem::path& root,
     const static_root_config_storage& config, std::chrono::milliseconds interval,
     static_root_precompression_options precompression, static_root_resident_options resident)
-    : interval_(interval),
+    : root_(root),
+      interval_(interval),
       precompression_(precompression),
       resident_(resident) {
     auto initial = static_root_access::make(process_resource(), root, config);
@@ -69,8 +70,8 @@ task<void> document_root_publisher::refresh(
     const auto previous = current_;
     snapshot_owner candidate(nullptr, pmr_object_deleter<static_root>{process_resource()});
     try {
-        auto rebuilt = co_await ruvia::try_run_blocking(pool, worker, [previous] {
-            return static_root_access::make(process_resource(), previous->path(),
+        auto rebuilt = co_await ruvia::try_run_blocking(pool, worker, [previous, &root = root_] {
+            return static_root_access::make(process_resource(), root,
                 static_root_access::copy_config(*previous, process_resource()));
         });
         if (!rebuilt.completed()) {

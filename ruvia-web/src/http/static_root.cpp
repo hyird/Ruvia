@@ -161,7 +161,9 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     stored.last_modified_ = source_value.last_modified_;
 }
 
-[[nodiscard]] std::pmr::string read_stable_static_root_entry_bytes(
+// A file that changed (or vanished) since it was indexed yields nothing: only
+// that entry loses its variants and stays file-backed, validated per request.
+[[nodiscard]] std::optional<std::pmr::string> read_stable_static_root_entry_bytes(
     const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
     if (entry_value.size_ > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         throw std::runtime_error("static file is too large to precompress");
@@ -173,11 +175,9 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     // those of the indexed snapshot, with no path re-resolution in between.
     detail::response_file_input input(http_response_file_view(
         entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
-    if (!input) {
-        throw std::runtime_error("open static file for precompression failed");
-    }
-    if (!detail::read_exact(input, bytes.data(), size) || !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
-        throw std::runtime_error("static file changed while it was being precompressed");
+    if (!input || !detail::read_exact(input, bytes.data(), size) ||
+        !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
+        return std::nullopt;
     }
     return bytes;
 }
@@ -339,7 +339,11 @@ void detail::static_root_access::install_precompressed_variants(
                 }
             }
             if (!plain.has_value()) {
-                plain.emplace(read_stable_static_root_entry_bytes(entry, resource));
+                plain = read_stable_static_root_entry_bytes(entry, resource);
+                if (!plain.has_value()) {
+                    entry.memory_variants_.clear();
+                    break;
+                }
             }
             if (plain->empty()) {
                 continue;

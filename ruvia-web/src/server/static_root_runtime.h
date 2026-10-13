@@ -71,6 +71,9 @@ public:
 private:
     void publish(document_root_snapshot snapshot);
 
+    // The configured path, not the snapshot's canonical one: a refresh must
+    // re-resolve symlinks so a retargeted root (atomic deploy) is followed.
+    std::filesystem::path root_;
     std::chrono::milliseconds interval_;
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;

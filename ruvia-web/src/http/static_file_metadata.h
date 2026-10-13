@@ -184,6 +184,47 @@ template <typename char_value_type>
     if (static_file_extension_equals(extension, ".wasm")) {
         return "application/wasm";
     }
+    if (static_file_extension_equals(extension, ".apng")) {
+        return "image/apng";
+    }
+    if (static_file_extension_equals(extension, ".avif")) {
+        return "image/avif";
+    }
+    if (static_file_extension_equals(extension, ".webp")) {
+        return "image/webp";
+    }
+    if (static_file_extension_equals(extension, ".bmp")) {
+        return "image/bmp";
+    }
+    if (static_file_extension_equals(extension, ".ico") ||
+        static_file_extension_equals(extension, ".cur")) {
+        return "image/vnd.microsoft.icon";
+    }
+    if (static_file_extension_equals(extension, ".woff")) {
+        return "font/woff";
+    }
+    if (static_file_extension_equals(extension, ".woff2")) {
+        return "font/woff2";
+    }
+    if (static_file_extension_equals(extension, ".ttf")) {
+        return "font/ttf";
+    }
+    if (static_file_extension_equals(extension, ".otf")) {
+        return "font/otf";
+    }
+    if (static_file_extension_equals(extension, ".eot")) {
+        return "application/vnd.ms-fontobject";
+    }
+    if (static_file_extension_equals(extension, ".xml") ||
+        static_file_extension_equals(extension, ".xsl")) {
+        return "text/xml; charset=utf-8";
+    }
+    if (static_file_extension_equals(extension, ".map")) {
+        return "application/json; charset=utf-8";
+    }
+    if (static_file_extension_equals(extension, ".webmanifest")) {
+        return "application/manifest+json; charset=utf-8";
+    }
     return "application/octet-stream";
 }
 
