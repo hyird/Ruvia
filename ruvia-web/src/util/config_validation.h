@@ -9,39 +9,21 @@
 
 namespace ruvia::detail {
 
-struct config_host_rules final {
-    bool reject_brackets_{false};
-    bool reject_single_colon_{false};
-};
-
-inline constexpr config_host_rules separated_port_host_rules{
-    .reject_brackets_ = true, .reject_single_colon_ = true};
-
-[[nodiscard]] inline bool is_valid_config_host(
-    std::string_view host, config_host_rules rules = {}) noexcept {
-    if (host.empty()) {
-        return false;
-    }
-
-    std::size_t colon_count = 0;
-    for (const auto ch : host) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F || byte == '/' || byte == '\\' ||
-            (rules.reject_brackets_ && (byte == '[' || byte == ']'))) {
-            return false;
-        }
-        colon_count += byte == ':' ? 1 : 0;
-    }
-
-    return !rules.reject_single_colon_ || colon_count != 1;
-}
-
-inline void ensure_config_host(std::string_view host, const char* empty_message,
-    const char* invalid_message, config_host_rules rules = {}) {
+// A configured host whose port is a separate field: brackets and a lone colon
+// (host:port) are rejected; an unbracketed IPv6 literal has several colons.
+inline void ensure_config_host(std::string_view host, const char* empty_message, const char* invalid_message) {
     if (host.empty()) {
         throw std::invalid_argument(empty_message);
     }
-    if (!is_valid_config_host(host, rules)) {
+    std::size_t colon_count = 0;
+    for (const auto ch : host) {
+        const auto byte = static_cast<unsigned char>(ch);
+        if (byte <= 0x20 || byte == 0x7F || byte == '/' || byte == '\\' || byte == '[' || byte == ']') {
+            throw std::invalid_argument(invalid_message);
+        }
+        colon_count += byte == ':' ? 1 : 0;
+    }
+    if (colon_count == 1) {
         throw std::invalid_argument(invalid_message);
     }
 }

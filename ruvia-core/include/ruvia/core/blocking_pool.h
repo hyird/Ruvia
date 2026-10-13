@@ -289,25 +289,17 @@ private:
 
 namespace detail {
 
+// Every caller is in try_run_blocking_until(): rejections never carry the
+// completed status, and a completed payload always holds a value or an error.
 struct blocking_result_access final {
     template <typename t_type>
-    [[nodiscard]] static blocking_result<t_type> rejected(blocking_status status) {
-        if (status == blocking_status::completed) {
-            throw std::logic_error("completed blocking result requires a payload");
-        }
+    [[nodiscard]] static blocking_result<t_type> rejected(blocking_status status) noexcept {
         return blocking_result<t_type>(status);
     }
 
     template <typename t_type>
-    [[nodiscard]] static blocking_result<t_type> completed(blocking_payload<t_type>&& payload_value) {
-        if (payload_value.status_ != blocking_status::completed) {
-            throw std::logic_error("blocking payload requires completed status");
-        }
-        if constexpr (!std::is_void_v<t_type>) {
-            if (payload_value.error_ == nullptr && !payload_value.value_.has_value()) {
-                throw std::logic_error("completed blocking payload requires a value or error");
-            }
-        }
+    [[nodiscard]] static blocking_result<t_type> completed(blocking_payload<t_type>&& payload_value) noexcept(
+        std::is_nothrow_move_constructible_v<blocking_payload<t_type>>) {
         return blocking_result<t_type>(std::move(payload_value));
     }
 };

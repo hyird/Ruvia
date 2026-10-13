@@ -33,7 +33,7 @@ enum class timer_sleep_result : std::uint8_t {
     const worker_handle& worker_value, std::chrono::steady_clock::duration duration);
 task<timer_sleep_result> sleep_for(worker_handle&&, std::chrono::steady_clock::duration) = delete;
 
-// The same sleep, cut short when `get_stop_token` is stopped as well as by worker
+// The same sleep, cut short when `stop_token_value` is stopped as well as by worker
 // shutdown. A framework-provided wait that ignores the caller's stop token is a
 // hole in every deadline built on that token, so anything a request can await
 // should take one.

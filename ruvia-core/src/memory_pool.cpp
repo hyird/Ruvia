@@ -182,10 +182,8 @@ public:
 };
 
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {
-    if (impl != nullptr) {
-        auto* const upstream = impl->blocks_.upstream_resource();
-        destroy_pmr_object(impl, upstream);
-    }
+    auto* const upstream = impl->blocks_.upstream_resource();
+    destroy_pmr_object(impl, upstream);
 }
 
 void validate_memory_pool_config(const memory_pool_config& config) {

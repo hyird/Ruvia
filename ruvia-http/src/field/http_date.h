@@ -147,7 +147,7 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline std::optional<std::time_t> http_parse_rfc850_date(
-    std::string_view value, std::optional<std::time_t> reference_time = std::nullopt) noexcept {
+    std::string_view value) noexcept {
     const auto comma = value.find(", ");
     if (comma == std::string_view::npos || !http_is_long_weekday(value.substr(0, comma))) {
         return std::nullopt;
@@ -166,8 +166,8 @@ namespace ruvia::detail {
     if (!day || month == 0 || !short_year || !hour || !minute || !second) {
         return std::nullopt;
     }
-    const auto now = reference_time ? *reference_time : std::time(nullptr);
-    if (!reference_time && now == std::time_t{-1}) {
+    const auto now = std::time(nullptr);
+    if (now == std::time_t{-1}) {
         return std::nullopt;
     }
     const auto current_utc = http_utc_tm(now);

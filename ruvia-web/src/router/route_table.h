@@ -96,8 +96,7 @@ public:
     // worker's document_root_binding::configured(generation) lease otherwise.
     task<http_response> dispatch_buffered_response(const http_request& request,
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-        context_services services,
-        static_file_selection_mode static_file_mode = static_file_selection_mode::identity_only) const;
+        context_services services, static_file_selection_mode static_file_mode) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
         http_error_info error, context_services services) const;
     task<http_response> handle_exception(const http_request& request, request_memory& memory,

@@ -28,19 +28,6 @@ db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
       source_(std::exchange(other.source_, invalid_socket)) {}
 #endif
 
-db_slot_socket& db_slot_socket::operator=(db_slot_socket&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-#if defined(_WIN32)
-    socket_ = std::move(other.socket_);
-#else
-    descriptor_ = std::move(other.descriptor_);
-#endif
-    source_ = std::exchange(other.source_, invalid_socket);
-    return *this;
-}
-
 db_slot_socket::waitable_type& db_slot_socket::waitable() noexcept {
 #if defined(_WIN32)
     return socket_;

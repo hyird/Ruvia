@@ -23,7 +23,6 @@
 
 namespace ruvia {
 
-class request_memory;
 class db_value;
 
 enum class db_driver : std::uint8_t {

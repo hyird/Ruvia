@@ -17,7 +17,6 @@ namespace ruvia {
 namespace detail {
 
 struct env_access;
-struct dotenv_result_access;
 struct env_state;
 
 }  // namespace detail
@@ -35,31 +34,6 @@ enum class dotenv_missing_file_policy : std::uint8_t {
 struct dotenv_options {
     dotenv_existing_variable_policy existing_variables_{dotenv_existing_variable_policy::preserve};
     dotenv_missing_file_policy missing_file_{dotenv_missing_file_policy::ignore};
-};
-
-class dotenv_result final {
-public:
-    [[nodiscard]] bool loaded() const noexcept {
-        return loaded_;
-    }
-
-    [[nodiscard]] std::size_t variables_set() const noexcept {
-        return variables_set_;
-    }
-
-    [[nodiscard]] std::size_t variables_skipped() const noexcept {
-        return variables_skipped_;
-    }
-
-private:
-    friend struct detail::dotenv_result_access;
-
-    explicit dotenv_result(bool loaded) noexcept
-        : loaded_(loaded) {}
-
-    bool loaded_{false};
-    std::size_t variables_set_{0};
-    std::size_t variables_skipped_{0};
 };
 
 class env final {
@@ -156,7 +130,7 @@ std::optional<std::remove_cvref_t<t_type>> env::parse_typed_value(std::string_vi
         return parse_arithmetic_value<value_type>(value);
     } else {
         static_assert(unsupported_typed_env_value<value_type>,
-            "Env::get<T>() supports string_view, bool, integral, and floating-point values");
+            "env::get<T>() supports string_view, bool, integral, and floating-point values");
     }
 }
 

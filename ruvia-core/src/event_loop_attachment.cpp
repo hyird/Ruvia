@@ -124,10 +124,8 @@ void event_loop_state::attach(const std::shared_ptr<event_loop_state>& self) {
 }
 
 void event_loop_state::shutdown_external_context() noexcept {
-    auto* attached = std::get_if<attached_context>(&context_ownership_);
-    if (attached == nullptr) {
-        return;
-    }
+    // Only attach() retains a state with this service, so it is an attached loop.
+    auto& attached = *std::get_if<attached_context>(&context_ownership_);
     retirement_->close_admission();
     if (retirement_->pending() != 0) {
         // Their frames and leases are owned by handlers that this shutdown
@@ -139,7 +137,7 @@ void event_loop_state::shutdown_external_context() noexcept {
         std::terminate();
     }
     stopping_.store(true, std::memory_order_release);
-    attached->stop_.abandon();
+    attached.stop_.abandon();
     runtime_.detach();
     worker_handle_access::wait_for_reservations(runtime_.handle());
 }

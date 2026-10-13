@@ -1,6 +1,7 @@
 #include "ruvia/core/scoped_operation.h"
 
 #include <exception>
+#include <stdexcept>
 
 namespace ruvia {
 

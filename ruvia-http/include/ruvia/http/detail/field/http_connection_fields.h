@@ -53,7 +53,7 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
     "content-length", "transfer-encoding", "content-type", "content-encoding", "trailer"};
 
 // WebSocket opening-handshake fields owned by the handshake implementation
-// (RFC 6455 section 4). The key exchange pair leads the full set.
+// (RFC 6455 section 4).
 inline constexpr std::array<std::string_view, 5> http_websocket_handshake_fields{"sec-websocket-key",
     "sec-websocket-accept", "sec-websocket-version", "sec-websocket-protocol", "sec-websocket-extensions"};
 

@@ -35,7 +35,6 @@ public:
 
     [[nodiscard]] std::size_t loop_count() const noexcept;
     [[nodiscard]] event_loop loop(std::size_t index) const;
-    [[nodiscard]] event_loop next_loop() noexcept;
     [[nodiscard]] event_loop loop_for(std::uint64_t key) const noexcept;
     [[nodiscard]] event_loop loop_for(std::string_view key) const noexcept;
 

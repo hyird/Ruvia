@@ -25,7 +25,7 @@ enum class json_byte_scan_kind : std::uint8_t {
 
 template <json_byte_scan_kind kind>
 [[nodiscard]] inline std::size_t find_json_special_byte(
-    std::string_view input, std::size_t offset = 0) noexcept {
+    std::string_view input, std::size_t offset) noexcept {
     if (offset >= input.size()) {
         return std::string_view::npos;
     }
@@ -85,12 +85,12 @@ template <json_byte_scan_kind kind>
 }
 
 [[nodiscard]] inline std::size_t find_json_escape_byte(
-    std::string_view input, std::size_t offset = 0) noexcept {
+    std::string_view input, std::size_t offset) noexcept {
     return find_json_special_byte<json_byte_scan_kind::escape>(input, offset);
 }
 
 [[nodiscard]] inline std::size_t find_json_string_token_byte(
-    std::string_view input, std::size_t offset = 0) noexcept {
+    std::string_view input, std::size_t offset) noexcept {
     return find_json_special_byte<json_byte_scan_kind::string_token>(input, offset);
 }
 

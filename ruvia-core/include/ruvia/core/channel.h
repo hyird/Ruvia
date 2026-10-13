@@ -93,9 +93,6 @@ private:
     std::optional<t_type> rejected_;
 };
 
-template <typename t_type>
-class channel_receiver;
-
 namespace detail {
 
 struct channel_open final {};

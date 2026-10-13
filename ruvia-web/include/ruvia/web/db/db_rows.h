@@ -19,8 +19,6 @@
 #include "ruvia/web/detail/db/db_backend.h"
 #include "ruvia/web/detail/db/db_operation_state.h"
 
-struct st_mysql_res;
-
 namespace ruvia {
 
 class db_rows final {

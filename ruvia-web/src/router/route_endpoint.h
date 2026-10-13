@@ -161,34 +161,21 @@ public:
     route_endpoint(route_endpoint&&) noexcept = default;
     route_endpoint& operator=(route_endpoint&&) = delete;
 
+    // Handlers come from the controller macros' bind()/bind_stream(), which
+    // always supply an invoker; body modes and stream kinds are the builder's
+    // own enumerators.
     [[nodiscard]] static route_endpoint buffered(route_handler_type::invoke_type invoke,
         request_body_mode request_body_mode_value) {
-        if (invoke == nullptr) {
-            throw std::invalid_argument("route handler must not be empty");
-        }
-        if (request_body_mode_value != request_body_mode::buffered &&
-            request_body_mode_value != request_body_mode::stream) {
-            throw std::invalid_argument("invalid route request-body mode");
-        }
         return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value));
     }
 
     [[nodiscard]] static route_endpoint response_stream(
         route_stream_handler_type::invoke_type invoke, http_response_stream_kind kind) {
-        if (invoke == nullptr) {
-            throw std::invalid_argument("route stream handler must not be empty");
-        }
-        if (kind != http_response_stream_kind::generic && kind != http_response_stream_kind::sse) {
-            throw std::invalid_argument("invalid response-stream kind");
-        }
         return route_endpoint(response_stream_route_endpoint(invoke, kind));
     }
 
     [[nodiscard]] static route_endpoint get_websocket(std::pmr::memory_resource* resource,
-        route_stream_handler_type::invoke_type invoke, websocket_route_config options = {}) {
-        if (invoke == nullptr) {
-            throw std::invalid_argument("websocket route handler must not be empty");
-        }
+        route_stream_handler_type::invoke_type invoke, websocket_route_config options) {
         if (options.lifecycle_.close_handshake_timeout_.has_value() &&
             options.lifecycle_.close_handshake_timeout_->count() <= 0) {
             throw std::invalid_argument(
@@ -217,10 +204,9 @@ public:
     }
 
     [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
-        route_stream_handler_type::invoke_type invoke, std::string_view protocol,
-        http_tunnel_route_config config = {}) {
-        if (invoke == nullptr || (!protocol.empty() && !is_valid_http_method_token(protocol))) {
-            throw std::invalid_argument("invalid CONNECT handler or protocol token");
+        route_stream_handler_type::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
+        if (!protocol.empty() && !is_valid_http_method_token(protocol)) {
+            throw std::invalid_argument("invalid CONNECT protocol token");
         }
         if (protocol == "connect-udp") {
             config.datagrams_ = true;

@@ -12,7 +12,6 @@
 namespace ruvia::detail {
 
 class http_client_pool;
-class http_client_request_storage;
 class http_client_response_state;
 
 // One fixed TCP slot of an http_client_pool: its transport and HTTP/1 parse

@@ -13,7 +13,7 @@
 
 namespace ruvia::detail {
 
-// Append `value` to `out`, decoding RFC 7230 §3.2.6 quoted-pairs ("\X" -> "X").
+// Append `value` to `out`, decoding RFC 9110 section 5.6.4 quoted-pairs ("\X" -> "X").
 // `value` must be a quote-trimmed parameter value: a valid unquoted token cannot
 // contain a backslash, so any '\' present came from a quoted-string and is an
 // escape. (A trailing lone '\' -- only possible from malformed input -- is emitted
@@ -122,40 +122,6 @@ template <typename predicate_type>
 
 template <http_temporary_owning_char_string value_type>
 std::optional<std::string_view> http_find_semicolon_parameter(value_type&&, std::string_view) = delete;
-
-[[nodiscard]] inline std::optional<std::string_view> http_find_semicolon_parameter_quoted(
-    std::string_view value, std::string_view name) {
-    std::optional<std::string_view> result;
-    http_visit_semicolon_parameters_quoted_field(
-        value, [name, &result](std::string_view key, std::string_view parameter_value) {
-            if (key == name) {
-                result = parameter_value;
-            }
-            return true;
-        });
-    return result;
-}
-
-template <http_temporary_owning_char_string value_type>
-std::optional<std::string_view> http_find_semicolon_parameter_quoted(
-    value_type&&, std::string_view) = delete;
-
-[[nodiscard]] inline std::optional<std::string_view> http_find_semicolon_parameter_ignore_case(
-    std::string_view value, std::string_view name) {
-    std::optional<std::string_view> result;
-    http_visit_semicolon_parameters(
-        value, [name, &result](std::string_view key, std::string_view parameter_value) {
-            if (http_ascii_equals_ignore_case(key, name)) {
-                result = parameter_value;
-            }
-            return true;
-        });
-    return result;
-}
-
-template <http_temporary_owning_char_string value_type>
-std::optional<std::string_view> http_find_semicolon_parameter_ignore_case(
-    value_type&&, std::string_view) = delete;
 
 [[nodiscard]] inline bool http_has_token(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {

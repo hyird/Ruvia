@@ -1,6 +1,5 @@
 #include "server/http_response_head.h"
 
-#include <exception>
 #include <optional>
 #include <stdexcept>
 
@@ -228,12 +227,7 @@ void append_response_head(
     head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
         http_raw_wire_sink sink_value(cursor_value);
         emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags);
-        // A mismatch has already overrun or under-filled the reserved bytes; the
-        // writer is noexcept and the heap path has already grown the buffer, so
-        // failing here cannot leave the output unchanged or the memory trusted.
-        if (sink_value.position() != cursor_value + head_budget.bytes()) {
-            std::terminate();
-        }
+        check_http_wire_end(sink_value.position(), cursor_value + head_budget.bytes());
     });
 }
 

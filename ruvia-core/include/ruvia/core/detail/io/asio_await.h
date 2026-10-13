@@ -12,10 +12,8 @@
 #include <asio/associated_allocator.hpp>
 #include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
-#include <asio/awaitable.hpp>
 #include <asio/bind_allocator.hpp>
 #include <asio/post.hpp>
-#include <asio/use_awaitable.hpp>
 
 #include "ruvia/core/detail/suspend_race_state.h"
 #include "ruvia/core/task.h"
@@ -235,25 +233,14 @@ inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&
     if (pending_task.handle_ == nullptr) {
         throw std::logic_error("cannot adapt an empty ruvia::task to asio::awaitable");
     }
-    if constexpr (std::is_void_v<t_type>) {
-        return asio::async_initiate<completion_token_type, void(task_completion_result<void>)>(
-            [](auto&& handler, task<t_type> task_value) {
-                using handler_type = std::decay_t<decltype(handler)>;
-                auto* state_value = task_completion_state<t_type, handler_type>::create(
-                    std::move(task_value), std::forward<decltype(handler)>(handler));
-                state_value->start();
-            },
-            token, std::move(pending_task));
-    } else {
-        return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>)>(
-            [](auto&& handler, task<t_type> task_value) {
-                using handler_type = std::decay_t<decltype(handler)>;
-                auto* state_value = task_completion_state<t_type, handler_type>::create(
-                    std::move(task_value), std::forward<decltype(handler)>(handler));
-                state_value->start();
-            },
-            token, std::move(pending_task));
-    }
+    return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>)>(
+        [](auto&& handler, task<t_type> task_value) {
+            using handler_type = std::decay_t<decltype(handler)>;
+            auto* state_value = task_completion_state<t_type, handler_type>::create(
+                std::move(task_value), std::forward<decltype(handler)>(handler));
+            state_value->start();
+        },
+        token, std::move(pending_task));
 }
 
 template <typename result_type, typename initiate_type>

@@ -80,8 +80,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                 size_line_search_offset_ = 0;
                 const auto line_end = line_feed - 1;
                 std::size_t chunk_size = 0;
-                if (detail::parse_http_chunk_size_line(available.substr(cursor, line_end - cursor), chunk_size) !=
-                    detail::chunk_size_line_status::ok) {
+                if (!detail::parse_http_chunk_size_line(available.substr(cursor, line_end - cursor), chunk_size)) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
                 cursor = line_end + 2;

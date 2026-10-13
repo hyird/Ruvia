@@ -18,7 +18,7 @@ namespace ruvia::detail {
 // unbracketed IP literal or an ASCII DNS host name.
 inline void validate_client_origin_host(
     std::string_view host, const char* empty_message, const char* invalid_message) {
-    ensure_config_host(host, empty_message, invalid_message, separated_port_host_rules);
+    ensure_config_host(host, empty_message, invalid_message);
     if (!is_client_ip_address(host) && !is_valid_dns_host(host)) {
         throw std::invalid_argument(invalid_message);
     }

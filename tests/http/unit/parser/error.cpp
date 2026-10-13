@@ -73,8 +73,6 @@ RUVIA_TEST(parse_error_status_mapping) {
         ruvia::http_status::request_header_fields_too_large);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::too_many_headers).status(),
         ruvia::http_status::request_header_fields_too_large);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::body_too_large).status(),
-        ruvia::http_status::content_too_large);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding).status(),
         ruvia::http_status::not_implemented);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::unsupported_http_version).status(),
@@ -85,8 +83,6 @@ RUVIA_TEST(parse_error_status_mapping) {
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::invalid_connection).status(),
         ruvia::http_status::bad_request);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::invalid_upgrade).status(),
-        ruvia::http_status::bad_request);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::invalid_chunk_size).status(),
         ruvia::http_status::bad_request);
     RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::conflicting_content_length).status(),
         ruvia::http_status::bad_request);

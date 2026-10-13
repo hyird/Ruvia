@@ -77,11 +77,6 @@ public:
         : resource_(resource),
           value_(std::in_place_type<context_pending_response>, resource) {}
 
-    [[nodiscard]] const context_pending_response* pending() const& noexcept {
-        return std::get_if<context_pending_response>(&value_);
-    }
-    const context_pending_response* pending() const&& = delete;
-
     [[nodiscard]] const context_final_response* final() const& noexcept {
         return std::get_if<context_final_response>(&value_);
     }

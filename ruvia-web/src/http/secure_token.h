@@ -30,11 +30,6 @@ public:
     }
     [[nodiscard]] const secure_token_ready* ready() const&& = delete;
 
-    [[nodiscard]] const secure_token_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    [[nodiscard]] const secure_token_failure* failure() const&& = delete;
-
 private:
     friend secure_token_result generate_secure_token(std::span<char> buffer) noexcept;
 

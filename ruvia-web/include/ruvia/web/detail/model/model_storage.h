@@ -16,7 +16,6 @@ namespace ruvia::detail::model {
 template <typename... descriptor_types>
 class model_storage final {
 public:
-    using schema_type = model_schema<descriptor_types...>;
     static constexpr bool has_initial =
         (descriptor_types::options_type::has_initial || ... || false);
 

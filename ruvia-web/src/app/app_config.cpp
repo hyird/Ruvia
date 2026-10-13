@@ -10,19 +10,20 @@
 #include "app/env_state.h"
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_identity.h"
+#include "util/config_validation.h"
 
 namespace ruvia {
 
 application& application::load_dotenv(dotenv_options options) {
     return detail::mutate_stopped_app(
         *this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
-            (void)detail::load_env_from_executable_directory(state_value.env_, options);
+            detail::load_env_from_executable_directory(state_value.env_, options);
         });
 }
 
 application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) {
     return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running",
-        [&](detail::app_state& state_value) { (void)detail::load_env_from_file(state_value.env_, path, options); });
+        [&](detail::app_state& state_value) { detail::load_env_from_file(state_value.env_, path, options); });
 }
 
 application& application::listen(listen_config config) {

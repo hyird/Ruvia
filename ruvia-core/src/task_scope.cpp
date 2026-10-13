@@ -1,6 +1,6 @@
 #include "ruvia/core/task_scope.h"
 
-#include <cstdlib>
+#include <exception>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -144,7 +144,7 @@ void task_scope::finish(node_type* node_value) noexcept {
     try {
         node_value->task_.handle_.promise().result();
     } catch (...) {
-        if ((outcome_.index() == 0)) {
+        if (outcome_.index() == 0) {
             outcome_ = task_scope_failure_type(std::current_exception());
             request_stop();
         }
@@ -166,7 +166,7 @@ void task_scope::finish(node_type* node_value) noexcept {
 }
 
 void task_scope::rethrow_failure() {
-    if ((outcome_.index() != 0)) {
+    if (outcome_.index() != 0) {
         std::rethrow_exception(std::get<1>(outcome_).exception());
     }
 }

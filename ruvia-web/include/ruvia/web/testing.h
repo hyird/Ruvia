@@ -211,7 +211,7 @@ public:
     // Dispatches one request through the production route table and returns
     // the copied-out response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
-    // including route Deadline cancellation and per-worker state semantics.
+    // including route deadline cancellation and per-worker state semantics.
     [[nodiscard]] test_response request(const test_request& request);
 
 private:

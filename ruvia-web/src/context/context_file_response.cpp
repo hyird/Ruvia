@@ -88,7 +88,7 @@ public:
 
     // `path` must be NUL-terminated (a c_str() or path::native() view).
     file_response_path(http_native_path_view_type path, http_response_file_identity identity,
-        http_response_file_handle opened = {}, inline_read read_policy = inline_read::transport)
+        http_response_file_handle opened, inline_read read_policy = inline_read::transport)
         : path_(path),
           identity_(identity),
           opened_(std::move(opened)),

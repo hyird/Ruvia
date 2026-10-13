@@ -92,13 +92,6 @@ tls_certificate::tls_certificate(tls_certificate&& other) noexcept
       chain_(std::exchange(other.chain_, nullptr)),
       private_key_(std::exchange(other.private_key_, nullptr)) {}
 
-tls_certificate& tls_certificate::operator=(const tls_certificate& other) {
-    if (this != &other) {
-        *this = tls_certificate(other);
-    }
-    return *this;
-}
-
 tls_certificate& tls_certificate::operator=(tls_certificate&& other) noexcept {
     if (this != &other) {
         release();

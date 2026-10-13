@@ -31,20 +31,6 @@ struct env_access final {
     }
 };
 
-struct dotenv_result_access final {
-    [[nodiscard]] static dotenv_result make(bool loaded) noexcept {
-        return dotenv_result(loaded);
-    }
-
-    static void increment_variables_set(dotenv_result& result_value) noexcept {
-        ++result_value.variables_set_;
-    }
-
-    static void increment_variables_skipped(dotenv_result& result_value) noexcept {
-        ++result_value.variables_skipped_;
-    }
-};
-
 struct dotenv_entry final {
     std::pmr::string name_{process_resource()};
     std::pmr::string value_{process_resource()};
@@ -53,7 +39,7 @@ struct dotenv_entry final {
 [[nodiscard]] std::pmr::vector<dotenv_entry> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenv_executable_directory();
-dotenv_result load_env_from_executable_directory(env& env_value, dotenv_options options);
-dotenv_result load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options);
+void load_env_from_executable_directory(env& env_value, dotenv_options options);
+void load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options);
 
 }  // namespace ruvia::detail

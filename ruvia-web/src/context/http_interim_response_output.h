@@ -26,12 +26,6 @@ public:
         }
         final_committed_ = true;
     }
-    [[nodiscard]] bool final_committed() const noexcept {
-        return final_committed_;
-    }
-    [[nodiscard]] bool busy() const noexcept {
-        return output_active_;
-    }
 
 private:
     [[nodiscard]] task<void> write_owned(http_status_code status, std::pmr::vector<http_header> fields);

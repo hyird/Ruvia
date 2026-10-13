@@ -20,7 +20,6 @@ class http_capsule_stream_state;
 }  // namespace detail
 
 class response_stream_writer;
-class worker_handle;
 
 // A borrow-only facade embedded in http_client_response. It cannot be detached,
 // independently destroyed, or moved away from the response. Body operations

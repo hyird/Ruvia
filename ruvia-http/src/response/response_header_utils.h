@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -35,13 +34,6 @@ inline bool set_known_static_vary_token(http_response& response, std::string_vie
         }
     }
     return false;
-}
-
-inline void set_response_header_if_missing(
-    http_response& response, std::uint32_t bit, std::string_view name, std::string_view value) {
-    if (!response_has_known_header(response, bit)) {
-        response.header(name, value);
-    }
 }
 
 inline void add_vary_token(http_response& response, std::string_view token) {

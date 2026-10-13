@@ -1,7 +1,6 @@
 #pragma once
 
 #include <mutex>
-#include <optional>
 
 #include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>

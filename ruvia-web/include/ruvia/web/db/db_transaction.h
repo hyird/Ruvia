@@ -25,9 +25,6 @@ namespace ruvia {
 
 class db_transaction;
 class db_query;
-class db_statement;
-template <typename entity_type>
-class entity_rows;
 template <typename entity_type, typename executor_type>
 class db_repository;
 template <typename entity_type, typename executor_type>

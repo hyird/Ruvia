@@ -198,6 +198,8 @@ request_header_kind classify_request_header(std::string_view name) noexcept {
     return request_header_kind::other;
 }
 
+namespace {
+
 bool is_valid_http_chunk_extension(std::string_view value) noexcept {
     if (value.empty()) {
         return true;
@@ -278,7 +280,9 @@ bool is_valid_http_chunk_extension(std::string_view value) noexcept {
     return true;
 }
 
-chunk_size_line_status parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexcept {
+}  // namespace
+
+bool parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexcept {
     // RFC 9112: chunk-size starts at the first byte of the line. Leading OWS
     // before the size is a known request-smuggling vector and is rejected,
     // matching picohttpparser/llhttp strict parsing.
@@ -291,20 +295,17 @@ chunk_size_line_status parse_http_chunk_size_line(std::string_view value, std::s
             break;
         }
         if (parsed_value > max_before_shift) {
-            return chunk_size_line_status::overflow;
+            return false;
         }
         parsed_value = (parsed_value << 4U) | static_cast<std::size_t>(nibble);
         ++cursor_value;
     }
-    if (cursor_value == 0) {
-        return chunk_size_line_status::invalid_size;
-    }
-    if (!is_valid_http_chunk_extension(value.substr(cursor_value))) {
-        return chunk_size_line_status::invalid_extension;
+    if (cursor_value == 0 || !is_valid_http_chunk_extension(value.substr(cursor_value))) {
+        return false;
     }
 
     size = parsed_value;
-    return chunk_size_line_status::ok;
+    return true;
 }
 
 }  // namespace ruvia::detail

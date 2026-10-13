@@ -17,7 +17,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/process_resource.h"
 
 // The dispatcher's state, declared here because two translation units own parts
 // of it: worker_dispatcher.cpp runs the queue and the worker's lifecycle, while

@@ -12,7 +12,7 @@ namespace ruvia {
 
 // How long a route's handler may take before the request is told to stop:
 //
-//     RUVIA_POST("/report", build, ruvia::Deadline<2000>);
+//     RUVIA_POST("/report", build, ruvia::deadline<2000>);
 //
 // The server's phase timeouts bound reading the head, reading the body and
 // writing the response. They also provide a coarse socket-level deadman for a

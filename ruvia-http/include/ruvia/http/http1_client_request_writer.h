@@ -18,8 +18,6 @@
 
 namespace ruvia {
 
-class http1_client_response_parser;
-
 // One immutable wire policy for request preparation. Expect is writer-owned so
 // the emitted field and the resulting content gate cannot disagree. How long an
 // I/O runtime waits before releasing a continue-gated body remains runtime

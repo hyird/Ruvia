@@ -227,9 +227,6 @@ class db_entity_row_decoder final {
     static constexpr auto missing_column = (std::numeric_limits<std::size_t>::max)();
 
 public:
-    db_entity_row_decoder() {
-        selected_.fill(true);
-    }
     explicit db_entity_row_decoder(const std::array<bool, column_count>& selected)
         : selected_(selected) {}
 
@@ -269,17 +266,6 @@ private:
     // Used only while synchronously mapping a live, immutable db_rows result.
     std::optional<std::span<const std::pmr::string>> schema_{};
 };
-
-template <typename e_type>
-entity_rows<e_type> map_entity_rows(db_rows&& rows, std::pmr::memory_resource* resource = nullptr) {
-    auto* resolved = pmr_resource_or_default(resource);
-    auto result_value = db_result_access::make_entity_rows<e_type>(resolved, rows.size());
-    db_entity_row_decoder<e_type> decoder;
-    for (const auto& row : rows) {
-        result_value.push_back(decoder.decode(row, resolved));
-    }
-    return result_value;
-}
 
 template <typename t_type>
 void append_entity_array_value(std::pmr::string& output, const t_type& value) {

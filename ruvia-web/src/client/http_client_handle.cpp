@@ -174,14 +174,6 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     }
 }
 
-void detail::http_client_response_state::discard_pending_body() noexcept {
-    {
-        std::pmr::string empty(resource_);
-        pending_.swap(empty);
-    }
-    notify_producer_space();
-}
-
 void detail::http_client_response_state::discard_response_body() noexcept {
     {
         std::pmr::string empty_buffered(resource_);

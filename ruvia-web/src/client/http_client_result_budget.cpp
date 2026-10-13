@@ -49,10 +49,6 @@ void http_client_result_budget_domain::release(std::size_t bytes_value) noexcept
     }
 }
 
-std::size_t http_client_result_budget_domain::retained_bytes() const noexcept {
-    return retained_bytes_.load(std::memory_order_acquire);
-}
-
 http_client_result_budget_lease::http_client_result_budget_lease(
     const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept
     : domain_(domain),
@@ -62,16 +58,6 @@ http_client_result_budget_lease::http_client_result_budget_lease(
     http_client_result_budget_lease&& other) noexcept
     : domain_(std::move(other.domain_)),
       bytes_(std::exchange(other.bytes_, 0)) {}
-
-http_client_result_budget_lease& http_client_result_budget_lease::operator=(
-    http_client_result_budget_lease&& other) noexcept {
-    if (this != &other) {
-        reset();
-        domain_ = std::move(other.domain_);
-        bytes_ = std::exchange(other.bytes_, 0);
-    }
-    return *this;
-}
 
 http_client_result_budget_lease::~http_client_result_budget_lease() {
     reset();

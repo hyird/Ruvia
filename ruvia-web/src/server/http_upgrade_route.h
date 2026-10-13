@@ -25,24 +25,20 @@ namespace ruvia::detail {
 
 class http_upgrade_route_outcome final {
 public:
+    // The session ran and was finished; the request is complete.
     [[nodiscard]] static http_upgrade_route_outcome make_upgraded() noexcept {
-        return http_upgrade_route_outcome(true);
+        return http_upgrade_route_outcome();
     }
 
     // The terminal ran but no session remains (e.g. the upgrade head write
     // failed): output may be partially committed, so the connection is closed
     // instead of answering.
     [[nodiscard]] static http_upgrade_route_outcome make_abandoned() noexcept {
-        return http_upgrade_route_outcome(false);
+        return http_upgrade_route_outcome();
     }
 
     [[nodiscard]] static http_upgrade_route_outcome make_buffered(http_response response) noexcept {
         return http_upgrade_route_outcome(std::move(response));
-    }
-
-    // The session ran and was finished; the request is complete.
-    [[nodiscard]] bool upgraded() const noexcept {
-        return upgraded_;
     }
 
     // The application answered without upgrading: a buffered response still
@@ -53,14 +49,12 @@ public:
     http_response* response() && = delete;
 
 private:
-    explicit http_upgrade_route_outcome(bool upgraded) noexcept
-        : upgraded_(upgraded) {}
+    http_upgrade_route_outcome() noexcept = default;
 
     explicit http_upgrade_route_outcome(http_response response) noexcept
         : response_(std::move(response)) {}
 
     std::optional<http_response> response_;
-    bool upgraded_{false};
 };
 
 // `establish(context&) -> task<void>` commits the upgrade response head,

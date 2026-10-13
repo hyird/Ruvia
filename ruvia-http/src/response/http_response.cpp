@@ -256,10 +256,6 @@ void http_response::apply_encoded_representation(
     update.publish();
 }
 
-void http_response::materialize_body() {
-    body_.materialize(memory_resource());
-}
-
 void http_response::file_body(http_native_path_view_type file, std::uint64_t size,
     std::uint64_t offset, std::uint64_t length, http_response_file_identity identity,
     http_response_file_handle opened) {

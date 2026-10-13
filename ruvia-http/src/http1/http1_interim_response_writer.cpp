@@ -114,35 +114,6 @@ struct http1_interim_header_facts final {
 
 }  // namespace
 
-std::string_view http1_interim_response_prepare_error_message(
-    http1_interim_response_prepare_error error) noexcept {
-    switch (error) {
-        case http1_interim_response_prepare_error::invalid_header:
-            return "invalid HTTP/1 interim response header";
-        case http1_interim_response_prepare_error::too_many_headers:
-            return "too many HTTP/1 interim response headers";
-        case http1_interim_response_prepare_error::content_length_forbidden:
-            return "Content-Length is forbidden on an interim response";
-        case http1_interim_response_prepare_error::transfer_encoding_forbidden:
-            return "Transfer-Encoding is forbidden on an interim response";
-        case http1_interim_response_prepare_error::trailer_forbidden:
-            return "Trailer is forbidden on an interim response";
-        case http1_interim_response_prepare_error::te_field_forbidden:
-            return "TE is not a response field";
-        case http1_interim_response_prepare_error::repeated_singleton:
-            return "repeated singleton interim response header";
-        case http1_interim_response_prepare_error::invalid_connection:
-            return "invalid HTTP/1 interim response Connection field";
-        case http1_interim_response_prepare_error::invalid_upgrade:
-            return "invalid HTTP/1 interim response Upgrade field";
-        case http1_interim_response_prepare_error::upgrade_connection_option_required:
-            return "HTTP/1 interim Upgrade requires Connection: Upgrade";
-        case http1_interim_response_prepare_error::header_too_large:
-            return "HTTP/1 interim response head is too large";
-    }
-    return "invalid HTTP/1 interim response";
-}
-
 http1_interim_response_prepare_result http1_interim_response_writer::prepare(
     const http_interim_response_head& response, std::span<char> head_buffer) const noexcept {
     if (response.headers().size() > max_http_header_fields) {

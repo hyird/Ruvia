@@ -7,11 +7,10 @@
 namespace ruvia::detail {
 namespace {
 
-// One synchronous representation pass: own borrowed body bytes, apply CORS,
-// and run the compression policy up to its offload boundary.
+// One synchronous representation pass: apply CORS and run the compression
+// policy up to its offload boundary.
 [[nodiscard]] http_buffered_compression_step prepare_representation(const http_request& request,
     const http_response_coding_policy& policy, http_response& response, const http_server_options& options) {
-    response.materialize_body();
     if (options.cors_.has_value()) {
         apply_cors_headers(request, response, *options.cors_);
     }

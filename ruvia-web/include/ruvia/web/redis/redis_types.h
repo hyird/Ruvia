@@ -28,7 +28,7 @@ class redis_z_scan_result;
 class redis_x_read_group_result;
 
 struct redis_config {
-    // Host name or unbracketed address only; keep the port in port.
+    // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host_{"127.0.0.1"};
     // Must be non-zero.
     std::uint16_t port_{6379};
@@ -496,7 +496,6 @@ namespace detail {
 
 class redis_pool;
 struct redis_command_executor;
-class redis_registry;
 
 }  // namespace detail
 

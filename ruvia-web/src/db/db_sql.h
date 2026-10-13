@@ -9,7 +9,6 @@
 #include "ruvia/web/db/db.h"
 
 struct st_mysql;
-struct st_mysql_res;
 
 namespace ruvia::detail {
 

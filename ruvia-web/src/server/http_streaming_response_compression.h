@@ -48,17 +48,8 @@ public:
         if (!std::holds_alternative<unprepared_type>(state_)) {
             throw std::logic_error("streaming response compression is already prepared");
         }
-        http_response_compression_source source;
-        switch (kind) {
-            case http_response_stream_kind::generic:
-                source = http_response_compression_source::stream;
-                break;
-            case http_response_stream_kind::sse:
-                source = http_response_compression_source::sse;
-                break;
-            default:
-                throw std::invalid_argument("invalid response stream kind");
-        }
+        const auto source = (kind == http_response_stream_kind::sse) ? http_response_compression_source::sse
+                                                                     : http_response_compression_source::stream;
         const auto decision = prepare_response_compression(
             selection_, request_method, response, source, availability_);
         if (decision != http_response_compression_decision::encode) {

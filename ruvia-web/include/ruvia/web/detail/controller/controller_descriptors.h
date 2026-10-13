@@ -93,8 +93,6 @@ private:
 
 class controller_route_builder final {
 public:
-    controller_route_builder(controller_route_builder&&) noexcept;
-    controller_route_builder& operator=(controller_route_builder&&) noexcept;
     controller_route_builder(const controller_route_builder&) = delete;
     controller_route_builder& operator=(const controller_route_builder&) = delete;
     ~controller_route_builder();
@@ -103,34 +101,29 @@ private:
     template <typename controller_t_type>
     friend class controller_registration_access;
 
-    controller_route_builder(router& router_value, std::string_view prefix,
-        std::pmr::vector<controller_middleware_descriptor> middlewares =
-            std::pmr::vector<controller_middleware_descriptor>(registration_resource()));
+    // Middlewares come from make_middlewares(), already allocated from
+    // registration_resource(), and are stored as-is.
+    controller_route_builder(
+        router& router_value, std::string_view prefix, std::pmr::vector<controller_middleware_descriptor> middlewares);
 
     // Each builds the endpoint its route kind runs and registers it through
     // the router's single registration path.
-    void register_route(http_known_method method, std::string_view path,
-        route_handler_type handler, request_body_mode body_mode,
-        std::span<const controller_middleware_descriptor> middlewares = {}) const;
+    void register_route(http_known_method method, std::string_view path, route_handler_type handler,
+        request_body_mode body_mode, std::span<const controller_middleware_descriptor> middlewares) const;
     void register_extension_method_route(std::string_view method_token, std::string_view path,
         route_handler_type handler, request_body_mode body_mode,
-        std::span<const controller_middleware_descriptor> middlewares = {}) const;
+        std::span<const controller_middleware_descriptor> middlewares) const;
     void register_response_stream_route(http_known_method method, std::string_view path,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> middlewares = {}) const;
-    void register_sse_route(http_known_method method, std::string_view path,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> middlewares = {}) const;
-    void register_tunnel_route(std::string_view protocol, std::string_view target,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> middlewares = {}, http_tunnel_route_config config = {}) const;
+        route_stream_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const;
+    void register_sse_route(http_known_method method, std::string_view path, route_stream_handler_type handler,
+        std::span<const controller_middleware_descriptor> middlewares) const;
+    void register_tunnel_route(std::string_view protocol, std::string_view target, route_stream_handler_type handler,
+        std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const;
     void register_websocket_route(http_known_method method, std::string_view path,
-        route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> middlewares = {},
-        websocket_route_config websocket_config = {}) const;
-    [[nodiscard]] controller_route_builder create_scope(std::string_view prefix,
-        const std::pmr::vector<controller_middleware_descriptor>& middlewares =
-            std::pmr::vector<controller_middleware_descriptor>(registration_resource())) const;
+        route_stream_handler_type handler, std::span<const controller_middleware_descriptor> middlewares,
+        websocket_route_config websocket_config) const;
+    [[nodiscard]] controller_route_builder create_scope(
+        std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const;
 
     struct owned_prefix_tag_type final {};
     controller_route_builder(router& router_value, std::pmr::string prefix,

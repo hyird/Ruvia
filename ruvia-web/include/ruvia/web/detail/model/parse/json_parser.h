@@ -150,16 +150,6 @@ struct model_parse_access final {
     }
 
     template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_form_fields(
-        const request_name_value_list& fields_value, std::pmr::memory_resource* resource) {
-        auto value = parse_form_fields_partial<model_t_type>(fields_value, resource);
-        if (!has_valid_structure(value)) {
-            return std::nullopt;
-        }
-        return value;
-    }
-
-    template <typename model_t_type>
     [[nodiscard]] static std::optional<model_t_type> parse_form_fields_partial(
         const request_name_value_list& fields_value, std::pmr::memory_resource* resource) {
         return materialize_form_input<model_t_type>(make_form_fields_model_input(fields_value, resource));
@@ -466,17 +456,6 @@ template <typename t_type>
     } else {
         static_assert(always_false<field_t_type>, "RUVIA_MODEL JSON field type is not supported");
     }
-}
-
-template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth = 0,
-    model_string_storage string_storage = model_string_storage::borrowed) {
-    json_parse_budget budget;
-    if (!budget.consume_bytes(sizeof(t_type))) {
-        return std::nullopt;
-    }
-    return parse_json_value<t_type>(input, resource, depth, string_storage, budget);
 }
 
 // One complete typed JSON value, including structural checks inside arrays.

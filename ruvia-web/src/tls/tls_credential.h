@@ -37,7 +37,6 @@ public:
 
     tls_certificate(const tls_certificate& other);
     tls_certificate(tls_certificate&& other) noexcept;
-    tls_certificate& operator=(const tls_certificate& other);
     tls_certificate& operator=(tls_certificate&& other) noexcept;
     ~tls_certificate();
 

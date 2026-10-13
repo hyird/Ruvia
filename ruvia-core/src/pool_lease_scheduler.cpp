@@ -118,7 +118,7 @@ public:
         auto stop_registration_value = stop_token_value.register_callback([&worker_value, waiter_state, waiter_id] {
             waiter_state->request_cancellation(worker_value, waiter_id);
         });
-        if (stop_token_value.stoppable() && stop_token_value.stop_requested()) {
+        if (stop_token_value.stop_requested()) {
             (void)waiter_state->queue_.cancel(waiter_id);
         }
 

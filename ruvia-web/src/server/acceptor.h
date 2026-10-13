@@ -33,9 +33,8 @@ public:
     };
     using failure_callback = void (*)(void*) noexcept;
 
-    acceptor(std::span<const http_server_listener_definition> listeners,
-        std::span<const worker_target> targets, void* failure_target = nullptr,
-        failure_callback failure = nullptr);
+    acceptor(std::span<const http_server_listener_definition> listeners, std::span<const worker_target> targets,
+        void* failure_target, failure_callback failure);
     ~acceptor();
     acceptor(const acceptor&) = delete;
     acceptor& operator=(const acceptor&) = delete;

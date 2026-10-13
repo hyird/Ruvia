@@ -91,9 +91,6 @@ private:
     std::optional<t_type> rejected_;
 };
 
-template <typename t_type>
-class one_shot_receiver;
-
 namespace detail {
 
 struct one_shot_pending final {};

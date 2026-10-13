@@ -110,8 +110,8 @@ public:
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere arms nothing per
     // request. A route may tighten the handler
-    // deadline with ruvia::Deadline<N> but never extend it -- the same rule
-    // server_config::max_buffered_body_bytes follows.
+    // deadline with ruvia::deadline<N> but never extend it -- the same rule
+    // server_config::max_buffered_body_bytes_ follows.
     application& deadline(deadline_config config);
     application& deadline(std::nullptr_t);
     // Disabled by default. A config enables response coding and precompressed
@@ -160,7 +160,7 @@ public:
     // The rate limit every request passes. A route may add its own with
     // ruvia::rate_limit<max, window_ms>; both then apply, so the stricter is what
     // a caller actually meets -- the same "narrower scope may only tighten"
-    // rule server_config::max_buffered_body_bytes follows.
+    // rule server_config::max_buffered_body_bytes_ follows.
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.

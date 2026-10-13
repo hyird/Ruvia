@@ -121,7 +121,7 @@ public:
         : value_(route_not_found{}) {}
 
     [[nodiscard]] static route_resolution resolved(
-        const route_entry& route, void* handler_target, const route_match& match = {}) noexcept {
+        const route_entry& route, void* handler_target, const route_match& match) noexcept {
         return route_resolution(resolved_route(route, handler_target, match));
     }
 
@@ -129,8 +129,7 @@ public:
     // that has extension-method routes. `resource_exists` carries that fact
     // separately, ensuring an extension-only path answers 405 with an Allow
     // built from its tokens instead of collapsing to 404.
-    [[nodiscard]] static route_resolution method_not_allowed(
-        std::uint32_t allowed_methods, bool resource_exists = false) noexcept {
+    [[nodiscard]] static route_resolution method_not_allowed(std::uint32_t allowed_methods, bool resource_exists) noexcept {
         if (allowed_methods == 0 && !resource_exists) {
             return route_resolution();
         }
@@ -150,11 +149,6 @@ public:
         return std::get_if<route_method_not_allowed>(&value_);
     }
     [[nodiscard]] const route_method_not_allowed* method_not_allowed() const&& = delete;
-
-    [[nodiscard]] const route_not_found* not_found() const& noexcept {
-        return std::get_if<route_not_found>(&value_);
-    }
-    [[nodiscard]] const route_not_found* not_found() const&& = delete;
 
     [[nodiscard]] const route_rejected* rejected() const& noexcept {
         return std::get_if<route_rejected>(&value_);

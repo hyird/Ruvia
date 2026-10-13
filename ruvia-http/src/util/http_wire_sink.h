@@ -69,14 +69,6 @@ public:
         out_->append(value);
     }
 
-    void append(char value) {
-        out_->push_back(value);
-    }
-
-    void append_unsigned(std::uint64_t value) {
-        http_append_unsigned(*out_, value);
-    }
-
 private:
     std::pmr::string* out_;
 };

@@ -11,12 +11,6 @@
 
 namespace {
 
-struct throwing_move final {
-    throwing_move() = default;
-    throwing_move(const throwing_move&) = delete;
-    throwing_move(throwing_move&&) noexcept(false) {}
-};
-
 ruvia::task<std::unique_ptr<int>> make_value(ruvia::worker_handle worker_value) {
     if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");

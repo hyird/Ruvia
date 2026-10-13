@@ -265,7 +265,7 @@ public:
     [[nodiscard]] bool deadline_exceeded() const noexcept;
 
     // Stopped when this request should stop doing work: its handler deadline
-    // elapsed (see ruvia::Deadline), or the owning worker began stopping.
+    // elapsed (see ruvia::deadline), or the owning worker began stopping.
     // db(), redis(), get_http_client({...}).send(), and run_blocking() bind this
     // token automatically, which is how a deadline reaches a handler that
     // never mentions one. An explicit operation token is combined with it.
@@ -484,7 +484,7 @@ public:
     [[nodiscard]] scoped_operation<http_response> not_found();
 
 private:
-    [[nodiscard]] http_response streaming_head(std::string_view content_type = {}) const;
+    [[nodiscard]] http_response streaming_head() const;
 
     [[nodiscard]] task<http_response> not_found_task();
     // `fields`: method, target, body, then header name/value pairs (owned copies).
@@ -553,7 +553,6 @@ private:
     // bytes without re-reading the header.
     mutable bool body_identity_ : 1 {false};
 
-    [[nodiscard]] detail::context_request_body_source& request_body_source() noexcept;
     [[nodiscard]] const detail::context_request_body_source& request_body_source() const noexcept;
     [[nodiscard]] detail::context_response_output& response_output() noexcept;
     [[nodiscard]] const detail::context_response_output& response_output() const noexcept;

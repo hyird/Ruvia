@@ -438,7 +438,6 @@ public:
     void body(std::string_view value);
     void owned_body(std::pmr::string&& value);
     void static_body(std::string_view value) noexcept;
-    void materialize_body();
     // Own the native path in this response's PMR storage and preserve the
     // runtime's opaque identity token. `opened`, when engaged, is the handle the
     // runtime framed the response from; the body owns it and releases it on

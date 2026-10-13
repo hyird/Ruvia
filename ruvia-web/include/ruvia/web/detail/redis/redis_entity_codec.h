@@ -66,7 +66,7 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] std::pmr::string encode_redis_scalar(
-    const t_type& value, std::pmr::memory_resource* resource = nullptr) {
+    const t_type& value, std::pmr::memory_resource* resource) {
     auto* const memory_resource = pmr_resource_or_default(resource);
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
@@ -93,7 +93,7 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] t_type decode_redis_scalar(
-    std::string_view value, std::pmr::memory_resource* resource = nullptr) {
+    std::string_view value, std::pmr::memory_resource* resource) {
     auto* const memory_resource = pmr_resource_or_default(resource);
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {

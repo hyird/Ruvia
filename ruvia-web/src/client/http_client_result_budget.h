@@ -18,7 +18,6 @@ public:
 
     [[nodiscard]] bool try_reserve(std::size_t bytes) noexcept;
     void release(std::size_t bytes) noexcept;
-    [[nodiscard]] std::size_t retained_bytes() const noexcept;
 
     // Only the owning worker accesses receive accounting. Escaped results
     // independently use the thread-safe retained-result counter above.
@@ -40,7 +39,6 @@ public:
     http_client_result_budget_lease(const http_client_result_budget_lease&) = delete;
     http_client_result_budget_lease& operator=(const http_client_result_budget_lease&) = delete;
     http_client_result_budget_lease(http_client_result_budget_lease&& other) noexcept;
-    http_client_result_budget_lease& operator=(http_client_result_budget_lease&& other) noexcept;
     ~http_client_result_budget_lease();
 
     [[nodiscard]] static std::optional<http_client_result_budget_lease> try_acquire(

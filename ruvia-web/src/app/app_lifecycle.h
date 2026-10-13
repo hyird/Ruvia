@@ -25,10 +25,6 @@ enum class app_stop_request : std::uint8_t {
 // stopping. A stop requested while stopped is latched and consumed by the next run.
 class app_lifecycle final {
 public:
-    [[nodiscard]] app_lifecycle_state state() const noexcept {
-        return state_;
-    }
-
     [[nodiscard]] bool active() const noexcept {
         return state_ != app_lifecycle_state::stopped;
     }

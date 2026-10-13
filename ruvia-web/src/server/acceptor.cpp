@@ -61,12 +61,8 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
       targets_(targets.begin(), targets.end(), process_resource()),
       failure_target_(failure_target),
       failure_callback_(failure) {
-    if (listeners.empty()) {
-        throw std::invalid_argument("acceptor requires at least one TCP listener");
-    }
     for (const auto& target : targets_) {
-        if (!target.submission_.valid() || target.object_ == nullptr || target.available_ == nullptr ||
-            target.accept_ == nullptr) {
+        if (!target.submission_.valid()) {
             throw std::invalid_argument("acceptor worker target is incomplete");
         }
     }
@@ -82,10 +78,7 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
                 begin_accept(i);
             } },
         .stop_admission_ = [this] { stop_on_owner(); },
-        .failure_ = [this](std::exception_ptr) noexcept {
-            if (failure_callback_ != nullptr) {
-                failure_callback_(failure_target_);
-            } },
+        .failure_ = [this](std::exception_ptr) noexcept { failure_callback_(failure_target_); },
         .shutdown_ = [this]() noexcept { close_listeners(); },
     });
 }

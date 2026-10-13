@@ -131,9 +131,6 @@ void event_loop_state::worker_stopping_complete() noexcept {
 }
 
 void event_loop_state::report_failure(std::exception_ptr failure) noexcept {
-    if (!failure) {
-        return;
-    }
     if (failure_sink_) {
         failure_sink_(std::move(failure));
         return;
@@ -142,9 +139,6 @@ void event_loop_state::report_failure(std::exception_ptr failure) noexcept {
 }
 
 void event_loop_state::report_attached_failure(std::exception_ptr failure) noexcept {
-    if (!failure) {
-        return;
-    }
     report_unhandled_failure("attached event loop failure", failure);
     stop();
 }

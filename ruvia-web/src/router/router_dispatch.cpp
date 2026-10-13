@@ -18,7 +18,7 @@ namespace ruvia {
 namespace {
 
 http_response make_allow_no_content_response(request_memory& memory, std::uint32_t method_mask,
-    std::span<const std::string_view> extension_methods = {}) {
+    std::span<const std::string_view> extension_methods) {
     http_response response({.resource_ = memory.resource()});
     response.status(ruvia::http_status::no_content);
     response.allow_methods(method_mask, extension_methods);

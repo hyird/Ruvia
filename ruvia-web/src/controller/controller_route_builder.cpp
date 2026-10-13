@@ -50,25 +50,13 @@ std::pmr::string join_controller_paths(std::string_view prefix, std::string_view
     return output;
 }
 
-template <typename base_range_type, typename extra_range_type>
 [[nodiscard]] std::pmr::vector<controller_middleware_descriptor> merge_middleware_descriptors(
-    const base_range_type& base, const extra_range_type& extra) {
+    std::span<const controller_middleware_descriptor> base, std::span<const controller_middleware_descriptor> extra) {
     std::pmr::vector<controller_middleware_descriptor> middlewares(registration_resource());
     middlewares.reserve(base.size() + extra.size());
     middlewares.insert(middlewares.end(), base.begin(), base.end());
     middlewares.insert(middlewares.end(), extra.begin(), extra.end());
     return middlewares;
-}
-
-[[nodiscard]] std::pmr::vector<controller_middleware_descriptor> normalize_controller_middlewares(
-    std::pmr::vector<controller_middleware_descriptor> middlewares) {
-    if (middlewares.get_allocator().resource() == registration_resource()) {
-        return middlewares;
-    }
-
-    std::pmr::vector<controller_middleware_descriptor> normalized(registration_resource());
-    normalized.insert(normalized.end(), middlewares.begin(), middlewares.end());
-    return normalized;
 }
 
 }  // namespace
@@ -85,12 +73,7 @@ detail::controller_route_builder::controller_route_builder(router& router_value,
 detail::controller_route_builder::controller_route_builder(router& router_value, std::pmr::string prefix,
     std::pmr::vector<controller_middleware_descriptor> middlewares, owned_prefix_tag_type)
     : impl_(construct_pmr_object<impl_type>(registration_resource(), router_value, std::move(prefix),
-          normalize_controller_middlewares(std::move(middlewares)))) {}
-
-detail::controller_route_builder::controller_route_builder(controller_route_builder&&) noexcept = default;
-
-detail::controller_route_builder& detail::controller_route_builder::operator=(
-    controller_route_builder&&) noexcept = default;
+          std::move(middlewares))) {}
 
 detail::controller_route_builder::~controller_route_builder() = default;
 
@@ -150,8 +133,8 @@ void detail::controller_route_builder::register_websocket_route(http_known_metho
         callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
-detail::controller_route_builder detail::controller_route_builder::create_scope(std::string_view prefix,
-    const std::pmr::vector<controller_middleware_descriptor>& middlewares) const {
+detail::controller_route_builder detail::controller_route_builder::create_scope(
+    std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const {
     auto merged = merge_middleware_descriptors(impl_->middlewares(), middlewares);
     return controller_route_builder(impl_->router(), join_controller_paths(impl_->prefix(), prefix),
         std::move(merged), owned_prefix_tag_type{});

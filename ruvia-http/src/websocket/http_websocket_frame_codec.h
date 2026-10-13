@@ -160,8 +160,7 @@ private:
 }
 
 [[nodiscard]] inline std::size_t encode_websocket_frame_header(websocket_frame_header_type& header_value,
-    websocket_opcode opcode, std::size_t payload_size, bool rsv1 = false,
-    bool masked = false) noexcept {
+    websocket_opcode opcode, std::size_t payload_size, bool rsv1, bool masked) noexcept {
     std::size_t header_size = 0;
     header_value[header_size++] =
         static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));

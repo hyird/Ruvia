@@ -2,6 +2,7 @@
 
 #include "ruvia/web/redis/redis_types.h"
 
+#include "client/client_host.h"
 #include "client/client_tls_config_storage.h"
 #include "util/config_validation.h"
 
@@ -9,8 +10,7 @@ namespace ruvia::detail {
 
 inline void validate_redis_config(const redis_config& config) {
     validate_client_tls_config(config.tls_);
-    detail::ensure_config_host(config.host_, "redis host must not be empty", "redis host is invalid",
-        detail::separated_port_host_rules);
+    validate_client_origin_host(config.host_, "redis host must not be empty", "redis host is invalid");
     detail::ensure_non_zero_port(config.port_, "redis port must not be zero");
     detail::ensure_positive_size(config.pool_size_per_worker_, "redis pool size must be greater than zero");
     detail::ensure_positive_size(

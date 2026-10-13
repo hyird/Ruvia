@@ -188,9 +188,9 @@ void ws_connection::append_frame(
     }
 }
 
-void ws_connection::fail(std::uint16_t code, std::string_view reason) {
+void ws_connection::fail(std::uint16_t code) {
     if (close_phase_ == close_phase_type::open) {
-        const auto payload_value = encode_websocket_close_payload(code, reason);
+        const auto payload_value = encode_websocket_close_payload(code, {});
         const auto* encoded = payload_value.encoded();
         if (encoded == nullptr) {
             return;

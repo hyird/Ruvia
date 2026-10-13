@@ -67,8 +67,7 @@ template <typename number_t_type>
 
 template <typename t_type>
 [[nodiscard]] std::optional<t_type> parse_form_value(resolved_pmr_resource_tag, std::string_view input,
-    form_value_encoding encoding, std::pmr::memory_resource* resource,
-    model_string_storage string_storage = model_string_storage::borrowed) {
+    form_value_encoding encoding, std::pmr::memory_resource* resource, model_string_storage string_storage) {
     using field_t_type = std::remove_cvref_t<t_type>;
 
     std::optional<std::pmr::string> decoded_storage;
@@ -115,14 +114,6 @@ template <typename t_type>
     } else {
         return std::nullopt;
     }
-}
-
-template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_form_value(std::string_view input, form_value_encoding encoding,
-    std::pmr::memory_resource* resource,
-    model_string_storage string_storage = model_string_storage::borrowed) {
-    return parse_form_value<t_type>(
-        resolved_pmr_resource_tag{}, input, encoding, pmr_resource_or_default(resource), string_storage);
 }
 
 }  // namespace ruvia::detail

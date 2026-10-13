@@ -36,9 +36,6 @@ enum class http1_interim_connection_disposition : std::uint8_t {
     close_after_interim_response,
 };
 
-[[nodiscard]] std::string_view http1_interim_response_prepare_error_message(
-    http1_interim_response_prepare_error error) noexcept;
-
 class http1_interim_response_buffer_too_small final {
 public:
     [[nodiscard]] constexpr std::size_t required_head_bytes() const noexcept {

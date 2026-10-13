@@ -1,7 +1,7 @@
 #pragma once
 
 #include <coroutine>
-#include <cstdlib>
+#include <exception>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -17,7 +17,7 @@ struct suspend_race_pending final {};
 // both orderings through this state machine makes the await_suspend return
 // value (suspend or not) the single verdict on which ordering happened.
 //
-// Payload moves may throw; complete() rolls the state back to pending so the
+// Payload moves may throw; complete() then restores the state it found so the
 // awaiter can retry or propagate the failure from the original call site.
 // Calls must be serialized by the owner, either on one thread or under its lock.
 template <typename t_type>

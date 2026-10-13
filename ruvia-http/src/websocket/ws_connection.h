@@ -83,7 +83,7 @@ public:
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
     [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, std::string_view payload,
-        bool compress = true, ws_payload_storage storage = ws_payload_storage::copy);
+        bool compress, ws_payload_storage storage = ws_payload_storage::copy);
     [[nodiscard]] websocket_close_submit_status submit_close(std::uint16_t code, std::string_view reason);
 
 private:
@@ -103,7 +103,7 @@ private:
 
     void append_frame(websocket_opcode opcode, std::string_view payload, bool rsv1 = false,
         ws_payload_storage storage = ws_payload_storage::copy);
-    void fail(std::uint16_t code, std::string_view reason = {});
+    void fail(std::uint16_t code);
     void receive_peer_close() noexcept;
     [[nodiscard]] std::optional<websocket_event> poll_impl() &;
 

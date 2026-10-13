@@ -104,9 +104,8 @@ struct context_access final {
         return context_value.response_state().release_final();
     }
 
-    [[nodiscard]] static http_response streaming_head(
-        const context& context_value, std::string_view content_type = {}) {
-        return context_value.streaming_head(content_type);
+    [[nodiscard]] static http_response streaming_head(const context& context_value) {
+        return context_value.streaming_head();
     }
 
     // Commits the bound session, then builds the head a response stream sends before its first byte.

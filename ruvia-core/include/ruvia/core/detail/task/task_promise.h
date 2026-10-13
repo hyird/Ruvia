@@ -198,7 +198,6 @@ private:
 template <typename t_type>
 class task_promise final {
 public:
-    using value_type = t_type;
     static_assert(!std::is_reference_v<t_type>, "ruvia::task does not support reference result types");
     task_promise() noexcept = default;
 

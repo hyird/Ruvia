@@ -5,6 +5,7 @@
 #include <future>
 #include <istream>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -900,6 +901,25 @@ RUVIA_TEST(redis_client_cold_connect_can_be_discarded_without_starting_the_pool)
         ruvia::redis_client client(pool.loop(0), {.host_ = "127.0.0.1"});
         auto discarded = client.connect();
         (void)discarded;
+    }
+    pool.join();
+}
+
+// The host feeds the shared client transport and TLS SNI path, so it must be
+// an unbracketed IP literal or an ASCII DNS name.
+RUVIA_TEST(redis_client_rejects_invalid_hosts_at_configuration) {
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    for (const std::string_view host : {std::string_view("a::b::c"), std::string_view("-leading.example"),
+             std::string_view("b\xc3\xbc"
+                              "cher.example"),
+             std::string_view("host:6379")}) {
+        std::string message;
+        try {
+            ruvia::redis_client client(pool.loop(0), {.host_ = std::string(host)});
+        } catch (const std::invalid_argument& error) {
+            message = error.what();
+        }
+        RUVIA_CHECK_EQ(message, std::string("redis host is invalid"));
     }
     pool.join();
 }

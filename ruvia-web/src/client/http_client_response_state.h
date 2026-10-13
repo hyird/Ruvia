@@ -33,7 +33,6 @@ class response_stream_writer;
 namespace ruvia::detail {
 
 class http_client_pool;
-class http_client_request_storage;
 class http_client_response_memory_domain;
 
 // Address-stable response storage. Network stream registration and connection
@@ -61,7 +60,6 @@ public:
     // or reports `head_message` for its error code. An encoded body is decoded
     // completely before the head is returned, so its failure is observed here.
     [[nodiscard]] task<void> await_head(std::string_view head_message);
-    void discard_pending_body() noexcept;
     void discard_response_body() noexcept;
     void release_consumed_body_prefix();
 

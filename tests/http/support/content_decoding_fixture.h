@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -65,30 +64,6 @@ using ruvia::parse_http_content_coding;
 using ruvia::protocol_byte_limit;
 
 inline constexpr std::size_t decoded_body_limit = 16 * 1024 * 1024;
-
-class reject_large_allocation_resource final : public std::pmr::memory_resource {
-public:
-    explicit reject_large_allocation_resource(std::size_t maximum_block_bytes)
-        : maximum_block_bytes_(maximum_block_bytes) {}
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (bytes_value > maximum_block_bytes_) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::get_default_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        std::pmr::get_default_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t maximum_block_bytes_;
-};
 
 inline std::string zlib_deflate_compress(std::string_view data) {
     z_stream stream{};

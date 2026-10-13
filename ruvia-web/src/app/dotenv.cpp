@@ -77,12 +77,11 @@ std::size_t env::size() const noexcept {
     return state_->variables_.size();
 }
 
-dotenv_result detail::load_env_from_executable_directory(env& env_value, dotenv_options options) {
-    return detail::load_env_from_file(env_value, detail::dotenv_executable_directory() / ".env", options);
+void detail::load_env_from_executable_directory(env& env_value, dotenv_options options) {
+    detail::load_env_from_file(env_value, detail::dotenv_executable_directory() / ".env", options);
 }
 
-dotenv_result detail::load_env_from_file(
-    env& env_value, const std::filesystem::path& path, dotenv_options options) {
+void detail::load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options) {
     if (options.existing_variables_ != dotenv_existing_variable_policy::preserve &&
         options.existing_variables_ != dotenv_existing_variable_policy::override) {
         throw std::invalid_argument("dotenv existing variable policy is invalid");
@@ -100,24 +99,19 @@ dotenv_result detail::load_env_from_file(
         if (options.missing_file_ == dotenv_missing_file_policy::require) {
             throw std::runtime_error("dotenv file not found: " + path.string());
         }
-        return detail::dotenv_result_access::make(false);
+        return;
     }
 
     const auto entries = detail::read_dotenv_entries(input, path);
-    auto result_value = detail::dotenv_result_access::make(true);
     auto& state_value = detail::env_access::state(env_value);
 
     for (const auto& entry : entries) {
         auto& variables = state_value.variables_;
         auto it = find_variable_slot(variables, entry.name_);
         if (it != variables.end() && std::string_view(it->name_) == std::string_view(entry.name_)) {
-            if (options.existing_variables_ == dotenv_existing_variable_policy::preserve) {
-                detail::dotenv_result_access::increment_variables_skipped(result_value);
-                continue;
+            if (options.existing_variables_ == dotenv_existing_variable_policy::override) {
+                it->value_ = entry.value_;
             }
-
-            it->value_ = entry.value_;
-            detail::dotenv_result_access::increment_variables_set(result_value);
             continue;
         }
 
@@ -125,11 +119,9 @@ dotenv_result detail::load_env_from_file(
         variable.name_.assign(entry.name_.data(), entry.name_.size());
         variable.value_.assign(entry.value_.data(), entry.value_.size());
         variables.insert(it, std::move(variable));
-        detail::dotenv_result_access::increment_variables_set(result_value);
     }
 
     state_value.loaded_ = true;
-    return result_value;
 }
 
 }  // namespace ruvia

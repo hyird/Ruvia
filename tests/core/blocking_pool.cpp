@@ -96,7 +96,6 @@ struct reentrant_discard_state final {
 struct reentrant_discarded_task final {
     reentrant_discard_state* state_{nullptr};
 
-    reentrant_discarded_task() = default;
     explicit reentrant_discarded_task(reentrant_discard_state& state_value)
         : state_(&state_value) {}
     reentrant_discarded_task(const reentrant_discarded_task&) = delete;

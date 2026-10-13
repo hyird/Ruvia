@@ -74,7 +74,6 @@ inline task<http1_session_request_completion> complete_failed_http_route(
     request_memory& request_memory_value, context_services exception_services, http_response& response) {
     response = co_await routes_value.handle_exception(
         parsed_value.request_, request_memory_value, exception, exception_services);
-    response.materialize_body();
     scanner_entry.touch();
     co_return close_with_framework_response(response, parsed_value.connection_plan_);
 }
@@ -94,8 +93,6 @@ template <typename take_pipeline_type>
     std::pmr::string& pipeline_stash, take_pipeline_type take_pipeline) {
     connection_plan = apply_request_body_consumption(connection_plan, body_consumption);
     connection_plan = request_sequence.complete_uncommitted_response(connection_plan);
-    // Fix borrowed response views before callers restore pipeline bytes.
-    response.materialize_body();
     scanner_entry.touch();
     return commit_http1_route_response(response, connection_plan,
         [&](http1_request_connection_plan committed) {

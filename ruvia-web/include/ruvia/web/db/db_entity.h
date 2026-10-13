@@ -23,7 +23,6 @@ namespace ruvia {
 namespace detail {
 template <typename e_type>
 struct db_entity_access;
-struct db_result_access;
 }  // namespace detail
 
 enum class db_relation_kind : unsigned char { one_to_one,

@@ -187,7 +187,7 @@ private:
         detail::ensure_app_not_running(state_.lifecycle_.active(), "app is already running");
         if (state_.listeners_.empty()) {
             throw std::invalid_argument(
-                "App::run() requires at least one listener; call App::listen() first");
+                "application::run() requires at least one listener; call application::listen() first");
         }
         if (!state_.lifecycle_.begin_run()) {
             std::terminate();

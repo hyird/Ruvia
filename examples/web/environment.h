@@ -14,7 +14,7 @@ namespace example {
 
 // Startup-only lookup shared by the examples. Process variables take precedence
 // over an optional application::env() loaded from .env beside the executable. A default
-// ruvia::Env is empty: it does not import the process environment automatically.
+// ruvia::env is empty: it does not import the process environment automatically.
 class environment final {
 public:
     explicit environment(const ruvia::env* dotenv = nullptr) noexcept

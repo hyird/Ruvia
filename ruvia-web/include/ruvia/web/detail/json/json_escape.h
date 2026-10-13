@@ -12,10 +12,6 @@ namespace ruvia::detail {
 enum class json_hex_case : std::uint8_t { upper,
     lower };
 
-[[nodiscard]] inline bool json_needs_escape(unsigned char value) noexcept {
-    return value == '"' || value == '\\' || value < 0x20;
-}
-
 // Reservation hint for append_json_string. It counts escapes only; output for
 // ill-formed UTF-8 grows by up to two bytes per replaced byte beyond the hint.
 [[nodiscard]] inline std::size_t json_string_size_hint(std::string_view value) noexcept {

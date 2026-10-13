@@ -55,11 +55,6 @@ void db_schema::require_postgresql() const {
         throw std::invalid_argument("schema operation requires PostgreSQL");
     }
 }
-std::pmr::string db_schema::table_prefix(std::string_view table_value) const {
-    std::pmr::string s(resource_);
-    append_db_qualified_identifier(s, table_value, driver_);
-    return s;
-}
 void db_schema::append_expression(std::pmr::string& s, db_query::expr_type e) const {
     if (e.empty()) {
         throw std::invalid_argument("schema expression is required");

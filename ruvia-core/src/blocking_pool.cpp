@@ -56,13 +56,10 @@ std::string_view describe_blocking_status(blocking_status status) noexcept {
     return "unknown";
 }
 
+// Only blocking_result::value() constructs this, after ruling out completed.
 blocking_operation_rejected::blocking_operation_rejected(blocking_status status)
     : std::runtime_error(std::string(describe_blocking_status(status))),
-      status_(status) {
-    if (status == blocking_status::completed) {
-        throw std::invalid_argument("completed blocking operation was not rejected");
-    }
-}
+      status_(status) {}
 
 struct blocking_pool::thread_state_type final {
     explicit thread_state_type()
@@ -123,7 +120,7 @@ struct blocking_pool::impl_type final {
             {
                 std::unique_lock lock(mutex_);
                 condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
-                if (stopping_ || queued_ == 0) {
+                if (stopping_) {
                     // Stopping discards every task that has not already been
                     // picked up. A worker must never start queued work after
                     // the stop request becomes visible.

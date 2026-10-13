@@ -1,24 +1,13 @@
 #pragma once
-#include <cstddef>
-#include <optional>
 #include <span>
 #include <vector>
 
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
-#include "util/config_validation.h"
 
 namespace ruvia::detail {
 
-void validate_document_root_runtime_config(const http_server_options& options);
-
-void validate_worker_queue_capacity(std::size_t capacity);
-
 void validate_server_limits(const server_config& config);
-
-void validate_http_server_options(const http_server_options& options);
-
-void validate_http_server_listener(const http_server_listener_definition& listener_value);
 
 class validated_http_server_configuration final {
 public:

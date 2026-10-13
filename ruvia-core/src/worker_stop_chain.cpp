@@ -1,9 +1,8 @@
 #include "worker_stop_chain.h"
 
 #include <exception>
+#include <optional>
 #include <utility>
-
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 
 namespace ruvia::detail {
 

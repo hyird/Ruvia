@@ -64,10 +64,6 @@ detail::context_request_storage& context::request_storage() const {
     return *request_storage_;
 }
 
-detail::context_request_body_source& context::request_body_source() noexcept {
-    return services().request_body_source();
-}
-
 const detail::context_request_body_source& context::request_body_source() const noexcept {
     return services().request_body_source();
 }

@@ -152,10 +152,6 @@ public:
     }
     context_services with_routes(route_table&&) const = delete;
 
-    [[nodiscard]] constexpr context_request_body_source& request_body_source() noexcept {
-        return request_services_.body_source_;
-    }
-
     [[nodiscard]] constexpr const context_request_body_source& request_body_source() const noexcept {
         return request_services_.body_source_;
     }
@@ -265,7 +261,7 @@ public:
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched.
     [[nodiscard]] context_services with_plain_transport(
-        std::string_view remote_address, std::uint16_t remote_port = 0) const noexcept {
+        std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;
         services.connection_services_.info_ = conn_info::plain(remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
@@ -275,11 +271,10 @@ public:
 
     template <typename traits_type, typename allocator_type>
     context_services with_plain_transport(
-        std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t = 0) const = delete;
+        std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
     [[nodiscard]] context_services with_tls_transport(std::string_view remote_address,
-        std::string_view client_certificate_subject = {},
-        std::uint16_t remote_port = 0) const noexcept {
+        std::string_view client_certificate_subject, std::uint16_t remote_port) const noexcept {
         auto services = *this;
         services.connection_services_.info_ = conn_info::tls(remote_address, client_certificate_subject);
         services.connection_services_.info_.set_remote_port(remote_port);
@@ -288,12 +283,12 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::basic_string<char, traits_type, allocator_type>&&,
-        std::string_view = {}, std::uint16_t = 0) const = delete;
+    context_services with_tls_transport(
+        std::basic_string<char, traits_type, allocator_type>&&, std::string_view, std::uint16_t) const = delete;
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::string_view,
-        std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t = 0) const = delete;
+    context_services with_tls_transport(
+        std::string_view, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
 private:
     [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {

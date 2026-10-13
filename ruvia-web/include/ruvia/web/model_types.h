@@ -25,8 +25,6 @@
 
 namespace ruvia {
 
-class request_name_value_list;
-
 namespace detail {
 
 template <typename t_type>
@@ -43,7 +41,6 @@ template <typename target_type, typename input_type>
     return static_cast<target_type>(input);
 }
 
-class model_input;
 struct model_value_factory;
 struct model_value_rebind_access;
 

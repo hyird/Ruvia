@@ -51,16 +51,9 @@ namespace ruvia::detail {
     return 0;
 }
 
-enum class chunk_size_line_status : std::uint8_t {
-    ok,
-    invalid_size,
-    overflow,
-    invalid_extension,
-};
-
 [[nodiscard]] request_header_kind classify_request_header(std::string_view name) noexcept;
-[[nodiscard]] bool is_valid_http_chunk_extension(std::string_view value) noexcept;
-[[nodiscard]] chunk_size_line_status parse_http_chunk_size_line(
-    std::string_view value, std::size_t& size) noexcept;
+// Parses `chunk-size [ chunk-ext ]` (RFC 9112 7.1); false on any malformed or
+// overflowing line.
+[[nodiscard]] bool parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexcept;
 
 }  // namespace ruvia::detail

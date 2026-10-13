@@ -139,11 +139,11 @@ public:
     explicit stop_callback(move_only_function<void()> callback_value) noexcept
         : callback_(std::move(callback_value)) {}
 
+    // Callers only wrap a non-empty callback: registration returns early on an
+    // empty one, and invoke() runs the stored callback at most once.
     void operator()() noexcept {
         try {
-            if (callback_) {
-                callback_();
-            }
+            callback_();
         } catch (...) {
             std::terminate();
         }

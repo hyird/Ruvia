@@ -33,7 +33,6 @@ enum class http_date_format_error { out_of_range };
     utc.tm_mon = static_cast<int>(static_cast<unsigned>(calendar.month())) - 1;
     utc.tm_mday = static_cast<int>(static_cast<unsigned>(calendar.day()));
     utc.tm_wday = static_cast<int>(weekday{date}.c_encoding());
-    utc.tm_yday = static_cast<int>((date - sys_days{calendar.year() / January / 1}).count());
     utc.tm_hour = static_cast<int>(clock.hours().count());
     utc.tm_min = static_cast<int>(clock.minutes().count());
     utc.tm_sec = static_cast<int>(clock.seconds().count());

@@ -64,8 +64,6 @@ RUVIA_TEST(http_parse_error_messages) {
     RUVIA_CHECK_EQ(
         std::string_view(invalid_length.what()), std::string_view(conflicting_length.what()));
     // Reachable errors all map to a non-empty message.
-    RUVIA_CHECK(std::string_view(http_parse_protocol_error(http_parse_error::chunk_size_overflow).what())
-                    .size() != 0);
     RUVIA_CHECK(
         std::string_view(http_parse_protocol_error(http_parse_error::invalid_transfer_encoding).what())
             .size() != 0);

@@ -102,25 +102,6 @@ void apply_find_options(db_query& query, const db_find_options& options, std::st
         query.lock(*options.lock_);
     }
 }
-template <typename e_type>
-struct db_map_entity_rows final {
-    entity_rows<e_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
-        return map_entity_rows<e_type>(std::move(rows), resource);
-    }
-};
-template <typename e_type>
-struct db_map_one_entity final {
-    std::optional<e_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
-        if (rows.empty()) {
-            return std::nullopt;
-        }
-        e_type entity(resource);
-        for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-            decode_entity_column<e_type, c_type>(entity, rows.front(), resource);
-        });
-        return std::optional<e_type>(std::in_place, std::move(entity));
-    }
-};
 struct db_map_count final {
     std::uint64_t operator()(db_rows&& rows, std::pmr::memory_resource*) const {
         return db_count_value(rows);

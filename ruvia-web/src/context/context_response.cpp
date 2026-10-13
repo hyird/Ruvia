@@ -185,11 +185,8 @@ task<http_response> context::not_found_task() {
     co_return response;
 }
 
-http_response context::streaming_head(std::string_view content_type_value) const {
+http_response context::streaming_head() const {
     http_response response({.resource_ = arena()});
-    if (!content_type_value.empty()) {
-        response.header("Content-Type", content_type_value);
-    }
     apply_response_state(response, std::nullopt);
     return response;
 }

@@ -16,9 +16,9 @@ struct pool_waiter_queued final {};
 
 using pool_waiter_result_type = worker_wait_result<std::size_t>;
 
-// One coroutine waiting for a free connection slot in a per-worker connection
-// pool. The node lives on the waiting coroutine's frame; the queue owns only
-// the intrusive links, so enqueuing costs no allocation.
+// One coroutine waiting for a free pool_lease_scheduler slot. The node lives
+// on the waiting coroutine's frame; the queue owns only the intrusive links,
+// so enqueuing costs no allocation.
 // pool_waiter is its own awaiter: the queue commits one typed result before it
 // resumes the coroutine, so callers never coordinate external readiness flags.
 class pool_waiter final {
@@ -79,19 +79,12 @@ private:
     pool_waiter* next_{nullptr};
 };
 
-// Intrusive FIFO shared by per-worker connection pools. Each pool is owned by a
-// single worker io_context and only
-// ever touched from that worker thread, so the queue needs no synchronization.
+// Intrusive FIFO of one pool_lease_scheduler. The scheduler is only ever
+// touched from its worker thread, so the queue needs no synchronization.
 class pool_waiter_queue final {
 public:
-    [[nodiscard]] bool empty() const noexcept {
-        return head_ == nullptr;
-    }
-
+    // Only acquire_waiting() enqueues, with a freshly constructed idle waiter.
     void enqueue(pool_waiter& waiter) noexcept {
-        if (!std::holds_alternative<pool_waiter_idle>(waiter.state_)) {
-            return;
-        }
         waiter.previous_ = tail_;
         waiter.next_ = nullptr;
         waiter.state_.template emplace<pool_waiter_queued>();

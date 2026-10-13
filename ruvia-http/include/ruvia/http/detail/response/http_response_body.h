@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -12,7 +11,6 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
@@ -31,21 +29,6 @@ class http_empty_response_body final {
 private:
     friend class http_response_body;
     constexpr http_empty_response_body() noexcept = default;
-};
-
-class http_borrowed_response_bytes final {
-public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-
-private:
-    friend class http_response_body;
-
-    explicit constexpr http_borrowed_response_bytes(std::string_view bytes_value) noexcept
-        : bytes_(bytes_value) {}
-
-    std::string_view bytes_;
 };
 
 class http_static_response_bytes final {
@@ -84,25 +67,8 @@ private:
 
 class http_owned_response_file final {
 public:
-    [[nodiscard]] const http_native_path_char_type* native_path_c_str() const& noexcept {
-        return native_path_->c_str();
-    }
-    [[nodiscard]] const http_native_path_char_type* native_path_c_str() const&& = delete;
-
-    [[nodiscard]] constexpr std::uint64_t size() const noexcept {
-        return size_;
-    }
-
-    [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
-        return offset_;
-    }
-
     [[nodiscard]] constexpr std::uint64_t length() const noexcept {
         return length_;
-    }
-
-    [[nodiscard]] constexpr http_response_file_identity identity() const noexcept {
-        return identity_;
     }
 
     [[nodiscard]] http_response_file_view view() const& noexcept {
@@ -176,15 +142,6 @@ public:
     [[nodiscard]] http_response_file_view file() const noexcept {
         return http_response_file_view(native_path_->c_str(), size_, 0, size_, identity_, &opened_);
     }
-    [[nodiscard]] std::uint64_t file_size() const noexcept {
-        return size_;
-    }
-    [[nodiscard]] http_response_file_identity identity() const noexcept {
-        return identity_;
-    }
-    [[nodiscard]] const http_multipart_byte_range_plan& plan() const& noexcept {
-        return plan_;
-    }
 
 private:
     friend class http_response_body;
@@ -210,16 +167,6 @@ public:
     }
     http_response_body& operator=(http_response_body&&) = delete;
 
-    [[nodiscard]] const http_empty_response_body* empty() const& noexcept {
-        return std::get_if<http_empty_response_body>(&value_);
-    }
-    [[nodiscard]] const http_empty_response_body* empty() const&& = delete;
-
-    [[nodiscard]] const http_borrowed_response_bytes* borrowed_bytes() const& noexcept {
-        return std::get_if<http_borrowed_response_bytes>(&value_);
-    }
-    [[nodiscard]] const http_borrowed_response_bytes* borrowed_bytes() const&& = delete;
-
     [[nodiscard]] const http_static_response_bytes* static_bytes() const& noexcept {
         return std::get_if<http_static_response_bytes>(&value_);
     }
@@ -241,9 +188,6 @@ public:
     [[nodiscard]] const http_multipart_response_body* multipart_body() const&& = delete;
 
     [[nodiscard]] std::string_view bytes() const& noexcept {
-        if (const auto* body = borrowed_bytes()) {
-            return body->bytes();
-        }
         if (const auto* body = static_bytes()) {
             return body->bytes();
         }
@@ -278,9 +222,8 @@ public:
 private:
     friend class ::ruvia::http_response;
 
-    using value_type =
-        std::variant<http_empty_response_body, http_borrowed_response_bytes, http_static_response_bytes,
-            http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
+    using value_type = std::variant<http_empty_response_body, http_static_response_bytes,
+        http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
     static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
     void set_empty() noexcept {
@@ -294,14 +237,6 @@ private:
         }
         http_owned_response_bytes body(resource, bytes_value);
         value_.emplace<http_owned_response_bytes>(std::move(body));
-    }
-
-    void set_borrowed(std::string_view bytes_value) noexcept {
-        if (bytes_value.empty()) {
-            set_empty();
-            return;
-        }
-        value_.emplace<http_borrowed_response_bytes>(http_borrowed_response_bytes(bytes_value));
     }
 
     void set_static(std::string_view bytes_value) noexcept {
@@ -318,15 +253,6 @@ private:
             return;
         }
         http_owned_response_bytes body(resource, std::move(bytes_value));
-        value_.emplace<http_owned_response_bytes>(std::move(body));
-    }
-
-    void materialize(std::pmr::memory_resource* resource) {
-        const auto* borrowed = borrowed_bytes();
-        if (borrowed == nullptr) {
-            return;
-        }
-        http_owned_response_bytes body(resource, borrowed->bytes());
         value_.emplace<http_owned_response_bytes>(std::move(body));
     }
 

@@ -274,7 +274,7 @@ struct permessage_deflate_params final {
 }
 
 [[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(
-    const http_request& request, websocket_deflate_config config = {}) {
+    const http_request& request, websocket_deflate_config config) {
     if (config.compression_level_ < 0 || config.compression_level_ > 9) {
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
     }

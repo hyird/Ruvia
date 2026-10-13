@@ -29,8 +29,6 @@ struct db_query_backend;
 }  // namespace detail
 
 class db_query;
-template <typename entity_type>
-class entity_rows;
 template <typename entity_type, typename executor_type>
 class db_repository;
 template <typename entity_type, typename executor_type>

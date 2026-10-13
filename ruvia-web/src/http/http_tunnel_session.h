@@ -30,7 +30,7 @@ template <typename stream_type>
 class http_tunnel_session final {
 public:
     http_tunnel_session(stream_type& stream, tls_tunnel_output* tls_output, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
+        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending)
         : transport_(stream, tls_output),
           inbound_(inbound),
           pending_(pending, &inbound),

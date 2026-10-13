@@ -6,6 +6,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "parser/field_line_folding.h"
@@ -222,7 +223,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
         if (first_boundary_) {
             const auto delimiter =
                 detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_.eof(),
-                    &delimiter_scan_offset_, &delimiter_padding_offset_);
+                    delimiter_scan_offset_, delimiter_padding_offset_);
             if (delimiter.no_match() != nullptr) {
                 if (buffer_view().size() > max_multipart_preamble_bytes) {
                     return multipart_parse_error::preamble_too_large;
@@ -241,9 +242,6 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
             }
             const auto* part = delimiter.part();
             const auto* close = delimiter.close();
-            if (part == nullptr && close == nullptr) {
-                return multipart_parse_error::invalid_delimiter;
-            }
             const auto preamble_bytes = part != nullptr ? part->offset() : close->offset();
             if (preamble_bytes > max_multipart_preamble_bytes) {
                 return multipart_parse_error::preamble_too_large;
@@ -256,7 +254,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
 
         const auto delimiter =
             detail::http_match_multipart_delimiter_line(buffer_view(), boundary_, input_.eof(),
-                &delimiter_padding_offset_);
+                delimiter_padding_offset_);
         if (delimiter.need_input() != nullptr) {
             if (buffer_view().size() > max_multipart_delimiter_line_bytes) {
                 return multipart_parse_error::delimiter_line_too_large;
@@ -370,7 +368,7 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         const auto buffer = buffer_view();
         const auto delimiter =
             detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(),
-                &delimiter_scan_offset_, &delimiter_padding_offset_);
+                delimiter_scan_offset_, delimiter_padding_offset_);
         const auto* part_delimiter = delimiter.part();
         const auto* close_delimiter = delimiter.close();
         if (part_delimiter != nullptr || close_delimiter != nullptr) {

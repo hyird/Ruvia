@@ -228,7 +228,6 @@ private:
     };
     void append(std::pmr::string sql, db_migration_atomicity atomicity = db_migration_atomicity::transactional, bool procedural = false);
     void require_postgresql() const;
-    [[nodiscard]] std::pmr::string table_prefix(std::string_view table) const;
     void append_type(std::pmr::string& sql, const db_type_definition& type) const;
     void append_column(std::pmr::string& sql, const db_schema_column& column) const;
     void append_constraint(std::pmr::string& sql, const db_schema_constraint& constraint) const;

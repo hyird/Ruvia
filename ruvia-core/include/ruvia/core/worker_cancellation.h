@@ -141,10 +141,6 @@ public:
           id_(require_target(target).next_operation_id()) {
         identity = id_;
     }
-    [[nodiscard]] static worker_cancellation_registration observe(
-        const std::shared_ptr<target_type>& target, std::uint64_t id) {
-        return worker_cancellation_registration(&require_target(target), id);
-    }
     worker_cancellation_registration(const worker_cancellation_registration&) = delete;
     worker_cancellation_registration& operator=(const worker_cancellation_registration&) = delete;
     worker_cancellation_registration(worker_cancellation_registration&&) = delete;
@@ -183,9 +179,6 @@ private:
         }
         return *target;
     }
-    worker_cancellation_registration(target_type* target, std::uint64_t id) noexcept
-        : target_(target),
-          id_(id) {}
     target_type* target_;
     std::uint64_t* identity_{};
     std::uint64_t id_;

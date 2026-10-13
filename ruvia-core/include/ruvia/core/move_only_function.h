@@ -141,15 +141,13 @@ private:
         delete static_cast<stored_type*>(object);
     }
 
-    static void move_heap(void*, void*) noexcept {}
-
     template <typename stored_type>
     static inline constexpr operations inline_operations{
         &invoke<stored_type>, &destroy_inline<stored_type>, &move_inline<stored_type>};
 
+    // move_from() relocates only inline storage; heap targets keep their pointer.
     template <typename stored_type>
-    static inline constexpr operations heap_operations{
-        &invoke<stored_type>, &destroy_heap<stored_type>, &move_heap};
+    static inline constexpr operations heap_operations{&invoke<stored_type>, &destroy_heap<stored_type>, nullptr};
 
     [[nodiscard]] bool is_inline() const noexcept {
         return object_ == static_cast<const void*>(storage_);

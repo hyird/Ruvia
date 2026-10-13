@@ -93,9 +93,6 @@ std::int64_t connection_scanner::entry_type::last_active_ms() const noexcept {
 void connection_scanner::entry_type::register_periodic_check(periodic_check_registration_type& registration,
     void* target, periodic_check_type tick, drain_check_type drain) noexcept {
     registration.reset();
-    if (target == nullptr || tick == nullptr) {
-        return;
-    }
     registration.entry_ = this;
     registration.target_ = target;
     registration.tick_ = tick;
