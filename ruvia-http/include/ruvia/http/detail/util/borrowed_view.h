@@ -1,6 +1,8 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -28,5 +30,15 @@ inline constexpr bool is_http_owning_char_string<std::basic_string<char, traits_
 template <typename t_type>
 concept http_temporary_owning_char_string =
     is_http_owning_char_string<std::remove_cvref_t<t_type>> && !std::is_lvalue_reference_v<t_type&&>;
+
+// std::span<const element_type> parameters bind every contiguous range,
+// including temporary std::string, std::vector, and std::array values. Use this
+// shared predicate on deleted overloads of span entry points whose results
+// borrow the input; borrowed ranges (span, string_view) and lvalues still bind.
+template <typename range_type, typename element_type>
+concept http_temporary_owning_range =
+    !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
+    !std::ranges::borrowed_range<range_type> &&
+    std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>;
 
 }  // namespace ruvia::detail

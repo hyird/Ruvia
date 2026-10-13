@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_whitespace.h"
@@ -150,13 +151,7 @@ private:
 // A validated section retains the caller's header array until the synchronous
 // protocol submission completes.  Letting a temporary std::array/vector convert
 // to span here would return a proof object whose field storage had already died.
-template <typename range_type>
-concept http_temporary_owning_response_trailer_range =
-    !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-    !std::ranges::borrowed_range<range_type> &&
-    std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, http_header_view>;
-
-template <http_temporary_owning_response_trailer_range headers_type>
+template <http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section_result check_http_response_trailer_section(headers_type&&) noexcept = delete;
 
 // Validate the whole section before head, encoder, output, or stream mutation.
@@ -175,7 +170,7 @@ http_response_trailer_section_result check_http_response_trailer_section(headers
     return http_response_trailer_section_result(http_response_trailer_section(trailers));
 }
 
-template <http_temporary_owning_response_trailer_range headers_type>
+template <http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section_result validated_response_trailer_section(headers_type&&) = delete;
 
 // Validate a caller's trailers, throwing the typed failure. The caller keeps the

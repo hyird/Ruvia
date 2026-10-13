@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -9,6 +10,8 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+
+#include "ruvia/http/detail/util/http_encode_overlap.h"
 
 namespace ruvia {
 
@@ -42,39 +45,45 @@ enum class http_base64_padding : std::uint8_t {
 }
 
 // The single base64 encoder. `output` must have room for
-// http_base64_encoded_size(input.size(), padding) characters.
+// http_base64_encoded_size(input.size(), padding) characters and may overlap
+// `input` anywhere, including in place.
 inline void http_base64_encode(char* output, std::span<const std::uint8_t> input,
     http_base64_charset charset = http_base64_charset::standard,
     http_base64_padding padding = http_base64_padding::required) noexcept {
     const auto alphabet =
         charset == http_base64_charset::url_safe ? http_base64_url_alphabet : http_base64_alphabet;
-    std::size_t in = 0;
-    std::size_t out = 0;
-    while (input.size() - in >= 3) {
-        const auto value = (static_cast<std::uint32_t>(input[in]) << 16) |
-                           (static_cast<std::uint32_t>(input[in + 1]) << 8) |
-                           static_cast<std::uint32_t>(input[in + 2]);
-        output[out++] = alphabet[(value >> 18) & 0x3F];
-        output[out++] = alphabet[(value >> 12) & 0x3F];
-        output[out++] = alphabet[(value >> 6) & 0x3F];
-        output[out++] = alphabet[value & 0x3F];
-        in += 3;
+    const bool padded = padding == http_base64_padding::required;
+    // Group k reads input[3k, 3k + 3) before writing output[4k, 4k + 4).
+    const auto encode_group = [output, input, alphabet, padded](std::size_t group) noexcept {
+        const auto bytes = input.subspan(group * 3, (std::min)(input.size() - group * 3, std::size_t{3}));
+        auto value = static_cast<std::uint32_t>(bytes[0]) << 16;
+        if (bytes.size() > 1) {
+            value |= static_cast<std::uint32_t>(bytes[1]) << 8;
+        }
+        if (bytes.size() > 2) {
+            value |= static_cast<std::uint32_t>(bytes[2]);
+        }
+        auto* const digits = output + group * 4;
+        digits[0] = alphabet[(value >> 18) & 0x3F];
+        digits[1] = alphabet[(value >> 12) & 0x3F];
+        if (bytes.size() > 1) {
+            digits[2] = alphabet[(value >> 6) & 0x3F];
+        } else if (padded) {
+            digits[2] = '=';
+        }
+        if (bytes.size() > 2) {
+            digits[3] = alphabet[value & 0x3F];
+        } else if (padded) {
+            digits[3] = '=';
+        }
+    };
+    const auto groups = input.size() / 3 + (input.size() % 3 == 0 ? 0 : 1);
+    const auto forward_groups = detail::http_forward_encoded_groups(output, input.data(), groups);
+    for (auto group = groups; group != forward_groups;) {
+        encode_group(--group);
     }
-    const auto remaining = input.size() - in;
-    if (remaining == 0) {
-        return;
-    }
-    const auto value = (static_cast<std::uint32_t>(input[in]) << 16) |
-                       (remaining == 2 ? static_cast<std::uint32_t>(input[in + 1]) << 8 : 0U);
-    output[out++] = alphabet[(value >> 18) & 0x3F];
-    output[out++] = alphabet[(value >> 12) & 0x3F];
-    if (remaining == 2) {
-        output[out++] = alphabet[(value >> 6) & 0x3F];
-    } else if (padding == http_base64_padding::required) {
-        output[out++] = '=';
-    }
-    if (padding == http_base64_padding::required) {
-        output[out] = '=';
+    for (std::size_t group = 0; group != forward_groups; ++group) {
+        encode_group(group);
     }
 }
 

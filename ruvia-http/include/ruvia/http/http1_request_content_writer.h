@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http_header.h"
 
@@ -43,6 +44,8 @@ public:
     void release_content() noexcept;
     void abort() noexcept;
     [[nodiscard]] std::variant<chunk_type, http1_request_content_write_error> plan_chunk(std::span<const char> payload) noexcept;
+    template <detail::http_temporary_owning_range<char> payload_type>
+    std::variant<chunk_type, http1_request_content_write_error> plan_chunk(payload_type&&) noexcept = delete;
     [[nodiscard]] std::variant<std::monostate, http1_request_content_write_error> commit_chunk(std::size_t payload_bytes) noexcept;
     // Returns a view into buffer. Transmit it, then commit_finish(). Known-length
     // bodies return an empty view and still require a successful commit_finish().

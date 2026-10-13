@@ -7,6 +7,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+
+#include "ruvia/http/detail/util/http_encode_overlap.h"
 
 namespace ruvia {
 
@@ -36,13 +39,25 @@ namespace ruvia {
 }
 
 // The single byte-sequence to lowercase hex encoder: writes exactly
-// 2 * bytes.size() digits starting at `output` and returns the end.
+// 2 * bytes.size() digits starting at `output` and returns the end. `output`
+// may overlap `bytes` anywhere, including in place.
 constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned char> bytes) noexcept {
-    for (const auto byte : bytes) {
-        *output++ = http_lower_hex_digit(byte >> 4);
-        *output++ = http_lower_hex_digit(byte);
+    const auto encode_byte = [output, bytes](std::size_t index) noexcept {
+        const auto byte = bytes[index];
+        output[2 * index] = http_lower_hex_digit(byte >> 4);
+        output[2 * index + 1] = http_lower_hex_digit(byte);
+    };
+    // Constant evaluation cannot make char output alias unsigned char input.
+    const auto forward_bytes = std::is_constant_evaluated()
+                                   ? bytes.size()
+                                   : detail::http_forward_encoded_groups(output, bytes.data(), bytes.size());
+    for (auto index = bytes.size(); index != forward_bytes;) {
+        encode_byte(--index);
     }
-    return output;
+    for (std::size_t index = 0; index != forward_bytes; ++index) {
+        encode_byte(index);
+    }
+    return output + 2 * bytes.size();
 }
 
 // Text is encoded byte by byte, like its unsigned char representation.
@@ -65,20 +80,11 @@ inline void http_append_lower_hex(std::pmr::string& output, std::span<const unsi
     const bool aliased = !bytes.empty() && !before(bytes.data(), first) && !before(first + start, bytes.data());
     const auto offset = aliased ? static_cast<std::size_t>(bytes.data() - first) : 0;
     output.resize(start + bytes.size() * 2);
-    if (!aliased) {
-        http_encode_lower_hex(output.data() + start, bytes);
-        return;
-    }
-    // The source ends at the latest at the old terminating NUL, index start,
-    // where the digits begin (resize rewrote that byte with the same NUL).
-    // Encoding backwards keeps every write above the unread source bytes.
-    const auto* const source = reinterpret_cast<const unsigned char*>(output.data()) + offset;
-    auto* digit = output.data() + output.size();
-    for (auto index = bytes.size(); index != 0;) {
-        const auto byte = source[--index];
-        *--digit = http_lower_hex_digit(byte);
-        *--digit = http_lower_hex_digit(byte >> 4);
-    }
+    // An aliased source ends at the latest at the old terminating NUL, index
+    // start, which resize rewrote with the same NUL.
+    const auto source =
+        aliased ? std::span(reinterpret_cast<const unsigned char*>(output.data()) + offset, bytes.size()) : bytes;
+    http_encode_lower_hex(output.data() + start, source);
 }
 
 inline void http_append_lower_hex(std::pmr::string& output, std::string_view bytes) {

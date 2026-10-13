@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -11,10 +12,11 @@
 
 namespace {
 
-std::string encode(std::string_view input) {
-    std::string output(ruvia::http_base64_encoded_size(input.size()), '\0');
+std::string encode(std::string_view input, ruvia::http_base64_padding padding = ruvia::http_base64_padding::required) {
+    std::string output(ruvia::http_base64_encoded_size(input.size(), padding), '\0');
     ruvia::http_base64_encode(output.data(),
-        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()));
+        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
+        ruvia::http_base64_charset::standard, padding);
     return output;
 }
 
@@ -27,6 +29,27 @@ RUVIA_TEST(http_base64_encodes_with_standard_alphabet_and_padding) {
     RUVIA_CHECK_EQ(encode("foo"), std::string("Zm9v"));
     RUVIA_CHECK_EQ(encode("foobar"), std::string("Zm9vYmFy"));
     RUVIA_CHECK_EQ(encode("\xfb\xff"), std::string("+/8="));
+}
+
+RUVIA_TEST(http_base64_encode_accepts_output_overlapping_input) {
+    constexpr std::string_view text = "abcdefghij";
+    constexpr std::size_t input_start = 16;
+    for (const auto padding : {ruvia::http_base64_padding::required, ruvia::http_base64_padding::forbidden}) {
+        for (std::size_t size = 0; size <= text.size(); ++size) {
+            const auto input = text.substr(0, size);
+            const auto expected = encode(input, padding);
+            // Every output start from wholly before to wholly after the input,
+            // including in place and starts inside it.
+            for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
+                std::array<char, 48> buffer{};
+                input.copy(buffer.data() + input_start, size);
+                ruvia::http_base64_encode(buffer.data() + output_start,
+                    std::span(reinterpret_cast<const std::uint8_t*>(buffer.data()) + input_start, size),
+                    ruvia::http_base64_charset::standard, padding);
+                RUVIA_CHECK_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
+            }
+        }
+    }
 }
 
 RUVIA_TEST(http_base64_encoded_size_preserves_padding_at_numeric_boundaries) {
