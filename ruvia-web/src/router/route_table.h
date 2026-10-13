@@ -129,13 +129,6 @@ private:
         std::string_view method_token, std::string_view path) const noexcept;
     [[nodiscard]] route_resolution resolved(const route_entry& route, const route_match& match = {}) const noexcept;
 
-    // How dispatch_request treats a failure escaping the routing machinery
-    // itself. Handler exceptions are already converted inside the route path.
-    enum class dispatch_failure_type : std::uint8_t {
-        propagate,
-        respond,
-    };
-
     static constexpr std::size_t routable_method_count = compiled_route_plan::routable_method_count;
     static constexpr std::size_t no_route_index = compiled_route_plan::no_route_index;
     using dynamic_node_type = compiled_route_plan::dynamic_node_type;
@@ -162,7 +155,7 @@ private:
         std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept;
     [[nodiscard]] task<http_response> dispatch_request(const http_request& request,
         const route_resolution& resolution, request_memory& memory, context_services services,
-        document_root_binding document_root, dispatch_failure_type failure,
+        document_root_binding document_root,
         static_file_selection_mode static_file_mode) const;
     [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
     // The handler is copied into the coroutine frame: callers may pass one
@@ -184,6 +177,10 @@ private:
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler_type terminal) const;
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
+    // A failure that escapes the entry hop is answered exactly like one
+    // contained below it, so the response keeps the context metadata and does
+    // not depend on how deep in the chain the failure was raised.
+    [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
     [[nodiscard]] static task<void> contain_stream_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_error(context& context, http_error_info error) const;

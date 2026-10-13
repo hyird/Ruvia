@@ -215,6 +215,11 @@ task<void> detail::route_table::contain_failure(
     detail::context_access::set_response(context_value, std::move(response));
 }
 
+task<http_response> detail::route_table::finalize_failure(context& context_value, std::exception_ptr exception) const {
+    co_await contain_failure(*this, context_value, std::move(exception));
+    co_return detail::context_access::release_response(context_value);
+}
+
 task<void> detail::route_table::contain_stream_failure(
     const route_table& table, context& context_value, std::exception_ptr exception) {
     // Not a failure: the committed head already completed a body-suppressed

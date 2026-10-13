@@ -137,7 +137,10 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     }
     dispatch_response result(pool());
     result.status_ = response.status();
-    result.body_.assign(response.body_bytes());
+    // As on the wire: HEAD and content-forbidden statuses carry no body.
+    if (!plan_http_response_body(request.known_method(), response.status()).body_suppressed()) {
+        result.body_.assign(response.body_bytes());
+    }
     result.headers_.reserve(response.headers().size());
     for (const auto& header : response.headers()) {
         result.headers_.push_back(http_header::copy_of(header.name(), header.value(), pool()));

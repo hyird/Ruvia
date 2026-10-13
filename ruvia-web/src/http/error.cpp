@@ -5,6 +5,7 @@
 #include <system_error>
 
 #include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/process_resource.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
@@ -179,14 +180,11 @@ task<http_response> detail::invoke_error_handler(
             co_return co_await handler(context_value, error);
         } catch (const http_error& nested) {
             co_return make_default_error_response(context_value.arena(), nested.info());
-        } catch (const std::exception&) {
-            // The error handler itself threw; keep transport output deterministic
-            // and avoid echoing exception detail to the client.
-            co_return make_default_error_response(context_value.arena(),
-                http_error_info({.status_ = ruvia::http_status::internal_server_error,
-                    .code_ = "error_handler_failed",
-                    .message_ = "error handler failed"}));
         } catch (...) {
+            // The error handler itself threw: nothing above it observes the
+            // failure, so report it server-side, keep transport output
+            // deterministic, and avoid echoing exception detail to the client.
+            ruvia::report_unhandled_failure("error handler", std::current_exception());
             co_return make_default_error_response(context_value.arena(),
                 http_error_info({.status_ = ruvia::http_status::internal_server_error,
                     .code_ = "error_handler_failed",

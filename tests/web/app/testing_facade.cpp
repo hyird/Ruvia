@@ -132,6 +132,19 @@ public:
     }
 };
 
+// Rejects requests under /guarded before reaching the answer.
+class testing_facade_unmatched_reject final {
+public:
+    static constexpr bool ruvia_runs_on_unmatched_requests = true;
+
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+        if (c.req().path().starts_with("/guarded")) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::unauthorized});
+        }
+        co_await next_value();
+    }
+};
+
 // Each replaces a complete downstream response after next(): one by failing,
 // one by responding.
 class testing_facade_deny_after final {
@@ -214,6 +227,7 @@ public:
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/deadline", deadline, ruvia::deadline<20>);
     RUVIA_GET("/partial", partial);
+    RUVIA_GET("/subrequest", subrequest);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
     RUVIA_METHOD("PROPFIND", "/dav-only", dav_only);
@@ -233,6 +247,18 @@ private:
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& c) {
         co_return c.text("hello");
+    }
+
+    // Relays a subrequest named by the query as status and body; X-Test-Relayed
+    // tells a relayed answer from a failure escaping dispatch().
+    ruvia::task<ruvia::http_response> subrequest(ruvia::context& c) {
+        const auto child = co_await c.dispatch({
+            .method_ = c.req().query("method").value_or("GET"),
+            .target_ = c.req().query("target").value_or("/"),
+        });
+        c.status(child.status());
+        c.header("X-Test-Relayed", "1");
+        co_return c.text(child.body());
     }
 
     // A representation-specific answer whose metadata describes only its own body.
@@ -1005,6 +1031,37 @@ RUVIA_TEST(testing_facade_metadata_set_after_a_final_response_is_kept) {
         RUVIA_CHECK(!failed.header("Content-Range").has_value());
         RUVIA_CHECK(!failed.header("ETag").has_value());
     }
+}
+
+RUVIA_TEST(testing_facade_failure_after_next_keeps_metadata_without_error_handler) {
+    // The default error response of a failure raised by the only middleware
+    // carries the metadata it set after next(), as from any deeper hop.
+    ruvia::test_app app;
+    app.use_at<testing_facade_stamp_then_fail>({.prefix_ = "/t/partial"});
+    const auto failed = app.request(ruvia::test_request::get("/t/partial"));
+    RUVIA_CHECK_EQ(failed.status(), ruvia::http_status::conflict);
+    RUVIA_CHECK_EQ(failed.header("X-Test-After").value_or(std::string_view{}), std::string_view("1"));
+    RUVIA_CHECK(!failed.header("Content-Range").has_value());
+}
+
+RUVIA_TEST(testing_facade_subrequest_answers_like_a_network_request) {
+    ruvia::test_app app;
+    app.use<testing_facade_unmatched_reject>();
+
+    const auto missing = app.request(ruvia::test_request::get("/t/subrequest?target=/guarded/missing"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::unauthorized);
+    RUVIA_CHECK(missing.header("X-Test-Relayed").has_value());
+    const auto options =
+        app.request(ruvia::test_request::get("/t/subrequest?method=OPTIONS&target=/guarded/missing"));
+    RUVIA_CHECK_EQ(options.status(), ruvia::http_status::unauthorized);
+    RUVIA_CHECK(options.header("X-Test-Relayed").has_value());
+
+    // RFC 9110 9.3.2: HEAD answers with the GET metadata but no body.
+    const auto head = app.request(ruvia::test_request::get("/t/subrequest?method=HEAD&target=/t/hello"));
+    RUVIA_CHECK_EQ(head.status(), ruvia::http_status::ok);
+    RUVIA_CHECK(head.body().empty());
+    const auto get = app.request(ruvia::test_request::get("/t/subrequest?target=/t/hello"));
+    RUVIA_CHECK_EQ(get.body(), std::string_view("hello"));
 }
 
 RUVIA_TEST(testing_facade_unmatched_middleware_wraps_automatic_options_answers) {

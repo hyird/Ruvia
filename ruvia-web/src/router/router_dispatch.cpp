@@ -98,13 +98,13 @@ task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const h
 task<http_response> detail::route_table::dispatch(const http_request& request,
     const route_resolution& resolution, request_memory& memory, context_services services) const {
     co_return co_await dispatch_request(request, resolution, memory, services,
-        document_root_binding::none(), dispatch_failure_type::propagate,
+        document_root_binding::none(),
         static_file_selection_mode::identity_only);
 }
 
 task<http_response> detail::route_table::dispatch_request(const http_request& request,
     const route_resolution& resolution, request_memory& memory, context_services services,
-    document_root_binding document_root, dispatch_failure_type failure,
+    document_root_binding document_root,
     static_file_selection_mode static_file_mode) const {
     std::exception_ptr dispatch_exception;
     try {
@@ -194,11 +194,8 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
         } catch (...) {
             exception = std::current_exception();
         }
-        co_return co_await handle_exception(context_value, exception);
+        co_return co_await finalize_failure(context_value, exception);
     } catch (...) {
-        if (failure == dispatch_failure_type::propagate) {
-            throw;
-        }
         dispatch_exception = std::current_exception();
     }
     co_return co_await handle_exception(request, memory, dispatch_exception, services);
@@ -211,7 +208,7 @@ task<http_response> detail::route_table::dispatch_buffered_response(const http_r
     // failure policy live in the existing dispatch frame, so the unified
     // application entry adds no request-path allocation.
     return dispatch_request(request, resolution, memory, services, std::move(document_root),
-        dispatch_failure_type::respond, static_file_mode);
+        static_file_mode);
 }
 
 }  // namespace ruvia

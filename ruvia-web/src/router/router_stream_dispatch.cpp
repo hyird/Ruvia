@@ -104,7 +104,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         if (detail::context_access::output_committed(context_value)) {
             std::rethrow_exception(exception);
         }
-        auto response = co_await handle_exception(context_value, exception);
+        auto response = co_await finalize_failure(context_value, exception);
         co_return std::move(response);
     }
 
