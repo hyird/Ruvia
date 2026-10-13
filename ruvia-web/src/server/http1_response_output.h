@@ -71,7 +71,13 @@ public:
 
     // Begins writing the output followed by `body`, which stays borrowed until
     // complete(). Returns true when the write already settled.
-    [[nodiscard]] bool start(std::string_view body = {}) noexcept {
+    // MSVC 19.51 can lose a required coroutine tail call when this synchronous
+    // path is inlined into its caller.
+    [[nodiscard]]
+#if defined(_MSC_VER) && !defined(__clang__)
+    __declspec(noinline)
+#endif
+    bool start(std::string_view body = {}) noexcept {
         body_ = body;
         written_ = {};
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {

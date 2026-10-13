@@ -63,6 +63,10 @@ public:
         }
     }
 
+    [[nodiscard]] auto wait() {
+        return signal_.wait();
+    }
+
     template <typename owner_type, typename start_type>
     [[nodiscard]] task<void> shutdown_owned(std::shared_ptr<owner_type> owner_value,
         start_type start, observation_mode_type mode) {
@@ -75,10 +79,6 @@ public:
             co_await wait();
         }
         observe_failure(mode);
-    }
-
-    [[nodiscard]] auto wait() {
-        return signal_.wait();
     }
 
     void notify_progress() noexcept {

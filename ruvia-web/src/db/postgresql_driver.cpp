@@ -348,7 +348,9 @@ task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::
         }
         const auto status = PQresultStatus(result_value.get());
         if (!successful_result_status(status)) {
-            throw co_await postgresql_statement_failure(pool, index, "PostgreSQL query", result_value, deadline_value);
+            auto failure = co_await postgresql_statement_failure(
+                pool, index, "PostgreSQL query", result_value, deadline_value);
+            throw failure;
         }
         if (status == PGRES_TUPLES_OK) {
             if (retained_tuple_result) {
@@ -382,7 +384,9 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
         }
         const auto status = PQresultStatus(result_value.get());
         if (!successful_result_status(status)) {
-            throw co_await postgresql_statement_failure(pool, index, "PostgreSQL execute", result_value, deadline_value);
+            auto failure = co_await postgresql_statement_failure(
+                pool, index, "PostgreSQL execute", result_value, deadline_value);
+            throw failure;
         }
         // The whole command is read before a row set is refused, leaving the
         // connection idle.
