@@ -58,9 +58,9 @@ public:
     }
 
     // Exactly `bytes` uninitialized writable bytes after the readable ones.
-    // Moves the readable bytes to the front when that makes the room;
-    // otherwise grows the storage geometrically. Throws std::length_error when
-    // the size would exceed the addressable range.
+    // Compacts when the consumed prefix covers the live bytes and makes room;
+    // otherwise grows geometrically to amortize small read/write cycles.
+    // Throws std::length_error when the size exceeds the addressable range.
     [[nodiscard]] std::span<char> prepare(std::size_t bytes);
     // Appends the first `bytes` bytes of the writable space, which the caller
     // has written. Throws std::length_error past the storage.
@@ -84,7 +84,7 @@ public:
     void clear_retaining_small(std::size_t retained_bytes = http_retained_pmr_string_bytes) noexcept;
 
 private:
-    [[nodiscard]] std::size_t grown_capacity(std::size_t bytes) const;
+    [[nodiscard]] std::size_t room_capacity(std::size_t bytes) const;
     void make_room(std::size_t bytes);
     void reallocate(std::size_t capacity, std::string_view tail = {});
     void release() noexcept;

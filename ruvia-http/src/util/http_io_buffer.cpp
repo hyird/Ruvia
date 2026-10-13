@@ -54,14 +54,14 @@ void http_io_buffer::append(std::string_view bytes) {
         return;
     }
     const bool aliases = detail::http_text_overlaps(bytes, std::string_view(storage_, capacity_));
-    if (!aliases && capacity_ - size() >= bytes.size()) {
+    if (!aliases) {
         make_room(bytes.size());
         std::memcpy(storage_ + end_, bytes.data(), bytes.size());
         end_ += bytes.size();
         return;
     }
     // Copy an aliasing source into new storage before the old one is freed.
-    reallocate(capacity_ - size() >= bytes.size() ? capacity_ : grown_capacity(bytes.size()), bytes);
+    reallocate(room_capacity(bytes.size()), bytes);
 }
 
 void http_io_buffer::consume(std::size_t bytes) noexcept {
@@ -94,17 +94,23 @@ void http_io_buffer::clear_retaining_small(std::size_t retained_bytes) noexcept 
     }
 }
 
-std::size_t http_io_buffer::grown_capacity(std::size_t bytes) const {
+std::size_t http_io_buffer::room_capacity(std::size_t bytes) const {
     if (bytes > max_io_buffer_bytes - size()) {
         throw std::length_error("http_io_buffer size exceeds the addressable range");
+    }
+    // Charge compaction to the consumed prefix: moving the live bytes must
+    // recover at least as many bytes. Otherwise grow once for future writes.
+    if (capacity_ - size() >= bytes && begin_ >= size()) {
+        return capacity_;
     }
     const auto doubled = capacity_ > max_io_buffer_bytes / 2 ? max_io_buffer_bytes : capacity_ * 2;
     return std::max(size() + bytes, doubled);
 }
 
 void http_io_buffer::make_room(std::size_t bytes) {
-    if (capacity_ - size() < bytes) {
-        reallocate(grown_capacity(bytes));
+    const auto capacity = room_capacity(bytes);
+    if (capacity > capacity_) {
+        reallocate(capacity);
         return;
     }
     // Only the readable bytes move, and only when the dead prefix is needed.

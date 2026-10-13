@@ -158,3 +158,38 @@ RUVIA_TEST(io_buffer_releases_storage_by_policy) {
     }
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
 }
+
+RUVIA_TEST(io_buffer_small_reads_preserve_the_sliding_window) {
+    counting_resource resource;
+    for (const bool prepared : {false, true}) {
+        {
+            ruvia::http_io_buffer buffer(&resource);
+            std::string expected(64, '\0');
+            for (std::size_t index = 0; index < expected.size(); ++index) {
+                expected[index] = static_cast<char>(index);
+            }
+            buffer.append(expected);
+            for (std::size_t index = 0; index < 1024; ++index) {
+                buffer.consume(1);
+                expected.erase(0, 1);
+                const char byte = static_cast<char>(index);
+                if (prepared) {
+                    buffer.prepare(1)[0] = byte;
+                    buffer.commit(1);
+                } else {
+                    buffer.append(std::string_view(&byte, 1));
+                }
+                expected.push_back(byte);
+                RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+            }
+            // A self-append can grow or compact; it must read the old window.
+            buffer.consume(32);
+            expected.erase(0, 32);
+            const auto copied = expected;
+            buffer.append(buffer.view());
+            expected.append(copied);
+            RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+        }
+        RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
+    }
+}
