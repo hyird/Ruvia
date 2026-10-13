@@ -53,16 +53,23 @@ public:
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
 
+    [[nodiscard]] constexpr bool file_representation() const noexcept {
+        return file_representation_;
+    }
+
 private:
     friend class http_response_body;
 
     http_owned_response_bytes(std::pmr::memory_resource* resource, std::string_view bytes_value)
         : bytes_(make_http_pmr_object<std::pmr::string>(resource, bytes_value, resource)) {}
 
-    http_owned_response_bytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value)
-        : bytes_(make_http_pmr_object<std::pmr::string>(resource, std::move(bytes_value), resource)) {}
+    http_owned_response_bytes(
+        std::pmr::memory_resource* resource, std::pmr::string&& bytes_value, bool file_representation)
+        : bytes_(make_http_pmr_object<std::pmr::string>(resource, std::move(bytes_value), resource)),
+          file_representation_(file_representation) {}
 
     std::unique_ptr<std::pmr::string, http_pmr_object_deleter<std::pmr::string>> bytes_;
+    bool file_representation_{false};
 };
 
 class http_owned_response_file final {
@@ -208,6 +215,13 @@ public:
     }
     [[nodiscard]] std::optional<http_response_file_view> file() const&& = delete;
 
+    [[nodiscard]] bool file_representation() const noexcept {
+        if (const auto* body = owned_bytes()) {
+            return body->file_representation();
+        }
+        return owned_file() != nullptr || multipart_body() != nullptr;
+    }
+
     [[nodiscard]] std::uint64_t size() const noexcept {
         if (const auto* body = owned_file()) {
             return body->length();
@@ -251,7 +265,13 @@ private:
             set_empty();
             return;
         }
-        http_owned_response_bytes body(resource, std::move(bytes_value));
+        http_owned_response_bytes body(resource, std::move(bytes_value), false);
+        value_.emplace<http_owned_response_bytes>(std::move(body));
+    }
+
+    // Kept even when empty: an empty file is still a file representation.
+    void set_file_bytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value) {
+        http_owned_response_bytes body(resource, std::move(bytes_value), true);
         value_.emplace<http_owned_response_bytes>(std::move(body));
     }
 

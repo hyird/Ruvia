@@ -140,7 +140,7 @@ public:
             // the bytes only if the same handle still matches it after the read.
             validate_current(size);
             opened_ = {};
-            response.owned_body(std::move(bytes));
+            response.file_bytes_body(std::move(bytes));
             return;
         }
 #else
@@ -210,7 +210,7 @@ public:
         std::pmr::string owned(
             bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)),
             resource);
-        response.owned_body(std::move(owned));
+        response.file_bytes_body(std::move(owned));
     }
 
     void set_full_body(
@@ -234,7 +234,7 @@ public:
                 body.append(plan.metadata().substr(segment.metadata_offset_, segment.metadata_length_));
             }
         }
-        response.owned_body(std::move(body));
+        response.file_bytes_body(std::move(body));
     }
 
 private:

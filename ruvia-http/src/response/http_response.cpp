@@ -35,6 +35,10 @@ bool http_response::has_multipart_file_body() const noexcept {
     return detail::response_body(*this).multipart_body() != nullptr;
 }
 
+bool http_response::has_file_representation() const noexcept {
+    return detail::response_body(*this).file_representation();
+}
+
 std::size_t http_response::body_segment_count() const noexcept {
     const auto& body = detail::response_body(*this);
     if (const auto* multipart = body.multipart_body()) {
@@ -212,6 +216,10 @@ void http_response::owned_body(std::pmr::string&& value) {
 
 void http_response::static_body(std::string_view value) noexcept {
     body_.set_static(value);
+}
+
+void http_response::file_bytes_body(std::pmr::string&& value) {
+    body_.set_file_bytes(memory_resource(), std::move(value));
 }
 
 void http_response::apply_content_encoding(std::string_view content_encoding) {

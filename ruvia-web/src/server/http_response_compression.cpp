@@ -98,7 +98,10 @@ http_response_compression_decision prepare_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
     http_response& response, http_response_compression_source source_value,
     http_response_coding_availability availability) {
-    if (source_value == http_response_compression_source::buffered && response.file_body().has_value()) {
+    // A file's bytes are served as the representation their validators and
+    // HEAD response describe, whether the transport reads the file or the
+    // context already carries them in memory.
+    if (source_value == http_response_compression_source::buffered && response.has_file_representation()) {
         return http_response_compression_decision::fixed_representation;
     }
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {

@@ -431,12 +431,19 @@ public:
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;
+    // True for file_body(), multipart_file_body() and file_bytes_body() bodies:
+    // the bytes are a file's representation, which a sender transmits as is.
+    [[nodiscard]] bool has_file_representation() const noexcept;
     [[nodiscard]] std::size_t body_segment_count() const noexcept;
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
     void owned_body(std::pmr::string&& value);
     void static_body(std::string_view value) noexcept;
+    // Own bytes read from a file: all of it, a byte range, or a multipart
+    // byte-range payload of it. Unlike owned_body(), the body remains a file
+    // representation, even when empty.
+    void file_bytes_body(std::pmr::string&& value);
     // Own the native path in this response's PMR storage and preserve the
     // runtime's opaque identity token. `opened`, when engaged, is the handle the
     // runtime framed the response from; the body owns it and releases it on
