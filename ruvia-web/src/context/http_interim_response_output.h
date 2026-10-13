@@ -20,6 +20,11 @@ public:
           write_(write) {}
 
     [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
+    // Answers a 100-continue expectation before the body is read, on the same
+    // lane as inform() so the two heads never interleave. A final response
+    // that has started already answered the expectation, and RFC 9110 §15.2
+    // forbids any 1xx after it, so then nothing is written.
+    task<void> send_continue();
     void commit_final() {
         if (output_active_) {
             throw std::logic_error("interim response output is still active");

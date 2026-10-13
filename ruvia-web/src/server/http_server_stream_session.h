@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -510,40 +511,74 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 std::make_exception_ptr(rejected->exception()), parsed_value, routes_value,
                 request_memory_value, admission->services(), response));
         }
-        const auto tail = admission ? admission->tail()
-                                    : http_response_tail(parsed_value.request_,
-                                          http_response_coding_policy::disabled(), remote_address, request_start);
+        auto tail = admission ? admission->tail()
+                              : http_response_tail(parsed_value.request_,
+                                    http_response_coding_policy::disabled(), remote_address, request_start);
         auto connection_plan = request_completion->connection_plan();
         if (request_completion->buffered_response() != nullptr) {
             scanner_entry.set_phase(connection_scanner::phase_type::writing);
-            const auto preparation = tail.prepare(response, options_);
-            const auto prepared = preparation.ready() != nullptr
-                                      ? *preparation.ready()
-                                      : co_await tail.finish_prepare(preparation, response, options_, routes_value,
-                                            request_memory_value, admission ? admission->services() : request_services);
-            if (prepared.recovered_) {
-                connection_plan = require_http1_final_response_commit(response, connection_plan);
-                request_completion = request_completion->with_buffered_connection_plan(connection_plan);
-                connection_plan = request_completion->connection_plan();
-            }
-            const auto write_plan = prepared.write_plan_;
-            const auto response_plan = get_http1_buffered_response_plan(write_plan, connection_plan);
-            const bool file_response = response.file_body() || response.has_multipart_file_body();
-            if (file_response && !response_output.empty()) {
+            const auto& services = admission ? admission->services() : request_services;
+            std::optional<http1_buffered_response_plan> planned_response;
+            std::optional<http1_response_write_start> started_write;
+            bool file_response = false;
+            bool head_failure_recovered = false;
+            for (;;) {
+                const auto preparation = tail.prepare(response, options_);
+                const auto prepared = preparation.ready() != nullptr
+                                          ? *preparation.ready()
+                                          : co_await tail.finish_prepare(preparation, response, options_,
+                                                routes_value, request_memory_value, services);
+                if (prepared.recovered_) {
+                    connection_plan = require_http1_final_response_commit(response, connection_plan);
+                    request_completion = request_completion->with_buffered_connection_plan(connection_plan);
+                    connection_plan = request_completion->connection_plan();
+                }
+                planned_response.emplace(get_http1_buffered_response_plan(prepared.write_plan_, connection_plan));
+                file_response = response.file_body() || response.has_multipart_file_body();
+                if (file_response && !response_output.empty()) {
+                    if (co_await response_output.flush()) {
+                        co_return http_connection_close::abort;
+                    }
+                }
+                // A response waits in the output only while the connection stays
+                // open and already holds its next request, so the response that
+                // ends a pipelined run carries the held ones in one write.
+                const auto* const compaction = request_completion->buffer_completion().compaction();
+                const bool next_request_buffered = connection_plan.disposition() == http1_close_policy::allow_reuse &&
+                                                   compaction != nullptr &&
+                                                   compaction->consumed_bytes() < read_buffer.pending().size() &&
+                                                   http_server_worker_running(state_);
+                // The head is checked in full before it touches the output, so a
+                // failure leaves the responses held before it intact.
+                std::exception_ptr head_failure;
+                try {
+                    started_write.emplace(start_response_write(response_head, response, *planned_response,
+                        next_request_buffered ? pipelined_output_batch_bytes : 0));
+                } catch (...) {
+                    head_failure = std::current_exception();
+                }
+                if (head_failure == nullptr) {
+                    break;
+                }
+                // An error response that cannot be serialized either is a real
+                // fault of the error handler.
+                if (head_failure_recovered) {
+                    std::rethrow_exception(head_failure);
+                }
+                // Nothing of this response reached the wire. Like a stream whose
+                // head fails, it becomes the generic error response that closes
+                // the connection; the complete responses held before it go first.
                 if (co_await response_output.flush()) {
                     co_return http_connection_close::abort;
                 }
+                tail.disable_response_coding();
+                request_completion.emplace(co_await complete_failed_http_route(scanner_entry, head_failure,
+                    parsed_value, routes_value, request_memory_value, services, response));
+                connection_plan = request_completion->connection_plan();
+                head_failure_recovered = true;
             }
-            // A response waits in the output only while the connection stays
-            // open and already holds its next request, so the response that
-            // ends a pipelined run carries the held ones in one write.
-            const auto* const compaction = request_completion->buffer_completion().compaction();
-            const bool next_request_buffered = connection_plan.disposition() == http1_close_policy::allow_reuse &&
-                                               compaction != nullptr &&
-                                               compaction->consumed_bytes() < read_buffer.pending().size() &&
-                                               http_server_worker_running(state_);
-            const auto write_start = start_response_write(response_head, response, response_plan,
-                next_request_buffered ? pipelined_output_batch_bytes : 0);
+            const auto& response_plan = *planned_response;
+            const auto& write_start = *started_write;
             if (write_start.held_) {
                 // Logged once the write that carries its head commits it.
                 tail.defer_access(options_.access_log_, work_set.deferred_access_, write_start.head_bytes_,

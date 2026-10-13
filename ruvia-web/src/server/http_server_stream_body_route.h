@@ -30,7 +30,8 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         // The reader's buffers are inbound memory: they count against the
         // connection's and the worker's inbound budgets.
         body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(&d.inbound_buffer_pool_),
-            body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_);
+            body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_,
+            *d.base_route_services_.interim_output());
         d.response_ = co_await d.routes_.dispatch(d.parsed_.request_, route_resolution_value, d.request_memory_,
             d.base_route_services_.with_streaming_request_body(body_reader->facade()).with_request_trailers(body_reader->reader().trailers()));
     } catch (...) {

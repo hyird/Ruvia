@@ -8,7 +8,7 @@ template <typename stream_type>
 stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
     std::pmr::polymorphic_allocator<char> allocator, std::string_view initial_body_and_pipeline,
     http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-    connection_scanner::entry_type& scanner_entry)
+    connection_scanner::entry_type& scanner_entry, http_interim_response_output& interim_output)
     : stream_(stream),
       buffer_(allocator),
       transfer_output_(allocator),
@@ -20,6 +20,7 @@ stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
       chunk_decoder_(http1_chunked_body_decoder_config{.body_limit_ = body_limit_value}),
       trailers_(allocator.resource()),
       scanner_entry_(scanner_entry),
+      interim_output_(interim_output),
       finished_(!body_plan_.requires_consumption()) {
     const auto* chunked = body_plan_.chunked();
     if (chunked != nullptr && !chunked->transfer_codings().empty()) {
@@ -147,7 +148,7 @@ task<void> stream_body_reader<stream_type>::ensure_continue() {
     const auto expectation_plan =
         body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
     if (expectation_plan.send_continue() != nullptr && !continue_sent_) {
-        co_await write_http1_continue(stream_);
+        co_await interim_output_.send_continue();
         continue_sent_ = true;
     }
 }

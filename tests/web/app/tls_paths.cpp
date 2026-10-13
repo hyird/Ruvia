@@ -16,9 +16,11 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 #include <openssl/bio.h>
+#include <openssl/err.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/web/app.h"
@@ -147,6 +149,42 @@ bool serves_secure_body(const std::string& response) {
            std::string_view(response).substr(body_start + 4) == "secure";
 }
 
+struct alpn_handshake final {
+    asio::error_code error_;
+    std::string selected_;
+};
+
+// Handshakes offering `protocols` (ALPN wire format) and reports the protocol
+// the server selected.
+alpn_handshake negotiate_alpn(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view protocols) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    if (SSL_set_alpn_protos(stream.native_handle(), reinterpret_cast<const unsigned char*>(protocols.data()),
+            static_cast<unsigned int>(protocols.size())) != 0) {
+        throw std::runtime_error("cannot offer ALPN protocols");
+    }
+    alpn_handshake result;
+    stream.next_layer().connect(endpoint, result.error_);
+    if (!result.error_) {
+        stream.handshake(asio::ssl::stream_base::client, result.error_);
+    }
+    if (!result.error_) {
+        const unsigned char* selected = nullptr;
+        unsigned int size = 0;
+        SSL_get0_alpn_selected(stream.native_handle(), &selected, &size);
+        result.selected_.assign(reinterpret_cast<const char*>(selected), size);
+    }
+    return result;
+}
+
+// RFC 7301 §3.2: a client offering no protocol the server speaks gets a fatal
+// no_application_protocol alert rather than a connection without ALPN.
+bool refuses_with_no_application_protocol(const alpn_handshake& handshake) {
+    return handshake.error_.category() == asio::error::get_ssl_category() &&
+           ERR_GET_REASON(static_cast<unsigned long>(handshake.error_.value())) == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL;
+}
+
 }  // namespace tls_paths_test
 
 using namespace tls_paths_test;
@@ -155,6 +193,7 @@ using namespace tls_paths_test;
 // and the SNI identity) lives under a path that no ANSI code page can encode.
 // listen() loads them once and cleanses its password copy, so the same
 // listener must still serve HTTPS on a second run without another listen().
+// Each run also negotiates ALPN: http/1.1 when offered, a fatal alert otherwise.
 RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
     ruvia::test::tls_identity identity("localhost");
     const non_ascii_directory directory;
@@ -214,6 +253,10 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
+            RUVIA_CHECK(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x02h2")));
+            const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
+            RUVIA_CHECK(!negotiated.error_);
+            RUVIA_CHECK_EQ(negotiated.selected_, std::string("http/1.1"));
         }
         app.stop();
         runner.join();

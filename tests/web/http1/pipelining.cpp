@@ -45,6 +45,7 @@ class pipelining_routes final {
     RUVIA_GET("/pipelining/large", large);
     RUVIA_GET("/pipelining/hint", hint);
     RUVIA_GET("/pipelining/long-hint", long_hint);
+    RUVIA_GET("/pipelining/too-many-fields", too_many_fields);
     RUVIA_GET("/pipelining/file", file);
     RUVIA_POST("/pipelining/echo", echo);
     RUVIA_GET_STREAM("/pipelining/stream", stream);
@@ -75,6 +76,16 @@ class pipelining_routes final {
         const ruvia::http_header_view headers[] = {{"X-Hint", value}};
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, headers));
         co_return c.text("long-hinted");
+    }
+
+    // More fields than an HTTP/1 response head may carry, so its head cannot
+    // be serialized.
+    ruvia::task<ruvia::http_response> too_many_fields(ruvia::context& c) {
+        auto response = c.text("unsendable");
+        for (int index = 0; index < 70; ++index) {
+            response.header("X-Field-" + std::to_string(index), "value");
+        }
+        co_return response;
     }
 
     ruvia::task<ruvia::http_response> file(ruvia::context& c) {
@@ -236,6 +247,27 @@ RUVIA_TEST(a_long_interim_head_is_sent_whole_between_pipelined_responses) {
     RUVIA_CHECK(appear_in_order(
         output, {"item-before", "HTTP/1.1 103 ", hint_field, "\r\n\r\n", "long-hinted", "item-after"}));
     RUVIA_CHECK_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{4});
+}
+
+RUVIA_TEST(an_unserializable_pipelined_response_becomes_a_500_after_the_held_ones) {
+    // The item response is held for a coalesced write when the next head
+    // fails to serialize. The held response still leaves first, the failed
+    // one is answered with the generic error response, and the connection
+    // closes without that counting as a connection failure.
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto response = exchange_pipelined(server.endpoint(),
+        get("/pipelining/item/before") + get("/pipelining/too-many-fields") + get("/pipelining/item/after"));
+    server.finish();
+
+    RUVIA_CHECK(response.has_value());
+    const auto output = response.value_or("");
+    RUVIA_CHECK(appear_in_order(output, {"HTTP/1.1 200 ", "item-before", "HTTP/1.1 500 "}));
+    RUVIA_CHECK_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{2});
+    RUVIA_CHECK(output.find("unsendable") == std::string::npos);
+    RUVIA_CHECK(output.find("item-after") == std::string::npos);
+    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
 }
 
 RUVIA_TEST(a_stream_route_that_consumed_its_request_body_keeps_the_connection) {

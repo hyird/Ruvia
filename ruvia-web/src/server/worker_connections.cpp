@@ -34,7 +34,10 @@ int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_len
             static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
-    return SSL_TLSEXT_ERR_NOACK;
+    // RFC 7301 §3.2: a client that offers ALPN without http/1.1 must get a
+    // fatal no_application_protocol alert (OpenSSL sends it for this result),
+    // not a handshake that silently proceeds with HTTP/1.1.
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
 // RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's

@@ -1,3 +1,4 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -16,6 +17,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
 
@@ -23,12 +25,17 @@
 // makes that handler's own transport write -- an interim head, or the 100
 // Continue its body read sends -- fail. That is the connection ending, not the
 // handler failing: the error handler does not see it, nothing is counted as a
-// connection failure, and no 500 is attempted. This executable owns its
-// application because the error handler is registered application-wide.
+// connection failure, and no 500 is attempted. A connection this server closes
+// itself (here: idle_timeout during a stream handler's pause) ends just as
+// normally for the handler's next write. This executable owns its application
+// because the error handler is registered application-wide.
 
 namespace peer_reset_test {
 
 using namespace std::chrono_literals;
+
+// Far above the reset cases' handler waits, so it never closes those first.
+constexpr auto idle_timeout = 1s;
 
 std::atomic<bool> peer_closed{false};
 std::atomic<std::size_t> error_handler_calls{0};
@@ -47,6 +54,7 @@ class peer_reset_routes final {
     RUVIA_ROUTES_BEGIN(peer_reset_routes)
     RUVIA_GET("/peer-reset/inform", inform);
     RUVIA_POST("/peer-reset/body", body);
+    RUVIA_GET_STREAM("/peer-reset/idle-stream", idle_stream);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> inform(ruvia::context& c) {
@@ -66,6 +74,15 @@ class peer_reset_routes final {
         (void)co_await c.req().text();
         handlers_finished.fetch_add(1);
         co_return c.text("read");
+    }
+
+    // Pauses past idle_timeout, so the server closes the connection before the
+    // second write starts.
+    ruvia::task<void> idle_stream(ruvia::context& c) {
+        co_await c.stream_text().write("first");
+        (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
+        co_await c.stream_text().write("second");
+        handlers_finished.fetch_add(1);
     }
 };
 
@@ -94,6 +111,18 @@ void wait_until_idle(ruvia::application& app) {
     }
 }
 
+// Reads until the server closes the connection.
+void send_and_read_to_close(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    asio::write(socket, asio::buffer(request));
+    std::array<char, 1024> buffer{};
+    std::error_code ec;
+    while (!ec) {
+        (void)socket.read_some(asio::buffer(buffer), ec);
+    }
+}
+
 }  // namespace peer_reset_test
 
 using namespace peer_reset_test;
@@ -106,7 +135,7 @@ RUVIA_TEST(a_peer_reset_during_a_handlers_transport_write_is_a_normal_connection
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms})
+    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
         .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
         .on_error(&count_error)
         .on_start([&started] { started.release(); });
@@ -133,9 +162,13 @@ RUVIA_TEST(a_peer_reset_during_a_handlers_transport_write_is_a_normal_connection
         wait_until_idle(app);
         RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
 
+        send_and_read_to_close(io, endpoint, "GET /peer-reset/idle-stream HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        wait_until_idle(app);
+        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+
         RUVIA_CHECK_EQ(error_handler_calls.load(), std::size_t{0});
         RUVIA_CHECK_EQ(app.http_stats().connection_failures_, std::size_t{0});
-        // The failed write ended each handler; neither ran to its response.
+        // The failed write ended each handler; none ran to its end.
         RUVIA_CHECK_EQ(handlers_finished.load(), std::size_t{0});
     }
     app.stop();

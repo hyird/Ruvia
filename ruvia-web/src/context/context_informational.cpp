@@ -42,4 +42,11 @@ task<void> http_interim_response_output::write_owned(http_status_code status, st
     const http_interim_response_head head(status, std::span<const http_header_view>(views));
     co_await write_(target_, head);
 }
+task<void> http_interim_response_output::send_continue() {
+    if (final_committed_) {
+        co_return;
+    }
+    auto lease = claim_operation_lane(output_active_, "interim response output is already active");
+    co_await write_(target_, http_interim_response_head(http_status::continue_value));
+}
 }  // namespace ruvia::detail

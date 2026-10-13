@@ -50,6 +50,7 @@ class stream_lane_routes final {
     RUVIA_GET_STREAM("/server-lazy-stream-output", output);
     RUVIA_GET_STREAM("/server-endless-stream", endless);
     RUVIA_GET_STREAM("/server-upstream-timeout-stream", upstream_timeout);
+    RUVIA_GET_STREAM("/server-stream-then-read-body", stream_then_read_body);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -107,6 +108,15 @@ class stream_lane_routes final {
     ruvia::task<void> upstream_timeout(ruvia::context& context_value) {
         co_await context_value.stream_text().write("partial");
         throw std::system_error(asio::error::make_error_code(asio::error::timed_out), "upstream request");
+    }
+
+    // Starts the response before reading a body the client sent with
+    // Expect: 100-continue.
+    ruvia::task<void> stream_then_read_body(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        co_await writer.write("x");
+        const auto body = co_await context_value.req().text();
+        co_await writer.write(body);
     }
 };
 
@@ -219,4 +229,38 @@ RUVIA_TEST(response_stream_handler_failure_with_a_transport_code_is_a_connection
     }
     server.finish();
     RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
+}
+
+// RFC 9110 §15.2: no 1xx may follow the start of the final response. A stream
+// that committed before its handler read the body already answered the
+// expectation, so the body read writes no 100 Continue into the stream.
+RUVIA_TEST(response_stream_body_read_after_commit_sends_no_continue) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::string response;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string_view head =
+            "GET /server-stream-then-read-body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n"
+            "Expect: 100-continue\r\nConnection: close\r\n\r\n";
+        asio::write(client, asio::buffer(head));
+        std::array<char, 1024> input{};
+        std::error_code ec;
+        // The body goes out only once the first chunk shows the response has
+        // started, so the handler's read has to wait for it on the socket.
+        while (!ec && response.find("\r\n\r\n1\r\nx\r\n") == std::string::npos) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
+        }
+        asio::write(client, asio::buffer(std::string_view("abcd")), ec);
+        while (!ec) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
+        }
+    }
+    server.finish();
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(response.find("100 Continue") == std::string::npos);
+    RUVIA_CHECK(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
 }
