@@ -18,8 +18,12 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     state_value.body_decode_required_ = false;
     state_value.content_coding_.reset();
     const auto* plan = state_value.response_body_plan_ ? &*state_value.response_body_plan_ : nullptr;
+    // A 206 body (single range or multipart/byteranges) holds slices of the
+    // encoded representation that cannot be decoded alone (RFC 9110 §14,
+    // §15.3.7); it is exposed as received, with Content-Encoding kept.
     if (plan == nullptr || plan->body_suppressed() || !plan->status_allows_body() ||
-        plan->content_semantics() != http_response_content_semantics::with_content) {
+        plan->content_semantics() != http_response_content_semantics::with_content ||
+        state_value.status_ == http_status::partial_content) {
         return;
     }
     // Parsed once with the final head; decoding reuses this result at FIN.

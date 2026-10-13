@@ -685,6 +685,60 @@ RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) 
     run_operation(worker, io, operation);
 }
 
+// RFC 9110 section 9.3.8: stored cookies are sensitive and stay out of TRACE.
+RUVIA_TEST(http_client_omits_stored_cookies_from_trace) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
+    auto config = local_http_client_config(peer.port());
+    config.cookies_ = {{"sid", "secret"}};
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        for (const auto* method : {"TRACE", "GET"}) {
+            auto response = co_await client.handle().send({.method_ = method, .target_ = "/"});
+            RUVIA_CHECK((co_await response.body().read_all()).empty());
+        }
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{2});
+        if (peer.requests_.size() == 2) {
+            RUVIA_CHECK(peer.requests_[0].find("sid=secret") == std::string::npos);
+            RUVIA_CHECK(peer.requests_[1].find("sid=secret") != std::string::npos);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
+// RFC 9110 sections 14 and 15.3.7: a range of an encoded representation is not
+// decodable alone, so a 206 body is delivered as received.
+RUVIA_TEST(http_client_passes_encoded_partial_content_through) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    const std::string gzip_prefix("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03", 10);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 206 Partial Content\r\nContent-Encoding: gzip\r\nContent-Range: bytes 0-9/100\r\n"
+         "Content-Length: 10\r\nConnection: close\r\n\r\n" +
+            gzip_prefix});
+    auto config = local_http_client_config(peer.port());
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        auto response = co_await client.handle().send({.target_ = "/range"});
+        RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{206});
+        const auto bytes_value = co_await response.body().read_all();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()),
+            std::string_view(gzip_prefix));
+        co_await peer.wait();
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_operation_runs) {
     {
         auto& io = ruvia::test::new_test_io_context();

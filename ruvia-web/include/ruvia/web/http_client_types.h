@@ -62,6 +62,7 @@ struct http_client_config final {
     client_tcp_config tcp_{};
     http_client_received_cookie_policy received_cookies_{http_client_received_cookie_policy::ignore};
     std::string user_agent_{"Ruvia"};
+    // Client-stored like retained cookies: never sent with TRACE (RFC 9110 §9.3.8).
     std::vector<std::pair<std::string, std::string>> cookies_{};
 };
 

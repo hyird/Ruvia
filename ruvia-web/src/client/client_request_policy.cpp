@@ -247,6 +247,14 @@ void client_request_policy::append_headers(const http_client_request_storage& re
         return true;
     });
 
+    // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
+    // out; caller-written Cookie fields above remain the caller's choice.
+    if (request.method() == "TRACE") {
+        if (!cookie_header.empty()) {
+            headers.emplace_back("cookie", cookie_header);
+        }
+        return;
+    }
     discard_expired(std::chrono::system_clock::now());
     const auto path = request_path_only(request.target());
     for (const auto& cookie : cookies_) {
