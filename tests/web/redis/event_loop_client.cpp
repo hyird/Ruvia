@@ -8,15 +8,18 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
+#include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/ssl/context.hpp>
+#include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/streambuf.hpp>
@@ -141,28 +144,30 @@ private:
             co_await serve_connection(blocking_socket_, blocking_buffer_, true);
             co_return;
         }
-        try {
-            co_await serve_transport();
-        } catch (const std::system_error&) {
-            if (mode_ != mode_type::reject_then_ping) {
-                throw;
+        // A TLS idle probe can retire a connection with unread session tickets.
+        // Like Redis, keep accepting after a peer end instead of leaving the
+        // next connection in the listen backlog without a handshake.
+        for (;;) {
+            try {
+                co_await serve_transport();
+            } catch (const std::system_error& error) {
+                if (!acceptor_.is_open()) {
+                    co_return;
+                }
+                if (error.code() != asio::error::eof &&
+                    error.code() != asio::error::connection_reset &&
+                    error.code() != asio::ssl::error::stream_truncated) {
+                    throw;
+                }
             }
-        }
-        if (mode_ == mode_type::close_after_reply) {
             std::error_code ignored;
             socket_.close(ignored);
-            first_connection_ = false;
             buffer_.consume(buffer_.size());
-            closed_.set_value();
-            co_await acceptor_.async_accept(socket_, asio::use_awaitable);
-            co_await serve_transport();
-            co_return;
-        }
-        if (mode_ == mode_type::reject_then_ping) {
+            if (mode_ == mode_type::close_after_reply && first_connection_) {
+                closed_.set_value();
+            }
             first_connection_ = false;
-            socket_ = asio::ip::tcp::socket(io_);
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
-            co_await serve_transport();
         }
     }
 
