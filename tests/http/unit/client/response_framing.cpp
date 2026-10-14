@@ -446,9 +446,97 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
         RUVIA_CHECK(parsed->plan().protocol_upgrade() != nullptr);
         RUVIA_CHECK_EQ(upgrade_wire.substr(parsed->consumed_bytes()), "protocol bytes");
     }
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 100 Continue\r\nTrailer: X-Checksum"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 103 Early Hints\r\nTrailer: X-Checksum"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTrailer: X-Checksum"));
+}
+
+RUVIA_TEST(http_client_auxiliary_response_fields_do_not_change_content_framing) {
+    constexpr std::string_view auxiliary =
+        "Upgrade: websocket\r\nTrailer: X-Checksum\r\nTE: trailers\r\n";
+    for (const std::string_view framing : {
+             std::string_view("Content-Length: 2\r\n"),
+             std::string_view("Transfer-Encoding: chunked\r\n"),
+             std::string_view("Transfer-Encoding: gzip\r\n"),
+             std::string_view{},
+         }) {
+        std::string head("HTTP/1.1 200 OK\r\n");
+        head.append(auxiliary);
+        head.append(framing);
+        head.append("\r\n");
+        const std::string wire = head + "body bytes";
+        const auto result = parse_wire("GET", wire);
+        RUVIA_CHECK(result.parsed() != nullptr);
+        if (const auto* parsed = result.parsed()) {
+            RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
+            RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes()), "body bytes");
+            if (framing.starts_with("Content-Length")) {
+                const auto& body = require_known_length(parsed->plan());
+                RUVIA_CHECK_EQ(body.content_length(), std::size_t{2});
+                RUVIA_CHECK(body.persistence() == http1_close_policy::allow_reuse);
+            } else if (framing == "Transfer-Encoding: chunked\r\n") {
+                RUVIA_CHECK(require_chunked(parsed->plan()).persistence() == http1_close_policy::allow_reuse);
+            } else {
+                RUVIA_CHECK(parsed->plan().close_delimited() != nullptr);
+            }
+        }
+    }
+    for (const std::string_view malformed : {
+             std::string_view("Content-Length: invalid\r\n"),
+             std::string_view("Content-Length: 2\r\nTransfer-Encoding: chunked\r\n"),
+             std::string_view("Transfer-Encoding: chunked, gzip\r\n"),
+             std::string_view("Transfer-Encoding: custom-coding\r\n"),
+         }) {
+        std::string head("HTTP/1.1 200 OK\r\n");
+        head.append(auxiliary);
+        head.append(malformed);
+        RUVIA_CHECK(parse_fails("GET", head));
+    }
+}
+
+RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_response_boundary) {
+    for (const std::string_view status_line :
+        {"HTTP/1.1 100 Continue\r\n", "HTTP/1.1 103 Early Hints\r\n"}) {
+        ruvia::http_client_request_view request;
+        std::array<char, 512> request_head;
+        const auto prepared = ruvia::http1_client_request_writer().prepare(
+            ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
+        RUVIA_CHECK(prepared.prepared() != nullptr);
+        if (prepared.prepared() == nullptr) {
+            continue;
+        }
+        std::string head(status_line);
+        head.append(
+            "Content-Length: ignored\r\nTransfer-Encoding: ignored\r\n"
+            "Trailer: X-Checksum\r\nTE: trailers\r\nUpgrade: websocket\r\n"
+            "Content-Type: text/plain\r\nContent-Type: application/json\r\n"
+            "Server: first\r\nServer: second\r\n\r\n");
+        const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        http1_client_response_parser parser(prepared.prepared()->exchange_state());
+        for (std::size_t size = 1; size < head.size(); ++size) {
+            const auto partial = parser.parse(std::string_view(wire).substr(0, size));
+            RUVIA_CHECK(partial.need_more() != nullptr);
+        }
+        const auto interim = parser.parse(wire);
+        RUVIA_CHECK(interim.parsed() != nullptr);
+        if (const auto* parsed = interim.parsed()) {
+            RUVIA_CHECK(parsed->plan().informational() != nullptr);
+            if (const auto* informational = parsed->plan().informational()) {
+                RUVIA_CHECK(informational->persistence() == http1_close_policy::allow_reuse);
+            }
+            RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
+            RUVIA_CHECK_EQ(parsed->head().headers().size(), std::size_t{9});
+            const auto final_response = parser.parse(std::string_view(wire).substr(parsed->consumed_bytes()));
+            RUVIA_CHECK(final_response.parsed() != nullptr);
+            if (const auto* final_head = final_response.parsed()) {
+                RUVIA_CHECK_EQ(require_known_length(final_head->plan()).content_length(), std::size_t{2});
+                RUVIA_CHECK(require_known_length(final_head->plan()).persistence() == http1_close_policy::allow_reuse);
+            }
+        }
+        head.insert(head.size() - 2, "Connection: close\r\n");
+        const auto closing = parse_head("GET", head);
+        RUVIA_CHECK(closing.plan().informational() != nullptr);
+        if (const auto* informational = closing.plan().informational()) {
+            RUVIA_CHECK(informational->persistence() == http1_close_policy::close_after_response);
+        }
+    }
 }
 
 RUVIA_TEST(http_client_no_body_content_length_metadata_must_parse) {

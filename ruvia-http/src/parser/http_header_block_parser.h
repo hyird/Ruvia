@@ -52,13 +52,11 @@ struct parsed_request_header_block {
     std::size_t header_count_{0};
     known_request_header_index_type host_header_index_{-1};
     http_connection_options connection_options_;
-    http_upgrade_protocols upgrade_protocols_;
     http_content_length_state content_length_;
     request_field_state fields_{};
     http_response_coding_qualities response_coding_qualities_;
     http_transfer_encoding_state transfer_encoding_;
     http_request_expectations expectations_;
-    bool non_empty_trailer_header_present_{false};
 };
 
 [[nodiscard]] std::size_t find_http_header_end(

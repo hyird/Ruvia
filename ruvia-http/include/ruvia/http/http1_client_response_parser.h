@@ -449,8 +449,14 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // it. Header validation is transactional and owning response allocation occurs
 // only after protocol validation succeeds. Response obs-fold is replaced with
 // spaces before field validation; its temporary storage uses the same PMR.
-// Trailer declarations do not create a body or trailer section in HEAD/304
-// responses; those responses end at the first empty line.
+// Auxiliary fields do not select framing: valid Trailer announcements are
+// accepted without chunked framing, TE has no response semantics, and advertised
+// Upgrade does not require Connection: Upgrade unless this is a negotiated 101
+// switch. These recipient rules do not relax HTTP/1 sender requirements. A 1xx, HEAD,
+// 204 or 304 response ends at the first empty line regardless of framing fields
+// (RFC 9112 section 6.3); a successful CONNECT begins its tunnel there.
+// HEAD/304 Content-Length representation metadata still requires valid,
+// consistent lengths; ignored 1xx/204/CONNECT framing values are not interpreted.
 class http1_client_response_parser final {
 public:
     struct options_type final {

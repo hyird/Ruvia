@@ -193,3 +193,27 @@ RUVIA_TEST(io_buffer_small_reads_preserve_the_sliding_window) {
         RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
     }
 }
+
+RUVIA_TEST(io_buffer_prepare_spare_reuses_consumed_prefix_without_growing) {
+    // A reader that fills all spare storage after each partial consume must
+    // keep the storage bounded however the live tail compares to the prefix.
+    counting_resource resource;
+    ruvia::http_io_buffer buffer(&resource);
+    buffer.reserve(64);
+    std::string expected;
+    for (std::size_t round = 0; round < 64; ++round) {
+        const auto spare = buffer.prepare_spare();
+        RUVIA_CHECK_EQ(spare.size(), buffer.capacity() - buffer.size());
+        std::string fill(spare.size(), static_cast<char>('a' + round % 26));
+        write_text(spare, fill);
+        buffer.commit(spare.size());
+        expected += fill;
+        // Leave a live tail larger than the consumed prefix.
+        const auto consumed = buffer.size() / 4;
+        buffer.consume(consumed);
+        expected.erase(0, consumed);
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+        RUVIA_CHECK_EQ(buffer.capacity(), std::size_t{64});
+    }
+    RUVIA_CHECK_EQ(resource.allocations_, std::size_t{1});
+}

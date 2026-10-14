@@ -132,6 +132,11 @@ public:
     // source once its request-line is CRLF-terminated or cannot start a method.
     // Expect extensions follow RFC 9110 sections 10.1.1 and 5.6.6: OWS
     // around ';' is allowed, but whitespace around '=' is invalid.
+    // Auxiliary Upgrade and Trailer fields do not establish message framing.
+    // OPTIONS Content-Type presence is a sender obligation (RFC 9110 9.3.7),
+    // not a recipient rejection rule; supplied field values remain validated.
+    // TRACE and CONNECT accept Content-Length: 0, but reject nonzero or
+    // unknown-length content. Framing still follows RFC 9112 section 6.3.
     void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
         std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
 

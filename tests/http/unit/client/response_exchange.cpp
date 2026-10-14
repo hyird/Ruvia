@@ -4,7 +4,7 @@
 
 // HTTP/1 client responses: the exchange around it: interim responses, Expect, upgrades and tunnels.
 
-RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {
+RUVIA_TEST(http_client_informational_responses_ignore_framing_fields) {
     for (const auto status :
         {std::string_view("HTTP/1.1 100 Continue"), std::string_view("HTTP/1.1 103 Early Hints")}) {
         const auto head = parse_head("GET", status);
@@ -27,22 +27,6 @@ RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {
         const auto ignored = parse_head("GET", head);
         RUVIA_CHECK(ignored.plan().informational() != nullptr);
         RUVIA_CHECK_EQ(ignored.consumed_bytes(), head.size() + 4);
-    }
-
-    constexpr std::array invalid_fields{
-        std::string_view("Trailer: X-Checksum"),
-        std::string_view("Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n"
-                         "date: Thu, 01 Jan 1970 00:00:01 GMT"),
-    };
-    for (const auto fields : invalid_fields) {
-        std::string head("HTTP/1.1 103 Early Hints\r\n");
-        head.append(fields);
-        const auto result_value = parse_result("GET", head);
-        RUVIA_CHECK(result_value.parsed() == nullptr);
-        RUVIA_CHECK(result_value.failure() != nullptr);
-        if (result_value.failure() != nullptr) {
-            RUVIA_CHECK(result_value.failure()->error() == http1_client_response_parse_error::invalid_header);
-        }
     }
 }
 
@@ -466,9 +450,10 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
     RUVIA_CHECK(parse_failure_error("GET",
                     "HTTP/1.1 200 OK\r\nUpgrade: websocket/\r\n"
                     "Content-Length: 0") == http1_client_response_parse_error::invalid_upgrade);
-    RUVIA_CHECK(parse_failure_error("GET",
-                    "HTTP/1.1 200 OK\r\nUpgrade: websocket\r\n"
-                    "Content-Length: 0") == http1_client_response_parse_error::invalid_connection);
+    const auto advertised = parse_head("GET",
+        "HTTP/1.1 200 OK\r\nUpgrade: websocket\r\nContent-Length: 0");
+    RUVIA_CHECK_EQ(require_known_length(advertised.plan()).content_length(), std::size_t{0});
+    RUVIA_CHECK(require_known_length(advertised.plan()).persistence() == http1_close_policy::allow_reuse);
 
     const ruvia::http_header_view offered[] = {
         {"Connection", "Upgrade"},

@@ -559,11 +559,15 @@ RUVIA_TEST(http1_parse_repeated_etag_list_fields_accepted) {
     RUVIA_CHECK(result_value.complete());
 }
 
-RUVIA_TEST(http1_parse_upgrade_requires_connection_option) {
+RUVIA_TEST(http1_parse_upgrade_advertisement_does_not_require_connection_option) {
     {
         const auto result_value =
             parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n");
-        RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_connection));
+        RUVIA_CHECK(result_value.complete());
+        RUVIA_CHECK(result_value.state_.body_plan_.without_body() != nullptr);
+        RUVIA_CHECK(result_value.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+        RUVIA_CHECK_EQ(result_value.state_.request_.header("Upgrade").value_or(std::string_view{}),
+            std::string_view("websocket"));
     }
     {
         const auto result_value = parse_http1_request_message(
@@ -683,16 +687,28 @@ RUVIA_TEST(http1_parse_chunked_body_accepts_many_small_chunks) {
     }
 }
 
-RUVIA_TEST(http1_parse_rejects_non_empty_trailer_header_without_chunked_framing) {
+RUVIA_TEST(http1_parse_trailer_advertisement_does_not_establish_framing) {
     {
         const auto result_value =
             parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\n\r\n");
-        RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
+        RUVIA_CHECK(result_value.complete());
+        RUVIA_CHECK(result_value.state_.body_plan_.without_body() != nullptr);
+        RUVIA_CHECK(result_value.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
     }
     {
         const auto result_value = parse_http1_request_message(
             "POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nContent-Length: 0\r\n\r\n");
-        RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
+        RUVIA_CHECK(result_value.complete());
+        RUVIA_CHECK_EQ(require_known_length(result_value.state_.body_plan_).content_length(), std::size_t{0});
+        RUVIA_CHECK(result_value.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+    }
+    {
+        const auto result_value = parse_http1_request_message(
+            "POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nContent-Length: 3\r\n\r\nabc");
+        RUVIA_CHECK(result_value.complete());
+        RUVIA_CHECK_EQ(require_known_length(result_value.state_.body_plan_).content_length(), std::size_t{3});
+        RUVIA_CHECK_EQ(result_value.body_.size(), std::size_t{3});
+        RUVIA_CHECK(result_value.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
     }
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: ,\r\n\r\n");
@@ -822,7 +838,7 @@ RUVIA_TEST(http1_parse_head_failures_close_persistent_connections) {
     // message boundary unknown.
     for (const auto wire : {
              "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
-             "TRACE / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+             "TRACE / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx",
              "POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n",
              "POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx",
          }) {
@@ -901,19 +917,33 @@ RUVIA_TEST(http1_parse_absolute_options_empty_path_with_query_normalizes_to_slas
         std::string_view("api.example"));
 }
 
-RUVIA_TEST(http1_parse_options_content_requires_valid_content_type) {
+RUVIA_TEST(http1_parse_options_content_type_presence_is_sender_obligation) {
     const auto missing_for_empty_content = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Content-Length: 0\r\n\r\n");
-    RUVIA_CHECK(is_failure(missing_for_empty_content.state_, http_parse_error::invalid_header));
+    RUVIA_CHECK(missing_for_empty_content.complete());
+    RUVIA_CHECK_EQ(require_known_length(missing_for_empty_content.state_.body_plan_).content_length(),
+        std::size_t{0});
+    RUVIA_CHECK(missing_for_empty_content.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
 
     const auto missing_for_chunked_content = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Transfer-Encoding: chunked\r\n\r\n"
         "0\r\n\r\n");
-    RUVIA_CHECK(is_failure(missing_for_chunked_content.state_, http_parse_error::invalid_header));
+    RUVIA_CHECK(missing_for_chunked_content.complete());
+    RUVIA_CHECK(missing_for_chunked_content.state_.body_plan_.chunked() != nullptr);
+    RUVIA_CHECK(missing_for_chunked_content.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+
+    const auto missing_for_nonempty_content = parse_http1_request_message(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Length: 1\r\n\r\nx");
+    RUVIA_CHECK(missing_for_nonempty_content.complete());
+    RUVIA_CHECK_EQ(require_known_length(missing_for_nonempty_content.state_.body_plan_).content_length(),
+        std::size_t{1});
+    RUVIA_CHECK_EQ(missing_for_nonempty_content.body_.size(), std::size_t{1});
 
     const auto invalid = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
@@ -1035,18 +1065,38 @@ RUVIA_TEST(http1_parse_connect_uses_target_authority) {
     }
 }
 
-RUVIA_TEST(http1_parse_methods_without_content_reject_framing_fields) {
+RUVIA_TEST(http1_parse_methods_without_content_accept_zero_length_only) {
     const auto rejects = [&](std::string_view request, http_parse_error error) {
         const auto result_value = parse_http1_request_message(request);
         RUVIA_CHECK(is_failure(result_value.state_, error));
     };
 
-    // RFC 9110 sections 9.3.6 and 9.3.8 define CONNECT as having no request
-    // content and forbid a client from sending content in TRACE. A framing
-    // field is still an explicit content signal when its length is zero.
+    // RFC 9110 sections 9.3.6 and 9.3.8 prohibit content, not zero-length
+    // framing. Keep rejecting nonzero and unknown-length content.
+    for (const auto wire : {
+             "TRACE /diagnostic HTTP/1.1\r\nHost: example.test\r\nContent-Length: 0\r\n\r\n",
+             "CONNECT tunnel.example:443 HTTP/1.1\r\nHost: tunnel.example:443\r\nContent-Length: 0\r\n\r\n",
+         }) {
+        const auto accepted = parse_http1_request_message(wire);
+        RUVIA_CHECK(accepted.complete());
+        RUVIA_CHECK_EQ(require_known_length(accepted.state_.body_plan_).content_length(), std::size_t{0});
+        RUVIA_CHECK(accepted.body_.empty());
+        RUVIA_CHECK(!accepted.state_.body_plan_.requires_consumption());
+        RUVIA_CHECK(accepted.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+        RUVIA_CHECK_EQ(accepted.state_.connection_plan_.tunnel_request(),
+            accepted.state_.request_.known_method() == http_known_method::connect);
+        std::string with_following_bytes(wire);
+        with_following_bytes.append("opaque");
+        const auto boundary = parse_http1_request_message(with_following_bytes);
+        RUVIA_CHECK(boundary.complete());
+        if (boundary.complete()) {
+            RUVIA_CHECK_EQ(*boundary.message_bytes_, std::string_view(wire).size());
+            RUVIA_CHECK_EQ(boundary.state_.head_ready()->header_bytes(), std::string_view(wire).size());
+        }
+    }
     rejects(
         "CONNECT tunnel.example:443 HTTP/1.1\r\n"
-        "Host: tunnel.example:443\r\nContent-Length: 0\r\n\r\n",
+        "Host: tunnel.example:443\r\nContent-Length: 1\r\n\r\nx",
         http_parse_error::invalid_content_length);
     rejects(
         "CONNECT tunnel.example:443 HTTP/1.1\r\n"

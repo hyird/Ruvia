@@ -14,10 +14,12 @@ response_field_status validate_response_field(request_header_kind kind, std::str
             if (!is_valid_http_content_type_field_value(value)) {
                 return response_field_status::invalid;
             }
-            if (state.content_type_seen_) {
-                return response_field_status::repeated_singleton;
+            if (role == http_field_list_role::sender) {
+                if (state.content_type_seen_) {
+                    return response_field_status::repeated_singleton;
+                }
+                state.content_type_seen_ = true;
             }
-            state.content_type_seen_ = true;
             break;
         case request_header_kind::content_encoding:
             if (!is_valid_http_content_encoding_field_value(value, role)) {

@@ -37,7 +37,6 @@ struct http1_client_parsed_response_head final {
     http_protocol_version protocol_version_;
     bool content_length_field_present_{false};
     bool saw_transfer_encoding_{false};
-    bool non_empty_trailer_header_present_{false};
     http_connection_options connection_options_;
     http_upgrade_protocols upgrade_protocols_;
     http_content_length_state content_length_;

@@ -45,6 +45,9 @@ public:
         return protocol_version_;
     }
 
+    // Parsed field lines retain wire order and repeated metadata fields. In
+    // particular, repeated Content-Type lines are not merged or interpreted;
+    // applications that use the media type own that semantic decision.
     [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         if (headers_ == nullptr) {
             return {};

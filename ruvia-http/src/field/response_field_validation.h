@@ -14,8 +14,9 @@ enum class response_field_status : std::uint8_t {
     repeated_singleton,
 };
 
-// One state per response header section. Content-Type is a single media type;
-// repeated field lines cannot be combined into a list.
+// One state per response header section. Senders cannot repeat Content-Type:
+// its single media type cannot be combined into a list (RFC 9110 section 5.3).
+// Recipients retain the individual field lines without choosing a media type.
 class response_field_state final {
 private:
     friend response_field_status validate_response_field(request_header_kind kind, std::string_view value,

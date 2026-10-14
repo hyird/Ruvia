@@ -199,7 +199,7 @@ struct request_head_write_plan final {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::expectation_without_content);
     }
-    if (explicit_content) {
+    if (content_indication == http_request_content_indication::will_follow) {
         const auto content_semantics = http_request_content_semantics(method);
         if (content_semantics == http_request_content_semantics::forbidden) {
             return detail::http1_client_request_prepare_result_access::failure(

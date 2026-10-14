@@ -20,7 +20,6 @@ using ruvia::detail::http_request_access;
 using ruvia::detail::parse_http_header_block;
 using ruvia::detail::parse_request_target;
 using ruvia::detail::parsed_request_header_block;
-using ruvia::detail::request_header_kind;
 using ruvia::detail::request_target_view;
 
 // The head cap hit before the request-line ended. Bytes past the method's SP
@@ -117,9 +116,6 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     if (known_method == http_known_method::connect) {
         state_value.connection_plan_ = state_value.connection_plan_.with_tunnel_request();
     }
-    if (block.upgrade_protocols_.has_field() && !block.connection_options_.upgrade()) {
-        return fail(http_parse_error::invalid_connection);
-    }
     // RFC 9110 10.1.4 obliges the TE sender to list "TE" in Connection; it does
     // not oblige the recipient to reject. The server never acts on TE (it does
     // not condition trailers on it), so a bare TE is simply ignored.
@@ -146,14 +142,13 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     }
 
     if (http_request_content_semantics(method) == http_request_content_semantics::forbidden) {
-        // CONNECT has no request content, and TRACE explicitly forbids it
-        // (RFC 9110 sections 9.3.6 and 9.3.8). Content-Length is an explicit
-        // content signal even at zero; accepting either framing field would
-        // give the runtime a body contract that the method does not have.
+        // RFC 9110 sections 9.3.6 and 9.3.8 disallow request content.
+        // A zero Content-Length frames no content (RFC 9112 section 6.3);
+        // transfer coding leaves the content length unknown at head time.
         if (transfer_encoding.has_value()) {
             return fail(http_parse_error::invalid_transfer_encoding);
         }
-        if (content_length.has_value()) {
+        if (content_length.has_value() && *content_length != 0) {
             return fail(http_parse_error::invalid_content_length);
         }
     }
@@ -163,9 +158,6 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     if (transfer_encoding.has_value() && final_chunked == nullptr) {
         return fail(http_parse_error::invalid_transfer_encoding);
     }
-    if (block.non_empty_trailer_header_present_ && final_chunked == nullptr) {
-        return fail(http_parse_error::invalid_header);
-    }
 
     // RFC 9112 section 6.1: Transfer-Encoding in an HTTP/1.0 request must be treated
     // as faulty framing; the error path closes the connection after replying.
@@ -174,15 +166,6 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     }
     if (block.transfer_encoding_.unsupported()) {
         return fail(http_parse_error::unsupported_transfer_encoding);
-    }
-
-    if (http_request_content_semantics(method) == http_request_content_semantics::content_type_required &&
-        (content_length.has_value() || transfer_encoding.has_value()) &&
-        !block.fields_.seen(request_header_kind::content_type)) {
-        // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
-        // explicitly carries content. A zero Content-Length still declares an
-        // empty representation and therefore retains this metadata contract.
-        return fail(http_parse_error::invalid_header);
     }
 
     http_request_access::set_resource(state_value.request_, resource);

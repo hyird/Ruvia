@@ -35,6 +35,11 @@ std::span<char> http_io_buffer::prepare(std::size_t bytes) {
     return std::span<char>(storage_ + end_, bytes);
 }
 
+std::span<char> http_io_buffer::prepare_spare() noexcept {
+    move_window_to_front();
+    return std::span<char>(storage_ + end_, capacity_ - end_);
+}
+
 void http_io_buffer::commit(std::size_t bytes) {
     if (bytes > capacity_ - end_) {
         throw std::length_error("http_io_buffer commit exceeds the prepared space");
@@ -113,7 +118,13 @@ void http_io_buffer::make_room(std::size_t bytes) {
         reallocate(capacity);
         return;
     }
-    // Only the readable bytes move, and only when the dead prefix is needed.
+    move_window_to_front();
+}
+
+void http_io_buffer::move_window_to_front() noexcept {
+    if (begin_ == 0) {
+        return;
+    }
     const auto live = size();
     std::memmove(storage_, storage_ + begin_, live);
     begin_ = 0;

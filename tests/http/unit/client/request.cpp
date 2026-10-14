@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <new>
 #include <optional>
@@ -478,21 +479,57 @@ RUVIA_TEST(http1_client_request_writer_enforces_method_content_semantics) {
     RUVIA_CHECK(
         prepare_error(options) == http1_client_request_prepare_error::options_content_type_required);
 
-    // Content-Length signals request content even when its value is zero. An
-    // explicitly empty OPTIONS representation therefore has the same mandatory
-    // Content-Type contract as a non-empty one.
-    options.content_ = http_client_request_content_view::bytes("");
-    RUVIA_CHECK(
-        prepare_error(options) == http1_client_request_prepare_error::options_content_type_required);
-
     const ruvia::http_header_view content_type_value("Content-Type", "application/json");
     options.headers_ = std::span<const ruvia::http_header_view>(&content_type_value, 1);
     prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), options);
     RUVIA_CHECK(fixture_value.result_.prepared() != nullptr);
+    if (const auto* prepared = fixture_value.result_.prepared()) {
+        RUVIA_CHECK(prepared->content_plan().immediate() != nullptr);
+        if (const auto* content = prepared->content_plan().immediate()) {
+            RUVIA_CHECK_EQ(content->bytes(), std::string_view("options body"));
+        }
+    }
 
     const ruvia::http_header_view invalid_content_type("Content-Type", "invalid");
     options.headers_ = std::span<const ruvia::http_header_view>(&invalid_content_type, 1);
     RUVIA_CHECK(prepare_error(options) == http1_client_request_prepare_error::invalid_header);
+}
+
+RUVIA_TEST(http1_client_request_writer_allows_empty_method_content) {
+    for (const char* method : {"OPTIONS", "TRACE"}) {
+        http_client_request_view request;
+        request.method_ = method;
+        request.content_ = http_client_request_content_view::bytes("");
+        prepared_fixture fixture(http_origin_view::http({.host_ = "example.test"}), request);
+        const auto* prepared = fixture.result_.prepared();
+        RUVIA_CHECK(prepared != nullptr);
+        if (prepared == nullptr) {
+            continue;
+        }
+        RUVIA_CHECK(prepared->head().find("Content-Length: 0\r\n") != std::string_view::npos);
+        const auto* content = prepared->content_plan().immediate();
+        RUVIA_CHECK(content != nullptr);
+        if (content != nullptr) {
+            RUVIA_CHECK(content->bytes().empty());
+        }
+
+        std::array<char, 1024> head_buffer;
+        ruvia::http1_client_request_head_view streaming;
+        streaming.method_ = method;
+        streaming.content_length_ = 0;
+        const auto result = http1_client_request_writer().prepare_streaming(
+            http_origin_view::http({.host_ = "example.test"}), streaming, head_buffer);
+        const auto* streaming_prepared = result.prepared();
+        RUVIA_CHECK(streaming_prepared != nullptr);
+        if (streaming_prepared != nullptr) {
+            RUVIA_CHECK(streaming_prepared->head().find("Content-Length: 0\r\n") != std::string_view::npos);
+            const auto* streaming_content = streaming_prepared->content_plan().streaming();
+            RUVIA_CHECK(streaming_content != nullptr);
+            if (streaming_content != nullptr) {
+                RUVIA_CHECK_EQ(streaming_content->content_length(), std::optional<std::uint64_t>{0});
+            }
+        }
+    }
 }
 
 RUVIA_TEST(http1_client_request_writer_rejects_invalid_content_type_parameters) {

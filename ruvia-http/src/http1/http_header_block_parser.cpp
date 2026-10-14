@@ -2,7 +2,6 @@
 
 #include <algorithm>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/http_limits.h"
 
 #include "field/field_value_scan.h"
@@ -126,20 +125,13 @@ namespace {
             // generic field value, but Upgrade-specific grammar must not
             // turn an otherwise valid HTTP/1.0 request into a 400.
             if (!ignore_upgrade &&
-                block.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
+                http_upgrade_protocols{}.parse_field(value, http_field_list_role::recipient) !=
                     http_field_list_parse_status::ok) {
                 return http_parse_error::invalid_upgrade;
             }
             break;
         case request_header_kind::accept_encoding:
             block.response_coding_qualities_.update(value);
-            break;
-        case request_header_kind::trailer:
-            if (!http_find_header_token(value, [](std::string_view) noexcept {
-                    return true;
-                }).empty()) {
-                block.non_empty_trailer_header_present_ = true;
-            }
             break;
         default:
             break;

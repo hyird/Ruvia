@@ -5,8 +5,8 @@
 
 namespace ruvia {
 
-// RFC 9110 method requirements for a request that explicitly carries content.
-// Senders and recipients use the same protocol rule regardless of wire version.
+// RFC 9110 sender requirements when a request carries content. Explicit
+// zero-length framing does not create content; recipients frame it separately.
 enum class http_request_content_semantics : std::uint8_t {
     no_additional_requirements,
     forbidden,

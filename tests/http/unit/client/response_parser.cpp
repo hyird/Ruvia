@@ -192,7 +192,7 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
             .empty());
 }
 
-RUVIA_TEST(http_client_rejects_invalid_or_repeated_content_type) {
+RUVIA_TEST(http_client_validates_content_type_syntax_without_sender_singleton_policy) {
     const auto invalid = parse_result("GET",
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: not a media type\r\n"
@@ -202,15 +202,15 @@ RUVIA_TEST(http_client_rejects_invalid_or_repeated_content_type) {
         RUVIA_CHECK(invalid.failure()->error() == http1_client_response_parse_error::invalid_header);
     }
 
-    const auto repeated = parse_result("GET",
+    const auto repeated = parse_head("GET",
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/plain\r\n"
-        "Content-Type: text/plain\r\n"
+        "Content-Type: application/json\r\n"
         "Content-Length: 0");
-    RUVIA_CHECK(repeated.failure() != nullptr);
-    if (repeated.failure() != nullptr) {
-        RUVIA_CHECK(repeated.failure()->error() == http1_client_response_parse_error::invalid_header);
-    }
+    RUVIA_CHECK_EQ(repeated.head().headers().size(), std::size_t{3});
+    RUVIA_CHECK_EQ(repeated.head().headers()[0].value(), std::string_view("text/plain"));
+    RUVIA_CHECK_EQ(repeated.head().headers()[1].value(), std::string_view("application/json"));
+    RUVIA_CHECK_EQ(require_known_length(repeated.plan()).content_length(), std::size_t{0});
 
     const auto valid = parse_response("GET",
         "HTTP/1.1 200 OK\r\n"
@@ -230,10 +230,11 @@ RUVIA_TEST(http_client_rejects_invalid_trailer_field_names_in_response_head) {
             parse_failure_error("GET", head) == http1_client_response_parse_error::invalid_header);
     }
 
-    RUVIA_CHECK(parse_failure_error("GET",
-                    "HTTP/1.1 200 OK\r\n"
-                    "Trailer: ETag, X-Checksum\r\n"
-                    "Content-Length: 0") == http1_client_response_parse_error::invalid_header);
+    const auto announced_without_chunking = parse_head("GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Trailer: ETag, X-Checksum\r\n"
+        "Content-Length: 0");
+    RUVIA_CHECK_EQ(require_known_length(announced_without_chunking.plan()).content_length(), std::size_t{0});
 
     const auto valid = parse_response("GET",
         "HTTP/1.1 200 OK\r\n"
@@ -243,11 +244,14 @@ RUVIA_TEST(http_client_rejects_invalid_trailer_field_names_in_response_head) {
     RUVIA_CHECK_EQ(valid.head_.headers().front().name(), std::string_view("Trailer"));
 }
 
-RUVIA_TEST(http_client_rejects_request_only_te_in_final_response_head) {
-    RUVIA_CHECK(parse_failure_error("GET",
-                    "HTTP/1.1 200 OK\r\n"
-                    "TE: trailers\r\n"
-                    "Content-Length: 0") == http1_client_response_parse_error::invalid_header);
+RUVIA_TEST(http_client_ignores_request_only_te_in_final_response_head) {
+    const auto parsed = parse_head("GET",
+        "HTTP/1.1 200 OK\r\n"
+        "TE: trailers\r\n"
+        "Content-Length: 0");
+    RUVIA_CHECK_EQ(require_known_length(parsed.plan()).content_length(), std::size_t{0});
+    RUVIA_CHECK(require_known_length(parsed.plan()).persistence() == http1_close_policy::allow_reuse);
+    RUVIA_CHECK_EQ(parsed.head().headers().front().name(), std::string_view("TE"));
 }
 
 RUVIA_TEST(http_client_response_parser_need_more_is_distinct) {

@@ -5,12 +5,10 @@
 #include <variant>
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http_field_whitespace.h"
 
 #include "client/http_client_response_head.h"
-#include "field/http_interim_response_validation.h"
 #include "field/response_field_validation.h"
 
 namespace ruvia::detail {
@@ -58,24 +56,6 @@ namespace {
         .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
-// RFC 9112 section 6.3 rule 1: a 1xx ends at its header section, so the
-// recipient ignores the framing fields the interim contract forbids senders
-// to emit; every other interim field rule still applies.
-[[nodiscard]] constexpr bool interim_field_acceptable(
-    http_interim_response_header_validation_status status) noexcept {
-    switch (status) {
-        case http_interim_response_header_validation_status::ok:
-        case http_interim_response_header_validation_status::content_length_forbidden:
-        case http_interim_response_header_validation_status::transfer_encoding_forbidden:
-            return true;
-        case http_interim_response_header_validation_status::invalid_header:
-        case http_interim_response_header_validation_status::trailer_forbidden:
-        case http_interim_response_header_validation_status::repeated_singleton:
-            return false;
-    }
-    return false;
-}
-
 }  // namespace
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
@@ -91,7 +71,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);
-    http_interim_response_header_validator interim_headers(http_field_list_role::recipient);
     response_field_state response_fields;
     const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
     const bool reset_content_requires_empty =
@@ -119,17 +98,14 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
         const auto name = line.substr(0, colon);
         const auto value = http_trim_ows(line.substr(colon + 1));
-        const bool fields_valid = content_semantics == http_response_content_semantics::informational
-                                      ? interim_field_acceptable(interim_headers.validate(name, value))
-                                      : is_valid_http_header_name(name) && is_valid_http_header_value(value);
+        const bool fields_valid = is_valid_http_header_name(name) && is_valid_http_header_value(value);
         if (!fields_valid) {
             return http1_client_response_parse_error::invalid_header;
         }
         if (output.header_count_ == max_http_header_fields) {
             return http1_client_response_parse_error::too_many_headers;
         }
-        if (content_semantics != http_response_content_semantics::informational &&
-            validate_response_field(classify_request_header(name), value, http_field_list_role::recipient,
+        if (validate_response_field(classify_request_header(name), value, http_field_list_role::recipient,
                 response_fields) != response_field_status::ok) {
             return http1_client_response_parse_error::invalid_header;
         }
@@ -149,14 +125,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                         return http1_client_response_parse_error::conflicting_content_length;
                 }
             }
-        } else if (http_ascii_equals_ignore_case(name, "Trailer")) {
-            if (!http_find_header_token(value, [](std::string_view) noexcept {
-                    return true;
-                }).empty()) {
-                output.non_empty_trailer_header_present_ = true;
-            }
-        } else if (http_ascii_equals_ignore_case(name, "TE")) {
-            return http1_client_response_parse_error::invalid_header;
         } else if (http_ascii_equals_ignore_case(name, "Connection")) {
             if (output.connection_options_.parse_field(value, http_field_list_role::recipient) !=
                 http_field_list_parse_status::ok) {
@@ -194,15 +162,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     }
     if (output.protocol_version_ == http_protocol_version::http10 && output.saw_transfer_encoding_) {
         return http1_client_response_parse_error::transfer_encoding_in_http10;
-    }
-    if (output.upgrade_protocols_.has_field() && !output.connection_options_.upgrade()) {
-        return http1_client_response_parse_error::invalid_connection;
-    }
-    if (framing_fields_apply && output.non_empty_trailer_header_present_) {
-        const auto& transfer_encoding = output.transfer_encoding_.value();
-        if (!transfer_encoding.has_value() || transfer_encoding->final_chunked() == nullptr) {
-            return http1_client_response_parse_error::invalid_header;
-        }
     }
     return output;
 }

@@ -22,19 +22,12 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
     repeated_singleton,
 };
 
-// Incremental form of the version-neutral interim-field contract. Senders use
-// it while validating a complete http_interim_response_head; receivers use the
-// same state while their parsers progressively yield fields. Keeping the seen-known-
-// field set here prevents protocol drivers from reimplementing the forbidden
-// field and singleton rules with subtly different wire acceptance. The framing
-// statuses are reported separately so a recipient can apply its transport's
-// rule: RFC 9112 section 6.3 ends an HTTP/1 1xx at its header section, so the
-// HTTP/1 client ignores Content-Length and Transfer-Encoding there.
+// Incremental sender validation for a version-neutral interim head. HTTP/1
+// recipients use ordinary field syntax and message-length precedence instead:
+// a 1xx ends at its header section irrespective of framing advertisements
+// (RFC 9112 section 6.3); sender prohibitions are not receiver requirements.
 class http_interim_response_header_validator final {
 public:
-    explicit http_interim_response_header_validator(http_field_list_role role) noexcept
-        : role_(role) {}
-
     [[nodiscard]] http_interim_response_header_validation_status validate(
         std::string_view name, std::string_view value) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
@@ -51,7 +44,7 @@ public:
         if (http_ascii_equals_ignore_case(name, "Trailer")) {
             return http_interim_response_header_validation_status::trailer_forbidden;
         }
-        switch (validate_response_field(classify_request_header(name), value, role_, fields_)) {
+        switch (validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields_)) {
             case response_field_status::ok:
                 break;
             case response_field_status::invalid:
@@ -68,7 +61,6 @@ public:
     }
 
 private:
-    http_field_list_role role_;
     response_field_state fields_;
     std::uint32_t known_bits_{0};
 };
@@ -79,7 +71,7 @@ private:
 // Trailer. Connection fields are checked by the HTTP/1 writer after this pass.
 [[nodiscard]] inline http_interim_response_header_validation_status validate_http_interim_response_headers(
     const http_interim_response_head& response) noexcept {
-    http_interim_response_header_validator validator(http_field_list_role::sender);
+    http_interim_response_header_validator validator;
     for (const auto& header : response.headers()) {
         const auto status = validator.validate(header.name(), header.value());
         if (status != http_interim_response_header_validation_status::ok) {

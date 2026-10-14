@@ -10,15 +10,15 @@
 namespace ruvia {
 
 // PMR byte buffer for transport input: a readable window followed by writable
-// space. A read fills the span prepare() returns and commit() publishes the
-// bytes it wrote. Unlike std::pmr::string, growing for a read never
+// space. A read fills the span prepare() or prepare_spare() returns; commit()
+// publishes the bytes it wrote. Unlike std::pmr::string, growing for a read never
 // initializes the bytes the read is about to overwrite, and uninitialized
 // bytes are never part of the readable window.
 //
 // consume() only advances the window, so views of readable bytes stay valid
-// until the next prepare(), append(), reserve(), shrink_to() or
-// clear_retaining_small(). The window moves to the front only when prepare()
-// or append() needs the room.
+// until the next prepare(), prepare_spare(), append(), reserve(), shrink_to()
+// or clear_retaining_small(). prepare_spare() reclaims any consumed prefix;
+// prepare() and append() move the window only when they need the room.
 class http_io_buffer final {
 public:
     using allocator_type = std::pmr::polymorphic_allocator<char>;
@@ -62,6 +62,12 @@ public:
     // otherwise grows geometrically to amortize small read/write cycles.
     // Throws std::length_error when the size exceeds the addressable range.
     [[nodiscard]] std::span<char> prepare(std::size_t bytes);
+    // Every uninitialized byte of the current storage after the readable
+    // ones, never growing it: a consumed prefix is reclaimed by moving the
+    // readable bytes to the front. Filling all spare storage this way moves
+    // each byte at most once per read, whereas prepare(capacity() - size())
+    // may grow geometrically on every call.
+    [[nodiscard]] std::span<char> prepare_spare() noexcept;
     // Appends the first `bytes` bytes of the writable space, which the caller
     // has written. Throws std::length_error past the storage.
     void commit(std::size_t bytes);
@@ -86,6 +92,7 @@ public:
 private:
     [[nodiscard]] std::size_t room_capacity(std::size_t bytes) const;
     void make_room(std::size_t bytes);
+    void move_window_to_front() noexcept;
     void reallocate(std::size_t capacity, std::string_view tail = {});
     void release() noexcept;
 

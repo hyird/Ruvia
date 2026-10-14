@@ -45,9 +45,10 @@ std::span<char> connection_read_buffer::prepare_read() {
     if (storage_.size() == storage_.capacity() && storage_.capacity() < max_http_header_bytes) {
         storage_.reserve(std::min(std::max(storage_.capacity() * 2, initial_read_buffer_bytes), max_http_header_bytes));
     }
-    // The whole spare storage fits, so preparing it at most moves the
-    // incomplete tail to the front: every byte moves at most once per read.
-    return storage_.prepare(storage_.capacity() - storage_.size());
+    // Reading into the spare storage at most moves the incomplete tail to the
+    // front: every byte moves at most once per read, and only the doubling
+    // above grows the storage however pipelined input is split.
+    return storage_.prepare_spare();
 }
 
 void connection_read_buffer::consume(std::size_t bytes) noexcept {

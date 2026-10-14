@@ -296,6 +296,8 @@ private:
 // tail of head_buffer and remains unchanged until the runtime sends it.
 // CONNECT uses its dedicated entry so authority form cannot be confused with an
 // origin-form target.
+// Explicit empty content emits Content-Length: 0 without triggering TRACE's
+// content prohibition or OPTIONS' Content-Type requirement.
 class http1_client_request_writer final {
 public:
     struct options_type final {
