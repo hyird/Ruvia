@@ -1,8 +1,7 @@
 #include "ruvia/core/stop_token.h"
 
+#include <memory_resource>
 #include <new>
-
-#include "ruvia/core/memory/process_resource.h"
 
 namespace ruvia {
 
@@ -96,7 +95,11 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
 
 }  // namespace detail
 
+// Request deadlines create a source per request on every worker. The process
+// pool would serialize those workers on its shared lock, so the state comes
+// from new/delete, whose small-object path is thread-local. The resource is
+// never destroyed, so a state may retire on any thread at any time.
 stop_source::stop_source()
-    : state_(detail::stop_state::create(*process_resource())) {}
+    : state_(detail::stop_state::create(*std::pmr::new_delete_resource())) {}
 
 }  // namespace ruvia

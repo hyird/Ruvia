@@ -429,9 +429,10 @@ private:
 
 [[nodiscard]] stop_token combine_stop_tokens(stop_token first, stop_token second);
 
-// Owns one stop state and requests its stop. The state comes from the process
-// memory pool, never the global heap, and lives until this source and every
-// token and registration observing it retire, on whichever thread that is.
+// Owns one stop state and requests its stop. The state comes from
+// std::pmr::new_delete_resource(), which is thread-safe and never destroyed,
+// and lives until this source and every token and registration observing it
+// retire, on whichever thread that is.
 class stop_source final {
 public:
     stop_source();
