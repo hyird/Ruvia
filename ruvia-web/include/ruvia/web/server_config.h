@@ -71,8 +71,9 @@ struct server_config final {
     std::optional<std::chrono::milliseconds> header_completion_timeout_{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> body_completion_timeout_{std::chrono::seconds(120)};
     // Inactivity while a response (a buffered response, or one write of a
-    // response stream) is being written: a reader that accepts nothing for
-    // this long loses the connection.
+    // response stream) is being written. Successful transport writes renew
+    // this limit; it is not a deadline for completing the whole response.
+    // Time between response-stream writes is governed by idle_timeout_.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // Excess accepted sockets are closed before TLS or HTTP protocol

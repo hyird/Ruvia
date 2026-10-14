@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -422,6 +423,31 @@ RUVIA_TEST(stop_registration_reset_waits_for_callback_running_on_another_thread)
     releaser.join();
     stopper.join();
     RUVIA_CHECK(waited);
+}
+
+RUVIA_TEST(stop_registration_racing_with_stop_invokes_each_callback_once) {
+    constexpr std::size_t rounds = 256;
+    std::array<ruvia::stop_source, rounds> sources;
+    std::array<std::atomic_int, rounds> calls{};
+    std::barrier gate(2);
+    std::thread stopper([&] {
+        for (std::size_t index = 0; index < rounds; ++index) {
+            gate.arrive_and_wait();
+            sources[index].request_stop();
+            gate.arrive_and_wait();
+        }
+    });
+
+    for (std::size_t index = 0; index < rounds; ++index) {
+        gate.arrive_and_wait();
+        auto registration = sources[index].token().register_callback(
+            [&, index] { calls[index].fetch_add(1, std::memory_order_relaxed); });
+        gate.arrive_and_wait();
+        registration.reset();
+        sources[index].request_stop();
+        RUVIA_CHECK_EQ(calls[index].load(std::memory_order_relaxed), 1);
+    }
+    stopper.join();
 }
 
 RUVIA_TEST(stop_token_registration_synchronous_race_leaves_registration_idle_and_reusable) {

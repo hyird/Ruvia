@@ -511,32 +511,113 @@ db_query::expr_type db_query::import_expression(expr_type expression, std::strin
             auto snapshot = source_value.queries_[node_value.query_].clone(target.resource_);
             if (!source_qualifier.empty()) {
                 auto rewrite_subquery = [&](auto&& self_query, detail::db_query_storage& query_storage,
-                                            std::size_t subquery_depth) -> void {
+                                            bool outer_source_bound, bool outer_target_bound, std::size_t subquery_depth) -> void {
                     if (subquery_depth > 256) {
                         throw std::length_error("database expression nesting exceeds 256 levels");
                     }
-                    const auto effective_name = [](const detail::db_query_source& src) noexcept -> std::string_view {
-                        return src.alias_.empty() ? std::string_view(src.name_) : std::string_view(src.alias_);
+                    const auto binds = [](const detail::db_query_source& src, std::string_view qualifier) noexcept {
+                        if (!src.alias_.empty()) {
+                            return src.alias_ == qualifier;
+                        }
+                        const std::string_view name = src.name_;
+                        // Unaliased qualified tables also bind their unqualified table name.
+                        return name == qualifier || (name.size() > qualifier.size() && name.ends_with(qualifier) &&
+                                                        name[name.size() - qualifier.size() - 1] == '.');
                     };
-                    if (query_storage.source_ && effective_name(*query_storage.source_) == source_qualifier) {
-                        return;
+                    bool source_bound = outer_source_bound;
+                    bool target_bound = outer_target_bound;
+                    const auto bind_source = [&](const detail::db_query_source& src) {
+                        source_bound = source_bound || binds(src, source_qualifier);
+                        target_bound = target_bound || binds(src, target_qualifier);
+                    };
+                    if (query_storage.source_) {
+                        bind_source(*query_storage.source_);
                     }
                     for (const auto& join : query_storage.joins_) {
-                        if (effective_name(join.source_) == source_qualifier) {
+                        bind_source(join.source_);
+                    }
+                    // Only reachable expressions participate: abandoned builder nodes cannot
+                    // introduce a capture or an otherwise invisible nested query.
+                    std::pmr::vector<bool> visited(query_storage.nodes_.size(), false, target.resource_);
+                    auto rewrite_node = [&](auto&& self_node, std::size_t node, std::size_t node_depth) -> void {
+                        if (node == no_db_node) {
                             return;
                         }
-                    }
-                    for (auto& sub_node : query_storage.nodes_) {
-                        if ((sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
+                        if (node_depth > 256) {
+                            throw std::length_error("database expression nesting exceeds 256 levels");
+                        }
+                        if (visited[node]) {
+                            return;
+                        }
+                        visited[node] = true;
+                        auto& sub_node = query_storage.nodes_[node];
+                        if (!source_bound && (sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
                             sub_node.qualifier_ == source_qualifier) {
+                            if (target_bound) {
+                                throw std::invalid_argument("expression qualifier mapping would capture a correlated reference");
+                            }
                             sub_node.qualifier_ = target_qualifier;
                         }
+                        self_node(self_node, sub_node.left_, node_depth + 1);
+                        self_node(self_node, sub_node.right_, node_depth + 1);
+                        for (const auto arg : sub_node.args_) {
+                            self_node(self_node, arg, node_depth + 1);
+                        }
+                        for (const auto& arg : sub_node.named_) {
+                            self_node(self_node, arg.expression_, node_depth + 1);
+                        }
+                        for (const auto& order : sub_node.orders_) {
+                            self_node(self_node, order.expression_, node_depth + 1);
+                        }
+                        if (sub_node.query_ != no_db_node) {
+                            self_query(self_query, query_storage.queries_[sub_node.query_].storage(), source_bound, target_bound, node_depth + 1);
+                        }
+                    };
+                    const auto rewrite = [&](std::size_t node) { rewrite_node(rewrite_node, node, subquery_depth + 1); };
+                    for (const auto node : query_storage.projections_) {
+                        rewrite(node);
                     }
-                    for (auto& child_query : query_storage.queries_) {
-                        self_query(self_query, child_query.storage(), subquery_depth + 1);
+                    for (const auto node : query_storage.distinct_on_) {
+                        rewrite(node);
+                    }
+                    for (const auto node : query_storage.groups_) {
+                        rewrite(node);
+                    }
+                    for (const auto& order : query_storage.orders_) {
+                        rewrite(order.expression_);
+                    }
+                    rewrite(query_storage.predicate_);
+                    rewrite(query_storage.having_);
+                    for (const auto& row : query_storage.rows_) {
+                        for (const auto node : row) {
+                            rewrite(node);
+                        }
+                    }
+                    const auto rewrite_source = [&](const detail::db_query_source& src) {
+                        rewrite(src.expression_);
+                        if (src.query_ != no_db_node) {
+                            self_query(self_query, query_storage.queries_[src.query_].storage(),
+                                src.lateral_ ? source_bound : outer_source_bound,
+                                src.lateral_ ? target_bound : outer_target_bound, subquery_depth + 1);
+                        }
+                    };
+                    if (query_storage.source_) {
+                        rewrite_source(*query_storage.source_);
+                    }
+                    for (const auto& join : query_storage.joins_) {
+                        rewrite_source(join.source_);
+                        rewrite(join.on_);
+                    }
+                    // CTE bodies and set operands are siblings of this query's body:
+                    // its FROM bindings do not shadow their correlated references.
+                    for (const auto& cte : query_storage.ctes_) {
+                        self_query(self_query, query_storage.queries_[cte.query_].storage(), outer_source_bound, outer_target_bound, subquery_depth + 1);
+                    }
+                    for (const auto& operation : query_storage.set_operations_) {
+                        self_query(self_query, query_storage.queries_[operation.query_].storage(), outer_source_bound, outer_target_bound, subquery_depth + 1);
                     }
                 };
-                rewrite_subquery(rewrite_subquery, snapshot.storage(), depth + 1);
+                rewrite_subquery(rewrite_subquery, snapshot.storage(), false, false, depth + 1);
             }
             node_value.query_ = target.queries_.size();
             target.queries_.push_back(std::move(snapshot));

@@ -1407,14 +1407,202 @@ RUVIA_TEST(db_query_import_expression_rewrites_correlated_subquery_qualifiers) {
         .where(sub.binary(sub.column("user_id", "o"), db_binary_operator::equal, sub.column("id", "users")));
     db_query builder;
     const auto exists_expr = builder.exists(sub);
+    builder.select(exists_expr);
+    const auto original = compile_sql([&] { return builder.compile(db_driver::postgresql, nullptr); });
 
     db_query main_query;
     main_query.select(main_query.column("id", "u"))
         .from("users", "u")
         .where(main_query.import_expression(exists_expr, "users", "u"));
     const auto compiled = main_query.compile(db_driver::postgresql, nullptr);
-    RUVIA_CHECK(compiled.sql().find("\"u\".\"id\"") != std::string_view::npos);
-    RUVIA_CHECK(compiled.sql().find("\"users\".\"id\"") == std::string_view::npos);
+    RUVIA_CHECK_EQ(compiled.sql(), "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"o\" WHERE (\"o\".\"user_id\" = \"u\".\"id\"))");
+    RUVIA_CHECK_EQ(compile_sql([&] { return builder.compile(db_driver::postgresql, nullptr); }), original);
+}
+
+RUVIA_TEST(db_query_import_expression_preserves_schema_qualified_local_bindings) {
+    for (const std::string_view qualifier : {"users", "public.users"}) {
+        db_query main_query;
+        main_query.select(main_query.column("id", "u")).from("users", "u");
+        {
+            db_query sub;
+            sub.select(sub.value(1))
+                .from("public.users")
+                .where(sub.binary(sub.column("id", qualifier), op_type::equal, sub.value(10)));
+            db_query builder;
+            const auto expression = builder.exists(sub);
+            main_query.where(main_query.import_expression(expression, qualifier, "u"));
+        }
+        const auto compiled = main_query.compile(db_driver::postgresql, nullptr);
+        const std::string expected = qualifier == "users"
+                                         ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"users\".\"id\" = $2))"
+                                         : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"public\".\"users\".\"id\" = $2))";
+        RUVIA_CHECK_EQ(compiled.sql(), expected);
+        RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{2});
+    }
+}
+
+RUVIA_TEST(db_query_import_expression_rejects_captured_correlated_references_only) {
+    db_query sub;
+    sub.select(sub.value(1))
+        .from("orders", "u")
+        .where(sub.binary(sub.column("user_id", "u"), op_type::equal, sub.column("id", "users")));
+    db_query builder;
+    const auto expression = builder.exists(sub);
+    builder.select(expression);
+    const auto original = compile_sql([&] { return builder.compile(db_driver::postgresql, nullptr); });
+    db_query main_query;
+    main_query.select(main_query.column("id", "u")).from("users", "u");
+    bool rejected = false;
+    try {
+        (void)main_query.import_expression(expression, "users", "u");
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(compile_sql([&] { return builder.compile(db_driver::postgresql, nullptr); }), original);
+
+    // The abandoned correlated predicate still exists in the builder's storage,
+    // but does not appear in the imported query and must not cause a rejection.
+    sub.where(sub.binary(sub.column("user_id", "u"), op_type::equal, sub.value(7)));
+    main_query.where(main_query.import_expression(builder.exists(sub), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"u\" WHERE (\"u\".\"user_id\" = $2))");
+}
+
+RUVIA_TEST(db_query_import_expression_preserves_nested_source_shadowing) {
+    db_query inner;
+    inner.select(inner.value(1))
+        .from("orders", "u")
+        .where(inner.binary(inner.column("user_id", "u"), op_type::equal, inner.column("id", "users")));
+    db_query middle;
+    middle.select(middle.column("id", "users")).from("public.users").where(middle.exists(inner));
+    db_query builder;
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"public\".\"users\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"u\" WHERE (\"u\".\"user_id\" = \"users\".\"id\")))");
+}
+
+RUVIA_TEST(db_query_import_expression_maps_nested_correlations_without_crossing_local_scopes) {
+    db_query inner;
+    inner.select(inner.column("id", "users")).from("public.users");
+    db_query middle;
+    middle.select(middle.column("id", "users")).from("orders", "o").where(middle.exists(inner));
+    db_query builder;
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"public\".\"users\"))");
+}
+
+RUVIA_TEST(db_query_import_expression_rejects_capture_by_an_enclosing_subquery) {
+    db_query inner;
+    inner.select(inner.column("id", "users")).from("items", "i");
+    db_query middle;
+    middle.select(middle.column("id", "u")).from("orders", "u").where(middle.exists(inner));
+    db_query builder;
+    const auto expression = builder.exists(middle);
+    db_query main_query;
+    bool rejected = false;
+    try {
+        (void)main_query.import_expression(expression, "users", "u");
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(db_query_import_expression_keeps_set_operand_scopes_independent) {
+    for (const std::string_view qualifier : {"users", "u"}) {
+        db_query branch;
+        branch.select(branch.column("id", "users")).from("orders", "o");
+        db_query sub;
+        sub.select(sub.column("id", qualifier));
+        if (qualifier == "users") {
+            sub.from("public.users");
+        } else {
+            sub.from("orders", "u");
+        }
+        sub.combine(db_set_operation::union_all, branch);
+        db_query builder;
+        db_query main_query;
+        main_query.select(main_query.column("id", "u"))
+            .from("users", "u")
+            .where(main_query.import_expression(builder.exists(sub), "users", "u"));
+        const std::string expected = qualifier == "users"
+                                         ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"users\".\"id\" FROM \"public\".\"users\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))"
+                                         : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"u\".\"id\" FROM \"orders\" AS \"u\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))";
+        RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }), expected);
+    }
+}
+
+RUVIA_TEST(db_query_import_expression_keeps_cte_body_scopes_independent) {
+    db_query cte;
+    cte.select(cte.column("id", "users")).from("orders", "o");
+    db_query sub;
+    sub.with("matched", cte).select(sub.column("id", "users")).from("public.users");
+    db_query builder;
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(builder.exists(sub), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (WITH \"matched\" AS (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\") SELECT \"users\".\"id\" FROM \"public\".\"users\")");
+}
+
+RUVIA_TEST(db_query_import_expression_preserves_schema_qualified_join_bindings) {
+    db_query sub;
+    sub.select(sub.column("id", "users"))
+        .from("orders", "o")
+        .join(db_join_type::inner, "public.users",
+            sub.binary(sub.column("user_id", "o"), op_type::equal, sub.column("id", "users")));
+    db_query builder;
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(builder.exists(sub), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"orders\" AS \"o\" INNER JOIN \"public\".\"users\" ON (\"o\".\"user_id\" = \"users\".\"id\"))");
+}
+
+RUVIA_TEST(db_query_import_expression_rejects_qualified_table_and_join_target_capture) {
+    for (const bool joined : {false, true}) {
+        db_query sub;
+        sub.select(sub.column("id", "users"));
+        if (joined) {
+            sub.from("orders", "o").join(db_join_type::cross, "items", {}, "u");
+        } else {
+            sub.from("public.u");
+        }
+        db_query builder;
+        const auto expression = builder.exists(sub);
+        db_query main_query;
+        bool rejected = false;
+        try {
+            (void)main_query.import_expression(expression, "users", "u");
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+}
+
+RUVIA_TEST(db_query_import_expression_rewrites_deep_correlated_references) {
+    db_query inner;
+    inner.select(inner.column("id", "users")).from("items", "i");
+    db_query middle;
+    middle.select(middle.column("id", "o")).from("orders", "o").where(middle.exists(inner));
+    db_query builder;
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    RUVIA_CHECK_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql, nullptr); }),
+        "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"o\".\"id\" FROM \"orders\" AS \"o\" WHERE EXISTS (SELECT \"u\".\"id\" FROM \"items\" AS \"i\"))");
 }
 
 }  // namespace

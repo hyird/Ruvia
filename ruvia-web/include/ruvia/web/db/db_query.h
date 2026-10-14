@@ -373,6 +373,14 @@ public:
     expr_type extract(db_date_part part, expr_type value);
     expr_type subscript(expr_type array, expr_type index);
     expr_type collate(expr_type value, std::string_view collation);
+    // Copies the expression and its referenced subqueries into this query's resource;
+    // the source must remain alive during import, but is unchanged and need not outlive the result.
+    // Both qualifiers must be empty or valid nonempty names. A mapping rewrites exact
+    // column/star qualifiers, including correlated references in nested queries, but not
+    // references bound by a local alias or unaliased table name (qualified or unqualified).
+    // Raw SQL text is not rewritten. Throws std::invalid_argument for an empty expression,
+    // invalid mapping, or a mapped correlated reference captured by a local target binding.
+    // Throws std::length_error if expression/query nesting exceeds 256 levels.
     expr_type import_expression(expr_type expression, std::string_view source_qualifier = {}, std::string_view target_qualifier = {});
     [[nodiscard]] static std::pmr::string render_expression(expr_type expression, db_driver driver,
         std::pmr::memory_resource* resource, db_parameter_mode mode = db_parameter_mode::literal);

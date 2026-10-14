@@ -175,20 +175,19 @@ private:
     move_only_function<void()> callback_;
 };
 
-// One registration's link into one stop state. Construction either links the
-// node or, when stop was already requested, runs the callback at once.
+// One registration's link into one stop state. Construction records whether
+// it linked before stop; the registration invokes an already-stopped callback.
 // Destruction unlinks it; if the callback is running on another thread, it
 // waits for that run to return, so the callback state can be released next.
 class stop_callback_node final {
 public:
     stop_callback_node(const stop_state_ref& state_value, stop_callback_state& callback) noexcept
         : state_(state_value),
-          callback_(&callback) {
-        static_cast<void>(state_->link(*this));
-    }
+          callback_(&callback),
+          linked_at_registration_(state_->link(*this)) {}
 
-    [[nodiscard]] bool linked() const noexcept {
-        return linked_;
+    [[nodiscard]] bool linked_at_registration() const noexcept {
+        return linked_at_registration_;
     }
     ~stop_callback_node() {
         state_->unlink(*this);
@@ -211,6 +210,9 @@ private:
     // destroyed this node from inside its own run.
     bool* destroyed_{nullptr};
     std::atomic<bool> completed_{false};
+    // Initialize last: link() publishes every field request_stop() may access.
+    // Its result stays stable even if another thread immediately unlinks us.
+    const bool linked_at_registration_;
 };
 
 }  // namespace detail
@@ -307,7 +309,7 @@ private:
         for (std::size_t index = 0; index != tokens.size() && tokens[index]; ++index) {
             if (tokens[index]->stop_possible()) {
                 callbacks_[index].emplace(tokens[index], *callback_state_);
-                if (!callbacks_[index]->linked()) {
+                if (!callbacks_[index]->linked_at_registration()) {
                     stop_already_requested = true;
                     break;
                 }
@@ -385,6 +387,8 @@ public:
 
     // The registration embeds one intrusive node per observed source, so
     // registering a cancellation callback performs no allocation.
+    // Registration may race with request_stop(). If stop was already requested,
+    // the callback runs synchronously before registration returns.
     // request_stop() may invoke the callback on the requesting thread; callbacks
     // that affect worker-owned state must post only an id/generation to that
     // worker and let the owner validate it there.
