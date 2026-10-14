@@ -405,7 +405,7 @@ void worker_dispatcher::detach_context() noexcept {
     impl_->stale_timer_count_ = 0;
     impl_->timer_armed_ = false;
     for (std::size_t index = 0; index < impl_->timer_slots_.size(); ++index) {
-        if (impl_->timer_slots_[index].active_generation_.load(std::memory_order_relaxed) != 0) {
+        if (impl_->timer_slots_[index].occupied_) {
             static_cast<void>(release_timer_slot(index));
         }
     }

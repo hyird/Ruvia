@@ -209,6 +209,10 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
         const auto end = value.find(';', offset);
         const auto [attribute, argument] = split_attribute(value.substr(
             offset, end == std::string_view::npos ? value.size() - offset : end - offset));
+        if (contains_rejected_received_cookie_control(attribute) ||
+            contains_rejected_received_cookie_control(argument)) {
+            return std::nullopt;
+        }
         if (argument.size() > detail::max_cookie_attribute_value_bytes) {
             // Ignore this cookie-av and continue with later attributes.
         } else if (http_ascii_equals_ignore_case(attribute, "Path")) {
@@ -222,7 +226,7 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
             if (!domain.empty() && domain.front() == '.') {
                 domain.remove_prefix(1);
             }
-            if (!domain.empty() && !detail::is_valid_cookie_domain(domain)) {
+            if (!argument.empty() && (domain.empty() || !detail::is_valid_cookie_domain(domain))) {
                 return std::nullopt;
             }
             result.domain_ = domain;

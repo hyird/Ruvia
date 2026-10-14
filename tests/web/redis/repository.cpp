@@ -651,6 +651,15 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         RUVIA_CHECK(throws_invalid_argument([&] {
             (void)repository.find_one({.where_ = test_redis_user::field<"id">() == ""});
         }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)repository.find_one({.take_ = std::numeric_limits<std::uint64_t>::max()});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)repository.count({.skip_ = std::numeric_limits<std::uint64_t>::max()});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)repository.exists({.order_ = {{.field_ = "missing_field"}}});
+        }));
         co_return;
     });
 }

@@ -12,6 +12,7 @@
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "coding/http_zlib_stream.h"
+#include "util/http_text_overlap.h"
 
 // The one RFC 7692 whole-message deflate and inflate loop, shared by
 // per-connection codecs and the shared no-context-takeover codec set. Context
@@ -32,9 +33,15 @@ namespace ruvia::detail {
 
 // Compresses a whole message, appending the raw-DEFLATE block to `out` with
 // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
-[[nodiscard]] inline bool websocket_deflate_message(
-    zlib_deflate_stream& deflater, std::string_view input, std::pmr::string& out) {
+[[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
+    std::pmr::string& out, std::pmr::memory_resource* resource = nullptr) {
+    std::pmr::string owned_input(resource != nullptr ? resource : out.get_allocator().resource());
+    if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
+        owned_input.assign(input);
+        input = owned_input;
+    }
     auto& stream = deflater.native();
+    const zlib_borrow_scope borrow(stream);
     const auto start = out.size();
     stream.avail_in = 0;
     std::size_t supplied = 0;
@@ -67,6 +74,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data,
     std::size_t size, std::pmr::string& out, std::size_t start, protocol_byte_limit message_limit) {
     auto& stream = inflater.native();
+    const zlib_borrow_scope borrow(stream);
     stream.avail_in = 0;
     std::size_t supplied = 0;
     char buffer[8192];
@@ -102,9 +110,15 @@ namespace ruvia::detail {
 // the sender stripped, then raw-inflates into `out`, bounded by one explicit
 // message limit across the appended bytes to defuse decompression bombs
 // (RFC 7692 §7.2.2).
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(
-    zlib_inflate_stream& inflater, std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit) {
+[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater,
+    std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit,
+    std::pmr::memory_resource* resource = nullptr) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
+    std::pmr::string owned_input(resource != nullptr ? resource : out.get_allocator().resource());
+    if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
+        owned_input.assign(input);
+        input = owned_input;
+    }
     const auto start = out.size();
     if (const auto result_value = websocket_inflate_chunk(
             inflater, input.data(), input.size(), out, start, message_limit);

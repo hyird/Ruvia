@@ -79,6 +79,8 @@ private:
     bool stopping_{false};
     bool stop_dispatching_{false};
     bool sealed_{false};
+    bool ready_{false};
+    bool serve_requested_{false};
     bool member_stopped_{false};
     std::exception_ptr failure_;
     worker_runtime* failed_member_{nullptr};

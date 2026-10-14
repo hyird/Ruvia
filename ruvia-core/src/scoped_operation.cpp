@@ -59,10 +59,10 @@ void operation_scope::close() noexcept {
             std::terminate();
         }
     }
-    drain_guard drain(*this);
-    active_ = false;
-    retire_cold_operations();
-    expire_capabilities();
+    expire_for_join();
+    if (head_ == nullptr) {
+        expire_capabilities();
+    }
 }
 
 task<void> operation_scope::close_and_join() & {

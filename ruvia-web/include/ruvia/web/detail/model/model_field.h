@@ -77,9 +77,10 @@ public:
         if (!value_) {
             if constexpr (detail::is_ruvia_json_value<value_t_type> && !nullable) {
                 throw std::invalid_argument("ensuring an absent JSON value requires RUVIA_NULLABLE");
+            } else {
+                value_.emplace(
+                    detail::make_request_value<value_t_type>(resolved_pmr_resource_tag{}, resource));
             }
-            value_.emplace(
-                detail::make_request_value<value_t_type>(resolved_pmr_resource_tag{}, resource));
         }
         state_ = detail::model_field_state::parsed;
         return *value_;

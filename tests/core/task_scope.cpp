@@ -258,6 +258,24 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             co_return;
         }
     }
+    {
+        struct unjoined_scope_holder final {
+            explicit unjoined_scope_holder(const ruvia::worker_handle& w)
+                : scope_(w) {}
+            ruvia::task_scope scope_;
+        };
+        auto holder = std::make_shared<unjoined_scope_holder>(worker_value);
+        auto child_with_holder = [](std::shared_ptr<unjoined_scope_holder> owned) -> ruvia::task<void> {
+            static_cast<void>(owned);
+            co_return;
+        };
+        holder->scope_.spawn(child_with_holder(holder));
+        std::weak_ptr<unjoined_scope_holder> weak_holder = holder;
+        holder.reset();
+        while (!weak_holder.expired()) {
+            static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+        }
+    }
 
     {
         ruvia::task_scope completed_failure_scope(worker_value);

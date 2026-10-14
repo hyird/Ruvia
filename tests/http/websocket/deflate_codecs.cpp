@@ -248,3 +248,15 @@ RUVIA_TEST(websocket_deflate_codecs_reject_invalid_parameters) {
     RUVIA_CHECK(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 10, 15)); }));
     RUVIA_CHECK(out.empty());
 }
+
+RUVIA_TEST(websocket_deflate_codecs_support_input_aliasing_output_across_reallocation) {
+    websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
+    const std::string payload(16384, 'a');
+    std::pmr::string buffer(std::pmr::new_delete_resource());
+    RUVIA_CHECK(codecs.deflate_message(payload, buffer, 6, 15));
+    const auto compressed_size = buffer.size();
+    RUVIA_CHECK(codecs.inflate_message(
+                    std::string_view(buffer), buffer, protocol_byte_limit::unlimited()) ==
+                websocket_inflate_result::ok);
+    RUVIA_CHECK_EQ(std::string_view(buffer).substr(compressed_size), std::string_view(payload));
+}

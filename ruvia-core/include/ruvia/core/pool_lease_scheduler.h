@@ -88,6 +88,7 @@ private:
     stop_token stop_token_;
     std::optional<worker_wait_result<std::size_t>> result_;
     std::optional<detail::task_awaiter<worker_wait_result<std::size_t>>> waiting_;
+    bool awaited_{false};
 };
 
 }  // namespace ruvia

@@ -165,6 +165,10 @@ RUVIA_TEST(set_cookie_parser_treats_empty_domain_as_host_only) {
         ruvia::parse_set_cookie("sid=abc; Domain=example.com; Domain=");
     RUVIA_CHECK(overrides_earlier_domain.has_value());
     RUVIA_CHECK(overrides_earlier_domain->domain().empty());
+    RUVIA_CHECK(!ruvia::parse_set_cookie("sid=abc; Domain=.").has_value());
+    const std::string overlong_with_nul =
+        std::string("sid=abc; Custom=") + std::string(1100, 'a') + std::string("\0b", 2);
+    RUVIA_CHECK(!ruvia::parse_set_cookie(overlong_with_nul).has_value());
 }
 
 RUVIA_TEST(set_cookie_parser_saturates_max_age_overflow) {

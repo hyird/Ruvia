@@ -363,14 +363,11 @@ RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies)
     RUVIA_CHECK_EQ(calls, 1);
 }
 
-RUVIA_TEST(stop_source_state_never_uses_the_global_heap) {
-    // The first source may grow the process pool from its upstream.
-    {
-        ruvia::stop_source warm_up;
-    }
+RUVIA_TEST(stop_token_combination_and_registration_never_allocate) {
+    std::array<ruvia::stop_source, 16> sources;
+    global_allocations = 0;
     global_allocations_armed = true;
-    for (int round = 0; round != 16; ++round) {
-        ruvia::stop_source source;
+    for (auto& source : sources) {
         auto token = source.token();
         int calls = 0;
         auto registration = token.register_callback([&calls] { ++calls; });
@@ -425,4 +422,61 @@ RUVIA_TEST(stop_registration_reset_waits_for_callback_running_on_another_thread)
     releaser.join();
     stopper.join();
     RUVIA_CHECK(waited);
+}
+
+RUVIA_TEST(stop_token_registration_synchronous_race_leaves_registration_idle_and_reusable) {
+    ruvia::stop_source first;
+    ruvia::stop_source second;
+    ruvia::stop_source third;
+    ruvia::stop_registration registration;
+    std::atomic_int moves{0};
+    std::atomic_int calls{0};
+
+    struct state_type final {
+        ruvia::stop_source* source_{};
+        ruvia::stop_source* reuse_source_{};
+        ruvia::stop_registration* registration_{};
+        std::atomic_int* moves_{};
+        std::atomic_int* calls_{};
+    };
+    struct stop_on_move_without_reset final {
+        state_type* state_{};
+
+        explicit stop_on_move_without_reset(state_type& state_value) noexcept
+            : state_(&state_value) {}
+        stop_on_move_without_reset(const stop_on_move_without_reset&) = delete;
+        stop_on_move_without_reset& operator=(const stop_on_move_without_reset&) = delete;
+        stop_on_move_without_reset(stop_on_move_without_reset&& other) noexcept
+            : state_(other.state_) {
+            if (state_->moves_->fetch_add(1, std::memory_order_relaxed) + 1 == move_into_callback_state) {
+                state_->source_->request_stop();
+            }
+        }
+        stop_on_move_without_reset& operator=(stop_on_move_without_reset&&) = delete;
+
+        void operator()() const noexcept {
+            state_->calls_->fetch_add(1, std::memory_order_relaxed);
+            if (state_->reuse_source_ != nullptr) {
+                auto* calls_ptr = state_->calls_;
+                state_->reuse_source_->token().register_callback(
+                    *state_->registration_, [calls_ptr] { calls_ptr->fetch_add(10, std::memory_order_relaxed); });
+            }
+        }
+    };
+
+    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    state_type first_state{&first, nullptr, &registration, &moves, &calls};
+    token.register_callback(registration, stop_on_move_without_reset(first_state));
+    RUVIA_CHECK(!registration.registered());
+    RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 1);
+
+    ruvia::stop_source fourth;
+    moves.store(0, std::memory_order_relaxed);
+    auto second_token = ruvia::combine_stop_tokens(fourth.token(), second.token());
+    state_type second_state{&fourth, &third, &registration, &moves, &calls};
+    second_token.register_callback(registration, stop_on_move_without_reset(second_state));
+    RUVIA_CHECK(registration.registered());
+    RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 2);
+    third.request_stop();
+    RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 12);
 }

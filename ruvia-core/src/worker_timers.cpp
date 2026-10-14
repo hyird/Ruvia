@@ -36,11 +36,15 @@ void worker_timer_registration::cancel_and_notify() noexcept {
 
 void worker_timer_registration::unregister(bool notify) noexcept {
     auto* dispatcher = std::exchange(dispatcher_, nullptr);
-    slot_state_ = nullptr;
+    const auto* slot_state = std::exchange(slot_state_, nullptr);
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
     if (dispatcher == nullptr) {
         return;
+    }
+    if (!notify && slot_state != nullptr) {
+        auto expected = generation;
+        (void)const_cast<detail::timer_slot*>(slot_state)->active_generation_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_relaxed);
     }
     dispatcher->request_timer_cancellation(slot, generation, notify);
 }
@@ -119,8 +123,9 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
         ++slot.generation_;
     }
     slot.next_free_ = no_timer_slot;
+    slot.occupied_ = true;
     slot.completion_ = std::move(completion);
-    slot.active_generation_.store(slot.generation_, std::memory_order_relaxed);
+    slot.active_generation_.store(slot.generation_, std::memory_order_release);
     try {
         impl_->timers_.push_back(timer_entry{
             .deadline_ = deadline_value,
@@ -195,9 +200,10 @@ void worker_dispatcher::request_timer_cancellation(
 
 move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
     std::size_t slot_index, std::uint64_t generation) noexcept {
-    if (!has_timer(slot_index, generation)) {
+    if (!has_occupied_timer(slot_index, generation)) {
         return {};
     }
+    const bool active = has_timer(slot_index, generation);
     auto completion = release_timer_slot(slot_index);
     ++impl_->stale_timer_count_;
     if (impl_->stale_timer_count_ == impl_->timers_.size()) {
@@ -211,14 +217,15 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
             impl_->timer_->cancel();
         }
     } else if (impl_->stale_timer_count_ >= 64 && impl_->stale_timer_count_ * 2 >= impl_->timers_.size()) {
-        std::erase_if(impl_->timers_,
-            [this](const timer_entry& entry_value) { return !has_timer(entry_value.slot_, entry_value.generation_); });
+        std::erase_if(impl_->timers_, [this](const timer_entry& entry_value) {
+            return !has_occupied_timer(entry_value.slot_, entry_value.generation_);
+        });
         std::ranges::make_heap(impl_->timers_, timer_entry_later{});
         impl_->stale_timer_count_ = 0;
     }
     // Otherwise the armed wait stays: it fires no later than any live entry,
     // and fire_timers() skips the stale one.
-    return completion;
+    return active ? std::move(completion) : move_only_function<void(worker_timer_outcome)>{};
 }
 
 void worker_dispatcher::stop_timers() noexcept {
@@ -240,12 +247,14 @@ void worker_dispatcher::stop_timers() noexcept {
     impl_->timers_.clear();
     impl_->stale_timer_count_ = 0;
     for (std::size_t index = 0; index < impl_->timer_slots_.size(); ++index) {
-        if (impl_->timer_slots_[index].active_generation_.load(std::memory_order_relaxed) == 0) {
+        if (!impl_->timer_slots_[index].occupied_) {
             continue;
         }
+        const bool active =
+            impl_->timer_slots_[index].active_generation_.load(std::memory_order_acquire) != 0;
         auto completion = release_timer_slot(index);
         try {
-            if (completion) {
+            if (active && completion) {
                 completion(worker_timer_outcome::cancelled);
             }
         } catch (...) {
@@ -265,7 +274,7 @@ void worker_dispatcher::arm_timer() {
         impl_->timer_armed_ = false;
     }
     while (!impl_->timers_.empty() &&
-           !has_timer(impl_->timers_.front().slot_, impl_->timers_.front().generation_)) {
+           !has_occupied_timer(impl_->timers_.front().slot_, impl_->timers_.front().generation_)) {
         std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
         impl_->timers_.pop_back();
         if (impl_->stale_timer_count_ != 0) {
@@ -304,14 +313,15 @@ void worker_dispatcher::fire_timers() {
             std::ranges::pop_heap(impl_->timers_, timer_entry_later{});
             auto entry_value = std::move(impl_->timers_.back());
             impl_->timers_.pop_back();
-            if (!has_timer(entry_value.slot_, entry_value.generation_)) {
+            if (!has_occupied_timer(entry_value.slot_, entry_value.generation_)) {
                 if (impl_->stale_timer_count_ != 0) {
                     --impl_->stale_timer_count_;
                 }
                 continue;
             }
+            const bool active = has_timer(entry_value.slot_, entry_value.generation_);
             auto completion = release_timer_slot(entry_value.slot_);
-            if (completion) {
+            if (active && completion) {
                 completion(worker_timer_outcome::expired);
             }
         }
@@ -343,12 +353,18 @@ void worker_dispatcher::fail_timers(std::string_view context_value, std::excepti
 
 bool worker_dispatcher::has_timer(std::size_t slot, std::uint64_t generation) const noexcept {
     return generation != 0 && slot < impl_->timer_slots_.size() &&
-           impl_->timer_slots_[slot].active_generation_.load(std::memory_order_relaxed) == generation;
+           impl_->timer_slots_[slot].active_generation_.load(std::memory_order_acquire) == generation;
+}
+
+bool worker_dispatcher::has_occupied_timer(std::size_t slot, std::uint64_t generation) const noexcept {
+    return generation != 0 && slot < impl_->timer_slots_.size() && impl_->timer_slots_[slot].occupied_ &&
+           impl_->timer_slots_[slot].generation_ == generation;
 }
 
 move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(
     std::size_t slot_index) noexcept {
     auto& slot = impl_->timer_slots_[slot_index];
+    slot.occupied_ = false;
     slot.active_generation_.store(0, std::memory_order_release);
     auto completion = std::move(slot.completion_);
     slot.next_free_ = impl_->free_timer_slot_;

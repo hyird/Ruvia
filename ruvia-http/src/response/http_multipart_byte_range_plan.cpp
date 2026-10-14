@@ -101,6 +101,9 @@ http_multipart_byte_range_plan http_multipart_byte_range_plan::clone(
     if (resource == nullptr) {
         throw std::invalid_argument("multipart plan clone requires a memory resource");
     }
+    if (state_ == nullptr) {
+        throw std::invalid_argument("multipart response plan must contain segments");
+    }
     http_multipart_byte_range_plan copy(resource);
     copy.state_->content_type_.assign(state_->content_type_);
     copy.state_->metadata_.assign(state_->metadata_);

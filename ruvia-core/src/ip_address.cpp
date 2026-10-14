@@ -69,11 +69,25 @@ namespace {
             return false;
         }
     }
+    if (address.find('.') != std::string_view::npos) {
+        const auto last_colon = address.rfind(':');
+        if (last_colon == std::string_view::npos || !parse_ipv4_literal(address.substr(last_colon + 1)).has_value()) {
+            return false;
+        }
+    }
     if (zone == std::string_view::npos) {
         return true;
     }
     const auto zone_name = text.substr(zone + 1);
-    return !zone_name.empty() && zone_name.find('%') == std::string_view::npos;
+    if (zone_name.empty()) {
+        return false;
+    }
+    for (const unsigned char ch : zone_name) {
+        if (ch <= 0x20 || ch >= 0x7f || ch == '%' || ch == ':' || ch == '[' || ch == ']') {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace

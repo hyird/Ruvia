@@ -174,6 +174,9 @@ inline void validate_migration_list(std::span<const db_migration> migrations, db
         if (migration.id().empty()) {
             throw std::invalid_argument("database migration id must not be empty");
         }
+        if (migration.id().find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("database migration id must not contain NUL bytes");
+        }
         if (migration.id().size() > 190) {
             throw std::invalid_argument("database migration id must not exceed 190 bytes");
         }
@@ -183,6 +186,9 @@ inline void validate_migration_list(std::span<const db_migration> migrations, db
         }
         if (!has_migration_statement_text(migration.sql(), driver)) {
             throw std::invalid_argument("database migration SQL must not be empty");
+        }
+        if (migration.sql().find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("database migration SQL must not contain NUL bytes");
         }
         const auto separator = find_migration_statement_separator(migration.sql(), driver);
         if (separator != std::string_view::npos &&

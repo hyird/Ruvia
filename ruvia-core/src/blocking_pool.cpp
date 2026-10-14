@@ -255,7 +255,8 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
-    auto& owner = *impl_;
+    const auto owner_ptr = impl_;
+    auto& owner = *owner_ptr;
     impl_type::node_type* node = nullptr;
     {
         std::lock_guard lock(owner.mutex_);
@@ -294,7 +295,8 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
 }
 
 void blocking_pool::stop() noexcept {
-    impl_->stop();
+    const auto owner = impl_;
+    owner->stop();
 }
 
 void blocking_pool::join() {

@@ -145,6 +145,27 @@ bool off_worker_cancellation_after_context_stop_does_not_expire_later() {
     return !expired && !cancelled;
 }
 
+bool off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
+    const auto worker_value = attachment.loop().handle();
+    auto registration = std::make_unique<ruvia::worker_timer_registration>();
+    bool invoked = false;
+
+    asio::post(io_context, [&] {
+        (worker_value).schedule_timer(*registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [&invoked](ruvia::worker_timer_outcome) { invoked = true; });
+        io_context.stop();
+    });
+    attachment.run();
+
+    attachment.stop();
+    registration.reset();
+
+    io_context.restart();
+    attachment.run();
+    return !invoked;
+}
+
 bool explicit_timer_cancellation_notifies_after_quiet_destruction() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 2});
@@ -600,6 +621,7 @@ int main() {
         !timer_immediate_shutdown_works() ||
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
         !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
+        !off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback() ||
         !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||
         !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
         !timer_callback_failure_preserves_remaining_operations() ||

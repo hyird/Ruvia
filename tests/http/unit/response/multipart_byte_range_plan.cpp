@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/http_multipart_byte_range_plan.h"
+#include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
 #include "test_harness.h"
@@ -192,4 +193,35 @@ RUVIA_TEST(multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage)
     }
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(multipart_range_plan_moved_from_and_empty_file_path_are_rejected_cleanly) {
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,4-5", 10);
+    auto plan = ruvia::make_http_multipart_byte_range_plan(
+        ranges, 10, "text/plain", "b", {}, std::pmr::get_default_resource());
+    auto moved = std::move(plan);
+    RUVIA_CHECK(plan.content_type().empty());
+    RUVIA_CHECK(plan.metadata().empty());
+    RUVIA_CHECK(plan.segments().empty());
+    RUVIA_CHECK_EQ(plan.content_length(), std::uint64_t{0});
+
+    ruvia::http_response response;
+    bool empty_path_rejected = false;
+    try {
+        response.multipart_file_body(
+            {}, 10, ruvia::http_response_file_identity::unchecked(), std::move(moved));
+    } catch (const std::invalid_argument&) {
+        empty_path_rejected = true;
+    }
+    RUVIA_CHECK(empty_path_rejected);
+
+    bool moved_plan_rejected = false;
+    try {
+        const ruvia::http_native_path_string_type non_empty(1, static_cast<ruvia::http_native_path_char_type>('a'));
+        response.multipart_file_body(
+            non_empty, 10, ruvia::http_response_file_identity::unchecked(), std::move(plan));
+    } catch (const std::invalid_argument&) {
+        moved_plan_rejected = true;
+    }
+    RUVIA_CHECK(moved_plan_rejected);
 }

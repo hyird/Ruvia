@@ -141,27 +141,35 @@ void task_scope::child_complete(void* raw) noexcept {
 }
 
 void task_scope::finish(node_type* node_value) noexcept {
+    bool notify_stop = false;
     try {
         node_value->task_.handle_.promise().result();
     } catch (...) {
         if (outcome_.index() == 0) {
             outcome_ = task_scope_failure_type(std::current_exception());
-            request_stop();
+            stop_requested_ = true;
+            notify_stop = true;
         }
+    }
+
+    const bool last_active = --active_ == 0;
+    std::coroutine_handle<> join_continuation{};
+    if (last_active) {
+        if (auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_)) {
+            join_continuation = joining->continuation();
+            lifecycle_.template emplace<task_scope_joined_type>();
+        }
+    }
+
+    if (notify_stop) {
+        request_stop();
     }
 
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);
     allocator.delete_object(node_value);
-    --active_;
 
-    if (active_ == 0) {
-        auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
-        if (joining == nullptr) {
-            return;
-        }
-        const auto continuation = joining->continuation();
-        lifecycle_.template emplace<task_scope_joined_type>();
-        continuation.resume();
+    if (join_continuation) {
+        join_continuation.resume();
     }
 }
 

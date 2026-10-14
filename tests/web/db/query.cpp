@@ -1400,4 +1400,21 @@ RUVIA_TEST(db_query_span_overloads_cover_expression_and_statement_builders) {
     (void)within;
 }
 
+RUVIA_TEST(db_query_import_expression_rewrites_correlated_subquery_qualifiers) {
+    db_query sub;
+    sub.select(sub.value(1))
+        .from("orders", "o")
+        .where(sub.binary(sub.column("user_id", "o"), db_binary_operator::equal, sub.column("id", "users")));
+    db_query builder;
+    const auto exists_expr = builder.exists(sub);
+
+    db_query main_query;
+    main_query.select(main_query.column("id", "u"))
+        .from("users", "u")
+        .where(main_query.import_expression(exists_expr, "users", "u"));
+    const auto compiled = main_query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK(compiled.sql().find("\"u\".\"id\"") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("\"users\".\"id\"") == std::string_view::npos);
+}
+
 }  // namespace

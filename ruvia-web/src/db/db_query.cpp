@@ -509,6 +509,35 @@ db_query::expr_type db_query::import_expression(expr_type expression, std::strin
         }
         if (node_value.query_ != no_db_node) {
             auto snapshot = source_value.queries_[node_value.query_].clone(target.resource_);
+            if (!source_qualifier.empty()) {
+                auto rewrite_subquery = [&](auto&& self_query, detail::db_query_storage& query_storage,
+                                            std::size_t subquery_depth) -> void {
+                    if (subquery_depth > 256) {
+                        throw std::length_error("database expression nesting exceeds 256 levels");
+                    }
+                    const auto effective_name = [](const detail::db_query_source& src) noexcept -> std::string_view {
+                        return src.alias_.empty() ? std::string_view(src.name_) : std::string_view(src.alias_);
+                    };
+                    if (query_storage.source_ && effective_name(*query_storage.source_) == source_qualifier) {
+                        return;
+                    }
+                    for (const auto& join : query_storage.joins_) {
+                        if (effective_name(join.source_) == source_qualifier) {
+                            return;
+                        }
+                    }
+                    for (auto& sub_node : query_storage.nodes_) {
+                        if ((sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
+                            sub_node.qualifier_ == source_qualifier) {
+                            sub_node.qualifier_ = target_qualifier;
+                        }
+                    }
+                    for (auto& child_query : query_storage.queries_) {
+                        self_query(self_query, child_query.storage(), subquery_depth + 1);
+                    }
+                };
+                rewrite_subquery(rewrite_subquery, snapshot.storage(), depth + 1);
+            }
             node_value.query_ = target.queries_.size();
             target.queries_.push_back(std::move(snapshot));
         }

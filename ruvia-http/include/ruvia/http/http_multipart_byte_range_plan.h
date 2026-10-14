@@ -39,19 +39,19 @@ public:
     http_multipart_byte_range_plan& operator=(http_multipart_byte_range_plan&&) = delete;
 
     [[nodiscard]] std::string_view content_type() const& noexcept {
-        return state_->content_type_;
+        return state_ == nullptr ? std::string_view{} : std::string_view(state_->content_type_);
     }
     [[nodiscard]] std::string_view content_type() const&& = delete;
     [[nodiscard]] std::string_view metadata() const& noexcept {
-        return state_->metadata_;
+        return state_ == nullptr ? std::string_view{} : std::string_view(state_->metadata_);
     }
     [[nodiscard]] std::string_view metadata() const&& = delete;
     [[nodiscard]] std::span<const segment> segments() const& noexcept {
-        return state_->segments_;
+        return state_ == nullptr ? std::span<const segment>{} : std::span<const segment>(state_->segments_);
     }
     [[nodiscard]] std::span<const segment> segments() const&& = delete;
     [[nodiscard]] std::uint64_t content_length() const noexcept {
-        return state_->content_length_;
+        return state_ == nullptr ? 0 : state_->content_length_;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return state_.get_deleter().resource_;

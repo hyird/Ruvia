@@ -49,6 +49,16 @@ RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     RUVIA_CHECK(ruvia::parse_http_capsule_protocol("true").index() != 0);
     const auto disabled = ruvia::parse_http_capsule_protocol("?0");
     RUVIA_CHECK(disabled.index() == 0 && !std::get<0>(disabled));
+    const std::array bad_resp{ruvia::http_header_view{"Upgrade", "websocket"}};
+    const auto resp_err =
+        ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, bad_resp);
+    RUVIA_CHECK(resp_err.index() == 1 &&
+                std::get<1>(resp_err) == ruvia::http_connect_udp_error::invalid_response);
+    auto [abs_req, abs_err] = ruvia::make_parsed_http_request("GET",
+        "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {},
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(!abs_err.has_value());
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(abs_req).index() == 0);
 }
 RUVIA_TEST(http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;

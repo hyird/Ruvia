@@ -189,6 +189,7 @@ private:
     void fire_timers();
     void fail_timers(std::string_view context_value, std::exception_ptr failure) noexcept;
     [[nodiscard]] bool has_timer(std::size_t slot, std::uint64_t generation) const noexcept;
+    [[nodiscard]] bool has_occupied_timer(std::size_t slot, std::uint64_t generation) const noexcept;
     // Deactivates an active slot, returns it to the free list, and hands back
     // its completion for the caller to invoke or destroy.
     [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;

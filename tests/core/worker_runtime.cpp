@@ -917,4 +917,27 @@ RUVIA_TEST(worker_runtime_retains_control_payload_until_owner_completion) {
     RUVIA_CHECK(lifetime.expired());
 }
 
+RUVIA_TEST(worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
+    {
+        ruvia::worker_runtime stopped_runtime;
+        stopped_runtime.request_stop();
+        RUVIA_CHECK(!stopped_runtime.start());
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)stopped_runtime.start(); }));
+        stopped_runtime.join();
+    }
+    {
+        ruvia::worker_runtime member;
+        member.configure({.startup_ = [&] { member.mark_ready(); }});
+        ruvia::worker_group group;
+        group.add(member, 0);
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.serve(); }));
+        RUVIA_CHECK(group.start());
+        RUVIA_CHECK(group.serve());
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.serve(); }));
+        group.request_stop();
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.start(); }));
+        RUVIA_CHECK(group.join() == nullptr);
+    }
+}
+
 }  // namespace worker_runtime_test

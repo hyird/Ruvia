@@ -1995,6 +1995,20 @@ bool test_async_stop_callbacks_start_together_and_keep_captures_alive() {
            finished.load(std::memory_order_acquire) == 2 && observed_value == 3;
 }
 
+bool test_reset_stop_registration_cancels_deferred_unstarted_callback() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    bool ran = false;
+    auto reg = attachment.loop().on_stop([&]() -> ruvia::task<void> {
+        ran = true;
+        co_return;
+    });
+    attachment.stop();
+    reg.reset();
+    attachment.run();
+    return !ran && !reg.valid();
+}
+
 ruvia::task<void> wait_for_shutdown_timer(const ruvia::worker_handle& worker_value, bool& child_done) {
     static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)));
     child_done = true;
@@ -2239,6 +2253,8 @@ int main() {
                        test_stop_callback_factory_failure_does_not_skip_other_callbacks) &&
                    run("async_stop_callbacks_start_together_and_keep_captures_alive",
                        test_async_stop_callbacks_start_together_and_keep_captures_alive) &&
+                   run("reset_stop_registration_cancels_deferred_unstarted_callback",
+                       test_reset_stop_registration_cancels_deferred_unstarted_callback) &&
                    run("root_tasks_join_nested_scopes_during_stop",
                        test_root_tasks_join_nested_scopes_during_stop) &&
                    run("root_result_moves_are_reentrant_and_preserve_owner",

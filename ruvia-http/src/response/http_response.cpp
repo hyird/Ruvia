@@ -279,6 +279,9 @@ void http_response::file_body(http_native_path_view_type file, std::uint64_t siz
 void http_response::multipart_file_body(http_native_path_view_type file, std::uint64_t size,
     http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
     http_response_file_handle opened) {
+    if (file.empty()) {
+        throw std::invalid_argument("file response path must not be empty");
+    }
     body_.set_multipart(memory_resource(), file, size, identity, std::move(plan), std::move(opened));
 }
 

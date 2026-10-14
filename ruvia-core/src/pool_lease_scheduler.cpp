@@ -65,8 +65,8 @@ public:
     };
 
     [[nodiscard]] std::optional<acquire_result_type> try_acquire(const stop_token& stop_token_value) {
-        if (stop_token_value.stoppable() && !worker_.valid()) {
-            throw std::logic_error("cancellable pool acquire requires a valid worker");
+        if (!worker_.is_current()) {
+            throw std::logic_error("pool lease acquire must run on its bound worker");
         }
         if (closing_) {
             return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::closed);
@@ -189,9 +189,13 @@ pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_va
 }
 
 pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr)),
+    : owner_(other.awaited_ ? nullptr : std::exchange(other.owner_, nullptr)),
       timeout_(other.timeout_),
-      stop_token_(std::move(other.stop_token_)) {}
+      stop_token_(std::move(other.stop_token_)) {
+    if (other.awaited_) {
+        std::terminate();
+    }
+}
 
 pool_lease_acquire::~pool_lease_acquire() {
     if (owner_ != nullptr) {
@@ -200,6 +204,10 @@ pool_lease_acquire::~pool_lease_acquire() {
 }
 
 bool pool_lease_acquire::await_ready() {
+    if (owner_ == nullptr || awaited_) {
+        throw std::logic_error("pool lease acquire cannot be awaited");
+    }
+    awaited_ = true;
     result_ = owner_->try_acquire(stop_token_);
     return result_.has_value();
 }

@@ -778,3 +778,14 @@ RUVIA_TEST(multipart_preamble_limit_counts_misleading_and_incomplete_marker_byte
         RUVIA_CHECK(failed);
     }
 }
+
+RUVIA_TEST(multipart_truncated_body_at_eof_fails_without_emitting_partial_part) {
+    const std::string truncated =
+        "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n" + std::string(64, 'x');
+    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc")});
+    parser.feed(truncated);
+    parser.finish_input();
+    const auto polled = parser.poll();
+    RUVIA_CHECK(polled.part() == nullptr);
+    RUVIA_CHECK(polled.failure() != nullptr);
+}

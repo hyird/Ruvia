@@ -48,6 +48,17 @@ RUVIA_TEST(db_migration_descriptor_owns_and_exposes_public_options) {
 
     const db_migration defaults(db_migration_options{.id_ = "cs_default", .sql_ = "SELECT 1"});
     RUVIA_CHECK_EQ(defaults.atomicity(), db_migration_atomicity::transactional);
+    bool nul_sql_rejected = false;
+    try {
+        const std::array<db_migration, 1> bad_migrations{{
+            db_migration{{.id_ = "001", .sql_ = std::string("SELECT 1\0", 9)}},
+        }};
+        (void)ruvia::db_migrator::migrate(
+            ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
+    } catch (const std::invalid_argument&) {
+        nul_sql_rejected = true;
+    }
+    RUVIA_CHECK(nul_sql_rejected);
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL

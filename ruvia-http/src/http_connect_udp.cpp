@@ -22,11 +22,12 @@ bool valid_host(std::string_view host) {
 struct handshake_fields {
     bool capsule_{false}, upgrade_{false}, connection_{false}, host_{false}, forbidden_{false};
 };
-std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const http_header_view> headers) {
+std::variant<handshake_fields, http_connect_udp_error> fields(
+    std::span<const http_header_view> headers, http_connect_udp_error syntax_error = http_connect_udp_error::invalid_request) {
     handshake_fields found;
     for (const auto& field : headers) {
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
-            return http_connect_udp_error::invalid_request;
+            return syntax_error;
         }
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             const auto value = parse_http_capsule_protocol(field.value());
@@ -35,19 +36,19 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const ht
             }
             found.capsule_ = true;
         } else if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
-            if (found.upgrade_ || !http_ascii_equals_ignore_case(field.value(), "connect-udp")) {
-                return http_connect_udp_error::invalid_request;
+            if (found.upgrade_ || !http_ascii_equals_ignore_case(http_trim_ows(field.value()), "connect-udp")) {
+                return syntax_error;
             }
             found.upgrade_ = true;
         } else if (http_ascii_equals_ignore_case(field.name(), "connection")) {
             detail::http_connection_options options;
             if (options.parse_field(field.value(), detail::http_field_list_role::recipient) != detail::http_field_list_parse_status::ok) {
-                return http_connect_udp_error::invalid_request;
+                return syntax_error;
             }
             found.connection_ = found.connection_ || options.contains(detail::http_connection_option::upgrade);
         } else if (http_ascii_equals_ignore_case(field.name(), "host")) {
             if (found.host_ || field.value().empty()) {
-                return http_connect_udp_error::invalid_request;
+                return syntax_error;
             }
             found.host_ = true;
         } else if (detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
@@ -118,7 +119,7 @@ std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_r
     if (version != http_protocol_version::http11) {
         return http_connect_udp_error::invalid_response;
     }
-    const auto parsed_value = fields(headers);
+    const auto parsed_value = fields(headers, http_connect_udp_error::invalid_response);
     if ((parsed_value.index() != 0)) {
         return std::get<1>(parsed_value);
     }
@@ -133,7 +134,10 @@ bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
            http_ascii_equals_ignore_case(http_trim_ows(request.header("upgrade").value_or("")), "connect-udp");
 }
 std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
-    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .authority_ = request.authority().empty() ? request.header("host").value_or("") : request.authority(), .path_ = request.target(), .headers_ = request.headers()});
+    const auto path = request.target_form() == http_request_target_form::absolute && request.query_string().empty()
+                          ? request.path()
+                          : request.target();
+    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .authority_ = request.authority().empty() ? request.header("host").value_or("") : request.authority(), .path_ = path, .headers_ = request.headers()});
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version != http_protocol_version::http11 || !response.status().is_successful() ||

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
@@ -13,8 +14,10 @@ struct worker_wait_result_access;
 template <typename t_type>
 class worker_wait_value final {
 public:
-    explicit worker_wait_value(t_type value) noexcept(std::is_nothrow_move_constructible_v<t_type>)
-        : value_(std::move(value)) {}
+    template <typename u_type>
+        requires std::constructible_from<t_type, u_type&&>
+    explicit worker_wait_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>)
+        : value_(std::forward<u_type>(value)) {}
 
     t_type value_;
 };
@@ -78,9 +81,10 @@ private:
 
     using result_type = std::variant<detail::worker_wait_value<t_type>, worker_wait_status>;
 
-    explicit worker_wait_result(detail::worker_wait_value<t_type> value) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>)
-        : result_(std::move(value)) {}
+    template <typename u_type>
+    explicit worker_wait_result(
+        std::in_place_type_t<detail::worker_wait_value<t_type>>, u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>)
+        : result_(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value)) {}
 
     explicit worker_wait_result(worker_wait_status status) noexcept
         : result_(status) {
@@ -98,9 +102,11 @@ namespace ruvia::detail {
 
 struct worker_wait_result_access final {
     template <typename t_type>
-    [[nodiscard]] static worker_wait_result<t_type> value(t_type value) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) {
-        return worker_wait_result<t_type>(worker_wait_value<t_type>(std::move(value)));
+    [[nodiscard]] static worker_wait_result<std::remove_cvref_t<t_type>> value(t_type&& value) noexcept(
+        std::is_nothrow_constructible_v<std::remove_cvref_t<t_type>, t_type&&>) {
+        using value_type = std::remove_cvref_t<t_type>;
+        return worker_wait_result<value_type>(
+            std::in_place_type<worker_wait_value<value_type>>, std::forward<t_type>(value));
     }
 
     template <typename t_type>

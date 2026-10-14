@@ -45,12 +45,16 @@ inline void add_vary_token(http_response& response, std::string_view token) {
     if (token.empty() || response_vary_has_token(response, "*")) {
         return;
     }
+
     if (token == "*") {
         response.header_stable_view("Vary", "*");
         return;
     }
     if (response_vary_has_token(response, token)) {
         return;
+    }
+    if (!is_valid_http_header_name(token)) {
+        throw std::invalid_argument("invalid HTTP Vary header token");
     }
 
     std::size_t existing_value_count = 0;

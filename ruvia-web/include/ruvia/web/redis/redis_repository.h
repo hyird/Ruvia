@@ -89,7 +89,8 @@ public:
                 return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
-        auto args = detail::compile_redis_find(mapping(), options, memory, false, 1);
+        const auto take = options.take_.has_value() ? (std::min)(*options.take_, std::uint64_t{1}) : std::uint64_t{1};
+        auto args = detail::compile_redis_find(mapping(), options, memory, false, take);
         detail::redis_map_first<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }

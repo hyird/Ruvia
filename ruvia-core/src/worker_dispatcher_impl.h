@@ -46,6 +46,7 @@ struct timer_slot final {
     std::uint64_t generation_{0};
     std::atomic<std::uint64_t> active_generation_{0};
     std::size_t next_free_{no_timer_slot};
+    bool occupied_{false};
     move_only_function<void(worker_timer_outcome)> completion_;
 };
 

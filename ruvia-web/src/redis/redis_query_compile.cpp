@@ -529,14 +529,33 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     }
     args.emplace_back(std::move(query));
     emplace_redis_string(args, "LIMIT");
+    constexpr auto max_redis_integer = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    const auto skip = options.skip_.value_or(0U);
+    const auto requested_take = options.take_.value_or(redis_find_default_take);
+    if (skip > max_redis_integer || requested_take > max_redis_integer) {
+        throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
+    }
+    std::optional<std::pmr::string> sort_field_name;
+    if (!options.order_.empty()) {
+        if (options.order_.size() != 1U) {
+            throw std::invalid_argument("Redis Search supports one SORTBY column per query");
+        }
+        const auto& order = options.order_.front();
+        sort_field_name = compiler.sort_field(order.field_);
+        switch (order.direction_) {
+            case redis_order_direction::ascending:
+            case redis_order_direction::descending:
+                break;
+            default:
+                throw std::invalid_argument("invalid Redis order direction");
+        }
+    }
     if (count_only) {
         emplace_redis_string(args, "0");
         emplace_redis_string(args, "0");
     } else {
-        constexpr auto max_redis_integer = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-        const auto skip = options.skip_.value_or(0U);
-        const auto take = take_override.value_or(options.take_.value_or(redis_find_default_take));
-        if (skip > max_redis_integer || take > max_redis_integer) {
+        const auto take = take_override.value_or(requested_take);
+        if (take > max_redis_integer) {
             throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
         }
         std::pmr::string encoded_skip(resource), encoded_take(resource);
@@ -545,24 +564,11 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         args.emplace_back(std::move(encoded_skip));
         args.emplace_back(std::move(encoded_take));
     }
-    if (!count_only && !options.order_.empty()) {
-        if (options.order_.size() != 1U) {
-            throw std::invalid_argument("Redis Search supports one SORTBY column per query");
-        }
-        const auto& order = options.order_.front();
-        auto field = compiler.sort_field(order.field_);
+    if (!count_only && sort_field_name.has_value()) {
         emplace_redis_string(args, "SORTBY");
-        args.push_back(std::move(field));
-        switch (order.direction_) {
-            case redis_order_direction::ascending:
-                emplace_redis_string(args, "ASC");
-                break;
-            case redis_order_direction::descending:
-                emplace_redis_string(args, "DESC");
-                break;
-            default:
-                throw std::invalid_argument("invalid Redis order direction");
-        }
+        args.push_back(std::move(*sort_field_name));
+        emplace_redis_string(
+            args, options.order_.front().direction_ == redis_order_direction::ascending ? "ASC" : "DESC");
     }
     emplace_redis_string(args, "DIALECT");
     emplace_redis_string(args, "2");

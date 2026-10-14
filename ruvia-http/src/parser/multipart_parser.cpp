@@ -392,7 +392,7 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         }
 
         const auto keep_tail = boundary_.value().size() + 8;
-        if (buffer.size() > keep_tail) {
+        if (!input_.eof() && buffer.size() > keep_tail) {
             const auto bytes_value = buffer.size() - keep_tail;
             auto part = make_part(buffer.substr(0, bytes_value), false);
             pending_erase_bytes_ = bytes_value;

@@ -124,10 +124,11 @@ public:
 
     [[nodiscard]] bool start() {
         std::unique_lock lock(mutex_);
+        if (start_called_) {
+            throw std::logic_error("worker runtime can only be started once");
+        }
+        start_called_ = true;
         if (!lifecycle_.start()) {
-            if (started_) {
-                throw std::logic_error("worker runtime can only be started once");
-            }
             return false;
         }
         try {
@@ -359,6 +360,7 @@ public:
     phase_type serving_{phase_type::pending};
     bool serve_requested_{};
     bool configured_{};
+    bool start_called_{};
     bool started_{};
     bool stop_dispatching_{};
     std::thread::id stop_dispatch_thread_{};

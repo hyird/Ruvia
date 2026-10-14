@@ -222,18 +222,20 @@ public:
             throw std::logic_error("root task has no result");
         }
         auto state_value = state_;
+        struct retire_state final {
+            std::shared_ptr<detail::root_task_state<t_type>>& state_;
+            const std::shared_ptr<detail::root_task_state<t_type>>& expected_;
+            ~retire_state() {
+                if (state_ == expected_ && !expected_->valid()) {
+                    state_.reset();
+                }
+            }
+        } retire{state_, state_value};
         if constexpr (std::is_void_v<t_type>) {
             state_value->get();
-            if (state_ == state_value) {
-                state_.reset();
-            }
             return;
         } else {
-            auto value = state_value->get();
-            if (state_ == state_value) {
-                state_.reset();
-            }
-            return value;
+            return state_value->get();
         }
     }
 

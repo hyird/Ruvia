@@ -48,11 +48,32 @@ public:
             worker_, shared_from_this(), &event_loop_stop_listener::shutdown_hook_);
     }
 
-    void worker_stopping() noexcept {
-        if (!callback_) {
-            return;
+    void cancel() noexcept {
+        move_only_function<task<void>()> abandoned;
+        bool finish_retirement = false;
+        {
+            const std::lock_guard lock(mutex_);
+            if (started_) {
+                return;
+            }
+            abandoned = std::move(callback_);
+            finish_retirement = std::exchange(retirement_begun_, false);
         }
-        retirement_->begin();
+        abandoned = nullptr;
+        if (finish_retirement) {
+            retirement_->finish();
+        }
+    }
+
+    void worker_stopping() noexcept {
+        {
+            const std::lock_guard lock(mutex_);
+            if (!callback_ || retirement_begun_ || started_) {
+                return;
+            }
+            retirement_->begin();
+            retirement_begun_ = true;
+        }
         auto self = shared_from_this();
         if (worker_.is_current()) {
             start_callback(std::move(self));
@@ -73,6 +94,13 @@ private:
     }
 
     void start_callback(std::shared_ptr<event_loop_stop_listener> self) noexcept {
+        {
+            const std::lock_guard lock(mutex_);
+            if (!callback_ || !retirement_begun_) {
+                return;
+            }
+            started_ = true;
+        }
         std::optional<task<void>> task;
         try {
             task.emplace(callback_());
@@ -104,6 +132,9 @@ private:
     worker_shutdown_hook shutdown_hook_;
     worker_handle worker_;
     asio::io_context::executor_type executor_;
+    std::mutex mutex_;
+    bool retirement_begun_{false};
+    bool started_{false};
     move_only_function<task<void>()> callback_;
     std::weak_ptr<event_loop_state> loop_;
     std::shared_ptr<event_loop_retirement> retirement_;
@@ -231,7 +262,9 @@ bool event_loop_stop_registration::valid() const noexcept {
 }
 
 void event_loop_stop_registration::reset() noexcept {
-    listener_.reset();
+    if (auto listener = std::move(listener_)) {
+        listener->cancel();
+    }
 }
 
 event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept

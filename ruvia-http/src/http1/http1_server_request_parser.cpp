@@ -260,7 +260,13 @@ std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_reques
     http_request_access::set_target_form(request, target_view.form_);
     http_request_access::reserve_headers(request, headers.size());
     for (const auto& header : headers) {
-        if (!http_request_access::add_header(request, header)) {
+        auto field = header;
+        if ((target_view.form_ == http_request_target_form::absolute ||
+                target_view.form_ == http_request_target_form::authority) &&
+            http_ascii_equals_ignore_case(field.name(), "Host")) {
+            field = http_header_view{field.name(), target_view.authority_};
+        }
+        if (!http_request_access::add_header(request, field)) {
             error = http_parse_error::too_many_headers;
             break;
         }

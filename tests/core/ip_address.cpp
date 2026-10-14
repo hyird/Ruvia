@@ -73,7 +73,8 @@ RUVIA_TEST(ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
 
 RUVIA_TEST(ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4) {
     for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256",
-             "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1"}) {
+             "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1",
+             "::ffff:01.2.3.4", "::ffff:192.0.2", "fe80::1%12:80", "fe80::1%12 ", "fe80::1%1]:80"}) {
         RUVIA_CHECK((ruvia::parse_ip_address(text).index() != 0));
     }
     RUVIA_CHECK((ruvia::parse_ip_address("0.0.0.0").index() == 0));

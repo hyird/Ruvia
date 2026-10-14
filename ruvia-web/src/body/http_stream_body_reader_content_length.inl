@@ -8,6 +8,9 @@ template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     std::pmr::string& body, std::size_t content_length) {
     if (finished_) {
+        if (body.empty() && delivered_bytes_ == 0 && initial_body_and_pipeline_.size() >= content_length) {
+            co_return initial_body_and_pipeline_.substr(0, content_length);
+        }
         co_return std::string_view(body);
     }
     if (exceeds_limit(content_length)) {
@@ -15,7 +18,7 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     }
 
     const auto initial_body_bytes = std::min(content_length, initial_body_and_pipeline_.size());
-    if (initial_body_bytes == content_length) {
+    if (delivered_bytes_ == 0 && initial_body_bytes == content_length) {
         mark_finished();
         co_return initial_body_and_pipeline_.substr(0, content_length);
     }

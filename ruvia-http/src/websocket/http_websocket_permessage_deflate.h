@@ -68,7 +68,7 @@ public:
             deflater_->rethrow_allocation_failure();
             return false;
         }
-        return websocket_deflate_message(*deflater_, input, out);
+        return websocket_deflate_message(*deflater_, input, out, resource_);
     }
 
     websocket_inflate_result decompress(
@@ -88,7 +88,7 @@ public:
             inflater_->rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
-        return websocket_inflate_message(*inflater_, input, out, message_limit);
+        return websocket_inflate_message(*inflater_, input, out, message_limit, resource_);
     }
 
     // A trial that is not sent must not enter the peer's future dictionary.
@@ -250,9 +250,9 @@ struct permessage_deflate_params final {
         return std::nullopt;
     }
     websocket_compression accepted{.enabled_ = true, .server_max_window_bits_ = params->server_max_window_bits_};
-    if (context_takeover && !params->server_no_context_takeover_ && !params->client_no_context_takeover_) {
-        accepted.server_no_context_takeover_ = false;
-        accepted.client_no_context_takeover_ = false;
+    if (context_takeover) {
+        accepted.server_no_context_takeover_ = params->server_no_context_takeover_;
+        accepted.client_no_context_takeover_ = params->client_no_context_takeover_;
     }
     return accepted;
 }

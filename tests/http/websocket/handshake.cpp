@@ -363,6 +363,23 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
     RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
 }
 
+RUVIA_TEST(ws_server_handshake_negotiates_directional_context_takeover_independently) {
+    const auto request = parse_request(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover\r\n"
+        "\r\n");
+    const auto handshake = ruvia::make_websocket_server_handshake(
+        request, {.deflate_ = {.enabled_ = true, .context_takeover_ = true}});
+    RUVIA_CHECK(handshake.compression().enabled_);
+    RUVIA_CHECK(!handshake.compression().server_no_context_takeover_);
+    RUVIA_CHECK(handshake.compression().client_no_context_takeover_);
+}
+
 RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookies) {
     const auto request = parse_request(valid_handshake());
     std::string cookie = "sid=0123456789abcdef; HttpOnly";

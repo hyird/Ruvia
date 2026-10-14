@@ -977,3 +977,20 @@ RUVIA_TEST(scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
     RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
     RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
 }
+
+RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close) {
+    ruvia::operation_scope scope;
+    int expired = 0;
+    struct reentrant_closer final {
+        ruvia::operation_scope* scope_;
+        int* expired_;
+    } state{&scope, &expired};
+    ruvia::scoped_capability_registration registration(
+        scope, &state, [](void* raw) noexcept {
+            auto* value = static_cast<reentrant_closer*>(raw);
+            ++*value->expired_;
+            value->scope_->close();
+        });
+    scope.close();
+    RUVIA_CHECK_EQ(expired, 1);
+}

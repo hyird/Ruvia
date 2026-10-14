@@ -157,11 +157,17 @@ public:
     explicit stop_callback_state(move_only_function<void()> callback_value) noexcept
         : callback_(std::move(callback_value)) {}
 
-    void invoke() noexcept {
+    [[nodiscard]] std::optional<stop_callback> take() noexcept {
         if (invoked_.test_and_set(std::memory_order_acq_rel)) {
-            return;
+            return std::nullopt;
         }
-        stop_callback(std::move(callback_))();
+        return stop_callback(std::move(callback_));
+    }
+
+    void invoke() noexcept {
+        if (auto callback = take()) {
+            (*callback)();
+        }
     }
 
 private:
@@ -178,9 +184,11 @@ public:
     stop_callback_node(const stop_state_ref& state_value, stop_callback_state& callback) noexcept
         : state_(state_value),
           callback_(&callback) {
-        if (!state_->link(*this)) {
-            callback_->invoke();
-        }
+        static_cast<void>(state_->link(*this));
+    }
+
+    [[nodiscard]] bool linked() const noexcept {
+        return linked_;
     }
     ~stop_callback_node() {
         state_->unlink(*this);
@@ -295,10 +303,28 @@ private:
             std::terminate();
         }
         callback_state_.emplace(std::move(callback_value));
+        bool stop_already_requested = false;
         for (std::size_t index = 0; index != tokens.size() && tokens[index]; ++index) {
             if (tokens[index]->stop_possible()) {
                 callbacks_[index].emplace(tokens[index], *callback_state_);
+                if (!callbacks_[index]->linked()) {
+                    stop_already_requested = true;
+                    break;
+                }
             }
+        }
+
+        if (stop_already_requested) {
+            for (auto callback = callbacks_.rbegin(); callback != callbacks_.rend(); ++callback) {
+                callback->reset();
+            }
+            auto callback = callback_state_->take();
+            callback_state_.reset();
+            phase_.store(registration_phase_type::idle, std::memory_order_release);
+            if (callback.has_value()) {
+                (*callback)();
+            }
+            return;
         }
 
         expected = registration_phase_type::registering;

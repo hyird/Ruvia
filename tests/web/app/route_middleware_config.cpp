@@ -256,6 +256,25 @@ RUVIA_TEST(test_app_runs_routes_with_deadlines) {
     RUVIA_CHECK_EQ(response.body(), std::string_view("deadline"));
 }
 
+RUVIA_TEST(app_rejects_route_only_body_limit_and_deadline_middlewares) {
+    ruvia::test_app app;
+    bool body_limit_rejected = false;
+    try {
+        app.use<ruvia::body_limit<16>>();
+    } catch (const std::invalid_argument&) {
+        body_limit_rejected = true;
+    }
+    RUVIA_CHECK(body_limit_rejected);
+
+    bool deadline_rejected = false;
+    try {
+        app.use<ruvia::deadline<50>>();
+    } catch (const std::invalid_argument&) {
+        deadline_rejected = true;
+    }
+    RUVIA_CHECK(deadline_rejected);
+}
+
 RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {
     ruvia::test_app app;
     const auto response = app.request(ruvia::test_request::post("/route-config/mixed").body("x"));

@@ -52,7 +52,7 @@ void worker_group::add(worker_runtime& member, std::size_t tier) {
 bool worker_group::start() {
     {
         const std::lock_guard lock(mutex_);
-        if (sealed_ && !stopping_) {
+        if (sealed_) {
             throw std::logic_error("worker group can only be started once");
         }
         sealed_ = true;
@@ -72,13 +72,28 @@ bool worker_group::start() {
             }
             begin = end;
         }
-        return settle(true, "ready");
+        const bool reached = settle(true, "ready");
+        if (reached) {
+            const std::lock_guard lock(mutex_);
+            ready_ = true;
+        }
+        return reached;
     } catch (...) {
         rethrow_phase_failure(std::current_exception());
     }
 }
 
 bool worker_group::serve() {
+    {
+        const std::lock_guard lock(mutex_);
+        if (!ready_) {
+            throw std::logic_error("worker group must be ready before it serves");
+        }
+        if (serve_requested_) {
+            throw std::logic_error("worker group can only serve once");
+        }
+        serve_requested_ = true;
+    }
     try {
         for (auto end = members_.size(); end != 0;) {
             auto begin = end - 1;

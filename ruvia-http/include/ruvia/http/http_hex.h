@@ -48,9 +48,10 @@ constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned cha
         output[2 * index + 1] = http_lower_hex_digit(byte);
     };
     // Constant evaluation cannot make char output alias unsigned char input.
-    const auto forward_bytes = std::is_constant_evaluated()
-                                   ? bytes.size()
-                                   : detail::http_forward_encoded_groups(output, bytes.data(), bytes.size());
+    auto forward_bytes = bytes.size();
+    if (!std::is_constant_evaluated()) {
+        forward_bytes = detail::http_forward_encoded_groups(output, bytes.data(), bytes.size());
+    }
     for (auto index = bytes.size(); index != forward_bytes;) {
         encode_byte(--index);
     }

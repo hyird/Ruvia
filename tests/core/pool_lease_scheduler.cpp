@@ -84,6 +84,19 @@ ruvia::task<void> exercise_lease_and_close(
     }
     const auto after_close = co_await scheduler.acquire(std::nullopt);
     success = after_close.status() == ruvia::worker_wait_status::closed;
+    auto moved_acquire = scheduler.acquire(std::nullopt);
+    auto target_acquire = std::move(moved_acquire);
+    static_cast<void>(target_acquire);
+    bool moved_from_rejected = false;
+    try {
+        (void)co_await std::move(moved_acquire);
+    } catch (const std::logic_error&) {
+        moved_from_rejected = true;
+    }
+    if (!moved_from_rejected) {
+        success = false;
+        co_return;
+    }
 }
 
 ruvia::task<void> exercise_worker_bound_acquire_timeout(

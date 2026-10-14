@@ -30,6 +30,9 @@ namespace {
 }
 
 void append_string_literal(st_mysql& connection, std::pmr::string& output, std::string_view value) {
+    if (value.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
+    }
     const auto literal_size_hint = mariadb_string_literal_size_hint(value.size());
     if (output.size() > (std::numeric_limits<std::size_t>::max)() - literal_size_hint) {
         throw std::length_error("MariaDB SQL is too large");
@@ -131,6 +134,9 @@ void free_stored_result(void* result_value) noexcept {
 
 std::pmr::string interpolate_sql(st_mysql& connection, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource) {
+    if (sql.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("SQL must not contain NUL bytes");
+    }
     validate_mariadb_sql_length(sql.size());
     std::pmr::string output(pmr_resource_or_default(resource));
     std::size_t size_hint = sql.size();

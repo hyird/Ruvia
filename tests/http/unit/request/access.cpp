@@ -72,6 +72,13 @@ RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
         "GET", "https://example.test/path?key=value", headers, {}, &resource);
     RUVIA_CHECK(!error.has_value());
     RUVIA_CHECK(resource.live_bytes_ > 0);
+    {
+        const http_header_view conflicting_host[]{{"Host", "conflicting.example"}};
+        auto [rebound_req, rebound_err] = ruvia::make_parsed_http_request(
+            "GET", "https://example.test/path", conflicting_host, {}, &resource);
+        RUVIA_CHECK(!rebound_err.has_value());
+        RUVIA_CHECK_EQ(rebound_req.header("Host").value_or(""), std::string_view("example.test"));
+    }
     request.reset();
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
     RUVIA_CHECK(request.method().empty());
