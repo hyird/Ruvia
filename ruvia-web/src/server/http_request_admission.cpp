@@ -15,7 +15,6 @@ namespace ruvia::detail {
 
 http_request_admission_policy http_request_admission_policy::server(const http_server_options& options) noexcept {
     return {
-        .handler_deadline_ = options.deadline_ ? std::optional{options.deadline_->handler_} : std::nullopt,
         .max_stream_body_bytes_ = options.server_.max_stream_body_bytes_,
         .max_buffered_body_bytes_ = options.server_.max_buffered_body_bytes_,
         .coding_availability_ = options.compression_.has_value()
@@ -69,7 +68,7 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, context_services services, std::optional<request_deadline>& deadline) {
+    const http_request_admission_policy& policy, context_services services) {
     const auto& request = input.request_;
     // Negotiate against every coding. A document root or context::static_file
     // may serve an indexed precompressed sidecar even when this worker has no
@@ -87,17 +86,6 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     const auto client_address = services.get_conn_info().client().address();
 
     const auto* resolved = input.resolution_.resolved();
-    // Armed before every server-layer rejection: a custom on_error handler is
-    // a handler too and must observe the request stop token.
-    const auto handler_deadline =
-        effective_handler_deadline(policy.handler_deadline_, resolved != nullptr ? resolved->route().deadline_ms() : 0);
-    if (handler_deadline > std::chrono::milliseconds::zero()) {
-        deadline.emplace(services.get_stop_token()).arm(services.worker(), handler_deadline);
-    }
-    if (deadline.has_value()) {
-        services = services.with_request_deadline(*deadline);
-    }
-
     http_request_admission admission(
         http_response_tail(request, coding_policy, client_address, input.start_), std::move(services));
     admission.resolved_ = resolved;

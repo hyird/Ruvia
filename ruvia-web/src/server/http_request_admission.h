@@ -23,11 +23,10 @@
 #include "server/http_buffered_response.h"
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
-#include "server/request_deadline.h"
 
 // Shared admission for HTTP/1 and in-process subrequests. The HTTP/1 session
 // reads and frames messages; admission decides coding, client identity,
-// deadlines, expectations, rate limits, body ceilings and endpoint kind.
+// expectations, rate limits, body ceilings and endpoint kind.
 
 namespace ruvia::detail {
 
@@ -38,7 +37,6 @@ class route_table;
 // options; a subrequest builds it from its parent (no rate limit: the parent
 // request already passed it).
 struct http_request_admission_policy final {
-    std::optional<std::chrono::milliseconds> handler_deadline_{};
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_buffered_body_bytes_{};
     http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
@@ -205,7 +203,7 @@ public:
         return coding_availability_;
     }
 
-    // The connection's request services plus the armed request deadline.
+    // The connection's request services after applying admission policy.
     [[nodiscard]] const context_services& services() const noexcept {
         return services_;
     }
@@ -225,8 +223,7 @@ public:
 
 private:
     friend http_request_admission admit_http_request(const http_request_admission_input& input,
-        const http_request_admission_policy& policy, context_services services,
-        std::optional<request_deadline>& deadline);
+        const http_request_admission_policy& policy, context_services services);
 
     http_request_admission(http_response_tail tail, context_services services) noexcept
         : tail_(tail),
@@ -243,11 +240,8 @@ private:
 };
 
 // Runs the admission policy once for one request. `services` are the
-// connection's request services (interim output, trailers, ...). The handler
-// deadline is armed before any rejection so a custom error handler observes
-// the request stop token: `deadline` must be disengaged and is emplaced on
-// services.get_stop_token() only when a deadline applies.
+// connection's request services (stop token, interim output, trailers, ...).
 [[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, context_services services, std::optional<request_deadline>& deadline);
+    const http_request_admission_policy& policy, context_services services);
 
 }  // namespace ruvia::detail

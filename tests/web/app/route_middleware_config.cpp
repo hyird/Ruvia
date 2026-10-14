@@ -17,7 +17,6 @@
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/deadline.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/testing.h"
@@ -103,7 +102,6 @@ public:
     RUVIA_POST("/small", small, ruvia::body_limit<16>);
     RUVIA_POST("/small-decoded", small, ruvia::body_limit<64>);
     RUVIA_POST("/default", default_body);
-    RUVIA_GET("/deadline", deadline, ruvia::deadline<100>);
     RUVIA_GET("/answered", one, response_middleware);
     // Unparameterized and parameterized entries in ONE list: both are types, so
     // the typename pack takes them together and a bare name needs no braces.
@@ -120,10 +118,6 @@ private:
     ruvia::task<ruvia::http_response> limited(ruvia::context& c) {
         co_return c.text("limited");
     }
-    ruvia::task<ruvia::http_response> deadline(ruvia::context& c) {
-        co_return c.text("deadline");
-    }
-
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
         const auto body = co_await c.req().text();
         co_return c.body(body);
@@ -249,14 +243,7 @@ RUVIA_TEST(route_body_limit_bounds_the_decoded_representation) {
     RUVIA_CHECK_EQ(accepted.body(), std::string_view(plain));
 }
 
-RUVIA_TEST(test_app_runs_routes_with_deadlines) {
-    ruvia::test_app app;
-    const auto response = app.request(ruvia::test_request::get("/route-config/deadline"));
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(response.body(), std::string_view("deadline"));
-}
-
-RUVIA_TEST(app_rejects_route_only_body_limit_and_deadline_middlewares) {
+RUVIA_TEST(app_rejects_route_only_body_limit_middleware) {
     ruvia::test_app app;
     bool body_limit_rejected = false;
     try {
@@ -265,14 +252,6 @@ RUVIA_TEST(app_rejects_route_only_body_limit_and_deadline_middlewares) {
         body_limit_rejected = true;
     }
     RUVIA_CHECK(body_limit_rejected);
-
-    bool deadline_rejected = false;
-    try {
-        app.use<ruvia::deadline<50>>();
-    } catch (const std::invalid_argument&) {
-        deadline_rejected = true;
-    }
-    RUVIA_CHECK(deadline_rejected);
 }
 
 RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {
@@ -350,8 +329,8 @@ RUVIA_TEST(test_app_releases_registered_middleware_arguments_with_the_app) {
 }
 
 RUVIA_TEST(app_wide_route_declarations_are_rejected_instead_of_ignored) {
-    // Admission reads body_limit and deadline from route and controller lists
-    // only, so an app-wide registration would silently bound nothing.
+    // Admission reads body_limit from route and controller lists only,
+    // so an app-wide registration would silently bound nothing.
     ruvia::test_app app;
     const auto rejects = [](auto&& register_value) {
         try {
@@ -363,8 +342,6 @@ RUVIA_TEST(app_wide_route_declarations_are_rejected_instead_of_ignored) {
     };
     RUVIA_CHECK(rejects([&app] { app.use<ruvia::body_limit<16>>(); }));
     RUVIA_CHECK(rejects([&app] { app.use_at<ruvia::body_limit<16>>({.prefix_ = "/route-config"}); }));
-    RUVIA_CHECK(rejects([&app] { app.use<ruvia::deadline<100>>(); }));
-    RUVIA_CHECK(rejects([&app] { app.use_at<ruvia::deadline<100>>({.prefix_ = "/route-config"}); }));
 
     const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);

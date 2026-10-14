@@ -22,9 +22,6 @@ namespace ruvia {
 
 class http_request;
 class http_request_trailers;
-namespace detail {
-class request_deadline;
-}
 class blocking_pool;
 class env;
 }  // namespace ruvia
@@ -66,7 +63,6 @@ struct context_request_services final {
     // request has none. It outlives every context created for the request.
     http_interim_response_output* interim_output_{};
     context_response_output response_output_{};
-    const request_deadline* deadline_{};
     std::size_t dispatch_depth_{};
     // The matched route's declared body_limit; 0 when it declares none.
     std::size_t route_body_limit_{};
@@ -202,14 +198,6 @@ public:
         auto services = *this;
         services.request_services_.response_output_ = context_response_output::response_stream(value);
         return services;
-    }
-
-    [[nodiscard]] context_services with_request_deadline(
-        const ::ruvia::detail::request_deadline& value) const noexcept;
-    context_services with_request_deadline(::ruvia::detail::request_deadline&&) const = delete;
-
-    [[nodiscard]] const ::ruvia::detail::request_deadline* request_deadline() const noexcept {
-        return request_services_.deadline_;
     }
 
     [[nodiscard]] std::size_t dispatch_depth() const noexcept {

@@ -148,8 +148,6 @@ struct http_server_options final {
     worker_codecs* codecs_{nullptr};
     std::optional<cors_options> cors_{};
     document_root_type document_root_{};
-    // Absent means no handler deadline anywhere, and nothing is armed.
-    std::optional<deadline_config> deadline_{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
     trusted_proxy_set trusted_proxies_{};

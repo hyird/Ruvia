@@ -15,13 +15,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/timer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/deadline.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/security_headers.h"
 #include "ruvia/web/session.h"
@@ -225,7 +223,6 @@ public:
     RUVIA_GET("/report", report);
     RUVIA_GET("/large", large);
     RUVIA_GET("/worker", worker);
-    RUVIA_GET("/deadline", deadline, ruvia::deadline<20>);
     RUVIA_GET("/partial", partial);
     RUVIA_GET("/subrequest", subrequest);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
@@ -373,14 +370,6 @@ private:
         co_return c.body(std::move(state_value));
     }
 
-    ruvia::task<ruvia::http_response> deadline(ruvia::context& c) {
-        const auto result_value =
-            co_await ruvia::sleep_for(c.worker(), std::chrono::hours(1), c.get_stop_token());
-        co_return c.body(result_value == ruvia::timer_sleep_result::stop_requested && c.deadline_exceeded()
-                             ? std::string_view("deadline")
-                             : std::string_view("missed"));
-    }
-
     // No auth middleware on this route, so nothing is bound and the optional
     // lookup must say so rather than throw.
     ruvia::task<ruvia::http_response> whoami_unbound(ruvia::context& c) {
@@ -484,9 +473,6 @@ RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
 
     const auto worker_value = app.request(ruvia::test_request::get("/t/worker"));
     RUVIA_CHECK_EQ(worker_value.body(), std::string_view("valid/current"));
-
-    const auto deadline_value = app.request(ruvia::test_request::get("/t/deadline"));
-    RUVIA_CHECK_EQ(deadline_value.body(), std::string_view("deadline"));
 
     // The automatic HEAD fallback answers with the GET status and no body.
     // Writer-synthesized framing headers (Content-Length, Date) are not part

@@ -141,8 +141,8 @@ private:
           committed_(committed),
           aborted_(aborted) {}
 
-    // The request's stop token travels with the binding so sleep() observes it;
-    // every framework-provided wait must preserve the request deadline.
+    // The context's stop token travels with the binding so sleep() observes
+    // worker shutdown and explicit subrequest cancellation.
     void bind_context(context& context_value, stop_token stop_token_value) {
         stop_token_ = std::move(stop_token_value);
         bind_context_(target_, &context_value);

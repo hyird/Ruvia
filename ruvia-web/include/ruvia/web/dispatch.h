@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
@@ -17,12 +17,14 @@ class context;
 
 // Inputs are copied before dispatch() returns its lazy scoped operation.
 // Only origin-form targets and buffered request/response bodies are accepted.
+// Cancellation combines `stop_token_` with the calling context's stop token;
+// subrequest handlers have no total execution timeout.
 struct dispatch_options final {
     std::string_view method_{};
     std::string_view target_{};
     std::span<const http_header_view> headers_{};
     std::string_view body_{};
-    operation_options operation_{};
+    stop_token stop_token_{};
 };
 
 // Owns its bytes in the calling worker's reclaimable pool, independently of

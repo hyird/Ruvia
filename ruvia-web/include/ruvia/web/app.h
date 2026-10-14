@@ -107,13 +107,6 @@ public:
     // from listen(). The application keeps only the parsed credentials; this
     // call's copy of each private-key password is cleansed before it returns.
     application& listen(listen_config config);
-    // The deployment's handler deadline. Absent by
-    // default: an app that declares no deadline anywhere arms nothing per
-    // request. A route may tighten the handler
-    // deadline with ruvia::deadline<N> but never extend it -- the same rule
-    // server_config::max_buffered_body_bytes_ follows.
-    application& deadline(deadline_config config);
-    application& deadline(std::nullptr_t);
     // Disabled by default. A config enables response coding and precompressed
     // static variant negotiation; nullptr disables both.
     application& compression(compression_config config);

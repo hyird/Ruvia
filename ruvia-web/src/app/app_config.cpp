@@ -80,21 +80,6 @@ application& application::server(server_config config) {
         });
 }
 
-application& application::deadline(deadline_config config) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the deadline while app is running", [config](detail::app_state& state_value) {
-            detail::ensure_positive_duration(
-                config.handler_, "handler deadline must be greater than zero");
-            state_value.options_.deadline_ = config;
-        });
-}
-
-application& application::deadline(std::nullptr_t) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the deadline while app is running",
-        [](detail::app_state& state_value) { state_value.options_.deadline_.reset(); });
-}
-
 application& application::on_start(app_hook_type hook) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",

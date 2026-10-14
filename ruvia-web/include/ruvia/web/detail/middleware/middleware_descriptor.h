@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -79,11 +78,6 @@ public:
         return request_body_limit_;
     }
 
-    // 0 when this middleware declares no deadline.
-    [[nodiscard]] std::int64_t deadline_ms() const noexcept {
-        return deadline_ms_;
-    }
-
     [[nodiscard]] bool uses_route_rate_limit() const noexcept {
         return uses_route_rate_limit_;
     }
@@ -94,7 +88,7 @@ private:
 
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
         const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,
-        bool runs_on_unmatched_requests, std::size_t request_body_limit, std::int64_t deadline_ms) noexcept
+        bool runs_on_unmatched_requests, std::size_t request_body_limit) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
@@ -102,7 +96,6 @@ private:
           validated_model_type_key_(validated_model_type_key),
           uses_route_rate_limit_(uses_route_rate_limit),
           request_body_limit_(request_body_limit),
-          deadline_ms_(deadline_ms),
           runs_on_unmatched_requests_(runs_on_unmatched_requests) {}
 
     invoke_type invoke_{nullptr};
@@ -113,7 +106,6 @@ private:
     std::string_view prefix_{};
     bool uses_route_rate_limit_{false};
     std::size_t request_body_limit_{0};
-    std::int64_t deadline_ms_{0};
     bool runs_on_unmatched_requests_{false};
 };
 

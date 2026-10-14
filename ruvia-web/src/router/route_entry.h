@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -37,8 +36,6 @@ public:
         bool dynamic_{false};
         // 0 = no route-declared ceiling; the server default applies.
         std::size_t max_request_body_bytes_{0};
-        // 0 = no route-declared deadline; the app-wide one applies.
-        std::int64_t deadline_ms_{0};
     };
 
     route_entry(std::pmr::memory_resource* resource, init_type init);
@@ -83,11 +80,6 @@ public:
         return max_request_body_bytes_;
     }
 
-    // A handler deadline declared by one of this route's middlewares, or 0.
-    [[nodiscard]] std::int64_t deadline_ms() const noexcept {
-        return deadline_ms_;
-    }
-
     [[nodiscard]] std::span<const std::string_view> param_names() const noexcept {
         return param_names_;
     }
@@ -122,7 +114,6 @@ private:
     route_endpoint endpoint_;
     bool dynamic_{false};
     std::size_t max_request_body_bytes_{0};
-    std::int64_t deadline_ms_{0};
     std::span<const std::string_view> param_names_{};
     std::size_t middleware_offset_{0};
     std::size_t middleware_count_{0};

@@ -33,26 +33,6 @@ namespace {
     return limit;
 }
 
-// The strictest deadline any of the route's middlewares declared, by the same
-// rule the body limit uses: a narrower scope may only tighten.
-[[nodiscard]] std::int64_t declared_deadline_ms(
-    std::span<const detail::controller_middleware_descriptor> controller_middlewares,
-    std::span<const detail::controller_middleware_descriptor> route_middlewares) noexcept {
-    std::int64_t deadline_value = 0;
-    const auto consider =
-        [&deadline_value](std::span<const detail::controller_middleware_descriptor> descriptors) noexcept {
-            for (const auto& descriptor : descriptors) {
-                const auto declared = descriptor.deadline_ms();
-                if (declared != 0 && (deadline_value == 0 || declared < deadline_value)) {
-                    deadline_value = declared;
-                }
-            }
-        };
-    consider(controller_middlewares);
-    consider(route_middlewares);
-    return deadline_value;
-}
-
 }  // namespace
 
 detail::route_entry::route_entry(std::pmr::memory_resource* resource, init_type init)
@@ -63,8 +43,7 @@ detail::route_entry::route_entry(std::pmr::memory_resource* resource, init_type 
       path_(init.path_, resource),
       endpoint_(std::move(init.endpoint_)),
       dynamic_(init.dynamic_),
-      max_request_body_bytes_(init.max_request_body_bytes_),
-      deadline_ms_(init.deadline_ms_) {}
+      max_request_body_bytes_(init.max_request_body_bytes_) {}
 
 void detail::router_impl::register_endpoint(http_known_method method, std::string_view method_token,
     std::string_view path, route_endpoint endpoint, void* handler_target,
@@ -132,8 +111,7 @@ void detail::router_impl::register_endpoint(http_known_method method, std::strin
             .path_ = path,
             .endpoint_ = std::move(endpoint),
             .dynamic_ = dynamic,
-            .max_request_body_bytes_ = declared_request_body_limit(controller_middlewares, route_middlewares),
-            .deadline_ms_ = declared_deadline_ms(controller_middlewares, route_middlewares)});
+            .max_request_body_bytes_ = declared_request_body_limit(controller_middlewares, route_middlewares)});
     route_indices_.emplace(hash, index);
 }
 

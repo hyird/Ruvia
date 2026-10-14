@@ -5,7 +5,7 @@
 // linked into the binary (the same macro registration path application::run() uses),
 // finalizes the production route table, and dispatches TestRequests through
 // the real buffered request chain of a server with default options: request
-// admission (body ceilings, handler deadlines, rate limits), routing,
+// admission (body ceilings, rate limits), routing,
 // controller/route/global middleware, validators, prefix and app-wide
 // not_found/on_error fallbacks, url_for, worker state, and the response tail
 // (CORS, content-coding and error recovery) all behave as they do in a
@@ -17,8 +17,7 @@
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/websocket routes and handlers that await worker-bound
 // services (db(), redis(), run_blocking()) need a running server; drive those
-// through a real loopback server instead. Deadlines are enforced by the
-// private worker's timer.
+// through a real loopback server instead.
 
 #include <cstddef>
 #include <memory>
@@ -211,7 +210,7 @@ public:
     // Dispatches one request through the production route table and returns
     // the copied-out response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
-    // including route deadline cancellation and per-worker state semantics.
+    // including per-worker state semantics.
     [[nodiscard]] test_response request(const test_request& request);
 
 private:

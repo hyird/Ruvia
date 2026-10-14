@@ -181,7 +181,6 @@ test_response test_app::request(const test_request& request) {
 
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
-        std::optional<detail::request_deadline> request_deadline;
         std::optional<detail::http_request_admission> admission;
         std::optional<detail::http_request_rejection> rejection;
         if (parse_error.has_value()) {
@@ -196,7 +195,7 @@ test_response test_app::request(const test_request& request) {
                     .resource_ = request_memory_value.resource(),
                     .start_ = request_start,
                 },
-                detail::http_request_admission_policy::server(options), services, request_deadline));
+                detail::http_request_admission_policy::server(options), services));
             if (const auto* admitted_rejection = admission->rejection()) {
                 // As in the server: a rejection does not inherit the coding promise.
                 rejection = *admitted_rejection;

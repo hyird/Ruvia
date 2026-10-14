@@ -29,7 +29,6 @@
 #include "server/http_server_stream_body_route.h"
 #include "server/http_server_tunnel_route.h"
 #include "server/http_server_websocket_route.h"
-#include "server/request_deadline.h"
 #include "server/response_file_source.h"
 #include "server/worker_connections.h"
 
@@ -216,10 +215,6 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         // cleaned up below. Declared before request_completion, which borrows
         // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
-        // Declared here, before the admission and everything that borrows its
-        // services, so the deadline's stop source outlives every dispatch that
-        // observes its token.
-        std::optional<request_deadline> request_deadline;
         http1_interim_response_sink interim_sink(stream, parsed_value.request_, memory_.resource(), response_output);
         const auto request_services =
             base_route_services.with_interim_output(interim_sink.output());
@@ -278,8 +273,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         .expectation_ = &expectation_plan,
                         .start_ = request_start,
                     },
-                    admission_policy, request_services,
-                    request_deadline));
+                    admission_policy, request_services));
 
                 if (const auto* redirect = listener_value.redirect()) {
                     if (admission->endpoint() == http_request_endpoint::rejection) {

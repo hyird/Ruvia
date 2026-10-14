@@ -20,7 +20,6 @@
 #include "context/context_services.h"
 #include "router/route_table.h"
 #include "server/http_request_admission.h"
-#include "server/request_deadline.h"
 
 namespace ruvia {
 
@@ -55,7 +54,6 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
         options.target_.find_first_of("\r\n\t #") != std::string_view::npos || options.target_.find('\0') != std::string_view::npos) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
-    validate_operation_options(options.operation_);
     if (options.body_.size() > services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
@@ -85,10 +83,10 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
         fields.emplace_back(header.value());
     }
     return ::ruvia::make_scoped_operation(
-        operation_scope_, dispatch_task(std::move(fields), std::move(options.operation_)));
+        operation_scope_, dispatch_task(std::move(fields), std::move(options.stop_token_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, operation_options options) {
+task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, stop_token stop_token_value) {
     auto memory = memory_.fork();
     const std::string_view body = fields[subrequest_field_body];
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
@@ -107,18 +105,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     }
     const auto& routes = *services().routes();
     const auto resolution = routes.resolve(request);
-    const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(options.stop_token_));
+    const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(stop_token_value));
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
-    // The parent request already passed the application rate limit. The
-    // operation timeout bounds this subrequest; a route may only tighten it.
+    // The parent request already passed the application rate limit.
     const detail::http_request_admission_policy policy{
-        .handler_deadline_ = options.timeout_,
         .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
         .apply_rate_limit_ = false,
     };
-    std::optional<detail::request_deadline> deadline;
     auto admission = detail::admit_http_request(
         {
             .request_ = request,
@@ -126,7 +121,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .coding_ = http_response_coding_selection_for(request),
             .resource_ = memory.resource(),
         },
-        policy, services().for_subrequest(stop), deadline);
+        policy, services().for_subrequest(stop));
     const auto* rejection = admission.rejection();
     auto response = rejection != nullptr
                         ? co_await detail::respond_http_request_rejection(

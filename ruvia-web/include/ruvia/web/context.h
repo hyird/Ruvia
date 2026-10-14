@@ -258,24 +258,13 @@ public:
         return capabilities_.try_run_blocking(timeout, std::move(callable));
     }
 
-    // Whether this request's handler deadline elapsed. The token alone cannot
-    // say: it trips for worker shutdown too, and a handler that catches the
-    // cancellation its own await raised needs to tell those apart before
-    // deciding whether to press on.
-    [[nodiscard]] bool deadline_exceeded() const noexcept;
-
-    // Stopped when this request should stop doing work: its handler deadline
-    // elapsed (see ruvia::deadline), or the owning worker began stopping.
+    // Observes worker shutdown and, for a subrequest, explicit cancellation.
     // db(), redis(), get_http_client({...}).send(), and run_blocking() bind this
-    // token automatically, which is how a deadline reaches a handler that
-    // never mentions one. An explicit operation token is combined with it.
+    // token automatically. Explicit operation tokens are combined with it.
     //
-    // Cooperative by necessity: a suspended coroutine cannot be abandoned in
-    // C++, so this stops the WAITS rather than the handler. Every wait Ruvia
-    // hands a handler observes this token, streaming sleep() included; a wait the
-    // application built out of raw Asio without one is not stopped, and if it is
-    // still suspended while the worker can run, the connection scanner's current
-    // inactivity phase eventually drops the socket instead of answering on it.
+    // Cancellation is cooperative: framework waits, including streaming sleep(),
+    // observe this token; CPU work and raw Asio waits without it are not preempted.
+    // Connection phase timeouts close the socket independently.
     //
     // HTTP/1 cannot observe a peer FIN while a handler is suspended without a
     // concurrent transport read, so this is not a promise of immediate
@@ -493,7 +482,7 @@ private:
     [[nodiscard]] task<http_response> not_found_task();
     // `fields`: method, target, body, then header name/value pairs (owned copies).
     [[nodiscard]] task<dispatch_response> dispatch_task(
-        std::pmr::vector<std::pmr::string> fields, operation_options options);
+        std::pmr::vector<std::pmr::string> fields, stop_token stop);
     [[nodiscard]] task<std::string_view> request_body() const;
     task<void> request_discard_body() const;
     [[nodiscard]] task<std::pmr::vector<multipart_part>> request_multipart() const;

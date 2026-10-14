@@ -9,11 +9,11 @@
 #include <thread>
 #include <utility>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/deadline.h"
 #include "ruvia/web/testing.h"
 
 #include "test_harness.h"
@@ -70,7 +70,7 @@ public:
     RUVIA_ROUTES_BEGIN(testing_memory_controller)
     RUVIA_GET("/owned", owned);
     RUVIA_GET("/throw", throwing);
-    RUVIA_GET("/cancel", cancelled, ruvia::deadline<5>);
+    RUVIA_GET("/cancel", cancelled);
     RUVIA_ROUTES_END
 
 private:
@@ -98,10 +98,14 @@ private:
         ruvia::http_response response({.resource_ = &state_value.resource_});
         std::pmr::string body(256 * 1024, 'c', &state_value.resource_);
         response.owned_body(std::move(body));
+        // Exercise explicit downstream cancellation while the response still
+        // owns worker-allocated memory, without a request-level timer.
+        ruvia::stop_source stop;
+        stop.request_stop();
         const auto result_value = co_await ruvia::sleep_for(
-            c.worker(), std::chrono::hours(1), c.get_stop_token());
-        if (result_value != ruvia::timer_sleep_result::stop_requested || !c.deadline_exceeded()) {
-            throw std::logic_error("deadline did not cancel the operation");
+            c.worker(), std::chrono::hours(1), stop.token());
+        if (result_value != ruvia::timer_sleep_result::stop_requested) {
+            throw std::logic_error("explicit cancellation did not stop the operation");
         }
         co_return response;
     }

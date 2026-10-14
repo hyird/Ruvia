@@ -4,7 +4,6 @@
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
 #include "router/route_limits.h"
-#include "server/request_deadline.h"
 
 namespace ruvia {
 
@@ -41,10 +40,6 @@ detail::context_services& context::services() noexcept {
 
 const detail::context_services& context::services() const noexcept {
     return request_storage().services_;
-}
-
-bool context::deadline_exceeded() const noexcept {
-    return services().request_deadline() != nullptr && services().request_deadline()->exceeded();
 }
 
 const ruvia::env& context::env() const noexcept {

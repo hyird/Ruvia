@@ -1,27 +1,22 @@
 // Request policies and local dispatch; no external services are required.
 // Build: cmake --build build --config Release --target ruvia_example_request_policies -j$(nproc)
 // Run the executable, then try:
-//   curl -i http://127.0.0.1:8091/policies/slow
 //   curl -i -d hello http://127.0.0.1:8091/policies/small
 //   curl -i -H "X-Demo-Name: reader" http://127.0.0.1:8091/policies/dispatch
-// Expected: a deadline response, an echo, and "reader (subrequest)" respectively.
+// Expected: an echo and "reader (subrequest)" respectively.
 // GET /policies/csrf issues XSRF-TOKEN. For POST, send that cookie AND copy its
 // value into X-XSRF-TOKEN; a missing or mismatched value is rejected with 403.
 
 #include <array>
-#include <chrono>
 #include <exception>
 #include <iostream>
 #include <string>
 
-#include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/csrf.h"
-#include "ruvia/web/deadline.h"
 #include "ruvia/web/dispatch.h"
-#include "ruvia/web/error.h"
 
 namespace {
 
@@ -45,7 +40,6 @@ public:
     RUVIA_CONTROLLER_GROUP("/policies", label_middleware)
     RUVIA_ROUTES_BEGIN(policy_controller)
     RUVIA_POST("/small", small, ruvia::body_limit<16>);
-    RUVIA_GET("/slow", slow, ruvia::deadline<100>);
     RUVIA_GET("/label", label);
     RUVIA_GET("/dispatch", dispatch);
     RUVIA_GET("/csrf", csrf, ruvia::csrf_protection);
@@ -58,19 +52,6 @@ private:
         // 413; a route may tighten, but cannot enlarge, the server-wide limit.
         const auto body = co_await c.req().text();
         co_return c.text(body);
-    }
-
-    ruvia::task<ruvia::http_response> slow(ruvia::context& c) {
-        // Deadlines are cooperative: propagate the request token to custom
-        // waits, then await their completion before releasing request state.
-        // db(), redis(), get_http_client(), and run_blocking() already inherit it.
-        const auto result_value = co_await ruvia::sleep_for(c.worker(), std::chrono::seconds(1), c.get_stop_token());
-        if (result_value == ruvia::timer_sleep_result::stop_requested) {
-            co_return c.error({.status_ = ruvia::http_status::gateway_timeout,
-                .code_ = "deadline",
-                .message_ = "the request stopped waiting"});
-        }
-        co_return c.text("completed\n");
     }
 
     ruvia::task<ruvia::http_response> label(ruvia::context& c) {
@@ -112,7 +93,6 @@ int main() {
             .server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
                 .max_buffered_body_bytes_ = 1024})
             .listen({.address_ = "127.0.0.1", .http_ = 8091})
-            .deadline({.handler_ = std::chrono::seconds(2)})
             .run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
