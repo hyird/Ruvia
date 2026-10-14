@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -55,15 +56,14 @@ struct static_root_options final {
     // root is never exposed. Enable it only for a root that intentionally
     // publishes hidden paths (for example .well-known/ for ACME).
     static_dotfile_policy dotfiles_{static_dotfile_policy::deny};
-    // Opt-in for a standalone static_root: keep the bytes of files up to
-    // resident_max_bytes_, at most resident_budget_bytes_ in total (in index
-    // order), and serve them from memory without touching the filesystem.
-    // Zero for either (the default) keeps every file on disk and fail-closed.
-    // A resident file is served as indexed even after it is rewritten on disk,
-    // because a standalone root is never refreshed. application::document_root
-    // rejects these; it takes document_root_config::resident_max_bytes_ instead.
-    std::size_t resident_max_bytes_{0};
-    std::size_t resident_budget_bytes_{0};
+    // Keep the bytes of files up to resident_max_bytes_, at most
+    // resident_budget_bytes_ in total (in index order). Unspecified values
+    // resolve to zero for a standalone static_root, or 64 KiB / 16 MiB for
+    // application::document_root. An explicit zero for either disables it.
+    // Resident files are served as indexed until the next snapshot, even
+    // after a disk edit; a standalone root is never refreshed.
+    std::optional<std::size_t> resident_max_bytes_{};
+    std::optional<std::size_t> resident_budget_bytes_{};
 };
 
 namespace detail {
@@ -100,11 +100,10 @@ struct static_root_state;
 //
 // These states persist until a new static_root is constructed. application document
 // roots replace it after the next successful refresh (every second by default);
-// a standalone static_root does not. A document root may also keep small files'
-// bytes in its snapshot (document_root_config::resident_max_bytes_): those are
-// served as indexed until that refresh instead of failing closed. A standalone
-// static_root does the same only when static_root_options::resident_max_bytes_
-// and resident_budget_bytes_ opt in; it never owns refresh or compression.
+// a standalone static_root does not. Resident files are served from the
+// snapshot's memory until that refresh instead of failing closed on a disk
+// edit. Both owners configure residency through static_root_options;
+// a standalone static_root never owns refresh or compression.
 class static_root final {
 public:
     explicit static_root(const std::filesystem::path& root, static_root_options options = {});

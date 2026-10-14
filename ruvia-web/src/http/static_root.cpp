@@ -461,8 +461,8 @@ static_root::prepared_construction_type static_root::prepare_construction(
     return prepared_construction_type{
         .canonical_root_ = canonical_static_root_path(root),
         .config_ = detail::store_validated_static_root_config(options, process_resource()),
-        .resident_ = {.max_file_bytes_ = options.resident_max_bytes_,
-            .budget_bytes_ = options.resident_budget_bytes_},
+        .resident_ = {.max_file_bytes_ = options.resident_max_bytes_.value_or(0),
+            .budget_bytes_ = options.resident_budget_bytes_.value_or(0)},
     };
 }
 

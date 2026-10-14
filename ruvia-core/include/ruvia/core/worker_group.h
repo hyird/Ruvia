@@ -17,8 +17,8 @@ namespace ruvia {
 //   launches, so an earlier tier may stage state into a later one;
 // - serve(): serving is requested from the last tier back to the first, so no
 //   tier admits work before everything downstream of it serves;
-// - request_stop(): closes admission on every member at once; member abandon
-//   hooks may query stop_requested() or repeat request_stop();
+// - request_stop(): closes admission on every member at once; lifecycle hooks
+//   may query stop_requested() or repeat request_stop();
 // - join(): joins tiers in order. Earlier tiers are the external producers of
 //   later ones: each later tier is finalized only once every earlier tier has
 //   joined, while first-tier members finalize under their own stop policy.
@@ -48,8 +48,8 @@ public:
     [[nodiscard]] bool serve();
     void request_stop() noexcept;
     [[nodiscard]] bool stop_requested() const noexcept;
-    // Requests stop and waits for its member notifications/abandon hooks to
-    // finish before retiring any tier. Returns the failure its caller rethrows:
+    // Requests stop and waits for its member notifications to finish before
+    // retiring any tier. Returns the failure its caller rethrows:
     // `primary` when given (a failure the caller already holds, such as one
     // start() or serve() threw), else the first member failure in tier order.
     // It is chosen before any report, so it is never reported here; every

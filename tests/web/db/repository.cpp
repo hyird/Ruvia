@@ -13,6 +13,7 @@
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_repository.h"
 
 #include "backend_client_fixture.h"
@@ -71,7 +72,7 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
             {
                 auto builder = repository.create_query_builder("i");
                 {
-                    db_expressions expressions(&source);
+                    db_query expressions(&source);
                     auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::string(200, 'x'))});
                     auto rank = expressions.over(expressions.call("row_number"), {.order_by_ = {{expressions.column("id", "i")}}});
                     builder.select({{"id"}, {"label", label}, {"rank", rank}});
@@ -103,7 +104,7 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
         auto repository = client.handle().get_repository<entity_type>();
         auto update = repository.create_update_builder("i");
         {
-            db_expressions x(&source);
+            db_query x(&source);
             update.update_from<entity_type>("incoming")
                 .set("name", x.column("name", "incoming"))
                 .where(x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "incoming")))
@@ -115,7 +116,7 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
         RUVIA_CHECK_EQ(statement.sql(), "UPDATE \"items\" AS \"i\" SET \"name\" = \"incoming\".\"name\" FROM \"items\" AS \"incoming\" WHERE ((\"i\".\"id\" = \"incoming\".\"id\") AND (\"i\".\"name\" IS DISTINCT FROM \"incoming\".\"name\")) RETURNING \"i\".\"id\" AS \"id\", \"i\".\"name\" AS \"label\"");
         auto mapped = update.get_many<item_summary>();
         RUVIA_CHECK(testing::throws_on([&] { (void)update.execute(); }));
-        db_expressions x;
+        db_query x;
         entity_type patch;
         patch.set<"name">("next");
         const auto condition = x.binary(x.column("name"), db_binary_operator::is_distinct_from, x.value("next"));
@@ -163,7 +164,7 @@ RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
             {
                 auto insert = archive.create_insert_builder();
                 {
-                    db_expressions x(&source);
+                    db_query x(&source);
                     auto candidates = repository.create_query_builder("c");
                     candidates.where(entity_type::column<"name">() == "pending").order_by("id").take(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
                     auto claim = repository.create_update_builder("t");
@@ -209,7 +210,7 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_input_snapsh
             bool cancelled = false;
             auto exercise = [&]() -> task<void> {
                 auto operation = [&] {
-                    db_expressions x(&input);
+                    db_query x(&input);
                     auto update = repository.create_update_builder();
                     update.set("name", x.value(std::string(400, 'v')))
                         .where(x.binary(x.column("id"), db_binary_operator::is_distinct_from, x.value(1)))
@@ -238,9 +239,10 @@ RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) 
         auto repository = client.handle().get_repository<entity_type>();
         auto builder = repository.create_query_builder("i");
         {
-            db_expressions x;
+            db_query x;
             auto source_value = repository.create_query_builder("s");
             source_value.where(entity_type::column<"id">() > 4);
+            source_value.select({{"id"}});
             builder.with("recent", source_value, {.materialization_ = db_materialization::materialized});
             builder.join_cte(db_join_type::inner, "recent", "r", x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "r")));
             auto correlated = repository.create_query_builder("c");
@@ -250,12 +252,15 @@ RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) 
             builder.select({{"id"}, {"rank", x.aggregate("count", {x.star()})}});
             builder.group_by({x.column("id", "i")}).having(x.binary(x.aggregate("count", {x.star()}), db_binary_operator::greater, x.value(1)));
             builder.and_where(source_value.exists(x));
+            builder.and_where(x.binary(x.column("id", "i"), db_binary_operator::in, source_value.subquery(x)));
         }
         const auto statement = builder.get_query_and_parameters();
         RUVIA_CHECK(statement.sql().find("WITH \"recent\" AS MATERIALIZED") != std::string_view::npos);
         RUVIA_CHECK(statement.sql().find("LEFT JOIN LATERAL") != std::string_view::npos);
         RUVIA_CHECK(statement.sql().find("CROSS JOIN \"items\" AS \"other\"") != std::string_view::npos);
         RUVIA_CHECK(statement.sql().find("GROUP BY \"i\".\"id\" HAVING") != std::string_view::npos);
+        RUVIA_CHECK(statement.sql().find("EXISTS (SELECT") != std::string_view::npos);
+        RUVIA_CHECK(statement.sql().find(" IN (SELECT") != std::string_view::npos);
         auto operation = builder.get_many<item_summary>();
         co_return;
     });
@@ -266,7 +271,7 @@ RUVIA_TEST(db_repository_grouped_projection_reuses_imported_parameters) {
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto builder = client.handle().get_repository<entity_type>().create_query_builder("i");
         {
-            db_expressions x;
+            db_query x;
             const auto bucket = x.binary(x.column("id", "i"), db_binary_operator::add, x.value(3));
             builder.select({{"id", bucket}}).group_by({bucket});
             builder.having(x.binary(bucket, db_binary_operator::greater, x.value(10)));
@@ -291,7 +296,7 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
         for (int i = 0; i < 12; ++i) {
             {
                 auto update = [&] {
-                    db_expressions x(&source);
+                    db_query x(&source);
                     const std::array changes{db_assignment{"name", x.call("concat", {x.column("name"), x.value(std::string(400, 'z'))})}};
                     const std::array fields_value{db_selection{"id"}, db_selection{"label", x.call("upper", {x.column("name")})}};
                     return repository.update_returning<item_summary>(where, changes, fields_value);
@@ -300,7 +305,7 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
                 auto insert = repository.insert_returning(entity);
                 auto erase = repository.delete_returning(where);
                 auto plain_update = repository.update_returning(where, entity);
-                db_expressions x;
+                db_query x;
                 db_upsert_options options{.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true, .update_expressions_ = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .update_where_ = x.binary(x.column("id", "items"), db_binary_operator::greater, x.value(0))};
                 auto upsert = repository.upsert_returning(entity, options);
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});

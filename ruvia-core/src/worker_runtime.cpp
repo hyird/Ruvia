@@ -133,7 +133,6 @@ public:
         }
         try {
             thread_ = std::thread([this] { run(true); });
-            started_ = true;
         } catch (...) {
             const auto failure = std::current_exception();
             lock.unlock();
@@ -221,35 +220,26 @@ public:
 
     void request_stop() noexcept {
         bool dispatch = false;
-        bool launched = false;
         {
             const std::lock_guard lock(mutex_);
             dispatch = lifecycle_.request_stop();
             if (dispatch) {
                 stop_dispatching_ = true;
                 stop_dispatch_thread_ = std::this_thread::get_id();
-                launched = started_;
             }
         }
         if (dispatch) {
-            // Publish independent stop before shutdown listeners or abandon
-            // can reenter group stop. Its self-stop recursion closes admission
-            // through the same nonwaiting path as every other repeat caller.
+            // Publish independent stop before shutdown listeners can reenter
+            // group stop. Its self-stop recursion closes admission through the
+            // same nonwaiting path as every other repeat caller.
             notify_group();
         }
         // Losing the lifecycle transition does not imply its winner has
-        // closed admission yet: it may still be notifying a group or running
-        // a cold abandon hook. Every caller establishes the closed gate.
+        // closed admission yet: it may still be notifying a group.
+        // Every caller establishes the closed gate.
         context_.close();
         if (!dispatch) {
             return;
-        }
-        if (!launched && hooks_.abandon_) {
-            try {
-                hooks_.abandon_();
-            } catch (...) {
-                std::terminate();
-            }
         }
         stop_.request_stop();
         abort_phases();
@@ -311,9 +301,8 @@ public:
             if (stop_dispatching_ && stop_dispatch_thread_ == std::this_thread::get_id()) {
                 throw std::logic_error("cannot join a worker runtime while dispatching its stop hooks");
             }
-            // A separate stop caller can still be releasing staged cold state.
-            // Do not establish an owner and drain its work until that dispatch
-            // has finished, even when our request_stop() lost its transition.
+            // Wait for an external stop dispatch before establishing an owner
+            // and draining its work, even when our stop lost its transition.
             condition_.wait(lock, [this] { return !joining_ && !stop_dispatching_; });
             if (joined_) {
                 return;
@@ -361,7 +350,6 @@ public:
     bool serve_requested_{};
     bool configured_{};
     bool start_called_{};
-    bool started_{};
     bool stop_dispatching_{};
     std::thread::id stop_dispatch_thread_{};
     bool joining_{};
@@ -450,11 +438,6 @@ std::exception_ptr worker_runtime::failure() const noexcept {
 
 runtime_lifecycle::state_type worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
-}
-
-bool worker_runtime::started() const noexcept {
-    const std::lock_guard lock(impl_->mutex_);
-    return impl_->started_;
 }
 
 worker_runtime_context& worker_runtime::context() & noexcept {

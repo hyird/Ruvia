@@ -104,9 +104,9 @@ template <typename fn_type>
 
         ruvia::document_root_config config;
         config.root_ = configured_root();
-        config.static_options_.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
-        config.runtime_.refresh_interval_ = refresh_interval;
+        config.static_options_ =
+            {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all}};
+        config.refresh_interval_ = refresh_interval;
         ruvia::app().document_root(std::move(config));
         return steady_clock::now();
     }();
@@ -198,6 +198,8 @@ RUVIA_TEST(document_root_refresh_failures_count_once_per_application) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
 
+    RUVIA_CHECK(write_version("cached before removal"));
+    RUVIA_CHECK(every_worker_serves(io, server.endpoint(), "cached before removal"));
     const auto failures_before = refresh_failures();
     const auto removed_at = steady_clock::now();
     RUVIA_CHECK(remove_document_root());
@@ -215,6 +217,10 @@ RUVIA_TEST(document_root_refresh_failures_count_once_per_application) {
         static_cast<std::size_t>((steady_clock::now() - removed_at) / refresh_interval);
     RUVIA_CHECK(failures >= 1);
     RUVIA_CHECK(failures <= window_intervals + 1);
+    // Configuring static_options_ without resident limits still keeps the
+    // application's small-file snapshots. Failed refreshes must not turn
+    // the last complete snapshot into an unreadable file-backed response.
+    RUVIA_CHECK(every_worker_serves(io, server.endpoint(), "cached before removal"));
 
     // The refresher keeps running after failures and recovers once the root
     // is back.

@@ -25,7 +25,7 @@ namespace {
 
 // Interval and precompression thresholds are validated when the document root
 // is configured; only the blocking-pool dependency is known at run time.
-void validate_document_root_runtime_config(const http_server_options& options) {
+void validate_document_root_dependencies(const http_server_options& options) {
     if (options.document_root_.publisher() != nullptr && options.blocking_pool_ == nullptr) {
         throw std::invalid_argument(
             "document root refresh cannot run while the blocking pool is disabled");
@@ -98,7 +98,7 @@ void validate_http_server_options(const http_server_options& options) {
                 "compression maximum size must not be smaller than the synchronous size");
         }
     }
-    validate_document_root_runtime_config(options);
+    validate_document_root_dependencies(options);
 }
 
 void validate_http_server_listener(const http_server_listener_definition& listener_value) {

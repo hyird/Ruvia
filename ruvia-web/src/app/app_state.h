@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -36,7 +37,7 @@ struct app_document_root_config final {
 
     http_native_path_string_type root_;
     static_root_config_storage static_options_;
-    document_root_runtime_config runtime_;
+    std::chrono::milliseconds refresh_interval_{};
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;
 };

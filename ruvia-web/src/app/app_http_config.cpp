@@ -73,14 +73,10 @@ application& application::document_root(document_root_config config) {
             if (config.root_.empty()) {
                 throw std::invalid_argument("document root must not be empty");
             }
-            detail::ensure_positive_duration(config.runtime_.refresh_interval_,
+            detail::ensure_positive_duration(config.refresh_interval_,
                 "document root refresh interval must be greater than zero");
             if (config.static_options_.index_file_.empty()) {
                 config.static_options_.index_file_ = "index.html";
-            }
-            if (config.static_options_.resident_max_bytes_ != 0 || config.static_options_.resident_budget_bytes_ != 0) {
-                throw std::invalid_argument(
-                    "document root resident bytes are set by document_root_config::resident_max_bytes_");
             }
             detail::validate_static_root_options(config.static_options_);
             const auto precompression = make_static_root_precompression_options(config);
@@ -89,11 +85,11 @@ application& application::document_root(document_root_config config) {
                 process_resource(), detail::store_validated_static_root_config(
                                         config.static_options_, process_resource()));
             http_assign_native_path(replacement.root_, config.root_);
-            replacement.runtime_ = config.runtime_;
+            replacement.refresh_interval_ = config.refresh_interval_;
             replacement.precompression_ = precompression;
             replacement.resident_ = detail::static_root_resident_options{
-                .max_file_bytes_ = config.resident_max_bytes_,
-                .budget_bytes_ = config.resident_budget_bytes_,
+                .max_file_bytes_ = config.static_options_.resident_max_bytes_.value_or(std::size_t{64} * 1024),
+                .budget_bytes_ = config.static_options_.resident_budget_bytes_.value_or(std::size_t{16} * 1024 * 1024),
             };
 
             state_value.document_root_config_ = std::move(replacement);

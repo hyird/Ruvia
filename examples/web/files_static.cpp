@@ -81,12 +81,10 @@ int main() {
             .precompress_gzip_ = true,
         };
         // Document roots refresh every second by default. To tune the interval:
-        // .runtime_ = {
-        //     .refresh_interval_ = std::chrono::milliseconds(500),
-        // },
+        // .refresh_interval_ = std::chrono::milliseconds(500),
         // .precompress_gzip_ refresh-builds gzip variants for changed text assets.
-        // Files up to .resident_max_bytes_ (64 KiB by default) are served from the
-        // snapshot's memory; set it to 0 to always read them from disk.
+        // Configure resident files through .static_options_.resident_max_bytes_
+        // and .static_options_.resident_budget_bytes_; zero disables them.
         // The application blocking pool is enabled by default.
 
         ruvia::app()

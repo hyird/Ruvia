@@ -12,10 +12,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/db/db_expressions.h"
 #include "ruvia/web/db/db_find_options.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_projection.h"
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_entity_codec.h"
 #include "ruvia/web/detail/db/db_relation_query.h"
 #include "ruvia/web/detail/db/db_result_access.h"
@@ -240,13 +240,13 @@ public:
         query_.from(name, alias_);
         return *this;
     }
-    db_expression subquery(db_expressions& expressions) const {
+    db_expression subquery(db_query& expressions) const {
         require_plain_projection();
-        return expressions.query_.subquery(query_);
+        return expressions.subquery(query_);
     }
-    db_expression exists(db_expressions& expressions) const {
+    db_expression exists(db_query& expressions) const {
         require_plain_projection();
-        return expressions.query_.exists(query_);
+        return expressions.exists(query_);
     }
     template <typename source, typename source_executor_type>
     db_query_builder& combine(db_set_operation operation, const db_query_builder<source, source_executor_type>& source_value) {

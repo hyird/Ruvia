@@ -215,7 +215,7 @@ private:
                                             : detail::static_root_precompression_options{};
             runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(runtime_resource_,
                 http_make_path_from_native_path(document_root.root_), document_root.static_options_,
-                document_root.runtime_.refresh_interval_, precompression, document_root.resident_);
+                document_root.refresh_interval_, precompression, document_root.resident_);
             prepared_options.document_root_ =
                 detail::http_server_options::document_root_type::refreshing(*runtime->document_root_);
         }

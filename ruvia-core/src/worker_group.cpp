@@ -150,10 +150,9 @@ void worker_group::request_stop() noexcept {
             dispatch = true;
         }
     }
-    // Runtime stop may synchronously call an unlaunched member's abandon hook.
-    // Publish the group stop first, then let hooks query/reenter it unlocked.
-    // The winner may still be blocked in an earlier member's hook, so every
-    // caller closes admission on all members; repeats are nonwaiting.
+    // Publish group stop before notifying members, which can reenter it.
+    // Every caller closes admission on all members; repeats are nonwaiting
+    // even while the winning dispatch is notifying an earlier member.
     for (const auto& member : members_) {
         member.runtime_->request_stop();
     }

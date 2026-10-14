@@ -264,9 +264,13 @@ private:
     bool returns_rows_{false};
 };
 
-// A synchronous relational query AST. Values, identifiers and nested queries
-// become owned data at each construction call. Compilation is the sole place
-// that emits SQL and assigns parameter positions.
+// A synchronous relational query AST and expression owner. Values, identifiers
+// and nested queries become owned data at each construction call. Expression
+// arguments must belong to this owner; import_expression() copies foreign nodes.
+// Returned expression views borrow this owner's storage; its memory resource must
+// outlive it. Repository and builder entry points copy expression nodes before
+// returning, so their source owner can then be destroyed. Compilation is the sole
+// place that emits SQL and assigns parameter positions.
 class db_query final {
 public:
     using expr_type = db_expression;

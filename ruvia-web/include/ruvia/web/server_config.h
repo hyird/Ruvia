@@ -211,29 +211,15 @@ struct cors_config final {
 // one refresher per application rebuilds the index each interval and every
 // worker adopts the shared snapshot. A standalone static_root remains immutable
 // because it has no server runtime.
-struct document_root_runtime_config final {
-    std::chrono::milliseconds refresh_interval_{std::chrono::seconds(1)};
-};
-
 struct document_root_config final {
     std::filesystem::path root_{};
     static_root_options static_options_{};
-    document_root_runtime_config runtime_{};
+    std::chrono::milliseconds refresh_interval_{std::chrono::seconds(1)};
     bool precompress_gzip_{false};
     bool precompress_brotli_{false};
     bool precompress_zstd_{false};
     std::size_t precompress_min_bytes_{1024};
     std::size_t precompress_max_bytes_{std::size_t{256} * 1024};
-    // Each snapshot keeps the bytes of files up to resident_max_bytes_ in
-    // memory, at most resident_budget_bytes_ in total (in index order), and
-    // serves them without touching the filesystem. Those bytes are exactly the
-    // ones the snapshot's validators describe, so an edit takes effect with the
-    // next refresh like any other change; larger files are opened per request
-    // and fail closed when they no longer match the snapshot. Zero disables it.
-    // static_options_.resident_max_bytes_ / resident_budget_bytes_ must stay
-    // zero: these two fields are the document root's only resident policy.
-    std::size_t resident_max_bytes_{std::size_t{64} * 1024};
-    std::size_t resident_budget_bytes_{std::size_t{16} * 1024 * 1024};
 };
 
 // One terminal response outcome with a committed final status, passed to the

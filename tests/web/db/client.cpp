@@ -13,7 +13,7 @@
 #include <system_error>
 
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_expressions.h"
+#include "ruvia/web/db/db_query.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -235,7 +235,7 @@ RUVIA_TEST(db_expression_values_use_explicit_resource_for_owned_parameters) {
     for (const bool through_expressions : {false, true}) {
         ruvia::test::counting_memory_resource destination_resource;
         ruvia::db_query destination(&destination_resource);
-        ruvia::db_expressions expressions(&destination_resource);
+        ruvia::db_query expressions(&destination_resource);
         rejecting_memory_resource rejecting_default;
         rejecting_default.reject_allocations();
         bool unexpected_allocation = false;

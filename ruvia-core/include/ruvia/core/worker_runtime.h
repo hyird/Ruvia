@@ -35,10 +35,6 @@ struct worker_runtime_hooks final {
     // Owner thread, once, when finalization releases the work guard. Retires
     // domain resources; pending I/O and continuations still drain afterwards.
     move_only_function<void()> finalize_{};
-    // Runs once, on the stopping thread, when the runtime stops before its owner
-    // thread launched. Releases state other runtimes staged into it; it must be
-    // thread-safe. Owner-affine cleanup still drains in shutdown_ during join().
-    move_only_function<void()> abandon_{};
     // Runs once, for the first failure only, on the thread that reported it:
     // the owner for escaped failures, the caller for fail().
     move_only_function<void(std::exception_ptr)> failure_{};
@@ -73,9 +69,8 @@ public:
     [[nodiscard]] bool wait_until_ready();
     void request_serve();
     [[nodiscard]] bool wait_until_serving();
-    // Every call closes dispatcher admission before returning. The winning
-    // caller dispatches cold abandon once; repeated/reentrant calls do not wait
-    // for those hooks to finish.
+    // Every call closes dispatcher admission before returning. Repeated or
+    // reentrant requests do not wait for the winning stop dispatch to finish.
     void request_stop() noexcept;
     // Records the first failure, wakes phase waiters, and requests stop. Only
     // the winning failure reaches the failure_ hook. Returns true for it.
@@ -97,7 +92,6 @@ public:
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
     [[nodiscard]] runtime_lifecycle::state_type state() const noexcept;
-    [[nodiscard]] bool started() const noexcept;
     [[nodiscard]] worker_runtime_context& context() & noexcept;
     worker_runtime_context& context() && = delete;
 
