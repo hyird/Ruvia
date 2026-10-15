@@ -7,6 +7,7 @@
 // RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE. Run on port 8086. Startup fails
 // unless RUVIA_DB_USER and RUVIA_DB_DATABASE name a database to serve.
 // RUVIA_DB_MIGRATE=true explicitly enables the demo schema migrations.
+// RUVIA_DB_POOL_SIZE selects connections per worker and database alias (default 1).
 // POST a name to /db/users, then GET /db/users or /db/users/1.
 // /db/transfer expects accounts 1 and 2 to exist; it commits both updates
 // together. An uncommitted transaction rolls back when released.
@@ -57,6 +58,9 @@ ruvia::db_config db_config_from_env(const example::environment& env_value) {
     config.tls_ = example::backend_tls("RUVIA_DB", env_value);
     if (const auto port = env_value.get<std::uint16_t>("RUVIA_DB_PORT")) {
         config.port_ = *port;
+    }
+    if (const auto pool_size = env_value.get<std::size_t>("RUVIA_DB_POOL_SIZE")) {
+        config.pool_size_per_worker_ = *pool_size;
     }
     config.acquire_timeout_ = std::chrono::seconds(2);
     config.connect_timeout_ = std::chrono::seconds(5);

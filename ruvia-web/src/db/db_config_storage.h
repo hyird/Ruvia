@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -55,6 +56,7 @@ struct db_config_storage final {
     std::pmr::string password_;
     client_tls_config_storage tls_;
     std::pmr::string database_;
+    std::size_t pool_size_per_worker_;
     std::optional<std::chrono::milliseconds> connect_timeout_;
     std::optional<std::chrono::milliseconds> read_timeout_;
     std::optional<std::chrono::milliseconds> write_timeout_;
@@ -72,6 +74,7 @@ private:
           password_(source_value.password_, resource),
           tls_(source_value.tls_, client_tls_files::keep_paths, resource),
           database_(source_value.database_, resource),
+          pool_size_per_worker_(source_value.pool_size_per_worker_),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),
           write_timeout_(source_value.write_timeout_),
@@ -88,6 +91,7 @@ private:
           password_(source_value.password_, resource),
           tls_(source_value.tls_, resource),
           database_(source_value.database_, resource),
+          pool_size_per_worker_(source_value.pool_size_per_worker_),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),
           write_timeout_(source_value.write_timeout_),

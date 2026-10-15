@@ -82,6 +82,7 @@ inline void validate_db_config(const db_config& config) {
         }
     }
     detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
+    detail::ensure_positive_size(config.pool_size_per_worker_, "database pool size must be greater than zero");
     detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
         config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_,
         config.acquire_timeout_);

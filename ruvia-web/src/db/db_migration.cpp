@@ -202,6 +202,8 @@ public:
         auto* resolved = pmr_resource_or_default(resource);
         const auto driver = config.driver_;
 
+        // Advisory locks and every migration statement must share one session.
+        config.pool_size_per_worker_ = 1;
         if (!config.acquire_timeout_.has_value()) {
             config.acquire_timeout_ = config.query_timeout_;
         }

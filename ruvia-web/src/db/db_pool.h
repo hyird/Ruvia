@@ -42,10 +42,6 @@ struct pg_conn;
 
 namespace ruvia::detail {
 
-// A database alias opens one connection per worker: every operation on one
-// worker is serialized behind it, and the worker count is the pool size.
-inline constexpr std::size_t db_connections_per_worker = 1;
-
 enum class db_deadline_kind : std::uint8_t {
     resolve,
     socket,

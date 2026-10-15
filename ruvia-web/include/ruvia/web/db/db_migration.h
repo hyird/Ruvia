@@ -123,6 +123,8 @@ private:
 //
 // db_config's timeouts apply here as they do on a worker: without connect_timeout
 // or query_timeout_ a stalled backend blocks startup indefinitely.
+// Migration locks and statements share one dedicated connection, independent
+// of db_config::pool_size_per_worker_.
 class db_migrator final {
 public:
     // The configuration and migration-table name are copied into options.resource;

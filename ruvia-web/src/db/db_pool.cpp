@@ -120,12 +120,12 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
       resource_(pmr_resource_or_default(resource)),
       worker_(require_db_worker(worker_value)),
       slots_(resource_),
-      leases_(*this, db_connections_per_worker, worker_, resource_) {
+      leases_(*this, config_.pool_size_per_worker_, worker_, resource_) {
     if (config_.driver_ != driver_type::driver) {
         throw std::invalid_argument(std::string(driver_type::name).append(" pool requires its own driver"));
     }
-    slots_.reserve(db_connections_per_worker);
-    for (std::size_t index = 0; index < db_connections_per_worker; ++index) {
+    slots_.reserve(config_.pool_size_per_worker_);
+    for (std::size_t index = 0; index < config_.pool_size_per_worker_; ++index) {
         slots_.emplace_back(io_context_);
     }
 }

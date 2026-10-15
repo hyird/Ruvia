@@ -75,6 +75,11 @@ Start with [basic_http.cpp](examples/web/basic_http.cpp). Further examples cover
 Browse [examples/web](examples/web) for the remaining features;
 [examples/CMakeLists.txt](examples/CMakeLists.txt) lists their build targets.
 
+SQL connections are configured by `db_config::pool_size_per_worker_` (default 1)
+for each database alias on each worker, or for one standalone `db_client`.
+See [database.cpp](examples/web/database.cpp) for configuration and usage;
+database migrations use a dedicated connection.
+
 ## License
 
 [MIT License](LICENSE).

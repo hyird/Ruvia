@@ -50,8 +50,8 @@ struct db_transaction_options final {
     db_transaction_access_mode access_mode_{db_transaction_access_mode::default_value};
 };
 
-// Each worker opens one connection per database alias, so operations issued on
-// one worker run one at a time and the worker count is the pool size.
+// Each worker owns a fixed pool per database alias. Standalone db_client uses
+// one pool on its bound event loop; db_migrator uses a dedicated connection.
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.
@@ -62,6 +62,10 @@ struct db_config final {
     std::string password_{};
     client_tls_config tls_{};
     std::string database_{};
+    // Opened at startup; must be positive. Total application connections per
+    // alias are worker_count * pool_size_per_worker. A transaction or streaming
+    // result holds its connection until completed or released.
+    std::size_t pool_size_per_worker_{1};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
     // Bound one socket wait for readability or writability, for both drivers.
