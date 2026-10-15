@@ -38,6 +38,15 @@ public:
         return status;
     }
 
+    [[nodiscard]] http_content_length_parse_status parse_single_value(std::string_view input) noexcept {
+        auto parsed = value_;
+        const auto status = accumulate(input, parsed);
+        if (status == http_content_length_parse_status::ok) {
+            value_ = parsed;
+        }
+        return status;
+    }
+
     [[nodiscard]] std::optional<std::size_t> value() const noexcept {
         return value_;
     }

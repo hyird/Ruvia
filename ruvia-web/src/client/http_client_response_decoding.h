@@ -10,7 +10,7 @@ class http_client_response_state;
 // must be collected to FIN before any bytes can be returned to the consumer.
 void configure_http_client_response_decoding(http_client_response_state& state_value);
 
-// Used by HTTP/1 responses. Uses the parser-computed body plan and
+// Shared by HTTP/1, HTTP/2 and HTTP/3. Uses the parser-computed body plan and
 // keeps decoded output bounded by the response's configured byte limit.
 void decode_http_client_response_body(http_client_response_state& state_value,
     bool content_semantics_present, std::size_t max_decoded_bytes);

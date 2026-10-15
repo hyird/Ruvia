@@ -62,6 +62,19 @@ public:
     void accept(native_accepted_socket_ticket&& ticket) noexcept;
     [[nodiscard]] http_server_stats stats() const noexcept;
 
+    [[nodiscard]] connection_scanner& scanner() noexcept {
+        return scanner_;
+    }
+    [[nodiscard]] const http_server_session_config& listener(std::size_t index) const {
+        return *listeners_.at(index);
+    }
+    [[nodiscard]] connection_drain& connection_lifecycle() noexcept {
+        return drain_;
+    }
+    [[nodiscard]] std::atomic<std::size_t>& refused_counter() noexcept {
+        return refused_;
+    }
+
 private:
     void configure_tls(http_server_session_config& session);
     void accept_socket(std::size_t index, tcp_socket_type socket);
@@ -74,6 +87,8 @@ private:
     template <typename stream_type>
     task<std::optional<http_connection_close>> serve_requests(
         http1_connection_session<stream_type>& session, connection_work_set& work_set);
+    template <typename stream_type>
+    task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services, std::string_view initial = {});
     asio::io_context& io_;
     const worker_handle& worker_;
     worker_memory& memory_;

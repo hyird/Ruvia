@@ -7,6 +7,13 @@
 
 #include "ruvia/web/http_capsule_stream.h"
 namespace ruvia {
+enum class http_datagram_send_policy : unsigned char { automatic,
+    capsule,
+    quic };
+struct http_datagram_config final {
+    http_capsule_config capsules_{};
+    http_datagram_send_policy send_policy_{http_datagram_send_policy::automatic};
+};
 // Owned opaque HTTP Datagram payload, valid across later reads and client
 // shutdown. Destroy results on their worker before the worker retires.
 class http_datagram final {
@@ -21,21 +28,25 @@ public:
         return std::as_bytes(std::span(bytes_value.data(), bytes_value.size()));
     }
     std::span<const std::byte> payload() const&& = delete;
+    [[nodiscard]] http_datagram_transport transport() const noexcept {
+        return transport_;
+    }
 
 private:
     friend class http_datagram_stream;
-    http_datagram(http_capsule capsule, std::size_t offset) noexcept
+    http_datagram(http_capsule capsule, std::size_t offset, http_datagram_transport transport) noexcept
         : capsule_(std::move(capsule)),
-          offset_(offset) {}
+          offset_(offset),
+          transport_(transport) {}
     http_capsule capsule_;
     std::size_t offset_{};
+    http_datagram_transport transport_{};
 };
-// RFC 9297 channel using reliable DATAGRAM capsules over a negotiated tunnel.
-// Create through http_tunnel::datagrams() or http_client_tunnel::datagrams();
-// arbitrary Capsule Protocol streams cannot be promoted to this channel.
-// Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
-// Operations occupy separate read and send/finish lanes when started; unstarted
-// operations may coexist. send() owns its payload before returning.
+// RFC 9297 channel over a negotiated tunnel. Receives both DATAGRAM capsules
+// and native QUIC DATAGRAMs on one lane. Automatic sending chooses QUIC when
+// negotiated and within its packet bound, otherwise reliable capsules. QUIC
+// sends are best effort; a full bounded queue drops the packet. Empty payloads
+// are data and an empty optional is EOF. Use exclusively with the tunnel.
 class http_datagram_stream final {
 public:
     http_datagram_stream(const http_datagram_stream&) = delete;
@@ -61,7 +72,7 @@ private:
     friend class http_tunnel;
     friend class http_client_tunnel;
     friend class http_udp_tunnel;
-    explicit http_datagram_stream(http_capsule_stream&& stream);
+    explicit http_datagram_stream(http_capsule_stream&& stream, http_datagram_send_policy policy = http_datagram_send_policy::automatic);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp);
     [[nodiscard]] scoped_operation<void> send_payload(std::string_view payload, bool udp);
     http_capsule_stream stream_;

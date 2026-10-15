@@ -48,6 +48,11 @@ void acceptor_target_accept(void* object, detail::native_accepted_socket_ticket&
     static_cast<detail::web_worker_runtime*>(object)->accept_transferred_connection(std::move(ticket));
 }
 
+void stage_worker_quic(void* object, detail::http3_datagram_channel& channel,
+    asio::ip::udp::endpoint endpoint, quic_cid_partition partition) {
+    static_cast<detail::web_worker_runtime*>(object)->stage_quic(channel, endpoint, partition);
+}
+
 void invoke_stop_hooks(detail::app_state& state_value) noexcept {
     for (auto& hook : state_value.on_stop_hooks_) {
         try {
@@ -141,8 +146,9 @@ public:
         try {
             if (!stop_requested()) {
                 start_signal_handling();
-                // Every worker and the acceptor are ready before start hooks;
-                // no listener accepts until every hook has succeeded.
+                // Ingress stages its QUIC channels before workers launch; every
+                // worker and the acceptor are ready before any start hook runs,
+                // and no listener accepts until every hook succeeded.
                 if (group.start()) {
                     publish_ready_workers();
                     run_start_hooks();
@@ -255,6 +261,10 @@ private:
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
+        const bool has_http3 = std::ranges::any_of(validated_configuration.listeners(),
+            [](const detail::http_server_listener_definition& listener_value) {
+                return listener_value.http3_.has_value();
+            });
         std::pmr::vector<detail::acceptor::worker_target> acceptor_targets(runtime_resource_);
         acceptor_targets.reserve(runtime->workers_.size());
         for (auto& slot : runtime->workers_) {
@@ -264,6 +274,7 @@ private:
                 .object_ = target,
                 .available_ = &acceptor_target_available,
                 .accept_ = &acceptor_target_accept,
+                .stage_quic_ = has_http3 ? &stage_worker_quic : nullptr,
             });
         }
         runtime->ingress_ = make_pmr_object<detail::acceptor>(runtime_resource_,

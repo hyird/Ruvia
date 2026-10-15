@@ -77,7 +77,7 @@ connection_scanner::entry_type::phase_scope_type::~phase_scope_type() {
 bool connection_scanner::entry_type::enter_long_lived() noexcept {
     const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
     if (draining && !has_drain_check()) {
-        close_socket(*socket_);
+        close_(close_target_);
         return false;
     }
     set_phase(phase_type::long_lived);
@@ -155,7 +155,11 @@ void connection_scanner::entry_type::notify_drain() noexcept {
 connection_scanner::guard_type::guard_type(
     connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket)
     : entry_(entry_value) {
-    scanner.impl_->register_entry(entry_, socket);
+    scanner.impl_->register_entry(entry_, &socket, [](void* target) noexcept { close_socket(*static_cast<asio::ip::tcp::socket*>(target)); });
+}
+connection_scanner::guard_type::guard_type(connection_scanner& scanner, entry_type& entry_value, void* target, void (*close)(void*) noexcept)
+    : entry_(entry_value) {
+    scanner.impl_->register_entry(entry_, target, close);
 }
 connection_scanner::guard_type::~guard_type() {
     connection_scanner::detach_entry(entry_);
@@ -244,11 +248,12 @@ void connection_scanner::impl_type::stop() noexcept {
     running_ = false;
     timer_.cancel();
 }
-void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio::ip::tcp::socket& socket) {
+void connection_scanner::impl_type::register_entry(entry_type& entry_value, void* target, void (*close)(void*) noexcept) {
     if (entry_value.scanner_ != nullptr) {
         throw std::logic_error("connection scanner entry is already registered");
     }
-    entry_value.socket_ = &socket;
+    entry_value.close_target_ = target;
+    entry_value.close_ = close;
     entry_value.scanner_ = owner_;
     entry_value.now_ms_ = &cached_now_ms_;
     entry_value.touch();
@@ -275,14 +280,15 @@ void connection_scanner::impl_type::unregister_entry(entry_type& entry_value) no
     entry_value.prev_->next_ = entry_value.next_;
     entry_value.next_->prev_ = entry_value.prev_;
     entry_value.prev_ = entry_value.next_ = nullptr;
-    entry_value.socket_ = nullptr;
+    entry_value.close_target_ = nullptr;
+    entry_value.close_ = nullptr;
     entry_value.now_ms_ = nullptr;
     entry_value.detach_periodic_checks();
     entry_value.scanner_ = nullptr;
 }
 void connection_scanner::impl_type::close_all() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
-        close_socket(*current->socket_);
+        current->close_(current->close_target_);
     }
 }
 void connection_scanner::impl_type::drain() noexcept {
@@ -290,8 +296,8 @@ void connection_scanner::impl_type::drain() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_;) {
         auto* const next = current->next_;
         if (current->reading_request_head_) {
-            close_socket(*current->socket_);
-        } else if (current->phase_ == phase_type::long_lived) {
+            current->close_(current->close_target_);
+        } else {
             current->notify_drain();
         }
         current = next;
@@ -358,7 +364,7 @@ bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
             registration->tick_(registration->target_, now);
         }
         if (scan_current_ != nullptr && is_timed_out(*scan_current_, now)) {
-            close_socket(*scan_current_->socket_);
+            scan_current_->close_(scan_current_->close_target_);
         }
         scan_current_ = nullptr;
     }

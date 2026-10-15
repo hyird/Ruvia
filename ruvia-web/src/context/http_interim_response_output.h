@@ -25,6 +25,9 @@ public:
     // that has started already answered the expectation, and RFC 9110 §15.2
     // forbids any 1xx after it, so then nothing is written.
     task<void> send_continue();
+    [[nodiscard]] bool final_committed() const noexcept {
+        return final_committed_;
+    }
     void commit_final() {
         if (output_active_) {
             throw std::logic_error("interim response output is still active");

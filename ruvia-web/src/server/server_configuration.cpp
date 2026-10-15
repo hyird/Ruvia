@@ -101,7 +101,104 @@ void validate_http_server_options(const http_server_options& options) {
     validate_document_root_dependencies(options);
 }
 
+}  // namespace
+
+[[nodiscard]] std::size_t http3_worker_tracked_stream_capacity(
+    std::size_t max_requests_per_connection) {
+    constexpr auto allowance = http3_peer_unidirectional_stream_allowance + http3_server_push_allowance;
+    if (max_requests_per_connection > std::numeric_limits<std::size_t>::max() - allowance) {
+        throw std::invalid_argument("HTTP/3 worker stream capacity is not representable");
+    }
+    return max_requests_per_connection + allowance;
+}
+
+[[nodiscard]] std::size_t http3_transport_lifetime_stream_capacity(
+    std::size_t max_requests_per_connection) {
+    constexpr auto allowance = http3_peer_unidirectional_stream_allowance +
+                               http3_post_goaway_request_allowance;
+    if (max_requests_per_connection > std::numeric_limits<std::size_t>::max() - allowance) {
+        throw std::invalid_argument("HTTP/3 transport stream capacity is not representable");
+    }
+    return max_requests_per_connection + allowance;
+}
+
+void validate_http3_server_limits(
+    std::optional<std::size_t> max_connections, const http3_listen_config& config,
+    std::optional<std::size_t> max_requests_per_connection, std::size_t worker_count) {
+    if (worker_count == 0) {
+        throw std::invalid_argument("HTTP/3 worker count must be greater than zero");
+    }
+    if (!max_connections.has_value()) {
+        throw std::invalid_argument("HTTP/3 requires a finite per-worker connection limit");
+    }
+    detail::ensure_positive_size(*max_connections,
+        "HTTP/3 per-worker connection limit must be greater than zero");
+
+    // Keep the aggregate startup-allocated slot count representable as a
+    // container difference across all worker-local protocol drivers.
+    const auto max_connection_capacity =
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    if (*max_connections > max_connection_capacity / worker_count) {
+        throw std::invalid_argument(
+            "HTTP/3 aggregate connection capacity is not representable");
+    }
+
+    (void)normalize_http3_capacity(config, worker_count);
+
+    if (!max_requests_per_connection.has_value()) {
+        throw std::invalid_argument(
+            "HTTP/3 requires a finite per-connection request limit");
+    }
+    detail::ensure_positive_size(*max_requests_per_connection,
+        "HTTP/3 per-connection request limit must be greater than zero");
+
+    // The request-stream boundary is a client-bidi QUIC stream ID: 4 * N.
+    constexpr std::uint64_t max_goaway_id = (std::uint64_t{1} << 62) - 4;
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+        if (*max_requests_per_connection > std::numeric_limits<std::uint64_t>::max()) {
+            throw std::invalid_argument("HTTP/3 request limit does not fit a GOAWAY varint");
+        }
+    }
+    const auto request_limit = static_cast<std::uint64_t>(*max_requests_per_connection);
+    if (request_limit > max_goaway_id / 4) {
+        throw std::invalid_argument("HTTP/3 GOAWAY request boundary is not representable");
+    }
+
+    const auto tracked_streams =
+        http3_worker_tracked_stream_capacity(*max_requests_per_connection);
+    const auto lifetime_streams =
+        http3_transport_lifetime_stream_capacity(*max_requests_per_connection);
+    constexpr auto max_power_of_two =
+        std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
+    if (tracked_streams > max_power_of_two / 2 || lifetime_streams > max_power_of_two) {
+        throw std::invalid_argument("HTTP/3 stream tracking capacity is not representable");
+    }
+    const std::vector<std::size_t> slots;
+    if (tracked_streams > slots.max_size() / 2 || lifetime_streams > slots.max_size()) {
+        throw std::invalid_argument("HTTP/3 stream capacity exceeds container limits");
+    }
+}
+
+void validate_http3_listen_config(const http3_listen_config& config) {
+    (void)normalize_http3_capacity(config, 1);
+    validate_http3_qpack_config(config.qpack_);
+    detail::ensure_positive_duration(config.handshake_timeout_,
+        "HTTP/3 handshake timeout must be greater than zero");
+    detail::ensure_positive_duration(config.drain_timeout_,
+        "HTTP/3 drain timeout must be greater than zero");
+    if (std::chrono::duration<long double>(config.drain_timeout_) >
+        std::chrono::duration<long double>(std::chrono::steady_clock::duration::max())) {
+        throw std::invalid_argument("HTTP/3 drain timeout is not representable");
+    }
+}
+
 void validate_http_server_listener(const http_server_listener_definition& listener_value) {
+    if (listener_value.http3_ && !std::holds_alternative<http_server_listener_definition::tls_type>(listener_value.transport_)) {
+        throw std::invalid_argument("HTTP/3 listener requires TLS");
+    }
+    if (listener_value.http3_) {
+        validate_http3_listen_config(*listener_value.http3_);
+    }
     if (const auto* redirect =
             std::get_if<http_server_listener_definition::redirect_http_to_https_type>(&listener_value.transport_)) {
         detail::ensure_non_zero_port(
@@ -109,14 +206,25 @@ void validate_http_server_listener(const http_server_listener_definition& listen
     }
 }
 
-}  // namespace
-
 [[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
+    const http3_listen_config* http3 = nullptr;
     for (const auto& listener : listeners) {
         validate_http_server_listener(listener);
+        if (listener.http3_.has_value()) {
+            if (http3) {
+                throw std::invalid_argument(
+                    "only one HTTP/3 listener is supported by the App runtime");
+            }
+            http3 = &*listener.http3_;
+        }
     }
     validate_http_server_options(options);
+    if (http3) {
+        validate_http3_server_limits(
+            options.server_.max_connections_per_worker_, *http3,
+            options.server_.max_requests_per_connection_, 1);
+    }
     return validated_http_server_configuration(listeners, std::move(options));
 }
 

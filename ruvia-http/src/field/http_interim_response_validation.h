@@ -28,6 +28,8 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 // (RFC 9112 section 6.3); sender prohibitions are not receiver requirements.
 class http_interim_response_header_validator final {
 public:
+    explicit http_interim_response_header_validator(http_field_list_role role = http_field_list_role::sender) noexcept
+        : role_(role) {}
     [[nodiscard]] http_interim_response_header_validation_status validate(
         std::string_view name, std::string_view value) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
@@ -44,7 +46,7 @@ public:
         if (http_ascii_equals_ignore_case(name, "Trailer")) {
             return http_interim_response_header_validation_status::trailer_forbidden;
         }
-        switch (validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields_)) {
+        switch (validate_response_field(classify_request_header(name), value, role_, fields_)) {
             case response_field_status::ok:
                 break;
             case response_field_status::invalid:
@@ -61,6 +63,7 @@ public:
     }
 
 private:
+    http_field_list_role role_;
     response_field_state fields_;
     std::uint32_t known_bits_{0};
 };
@@ -68,7 +71,8 @@ private:
 // Version-neutral interim-message validation. RFC 9110 section 8.6 and RFC
 // 9112 section 6 forbid Content-Length and Transfer-Encoding on every 1xx;
 // an interim response also cannot have the trailer section advertised by
-// Trailer. Connection fields are checked by the HTTP/1 writer after this pass.
+// Trailer. Version-specific connection fields are checked by the HTTP/1 and
+// HTTP/2 writers after this common pass.
 [[nodiscard]] inline http_interim_response_header_validation_status validate_http_interim_response_headers(
     const http_interim_response_head& response) noexcept {
     http_interim_response_header_validator validator;

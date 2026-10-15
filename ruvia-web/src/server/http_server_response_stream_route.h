@@ -46,15 +46,20 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
     response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
-        d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
+        d.base_route_services_.worker(), d.options_.cors_ ? &*d.options_.cors_ : nullptr,
         endpoint.kind(), stream_plan, http1_plan_consumed_response_stream(d.parsed_, close_policy),
         body_state.body(), d.response_coding_, d.response_coding_availability_);
 
     // The handler stays in the session's idle deadman phase; the sink times
     // its own writes.
     auto result_value = co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
-        resolved, d.request_memory_, d.base_route_services_);
+        resolved, d.request_memory_, d.base_route_services_,
+        /*peer_aborted=*/[]() noexcept { return false; });
 
+    if (result_value.peer_aborted_before_commit() != nullptr) {
+        throw std::logic_error(
+            "HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
+    }
     if (auto* recovered = result_value.recovered_failure()) {
         d.response_ = std::move(*recovered).take_response();
         d.scanner_entry_.touch();

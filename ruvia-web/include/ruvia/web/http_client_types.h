@@ -12,10 +12,22 @@
 
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/quic_types.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
+#include "ruvia/web/http3_qpack_config.h"
+#include "ruvia/web/http_client_advertisement_config.h"
+#include "ruvia/web/http_client_push_config.h"
 
 namespace ruvia {
+
+enum class http_client_protocol : std::uint8_t {
+    negotiate,
+    http1_only,
+    http2_only,
+    // HTTP/3 uses QUIC over UDP and never falls back to the TCP pool.
+    http3_only,
+};
 
 enum class http_client_received_cookie_policy : std::uint8_t {
     ignore,
@@ -41,6 +53,7 @@ struct http_client_config final {
     std::string host_{};
     std::optional<std::uint16_t> port_{};
     std::size_t connection_count_{1};
+    std::size_t max_concurrent_http2_streams_per_connection_{100};
     std::size_t max_buffered_requests_{1024};
     std::size_t max_cookies_{256};
     std::size_t max_cookie_bytes_{std::size_t{32} * 1024};
@@ -57,6 +70,13 @@ struct http_client_config final {
     // Bound of the wait for a free connection slot, within request_timeout_.
     std::optional<std::chrono::milliseconds> acquire_timeout_{5000};
     std::size_t max_response_bytes_{default_max_buffered_body_bytes};
+    http_client_protocol protocol_{http_client_protocol::negotiate};
+    quic_version initial_quic_version_{quic_version::v1};
+    // Enables client 0-RTT only for explicitly replay-safe bodyless GET/HEAD.
+    bool http3_early_data_{false};
+    http3_qpack_config qpack_{};
+    http_client_advertisement_config advertisements_{};
+    http_client_push_config push_{};
     // Used for https; client_tls_mode::disabled is rejected (select http instead).
     client_tls_config tls_{};
     client_tcp_config tcp_{};
@@ -104,6 +124,9 @@ struct http_client_stats final {
     std::size_t failed_requests_{0};
     std::size_t bytes_sent_{0};
     std::size_t bytes_received_{0};
+    std::size_t dropped_advertisements_{0};
+    std::size_t received_pushes_{0};
+    std::size_t rejected_pushes_{0};
 };
 
 }  // namespace ruvia

@@ -78,6 +78,10 @@ void decode_http_client_response_body(http_client_response_state& state_value,
             parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit, .resource_ = resource});
         if (auto* content = decoded.decoded()) {
             auto decoded_body = std::move(*content).take_bytes();
+            if (!state_value.replace_producer_body_bytes(decoded_body.size())) {
+                throw http_client_error(http_client_error::code_type::response_too_large,
+                    "HTTP response exceeds configured byte limit");
+            }
             std::pmr::string empty_buffered(state_value.resource_);
             std::pmr::string empty_pending(state_value.resource_);
             state_value.buffered_.swap(empty_buffered);

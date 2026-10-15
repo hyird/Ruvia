@@ -25,9 +25,9 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_native_path.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/conn_info.h"
@@ -36,6 +36,7 @@
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/dispatch.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/http3_early_data_info.h"
 #include "ruvia/web/request_fields.h"
 #include "ruvia/web/static_text.h"
 
@@ -185,6 +186,10 @@ private:
 public:
     using header_options_type = http_response_header_options;
 
+    // Dispatches the promised GET/HEAD through the same route/middleware plan.
+    // Returns false if peer push permission/capacity is unavailable. Completion
+    // commits the promise; the connection owns and joins its response task.
+    [[nodiscard]] scoped_operation<bool> push(http_push_request_view request);
     // Sends a bodyless 1xx head before the final response. Fields are copied
     // before return; the operation and its storage retire on the owning worker.
     // Output is linear when started. Unstarted operations may coexist and do not
@@ -192,6 +197,8 @@ public:
     // A failed write throws std::system_error, which is not routed through
     // on_error: the connection ends.
     [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
+    [[nodiscard]] scoped_operation<void> advertise_origins(std::span<const std::string_view> origins);
+    [[nodiscard]] scoped_operation<void> advertise_alternative_service(std::string_view value);
 
     ~context();
 
@@ -210,6 +217,14 @@ public:
         return conn_info_;
     }
     conn_info conn() const&& = delete;
+
+    // Immutable snapshot for this request. `received_from_early_data` is trusted
+    // local QUIC transport provenance; `upstream_declared_early_data` reflects
+    // only the untrusted HTTP field and must not be used as proof of 0-RTT.
+    // Subrequests issued through dispatch() inherit both flags from their parent.
+    [[nodiscard]] http3_early_data_info early_data_info() const noexcept {
+        return early_data_info_;
+    }
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an
@@ -326,6 +341,9 @@ public:
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context and arena.
+    // A subrequest of a 0-RTT request inherits its early-data snapshot and is
+    // answered 425 Too Early unless it is a content-free GET/HEAD to a
+    // replay-safe buffered route (RFC 8470).
     [[nodiscard]] scoped_operation<dispatch_response> dispatch(dispatch_options options);
     [[nodiscard]] bool is_subrequest() const noexcept;
 
@@ -515,6 +533,7 @@ private:
 
     request_memory& memory_;
     const http_request& request_;
+    http3_early_data_info early_data_info_{};
     conn_info conn_info_;
     // context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.

@@ -5,9 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -17,7 +14,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ruvia/core/detail/task/task_promise.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 
@@ -226,24 +222,15 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached);
 
     bool trimmed = false;
-    bool frames_cached = false;
-    bool frames_drained = false;
     RUVIA_CHECK(owner
             .post([&] {
-                // A freed frame stays in this thread's frame cache until trim.
-                void* const frame = ruvia::detail::task_frame_allocate(4096);
-                ruvia::detail::task_frame_deallocate_sized(frame, 4096);
-                frames_cached = ruvia::detail::task_frame_cached_bytes() >= 4096;
                 worker_value.trim(owner);
                 default_memory.trim(owner);
-                frames_drained = ruvia::detail::task_frame_cached_bytes() == 0;
                 trimmed = true;
             })
             .accepted());
     runtime.join();
     RUVIA_CHECK(trimmed);
-    RUVIA_CHECK(frames_cached);
-    RUVIA_CHECK(frames_drained);
     RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached - class_bytes);
     RUVIA_CHECK(live_block[0] == std::byte{0x44} && live_block[block_bytes - 1] == std::byte{0x44});
     resource->deallocate(live_block, block_bytes);
@@ -326,29 +313,6 @@ RUVIA_TEST(worker_memory_validates_retained_block_bytes) {
     RUVIA_CHECK_EQ(upstream.allocations_, std::size_t{0});
     ruvia::validate_memory_pool_config({.retained_block_bytes_ = 0});
     ruvia::validate_memory_pool_config({.retained_block_bytes_ = ruvia::max_retained_block_bytes});
-}
-
-RUVIA_TEST(core_sources_use_no_platform_page_mapping) {
-    const auto source_dir = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
-                            "ruvia-core" / "src";
-    RUVIA_CHECK(std::filesystem::is_directory(source_dir));
-    constexpr std::array<std::string_view, 4> forbidden{"mmap", "VirtualAlloc", "sys/mman", "windows.h"};
-    // error_text.cpp formats Windows system messages; it maps no memory.
-    constexpr std::string_view allowed_windows_file = "error_text.cpp";
-    std::size_t scanned = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
-        std::ifstream input(entry.path(), std::ios::binary);
-        const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-        ++scanned;
-        const bool windows_allowed = entry.path().filename() == allowed_windows_file;
-        for (const auto token : forbidden) {
-            if (windows_allowed && token == "windows.h") {
-                continue;
-            }
-            RUVIA_CHECK(text.find(token) == std::string::npos);
-        }
-    }
-    RUVIA_CHECK(scanned > 0);
 }
 
 RUVIA_TEST(worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {

@@ -159,6 +159,23 @@ void apply_exception_response_metadata(http_response& response, const std::excep
     }
 }
 
+void apply_automatic_response_headers(
+    http_response& response, const detail::context_services& services) {
+    if (!services.automatic_alt_svc().empty()) {
+        response.header("Alt-Svc", services.automatic_alt_svc());
+    }
+}
+
+void apply_automatic_response_headers(http_response& response, context& context_value) {
+    if (response.header("Alt-Svc").has_value()) {
+        return;
+    }
+    const auto alt_svc = detail::context_access::response_storage(context_value).header("Alt-Svc");
+    if (alt_svc.has_value()) {
+        response.header("Alt-Svc", *alt_svc);
+    }
+}
+
 }  // namespace
 
 task<http_response> detail::route_table::handle_error(const http_request& request,
@@ -167,6 +184,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     // Nothing to wrap and no handler: the original allocation-free path.
     if (error_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         auto response = make_default_error_response(memory.resource(), error);
+        apply_automatic_response_headers(response, services);
         co_return response;
     }
 
@@ -185,6 +203,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     try {
         auto response = co_await run_unmatched_chain(
             context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+        apply_automatic_response_headers(response, context_value);
         co_return response;
     } catch (...) {
         exception = std::current_exception();
@@ -200,6 +219,7 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
         report_unexpected_failure(error_info, exception, nullptr);
         auto response = make_default_error_response(memory.resource(), error_info.info_);
         apply_exception_response_metadata(response, exception);
+        apply_automatic_response_headers(response, services);
         co_return response;
     }
 
@@ -210,6 +230,7 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 task<http_response> detail::route_table::handle_error(context& context_value, http_error_info error) const {
     auto response = co_await invoke_error_handler(
         context_value, error, error_handler_for(detail::context_access::request(context_value).path()));
+    apply_automatic_response_headers(response, context_value);
     co_return response;
 }
 
@@ -219,6 +240,7 @@ task<http_response> detail::route_table::handle_not_found(
     if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         auto response = make_default_error_response(memory.resource(),
             http_error_info({.status_ = ruvia::http_status::not_found, .message_ = "route not found"}));
+        apply_automatic_response_headers(response, services);
         co_return response;
     }
 
@@ -242,6 +264,7 @@ task<http_response> detail::route_table::handle_not_found(
     };
     auto response =
         co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+    apply_automatic_response_headers(response, context_value);
     co_return response;
 }
 

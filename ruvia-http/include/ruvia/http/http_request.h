@@ -24,9 +24,14 @@ enum class http_request_target_form : std::uint8_t {
     absolute,
     authority,
     asterisk,
+    // HTTP/2 and HTTP/3 carry target components as pseudo-fields rather than
+    // one HTTP/1 request-target token.
+    http2,
+    http3,
 };
 
 class http_request;
+class http3_server_request;
 
 namespace detail {
 
@@ -100,7 +105,10 @@ public:
     // Semantic regular fields, not a byte-for-byte copy of the wire header
     // block. HTTP/1 preserves accepted field-name spelling but removes field
     // framing/OWS and replaces a conflicting Host value for absolute- or
-    // authority-form targets. Repeated regular fields retain wire order.
+    // authority-form targets. HTTP/2 names are lowercase, pseudo-fields are
+    // exposed through method()/scheme()/authority()/target(), split Cookie
+    // fields are coalesced, and Host is synthesized from a valid :authority
+    // when absent. Repeated regular fields retain wire order.
     [[nodiscard]] std::span<const http_header_view> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_.fields();
     }
@@ -122,6 +130,7 @@ public:
 
 private:
     friend struct detail::http_request_access;
+    friend class http3_server_request;
 
     static constexpr std::size_t cached_header_slots = detail::request_header_kind_count - 1;
 

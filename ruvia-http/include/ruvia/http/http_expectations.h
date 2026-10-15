@@ -9,13 +9,15 @@
 namespace ruvia {
 
 // Whether the framing/lifecycle owner has established that request content will
-// follow the initial head, as established by the HTTP/1 request body plan.
+// follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
+// while HTTP/2 combines its receive-half and remaining-content states so an open
+// metadata-only or known-empty stream cannot masquerade as pending content.
 enum class http_request_content_indication : std::uint8_t { no_content,
     will_follow };
 
 // RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
 // the request has no content. Keep this sender check next to the recipient-side
-// expectation state so the sender and recipient use the same content rule.
+// expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
 [[nodiscard]] constexpr bool http_client_expectation_is_valid(
     bool has_continue, http_request_content_indication content) noexcept {
     return !has_continue || content == http_request_content_indication::will_follow;

@@ -10,6 +10,7 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
+#include "http3/http3_client_connection.h"
 
 namespace ruvia {
 namespace {
@@ -94,11 +95,18 @@ void http_client_tunnel::abort() & noexcept {
         }
         state->tunnel_->output_.stop();
         if (!state->complete_ && !state->abandoned_) {
-            state->pool_->abandon_response(*state);
+            if (state->http3_connection_) {
+                state->http3_connection_->abandon_response(state->http3_request_id_);
+            } else if (state->pool_) {
+                state->pool_->abandon_response(*state);
+            }
         }
     }
 }
-http_udp_tunnel http_client_tunnel::udp(http_capsule_config config) && {
+http_udp_tunnel http_client_tunnel::udp(http_datagram_config config) && {
+    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
+        throw std::logic_error("UDP tunnel requires an accepted CONNECT-UDP handshake");
+    }
     return http_udp_tunnel(std::move(*this).datagrams(config));
 }
 scoped_operation<std::optional<std::span<const std::byte>>> http_client_tunnel::read() & {

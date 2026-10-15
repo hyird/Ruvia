@@ -29,17 +29,25 @@
 
 namespace ruvia::detail {
 
-// HTTP/1.1 websocket connection (RFC 6455) over the upgraded byte stream (plain
-// TCP socket or TLS stream). All protocol behavior, including frame
-// reassembly, write serialization, heartbeats, and close, lives here.
+// Transport-agnostic websocket connection (RFC 6455). All protocol behavior,
+// including frame reassembly, write serialization, heartbeats, and close,
+// lives here; the HTTP/1.1 and HTTP/2 transports differ only in the Transport
+// policy, which supplies four transport-specific operations:
+//   asio-executor executor() const;
+//   task<http_stream_read_result> read_more(std::pmr::string& buffer);
+//   task<std::error_code> write_bytes(std::string_view, websocket_transport_disposition);
+//   void abort() noexcept;  // abort this websocket transport, not an unrelated h2 stream
 template <typename stream_type>
 class websocket_connection final {
 public:
-    websocket_connection(stream_type& stream, const worker_handle& worker_value,
+    static constexpr bool native_stream = requires(stream_type& stream) { stream.get_executor(); };
+    using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
+
+    websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
         websocket_server_protocol_options protocol_options)
-        : stream_(stream),
+        : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
@@ -52,7 +60,7 @@ public:
             &websocket_connection::drain_thunk);
     }
 
-    websocket_connection(stream_type&, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
+    websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
         protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_server_protocol_options) = delete;
 
     ~websocket_connection() = default;
@@ -275,6 +283,14 @@ private:
     // Reads more transport bytes into buffer_. Between frames the read is
     // sized by recent traffic, so an idle connection holds little read storage.
     task<http_stream_read_result> read_more();
+    task<std::error_code> write_adapted(const websocket_output_plan& plan);
+    [[nodiscard]] auto executor() const {
+        if constexpr (native_stream) {
+            return stream_.get_executor();
+        } else {
+            return stream_.executor();
+        }
+    }
     auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
     void abort_transport(bool force_transport = false) noexcept;
@@ -285,7 +301,7 @@ private:
         return read_phase_ != read_phase_type::idle || write_active_ || write_phase_ != write_phase_type::idle;
     }
 
-    stream_type& stream_;
+    stream_argument_type stream_;
     const worker_handle* worker_;
     connection_scanner::entry_type& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};

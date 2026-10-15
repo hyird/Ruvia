@@ -21,6 +21,7 @@
 
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
+#include "http3/http3_client_connection.h"
 #include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
@@ -169,6 +170,53 @@ public:
             bytes_value.remove_prefix(chunk.size());
         }
     }
+    [[nodiscard]] http_datagram_session_config datagram_config() const {
+        if (server_) {
+            return server_->datagram_config_ ? server_->datagram_config_(server_->target_) : http_datagram_session_config{};
+        }
+        auto& state_value = *client_->response_.state_;
+        return state_value.http3_connection_ ? state_value.http3_connection_->datagram_config(state_value.http3_request_id_) : http_datagram_session_config{};
+    }
+    [[nodiscard]] task<std::optional<http_datagram_input>> read_datagram_input() {
+        if (server_) {
+            if (server_->read_datagram_input_) {
+                co_return co_await server_->read_datagram_input();
+            }
+            auto bytes_value = co_await server_->read();
+            if (!bytes_value) {
+                co_return std::nullopt;
+            }
+            co_return http_datagram_input{std::move(*bytes_value), false};
+        }
+        auto& state_value = *client_->response_.state_;
+        for (;;) {
+            if (!state_value.failure_ && !state_value.failure_ && !state_value.abandoned_ && !state_value.tunnel_->datagrams_.empty()) {
+                auto bytes_value = std::move(state_value.tunnel_->datagrams_.front());
+                state_value.tunnel_->datagrams_.pop_front();
+                co_return http_datagram_input{std::move(bytes_value), true};
+            }
+            if (!state_value.pending_.empty() || state_value.offset_ < state_value.buffered_.size() || state_value.receive_complete() || state_value.failure_ || state_value.failure_ || state_value.abandoned_) {
+                auto bytes_value = co_await client_->read();
+                if (!bytes_value) {
+                    co_return std::nullopt;
+                }
+                co_return http_datagram_input{std::pmr::string(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size(), resource_), false};
+            }
+            co_await state_value.data_signal_.wait();
+        }
+    }
+    [[nodiscard]] task<void> send_datagram(std::string_view bytes_value) {
+        if (server_) {
+            co_await server_->send_datagram(bytes_value);
+        } else {
+            auto& state_value = *client_->response_.state_;
+            if (state_value.tunnel_->output_.stopped_ || state_value.tunnel_->output_.ended_ || state_value.tunnel_->output_.end_requested_ || state_value.abandoned_ || !state_value.http3_connection_) {
+                throw std::runtime_error("HTTP Datagram sending direction is closed");
+            }
+            static_cast<void>(state_value.http3_connection_->send_datagram(state_value.http3_request_id_, std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
+        }
+    }
+    http_datagram_send_policy datagram_policy_{http_datagram_send_policy::automatic};
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
     std::optional<http_client_response> memory_pin_;

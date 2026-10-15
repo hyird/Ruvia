@@ -18,6 +18,8 @@ enum class http_response_stream_framing : std::uint8_t {
     // the body is delimited by the connection close (RFC 9112 6.3), so it also
     // announces Connection: close and the session shuts the socket afterwards.
     http1_close_delimited,
+    http2_frames,
+    http3_frames
 };
 
 enum class http_response_stream_kind : std::uint8_t { generic,
@@ -41,7 +43,10 @@ enum class http_response_trailer_intent : std::uint8_t { none,
 }
 
 // Authoritative phase immediately after the initial response head is submitted.
+// trailers_only is distinct from body_open: HTTP/2 may carry trailing HEADERS
+// after a HEAD/204-style response without allowing any DATA.
 enum class http_response_stream_head_disposition : std::uint8_t { body_open,
+    trailers_only,
     message_ended };
 
 class http_response_stream_commit_plan final {
@@ -58,9 +63,11 @@ public:
         return body_plan_;
     }
 
-    // Only an HTTP/1.1 chunked body can carry a trailer section (RFC 9112 7.1.2).
+    // HTTP/1.1 requires chunked framing for trailers (RFC 9112 7.1.2).
+    // HTTP/2 and HTTP/3 carry them in a trailing field section.
     [[nodiscard]] bool trailers_available() const noexcept {
-        return framing_ == http_response_stream_framing::http1_chunked && !body_plan_.body_suppressed();
+        return (framing_ == http_response_stream_framing::http1_chunked && !body_plan_.body_suppressed()) ||
+               framing_ == http_response_stream_framing::http2_frames || framing_ == http_response_stream_framing::http3_frames;
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
@@ -90,7 +97,7 @@ private:
           head_disposition_(head_disposition),
           trailer_intent_present_(trailer_intent_present) {}
 
-    http_response_stream_framing framing_{http_response_stream_framing::http1_known_length};
+    http_response_stream_framing framing_{http_response_stream_framing::http2_frames};
     http_response_body_plan body_plan_;
     http_response_stream_head_disposition head_disposition_{http_response_stream_head_disposition::message_ended};
     bool trailer_intent_present_{false};
@@ -100,6 +107,15 @@ private:
     http_response_stream_framing framing, http_known_method request_method, http_status_code response_status,
     http_response_trailer_intent trailer_intent) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response_status);
+    if (framing == http_response_stream_framing::http2_frames || framing == http_response_stream_framing::http3_frames) {
+        return http_response_stream_commit_plan(framing, body_plan,
+            body_plan.body_suppressed() ? (trailer_intent == http_response_trailer_intent::present
+                                                  ? http_response_stream_head_disposition::trailers_only
+                                                  : http_response_stream_head_disposition::message_ended)
+                                        : http_response_stream_head_disposition::body_open,
+            trailer_intent == http_response_trailer_intent::present);
+    }
+
     return http_response_stream_commit_plan(framing, body_plan,
         body_plan.body_suppressed() ? http_response_stream_head_disposition::message_ended
                                     : http_response_stream_head_disposition::body_open,

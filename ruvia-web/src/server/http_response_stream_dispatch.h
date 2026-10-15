@@ -86,6 +86,28 @@ private:
     http_status_code status_;
 };
 
+class response_stream_peer_aborted_before_commit final {
+private:
+    friend class response_stream_dispatch_result;
+
+    constexpr response_stream_peer_aborted_before_commit() noexcept = default;
+};
+
+class response_stream_peer_aborted_after_commit final {
+public:
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+
+    explicit constexpr response_stream_peer_aborted_after_commit(http_status_code status) noexcept
+        : status_(status) {}
+
+    http_status_code status_;
+};
+
 // The handler failed after its head was already on the wire. The status is what
 // the peer was told; the exception is why it will never receive the rest. The
 // status alone cannot be reported to anyone -- it says 200 -- so the exception
@@ -143,13 +165,23 @@ private:
 };
 
 // Each route terminal is one alternative. Commit-bearing alternatives own the
-// exact wire status; response-bearing alternatives own the movable response.
-// No separate outcome discriminator is needed.
+// exact wire status, response-bearing alternatives own the only movable response,
+// and a pre-commit peer abort owns neither. HTTP/1 and HTTP/2 need no second
+// outcome discriminator.
 class response_stream_dispatch_result final {
 public:
     [[nodiscard]] static response_stream_dispatch_result make_completed(
         http_status_code status) noexcept {
         return response_stream_dispatch_result(response_stream_completed(status));
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_peer_aborted_before_commit() noexcept {
+        return response_stream_dispatch_result(response_stream_peer_aborted_before_commit{});
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_peer_aborted_after_commit(
+        http_status_code status) noexcept {
+        return response_stream_dispatch_result(response_stream_peer_aborted_after_commit(status));
     }
 
     [[nodiscard]] static response_stream_dispatch_result make_failed_after_commit(
@@ -173,6 +205,19 @@ public:
     }
     const response_stream_completed* completed() const&& = delete;
 
+    [[nodiscard]] const response_stream_peer_aborted_before_commit* peer_aborted_before_commit()
+        const& noexcept {
+        return std::get_if<response_stream_peer_aborted_before_commit>(&value_);
+    }
+    [[nodiscard]] const response_stream_peer_aborted_before_commit* peer_aborted_before_commit() const&& =
+        delete;
+
+    [[nodiscard]] const response_stream_peer_aborted_after_commit* peer_aborted_after_commit()
+        const& noexcept {
+        return std::get_if<response_stream_peer_aborted_after_commit>(&value_);
+    }
+    const response_stream_peer_aborted_after_commit* peer_aborted_after_commit() const&& = delete;
+
     [[nodiscard]] const response_stream_failed_after_commit* failed_after_commit() const& noexcept {
         return std::get_if<response_stream_failed_after_commit>(&value_);
     }
@@ -192,6 +237,9 @@ public:
         if (const auto* value = completed()) {
             return value->status();
         }
+        if (const auto* value = peer_aborted_after_commit()) {
+            return value->status();
+        }
         if (const auto* value = failed_after_commit()) {
             return value->status();
         }
@@ -199,7 +247,8 @@ public:
     }
 
 private:
-    using value_type = std::variant<response_stream_completed, response_stream_failed_after_commit,
+    using value_type = std::variant<response_stream_completed, response_stream_peer_aborted_before_commit,
+        response_stream_peer_aborted_after_commit, response_stream_failed_after_commit,
         response_stream_route_response, response_stream_recovered_failure>;
 
     template <typename alternative_type>
@@ -215,18 +264,30 @@ template <typename sink>
     return sink_value.commit_plan()->response_status();
 }
 
-// Drives a response-stream route over an already-constructed sink. Connection
-// persistence remains a transport concern when a buffered response is returned.
-template <typename sink>
+// Drives a response-stream route over an already-constructed sink. peer_aborted
+// is a predicate consulted after the handler returns so a transport that can be
+// reset out from under the handler (HTTP/2, where the reset flag is a bit-field)
+// can distinguish an abort before any final head from one after the commit plan
+// exists; HTTP/1 passes a constant-false predicate, which folds away. Connection
+// persistence remains a transport concern after this helper returns a buffered
+// pre-commit error response.
+template <typename sink, typename peer_aborted_type>
 task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value,
     const http_request& request, const resolved_route& route, request_memory& request_memory_value,
-    context_services services) {
+    context_services services, peer_aborted_type peer_aborted) {
     auto response_stream = make_response_stream_writer(sink_value, *request_memory_value.upstream_resource());
 
     std::exception_ptr exception;
     try {
         auto result_value = co_await routes_value.dispatch_response_stream(
             request, route, request_memory_value, response_stream, services);
+        if (peer_aborted()) {
+            if (!sink_value.committed()) {
+                co_return response_stream_dispatch_result::make_peer_aborted_before_commit();
+            }
+            co_return response_stream_dispatch_result::make_peer_aborted_after_commit(
+                committed_response_stream_status(sink_value));
+        }
         if (!result_value.has_value()) {
             if (!sink_value.committed()) {
                 throw std::logic_error("handled response stream has no committed protocol plan");

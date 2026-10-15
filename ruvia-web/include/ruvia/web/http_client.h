@@ -50,6 +50,18 @@ public:
     task<void> shutdown() && = delete;
 
     [[nodiscard]] http_client_stats stats() const;
+    // QUIC migration is owner-loop-only. `local_address` must be a concrete
+    // address with a nonzero port in the current path's address family. The
+    // candidate socket is retained by its connection until validation
+    // terminates; abort closes that connection.
+    [[nodiscard]] quic_path_migration start_quic_path_migration(const quic_address& local_address) const;
+    [[nodiscard]] std::optional<quic_path_migration> path_migration(
+        std::uint64_t id) const;
+    [[nodiscard]] quic_operation_status cancel_quic_path_migration(std::uint64_t id) const;
+    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const&;
+    [[nodiscard]] std::optional<http_client_push> next_push() const&;
+    std::optional<http_client_push> next_push() const&& = delete;
+    std::optional<http_client_advertisement> next_advertisement() const&& = delete;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

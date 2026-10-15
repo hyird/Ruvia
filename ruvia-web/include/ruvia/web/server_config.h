@@ -32,6 +32,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/http3_qpack_config.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
 
@@ -78,8 +79,14 @@ struct server_config final {
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // Excess accepted sockets are closed before TLS or HTTP protocol
     // detection, so admission never fabricates a response.
+    // HTTP/3 requires a finite per-worker connection cap.
     std::optional<std::size_t> max_connections_per_worker_{1024};
-    // Cumulative request cap for each connection.
+    // Cumulative request cap per HTTP/1, HTTP/2, or HTTP/3 connection.
+    // HTTP/3 uses fixed cutoff 4*N. A request stream ID at/above it, arriving
+    // before N admitted requests, triggers early GOAWAY; such streams are
+    // rejected individually. Undecided lower-ID requests remain admissible
+    // until N, then admission seals/drains.
+    // Default 1000; not silently clamped.
     std::optional<std::size_t> max_requests_per_connection_{1000};
     std::size_t max_buffered_body_bytes_{default_max_buffered_body_bytes};
     // Live inbound buffer allocations across buffered and streamed HTTP request
@@ -139,13 +146,54 @@ struct tls_config final {
     std::filesystem::path private_key_file_{};
     std::string private_key_password_{};
     tls_client_certificate_config client_certificates_{};
+    // Disabled by default. Early requests still require an explicit replay-safe
+    // route and remain subject to OpenSSL's built-in anti-replay protection.
+    bool http3_early_data_{false};
     std::vector<tls_sni_config> sni_{};
+};
+
+enum class http3_mode : std::uint8_t {
+    automatic,
+    enabled,
+    disabled,
+};
+
+// HTTP/3 is an optional UDP capability on the HTTPS listener. Automatic mode
+// enables QUIC when HTTPS is configured; it never changes TCP ALPN.
+struct http3_listen_config final {
+    http3_mode mode_{http3_mode::automatic};
+    http3_qpack_config qpack_{};
+    // Acceptor-to-worker input slots and worker-to-Acceptor output credits.
+    std::size_t datagram_input_capacity_{64};
+    std::size_t datagram_output_capacity_{16};
+    // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
+    std::chrono::milliseconds handshake_timeout_{std::chrono::seconds(10)};
+    // Maximum time to drain admitted request streams and close the connection.
+    std::chrono::milliseconds drain_timeout_{std::chrono::seconds(30)};
+};
+
+enum class alt_svc_mode : std::uint8_t {
+    automatic,
+    disabled,
+    clear,
+};
+
+// HTTPS responses advertise an active HTTP/3 listener by default. Applications
+// can still replace or remove Alt-Svc on an individual response. Clear mode
+// emits the RFC 7838 cache-clearing value even when HTTP/3 is disabled.
+struct alt_svc_config final {
+    alt_svc_mode mode_{alt_svc_mode::automatic};
+    std::chrono::seconds max_age_{std::chrono::hours(24)};
+    bool persist_{false};
+    // Defaults to the HTTPS/UDP listener port. This override is for deployments
+    // whose externally advertised port differs from the local bind port.
+    std::optional<std::uint16_t> advertised_port_{};
 };
 
 // One bind address with optional HTTP and HTTPS service ports, independent of
 // the wire protocol. application validates and expands this value atomically. An
 // omitted port disables that service. auto_https_redirect_ targets the HTTPS
-// service port.
+// service port. HTTP/3 does not have a separate public listener port.
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
@@ -153,6 +201,8 @@ struct listen_config final {
     std::optional<std::uint16_t> http_{};
     std::optional<std::uint16_t> https_{};
     tls_config tls_{};
+    http3_listen_config http3_{};
+    alt_svc_config alt_svc_{};
     bool auto_https_redirect_{false};
 };
 

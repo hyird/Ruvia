@@ -27,7 +27,7 @@
 namespace ruvia {
 
 // Transport-independent sender policy for RFC 9110's only standardized
-// request expectation. The HTTP/1 writer owns generation of the
+// request expectation. HTTP/1 and HTTP/2 writers both own generation of the
 // Expect field so callers cannot create a wire/state-machine mismatch.
 enum class http_client_request_expectation : std::uint8_t {
     none,
@@ -165,6 +165,10 @@ struct http_client_request_view {
     // small set of facts needed by the later response exchange.
     std::span<const http_header_view> headers_{};
     http_client_request_content_view content_{http_client_request_content_view::none()};
+    // Explicit caller assertion that the complete server-side processing chain
+    // is replay-safe. HTTP/3 0-RTT additionally requires a configured early-data
+    // client and a bodyless GET or HEAD request.
+    bool replay_safe_{};
 };
 
 }  // namespace ruvia
