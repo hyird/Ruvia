@@ -68,48 +68,6 @@ struct normalized_host_unit final {
 
 }  // namespace
 
-bool is_valid_uri_authority(std::string_view value) noexcept {
-    auto host_and_port = value;
-    if (const auto delimiter = value.find('@'); delimiter != std::string_view::npos) {
-        if (!is_valid_uri_userinfo(value.substr(0, delimiter)) ||
-            value.find('@', delimiter + 1) != std::string_view::npos) {
-            return false;
-        }
-        host_and_port = value.substr(delimiter + 1);
-    }
-
-    std::string_view host;
-    std::string_view port;
-    bool has_port = false;
-    if (!host_and_port.empty() && host_and_port.front() == '[') {
-        const auto close = host_and_port.find(']');
-        if (close == std::string_view::npos) {
-            return false;
-        }
-        host = host_and_port.substr(0, close + 1);
-        const auto remainder = host_and_port.substr(close + 1);
-        if (!remainder.empty()) {
-            if (remainder.front() != ':') {
-                return false;
-            }
-            has_port = true;
-            port = remainder.substr(1);
-        }
-    } else {
-        const auto delimiter = host_and_port.find(':');
-        host = delimiter == std::string_view::npos ? host_and_port : host_and_port.substr(0, delimiter);
-        if (delimiter != std::string_view::npos) {
-            has_port = true;
-            port = host_and_port.substr(delimiter + 1);
-            if ((port.find(':') != std::string_view::npos)) {
-                return false;
-            }
-        }
-    }
-
-    return (host.empty() || is_valid_http_host(host)) && (!has_port || is_valid_uri_port(port));
-}
-
 bool is_valid_request_target_bytes(std::string_view target) noexcept {
     if (target.empty()) {
         return false;
@@ -346,10 +304,4 @@ bool parse_request_target(
     return parse_absolute_target(method, target, output);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
-    return http_ascii_equals_ignore_case(scheme, "https") ? 443 : (http_ascii_equals_ignore_case(scheme, "http") ? 80 : 0);
-}
 }  // namespace ruvia::detail

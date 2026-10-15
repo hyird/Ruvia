@@ -6,7 +6,7 @@ middleware, streaming, WebSocket, and optional SQL, Redis, and JWT support.
 | CMake target | Purpose |
 | --- | --- |
 | `ruvia::core` | Tasks, event loops, bounded channels, and blocking work. |
-| `ruvia::http` | Independent sans-I/O HTTP/1, HTTP/2, HTTP/3, QUIC, and WebSocket protocols. |
+| `ruvia::http` | Independent sans-I/O HTTP/1.0, HTTP/1.1, and WebSocket protocols. |
 | `ruvia::web` | Servers, routing, TLS, outbound clients, and data access; uses Core and HTTP. |
 
 ## Build
@@ -16,7 +16,7 @@ Requires CMake 3.28+, a C++20 compiler, and a bootstrapped vcpkg checkout
 with the `x64-windows-static` triplet. Linux executables require glibc.
 
 Dependencies are selected from [vcpkg.json](vcpkg.json): Asio for Core; zlib,
-Brotli, Zstandard, and ngtcp2 1.25+ for HTTP; OpenSSL 3.5+ for Web. A top-level build selects
+Brotli, and Zstandard for HTTP; OpenSSL 3.0+ for Web. A top-level build selects
 the vcpkg toolchain from `VCPKG_ROOT`; an embedding project supplies its own
 toolchain and manifest.
 
@@ -60,12 +60,8 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
   awaited or joined, including after cancellation.
 - Request views borrow their owner. Copy data before carrying it beyond the
   request lifetime or into offloaded work.
-- Servers and outbound clients use the same Web API for HTTP/1, HTTP/2, and HTTP/3.
-  HTTP/2 uses TLS ALPN or cleartext prior knowledge; HTTP/3 is enabled by default
-  on a TLS listener and binds UDP on the same address and port. HTTP/3 servers
-  require finite connection and request limits. WebSocket uses HTTP/1.1 Upgrade
-  or HTTP/2 and HTTP/3 Extended CONNECT. See [http_features.cpp](examples/web/http_features.cpp)
-  and [http_client_advanced.cpp](examples/web/http_client_advanced.cpp).
+- The server and outbound client support HTTP/1 over TCP and TLS; WebSocket
+  uses HTTP/1.1 Upgrade.
 
 ## Examples
 

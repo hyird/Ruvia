@@ -12,9 +12,6 @@ namespace ruvia::detail {
 namespace {
 
 // "Date: <value>\r\n" -- the cache is the single owner of this wire format.
-// Both the full-line accessor (HTTP/1 text response) and the
-// value-only accessor (HPACK :date for HTTP/2) derive their views from these
-// constants, so the framing lives in exactly one place.
 inline constexpr std::string_view date_header_prefix = "Date: ";
 inline constexpr std::string_view date_header_suffix = "\r\n";
 
@@ -51,15 +48,6 @@ std::string_view cached_date_header() noexcept {
         }
     }
     return std::string_view(cache.line_.data(), cache.size_);
-}
-
-std::string_view cached_date_value() noexcept {
-    const auto line = cached_date_header();
-    constexpr std::size_t framing = date_header_prefix.size() + date_header_suffix.size();
-    if (line.size() <= framing) {
-        return {};
-    }
-    return line.substr(date_header_prefix.size(), line.size() - framing);
 }
 
 }  // namespace ruvia::detail

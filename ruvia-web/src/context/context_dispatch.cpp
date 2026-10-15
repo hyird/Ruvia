@@ -120,9 +120,8 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .resolution_ = resolution,
             .coding_ = http_response_coding_selection_for(request),
             .resource_ = memory.resource(),
-            .received_early_data_ = early_data_info_.received_from_early_data(),
         },
-        policy, services().with_early_data_info(early_data_info_).for_subrequest(stop));
+        policy, services().for_subrequest(stop));
     const auto* rejection = admission.rejection();
     auto response = rejection != nullptr
                         ? co_await detail::respond_http_request_rejection(

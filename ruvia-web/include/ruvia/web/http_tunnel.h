@@ -13,7 +13,6 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/detail/http/http_datagram_input.h"
 #include "ruvia/web/http_capsule_stream.h"
 #include "ruvia/web/http_datagram_stream.h"
 
@@ -62,8 +61,8 @@ public:
     // Borrow the established route tunnel for HTTP Datagrams. The route protocol
     // owns negotiation; use only in its negotiated datagram handler, exclusively
     // with this tunnel. Capsule Protocol limits apply to encoded datagrams.
-    [[nodiscard]] http_datagram_stream datagrams(http_datagram_config config = {}) &;
-    http_datagram_stream datagrams(http_datagram_config = {}) && = delete;
+    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
+    http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
     [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &;
     http_capsule_stream capsules(http_capsule_config = {}) && = delete;
 
@@ -79,14 +78,6 @@ private:
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort) noexcept;
     void require_active() const;
-    using read_datagram_input_type = task<std::optional<detail::http_datagram_input>> (*)(void*);
-    using send_datagram_type = void (*)(void*, std::span<const std::byte>);
-    using datagram_config_type = http_datagram_session_config (*)(void*);
-    [[nodiscard]] scoped_operation<std::optional<detail::http_datagram_input>> read_datagram_input();
-    [[nodiscard]] scoped_operation<void> send_datagram(std::string_view bytes);
-    read_datagram_input_type read_datagram_input_{};
-    send_datagram_type send_datagram_{};
-    datagram_config_type datagram_config_{};
     std::pmr::memory_resource& resource_;
     const worker_handle& worker_;
     void* target_;

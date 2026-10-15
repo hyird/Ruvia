@@ -117,26 +117,4 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     return is_valid_http_te_field_value(value, http_te_field_validation_mode::client_capability);
 }
 
-// HTTP/2 and HTTP/3 carry no transfer codings, so TE may only advertise
-// "trailers" (RFC 9113 section 8.2.2, RFC 9114 section 4.2). The member is an
-// unprefixed ABNF literal and therefore case-insensitive (RFC 7405 section
-// 2.1); list members are OWS-trimmed (RFC 9110 section 5.6.1). Recipients
-// ignore empty members, senders must not generate them, and a field without
-// any member is rejected because it carries no permitted value.
-[[nodiscard]] inline bool is_valid_binary_http_te_field_value(
-    std::string_view value, http_field_list_role role) noexcept {
-    bool valid = true;
-    bool has_member = false;
-    http_visit_comma_separated_quoted_field_items(value, [&valid, &has_member, role](std::string_view member) noexcept {
-        if (member.empty() ? role == http_field_list_role::sender
-                           : !http_ascii_equals_ignore_case(member, "trailers")) {
-            valid = false;
-            return false;
-        }
-        has_member = has_member || !member.empty();
-        return true;
-    });
-    return valid && has_member;
-}
-
 }  // namespace ruvia::detail

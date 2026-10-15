@@ -63,16 +63,13 @@ public:
     // Transfers tunnel ownership to the Capsule Protocol adapter.
     [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &&;
     http_capsule_stream capsules(http_capsule_config = {}) & = delete;
-    // Consumes an accepted Extended CONNECT tunnel for application datagrams.
-    [[nodiscard]] http_datagram_stream datagrams(http_datagram_config config = {}) &&;
-    http_datagram_stream datagrams(http_datagram_config = {}) & = delete;
-    // Consumes an accepted CONNECT-UDP tunnel after validated negotiation.
-    [[nodiscard]] http_udp_tunnel udp(http_datagram_config config = {}) &&;
-    http_udp_tunnel udp(http_datagram_config = {}) & = delete;
-    void reprioritize(http_priority priority) & {
-        response_.reprioritize(priority);
-    }
-    void reprioritize(http_priority) && = delete;
+    // Checked ownership transfers for accepted, negotiated datagram/CONNECT-UDP
+    // tunnels. Ordinary CONNECT throws std::logic_error without consuming this
+    // owner. The Capsule Protocol limits apply directly to encoded datagrams.
+    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &&;
+    http_datagram_stream datagrams(http_capsule_config = {}) & = delete;
+    [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &&;
+    http_udp_tunnel udp(http_capsule_config = {}) & = delete;
 
 private:
     friend class detail::http_client_pool;

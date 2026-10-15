@@ -8,11 +8,6 @@
 
 namespace ruvia::detail {
 
-// The only version-dependent request-field semantics: HTTP/1.1 negotiates
-// transfer codings through TE, while HTTP/2 and HTTP/3 permit only "trailers".
-enum class request_field_framing : std::uint8_t { http1,
-    binary };
-
 enum class request_field_status : std::uint8_t {
     ok,
     // Grammar violation, or a second instance of a field that may occur once.
@@ -23,13 +18,9 @@ enum class request_field_status : std::uint8_t {
     managed_by_sender,
 };
 
-// Per field section: which once-only fields were seen, plus the framing whose
-// TE rules apply. One instance spans exactly one request header section.
+// One instance records once-only fields in exactly one request header section.
 class request_field_state final {
 public:
-    explicit request_field_state(request_field_framing framing) noexcept
-        : framing_(framing) {}
-
     // True once a field that may occur only once (Host and every
     // singleton_request_header_bit() kind) has been validated.
     [[nodiscard]] bool seen(request_header_kind kind) const noexcept;
@@ -39,15 +30,14 @@ private:
         http_field_list_role role, request_field_state& state) noexcept;
 
     std::uint32_t seen_{0};
-    request_field_framing framing_;
 };
 
 // The authoritative semantic check for one request field, shared by the
-// HTTP/1, HTTP/2 and HTTP/3 request writers (role sender) and request
+// HTTP/1 request writers (role sender) and request
 // recipients (role recipient). Callers classify the name once with
 // classify_request_header() and keep version-specific concerns themselves:
 // framing state (Content-Length values on receipt, Transfer-Encoding,
-// Connection, Upgrade), Host/:authority agreement, cookie joining, and parsing
+// Connection, Upgrade), request-target/Host agreement, and parsing
 // accepted Expect members.
 [[nodiscard]] request_field_status validate_request_field(request_header_kind kind, std::string_view value,
     http_field_list_role role, request_field_state& state) noexcept;

@@ -82,17 +82,13 @@ public:
         return uses_route_rate_limit_;
     }
 
-    [[nodiscard]] bool replay_safe() const noexcept {
-        return replay_safe_;
-    }
-
 private:
     template <middleware middleware_t_type, typename args_t_type>
     friend controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
         const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,
-        bool runs_on_unmatched_requests, std::size_t request_body_limit, bool replay_safe = false) noexcept
+        bool runs_on_unmatched_requests, std::size_t request_body_limit) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
@@ -100,8 +96,7 @@ private:
           validated_model_type_key_(validated_model_type_key),
           uses_route_rate_limit_(uses_route_rate_limit),
           request_body_limit_(request_body_limit),
-          runs_on_unmatched_requests_(runs_on_unmatched_requests),
-          replay_safe_(replay_safe) {}
+          runs_on_unmatched_requests_(runs_on_unmatched_requests) {}
 
     invoke_type invoke_{nullptr};
     create_type create_{nullptr};
@@ -112,7 +107,6 @@ private:
     bool uses_route_rate_limit_{false};
     std::size_t request_body_limit_{0};
     bool runs_on_unmatched_requests_{false};
-    bool replay_safe_{false};
 };
 
 // An app-level use<T>(args...) registration: the descriptor plus ownership of

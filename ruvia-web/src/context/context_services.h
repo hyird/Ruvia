@@ -12,10 +12,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/web/conn_info.h"
-#include "ruvia/web/error_handlers.h"
-#include "ruvia/web/http3_early_data_info.h"
 
 #include "context/context_capabilities.h"
 #include "integration/worker_client_registry_view.h"
@@ -33,8 +30,6 @@ namespace ruvia::detail {
 
 class rate_limiter;
 class http_interim_response_output;
-class http_connection_advertisement_output;
-class http_push_output;
 class route_table;
 class worker_state_registry;
 
@@ -53,23 +48,11 @@ struct context_worker_services final {
 };
 
 struct context_connection_services final {
-    std::string_view automatic_alt_svc_{};
     conn_info info_;
     // Whether the peer is a configured trusted proxy. Decided once per
     // connection: the peer address never changes, so its IP parse and block
     // match are not repeated per request.
     bool peer_trusted_{false};
-    http3_early_data_info early_data_{};
-};
-
-// The per-request protocol channels a driver binds once, before admission. A
-// null member is a channel this protocol, or this request, does not provide.
-// Each borrowed object outlives every context created for the request.
-struct context_request_channels final {
-    http_interim_response_output* interim_output_{};
-    http_connection_advertisement_output* connection_advertisements_{};
-    http_push_output* push_output_{};
-    const std::optional<http_priority>* priority_update_{};
 };
 
 struct context_request_services final {
@@ -78,7 +61,7 @@ struct context_request_services final {
     const http_request_trailers* trailers_{};
     // The driver's 1xx output, bound once before admission; null when this
     // request has none. It outlives every context created for the request.
-    context_request_channels channels_{};
+    http_interim_response_output* interim_output_{};
     context_response_output response_output_{};
     std::size_t dispatch_depth_{};
     // The matched route's declared body_limit; 0 when it declares none.
@@ -194,31 +177,13 @@ public:
     context_services with_request_trailers(http_request_trailers&&) const = delete;
 
     [[nodiscard]] http_interim_response_output* interim_output() const noexcept {
-        return request_services_.channels_.interim_output_;
-    }
-
-    [[nodiscard]] http_connection_advertisement_output* connection_advertisements() const noexcept {
-        return request_services_.channels_.connection_advertisements_;
-    }
-
-    [[nodiscard]] http_push_output* push_output() const noexcept {
-        return request_services_.channels_.push_output_;
-    }
-
-    [[nodiscard]] const std::optional<http_priority>* request_priority_update() const noexcept {
-        return request_services_.channels_.priority_update_;
-    }
-
-    [[nodiscard]] context_services with_request_channels(const context_request_channels& channels) const noexcept {
-        auto services = *this;
-        services.request_services_.channels_ = channels;
-        return services;
+        return request_services_.interim_output_;
     }
 
     [[nodiscard]] context_services with_interim_output(http_interim_response_output& output) const noexcept {
-        auto channels = request_services_.channels_;
-        channels.interim_output_ = &output;
-        return with_request_channels(channels);
+        auto services = *this;
+        services.request_services_.interim_output_ = &output;
+        return services;
     }
 
     [[nodiscard]] constexpr context_response_output& response_output() noexcept {
@@ -244,7 +209,6 @@ public:
         context_services services(worker_services_, stop_token_value);
         services.connection_services_.info_ = connection_services_.info_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
-        services.connection_services_.early_data_ = connection_services_.early_data_;
         return services;
     }
 
@@ -263,35 +227,8 @@ public:
         return worker_services_.states_;
     }
 
-    [[nodiscard]] constexpr std::string_view automatic_alt_svc() const noexcept {
-        return connection_services_.automatic_alt_svc_;
-    }
-
-    // The listener owns this value until every request context has retired.
-    // An application header with the same name replaces this default.
-    [[nodiscard]] context_services with_automatic_alt_svc(std::string_view value) const noexcept {
-        auto services = *this;
-        services.connection_services_.automatic_alt_svc_ = value;
-        return services;
-    }
-
-    template <typename traits_type, typename allocator_type>
-    context_services with_automatic_alt_svc(
-        std::basic_string<char, traits_type, allocator_type>&&) const = delete;
-
     [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {
         return connection_services_.info_;
-    }
-
-    [[nodiscard]] constexpr http3_early_data_info early_data_info() const noexcept {
-        return connection_services_.early_data_;
-    }
-
-    [[nodiscard]] context_services with_early_data_info(
-        http3_early_data_info value) const noexcept {
-        auto services = *this;
-        services.connection_services_.early_data_ = value;
-        return services;
     }
 
     // The connection metadata one request sees. Identical to get_conn_info() unless

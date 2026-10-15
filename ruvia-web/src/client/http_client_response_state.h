@@ -13,13 +13,10 @@
 
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
-#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client_informational_response.h"
@@ -27,7 +24,6 @@
 
 #include "client/http_client_tunnel_state.h"
 #include "client/http_client_upload_state.h"
-#include "http3/http3_body_budget.h"
 
 namespace ruvia {
 class response_stream_writer;
@@ -35,18 +31,8 @@ class response_stream_writer;
 
 namespace ruvia::detail {
 
-class http_client_request_storage;
 class http_client_pool;
 class http_client_response_memory_domain;
-class http_client_result_budget_domain;
-class http3_client_connection;
-
-enum class http_client_response_transport : std::uint8_t {
-    unassigned,
-    http1,
-    http2,
-    http3,
-};
 
 // Address-stable response storage. Network stream registration and connection
 // leases are added here rather than to the movable public response wrapper.
@@ -73,16 +59,6 @@ public:
     // or reports `head_message` for its error code. An encoded body is decoded
     // completely before the head is returned, so its failure is observed here.
     [[nodiscard]] task<void> await_head(std::string_view head_message);
-    [[nodiscard]] bool bind_http3_body_budget(http3_body_budget& budget) noexcept;
-    void release_http3_body_budget() noexcept;
-    [[nodiscard]] bool has_http3_body_budget() const noexcept;
-    [[nodiscard]] std::size_t producer_body_bytes() const noexcept;
-    [[nodiscard]] std::size_t producer_body_budget_available() const noexcept;
-    [[nodiscard]] bool retain_producer_body_bytes(std::size_t bytes) noexcept;
-    void release_producer_body_bytes(std::size_t bytes) noexcept;
-    void reconcile_producer_body_bytes() noexcept;
-    [[nodiscard]] bool replace_producer_body_bytes(std::size_t bytes) noexcept;
-    void discard_pending_body() noexcept;
     void discard_response_body() noexcept;
     void release_consumed_body_prefix();
 
@@ -102,12 +78,8 @@ public:
     worker_signal data_signal_;
     worker_signal space_signal_;
     http_client_pool* pool_{nullptr};
-    // The pool request driving this HTTP/3 response until its result is
-    // recorded; borrowed from that driver's frame.
-    const http_client_request_storage* pool_request_{nullptr};
     std::pmr::memory_resource* resource_;
     http_status_code status_{http_status::ok};
-    http_known_method request_method_{http_known_method::unknown};
     http_protocol_version protocol_version_{http_protocol_version::http11};
     std::optional<http_response_body_plan> response_body_plan_{};
     std::pmr::vector<http_client_informational_response> informational_;
@@ -115,9 +87,6 @@ public:
     http_field_section_budget informational_budget_;
     std::pmr::vector<http_header> headers_;
     std::pmr::vector<http_header> trailers_;
-    // Declared before body strings so their storage is destroyed before the
-    // receive reservation is returned to its worker-stable owner.
-    http3_body_budget::lease_type http3_body_budget_;
     std::pmr::string buffered_;
     // Producers only append here. The consumer swaps it with `buffered` before
     // returning a view, so later network progress cannot invalidate that view.
@@ -137,23 +106,10 @@ public:
     bool body_decode_required_{false};
     // Content-Encoding parsed with the final head while decoding is pending.
     std::optional<http_content_coding_field_result> content_coding_{};
-    // Any informational/final response event proves the peer processed some
-    // part of the request; GOAWAY/REQUEST_REJECTED must not replay it.
-    bool http3_response_started_{false};
-    http_client_response_transport transport_{http_client_response_transport::unassigned};
-    http3_client_connection* http3_connection_{nullptr};
-    std::uint64_t http3_request_id_{0};
-    std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
-    std::size_t connection_index_{0};
-    std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
-    std::uint64_t stream_id_{0};
     // Declared last so the operation scope closes while every field borrowed
     // by a body coroutine is alive.
     ::ruvia::operation_scope body_operation_scope_;
-    std::optional<http_push_request> promised_request_{};
-    bool push_response_taken_{false};
-    ::ruvia::operation_scope push_response_scope_;
 
 private:
     void promote_pending_data();

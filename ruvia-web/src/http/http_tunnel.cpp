@@ -98,28 +98,6 @@ scoped_operation<void> http_tunnel::finish() & {
     return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
-scoped_operation<std::optional<detail::http_datagram_input>> http_tunnel::read_datagram_input() {
-    require_active();
-    const auto read = +[](void* target, read_datagram_input_type fn, detail::operation_lane_lease lease_value, unsigned& count) -> task<std::optional<detail::http_datagram_input>> {
-        static_cast<void>(lease_value);
-        running_tunnel_operation running(count);
-        co_return co_await fn(target);
-    };
-    return ::ruvia::make_scoped_operation(operations_, read(target_, read_datagram_input_, detail::claim_operation_lane(read_active_, tunnel_lane_in_progress), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
-}
-scoped_operation<void> http_tunnel::send_datagram(std::string_view bytes_value) {
-    require_active();
-    if (send_ended_ || !send_datagram_) {
-        throw std::logic_error("HTTP Datagram sending direction is closed");
-    }
-    const auto send = +[](void* target, send_datagram_type fn, std::pmr::string owned, detail::operation_lane_lease lease_value, unsigned& count) -> task<void> {
-        static_cast<void>(lease_value);
-        running_tunnel_operation running(count);
-        fn(target, std::as_bytes(std::span(owned.data(), owned.size())));
-        co_return;
-    };
-    return ::ruvia::make_scoped_operation(operations_, send(target_, send_datagram_, std::pmr::string(bytes_value, &resource_), detail::claim_operation_lane(write_active_, tunnel_lane_in_progress), running_operations_), &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
-}
 void http_tunnel::abort() noexcept {
     if (!worker_.is_current()) {
         std::terminate();

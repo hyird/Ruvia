@@ -42,13 +42,6 @@ private:
     std::size_t used_{};
 };
 
-[[nodiscard]] inline inbound_buffer_budget& require_inbound_buffer_budget(inbound_buffer_budget* budget) {
-    if (budget == nullptr) {
-        throw std::logic_error("connection requires its worker inbound budget");
-    }
-    return *budget;
-}
-
 // One connection's inbound buffers. Each allocation is checked against the
 // connection's limit and its worker's budget, both charged together, and then
 // taken straight from the worker's upstream: one wrapper between a buffer and

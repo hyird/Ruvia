@@ -26,7 +26,7 @@ namespace ruvia::detail {
 
 // Fields that must never appear in a trailer section because they govern message
 // framing, routing, authentication, response controls, or content format
-// (RFC 9110 §6.5.1, RFC 9113 §8.1).
+// (RFC 9110 §6.5.1).
 [[nodiscard]] inline bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
     // The response header classifier is the authoritative set of standardized
     // fields Ruvia manages. RFC 9110 explicitly permits only ETag (section

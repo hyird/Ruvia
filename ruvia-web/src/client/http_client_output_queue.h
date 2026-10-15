@@ -18,9 +18,6 @@ public:
           chunk_(resource) {}
     void notify_data() noexcept {
         data_.notify();
-        if (wake_ != nullptr) {
-            wake_(wake_target_);
-        }
     }
     void acknowledge_chunk() noexcept {
         chunk_ready_ = false;
@@ -37,13 +34,8 @@ public:
         }
         stopped_ = true;
         data_.notify();
-        if (wake_ != nullptr) {
-            wake_(wake_target_);
-        }
         space_.notify();
     }
-    void* wake_target_{};
-    void (*wake_)(void*) noexcept {};
     worker_signal data_;
     worker_signal space_;
     std::pmr::string chunk_;

@@ -24,13 +24,9 @@
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
 
-// The one Web-side admission decision every server protocol (HTTP/1, HTTP/2,
-// HTTP/3) and the in-process subrequest path run between "request head parsed
-// and route resolved" and "a handler runs". Protocol drivers own only
-// transport work: reading the body with the admitted limit, committing heads,
-// and framing. Every policy fact -- coding negotiation, client address,
-// Expect, RFC 8470 early data, the application rate limit,
-// the body ceiling and the endpoint kind -- is decided here once.
+// Shared admission for HTTP/1 and in-process subrequests. The HTTP/1 session
+// reads and frames messages; admission decides coding, client identity,
+// expectations, rate limits, body ceilings and endpoint kind.
 
 namespace ruvia::detail {
 
@@ -52,22 +48,17 @@ struct http_request_admission_policy final {
 struct http_request_admission_input final {
     const http_request& request_;
     const route_resolution& resolution_;
-    // HTTP/1 passes the parser's parse-once selection; HTTP/2/3 pass
-    // http_response_coding_selection_for(request).
+    // The parser or subrequest supplies the response-coding selection.
     http_response_coding_selection_result coding_;
     // Request arena for copied rejection diagnostics.
     std::pmr::memory_resource* resource_;
     // The protocol's Expect plan, when it defers the rejection to Web.
     const http_server_expectation_plan* expectation_{};
-    // The request arrived in TLS 1.3 / QUIC 0-RTT data.
-    bool received_early_data_{false};
     // Start of the request for the access-log duration.
     std::chrono::steady_clock::time_point start_{std::chrono::steady_clock::now()};
 };
 
-// Byte ceiling for one request body given its effective body mode (HTTP/2
-// selects stream mode for CONNECT/Extended CONNECT before admission runs).
-// A route limit may only tighten the deployment's.
+// Effective request-body ceiling. A route may only tighten the deployment limit.
 [[nodiscard]] protocol_byte_limit http_request_body_limit(const route_resolution& resolution,
     request_body_mode mode, const http_request_admission_policy& policy) noexcept;
 
@@ -178,7 +169,6 @@ private:
 
 enum class http_request_endpoint : std::uint8_t {
     // Rejections: answer rejection() through respond_http_request_rejection.
-    too_early,
     rejection,
     not_acceptable,
     // Admitted endpoints (resolved() is non-null for all but buffered).
@@ -225,10 +215,6 @@ public:
     [[nodiscard]] static_file_selection_mode static_file_mode() const noexcept {
         return services_.precompressed_static_files() ? static_file_selection_mode::precompressed
                                                       : static_file_selection_mode::identity_only;
-    }
-
-    [[nodiscard]] const http_response_tail& tail() const noexcept {
-        return tail_;
     }
 
     [[nodiscard]] http_response_tail& tail() noexcept {

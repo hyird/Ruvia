@@ -23,10 +23,6 @@ public:
     }
     std::span<const std::byte> payload() const&& = delete;
 
-    [[nodiscard]] http_datagram_transport transport() const noexcept {
-        return datagram_.transport();
-    }
-
 private:
     friend class http_udp_tunnel;
     explicit http_udp_datagram(http_datagram datagram) noexcept

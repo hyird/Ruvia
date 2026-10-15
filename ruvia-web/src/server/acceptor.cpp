@@ -1,21 +1,13 @@
 #include "server/acceptor.h"
 
-#include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <limits>
 #include <stdexcept>
 #include <system_error>
 
-#include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/recycling_allocator.hpp>
 #include <asio/socket_base.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/memory/process_resource.h"
-
-#include "http3/http3_datagram_channel.h"
 
 namespace ruvia::detail {
 namespace {
@@ -67,11 +59,6 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
       io_context_(runtime_.context().io_context()),
       listeners_(process_resource()),
       targets_(targets.begin(), targets.end(), process_resource()),
-      quic_channels_(process_resource()),
-      udp_(nullptr, pmr_object_deleter<http3_acceptor_datagram_endpoint>{process_resource()}),
-      quic_notification_(runtime_.context()),
-      quic_visits_(process_resource()),
-      quic_retirement_(io_context_),
       failure_target_(failure_target),
       failure_callback_(failure) {
     for (const auto& target : targets_) {
@@ -79,220 +66,27 @@ acceptor::acceptor(std::span<const http_server_listener_definition> listeners,
             throw std::invalid_argument("acceptor worker target is incomplete");
         }
     }
-    const auto quic_count = std::ranges::count_if(listeners, [](const auto& listener) { return listener.http3_.has_value(); });
     listeners_.reserve(listeners.size());
-    quic_channels_.reserve(quic_count != 0 ? targets.size() : 0);
     for (const auto& configured : listeners) {
         listeners_.push_back(make_pmr_object<listener>(process_resource(), io_context_,
-            configured.endpoint_, configured.http3_ ? std::optional(normalize_http3_capacity(*configured.http3_, targets.size())) : std::nullopt));
+            configured.endpoint_));
     }
     runtime_.configure({
-        .startup_ = [this] {
-            prepare_quic();
-            runtime_.mark_ready(); },
+        .startup_ = [this] { runtime_.mark_ready(); },
         .serve_ = [this] {
-            if (udp_ && udp_->start() == http3_acceptor_datagram_endpoint::pump_result::error) {
-                throw std::system_error(udp_->error(), "start QUIC acceptor UDP listener");
-            }
             for (std::size_t i = 0; i < listeners_.size(); ++i) {
                 begin_accept(i);
             } },
         .stop_admission_ = [this] { stop_on_owner(); },
         .failure_ = [this](std::exception_ptr) noexcept { failure_callback_(failure_target_); },
-        .shutdown_ = [this]() noexcept {
-            close_listeners();
-            udp_.reset();
-            quic_channels_.clear();
-            quic_ready_.reset();
-            quic_pool_.reset(); },
+        .shutdown_ = [this]() noexcept { close_listeners(); },
     });
 }
 
 acceptor::~acceptor() {
-    // Ingress has no external producers: it finalizes itself once QUIC retires.
+    // Ingress has no external producers and finalizes after closing listeners.
     runtime_.request_stop();
     runtime_.join();
-}
-
-void acceptor::prepare_quic() {
-    const auto configured = std::ranges::find_if(listeners_,
-        [](const auto& bound) { return bound->quic_.has_value(); });
-    if (configured == listeners_.end()) {
-        return;
-    }
-    const auto& tcp = (*configured)->endpoint_;
-    const auto capacity = *(*configured)->quic_;
-    quic_pool_.emplace(capacity.packet_slots_,
-        http3_capacity::packet_bytes, process_resource());
-    quic_ready_.emplace(quic_notification_, targets_.size(), process_resource());
-    quic_visits_.reserve(targets_.size());
-    udp_ = make_pmr_object<http3_acceptor_datagram_endpoint>(process_resource(), io_context_,
-        asio::ip::udp::endpoint(tcp.address(), tcp.port()),
-        http3_acceptor_datagram_endpoint::notification{this, &datagram_ready}, *quic_pool_);
-    udp_->prepare();
-    const asio::ip::udp::endpoint endpoint(tcp.address(), udp_->bound_port());
-    quic_running_ = true;
-    try {
-        asio::co_spawn(io_context_, ruvia::as_awaitable(run_quic()),
-            asio::bind_allocator(asio::recycling_allocator<void>(),
-                [this](std::exception_ptr error) noexcept {
-                    quic_running_ = false;
-                    if (error) {
-                        (void)runtime_.fail(std::move(error));
-                        // An unrecoverable runner error must not bypass leases.
-                        stop_on_owner();
-                        if (!quic_retired()) {
-                            std::terminate();
-                        }
-                        quic_notification_.close();
-                    }
-                    runtime_.finalize();
-                }));
-    } catch (...) {
-        quic_running_ = false;
-        throw;
-    }
-    for (std::size_t worker_value = 0; worker_value < targets_.size(); ++worker_value) {
-        auto channel = make_pmr_object<http3_datagram_channel>(process_resource(),
-            *quic_pool_, *quic_ready_, worker_value, process_resource(),
-            capacity.input_slots_, capacity.output_credits_);
-        // A staging failure must not leave an unowned channel waiting for an ACK.
-        try {
-            targets_[worker_value].stage_quic_(targets_[worker_value].object_, *channel, endpoint,
-                {.index_ = static_cast<std::uint32_t>(worker_value),
-                    .count_ = static_cast<std::uint32_t>(targets_.size())});
-        } catch (...) {
-            channel->acceptor_close();
-            channel->abandon_worker();
-            if (!channel->acceptor_finalize()) {
-                std::terminate();
-            }
-            throw;
-        }
-        quic_channels_.push_back(std::move(channel));
-    }
-}
-
-task<void> acceptor::run_quic() {
-    for (;;) {
-        pump_quic();
-        if (quic_retired()) {
-            quic_notification_.close();
-            co_return;
-        }
-        if (quic_stopping_) {
-            // ACK publication follows the last cross-thread notification call.
-            // A cold timer covers wake-before-ACK without hot-path polling.
-            quic_retirement_.expires_after(std::chrono::milliseconds(1));
-            const auto completed = co_await ruvia::async_asio([this](auto handler) {
-                quic_retirement_.async_wait(std::move(handler));
-            });
-            if (completed.error_code()) {
-                throw std::system_error(completed.error_code(), "QUIC acceptor retirement wait");
-            }
-        } else {
-            try {
-                if (co_await quic_notification_.wait() == worker_notification_wait_status::closed) {
-                    stop_on_owner();
-                }
-            } catch (...) {
-                (void)runtime_.fail(std::current_exception());
-                stop_on_owner();
-            }
-        }
-    }
-}
-
-bool acceptor::quic_retired() noexcept {
-    if (!quic_stopping_) {
-        return false;
-    }
-    // Drain both normal and cold-abandoned owners before examining final ACKs.
-    pump_quic();
-    if (!udp_->endpoint_retired()) {
-        return false;
-    }
-    for (auto& channel : quic_channels_) {
-        if (!channel->acceptor_finalize()) {
-            return false;
-        }
-    }
-    return quic_pool_->outstanding() == 0;
-}
-
-void acceptor::datagram_ready(void* object, http3_acceptor_datagram_endpoint::notification_kind) noexcept {
-    auto& self = *static_cast<acceptor*>(object);
-    (void)self.quic_notification_.notify();
-}
-
-void acceptor::pump_quic() noexcept {
-    if (const auto error = udp_->error()) {
-        try {
-            throw std::system_error(error, "QUIC acceptor UDP I/O");
-        } catch (...) {
-            (void)runtime_.fail(std::current_exception());
-        }
-        stop_on_owner();
-    }
-    if (quic_stopping_) {
-        // Retirement is cold: every owner is polled. Queued descriptors retire
-        // here; a descriptor already submitted to native UDP remains inside the
-        // endpoint until its callback.
-        for (auto& channel : quic_channels_) {
-            channel->acceptor_poll();
-            while (channel->acceptor_take_output()) {
-            }
-        }
-        return;
-    }
-    // Only channels that signalled since the last wake are polled; each credit
-    // lane uses one bounded two-wrap batch and re-signals when more remain.
-    quic_visits_.clear();
-    quic_ready_->drain([this](std::size_t index) noexcept {
-        // A staging rollback can signal an index that never joined the channels.
-        if (index < quic_channels_.size()) {
-            quic_channels_[index]->acceptor_poll();
-            quic_visits_.push_back(static_cast<std::uint32_t>(index));
-        }
-    });
-    // Route every held packet. The endpoint holds at most its receive slots and
-    // completes none during this loop, which bounds the per-wake batch.
-    while (auto packet = udp_->take_receive()) {
-        const auto worker_value = ruvia::quic_datagram_partition(packet->view().bytes_,
-            static_cast<std::uint32_t>(targets_.size()));
-        if (worker_value) {
-            (void)quic_channels_[*worker_value]->acceptor_push(std::move(*packet));
-        }
-    }
-    // Routing, drops and independent RX credit returns make storage available.
-    // No second receive pool and no packet copy exist at this edge.
-    udp_->poll_receive();
-    // Send one packet per signalled channel per round, starting after the last
-    // channel served, while native send slots remain.
-    const auto first = std::ranges::lower_bound(quic_visits_, next_output_);
-    std::ranges::rotate(quic_visits_, first);
-    while (!quic_visits_.empty() && udp_->outbound_capacity()) {
-        std::size_t kept = 0;
-        for (const auto index : quic_visits_) {
-            if (!udp_->outbound_capacity()) {
-                quic_visits_[kept++] = index;
-                continue;
-            }
-            auto packet = quic_channels_[index]->acceptor_take_output();
-            if (!packet) {
-                continue;
-            }
-            (void)udp_->send_owned_datagram(std::move(*packet));
-            next_output_ = index + 1;
-            quic_visits_[kept++] = index;
-        }
-        quic_visits_.resize(kept);
-    }
-    // Send slots ran out first. A native send completion wakes the next pump,
-    // which revisits every channel not yet seen empty.
-    for (const auto index : quic_visits_) {
-        quic_ready_->mark(index);
-    }
 }
 
 void acceptor::prepare() {
@@ -337,19 +131,7 @@ bool acceptor::admitting() const noexcept {
 void acceptor::stop_on_owner() noexcept {
     admitting_ = false;
     close_listeners();
-    quic_stopping_ = true;
-    if (udp_) {
-        udp_->request_stop();
-    }
-    for (auto& channel : quic_channels_) {
-        channel->acceptor_close(udp_ ? udp_->error() : std::error_code{});
-    }
-    if (quic_running_) {
-        (void)quic_notification_.notify();
-    } else {
-        quic_notification_.close();
-        runtime_.finalize();
-    }
+    runtime_.finalize();
 }
 
 void acceptor::begin_accept(std::size_t index) noexcept {

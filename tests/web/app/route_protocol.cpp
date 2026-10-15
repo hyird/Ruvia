@@ -1,7 +1,7 @@
 #include "test_harness.h"
 
-// Extended CONNECT protocol identifiers must be HTTP tokens; an invalid route
-// fails at startup before any request can be served. The controller registry
+// A CONNECT protocol route for a protocol no request can select would be dead,
+// so startup must fail instead of serving without it. The controller registry
 // is process-wide, so this route lives in its own test executable. Public API
 // only.
 
@@ -19,7 +19,7 @@ namespace {
 class route_protocol_controller final {
 public:
     RUVIA_ROUTES_BEGIN(route_protocol_controller)
-    RUVIA_CONNECT_PROTOCOL("bad protocol", "/foo/:host/:port", tunnel);
+    RUVIA_CONNECT_PROTOCOL("foo", "/foo/:host/:port", tunnel);
     RUVIA_ROUTES_END
 
 private:
@@ -30,7 +30,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(route_protocol_rejects_invalid_connect_protocol_at_startup) {
+RUVIA_TEST(route_protocol_rejects_unsupported_connect_protocol_at_startup) {
     ruvia::test_app app;
     std::string message;
     try {
@@ -38,5 +38,5 @@ RUVIA_TEST(route_protocol_rejects_invalid_connect_protocol_at_startup) {
     } catch (const std::invalid_argument& error) {
         message = error.what();
     }
-    RUVIA_CHECK(message.find("CONNECT protocol must be an HTTP token") != std::string::npos);
+    RUVIA_CHECK(message.find("unsupported CONNECT protocol") != std::string::npos);
 }

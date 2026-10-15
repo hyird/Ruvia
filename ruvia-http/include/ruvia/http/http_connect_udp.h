@@ -44,11 +44,8 @@ enum class http_connect_udp_error : std::uint8_t {
     std::string_view path, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 struct http_connect_udp_request_view final {
-    // HTTP/1.1 Upgrade versus HTTP/2 or HTTP/3 Extended CONNECT.
-    http_protocol_version version_{http_protocol_version::http3};
-    std::string_view method_{"CONNECT"};
-    std::string_view protocol_{"connect-udp"};
-    std::string_view scheme_{"https"};
+    http_protocol_version version_{http_protocol_version::http11};
+    std::string_view method_{"GET"};
     std::string_view authority_{};
     std::string_view path_{};
     std::span<const http_header_view> headers_{};
@@ -60,7 +57,7 @@ struct http_connect_udp_request_view final {
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
 [[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;
 // Takes application response metadata, validates it, and supplies the required
-// Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
+// Capsule-Protocol and status/Upgrade fields. HTTP/1 status 101
 // can only be produced by this dedicated driver boundary.
 [[nodiscard]] std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version);
 [[nodiscard]] std::variant<http1_response_head_plan, http_connect_udp_error> prepare_http1_connect_udp_response_head(const http_response& response) noexcept;

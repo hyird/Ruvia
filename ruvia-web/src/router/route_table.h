@@ -28,14 +28,6 @@
 
 namespace ruvia::detail {
 
-struct route_request_view final {
-    http_known_method known_method_;
-    std::string_view method_;
-    std::string_view path_;
-    std::string_view connect_target_;
-    std::string_view extended_protocol_;
-};
-
 class controller_store;
 class router_impl;
 
@@ -82,7 +74,6 @@ public:
     [[nodiscard]] std::pmr::string url_for(std::string_view pattern,
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
-    [[nodiscard]] route_resolution resolve(route_request_view request) const noexcept;
 
     // Tokens of the extension routes registered on `path`, for the Allow header
     // of a 405. Written into caller storage so no allocation outlives the call.

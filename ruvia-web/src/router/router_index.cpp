@@ -51,14 +51,9 @@ detail::route_resolution detail::route_table::resolved(
 }
 
 detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
-    return resolve(route_request_view{request.known_method(), request.method(), request.path(), request.path(),
-        is_http_connect_udp_upgrade_request(request) ? std::string_view("connect-udp") : std::string_view{}});
-}
-
-detail::route_resolution detail::route_table::resolve(route_request_view request) const noexcept {
     // A plain CONNECT routes by its authority-form target.
-    if (request.known_method_ == http_known_method::connect && request.extended_protocol_.empty()) {
-        return resolve_connect({}, request.connect_target_);
+    if (request.known_method() == http_known_method::connect) {
+        return resolve_connect({}, request.path());
     }
     // Routes and path scopes name origin paths. A generic-scheme absolute-form
     // target can carry a rootless path ("x:admin/panel") that the segment trie
@@ -75,33 +70,25 @@ detail::route_resolution detail::route_table::resolve(route_request_view request
     // The rejection is terminal: the document root normalizes dot segments
     // itself, so serving "/private/./file" from it would bypass the guards of
     // the route that owns "/private/file".
-    const auto path = request.path_;
+    const auto path = request.path();
     if (path.empty() ||
-        (path.front() != '/' && (path != "*" || request.known_method_ != http_known_method::options)) ||
+        (path.front() != '/' && (path != "*" || request.known_method() != http_known_method::options)) ||
         has_dot_segment(path)) {
         return route_resolution::reject();
-    }
-    if (request.known_method_ == http_known_method::connect) {
-        if (request.extended_protocol_ == "websocket") {
-            auto websocket = resolve(http_known_method::get, path);
-            const auto* route = websocket.resolved();
-            return route != nullptr && route->route().endpoint().get_websocket() != nullptr ? websocket : route_resolution::reject();
-        }
-        return resolve_connect(request.extended_protocol_, path);
     }
     // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
     // among the connect-udp tunnel routes. Without one, the Upgrade is ignored
     // (RFC 9110 §7.8) and the GET routes as usual, as a WebSocket upgrade does.
-    if (request.extended_protocol_ == "connect-udp") {
+    if (is_http_connect_udp_upgrade_request(request)) {
         auto tunnel = resolve_connect("connect-udp", path);
         if (tunnel.resolved() != nullptr) {
             return tunnel;
         }
     }
-    if (request.known_method_ == http_known_method::unknown) {
-        return resolve_extension_method(request.method_, path);
+    if (request.known_method() == http_known_method::unknown) {
+        return resolve_extension_method(request.method(), path);
     }
-    return resolve(request.known_method_, path);
+    return resolve(request.known_method(), path);
 }
 
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {

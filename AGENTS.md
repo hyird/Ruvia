@@ -55,7 +55,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 跨库只用非 detail 公开 API，禁止穿透内部头和物理路径。需要共享的辅助能力由所属库公开提供。
 - 安装只包含公开头的真实依赖闭包。根 CMakeLists.txt 只负责全局构建与安装。
 - core 是独立运行时底座：不含 HTTP/Web 语义，不公开依赖 TLS、压缩或数据后端。
-- HTTP 是独立 sans-I/O 协议层，不依赖 core、Asio、socket 或 OpenSSL。它拥有 HTTP/1、HTTP/2、HTTP/3、QUIC 消息、分帧、连接和 WebSocket 协议语义。ngtcp2 只归 HTTP；Web 经公开协议 API 驱动 QUIC。
+- HTTP 是独立 sans-I/O 协议层，不依赖 core、Asio、socket 或 OpenSSL。它拥有 HTTP/1.0、HTTP/1.1 消息、分帧、连接和 WebSocket 协议语义。
 - Web 拥有应用策略、路由、TLS/crypto 和网络驱动。不复制协议判断，不将 Web 能力下沉。
 
 ## 性能与内存
@@ -73,8 +73,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 
 - 生产 application 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
 - 每个业务 worker 独占一个 standalone Asio 事件循环。n 个业务 worker 另配一个网络接入线程；阻塞池和信号线程另计。
-- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接，按目标 CID 分流 QUIC UDP 数据报。TCP 和 QUIC 连接固定绑定一个 worker，全部请求、I/O、TLS/crypto、协议定时器和连接生命周期由该 worker 管理至连接结束。
-- 初始及轮换 CID 保持同一 worker 分区；容量不足不得改绑。acceptor 与 worker 经有界数据报 channel 交互，双方退役确认且输出借用归还后才能销毁 channel。
+- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接。连接固定绑定一个 worker，全部请求、TCP I/O、TLS、协议定时器和连接生命周期由该 worker 管理至连接结束。
 - 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner。event_loop_pool 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
 - Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确的生命周期扩展点接入 core。worker 资源由统一 owner 管理，实例保持 worker-local。
@@ -117,5 +116,6 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 可确定性复现的公开 API 缺陷补充功能回归；不能确定性复现时说明原因和实际验证方式。不新增长期 integration、conformance、benchmark 或 probe，临时验证完成即清理。
 - 纯文档本地只做文档校验，不主动运行代码构建和测试；自动触发的 CI 如实报告。性能测试只在专用主机运行，性能结论必须可复核。
 - 无关改动导致构建或测试失败时保留现场、报告具体失败及验证限制，不借机扩大修改范围。准确区分已通过、失败、未运行和待 CI 验证。
-- 每轮修改结束汇报结果，自动提交并推送到 main；只提交本任务改动，不夹带用户或并行任务的修改，不强推或回滚无关提交，并如实报告提交、推送与 CI 状态。
+- 每轮修改结束汇报结果，自动提交并推送到任务对应的分支；只提交本任务改动，不夹带用户或并行任务的修改，不强推或回滚无关提交，并如实报告提交、推送与 CI 状态。
+- HTTP/2、HTTP/3 开发保留在 `http2/3` 分支，不自动合并或推送到 `main`。两分支共有的修改分别同步；只有用户明确要求合并 HTTP/2、HTTP/3 时才合入 `main`。
 

@@ -20,9 +20,8 @@
 
 // The one reader for buffered file response bodies (a whole file, a byte
 // range, or multipart/byteranges parts interleaved with in-memory boundaries)
-// shared by every protocol that cannot hand the file to the kernel: HTTP/2,
-// HTTP/3, and HTTP/1 over TLS or without a native sendfile. Plain-TCP HTTP/1
-// keeps sendfile/TransmitFile.
+// used over TLS or without a native sendfile. Plain TCP keeps
+// sendfile/TransmitFile.
 //
 // Opening, seeking and reading run on the server's blocking pool: each round
 // trip reads ahead up to response_file_read_ahead_bytes (several transport

@@ -85,26 +85,6 @@ http_client_stats http_client::stats() const {
     return state_->stats();
 }
 
-quic_path_migration http_client::start_quic_path_migration(const quic_address& local_address) const {
-    return with_options({}).start_quic_path_migration(local_address);
-}
-
-std::optional<quic_path_migration> http_client::path_migration(std::uint64_t id) const {
-    return with_options({}).path_migration(id);
-}
-
-quic_operation_status http_client::cancel_quic_path_migration(std::uint64_t id) const {
-    return with_options({}).cancel_quic_path_migration(id);
-}
-
-std::optional<http_client_push> http_client::next_push() const& {
-    return with_options({}).next_push();
-}
-
-std::optional<http_client_advertisement> http_client::next_advertisement() const& {
-    return with_options({}).next_advertisement();
-}
-
 std::string_view http_client::host() const& {
     return state_->host();
 }

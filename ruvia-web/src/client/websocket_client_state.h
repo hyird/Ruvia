@@ -25,14 +25,12 @@
 #include "client/client_lifecycle.h"
 #include "client/client_tcp_transport.h"
 #include "client/websocket_client_config_storage.h"
-#include "http2/websocket_http2_transport.h"
-#include "http3/websocket_http3_transport.h"
 #include "util/operation_lane_lease.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {
 
-// One WebSocket connection over HTTP/1.1, HTTP/2 or HTTP/3, retired through the
+// One WebSocket connection over HTTP/1.1, retired through the
 // shared client_lifecycle. The state is its own lifecycle backend: connect()
 // establishes the transport, performs the opening handshake and starts the
 // protocol; close_now() stops every I/O source; join() retires the heartbeat
@@ -66,8 +64,6 @@ public:
 
 private:
     friend class client_lifecycle<websocket_client_state>;
-    friend class websocket_http2_transport;
-    friend class websocket_http3_transport;
 
     static constexpr std::string_view client_name{"WebSocket"};
 
@@ -135,7 +131,6 @@ private:
     [[nodiscard]] task<void> join();
 
     [[nodiscard]] task<void> establish();
-    [[nodiscard]] task<void> join_transports();
     [[nodiscard]] task<void> perform_handshake();
 
     [[nodiscard]] task<std::optional<websocket_message>> run_read(operation_options options);
@@ -198,8 +193,6 @@ private:
     // single input reader (read_active_).
     std::pmr::string input_;
     std::optional<ruvia::websocket_connection> protocol_;
-    std::optional<websocket_http2_transport> http2_;
-    std::optional<websocket_http3_transport> http3_;
     std::pmr::string selected_subprotocol_;
     websocket_compression negotiated_compression_{};
     client_abort_reason abort_reason_{client_abort_reason::none};

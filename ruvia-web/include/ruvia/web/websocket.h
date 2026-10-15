@@ -36,9 +36,6 @@ struct websocket_lifecycle_options final {
     // transport is ended. The timeout starts when the Close is submitted, so it
     // also bounds writing the Close frame. nullopt disables this guard.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{std::chrono::seconds(5)};
-    // HTTP/3 only: after publishing local QUIC FIN, wait at most this long for
-    // the peer transport FIN. A websocket Close frame is not a transport FIN.
-    std::chrono::milliseconds peer_transport_fin_timeout_{std::chrono::seconds(5)};
 };
 
 struct websocket_route_config final {

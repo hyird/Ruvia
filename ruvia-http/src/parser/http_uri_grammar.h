@@ -26,8 +26,6 @@ namespace ruvia::detail {
 }
 
 // Literal pchar bytes. The caller validates percent-encoded triplets separately.
-[[nodiscard]] bool is_valid_uri_userinfo(std::string_view value) noexcept;
-[[nodiscard]] bool is_valid_uri_port(std::string_view value) noexcept;
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept;
 
 // Parse a decimal port, rejecting anything that does not fit 16 bits.

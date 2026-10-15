@@ -29,7 +29,7 @@ void websocket_connection<stream_type>::start_going_away() noexcept {
     going_away_pending_ = false;
     write_phase_ = write_phase_type::going_away;
     try {
-        asio::co_spawn(executor(), ruvia::as_awaitable(write_going_away_close()),
+        asio::co_spawn(stream_.get_executor(), ruvia::as_awaitable(write_going_away_close()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finish_write(write_phase_type::going_away);
@@ -70,7 +70,7 @@ void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcep
     liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);
     write_phase_ = write_phase_type::heartbeat;
     try {
-        asio::co_spawn(executor(), ruvia::as_awaitable(write_heartbeat_ping()),
+        asio::co_spawn(stream_.get_executor(), ruvia::as_awaitable(write_heartbeat_ping()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finish_write(write_phase_type::heartbeat);

@@ -68,13 +68,6 @@ private:
     kind_type kind_;
 };
 
-class websocket_handshake_validation_result;
-class http2_connection;
-namespace detail {
-class http2_stream_state;
-[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(const http2_stream_state&, const http_request&) noexcept;
-}  // namespace detail
-
 class websocket_handshake_validation_result final {
 public:
     [[nodiscard]] constexpr const websocket_handshake_accepted* accepted() const& noexcept {
@@ -88,8 +81,6 @@ public:
     const websocket_handshake_failure* failure() const&& = delete;
 
 private:
-    friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&) noexcept;
-    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(const detail::http2_stream_state&, const http_request&) noexcept;
     friend websocket_handshake_validation_result validate_websocket_handshake(
         const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 

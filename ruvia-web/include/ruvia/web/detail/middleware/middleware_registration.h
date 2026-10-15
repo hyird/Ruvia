@@ -111,15 +111,6 @@ template <typename middleware_t_type>
     }
 }
 
-template <typename middleware_t_type>
-[[nodiscard]] constexpr bool middleware_replay_safe() noexcept {
-    if constexpr (requires { middleware_t_type::ruvia_replay_safe; }) {
-        return middleware_t_type::ruvia_replay_safe;
-    } else {
-        return false;
-    }
-}
-
 // The one description of a middleware type: its entry points and declared
 // route properties, bound to the argument tuple (null when there is none).
 template <middleware middleware_t_type, typename args_t_type>
@@ -127,7 +118,7 @@ template <middleware middleware_t_type, typename args_t_type>
     return controller_middleware_descriptor(&invoke_middleware<middleware_t_type>,
         &create_middleware<middleware_t_type, args_t_type>, &destroy_middleware<middleware_t_type>, args,
         middleware_validated_model_type_key<middleware_t_type>(), middleware_uses_route_rate_limit<middleware_t_type>(),
-        middleware_runs_on_unmatched_requests<middleware_t_type>(), middleware_request_body_limit<middleware_t_type>(), middleware_replay_safe<middleware_t_type>());
+        middleware_runs_on_unmatched_requests<middleware_t_type>(), middleware_request_body_limit<middleware_t_type>());
 }
 
 // A default-constructed middleware, as controller and route middleware lists

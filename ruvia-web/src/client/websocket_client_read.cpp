@@ -70,18 +70,6 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
 
 task<std::size_t> websocket_client_state::read_transport(
     std::span<char> output, std::optional<std::chrono::milliseconds> configured_timeout) {
-    if (http2_ || http3_) {
-        worker_timer_registration timer;
-        arm(timer, configured_timeout, client_abort_reason::timeout);
-        const auto count = http3_ ? co_await http3_->read(output) : co_await http2_->read(output);
-        disarm(timer);
-        throw_if_aborted();
-        if (count != 0) {
-            touch_activity();
-        }
-        co_return count;
-    }
-
     // The transport read lane owns the deadline. Its timeout result retires
     // the whole connection like any other transport failure.
     const operation_timeout timeout(configured_timeout);

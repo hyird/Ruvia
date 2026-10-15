@@ -84,53 +84,49 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
 
 template <typename stream_type>
 task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
-    if constexpr (!native_stream) {
-        co_return co_await stream_.read_more(buffer_);
+    constexpr std::size_t min_read_bytes = 4096;
+    constexpr std::size_t max_read_bytes = 64 * 1024;
+    const bool between_frames = buffer_.empty();
+    std::size_t read_bytes = 0;
+    if (between_frames) {
+        // This read may wait as long as the peer stays idle, so it holds only
+        // what recent traffic needs: websocket_idle_read_bytes after small
+        // frames, otherwise the storage the buffer kept from the last frame
+        // (at most websocket_retained_buffer_bytes), so steady mid-size
+        // messages still arrive in one read. A larger frame grows the buffer
+        // below once its header is known.
+        read_bytes = small_frames_ ? websocket_idle_read_bytes : (std::max)(buffer_.capacity(), min_read_bytes);
+        // Empty, so shrinking only swaps a larger block for a smaller one.
+        buffer_.shrink_to(read_bytes);
     } else {
-        constexpr std::size_t min_read_bytes = 4096;
-        constexpr std::size_t max_read_bytes = 64 * 1024;
-        const bool between_frames = buffer_.empty();
-        std::size_t read_bytes = 0;
-        if (between_frames) {
-            // This read may wait as long as the peer stays idle, so it holds only
-            // what recent traffic needs: websocket_idle_read_bytes after small
-            // frames, otherwise the storage the buffer kept from the last frame
-            // (at most websocket_retained_buffer_bytes), so steady mid-size
-            // messages still arrive in one read. A larger frame grows the buffer
-            // below once its header is known.
-            read_bytes = small_frames_ ? websocket_idle_read_bytes : (std::max)(buffer_.capacity(), min_read_bytes);
-            // Empty, so shrinking only swaps a larger block for a smaller one.
-            buffer_.shrink_to(read_bytes);
-        } else {
-            // Within a frame, fill the spare capacity the buffer already owns,
-            // and at least what the frame still lacks, within bounds: one step
-            // grows the buffer to a whole frame of up to 64 KiB, and larger ones
-            // grow geometrically. The read space is never initialized before the
-            // socket fills it.
-            read_bytes = std::clamp((std::max)(buffer_.capacity() - buffer_.size(), protocol_.needed_input_bytes()),
-                min_read_bytes, max_read_bytes);
-        }
-        const auto read_space = buffer_.prepare(read_bytes);
-        auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
-            stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
-        });
-        const auto ec = read_completion.error_code();
-        const auto bytes_read = read_completion.result();
-        // An orderly peer close (TCP FIN or TLS close_notify) and a TLS peer
-        // that dropped TCP without close_notify both end the byte stream; the
-        // websocket core maps a missing Close frame to an abnormal closure.
-        if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
-            co_return http_stream_read_result::make_end();
-        }
-        if (ec) {
-            co_return http_stream_read_result::make_failure(ec);
-        }
-        buffer_.commit(bytes_read);
-        if (between_frames) {
-            small_frames_ = bytes_read < websocket_idle_read_bytes;
-        }
-        co_return http_stream_read_result::make_data();
+        // Within a frame, fill the spare capacity the buffer already owns,
+        // and at least what the frame still lacks, within bounds: one step
+        // grows the buffer to a whole frame of up to 64 KiB, and larger ones
+        // grow geometrically. The read space is never initialized before the
+        // socket fills it.
+        read_bytes = std::clamp((std::max)(buffer_.capacity() - buffer_.size(), protocol_.needed_input_bytes()),
+            min_read_bytes, max_read_bytes);
     }
+    const auto read_space = buffer_.prepare(read_bytes);
+    auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
+        stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
+    });
+    const auto ec = read_completion.error_code();
+    const auto bytes_read = read_completion.result();
+    // An orderly peer close (TCP FIN or TLS close_notify) and a TLS peer
+    // that dropped TCP without close_notify both end the byte stream; the
+    // websocket core maps a missing Close frame to an abnormal closure.
+    if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
+        co_return http_stream_read_result::make_end();
+    }
+    if (ec) {
+        co_return http_stream_read_result::make_failure(ec);
+    }
+    buffer_.commit(bytes_read);
+    if (between_frames) {
+        small_frames_ = bytes_read < websocket_idle_read_bytes;
+    }
+    co_return http_stream_read_result::make_data();
 }
 
 }  // namespace ruvia::detail

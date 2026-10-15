@@ -6,7 +6,6 @@
 #include <span>
 
 #include <asio/io_context.hpp>
-#include <asio/ip/udp.hpp>
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
@@ -14,7 +13,6 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_submission_view.h"
-#include "ruvia/http/quic_server.h"
 #include "ruvia/web/web_worker.h"
 
 #include "integration/worker_capabilities.h"
@@ -32,8 +30,6 @@ namespace ruvia::detail {
 class route_table;
 class validated_http_server_configuration;
 class web_worker_dispatch;
-class http3_datagram_channel;
-class http3_worker;
 
 // One server worker: its core worker_runtime plus the HTTP domain state that
 // runtime's hooks compose. Core owns the generic lifecycle (launch, ready/serve
@@ -73,10 +69,6 @@ public:
     }
     worker_submission_view network_submission() const&& = delete;
     [[nodiscard]] web_worker_handle web_worker() const;
-    // Cold staging only, before launch. Protocol objects are constructed on
-    // this worker, not by the ingress thread that supplies the datagram channel.
-    void stage_quic(http3_datagram_channel& channel, asio::ip::udp::endpoint endpoint,
-        ruvia::quic_cid_partition partition);
 
 private:
     web_worker_runtime(std::span<const http_server_listener_definition> listeners,
@@ -87,7 +79,6 @@ private:
     void drain_on_context() noexcept;
     void stop_admission_on_context() noexcept;
     void finalize_on_context() noexcept;
-    void stop_http3() noexcept;
     task<void> run_worker();
     ruvia::worker_runtime runtime_;
     asio::io_context& io_context_;
@@ -108,7 +99,6 @@ private:
     static_root_runtime static_roots_;
     worker_capabilities capabilities_;
     worker_connections connections_;
-    std::unique_ptr<http3_worker, pmr_object_deleter<http3_worker>> http3_;
     // Shared only with escaped public handles: their terminal queries outlive
     // this worker. Jobs run in background_tasks_ and are joined by run_worker.
     std::shared_ptr<web_worker_dispatch> web_worker_dispatch_;

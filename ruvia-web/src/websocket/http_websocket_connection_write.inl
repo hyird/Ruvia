@@ -154,32 +154,20 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_exclusive() 
 
 template <typename stream_type>
 auto websocket_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
-    if constexpr (!native_stream) {
-        return write_adapted(plan);
-    } else {
-        // One gathered write: pending protocol output, then a borrowed payload.
-        const std::array<asio::const_buffer, 2> buffers{
-            asio::buffer(plan.bytes().data(), plan.bytes().size()),
-            asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
-        return ruvia::async_asio([this, buffers](auto handler) mutable {
-            // Partial progress is transport activity: a slow reader that keeps
-            // draining a large write must not look like a stalled peer to the
-            // heartbeat.
-            asio::async_write(stream_, buffers, [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
+    // One gathered write: pending protocol output, then a borrowed payload.
+    const std::array<asio::const_buffer, 2> buffers{
+        asio::buffer(plan.bytes().data(), plan.bytes().size()),
+        asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
+    return ruvia::async_asio([this, buffers](auto handler) mutable {
+        // Partial progress is transport activity: a slow reader that keeps
+        // draining a large write must not look like a stalled peer to the
+        // heartbeat.
+        asio::async_write(stream_, buffers, [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
                 if (bytes_transferred != 0) {
                     scanner_entry_.touch();
                 }
                 return asio::transfer_all()(ec, bytes_transferred); }, std::move(handler));
-        });
-    }
-}
-
-template <typename stream_type>
-task<std::error_code> websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
-    if (const auto error = co_await stream_.write_bytes(plan.bytes(), websocket_transport_disposition::keep_open)) {
-        co_return error;
-    }
-    co_return co_await stream_.write_bytes(plan.borrowed_bytes(), plan.disposition());
+    });
 }
 
 template <typename stream_type>
@@ -191,16 +179,9 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_now() {
         if (size == 0 && disposition == websocket_transport_disposition::keep_open) {
             co_return;
         }
-        if (size != 0 || (!native_stream && disposition == websocket_transport_disposition::end_transport)) {
+        if (size != 0) {
             const auto write_completion = co_await write_bytes(plan);
-            const auto ec = [&] {
-                if constexpr (native_stream) {
-                    return write_completion.error_code();
-                } else {
-                    return write_completion;
-                }
-            }();
-            if (ec) {
+            if (const auto ec = write_completion.error_code()) {
                 close_stream();
                 (void)protocol_.abort();
                 throw inbound_transport_error(ec, "failed to write websocket bytes");
@@ -229,9 +210,7 @@ void websocket_connection<stream_type>::abort_transport(bool force_transport) no
 
 template <typename stream_type>
 void websocket_connection<stream_type>::close_stream() noexcept {
-    if constexpr (!native_stream) {
-        stream_.abort();
-    } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
+    if constexpr (requires(stream_type& value) { value.next_layer(); }) {
         ruvia::close_socket(stream_.next_layer());
     } else {
         ruvia::close_socket(stream_);

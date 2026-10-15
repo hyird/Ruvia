@@ -50,8 +50,7 @@ http_protocol_error websocket_handshake_failure::protocol_error() const noexcept
             return http_protocol_error(http_status::bad_request, "invalid WebSocket handshake");
         case kind_type::unsupported_version:
             // RFC 6455 section 4.4 requires Sec-websocket-Version and uses 400
-            // in its example. 426 would instead require HTTP Upgrade fields,
-            // which HTTP/2 and HTTP/3 forbid.
+            // in its example. 426 would instead require HTTP Upgrade fields.
             return http_protocol_error(
                 http_status::bad_request, "unsupported WebSocket version");
         case kind_type::unsupported_subprotocol:

@@ -14,8 +14,8 @@ namespace ruvia::detail {
 // so steady streaming reads amortize the memmove instead of shifting on every
 // consume. `offset` is reset to 0 whenever the buffer is rewritten.
 //
-// Shared by every offset-tracked read buffer (HTTP/2 frame input, multipart
-// parsing) so the compaction policy lives in exactly one place.
+// Shared by offset-tracked read buffers, including multipart parsing, so the
+// compaction policy lives in exactly one place.
 inline void compact_consumed_prefix(
     std::pmr::string& buffer, std::size_t& offset, std::size_t compact_threshold) {
     if (offset >= buffer.size()) {

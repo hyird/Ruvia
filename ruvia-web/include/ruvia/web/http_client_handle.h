@@ -10,10 +10,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_client_tunnel_request_view.h"
 #include "ruvia/http/http_connect_udp.h"
-#include "ruvia/http/quic_types.h"
-#include "ruvia/web/http_client_advertisement.h"
 #include "ruvia/web/http_client_exchange.h"
-#include "ruvia/web/http_client_push.h"
 #include "ruvia/web/http_client_response.h"
 #include "ruvia/web/http_client_tunnel.h"
 #include "ruvia/web/http_client_tunnel_config.h"
@@ -44,12 +41,6 @@ public:
     // and HTTP/1 Upgrade fields are driver-owned. Use accepted.tunnel()->udp().
     [[nodiscard]] scoped_operation<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
     [[nodiscard]] http_client_stats stats() const;
-    [[nodiscard]] quic_path_migration start_quic_path_migration(const quic_address& local_address) const;
-    [[nodiscard]] std::optional<quic_path_migration> path_migration(
-        std::uint64_t id) const;
-    [[nodiscard]] quic_operation_status cancel_quic_path_migration(std::uint64_t id) const;
-    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
-    [[nodiscard]] std::optional<http_client_push> next_push() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

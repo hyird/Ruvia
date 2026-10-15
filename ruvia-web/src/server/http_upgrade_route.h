@@ -15,8 +15,8 @@
 #include "router/route_table.h"
 
 // The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP
-// tunnels and WebSocket upgrades) across HTTP/1, HTTP/2 and HTTP/3: run the
-// application chain with a protocol terminal that commits the upgrade and
+// tunnels and WebSocket upgrades) over HTTP/1: run the
+// application chain with a terminal that commits the upgrade and
 // owns the resulting session; once a session exists it is always finished,
 // otherwise a handler failure propagates and an uncommitted response falls
 // back to the ordinary buffered tail.

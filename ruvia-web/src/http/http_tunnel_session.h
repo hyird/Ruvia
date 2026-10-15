@@ -26,35 +26,16 @@ namespace ruvia::detail {
 // bytes live in `inbound`, the connection's inbound buffer budget: one reused
 // read window, and each chunk handed to the handler, sized to the bytes read.
 // `resource` holds what the handler sends and the facade's own state.
-template <typename transport_type>
+template <typename stream_type>
 class http_tunnel_session final {
 public:
-    http_tunnel_session(transport_type transport, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
-        : transport_(std::move(transport)),
+    http_tunnel_session(stream_type& stream, tls_tunnel_output* tls_output, const worker_handle& worker_value,
+        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending)
+        : transport_(stream, tls_output),
           inbound_(inbound),
           pending_(pending, &inbound),
           read_buffer_(&inbound),
-          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {
-        if constexpr (requires(transport_type& value) { value.read_datagram_input(); value.datagram_config(); value.send_datagram(std::span<const std::byte>{}); }) {
-            facade_.read_datagram_input_ = [](void* target) -> task<std::optional<http_datagram_input>> {
-                auto& session = *static_cast<http_tunnel_session*>(target);
-                auto input = co_await session.transport_.read_datagram_input();
-                if (!input) {
-                    session.receive_ended_ = true;
-                }
-                co_return input;
-            };
-            facade_.send_datagram_ = [](void* target, std::span<const std::byte> bytes) {
-                auto& session = *static_cast<http_tunnel_session*>(target);
-                if (session.ended_) {
-                    throw std::logic_error("HTTP Datagram send direction has ended");
-                }
-                session.transport_.send_datagram(bytes);
-            };
-            facade_.datagram_config_ = [](void* target) { return static_cast<http_tunnel_session*>(target)->transport_.datagram_config(); };
-        }
-    }
+          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
@@ -130,7 +111,7 @@ private:
     static void abort_thunk(void* raw) noexcept {
         static_cast<http_tunnel_session*>(raw)->abort();
     }
-    transport_type transport_;
+    http_socket_tunnel_transport<stream_type> transport_;
     std::pmr::memory_resource& inbound_;
     std::pmr::string pending_;
     std::pmr::string read_buffer_;
@@ -140,8 +121,8 @@ private:
     http_tunnel facade_;
 };
 
-template <typename transport_type>
-[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
+template <typename stream_type>
+[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<stream_type>& session_value,
     connection_scanner::entry_type& entry_value, const route_stream_handler_type& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
     // A draining worker closed the socket instead of admitting the tunnel.
@@ -151,8 +132,8 @@ template <typename transport_type>
     co_await handler(context_value);
 }
 
-template <typename transport_type>
-[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value,
+template <typename stream_type>
+[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<stream_type>& session_value,
     std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote,
     connection_scanner::entry_type& scanner, std::chrono::milliseconds timeout) {
     if (failure != nullptr) {
@@ -161,7 +142,7 @@ template <typename transport_type>
     co_await session_value.join();
     if (failure == nullptr && !session_value.aborted()) {
         struct drain_deadline final {
-            http_tunnel_session<transport_type>& session_;
+            http_tunnel_session<stream_type>& session_;
             std::int64_t deadline_;
             connection_scanner::periodic_check_registration_type registration_;
             static void tick(void* raw, std::int64_t now) noexcept {

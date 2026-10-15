@@ -38,10 +38,6 @@ ruvia::task<std::string> read_to_end(asio::ip::tcp::socket& stream) {
 }
 
 ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned mode, std::string& received_value) {
-    if (mode == 3) {
-        received_value = co_await read_to_end(stream);
-        co_return;
-    }
     std::string head;
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
@@ -104,57 +100,47 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
             co_await serve_client_connect(socket, mode, received);
         };
         tasks.spawn(serve());
-        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port(), .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384});
         try {
-            if (mode == 3) {
-                bool unavailable = false;
-                try {
-                    auto result_value = co_await client.handle().open_tunnel({.authority_ = "target.test:443", .protocol_ = "test-datagram", .target_ = "/datagrams"});
-                } catch (const ruvia::http_client_error& error) {
-                    unavailable = error.code() == ruvia::http_client_error::code_type::protocol_unavailable;
+            auto result_value = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
+            if (mode == 2) {
+                RUVIA_CHECK(!result_value.tunnel() && result_value.response());
+                if (!result_value.response()) {
+                    throw std::runtime_error("missing CONNECT rejection");
                 }
-                RUVIA_CHECK(unavailable);
+                RUVIA_CHECK(result_value.response()->status().value() == 407);
+                std::string text;
+                while (auto bytes = co_await result_value.response()->body().text()) {
+                    text.append(*bytes);
+                }
+                RUVIA_CHECK(text == "denied");
             } else {
-                auto result_value = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
-                if (mode == 2) {
-                    RUVIA_CHECK(!result_value.tunnel() && result_value.response());
-                    if (!result_value.response()) {
-                        throw std::runtime_error("missing CONNECT rejection");
+                RUVIA_CHECK(result_value.tunnel() && !result_value.response());
+                if (!result_value.tunnel()) {
+                    throw std::runtime_error("CONNECT rejected");
+                }
+                auto tunnel = std::move(*result_value.tunnel());
+                RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
+                const auto read_greeting = [&]() -> ruvia::task<void> {
+                    std::string greeting;
+                    while (auto bytes = co_await tunnel.read()) {
+                        greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                     }
-                    RUVIA_CHECK(result_value.response()->status().value() == 407);
-                    std::string text;
-                    while (auto bytes = co_await result_value.response()->body().text()) {
-                        text.append(*bytes);
-                    }
-                    RUVIA_CHECK(text == "denied");
-                } else {
-                    RUVIA_CHECK(result_value.tunnel() && !result_value.response());
-                    if (!result_value.tunnel()) {
-                        throw std::runtime_error("CONNECT rejected");
-                    }
-                    auto tunnel = std::move(*result_value.tunnel());
-                    RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
-                    const auto read_greeting = [&]() -> ruvia::task<void> {
-                        std::string greeting;
-                        while (auto bytes = co_await tunnel.read()) {
-                            greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-                        }
-                        RUVIA_CHECK(greeting == std::string(100003, 's'));
-                    };
-                    if (mode == 1) {
-                        co_await read_greeting();
-                    }
-                    for (unsigned part = 0; part != 8; ++part) {
-                        std::string payload_value(16384, 't');
-                        auto write = tunnel.write(std::string_view(payload_value));
-                        payload_value.assign("mutated");
-                        co_await std::move(write);
-                    }
-                    co_await tunnel.finish();
-                    co_await tunnel.finish();
-                    if (mode == 0) {
-                        co_await read_greeting();
-                    }
+                    RUVIA_CHECK(greeting == std::string(100003, 's'));
+                };
+                if (mode == 1) {
+                    co_await read_greeting();
+                }
+                for (unsigned part = 0; part != 8; ++part) {
+                    std::string payload_value(16384, 't');
+                    auto write = tunnel.write(std::string_view(payload_value));
+                    payload_value.assign("mutated");
+                    co_await std::move(write);
+                }
+                co_await tunnel.finish();
+                co_await tunnel.finish();
+                if (mode == 0) {
+                    co_await read_greeting();
                 }
             }
         } catch (...) {
@@ -178,9 +164,7 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
     if (failure) {
         std::rethrow_exception(failure);
     }
-    if (mode == 3) {
-        RUVIA_CHECK(received.empty());
-    } else if (mode != 2) {
+    if (mode != 2) {
         RUVIA_CHECK(received == std::string(8 * 16384, 't'));
     }
 }
@@ -188,7 +172,7 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
 }  // namespace
 
 RUVIA_TEST(http1_client_tunnel_and_rejections_preserve_ownership_and_tcp_half_close) {
-    for (unsigned mode = 0; mode != 4; ++mode) {
+    for (unsigned mode = 0; mode != 3; ++mode) {
         exercise_client_connect(ruvia_ctx, mode);
     }
 }

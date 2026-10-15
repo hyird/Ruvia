@@ -40,7 +40,7 @@ RUVIA_TEST(http_connect_udp_default_template_requires_target_segments) {
 RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const std::array fields{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"},
         ruvia::http_header_view{"Upgrade", "connect-udp"}, ruvia::http_header_view{"Capsule-Protocol", "?1;version=1"}};
-    RUVIA_CHECK(ruvia::validate_http_connect_udp_request({.version_ = ruvia::http_protocol_version::http11, .method_ = "GET", .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).index() == 0);
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request({.authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).index() == 0);
     RUVIA_CHECK(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, fields).index() == 0);
     RUVIA_CHECK(ruvia::validate_http_connect_udp_request({.version_ = ruvia::http_protocol_version::http10, .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).index() != 0);
     RUVIA_CHECK(ruvia::validate_http_connect_udp_request({.method_ = "CONNECT", .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).index() != 0);
@@ -63,23 +63,23 @@ RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
 RUVIA_TEST(http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
     const std::string payload = "udp";
-    const auto plan = session.prepare_udp_datagram(payload, ruvia::http_datagram_transport::capsule);
+    const auto plan = session.prepare_udp_datagram(payload);
     RUVIA_CHECK(plan.index() == 0 && std::get<0>(plan).prefix_size_ == 3);
     RUVIA_CHECK(std::get<0>(plan).payload_.data() == payload.data());
     std::string wire(std::get<0>(plan).prefix_.data(), std::get<0>(plan).prefix_size_);
     wire.append(payload);
     const auto value = std::string_view(wire).substr(2);
-    const auto received = session.receive_udp_datagram(value, ruvia::http_datagram_transport::capsule);
+    const auto received = session.receive_udp_datagram(value);
     RUVIA_CHECK(received.index() == 0 && std::get<0>(received) && std::get<0>(received)->payload_.size() == 3);
     wire[2] = 2;
-    const auto dropped = session.receive_udp_datagram(value, ruvia::http_datagram_transport::capsule);
+    const auto dropped = session.receive_udp_datagram(value);
     RUVIA_CHECK(dropped.index() == 0 && !std::get<0>(dropped));
     const std::string too_large(65528, 'x');
-    RUVIA_CHECK(session.prepare_udp_datagram(too_large, ruvia::http_datagram_transport::capsule).index() != 0);
+    RUVIA_CHECK(session.prepare_udp_datagram(too_large).index() != 0);
     session.close_send();
     session.close_receive();
-    RUVIA_CHECK(session.prepare_udp_datagram(payload, ruvia::http_datagram_transport::capsule).index() != 0);
-    const auto closed = session.receive_udp_datagram(value, ruvia::http_datagram_transport::capsule);
+    RUVIA_CHECK(session.prepare_udp_datagram(payload).index() != 0);
+    const auto closed = session.receive_udp_datagram(value);
     RUVIA_CHECK(closed.index() == 0 && !std::get<0>(closed));
 }
 
