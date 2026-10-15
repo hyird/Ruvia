@@ -150,7 +150,8 @@ public:
         void notify_drain() noexcept;
         void remove_periodic_check(periodic_check_registration_type& registration) noexcept;
         void detach_periodic_checks() noexcept;
-        asio::ip::tcp::socket* socket_{nullptr};
+        void* close_target_{};
+        void (*close_)(void*) noexcept {};
         connection_scanner* scanner_{nullptr};
         entry_type* prev_{nullptr};
         entry_type* next_{nullptr};
@@ -170,6 +171,7 @@ public:
     class guard_type final {
     public:
         guard_type(connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket);
+        guard_type(connection_scanner& scanner, entry_type& entry_value, void* target, void (*close)(void*) noexcept);
         ~guard_type();
         guard_type(const guard_type&) = delete;
         guard_type& operator=(const guard_type&) = delete;
@@ -216,7 +218,7 @@ struct connection_scanner::impl_type final {
 
     void start();
     void stop() noexcept;
-    void register_entry(entry_type& entry, asio::ip::tcp::socket& socket);
+    void register_entry(entry_type& entry, void* target, void (*close)(void*) noexcept);
     void unregister_entry(entry_type& entry) noexcept;
     void close_all() noexcept;
     void drain() noexcept;

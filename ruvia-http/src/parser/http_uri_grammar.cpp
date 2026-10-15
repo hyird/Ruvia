@@ -80,7 +80,17 @@ template <typename is_allowed_type>
 
 }  // namespace
 
-[[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept {
+[[nodiscard]] bool is_valid_uri_userinfo(std::string_view value) noexcept {
+    return is_valid_percent_encoded(value, [](unsigned char byte) noexcept {
+        return is_uri_userinfo_literal(byte);
+    });
+}
+
+bool is_valid_uri_port(std::string_view value) noexcept {
+    return std::ranges::all_of(value, is_decimal_digit);
+}
+
+bool is_uri_pchar(unsigned char byte) noexcept {
     return is_uri_userinfo_literal(byte) || byte == '@';
 }
 

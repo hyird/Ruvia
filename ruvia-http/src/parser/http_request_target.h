@@ -27,6 +27,9 @@ struct request_target_view {
 // RFC 3986 scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
 [[nodiscard]] bool is_valid_uri_scheme(std::string_view value) noexcept;
 
+[[nodiscard]] std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept;
+[[nodiscard]] bool is_valid_uri_authority(std::string_view value) noexcept;
+
 // Strict origin-form starts with '/'. Asterisk-form is a separate target form
 // and is exposed explicitly so callers cannot lose its OPTIONS-only contract.
 [[nodiscard]] bool is_valid_origin_form_target(std::string_view target) noexcept;

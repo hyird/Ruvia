@@ -7,7 +7,7 @@
 namespace ruvia {
 
 // A self-contained startup/shutdown callback, invoked on the application::run() caller.
-// on_start runs after worker initialization, before TCP admission. on_stop
+// on_start runs after worker initialization, before TCP/QUIC admission. on_stop
 // runs after admission closes, before runtime join (including start-hook failure
 // or cancellation). A self-contained callable is owned by the hook value;
 // references captured by that callable must still

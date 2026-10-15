@@ -9,7 +9,9 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/websocket_client.h"
 
+#include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
+#include "http3/http3_qpack_config_validation.h"
 #include "websocket/websocket_heartbeat_config_validation.h"
 
 namespace ruvia::detail {
@@ -18,6 +20,13 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     if (config.scheme_ != websocket_scheme::ws && config.scheme_ != websocket_scheme::wss) {
         throw std::invalid_argument("WebSocket client scheme is invalid");
     }
+    if (config.protocol_ != websocket_client_protocol::http1 && config.protocol_ != websocket_client_protocol::http2 && config.protocol_ != websocket_client_protocol::http3) {
+        throw std::invalid_argument("WebSocket client HTTP protocol is invalid");
+    }
+    if (config.protocol_ == websocket_client_protocol::http3 && config.scheme_ != websocket_scheme::wss) {
+        throw std::invalid_argument("HTTP/3 WebSocket requires wss");
+    }
+    validate_http3_qpack_config(config.qpack_);
     validate_client_origin_host(
         config.host_, "WebSocket client host must not be empty", "WebSocket client host is invalid");
     if (config.port_.has_value() && config.port_.value() == 0) {

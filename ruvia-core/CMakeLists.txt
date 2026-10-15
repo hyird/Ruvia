@@ -32,7 +32,7 @@ ruvia_install_generated_public_header(
 ruvia_install_public_header_closure(core include/ruvia/core)
 
 if(WIN32)
-    target_link_libraries(ruvia-core PUBLIC ws2_32 mswsock)
+    target_link_libraries(ruvia-core PUBLIC ws2_32 mswsock PRIVATE Advapi32 Bcrypt)
 endif()
 
 ruvia_install_export(core)

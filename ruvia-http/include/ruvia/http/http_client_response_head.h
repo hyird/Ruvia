@@ -21,8 +21,8 @@ struct http_client_response_head_access;
 
 namespace ruvia {
 
-// A response-side signal for an external request-body writer, emitted by
-// HTTP/1 response plans.
+// A response-side signal for an external request-body writer. The same signal
+// is emitted by HTTP/1 response plans and HTTP/2 response events.
 enum class http_client_request_content_signal : std::uint8_t {
     continue_value,
     exchange_complete,

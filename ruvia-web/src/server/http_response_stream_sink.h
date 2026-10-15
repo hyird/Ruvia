@@ -46,14 +46,14 @@ template <typename stream_type>
 class response_stream_sink final {
 public:
     // `cors` is the application's CORS policy (null when none is configured);
-    // like `request` and `request_body`, it must outlive the sink. `plan`
+    // like `request_body`, it must outlive the sink. `plan`
     // assumes the request body is left unread; `consumed_plan` is the plan for
     // the same request once `request_body` reports its complete consumption,
     // which commit checks so a route that read its body before streaming keeps
     // the connection reusable.
     response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry_type& scanner_entry,
-        const worker_handle& worker_value, const http_request& request, const cors_options* cors,
+        const worker_handle& worker_value, const cors_options* cors,
         http_response_stream_kind kind, http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability) noexcept
@@ -62,7 +62,6 @@ public:
           trailers_(memory.resource()),
           scanner_entry_(scanner_entry),
           worker_(worker_value),
-          request_(request),
           cors_(cors),
           kind_(kind),
           plan_(plan),
@@ -72,7 +71,7 @@ public:
           compression_(memory.resource(), codecs, response_coding, response_coding_availability) {}
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
-        connection_scanner::entry_type&, worker_handle&&, const http_request&, const cors_options*,
+        connection_scanner::entry_type&, worker_handle&&, const cors_options*,
         http_response_stream_kind, http1_response_stream_plan, http1_response_stream_plan,
         const lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability) = delete;
@@ -125,12 +124,7 @@ private:
         }
 
         try {
-            auto response = co_await context_access::commit_streaming_head(state_.bound_context());
-            // The same final-representation order as a buffered response: the
-            // application CORS policy first, then content coding.
-            if (cors_ != nullptr) {
-                apply_cors_headers(request_, response, *cors_);
-            }
+            auto response = co_await context_access::commit_streaming_head(state_.bound_context(), cors_);
             compression_.prepare(plan_.request_method(), response, kind_);
             // The request body is settled at commit: read in full by now, the
             // connection stays reusable; anything less closes it after the
@@ -307,7 +301,6 @@ private:
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
     const worker_handle& worker_;
-    const http_request& request_;
     const cors_options* cors_;
     http_response_stream_kind kind_;
     http1_response_stream_plan plan_;

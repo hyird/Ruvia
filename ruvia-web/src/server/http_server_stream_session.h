@@ -14,6 +14,7 @@
 
 #include "context/context_services.h"
 #include "http/http_protocol_error_info.h"
+#include "http2/cleartext_upgrade.h"
 #include "server/http1_interim_response_sink.h"
 #include "server/http1_request_sequence.h"
 #include "server/http1_response_output.h"
@@ -231,6 +232,20 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         // above already has them; a pipelined request's arrived earlier.
         auto request_start = std::chrono::steady_clock::now();
         for (;;) {
+            if constexpr (plain_tcp) {
+                if (!read_buffer.empty() && !session.served_keepalive_request_ && listener_value.redirect() == nullptr &&
+                    probe_http2_cleartext_preface(read_buffer.pending()) != http2_cleartext_preface_probe::http1) {
+                    const auto protocol = co_await dispatch_cleartext_http2_preface(http2_server_session_setup<stream_type>{
+                                                                                        .stream_ = stream, .socket_ = stream, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = base_route_services, .worker_state_ = state_},
+                        read_buffer, false);
+                    if (protocol == cleartext_http2_dispatch_result::session_finished) {
+                        co_return http_connection_close::abort;
+                    }
+                    if (protocol == cleartext_http2_dispatch_result::continue_read_loop) {
+                        continue;
+                    }
+                }
+            }
             const auto buffer_view = read_buffer.pending();
             parser.parse_head(buffer_view, parsed_value, header_search_offset, request_memory_value.resource());
             const auto* const ready_head = parsed_value.head_ready();

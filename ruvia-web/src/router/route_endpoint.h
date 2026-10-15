@@ -42,16 +42,22 @@ public:
         return request_body_mode_;
     }
 
+    [[nodiscard]] bool replay_safe() const noexcept {
+        return replay_safe_;
+    }
+
 private:
     friend class route_endpoint;
 
     buffered_route_endpoint(route_handler_type::invoke_type invoke,
-        detail::request_body_mode request_body_mode_value) noexcept
+        detail::request_body_mode request_body_mode_value, bool replay_safe) noexcept
         : invoke_(invoke),
-          request_body_mode_(request_body_mode_value) {}
+          request_body_mode_(request_body_mode_value),
+          replay_safe_(replay_safe) {}
 
     route_handler_type::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
+    bool replay_safe_{};
 };
 
 class response_stream_route_endpoint final {
@@ -165,8 +171,8 @@ public:
     // always supply an invoker; body modes and stream kinds are the builder's
     // own enumerators.
     [[nodiscard]] static route_endpoint buffered(route_handler_type::invoke_type invoke,
-        request_body_mode request_body_mode_value) {
-        return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value));
+        request_body_mode request_body_mode_value, bool replay_safe = false) {
+        return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value, replay_safe));
     }
 
     [[nodiscard]] static route_endpoint response_stream(
@@ -180,6 +186,10 @@ public:
             options.lifecycle_.close_handshake_timeout_->count() <= 0) {
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
+        }
+        if (options.lifecycle_.peer_transport_fin_timeout_.count() <= 0) {
+            throw std::invalid_argument(
+                "websocket peer transport FIN timeout must be greater than zero");
         }
         if (options.deflate_.compression_level_ < 0 || options.deflate_.compression_level_ > 9) {
             throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
@@ -205,10 +215,10 @@ public:
 
     [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
         route_stream_handler_type::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
-        // Requests reach a protocol tunnel only through `Upgrade: connect-udp`;
-        // any other protocol would register a route nothing can resolve.
-        if (!protocol.empty() && protocol != "connect-udp") {
-            throw std::invalid_argument("unsupported CONNECT protocol; only connect-udp is routable");
+        // Extended CONNECT protocols use HTTP/2 or HTTP/3; connect-udp also
+        // admits the HTTP/1.1 Upgrade form.
+        if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
+            throw std::invalid_argument("CONNECT protocol must be an HTTP token");
         }
         if (protocol == "connect-udp") {
             config.datagrams_ = true;

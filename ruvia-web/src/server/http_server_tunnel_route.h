@@ -41,7 +41,8 @@ template <typename stream_type>
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
     }
     const auto& endpoint = *resolved.route().endpoint().tunnel();
-    using session_type = http_tunnel_session<stream_type>;
+    using transport_type = http_socket_tunnel_transport<stream_type>;
+    using session_type = http_tunnel_session<transport_type>;
     std::optional<tls_tunnel_output> tls_output;
     std::optional<session_type> tunnel;
     auto establish = [&](context& context_value) -> task<void> {
@@ -80,7 +81,7 @@ template <typename stream_type>
             tls_output.emplace(*d.stream_.native_handle(), d.stream_.next_layer(), d.base_route_services_.worker(), *d.memory_.resource());
             tls_output->start();
         }
-        tunnel.emplace(d.stream_, tls_output ? &*tls_output : nullptr, d.base_route_services_.worker(),
+        tunnel.emplace(transport_type(d.stream_, tls_output ? &*tls_output : nullptr), d.base_route_services_.worker(),
             *d.memory_.resource(), d.inbound_buffer_pool_, pending);
         co_await invoke_tunnel_handler(*tunnel, d.scanner_entry_, resolved.stream_handler(), context_value);
     };

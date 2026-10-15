@@ -2,6 +2,7 @@
 #include <string>
 #include <variant>
 
+#include "ruvia/http/http3_settings.h"
 #include "ruvia/http/http_datagram.h"
 
 #include "test_harness.h"
@@ -45,18 +46,22 @@ RUVIA_TEST(http_capsule_protocol_byte_parameters_accept_optional_padding_and_val
     RUVIA_CHECK((padded.index() == 0 && std::get<0>(padded)));
 }
 
-RUVIA_TEST(http_udp_datagram_context_prefix_roundtrips) {
-    std::array<char, 8> prefix{};
-    for (const auto id : {std::uint64_t{0}, std::uint64_t{63}, std::uint64_t{64}, std::uint64_t{16384}, (std::uint64_t{1} << 30), (std::uint64_t{1} << 62) - 1}) {
-        const auto encoded = ruvia::encode_http_udp_datagram_prefix(prefix, id);
-        RUVIA_CHECK(encoded.index() == 0);
-        const auto decoded = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(encoded)));
-        RUVIA_CHECK(decoded.index() == 0);
-        RUVIA_CHECK_EQ(std::get<0>(decoded).context_id_, id);
-        RUVIA_CHECK(std::get<0>(decoded).payload_.empty());
-    }
-    RUVIA_CHECK(ruvia::decode_http_udp_datagram({}).index() != 0);
-    RUVIA_CHECK(ruvia::encode_http_udp_datagram_prefix(prefix, std::uint64_t{1} << 62).index() != 0);
+RUVIA_TEST(http_datagram_quarter_stream_id_and_udp_context) {
+    std::array<char, 16> prefix{};
+    auto count = ruvia::encode_http3_datagram_prefix(prefix, 4096);
+    RUVIA_CHECK((count.index() == 0));
+    auto decoded = ruvia::decode_http3_datagram(std::span<const char>(prefix).first(std::get<0>(count)));
+    RUVIA_CHECK((decoded.index() == 0));
+    RUVIA_CHECK_EQ(std::get<0>(decoded).stream_id_, 4096u);
+    RUVIA_CHECK(std::get<0>(decoded).payload_.empty());
+    RUVIA_CHECK(!(ruvia::encode_http3_datagram_prefix(prefix, 1).index() == 0));
+    auto oversized = ruvia::encode_http3_var_int(prefix, std::uint64_t{1} << 60);
+    RUVIA_CHECK(!(ruvia::decode_http3_datagram(std::span<const char>(prefix).first(std::get<0>(oversized))).index() == 0));
+    RUVIA_CHECK(!(ruvia::decode_http3_datagram({}).index() == 0));
+    auto context_value = ruvia::encode_http_udp_datagram_prefix(prefix);
+    auto udp = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(context_value)));
+    RUVIA_CHECK((udp.index() == 0));
+    RUVIA_CHECK_EQ(std::get<0>(udp).context_id_, 0u);
 }
 RUVIA_TEST(http_capsule_incremental_unknown_empty_and_datagram) {
     std::array<char, 16> prefix{};
@@ -80,6 +85,16 @@ RUVIA_TEST(http_capsule_truncated_and_length_limit_are_terminal) {
     RUVIA_CHECK(limit.feed(prefix, false, nullptr, nullptr) == ruvia::http_capsule_status::limit);
     ruvia::http_capsule_decoder truncated;
     RUVIA_CHECK(truncated.feed(prefix, true, nullptr, nullptr) == ruvia::http_capsule_status::truncated);
+}
+RUVIA_TEST(http3_datagram_settings_validate_boolean_and_round_trip) {
+    std::array<char, 128> bytes_value{};
+    auto size = ruvia::encode_http3_settings(bytes_value, {.h3_datagram_ = true});
+    RUVIA_CHECK((size.index() == 0));
+    auto decoded = ruvia::decode_http3_settings(std::span<const char>(bytes_value).first(std::get<0>(size)));
+    RUVIA_CHECK((decoded.index() == 0));
+    RUVIA_CHECK(std::get<0>(decoded).h3_datagram_);
+    const std::array invalid{char(0x33), char(2)};
+    RUVIA_CHECK(!(ruvia::decode_http3_settings(invalid).index() == 0));
 }
 
 RUVIA_TEST(http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after_the_suffix) {
@@ -121,21 +136,26 @@ RUVIA_TEST(http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after
     RUVIA_CHECK(result_value.status_ == ruvia::http_capsule_status::truncated && !result_value.capsule_complete_ && result_value.consumed_bytes_ == partial.size());
 }
 
-RUVIA_TEST(http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {
-    ruvia::http_datagram_session session;
+RUVIA_TEST(http_datagram_generic_channel_frames_opaque_payloads_and_plans_receive_failures) {
+    using namespace ruvia;
+    http_datagram_session session_value({.http3_stream_id_ = 12, .local_h3_datagram_ = true, .peer_h3_datagram_ = true, .quic_datagram_ = true, .max_quic_payload_bytes_ = 8});
     const std::string_view opaque("\1\0\xff", 3);
-    const auto plan = session.prepare_datagram(std::span(opaque.data(), opaque.size()));
-    RUVIA_CHECK(plan.index() == 0);
-    RUVIA_CHECK_EQ(std::get<0>(plan).prefix_size_, std::size_t{2});
-    RUVIA_CHECK(std::get<0>(plan).prefix_[0] == 0 && std::get<0>(plan).prefix_[1] == 3);
-    RUVIA_CHECK(std::get<0>(plan).payload_.data() == opaque.data());
-    const auto received = session.receive_datagram(std::get<0>(plan).payload_);
-    RUVIA_CHECK(received.index() == 0 && std::get<0>(received));
-    RUVIA_CHECK(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == opaque);
-    const auto empty = session.prepare_datagram({});
-    RUVIA_CHECK(empty.index() == 0 && std::get<0>(empty).prefix_size_ == 2);
-    session.close_receive();
-    RUVIA_CHECK(!std::get<0>(session.receive_datagram(opaque)));
-    session.close_send();
-    RUVIA_CHECK(session.prepare_datagram({}).index() != 0);
+    const auto native = session_value.prepare_datagram(std::span(opaque.data(), opaque.size()), http_datagram_transport::quic);
+    RUVIA_CHECK((native.index() == 0) && std::get<0>(native).prefix_size_ == 1 && std::get<0>(native).prefix_[0] == 3);
+    const std::string packet = std::string(std::get<0>(native).prefix_.data(), std::get<0>(native).prefix_size_) + std::string(opaque);
+    const auto received_value = session_value.receive_datagram(std::span(packet.data(), packet.size()), http_datagram_transport::quic);
+    RUVIA_CHECK((received_value.index() == 0) && std::get<0>(received_value) && std::string_view((*std::get<0>(received_value)).data(), (*std::get<0>(received_value)).size()) == opaque);
+    const auto capsule = session_value.prepare_datagram({}, http_datagram_transport::capsule);
+    RUVIA_CHECK((capsule.index() == 0) && std::get<0>(capsule).prefix_size_ == 2 && std::get<0>(capsule).prefix_[0] == 0 && std::get<0>(capsule).prefix_[1] == 0);
+    RUVIA_CHECK((session_value.prepare_datagram(std::span<const char>("12345678", 8), http_datagram_transport::quic).index() != 0));
+    session_value.close_receive();
+    RUVIA_CHECK(!std::get<0>(session_value.receive_datagram(std::span(packet.data(), packet.size()), http_datagram_transport::quic)));
+    session_value.close_send();
+    RUVIA_CHECK((session_value.prepare_datagram({}, http_datagram_transport::capsule).index() != 0));
+    const http3_datagram_view view{12, {}};
+    RUVIA_CHECK(plan_http3_datagram_receive(view, {true, true, true, true}) == http3_datagram_receive_status::deliver);
+    RUVIA_CHECK(plan_http3_datagram_receive(view, {true, false, true, false}) == http3_datagram_receive_status::drop);
+    RUVIA_CHECK(plan_http3_datagram_receive(view, {true, true, false, false}) == http3_datagram_receive_status::drop);
+    RUVIA_CHECK(plan_http3_datagram_receive(view, {true, true, true, false}) == http3_datagram_receive_status::stream_error);
+    RUVIA_CHECK(plan_http3_datagram_receive(view, {false, true, true, true}) == http3_datagram_receive_status::connection_error);
 }

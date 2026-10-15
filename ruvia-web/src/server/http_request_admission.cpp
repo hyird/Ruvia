@@ -7,6 +7,7 @@
 
 #include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limit_decision.h"
+#include "router/route_early_data.h"
 #include "router/route_table.h"
 #include "server/http_connection_state.h"
 #include "server/request_body_limit.h"
@@ -100,6 +101,14 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         return std::move(admission);
     };
 
+    // RFC 8470: work carried by early data must be replay-safe.
+    if (input.received_early_data_ &&
+        !early_data_request_allowed(request.known_method(), !request.body_bytes().empty(), input.resolution_)) {
+        return reject(http_request_endpoint::too_early,
+            http_request_rejection::error(http_error_info({.status_ = http_status::too_early,
+                .code_ = "too_early",
+                .message_ = "request is not replay-safe for early data"})));
+    }
     // Expect extensions are valid HTTP syntax. The protocol reports the
     // semantic fact; this product implements only 100-continue and chooses the
     // RFC 9110-permitted 417 before reading request content.
@@ -115,7 +124,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
             return reject(http_request_endpoint::rejection, http_request_rejection::rate_limited(*rejection));
         }
     }
-    // Content already in hand (buffered bodies and subrequests) is held
+    // Content already in hand (HTTP/2/3 buffered bodies, subrequests) is held
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
         return reject(http_request_endpoint::rejection,

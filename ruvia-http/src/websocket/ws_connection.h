@@ -11,7 +11,7 @@
 //
 // Outbound frames, including automatic Pong and Close replies, are serialized
 // into the core's pending output. The output plan also owns the orderly transport
-// end decision: RFC 6455 close-handshake state must
+// end decision: RFC 6455 close-handshake state and RFC 8441 END_STREAM mapping must
 // not be reconstructed by a runtime from a loose `close` boolean. The runtime only
 // flushes the plan and owns coroutine I/O, timeout and write-exclusion policy.
 

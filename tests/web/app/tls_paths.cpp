@@ -290,10 +290,11 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
-            RUVIA_CHECK(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x02h2")));
+            RUVIA_CHECK(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
+            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
             RUVIA_CHECK(!negotiated.error_);
-            RUVIA_CHECK_EQ(negotiated.selected_, std::string("http/1.1"));
+            RUVIA_CHECK_EQ(negotiated.selected_, std::string("h2"));
             RUVIA_CHECK(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
         }
         app.stop();

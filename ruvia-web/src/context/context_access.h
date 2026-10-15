@@ -13,6 +13,7 @@
 #include "http/static_file_variant.h"
 
 namespace ruvia::detail {
+struct cors_options;
 
 class context_websocket_binding;
 class context_tunnel_binding;
@@ -109,7 +110,7 @@ struct context_access final {
     }
 
     // Commits the bound session, then builds the head a response stream sends before its first byte.
-    [[nodiscard]] static task<http_response> commit_streaming_head(context& context_value);
+    [[nodiscard]] static task<http_response> commit_streaming_head(context& context_value, const cors_options* cors);
 
 private:
     friend class context_websocket_binding;

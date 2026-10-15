@@ -16,7 +16,26 @@
 namespace ruvia::detail {
 namespace {
 
+}  // namespace
+
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
+constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
+    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept {
+    switch (mode) {
+        case client_alpn::none:
+            return {};
+        case client_alpn::http11:
+            return http11_alpn;
+        case client_alpn::http2:
+            return http2_alpn;
+        case client_alpn::negotiate:
+            return negotiated_http_alpn;
+    }
+    std::terminate();
+}
 
 [[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
     X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
@@ -69,6 +88,7 @@ constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/'
     std::terminate();
 }
 
+namespace {
 class client_tls_setup_category_type final : public std::error_category {
 public:
     [[nodiscard]] const char* name() const noexcept override {
@@ -137,12 +157,17 @@ std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resourc
     return wire_host;
 }
 
-void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config) {
+void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config,
+    client_tls_protocol protocol) {
     if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
     }
-    if (SSL_CTX_set_min_proto_version(&context_value, TLS1_2_VERSION) != 1 ||
-        SSL_CTX_set_max_proto_version(&context_value, 0) != 1) {
+    if (protocol != client_tls_protocol::stream && protocol != client_tls_protocol::quic) {
+        throw std::invalid_argument("invalid client TLS protocol");
+    }
+    const bool quic = protocol == client_tls_protocol::quic;
+    if (SSL_CTX_set_min_proto_version(&context_value, quic ? TLS1_3_VERSION : TLS1_2_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(&context_value, quic ? TLS1_3_VERSION : 0) != 1) {
         throw std::runtime_error("failed to configure client TLS versions");
     }
     const bool verify = config.mode_ == client_tls_mode::verify_identity;
@@ -173,9 +198,9 @@ client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp
         prepared != client_tls_setup_error::none) {
         return prepared;
     }
-    if (alpn == client_alpn::http11 &&
-        SSL_set_alpn_protos(stream.native_handle(), http11_alpn.data(), static_cast<unsigned int>(http11_alpn.size())) !=
-            0) {
+    const auto protocols = client_alpn_bytes(alpn);
+    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
+            static_cast<unsigned int>(protocols.size())) != 0) {
         return client_tls_setup_error::alpn_failed;
     }
     return client_tls_setup_error::none;

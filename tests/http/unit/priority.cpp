@@ -2,6 +2,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http3_frames.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_priority.h"
 
@@ -102,4 +103,22 @@ RUVIA_TEST(http_priority_repeated_fields_preserve_separators_and_empty_values) {
             ruvia::http_header_view{"priority", values[1]}};
         RUVIA_CHECK(ruvia::parse_http_priority(headers).index() != 0);
     }
+}
+
+RUVIA_TEST(http_priority_http2_http3_frame_roundtrips_and_output_bounds) {
+    std::array<char, 64> bytes_value{};
+    auto h2 = ruvia::encode_http2_priority_update(bytes_value, 5, {.urgency_ = 1, .incremental_ = true});
+    RUVIA_CHECK((h2.index() == 0));
+    auto decoded = ruvia::decode_http2_priority_update(std::span(bytes_value).subspan(9, std::get<0>(h2) - 9));
+    RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).element_id_ == 5 && !std::get<0>(decoded).push_ && std::get<0>(decoded).fields_.urgency_ == 1);
+    for (const bool push : {false, true}) {
+        const auto h3 = ruvia::encode_http3_priority_update(bytes_value, {.element_id_ = push ? 9u : 12u, .push_ = push, .fields_ = {.incremental_ = false}});
+        RUVIA_CHECK((h3.index() == 0));
+        const auto frame = ruvia::decode_http3_frame_header(std::span(bytes_value).first(std::get<0>(h3)));
+        RUVIA_CHECK((frame.index() == 0));
+        auto value = ruvia::decode_http3_priority_update(std::get<0>(frame).type_, std::span(bytes_value).subspan(std::get<0>(frame).encoded_bytes_, std::get<0>(h3) - std::get<0>(frame).encoded_bytes_));
+        RUVIA_CHECK((value.index() == 0) && std::get<0>(value).push_ == push && std::get<0>(value).fields_.incremental_ == false);
+    }
+    RUVIA_CHECK((ruvia::encode_http_priority(std::span(bytes_value).first(1), {.urgency_ = 2}).index() != 0));
+    RUVIA_CHECK((ruvia::encode_http2_priority_update(bytes_value, 0, {}).index() != 0));
 }

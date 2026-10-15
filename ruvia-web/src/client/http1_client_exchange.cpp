@@ -16,6 +16,7 @@
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_client_request_writer.h"
@@ -138,16 +139,28 @@ task<client_transport_result> http1_client_exchange::read_append(
 }
 
 task<void> http1_client_exchange::run(
-    const http_client_request_storage& request, const operation_timeout& timeout, http_client_response_state& state_value) {
+    const http_client_request_storage& request, const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    if (!request.tunnel_protocol().empty() && !request.udp_tunnel()) {
+        throw http_client_error(http_client_error::code_type::protocol_unavailable, "Extended CONNECT requires HTTP/2 or HTTP/3");
+    }
+    auto& connection = connection_;
+    connection.transport_.reset_abort();
+    connection.generation_ = connection.generation_ + 1 == 0 ? 1 : connection.generation_ + 1;
+    struct exchange_generation final {
+        http_client_connection& connection_;
+        http_client_response_state& response_;
+        ~exchange_generation() {
+            ++connection_.generation_;
+            connection_.http1_response_ = nullptr;
+            response_.cancellation_id_ = 0;
+        }
+    } exchange_generation_value{connection, state_value};
+    worker_cancellation_registration cancellation(pool_.cancellation_target(), connection.cancellation_id_);
+    state_value.cancellation_id_ = cancellation.id();
     // Bound for the exchange so a cancellation or shutdown stops the
     // response's output and wakes its producer waits.
-    struct response_binding final {
-        http_client_connection& connection_;
-        ~response_binding() {
-            connection_.http1_response_ = nullptr;
-        }
-    } response_binding_value{connection_};
-    connection_.http1_response_ = &state_value;
+    connection.http1_response_ = &state_value;
+    cancellation.arm(stop_token_value);
 
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());
@@ -238,9 +251,9 @@ task<void> http1_client_exchange::run(
     if (!upload->output_.ended_ && !upload->output_.stopped_) {
         if (const auto remaining = timeout.remaining()) {
             (void)pool_.worker().schedule_timer(upload_completion_timer, worker_timer_deadline_after(*remaining),
-                [this](worker_timer_outcome outcome) noexcept {
+                [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
-                        connection_.cancel(client_abort_reason::timeout);
+                        connection_.cancel(generation, client_abort_reason::timeout);
                     }
                 });
         }

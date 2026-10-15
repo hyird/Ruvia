@@ -12,6 +12,7 @@
 #include "context/context_access.h"
 #include "context/context_response_state.h"
 #include "context/context_services.h"
+#include "http/http_cors.h"
 #include "http/http_error_response.h"
 #include "http/session_access.h"
 #include "router/route_table.h"
@@ -191,11 +192,15 @@ http_response context::streaming_head() const {
     return response;
 }
 
-task<http_response> detail::context_access::commit_streaming_head(context& context_value) {
+task<http_response> detail::context_access::commit_streaming_head(context& context_value, const cors_options* cors) {
     if (context_value.try_session()) {
         co_await session_access::commit(context_value);
     }
-    co_return context_value.streaming_head();
+    auto response = context_value.streaming_head();
+    if (cors != nullptr) {
+        detail::apply_cors_headers(context_value.request_, response, *cors);
+    }
+    co_return response;
 }
 
 context& context::set_stable_response_header(std::string_view name, std::string_view value) {

@@ -8,6 +8,7 @@
 #include <asio/buffer.hpp>
 
 #include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -39,7 +40,7 @@ public:
     http1_client_exchange& operator=(const http1_client_exchange&) = delete;
 
     [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_timeout& timeout,
-        http_client_response_state& state_value);
+        stop_token stop_token_value, http_client_response_state& state_value);
 
 private:
     // Receives the final response head, then the body or an accepted tunnel.

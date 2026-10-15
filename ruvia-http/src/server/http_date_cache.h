@@ -9,4 +9,7 @@ namespace ruvia::detail {
 // four-digit wire year range.
 [[nodiscard]] std::string_view cached_date_header() noexcept;
 
+// Bare date value (no field name, no CRLF) for HPACK-encoded HTTP/2 headers.
+[[nodiscard]] std::string_view cached_date_value() noexcept;
+
 }  // namespace ruvia::detail

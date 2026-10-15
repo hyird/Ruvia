@@ -128,6 +128,10 @@ http_server_listener_definition::tls_type load_http_server_tls(
             .client_ca_ = load_tls_client_ca(*verify_file),
         });
     }
+    tls.http3_early_data_ = config.http3_early_data_;
+    if (tls.http3_early_data_ && tls.client_certificates_) {
+        throw std::invalid_argument("HTTP/3 early data is unavailable with TLS client certificates");
+    }
     tls.sni_identities_.reserve(config.sni_.size());
     for (std::size_t i = 0; i < config.sni_.size(); ++i) {
         tls.sni_identities_.emplace_back(config.sni_[i].host_, load_tls_certificate(sni_files[i]), target_resource);

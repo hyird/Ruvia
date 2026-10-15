@@ -9,7 +9,7 @@ namespace ruvia::detail {
 
 // One listener's TLS session ticket key set (16-byte key name, 32-byte HMAC
 // key, 32-byte AES key). Generated once when the server configuration is
-// validated and copied read-only into every worker's TLS SSL_CTX, so a
+// validated and copied read-only into every worker's TCP and QUIC SSL_CTX, so a
 // ticket issued by one worker resumes on any worker of the same listener.
 class tls_session_ticket_keys final {
 public:

@@ -58,7 +58,7 @@ class udp_tunnel_routes final {
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
         ruvia::http_capsule_config config{.max_capsule_length_ = 13};
-        ruvia::http_udp_tunnel original(c.tunnel().datagrams(config));
+        ruvia::http_udp_tunnel original(c.tunnel().datagrams({.capsules_ = config}));
         try {
             try {
                 co_await original.send(std::string(13, 'x'));
@@ -152,7 +152,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
             RUVIA_CHECK(!result.tunnel()->header("content-length"));
             ruvia::http_capsule_config capsule_config{.max_capsule_length_ = 13};
-            ruvia::http_udp_tunnel tunnel(std::move(*result.tunnel()).datagrams(capsule_config));
+            ruvia::http_udp_tunnel tunnel(std::move(*result.tunnel()).datagrams({.capsules_ = capsule_config}));
             bool capsule_bound_rejected = false;
             try {
                 co_await tunnel.send(std::string(13, 'x'));
@@ -218,7 +218,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
                 if (!udp_result.tunnel()) {
                     throw std::runtime_error("missing CONNECT-UDP tunnel");
                 }
-                auto udp = std::move(*udp_result.tunnel()).udp(capsule_config);
+                auto udp = std::move(*udp_result.tunnel()).udp({.capsules_ = capsule_config});
                 RUVIA_CHECK(!(co_await udp.read()));
                 co_await udp.finish();
             }

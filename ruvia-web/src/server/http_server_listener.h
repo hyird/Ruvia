@@ -42,13 +42,18 @@ struct http_server_listener_definition final {
 
         tls_type(tls_certificate certificate, std::pmr::memory_resource* resource)
             : certificate_(std::move(certificate)),
-              sni_identities_(pmr_resource_or_default(resource)) {}
+              sni_identities_(pmr_resource_or_default(resource)),
+              alt_svc_(pmr_resource_or_default(resource)) {}
 
         tls_certificate certificate_;
         std::optional<tls_client_certificate_policy_type> client_certificates_;
+        bool http3_early_data_{};
         std::pmr::vector<sni_identity_type> sni_identities_;
+        // Empty disables automatic injection. Otherwise this complete field
+        // value is borrowed by every TCP/TLS request context on this listener.
+        std::pmr::string alt_svc_;
         // Generated once by server configuration validation and shared
-        // read-only by every worker's TLS contexts.
+        // read-only by every worker's TCP and QUIC TLS contexts.
         std::optional<tls_session_ticket_keys> session_ticket_keys_;
     };
 
@@ -61,14 +66,18 @@ struct http_server_listener_definition final {
     using transport_type = std::variant<plain_http_type, tls_type, redirect_http_to_https_type>;
 
     http_server_listener_definition(asio::ip::tcp::endpoint configured_endpoint,
-        transport_type configured_transport = plain_http_type{})
+        transport_type configured_transport = plain_http_type{},
+        std::optional<http3_listen_config> configured_http3 = {})
         : endpoint_(std::move(configured_endpoint)),
-          transport_(std::move(configured_transport)) {}
+          transport_(std::move(configured_transport)),
+          http3_(std::move(configured_http3)) {}
 
     [[nodiscard]] http_server_listener_definition clone(std::pmr::memory_resource* resource) const;
 
     asio::ip::tcp::endpoint endpoint_;
     transport_type transport_;
+    // When enabled, UDP binds this TLS listener's address and numeric port.
+    std::optional<http3_listen_config> http3_;
 };
 
 // Every TLS context of a listener uses the configuration's one ticket key set.

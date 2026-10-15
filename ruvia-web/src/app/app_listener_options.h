@@ -31,5 +31,11 @@ private:
     tls_config& config_;
 };
 
+// Returns the complete Alt-Svc field value for TCP/TLS responses. An empty
+// result disables automatic injection. active_http3_port is absent when this
+// listener does not serve HTTP/3.
+[[nodiscard]] std::pmr::string normalize_alt_svc_advertisement(const alt_svc_config& config,
+    std::optional<std::uint16_t> active_http3_port, std::pmr::memory_resource* resource);
+
 }  // namespace detail
 }  // namespace ruvia
