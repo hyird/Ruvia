@@ -27,9 +27,8 @@ task<redis_set_result> execute_redis_set(redis_command_executor executor,
             (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
         co_return redis_types_access::set_result(applied);
     }
-    const auto text = redis_value_string(reply);
     if (!returns_previous) {
-        if (!http_ascii_equals_ignore_case(text, "OK")) {
+        if (!http_ascii_equals_ignore_case(redis_value_string(reply), "OK")) {
             throw redis_error(redis_error::code_type::command_error, "unexpected redis set reply");
         }
         co_return redis_types_access::set_result(true);
@@ -37,7 +36,7 @@ task<redis_set_result> execute_redis_set(redis_command_executor executor,
     const bool applied =
         !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
     co_return redis_types_access::set_result(
-        applied, std::pmr::string(text.data(), text.size(), resource));
+        applied, take_redis_string(std::move(reply), resource));
 }
 
 task<bool> execute_redis_integer_bool(redis_command_executor executor,
@@ -50,13 +49,13 @@ task<std::pmr::vector<redis_key_value>> execute_redis_key_value_array(redis_comm
     std::pmr::vector<std::pmr::string> args, std::string_view context_value,
     std::pmr::memory_resource* resource) {
     auto value = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return parse_redis_key_value_array(value, resource, context_value);
+    co_return parse_redis_key_value_array(std::move(value), resource, context_value);
 }
 
 task<std::pmr::vector<redis_scored_value>> execute_redis_scored_array(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return parse_redis_scored_array(value, resource);
+    co_return parse_redis_scored_array(std::move(value), resource);
 }
 
 task<std::optional<double>> execute_redis_optional_double(redis_command_executor executor,

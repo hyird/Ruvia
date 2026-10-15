@@ -7,6 +7,9 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/redis/redis_utils.h"
 
+#include "redis/redis_types_access.h"
+#include "util/pmr_owned_storage.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -60,6 +63,11 @@ std::string_view redis_value_string(const redis_value& value) {
     return value.string();
 }
 
+std::pmr::string take_redis_string(redis_value&& value, std::pmr::memory_resource* resource) {
+    (void)redis_value_string(value);
+    return rebind_owned_storage(redis_types_access::text(value), pmr_resource_or_default(resource));
+}
+
 std::int64_t redis_value_integer(const redis_value& value) {
     if (value.kind() == redis_value::kind_type::error) {
         throw redis_error(redis_error::code_type::command_error, value.error());
@@ -111,6 +119,11 @@ std::span<const redis_value> redis_value_array(const redis_value& value) {
         throw redis_error(redis_error::code_type::protocol_error, "redis reply is not an array");
     }
     return value.array();
+}
+
+std::span<redis_value> redis_value_array(redis_value& value) {
+    (void)redis_value_array(std::as_const(value));
+    return redis_types_access::elements(value);
 }
 
 void throw_if_redis_error(const redis_value& value) {
@@ -204,8 +217,7 @@ task<std::optional<std::pmr::string>> redis_string_command(redis_command_executo
     if (value.null()) {
         co_return std::nullopt;
     }
-    const auto text = redis_value_string(value);
-    co_return std::pmr::string(text.data(), text.size(), resource);
+    co_return take_redis_string(std::move(value), resource);
 }
 
 task<std::int64_t> redis_integer_command(redis_command_executor executor,
@@ -218,7 +230,7 @@ task<std::int64_t> redis_integer_command(redis_command_executor executor,
 task<std::pmr::vector<std::pmr::string>> redis_string_array_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return parse_redis_string_array(value, resource);
+    co_return parse_redis_string_array(std::move(value), resource);
 }
 
 task<std::pmr::vector<bool>> redis_bool_array_command(redis_command_executor executor,
@@ -243,14 +255,12 @@ task<std::pmr::vector<std::optional<std::pmr::string>>> redis_optional_string_ar
     const auto items = redis_value_array(value);
     std::pmr::vector<std::optional<std::pmr::string>> output(resource);
     output.reserve(items.size());
-    for (const auto& item : items) {
+    for (auto& item : items) {
         throw_if_redis_error(item);
         if (item.null()) {
             output.emplace_back(std::nullopt);
         } else {
-            const auto text = redis_value_string(item);
-            auto& stored = output.emplace_back(std::in_place, resource);
-            stored->assign(text.data(), text.size());
+            output.emplace_back(std::in_place, take_redis_string(std::move(item), resource));
         }
     }
     co_return output;
@@ -270,8 +280,7 @@ task<std::pmr::string> redis_status_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
     throw_if_redis_error(value);
-    const auto text = redis_value_string(value);
-    co_return std::pmr::string(text.data(), text.size(), resource);
+    co_return take_redis_string(std::move(value), resource);
 }
 
 }  // namespace ruvia::detail

@@ -43,21 +43,21 @@ task<redis_scan_result> execute_redis_scan(detail::redis_command_executor execut
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value =
         co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return detail::parse_redis_scan_result(value, resource);
+    co_return detail::parse_redis_scan_result(std::move(value), resource);
 }
 
 task<redis_hash_scan_result> execute_redis_hash_scan(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value =
         co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return detail::parse_redis_hash_scan_result(value, resource);
+    co_return detail::parse_redis_hash_scan_result(std::move(value), resource);
 }
 
 task<redis_z_scan_result> execute_redis_z_scan(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value =
         co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
-    co_return detail::parse_redis_z_scan_result(value, resource);
+    co_return detail::parse_redis_z_scan_result(std::move(value), resource);
 }
 
 // The server-side wait starts when the command is written, so the reply
@@ -83,14 +83,14 @@ task<std::optional<redis_key_value>> execute_redis_blocking_pop(detail::redis_po
     std::pmr::vector<std::pmr::string> args, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
     auto reply = co_await pool.execute_owned(std::move(args), resource, std::move(options), reply_timeout);
-    co_return detail::parse_redis_blocking_pop_reply(reply, resource);
+    co_return detail::parse_redis_blocking_pop_reply(std::move(reply), resource);
 }
 
 task<std::optional<redis_x_read_group_result>> execute_redis_x_read_group(detail::redis_pool& pool,
     std::pmr::vector<std::pmr::string> args, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
     auto reply = co_await pool.execute_owned(std::move(args), resource, std::move(options), reply_timeout);
-    co_return detail::parse_redis_x_read_group_reply(reply, resource);
+    co_return detail::parse_redis_x_read_group_reply(std::move(reply), resource);
 }
 
 }  // namespace
