@@ -47,14 +47,11 @@ void redis_command_batch::expire() noexcept {
 redis_command_batch& redis_command_batch::command(std::span<const std::string_view> args) {
     require_ready();
     (void)validate_redis_pooled_command(args, false);
-    commands_.emplace_back(make_owned_redis_command(resource(), args));
-    return *this;
+    return append_owned(make_owned_redis_command(resource(), args));
 }
 
-redis_command_batch& redis_command_batch::append_trusted(
-    std::string_view command_name, std::span<const std::string_view> rest) {
-    require_ready();
-    commands_.emplace_back(make_owned_redis_command(resource(), command_name, rest));
+redis_command_batch& redis_command_batch::append_owned(redis_owned_command command) {
+    commands_.push_back(std::move(command));
     return *this;
 }
 

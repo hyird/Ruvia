@@ -1,4 +1,5 @@
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
@@ -78,10 +79,8 @@ scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::sdiff(
 scoped_operation<std::int64_t> redis_handle::zadd(
     std::string_view key, double score, std::string_view member) const {
     registration_.require_active();
-    auto score_value = detail::redis_score_string(score, resource_);
     return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args({"ZADD", key, std::string_view(score_value), member}, resource_),
-        resource_));
+        detail::make_redis_zadd_command(key, score, member, resource_).args_, resource_));
 }
 
 scoped_operation<std::int64_t> redis_handle::zrem(
@@ -94,24 +93,15 @@ scoped_operation<std::int64_t> redis_handle::zrem(
 scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::zrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    auto start_value = detail::redis_int_string(start, resource_);
-    auto stop_value = detail::redis_int_string(stop, resource_);
     return scoped(detail::redis_string_array_command(executor(),
-        detail::own_redis_args(
-            {"ZRANGE", key, std::string_view(start_value), std::string_view(stop_value)}, resource_),
-        resource_));
+        detail::make_redis_range_command("ZRANGE", key, start, stop, resource_).args_, resource_));
 }
 
 scoped_operation<std::pmr::vector<redis_scored_value>> redis_handle::zrange_with_scores(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    auto start_value = detail::redis_int_string(start, resource_);
-    auto stop_value = detail::redis_int_string(stop, resource_);
-    return scoped(detail::execute_redis_scored_array(executor(),
-        detail::own_redis_args({"ZRANGE", key, std::string_view(start_value),
-                                   std::string_view(stop_value), "WITHSCORES"},
-            resource_),
-        resource_));
+    auto command = detail::make_redis_range_command("ZRANGE", key, start, stop, resource_, true);
+    return scoped(detail::execute_redis_scored_array(executor(), std::move(command.args_), resource_));
 }
 
 scoped_operation<std::optional<double>> redis_handle::zscore(

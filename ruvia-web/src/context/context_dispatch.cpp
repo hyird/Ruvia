@@ -126,7 +126,9 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     auto response = rejection != nullptr
                         ? co_await detail::respond_http_request_rejection(
                               routes, request, memory, *rejection, admission.services())
-                        : co_await routes.dispatch(request, resolution, memory, admission.services());
+                        : co_await routes.dispatch_buffered_response(request, resolution, memory,
+                              detail::document_root_binding::none(), admission.services(),
+                              detail::static_file_selection_mode::identity_only);
     if (response.file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
     }

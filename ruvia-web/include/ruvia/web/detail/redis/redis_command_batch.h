@@ -10,7 +10,6 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/web/detail/redis/redis_owned_command.h"
-#include "ruvia/web/detail/redis/redis_utils.h"
 
 namespace ruvia::detail {
 
@@ -96,8 +95,7 @@ public:
 
     redis_command_batch& incr_by(std::string_view key, std::int64_t value) {
         require_ready();
-        auto amount = redis_int_string(value, resource());
-        return trusted("INCRBY", key, std::string_view(amount));
+        return append_owned(make_redis_integer_command("INCRBY", key, value, resource()));
     }
 
     redis_command_batch& decr(std::string_view key) {
@@ -106,8 +104,7 @@ public:
 
     redis_command_batch& decr_by(std::string_view key, std::int64_t value) {
         require_ready();
-        auto amount = redis_int_string(value, resource());
-        return trusted("DECRBY", key, std::string_view(amount));
+        return append_owned(make_redis_integer_command("DECRBY", key, value, resource()));
     }
 
     redis_command_batch& hget(std::string_view key, std::string_view field) {
@@ -156,10 +153,7 @@ public:
 
     redis_command_batch& lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
-        auto start_value = redis_int_string(start, resource());
-        auto stop_value = redis_int_string(stop, resource());
-        return trusted(
-            "LRANGE", key, std::string_view(start_value), std::string_view(stop_value));
+        return append_owned(make_redis_range_command("LRANGE", key, start, stop, resource()));
     }
 
     redis_command_batch& sadd(std::string_view key, std::string_view member) {
@@ -180,8 +174,7 @@ public:
 
     redis_command_batch& zadd(std::string_view key, double score, std::string_view member) {
         require_ready();
-        auto score_value = redis_score_string(score, resource());
-        return trusted("ZADD", key, std::string_view(score_value), member);
+        return append_owned(make_redis_zadd_command(key, score, member, resource()));
     }
 
     redis_command_batch& zrem(std::string_view key, std::string_view member) {
@@ -190,10 +183,7 @@ public:
 
     redis_command_batch& zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
-        auto start_value = redis_int_string(start, resource());
-        auto stop_value = redis_int_string(stop, resource());
-        return trusted(
-            "ZRANGE", key, std::string_view(start_value), std::string_view(stop_value));
+        return append_owned(make_redis_range_command("ZRANGE", key, start, stop, resource()));
     }
 
     redis_command_batch& zscore(std::string_view key, std::string_view member) {
@@ -205,12 +195,13 @@ public:
     }
 
 private:
-    redis_command_batch& append_trusted(std::string_view command_name, std::span<const std::string_view> rest);
+    redis_command_batch& append_owned(redis_owned_command command);
 
     template <typename... args_type>
     redis_command_batch& trusted(std::string_view command_name, args_type... args) {
+        require_ready();
         const std::string_view rest[]{args...};
-        return append_trusted(command_name, std::span<const std::string_view>(rest));
+        return append_owned(make_owned_redis_command(resource(), command_name, std::span<const std::string_view>(rest)));
     }
 
     redis_pool* pool_;

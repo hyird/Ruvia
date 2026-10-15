@@ -194,9 +194,8 @@ scoped_operation<std::int64_t> redis_handle::strlen(std::string_view key) const 
 
 scoped_operation<std::int64_t> redis_handle::incr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    auto amount = detail::redis_int_string(value, resource_);
     return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args({"INCRBY", key, std::string_view(amount)}, resource_), resource_));
+        detail::make_redis_integer_command("INCRBY", key, value, resource_).args_, resource_));
 }
 
 scoped_operation<std::int64_t> redis_handle::decr(std::string_view key) const {
@@ -207,9 +206,8 @@ scoped_operation<std::int64_t> redis_handle::decr(std::string_view key) const {
 
 scoped_operation<std::int64_t> redis_handle::decr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    auto amount = detail::redis_int_string(value, resource_);
     return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args({"DECRBY", key, std::string_view(amount)}, resource_), resource_));
+        detail::make_redis_integer_command("DECRBY", key, value, resource_).args_, resource_));
 }
 
 scoped_operation<std::int64_t> redis_handle::del(std::string_view key) const {

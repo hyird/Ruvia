@@ -477,6 +477,79 @@ void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx,
     return "$" + std::to_string(value.size()) + "\r\n" + std::string(value) + "\r\n";
 }
 
+RUVIA_TEST(redis_typed_commands_preserve_arguments_across_direct_pipeline_and_transaction) {
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    const std::vector<std::string> command_replies{":1\r\n", ":2\r\n", "*1\r\n$5\r\nentry\r\n", ":1\r\n", "*1\r\n$6\r\nmember\r\n"};
+    auto replies = command_replies;
+    replies.insert(replies.end(), command_replies.begin(), command_replies.end());
+    replies.emplace_back("+OK\r\n");
+    replies.insert(replies.end(), 5, "+QUEUED\r\n");
+    std::string executed = "*5\r\n";
+    for (const auto& reply : command_replies) {
+        executed.append(reply);
+    }
+    replies.push_back(std::move(executed));
+    scripted_redis_peer peer(std::move(replies));
+    ruvia::redis_config config{.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
+    ruvia::redis_client client(worker.loop(), config);
+    const std::string key("key\0binary", 10);
+    const std::string member("member\0value", 12);
+    constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.handle();
+        RUVIA_CHECK_EQ(co_await redis.incr_by(key, minimum), std::int64_t{1});
+        RUVIA_CHECK_EQ(co_await redis.decr_by(key, maximum), std::int64_t{2});
+        const auto list = co_await redis.lrange(key, minimum, maximum);
+        RUVIA_CHECK_EQ(list.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(co_await redis.zadd(key, -std::numeric_limits<double>::infinity(), member), std::int64_t{1});
+        const auto sorted = co_await redis.zrange(key, maximum, minimum);
+        RUVIA_CHECK_EQ(sorted.size(), std::size_t{1});
+
+        const auto append = [&](auto& batch) {
+            batch.incr_by(key, minimum).decr_by(key, maximum).lrange(key, minimum, maximum).zadd(key, -std::numeric_limits<double>::infinity(), member).zrange(key, maximum, minimum);
+        };
+        auto pipeline = redis.pipeline();
+        append(pipeline);
+        const auto pipelined = co_await std::move(pipeline).exec();
+        RUVIA_CHECK_EQ(pipelined.size(), std::size_t{5});
+        auto transaction = redis.transaction();
+        append(transaction);
+        const auto transacted = co_await std::move(transaction).exec();
+        RUVIA_CHECK_EQ(transacted.size(), std::size_t{5});
+        for (const auto* results : {&pipelined, &transacted}) {
+            if (results->size() != 5) {
+                continue;
+            }
+            RUVIA_CHECK_EQ((*results)[0].integer(), std::int64_t{1});
+            RUVIA_CHECK_EQ((*results)[1].integer(), std::int64_t{2});
+            const auto entries = (*results)[2].array();
+            RUVIA_CHECK_EQ(entries.size(), std::size_t{1});
+            if (!entries.empty()) {
+                RUVIA_CHECK_EQ(entries[0].string(), std::string_view("entry"));
+            }
+            RUVIA_CHECK_EQ((*results)[3].integer(), std::int64_t{1});
+            const auto members = (*results)[4].array();
+            RUVIA_CHECK_EQ(members.size(), std::size_t{1});
+            if (!members.empty()) {
+                RUVIA_CHECK_EQ(members[0].string(), std::string_view("member"));
+            }
+        }
+    });
+    peer.join();
+    const std::vector<std::vector<std::string>> expected{
+        {"INCRBY", key, "-9223372036854775808"}, {"DECRBY", key, "9223372036854775807"},
+        {"LRANGE", key, "-9223372036854775808", "9223372036854775807"}, {"ZADD", key, "-inf", member},
+        {"ZRANGE", key, "9223372036854775807", "-9223372036854775808"}};
+    auto all = expected;
+    all.insert(all.end(), expected.begin(), expected.end());
+    all.push_back({"MULTI"});
+    all.insert(all.end(), expected.begin(), expected.end());
+    all.push_back({"EXEC"});
+    RUVIA_CHECK(peer.commands() == all);
+}
+
 RUVIA_TEST(redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);

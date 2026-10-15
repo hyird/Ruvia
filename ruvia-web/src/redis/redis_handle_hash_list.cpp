@@ -119,20 +119,15 @@ scoped_operation<std::int64_t> redis_handle::llen(std::string_view key) const {
 scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::lrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    auto start_value = detail::redis_int_string(start, resource_);
-    auto stop_value = detail::redis_int_string(stop, resource_);
     return scoped(detail::redis_string_array_command(executor(),
-        detail::own_redis_args(
-            {"LRANGE", key, std::string_view(start_value), std::string_view(stop_value)}, resource_),
-        resource_));
+        detail::make_redis_range_command("LRANGE", key, start, stop, resource_).args_, resource_));
 }
 
 scoped_operation<std::optional<std::pmr::string>> redis_handle::lindex(
     std::string_view key, std::int64_t index) const {
     registration_.require_active();
-    auto index_value = detail::redis_int_string(index, resource_);
     return scoped(detail::redis_string_command(executor(),
-        detail::own_redis_args({"LINDEX", key, std::string_view(index_value)}, resource_), resource_));
+        detail::make_redis_integer_command("LINDEX", key, index, resource_).args_, resource_));
 }
 
 scoped_operation<void> redis_handle::lset(
@@ -147,12 +142,8 @@ scoped_operation<void> redis_handle::lset(
 scoped_operation<void> redis_handle::ltrim(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    auto start_value = detail::redis_int_string(start, resource_);
-    auto stop_value = detail::redis_int_string(stop, resource_);
     return scoped(detail::redis_ok_command(executor(),
-        detail::own_redis_args(
-            {"LTRIM", key, std::string_view(start_value), std::string_view(stop_value)}, resource_),
-        resource_));
+        detail::make_redis_range_command("LTRIM", key, start, stop, resource_).args_, resource_));
 }
 
 scoped_operation<std::int64_t> redis_handle::lrem(

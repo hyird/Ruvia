@@ -85,8 +85,6 @@ public:
     // makes 405 conditional on the method being "known by the origin server",
     // so a token nobody registered is 501 no matter what the target path holds.
     [[nodiscard]] bool recognizes_method_token(std::string_view method_token) const noexcept;
-    task<http_response> dispatch(const http_request& request, const route_resolution& resolution,
-        request_memory& memory, context_services services) const;
     // Canonical buffered-response application dispatch. An unresolved route
     // first consults the configured document
     // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
@@ -153,10 +151,6 @@ private:
         http_known_method method, std::string_view path, route_match& match) const noexcept;
     [[nodiscard]] std::uint32_t allowed_methods(
         std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept;
-    [[nodiscard]] task<http_response> dispatch_request(const http_request& request,
-        const route_resolution& resolution, request_memory& memory, context_services services,
-        document_root_binding document_root,
-        static_file_selection_mode static_file_mode) const;
     [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.

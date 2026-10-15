@@ -1048,6 +1048,16 @@ RUVIA_TEST(testing_facade_subrequest_answers_like_a_network_request) {
     RUVIA_CHECK(head.body().empty());
     const auto get = app.request(ruvia::test_request::get("/t/subrequest?target=/t/hello"));
     RUVIA_CHECK_EQ(get.body(), std::string_view("hello"));
+
+    // The same dispatch entry preserves route parameters and error handling
+    // when reached through the public subrequest API.
+    for (const auto target : {"/t/users/42", "/t/boom", "/missing"}) {
+        const auto direct = app.request(ruvia::test_request::get(target));
+        const auto relayed = app.request(ruvia::test_request::get(std::string("/t/subrequest?target=") + target));
+        RUVIA_CHECK_EQ(relayed.status(), direct.status());
+        RUVIA_CHECK(relayed.header("X-Test-Relayed").has_value());
+        RUVIA_CHECK_EQ(relayed.body(), direct.body());
+    }
 }
 
 RUVIA_TEST(testing_facade_unmatched_middleware_wraps_automatic_options_answers) {

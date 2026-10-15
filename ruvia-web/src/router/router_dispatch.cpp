@@ -95,17 +95,9 @@ task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const h
     return dispatch_stream_route(request, resolved, memory, handler, services);
 }
 
-task<http_response> detail::route_table::dispatch(const http_request& request,
-    const route_resolution& resolution, request_memory& memory, context_services services) const {
-    co_return co_await dispatch_request(request, resolution, memory, services,
-        document_root_binding::none(),
-        static_file_selection_mode::identity_only);
-}
-
-task<http_response> detail::route_table::dispatch_request(const http_request& request,
-    const route_resolution& resolution, request_memory& memory, context_services services,
-    document_root_binding document_root,
-    static_file_selection_mode static_file_mode) const {
+task<http_response> detail::route_table::dispatch_buffered_response(const http_request& request,
+    const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
+    context_services services, static_file_selection_mode static_file_mode) const {
     std::exception_ptr dispatch_exception;
     try {
         const auto* resolved = resolution.resolved();
@@ -199,16 +191,6 @@ task<http_response> detail::route_table::dispatch_request(const http_request& re
         dispatch_exception = std::current_exception();
     }
     co_return co_await handle_exception(request, memory, dispatch_exception, services);
-}
-
-task<http_response> detail::route_table::dispatch_buffered_response(const http_request& request,
-    const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-    context_services services, static_file_selection_mode static_file_mode) const {
-    // Plain forwarding, not a coroutine: document-root selection and the
-    // failure policy live in the existing dispatch frame, so the unified
-    // application entry adds no request-path allocation.
-    return dispatch_request(request, resolution, memory, services, std::move(document_root),
-        static_file_mode);
 }
 
 }  // namespace ruvia
