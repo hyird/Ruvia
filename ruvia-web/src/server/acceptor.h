@@ -19,7 +19,9 @@
 
 namespace ruvia::detail {
 
-// The ingress owner detaches TCP sockets once for adoption by their worker.
+// The ingress owner hands native TCP sockets off once for worker adoption.
+// Linux accepts before reactor registration; other backends detach Asio's
+// accepted socket. Both use the same bounded worker hand-off and capacity gate.
 // Target objects must outlive this owner and its joined thread. Core owns the
 // lifecycle; serving starts acceptance and stopping closes every listener.
 // close_admission() closes the listeners earlier, while the runtime still runs.
@@ -66,7 +68,8 @@ private:
     };
     using listener_ptr = std::unique_ptr<listener, pmr_object_deleter<listener>>;
     void begin_accept(std::size_t index) noexcept;
-    void accepted(std::size_t index, const asio::error_code&, asio::ip::tcp::socket) noexcept;
+    void accept_failed(std::size_t index, const asio::error_code& error) noexcept;
+    [[nodiscard]] bool hand_off(std::size_t index, native_accepted_socket_ticket ticket) noexcept;
     void schedule_retry(std::size_t index) noexcept;
     void close_listeners() noexcept;
     void stop_on_owner() noexcept;

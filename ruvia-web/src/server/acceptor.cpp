@@ -4,7 +4,13 @@
 #include <chrono>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
+#if defined(__linux__)
+#include <sys/socket.h>
+#endif
+
+#include <asio/post.hpp>
 #include <asio/socket_base.hpp>
 
 #include "ruvia/core/memory/process_resource.h"
@@ -106,6 +112,11 @@ void acceptor::prepare() {
         if (!error) {
             socket.listen(asio::socket_base::max_listen_connections, error);
         }
+#if defined(__linux__)
+        if (!error) {
+            socket.native_non_blocking(true, error);
+        }
+#endif
         if (!error) {
             configured->endpoint_ = socket.local_endpoint(error);
         }
@@ -143,44 +154,80 @@ void acceptor::begin_accept(std::size_t index) noexcept {
         return;
     }
     try {
-        socket.async_accept([this, index](const asio::error_code& error, asio::ip::tcp::socket accepted_socket) mutable {
-            accepted(index, error, std::move(accepted_socket));
+#if defined(__linux__)
+        // Accept native descriptors before their first reactor registration.
+        // One bounded turn offers a connection per worker, then yields so stop
+        // and other listeners cannot starve under a continuously full backlog.
+        for (std::size_t count = 0; count < targets_.size(); ++count) {
+            const auto native = ::accept4(socket.native_handle(), nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+            if (native >= 0) {
+                if (!hand_off(index, native_accepted_socket_ticket(listeners_[index]->endpoint_.protocol(), index, native))) {
+                    return;
+                }
+                continue;
+            }
+            const asio::error_code error(errno, asio::system_category());
+            if (error == asio::error::interrupted) {
+                continue;
+            }
+            if (error == asio::error::would_block || error == asio::error::try_again) {
+                socket.async_wait(asio::ip::tcp::acceptor::wait_read, [this, index](const asio::error_code& ready_error) {
+                    if (ready_error) {
+                        accept_failed(index, ready_error);
+                    } else {
+                        begin_accept(index);
+                    }
+                });
+                return;
+            }
+            accept_failed(index, error);
+            return;
+        }
+        asio::post(io_context_, [this, index] { begin_accept(index); });
+#else
+        socket.async_accept([this, index](const asio::error_code& error, asio::ip::tcp::socket accepted_socket) {
+            if (error) {
+                accept_failed(index, error);
+                return;
+            }
+            asio::error_code release_error;
+            const auto native = accepted_socket.release(release_error);
+            if (release_error) {
+                try {
+                    throw std::system_error(release_error, "failed to detach accepted TCP socket");
+                } catch (...) {
+                    (void)runtime_.fail(std::current_exception());
+                }
+                return;
+            }
+            if (hand_off(index, native_accepted_socket_ticket(listeners_[index]->endpoint_.protocol(), index, native))) {
+                begin_accept(index);
+            }
         });
+#endif
     } catch (...) {
         (void)runtime_.fail(std::current_exception());
     }
 }
 
-void acceptor::accepted(std::size_t index, const asio::error_code& error,
-    asio::ip::tcp::socket socket) noexcept {
-    if (error) {
-        if (error == asio::error::operation_aborted && !admitting()) {
-            return;
-        }
-        if (!recoverable_accept_error(error)) {
-            try {
-                throw std::system_error(error, "fatal TCP accept error");
-            } catch (...) {
-                (void)runtime_.fail(std::current_exception());
-            }
-            return;
-        }
-        schedule_retry(index);
+void acceptor::accept_failed(std::size_t index, const asio::error_code& error) noexcept {
+    if (error == asio::error::operation_aborted && !admitting()) {
         return;
     }
-    asio::error_code release_error;
-    const auto native = socket.release(release_error);
-    if (release_error) {
+    if (!recoverable_accept_error(error)) {
         try {
-            throw std::system_error(release_error, "failed to detach accepted TCP socket");
+            throw std::system_error(error, "fatal TCP accept error");
         } catch (...) {
             (void)runtime_.fail(std::current_exception());
         }
         return;
     }
-    native_accepted_socket_ticket ticket(listeners_[index]->endpoint_.protocol(), index, native);
+    schedule_retry(index);
+}
+
+bool acceptor::hand_off(std::size_t index, native_accepted_socket_ticket ticket) noexcept {
     if (!admitting() || targets_.empty()) {
-        return;
+        return false;
     }
     auto selected = targets_.size();
     for (std::size_t offset = 0; offset < targets_.size(); ++offset) {
@@ -195,7 +242,7 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         // Dropping the ticket closes the connection at ingress.
         refused_connections_.fetch_add(1, std::memory_order_relaxed);
         schedule_retry(index);
-        return;
+        return false;
     }
     const auto target = targets_[selected];
     try {
@@ -211,11 +258,9 @@ void acceptor::accepted(std::size_t index, const asio::error_code& error,
         }
     } catch (...) {
         (void)runtime_.fail(std::current_exception());
-        return;
+        return false;
     }
-    if (admitting()) {
-        begin_accept(index);
-    }
+    return admitting();
 }
 
 void acceptor::schedule_retry(std::size_t index) noexcept {
