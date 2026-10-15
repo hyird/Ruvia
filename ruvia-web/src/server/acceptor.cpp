@@ -219,7 +219,7 @@ void acceptor::begin_accept(std::size_t index) noexcept {
         // unregistered until its worker adopts it, avoiding Asio release()'s
         // cancellation and completion-port detachment after every accept.
         asio::windows::overlapped_ptr operation(io_context_,
-            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()),
+            asio::bind_allocator(accept_memory_.allocator(),
                 [this, index, ticket = std::move(ticket)](const asio::error_code& error, std::size_t) mutable noexcept {
                     if (error) {
                         accept_failed(index, error);

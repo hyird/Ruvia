@@ -15,6 +15,7 @@
 #include <mswsock.h>
 #endif
 
+#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_submission_view.h"
@@ -88,6 +89,11 @@ private:
     // Owner thread: listeners still accept.
     [[nodiscard]] bool admitting() const noexcept;
 
+#if defined(_WIN32)
+    // Accept operations allocate and complete only on ingress. Keep its pool
+    // outside the runtime so pending completions retire before pool destruction.
+    worker_memory accept_memory_;
+#endif
     worker_runtime runtime_;
     asio::io_context& io_context_;
     std::pmr::vector<listener_ptr> listeners_;
