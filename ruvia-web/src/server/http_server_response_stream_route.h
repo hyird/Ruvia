@@ -58,7 +58,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
 
     if (result_value.peer_aborted_before_commit() != nullptr) {
         throw std::logic_error(
-            "HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
+            "HTTP/1 response stream reported an impossible peer-abort predicate");
     }
     if (auto* recovered = result_value.recovered_failure()) {
         d.response_ = std::move(*recovered).take_response();

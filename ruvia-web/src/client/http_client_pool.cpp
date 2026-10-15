@@ -66,14 +66,6 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     return http_client_error::code_type::protocol_error;
 }
 
-[[nodiscard]] std::shared_ptr<http_client_result_budget_domain> require_http_client_result_budget_domain(
-    std::shared_ptr<http_client_result_budget_domain> result_budget_domain) {
-    if (!result_budget_domain) {
-        throw std::invalid_argument("HTTP client result budget domain must not be null");
-    }
-    return result_budget_domain;
-}
-
 [[nodiscard]] task<std::size_t> acquire_http1_exchange_slot(
     pool_lease_scheduler& scheduler, const operation_timeout& timeout, stop_token stop_token_value) {
     const auto result_value = co_await scheduler.acquire(timeout.remaining(), std::move(stop_token_value));
@@ -128,7 +120,7 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       policy_(config_, resource_),
       advertisements_(worker_, config_.advertisements_, resource_),
       pushes_(resource_),
-      result_budget_domain_(require_http_client_result_budget_domain(std::move(result_budget_domain))),
+      result_budget_domain_(std::move(result_budget_domain)),
       tls_context_(asio::ssl::context::tls_client),
       slots_(*this, http_client_scheduler_slots(config_), worker_, resource_),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),

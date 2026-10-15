@@ -14,9 +14,6 @@
 #include "ruvia/core/memory/pmr_resource.h"
 
 namespace ruvia::detail {
-namespace {
-
-}  // namespace
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};

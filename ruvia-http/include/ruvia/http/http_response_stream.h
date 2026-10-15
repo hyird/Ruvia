@@ -97,7 +97,7 @@ private:
           head_disposition_(head_disposition),
           trailer_intent_present_(trailer_intent_present) {}
 
-    http_response_stream_framing framing_{http_response_stream_framing::http2_frames};
+    http_response_stream_framing framing_{http_response_stream_framing::http1_known_length};
     http_response_body_plan body_plan_;
     http_response_stream_head_disposition head_disposition_{http_response_stream_head_disposition::message_ended};
     bool trailer_intent_present_{false};

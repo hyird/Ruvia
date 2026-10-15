@@ -46,6 +46,20 @@ RUVIA_TEST(http_capsule_protocol_byte_parameters_accept_optional_padding_and_val
     RUVIA_CHECK((padded.index() == 0 && std::get<0>(padded)));
 }
 
+RUVIA_TEST(http_udp_datagram_context_prefix_roundtrips) {
+    std::array<char, 8> prefix{};
+    for (const auto id : {std::uint64_t{0}, std::uint64_t{63}, std::uint64_t{64}, std::uint64_t{16384}, (std::uint64_t{1} << 30), (std::uint64_t{1} << 62) - 1}) {
+        const auto encoded = ruvia::encode_http_udp_datagram_prefix(prefix, id);
+        RUVIA_CHECK(encoded.index() == 0);
+        const auto decoded = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(encoded)));
+        RUVIA_CHECK(decoded.index() == 0);
+        RUVIA_CHECK_EQ(std::get<0>(decoded).context_id_, id);
+        RUVIA_CHECK(std::get<0>(decoded).payload_.empty());
+    }
+    RUVIA_CHECK(ruvia::decode_http_udp_datagram({}).index() != 0);
+    RUVIA_CHECK(ruvia::encode_http_udp_datagram_prefix(prefix, std::uint64_t{1} << 62).index() != 0);
+}
+
 RUVIA_TEST(http_datagram_quarter_stream_id_and_udp_context) {
     std::array<char, 16> prefix{};
     auto count = ruvia::encode_http3_datagram_prefix(prefix, 4096);
@@ -134,6 +148,25 @@ RUVIA_TEST(http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after
     const std::array partial{char(0), char(3), char('a')};
     const auto result_value = truncated.feed_one(partial, true, nullptr, nullptr);
     RUVIA_CHECK(result_value.status_ == ruvia::http_capsule_status::truncated && !result_value.capsule_complete_ && result_value.consumed_bytes_ == partial.size());
+}
+
+RUVIA_TEST(http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {
+    ruvia::http_datagram_session session;
+    const std::string_view opaque("\1\0\xff", 3);
+    const auto plan = session.prepare_datagram(std::span(opaque.data(), opaque.size()), ruvia::http_datagram_transport::capsule);
+    RUVIA_CHECK(plan.index() == 0);
+    RUVIA_CHECK_EQ(std::get<0>(plan).prefix_size_, std::size_t{2});
+    RUVIA_CHECK(std::get<0>(plan).prefix_[0] == 0 && std::get<0>(plan).prefix_[1] == 3);
+    RUVIA_CHECK(std::get<0>(plan).payload_.data() == opaque.data());
+    const auto received = session.receive_datagram(std::get<0>(plan).payload_, ruvia::http_datagram_transport::capsule);
+    RUVIA_CHECK(received.index() == 0 && std::get<0>(received));
+    RUVIA_CHECK(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == opaque);
+    const auto empty = session.prepare_datagram({}, ruvia::http_datagram_transport::capsule);
+    RUVIA_CHECK(empty.index() == 0 && std::get<0>(empty).prefix_size_ == 2);
+    session.close_receive();
+    RUVIA_CHECK(!std::get<0>(session.receive_datagram(opaque, ruvia::http_datagram_transport::capsule)));
+    session.close_send();
+    RUVIA_CHECK(session.prepare_datagram({}, ruvia::http_datagram_transport::capsule).index() != 0);
 }
 
 RUVIA_TEST(http_datagram_generic_channel_frames_opaque_payloads_and_plans_receive_failures) {

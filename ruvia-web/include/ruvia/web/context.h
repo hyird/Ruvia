@@ -25,6 +25,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_push.h"

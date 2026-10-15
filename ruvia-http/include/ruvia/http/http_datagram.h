@@ -27,6 +27,8 @@ struct http3_datagram_view final {
 // check both SETTINGS_H3_DATAGRAM values, QUIC DATAGRAM negotiation, and the
 // request's datagram semantics/open directions before sending or delivering.
 [[nodiscard]] std::variant<http3_datagram_view, http3_codec_error> decode_http3_datagram(std::span<const char> input) noexcept;
+template <detail::http_temporary_owning_range<char> input_type>
+std::variant<http3_datagram_view, http3_codec_error> decode_http3_datagram(input_type&&) noexcept = delete;
 [[nodiscard]] std::variant<std::size_t, http3_codec_error> encode_http3_datagram_prefix(std::span<char> output, std::uint64_t stream_id) noexcept;
 
 struct http_udp_datagram_view final {
@@ -34,7 +36,10 @@ struct http_udp_datagram_view final {
     std::span<const char> payload_{};
 };
 // RFC 9298: context ID zero carries a UDP payload; unknown contexts are dropped.
+// The payload view borrows `input`.
 [[nodiscard]] std::variant<http_udp_datagram_view, http3_codec_error> decode_http_udp_datagram(std::span<const char> input) noexcept;
+template <detail::http_temporary_owning_range<char> input_type>
+std::variant<http_udp_datagram_view, http3_codec_error> decode_http_udp_datagram(input_type&&) noexcept = delete;
 [[nodiscard]] std::variant<std::size_t, http3_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id = 0) noexcept;
 
 struct http_capsule_event final {
@@ -138,14 +143,22 @@ public:
     }
     [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(
         std::span<const char> payload, http_datagram_transport transport) const noexcept;
+    template <detail::http_temporary_owning_range<char> payload_type>
+    std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(payload_type&&, http_datagram_transport) const noexcept = delete;
     [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(
         std::span<const char> input, http_datagram_transport transport) const noexcept;
+    template <detail::http_temporary_owning_range<char> input_type>
+    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(input_type&&, http_datagram_transport) const noexcept = delete;
     [[nodiscard]] std::variant<http_udp_datagram_write_plan, http_datagram_error> prepare_udp_datagram(
         std::span<const char> payload, http_datagram_transport transport) const noexcept;
+    template <detail::http_temporary_owning_range<char> payload_type>
+    std::variant<http_udp_datagram_write_plan, http_datagram_error> prepare_udp_datagram(payload_type&&, http_datagram_transport) const noexcept = delete;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
     // QUIC input includes Quarter Stream ID. Empty optional means silently dropped.
     [[nodiscard]] std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(
         std::span<const char> input, http_datagram_transport transport) const noexcept;
+    template <detail::http_temporary_owning_range<char> input_type>
+    std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(input_type&&, http_datagram_transport) const noexcept = delete;
 
 private:
     http_datagram_session_config config_;

@@ -2,7 +2,6 @@
 
 #include <array>
 #include <charconv>
-#include <filesystem>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
