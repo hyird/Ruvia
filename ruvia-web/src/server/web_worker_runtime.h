@@ -12,7 +12,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/core/worker_submission_view.h"
 #include "ruvia/web/web_worker.h"
 
 #include "integration/worker_capabilities.h"
@@ -20,7 +19,6 @@
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"
 #include "server/inbound_buffer_resource.h"
-#include "server/native_accepted_socket_ticket.h"
 #include "server/static_root_runtime.h"
 #include "server/worker_codecs.h"
 #include "server/worker_connections.h"
@@ -34,7 +32,7 @@ class web_worker_dispatch;
 // One server worker: its core worker_runtime plus the HTTP domain state that
 // runtime's hooks compose. Core owns the generic lifecycle (launch, ready/serve
 // barrier, stop admission, finalization, join, first failure); application
-// sequences every worker and the acceptor through one core worker_group.
+// sequences every independently listening worker through one core worker_group.
 class web_worker_runtime final {
 public:
     web_worker_runtime(const validated_http_server_configuration& configuration,
@@ -48,12 +46,6 @@ public:
         return runtime_;
     }
     ruvia::worker_runtime& runtime() && = delete;
-    // Lock-free admission snapshot for the acceptor. A true
-    // result is advisory; the worker rechecks capacity when the socket is delivered.
-    [[nodiscard]] bool available_for_network_dispatch() const noexcept;
-    // Called on the worker after bounded acceptor queue delivery. Rechecks worker state
-    // and capacity, assigns before any I/O, and consumes the ticket on every path.
-    void accept_transferred_connection(native_accepted_socket_ticket&& ticket) noexcept;
     // Any thread, while serving: stops admitting connections and requests,
     // closes connections outside a request exchange, and lets in-flight
     // requests finish before their connections close. Stopping the runtime
@@ -64,10 +56,6 @@ public:
     [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
-    [[nodiscard]] worker_submission_view network_submission() const& noexcept {
-        return worker_runtime_.submission();
-    }
-    worker_submission_view network_submission() const&& = delete;
     [[nodiscard]] web_worker_handle web_worker() const;
 
 private:

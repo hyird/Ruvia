@@ -36,18 +36,6 @@ void add_shutdown_signals(asio::signal_set& signals) {
 #endif
 }
 
-void acceptor_failed(void* object) noexcept {
-    static_cast<application*>(object)->stop();
-}
-
-bool acceptor_target_available(void* object) noexcept {
-    return static_cast<detail::web_worker_runtime*>(object)->available_for_network_dispatch();
-}
-
-void acceptor_target_accept(void* object, detail::native_accepted_socket_ticket&& ticket) noexcept {
-    static_cast<detail::web_worker_runtime*>(object)->accept_transferred_connection(std::move(ticket));
-}
-
 void invoke_stop_hooks(detail::app_state& state_value) noexcept {
     for (auto& hook : state_value.on_stop_hooks_) {
         try {
@@ -141,7 +129,7 @@ public:
         try {
             if (!stop_requested()) {
                 start_signal_handling();
-                // Every worker and the acceptor are ready before start hooks;
+                // Every independently listening worker is ready before hooks;
                 // no listener accepts until every hook has succeeded.
                 if (group.start()) {
                     publish_ready_workers();
@@ -255,24 +243,8 @@ private:
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
-        std::pmr::vector<detail::acceptor::worker_target> acceptor_targets(runtime_resource_);
-        acceptor_targets.reserve(runtime->workers_.size());
         for (auto& slot : runtime->workers_) {
-            auto* target = slot.runtime_.get();
-            acceptor_targets.push_back({
-                .submission_ = target->network_submission(),
-                .object_ = target,
-                .available_ = &acceptor_target_available,
-                .accept_ = &acceptor_target_accept,
-            });
-        }
-        runtime->ingress_ = make_pmr_object<detail::acceptor>(runtime_resource_,
-            validated_configuration.listeners(), acceptor_targets, &owner_, &acceptor_failed);
-        runtime->ingress_->prepare();
-        // Ingress is the external producer of every worker.
-        runtime->group_.add(runtime->ingress_->runtime(), 0);
-        for (auto& slot : runtime->workers_) {
-            runtime->group_.add(slot.runtime_->runtime(), 1);
+            runtime->group_.add(slot.runtime_->runtime(), 0);
         }
 
         std::lock_guard lock(state_.mutex_);
@@ -329,17 +301,15 @@ private:
         }
     }
 
-    // Graceful stop of a serving app: ingress stops accepting, every worker
-    // stops admitting requests, and in-flight requests may finish until the
-    // shared drain deadline. A member failure has already stopped the group,
-    // which closes every connection at once instead.
+    // Every worker closes its own listeners and request admission, then lets
+    // in-flight requests finish until the shared drain deadline. A member
+    // failure has already stopped the group and closed every connection.
     void drain() noexcept {
         auto& runtime = *state_.runtime_;
         if (state_.options_.server_.drain_timeout_.count() == 0 || runtime.group_.stop_requested()) {
             return;
         }
         const auto deadline = worker_timer_deadline_after(state_.options_.server_.drain_timeout_);
-        runtime.ingress_->close_admission();
         for (auto& slot : runtime.workers_) {
             slot.runtime_->request_drain();
         }

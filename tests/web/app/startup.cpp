@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -176,8 +177,8 @@ bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::end
 }
 
 // The listener's ticket keys are shared by every worker, so each resumption
-// attempt succeeds regardless of which worker the acceptor selects. Offering
-// the session must never fail a handshake.
+// attempt succeeds regardless of which worker accepts it. Offering the session
+// must never fail a handshake.
 bool resume_tls_session(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
@@ -422,6 +423,66 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             }
             return state_value;
         });
+
+    // Valid credentials ensure this fails for the conflicting services, not
+    // for a missing TLS identity.
+    bool duplicate_rejected = false;
+    try {
+        app.listen({.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}});
+    } catch (const std::invalid_argument&) {
+        duplicate_rejected = true;
+    }
+    RUVIA_CHECK(duplicate_rejected);
+
+    for (const bool occupy_http : {true, false}) {
+        asio::io_context io;
+        asio::ip::tcp::acceptor occupied(io);
+        occupied.open(asio::ip::tcp::v4());
+#if defined(_WIN32)
+        // The server intentionally uses SO_REUSEADDR on Windows. Only an
+        // exclusive external listener makes this conflict deterministic.
+        const BOOL exclusive = TRUE;
+        if (::setsockopt(occupied.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
+            throw std::system_error(::WSAGetLastError(), asio::system_category());
+        }
+#endif
+        occupied.bind({asio::ip::address_v4::loopback(), 0});
+        occupied.listen();
+        asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
+        const auto available_endpoint = reservation.local_endpoint();
+        const auto occupied_port = occupied.local_endpoint().port();
+        reservation.close();
+        app.listen({.address_ = "127.0.0.1",
+            .http_ = occupy_http ? occupied_port : available_endpoint.port(),
+            .https_ = occupy_http ? available_endpoint.port() : occupied_port,
+            .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}});
+        auto failed_run = std::async(std::launch::async, [&app] {
+            try {
+                app.run();
+                return std::exception_ptr{};
+            } catch (...) {
+                return std::current_exception();
+            }
+        });
+        const bool returned = failed_run.wait_for(3s) == std::future_status::ready;
+        RUVIA_CHECK(returned);
+        if (!returned) {
+            app.stop();
+        }
+        RUVIA_CHECK(failed_run.get() != nullptr);
+        RUVIA_CHECK(app.workers().empty());
+        RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
+        RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
+        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+        // Failure of either service must also retire the other service's
+        // listeners, including ones prepared by a different worker.
+        asio::ip::tcp::socket socket(io);
+        asio::error_code error;
+        socket.connect(available_endpoint, error);
+        RUVIA_CHECK(error == asio::error::connection_refused);
+    }
+
     app.on_start([state_value, &app] {
         state_value->start_thread_ = std::this_thread::get_id();
         auto workers = app.workers();

@@ -60,8 +60,6 @@ http_server_stats application::http_stats() const {
         total.accept_failures_ += stats.accept_failures_;
         total.worker_failures_ += stats.worker_failures_;
     }
-    // A published runtime always carries its ingress.
-    total.connections_refused_ += state_value.runtime_->ingress_->refused_connections();
     // One application-wide refresher owns the count; workers only adopt.
     if (state_value.runtime_->document_root_) {
         total.document_root_refresh_failures_ = state_value.runtime_->document_root_->failures();

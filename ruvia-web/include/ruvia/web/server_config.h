@@ -51,7 +51,8 @@ enum class process_signal_handler_policy : std::uint8_t {
 // data can therefore cause a reset that prevents receipt of the final response
 // (RFC 9112 §9.6); the server does not wait for the peer's FIN.
 struct server_config final {
-    // Business workers; one server network thread is additional.
+    // Business workers; each owns its listeners and accepts on its event loop.
+    // No additional server network thread is created.
     std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
     process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
     // Graceful stop of a serving app: once stop() closes admission, admitted
@@ -149,7 +150,11 @@ struct tls_config final {
 // One bind address with optional HTTP and HTTPS service ports, independent of
 // the wire protocol. application validates and expands this value atomically. An
 // omitted port disables that service. auto_https_redirect_ targets the HTTPS
-// service port.
+// service port. Each worker independently binds every enabled service. POSIX
+// requires SO_REUSEPORT in addition to SO_REUSEADDR; unsupported platforms fail
+// startup. Windows uses SO_REUSEADDR only: it does not provide SO_REUSEPORT's
+// isolation or distribution semantics, other processes can reuse the port, and
+// connection distribution across workers is not guaranteed to be balanced.
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
@@ -352,8 +357,8 @@ struct http_server_stats final {
     // Connections lost to an exception, as delivered to on_connection_failure
     // (peer resets and closes and server-cancelled I/O are not failures).
     std::size_t connection_failures_{0};
-    // Accepts that failed transiently (descriptor exhaustion, a session that
-    // could not be started). Each cost one connection, not the listener.
+    // Accept attempts or session starts that failed, excluding peer disconnects
+    // and our own cancellation. Fatal listener failures also stop the worker.
     std::size_t accept_failures_{0};
     // Failures that escaped to the worker's io_context and stopped it.
     std::size_t worker_failures_{0};

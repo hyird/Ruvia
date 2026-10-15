@@ -12,7 +12,6 @@
 
 #include "router/compiled_route_plan.h"
 #include "router/route_table.h"
-#include "server/acceptor.h"
 #include "server/static_root_runtime.h"
 #include "server/web_worker_runtime.h"
 
@@ -43,7 +42,6 @@ struct app_runtime_graph final {
           document_root_(nullptr, pmr_object_deleter<document_root_publisher>{resource}),
           route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource}),
           workers_(resource),
-          ingress_(nullptr, pmr_object_deleter<acceptor>{resource}),
           group_(resource) {}
 
     // Declared before workers so it is destroyed after suspended worker tasks.
@@ -54,9 +52,8 @@ struct app_runtime_graph final {
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
     std::pmr::vector<app_worker_slot> workers_;
-    std::unique_ptr<acceptor, pmr_object_deleter<acceptor>> ingress_;
-    // The one lifecycle over ingress (tier 0) and every worker (tier 1). It
-    // borrows their core runtimes, so it is declared after them.
+    // The one lifecycle over every independently listening worker. It borrows
+    // their core runtimes, so it is declared after them.
     worker_group group_;
     // Guarded by the application mutex. Worker handles are published only
     // once every worker is ready, so a posted job never meets a starting worker.

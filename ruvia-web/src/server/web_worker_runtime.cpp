@@ -49,7 +49,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
               .precompressed_static_files_ = options_.compression_.has_value(),
           }),
-      connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners),
+      connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
       web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
           runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
@@ -81,14 +81,6 @@ web_worker_runtime::~web_worker_runtime() {
     // application's worker_group has no external producers left.
     runtime_.finalize();
     runtime_.join();
-}
-
-bool web_worker_runtime::available_for_network_dispatch() const noexcept {
-    return connections_.available();
-}
-
-void web_worker_runtime::accept_transferred_connection(native_accepted_socket_ticket&& ticket) noexcept {
-    connections_.accept(std::move(ticket));
 }
 
 void web_worker_runtime::request_drain() noexcept {
@@ -130,6 +122,9 @@ void web_worker_runtime::stop_admission_on_context() noexcept {
     worker_state_ = http_server_worker_state::stopped;
     stop_source_.request_stop();
     connections_.stop();
+    // No ingress producer remains. This first-tier owner requests its own
+    // finalization; run_worker still joins every pending operation.
+    runtime_.finalize();
 }
 
 void web_worker_runtime::finalize_on_context() noexcept {
@@ -154,8 +149,8 @@ task<void> web_worker_runtime::run_worker() {
             (void)runtime_.fail(std::current_exception());
         }
     }
-    // Retain worker-local state until the lifecycle caller has joined ingress
-    // and finalized this worker.
+    // Retain worker-local state until finalization joins sessions and pending
+    // listener operations on this same owner.
     co_await finalize_signal_.wait();
     try {
         co_await background_tasks_.join();

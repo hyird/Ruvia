@@ -62,6 +62,11 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
   request lifetime or into offloaded work.
 - The server and outbound client support HTTP/1 over TCP and TLS; WebSocket
   uses HTTP/1.1 Upgrade.
+- Server workers bind their own listeners. Linux and other supported POSIX
+  systems require `SO_REUSEPORT`; startup fails if it is unavailable. Windows
+  uses `SO_REUSEADDR`, not an equivalent of `SO_REUSEPORT`: worker connection
+  distribution may be uneven, and other processes can reuse the listening port.
+  Do not rely on the Windows listener to reserve the port exclusively.
 
 ## Examples
 

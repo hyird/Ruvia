@@ -72,12 +72,12 @@ ruvia-web  -> ruvia-core + ruvia-http
 线程与连接：
 
 - 生产 application 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
-- 每个业务 worker 独占一个 standalone Asio 事件循环。n 个业务 worker 另配一个网络接入线程；阻塞池和信号线程另计。
-- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接。连接固定绑定一个 worker，全部请求、TCP I/O、TLS、协议定时器和连接生命周期由该 worker 管理至连接结束。
-- 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
+- 每个业务 worker 独占一个 standalone Asio 事件循环，在本 worker 上独立 bind/listen/accept 全部监听端点；n 个业务 worker 不另配网络接入线程，阻塞池和信号线程另计。
+- 连接由接受它的 worker 固定管理至结束，全部请求、TCP I/O、TLS、协议定时器和连接生命周期均留在本 worker；不设独立 acceptor、跨 worker 连接交接或接入交接队列。
+- Linux 及其他支持 `SO_REUSEPORT` 的 POSIX 平台使用 `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或设置失败则启动失败。Windows 按 `SO_REUSEADDR` 独立监听，不使用单监听回退；它不等价于 `SO_REUSEPORT`，不保证 worker 分配均衡，也不阻止其他进程复用端口。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner。event_loop_pool 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
-- Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确的生命周期扩展点接入 core。worker 资源由统一 owner 管理，实例保持 worker-local。
-- 跨线程交互走有界队列，禁止直接操作连接状态。其他线程只请求停止，资源由所属 owner 线程关闭。
+- Web 只拥有 worker-local 业务状态、能力、监听器、连接 I/O 和接入/退役策略，通过明确的生命周期扩展点接入 core。worker 资源由统一 owner 管理，实例保持 worker-local。
+- 跨线程业务调度走有界队列，禁止直接操作连接状态。其他线程只请求停止，监听器、accept 重试与连接资源由所属 owner 线程关闭。
 - 调度入口与事件循环同属一个 owner，入口先于上下文退役。请求期只借用稳定 worker 句柄；显式卸载可复制一次。
 
 协程与任务：
@@ -91,8 +91,10 @@ ruvia-web  -> ruvia-core + ruvia-http
 启动与停机：
 
 - 整体就绪且全部启动 hook 成功后才能服务。启动失败或取消不留下部分服务；失败原因必须可见。
+- 各 worker 在准备阶段独立绑定监听，服务 barrier 后才启动本 worker 的 accept；监听配置中重复端点必须拒绝，不能因端口复用而静默成功。任一监听准备失败须回滚全部 worker 的监听和资源。
 - 停机分阶段：停止接入 → 排空（关闭空闲和未完成请求头的连接，已接纳请求在 `drain_timeout` 内完成，WebSocket 以 1001 发起关闭）→ 强制关闭剩余连接 → 最终退役。
 - teardown 先终止 I/O，再 join 全部后台操作。外部生产者静默、跨线程 channel 双方退役确认及后台任务完成前，core 保持 owner 事件循环存活。
+- 排空和停止先关闭本 worker 的监听器与 accept 重试，唤醒 pending accept；所有 accept 操作完成并 join 后才能销毁 worker 资源。
 - 用户 hook 和 join 由生命周期调用线程执行。
 
 ## Web 核心设计

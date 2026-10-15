@@ -289,7 +289,7 @@ void reset_socket_state() {
 
 using namespace lifecycle_test;
 
-RUVIA_TEST(app_restarts_after_idle_connections_and_pending_accepts) {
+RUVIA_TEST(app_multi_worker_restarts_after_idle_connections_and_pending_accepts) {
     install_hooks();
     auto& app = ruvia::app();
     asio::io_context io;
@@ -299,6 +299,7 @@ RUVIA_TEST(app_restarts_after_idle_connections_and_pending_accepts) {
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
         app_run run(app);
         RUVIA_CHECK(state().started_.try_acquire_for(3s));
+        RUVIA_CHECK_EQ(app.workers().size(), std::size_t{2});
         std::vector<asio::ip::tcp::socket> idle;
         if (cycle != 0) {
             // Connecting without sending data must not hold up later accepts.
@@ -335,6 +336,12 @@ RUVIA_TEST(app_restarts_after_idle_connections_and_pending_accepts) {
             RUVIA_CHECK(read_to_end(socket, response));
             RUVIA_CHECK(response.empty());
         }
+        RUVIA_CHECK(app.workers().empty());
+        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+        asio::ip::tcp::socket stopped(io);
+        asio::error_code error;
+        stopped.connect(endpoint, error);
+        RUVIA_CHECK(error == asio::error::connection_refused);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "server/worker_connections.h"
 
+#include <cerrno>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
@@ -7,12 +8,20 @@
 #include <system_error>
 #include <utility>
 
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#endif
+
+#include <asio/bind_allocator.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "context/context_services.h"
@@ -25,6 +34,53 @@
 
 namespace ruvia::detail {
 namespace {
+
+enum class accept_error_action { retry,
+    report_and_retry,
+    fail };
+
+// Peer disappearance and readiness races are normal accept outcomes. Resource
+// and network failures leave the listener usable but must remain observable.
+accept_error_action classify_accept_error(const asio::error_code& error) noexcept {
+    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
+        error == asio::error::eof || error == asio::error::try_again ||
+        error == asio::error::would_block || error == asio::error::interrupted) {
+        return accept_error_action::retry;
+    }
+#if defined(_WIN32)
+    if (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED) {
+        return accept_error_action::retry;
+    }
+#endif
+    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
+        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
+        error == std::errc::protocol_error || error == asio::error::network_down ||
+        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
+        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
+        error == asio::error::no_permission || error == asio::error::timed_out) {
+        return accept_error_action::report_and_retry;
+    }
+#if defined(EHOSTDOWN) && defined(ENONET)
+    if (error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET)) {
+        return accept_error_action::report_and_retry;
+    }
+#endif
+    return accept_error_action::fail;
+}
+
+void configure_listener_address(asio::ip::tcp::acceptor& socket) {
+    socket.set_option(asio::socket_base::reuse_address(true));
+#if !defined(_WIN32)
+#if defined(SO_REUSEPORT)
+    const int enabled = 1;
+    if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
+        throw std::system_error(errno, asio::system_category(), "failed to enable TCP listener SO_REUSEPORT");
+    }
+#else
+    throw std::system_error(asio::error::operation_not_supported, "TCP worker listeners require SO_REUSEPORT");
+#endif
+#endif
+}
 
 int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void*) noexcept {
@@ -90,7 +146,7 @@ void resolve_remote_endpoint(tcp_socket_type& socket, std::pmr::string& address,
 worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
     worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
     http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
-    task_scope& tasks, std::span<const http_server_listener_definition> listeners)
+    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime)
     : io_(io),
       worker_(worker_value),
       memory_(memory),
@@ -100,32 +156,51 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       stop_token_(stop_token_value),
       state_(state_value),
       tasks_(tasks),
+      runtime_(runtime),
       listeners_(memory.resource()),
       scanner_(worker_value, make_connection_scanner_options(options, memory)),
       work_sets_(memory) {
     listeners_.reserve(listeners.size());
-    for (const auto& listener : listeners) {
-        listeners_.push_back(make_pmr_object<http_server_session_config>(memory.resource(), listener, memory.resource()));
+    for (const auto& configured : listeners) {
+        listeners_.push_back(make_pmr_object<listener>(memory.resource(), io, configured, memory.resource()));
     }
     options_.connection_failure_.counter_ = &failures_;
 }
 void worker_connections::prepare() {
-    for (auto& listener : listeners_) {
-        configure_tls(*listener);
+    try {
+        for (auto& configured : listeners_) {
+            configure_tls(configured->session_);
+            auto& socket = configured->socket_;
+            socket.open(configured->endpoint_.protocol());
+            configure_listener_address(socket);
+            socket.bind(configured->endpoint_);
+            socket.listen(asio::socket_base::max_listen_connections);
+        }
+        scanner_.start();
+    } catch (...) {
+        close_listeners();
+        scanner_.stop();
+        retire_tls();
+        throw;
     }
-    scanner_.start();
 }
 void worker_connections::open_admission() noexcept {
     drain_.open();
-    serving_.store(true, std::memory_order_release);
+    try {
+        for (std::size_t index = 0; index < listeners_.size(); ++index) {
+            tasks_.spawn(run_accept_loop(index));
+        }
+    } catch (...) {
+        report_accept_failure(std::current_exception(), true);
+    }
 }
 void worker_connections::drain() noexcept {
-    serving_.store(false, std::memory_order_release);
+    close_listeners();
     drain_.begin();
     scanner_.drain();
 }
 void worker_connections::stop() noexcept {
-    serving_.store(false, std::memory_order_release);
+    close_listeners();
     scanner_.stop();
     scanner_.close_all();
     drain_.complete();
@@ -134,16 +209,12 @@ bool worker_connections::wait_until_drained(std::chrono::steady_clock::time_poin
     return drain_.wait_until(deadline);
 }
 void worker_connections::retire_tls() noexcept {
-    for (auto& listener : listeners_) {
-        listener->tls_context_.reset();
-        listener->sni_lookup_.clear();
-        listener->sni_contexts_.clear();
+    for (auto& configured : listeners_) {
+        auto& session = configured->session_;
+        session.tls_context_.reset();
+        session.sni_lookup_.clear();
+        session.sni_contexts_.clear();
     }
-}
-bool worker_connections::available() const noexcept {
-    return serving_.load(std::memory_order_acquire) &&
-           (!options_.server_.max_connections_per_worker_ ||
-               drain_.active() < *options_.server_.max_connections_per_worker_);
 }
 http_server_stats worker_connections::stats() const noexcept {
     http_server_stats result;
@@ -152,6 +223,69 @@ http_server_stats worker_connections::stats() const noexcept {
     result.connection_failures_ = failures_.load(std::memory_order_relaxed);
     result.accept_failures_ = accept_failures_.load(std::memory_order_relaxed);
     return result;
+}
+
+void worker_connections::close_listeners() noexcept {
+    for (auto& configured : listeners_) {
+        asio::error_code ignored;
+        configured->retry_.cancel(ignored);
+        configured->socket_.close(ignored);
+    }
+}
+
+task<void> worker_connections::run_accept_loop(std::size_t index) {
+    auto& configured = *listeners_[index];
+    try {
+        while (http_server_worker_running(state_) && configured.socket_.is_open()) {
+            // The accepted socket is born on this worker and never changes
+            // executor. Only the long-lived listener task wraps acceptance.
+            tcp_socket_type socket(io_);
+            const auto completion = co_await ruvia::async_asio([this, &configured, &socket](auto handler) {
+                configured.socket_.async_accept(socket, asio::bind_allocator(memory_.allocator(), std::move(handler)));
+            });
+            if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
+                co_return;
+            }
+            const auto error = completion.error_code();
+            if (!error) {
+                accept_socket(index, std::move(socket));
+                continue;
+            }
+            const auto action = classify_accept_error(error);
+            if (action == accept_error_action::fail) {
+                throw std::system_error(error, "fatal TCP accept error");
+            }
+            if (action == accept_error_action::report_and_retry) {
+                try {
+                    throw std::system_error(error, "recoverable TCP accept error");
+                } catch (...) {
+                    report_accept_failure(std::current_exception(), false);
+                }
+            }
+            configured.retry_.expires_after(std::chrono::milliseconds(25));
+            const auto retry = co_await ruvia::async_asio([this, &configured](auto handler) {
+                configured.retry_.async_wait(asio::bind_allocator(memory_.allocator(), std::move(handler)));
+            });
+            if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
+                co_return;
+            }
+            if (retry.error_code()) {
+                throw std::system_error(retry.error_code(), "TCP accept retry failed");
+            }
+        }
+    } catch (...) {
+        report_accept_failure(std::current_exception(), true);
+    }
+}
+
+void worker_connections::report_accept_failure(std::exception_ptr failure, bool fatal) noexcept {
+    accept_failures_.fetch_add(1, std::memory_order_relaxed);
+    if (fatal) {
+        close_listeners();
+        (void)runtime_.fail(std::move(failure));
+    } else {
+        ruvia::report_unhandled_failure("web accept", std::move(failure));
+    }
 }
 
 void worker_connections::configure_tls(http_server_session_config& listener_value) {
@@ -291,58 +425,12 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
     try {
         ruvia::configure_accepted_socket(socket);
         accepted_connection_lease connection(std::move(socket), drain_);
-        auto& listener_value = *listeners_[listener_index];
+        auto& listener_value = listeners_[listener_index]->session_;
         tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection))
                                                      : run_session(listener_value, std::move(connection)));
     } catch (...) {
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
         options_.connection_failure_.invoke({}, std::current_exception());
-    }
-}
-
-void worker_connections::accept(native_accepted_socket_ticket&& ticket) noexcept {
-    if (!ticket.valid()) {
-        return;
-    }
-    const auto listener_index = ticket.listener_index();
-    if (listener_index >= listeners_.size()) {
-        return;
-    }
-    // Only a worker that still admits connections may adopt one. A ticket the
-    // acceptor published before admission closed is refused, and dropping it
-    // closes the connection.
-    if (!http_server_worker_running(state_)) {
-        refused_.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    try {
-        tcp_socket_type socket(io_);
-        asio::error_code error;
-        try {
-            socket.assign(ticket.protocol(), ticket.native_handle(), error);
-        } catch (...) {
-            // Some Asio implementations can take the handle before reporting an
-            // exception. Disarm the ticket before socket's RAII cleanup in that case.
-            if (socket.is_open() && socket.native_handle() == ticket.native_handle()) {
-                static_cast<void>(ticket.release());
-            }
-            accept_failures_.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        if (error) {
-            if (socket.is_open() && socket.native_handle() == ticket.native_handle()) {
-                static_cast<void>(ticket.release());
-            }
-            accept_failures_.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        static_cast<void>(ticket.release());  // ownership now belongs to socket.
-        accept_socket(listener_index, std::move(socket));
-    } catch (...) {
-        // Includes tcp_socket_type construction and any unexpected accept-path failure.
-        // Until assign transfers ownership the ticket remains responsible for close.
-        accept_failures_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
