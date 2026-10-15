@@ -25,13 +25,13 @@ struct redis_types_access final {
     }
 
     [[nodiscard]] static redis_key_value key_value(
-        std::string_view key, std::string_view value, std::pmr::memory_resource* resource) {
-        return redis_key_value(key, value, resource);
+        std::pmr::string&& key, std::pmr::string&& value) noexcept {
+        return redis_key_value(std::move(key), std::move(value));
     }
 
     [[nodiscard]] static redis_scored_value scored_value(
-        std::string_view value, double score, std::pmr::memory_resource* resource) {
-        return redis_scored_value(value, score, resource);
+        std::pmr::string&& value, double score) noexcept {
+        return redis_scored_value(std::move(value), score);
     }
 
     [[nodiscard]] static redis_scan_result scan_result(std::pmr::memory_resource* resource) {
@@ -77,8 +77,8 @@ struct redis_types_access final {
     }
 
     [[nodiscard]] static redis_stream_entry stream_entry(
-        std::string_view id, std::pmr::memory_resource* resource) {
-        return redis_stream_entry(id, resource);
+        std::pmr::string&& id) noexcept {
+        return redis_stream_entry(std::move(id));
     }
 
     [[nodiscard]] static std::pmr::vector<redis_key_value>& fields(redis_stream_entry& entry_value) noexcept {
@@ -86,8 +86,8 @@ struct redis_types_access final {
     }
 
     [[nodiscard]] static redis_stream_read_result stream_read_result(
-        std::string_view stream, std::pmr::memory_resource* resource) {
-        return redis_stream_read_result(stream, resource);
+        std::pmr::string&& stream) noexcept {
+        return redis_stream_read_result(std::move(stream));
     }
 
     [[nodiscard]] static std::pmr::vector<redis_stream_entry>& entries(
@@ -135,6 +135,10 @@ struct redis_types_access final {
 
     [[nodiscard]] static std::pmr::vector<redis_value>& elements(redis_value& value) noexcept {
         return value.array_;
+    }
+
+    [[nodiscard]] static std::pmr::string& text(redis_value& value) noexcept {
+        return value.string_;
     }
 
     // The resource every allocation of `value` comes from.

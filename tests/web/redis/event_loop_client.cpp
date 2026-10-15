@@ -285,8 +285,9 @@ private:
                 }
                 reply = "+OK\r\n";
             } else if (args.front() == "BLPOP") {
-                // An empty list: the server-side wait elapsed without an element.
-                reply = "*-1\r\n";
+                reply = args[1] == "filled"
+                            ? "*2\r\n$6\r\nfilled\r\n$3\r\n" + std::string("a\0b", 3) + "\r\n"
+                            : "*-1\r\n";
             } else {
                 reply = "-ERR test error\r\n";
             }
@@ -373,15 +374,17 @@ ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& clien
     ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     auto redis = client.handle();
-    const std::array<std::string_view, 1> keys{"queue"};
+    const std::array<std::string_view, 1> keys{"filled"};
     const auto wait = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(100));
     // The lazy blocking connection spends longer in SELECT than the wait plus
     // its reply grace; that time must not count against the server-side wait.
     const auto first = co_await redis.blpop(keys, wait);
-    RUVIA_CHECK(!first.has_value());
+    RUVIA_CHECK(first && first->key() == "filled" && first->value() == std::string_view("a\0b", 3));
     // The connection stayed healthy: the peer accepts no third connection.
-    const auto second = co_await redis.blpop(keys, wait);
+    const std::array<std::string_view, 1> empty_keys{"queue"};
+    const auto second = co_await redis.blpop(empty_keys, wait);
     RUVIA_CHECK(!second.has_value());
+    RUVIA_CHECK(first && first->value() == std::string_view("a\0b", 3));
     co_await client.shutdown();
 }
 

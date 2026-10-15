@@ -17,9 +17,13 @@ namespace ruvia::detail {
 // A reply's type is chosen by the (untrusted) server, so a wrong type is a
 // protocol condition the caller catches via redis_error, not a program bug.
 [[nodiscard]] std::string_view redis_value_string(const redis_value& value);
+// Consumes reply storage when its resource matches; otherwise owns a copy in
+// the destination resource. Never returns a borrow into the discarded reply.
+[[nodiscard]] std::pmr::string take_redis_string(redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] std::int64_t redis_value_integer(const redis_value& value);
 [[nodiscard]] bool redis_value_integer_bool(const redis_value& value);
 [[nodiscard]] std::span<const redis_value> redis_value_array(const redis_value& value);
+[[nodiscard]] std::span<redis_value> redis_value_array(redis_value& value);
 void throw_if_redis_error(const redis_value& value);
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index);
 [[nodiscard]] bool validate_redis_pooled_command(
@@ -79,17 +83,17 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
 
 [[nodiscard]] double parse_redis_double(std::string_view value, std::string_view context_value);
 [[nodiscard]] std::pmr::vector<redis_key_value> parse_redis_key_value_array(
-    const redis_value& value, std::pmr::memory_resource* resource, std::string_view context_value);
+    redis_value&& value, std::pmr::memory_resource* resource, std::string_view context_value);
 [[nodiscard]] std::pmr::vector<redis_scored_value> parse_redis_scored_array(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> parse_redis_string_array(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_scan_result parse_redis_scan_result(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_z_scan_result parse_redis_z_scan_result(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> redis_eval_args(std::string_view command,
     std::string_view script, std::span<const std::string_view> keys,
@@ -98,11 +102,11 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     std::span<const std::string_view> keys, redis_block_wait wait,
     std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<redis_key_value> parse_redis_blocking_pop_reply(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> redis_x_read_group_args(std::string_view group,
     std::string_view consumer, std::span<const redis_stream_read_view> streams,
     const redis_x_read_group_options& options, std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
-    const redis_value& value, std::pmr::memory_resource* resource);
+    redis_value&& value, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

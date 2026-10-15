@@ -730,4 +730,115 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
     peer.join();
 }
 
+RUVIA_TEST(redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
+    std::string key(128, 'k');
+    std::string payload(4097, 'v');
+    key[17] = '\0';
+    payload[2048] = '\0';
+    const std::string_view expected_key(key);
+    const std::string_view expected_payload(payload);
+    const auto bulk_key = redis_bulk_reply(key);
+    const auto bulk_payload = redis_bulk_reply(payload);
+    const auto array = [](std::initializer_list<std::string> items) {
+        std::string result = "*" + std::to_string(items.size()) + "\r\n";
+        for (const auto& item : items) {
+            result.append(item);
+        }
+        return result;
+    };
+    const auto fields = array({bulk_key, bulk_payload});
+    const auto scored = array({bulk_key, redis_bulk_reply("1.5")});
+    const auto scan = [&](const std::string& values) {
+        return array({redis_bulk_reply("0"), values});
+    };
+    const auto stream = [&](const std::string& values) {
+        return array({array({bulk_key, array({array({redis_bulk_reply("1-0"), values})})})});
+    };
+    scripted_redis_peer peer({bulk_payload, bulk_payload, bulk_payload,
+        array({bulk_payload, "$-1\r\n", "$0\r\n\r\n"}), array({bulk_payload, bulk_key}),
+        fields, scored, scan(array({bulk_key, bulk_payload})), scan(fields), scan(scored), stream(fields),
+        array({bulk_payload, ":1\r\n"}), scan(array({bulk_key})), stream(array({bulk_key})),
+        bulk_payload, ":1\r\n", "$-1\r\n"});
+    auto& io = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io);
+    ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.handle();
+        const auto scalar = co_await redis.get(key);
+        const auto status = co_await redis.ping(payload);
+        const auto previous = co_await redis.set(key, "new", {.previous_value_ = ruvia::redis_set_previous_value_policy::return_value});
+        const std::array<std::string_view, 3> keys{key, "missing", "empty"};
+        const auto optional_values = co_await redis.mget(keys);
+        const auto list = co_await redis.lrange(key, 0, -1);
+        const auto hash = co_await redis.hget_all(key);
+        const auto sorted = co_await redis.zrange_with_scores(key, 0, -1);
+        const auto scanned = co_await redis.scan();
+        const auto hash_scan = co_await redis.hscan(key);
+        const auto sorted_scan = co_await redis.zscan(key);
+        const std::array streams{ruvia::redis_stream_read_view{.stream_ = key, .id_ = ">"}};
+        const auto grouped = co_await redis.xread_group("group", "consumer", streams);
+        const auto rejects_protocol = [&](auto&& operation) -> ruvia::task<void> {
+            bool rejected = false;
+            try {
+                (void)co_await std::move(operation);
+            } catch (const ruvia::redis_error& error) {
+                rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+            }
+            RUVIA_CHECK(rejected);
+        };
+        co_await rejects_protocol(redis.lrange(key, 0, -1));
+        co_await rejects_protocol(redis.hscan(key));
+        co_await rejects_protocol(redis.xread_group("group", "consumer", streams));
+        const auto after_errors = co_await redis.get(key);
+        co_await rejects_protocol(redis.get(key));
+        RUVIA_CHECK(!(co_await redis.get("missing")));
+
+        RUVIA_CHECK(scalar && *scalar == expected_payload);
+        RUVIA_CHECK_EQ(status, expected_payload);
+        RUVIA_CHECK(previous.applied() && previous.previous() && *previous.previous() == expected_payload);
+        RUVIA_CHECK_EQ(optional_values.size(), std::size_t{3});
+        if (optional_values.size() == 3) {
+            RUVIA_CHECK(optional_values[0] && *optional_values[0] == expected_payload);
+            RUVIA_CHECK(!optional_values[1]);
+            RUVIA_CHECK(optional_values[2] && optional_values[2]->empty());
+        }
+        RUVIA_CHECK_EQ(list.size(), std::size_t{2});
+        if (list.size() == 2) {
+            RUVIA_CHECK(list[0] == expected_payload && list[1] == expected_key);
+        }
+        const auto check_fields = [&](std::span<const ruvia::redis_key_value> values) {
+            RUVIA_CHECK_EQ(values.size(), std::size_t{1});
+            if (values.size() == 1) {
+                RUVIA_CHECK(values[0].key() == expected_key && values[0].value() == expected_payload);
+            }
+        };
+        const auto check_scores = [&](std::span<const ruvia::redis_scored_value> values) {
+            RUVIA_CHECK_EQ(values.size(), std::size_t{1});
+            if (values.size() == 1) {
+                RUVIA_CHECK(values[0].value() == expected_key && values[0].score() == 1.5);
+            }
+        };
+        check_fields(hash);
+        check_fields(hash_scan.entries());
+        check_scores(sorted);
+        check_scores(sorted_scan.entries());
+        RUVIA_CHECK(scanned.done() && hash_scan.done() && sorted_scan.done());
+        RUVIA_CHECK_EQ(scanned.values().size(), std::size_t{2});
+        if (scanned.values().size() == 2) {
+            RUVIA_CHECK(scanned.values()[0] == expected_key && scanned.values()[1] == expected_payload);
+        }
+        RUVIA_CHECK(grouped && grouped->streams().size() == 1);
+        if (grouped && grouped->streams().size() == 1) {
+            const auto& result = grouped->streams()[0];
+            RUVIA_CHECK(result.stream() == expected_key && result.entries().size() == 1);
+            if (result.entries().size() == 1) {
+                RUVIA_CHECK_EQ(result.entries()[0].id(), std::string_view("1-0"));
+                check_fields(result.entries()[0].fields());
+            }
+        }
+        RUVIA_CHECK(after_errors && *after_errors == expected_payload);
+    });
+    peer.join();
+}
+
 }  // namespace redis_client_test

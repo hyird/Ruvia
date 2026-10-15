@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -259,14 +260,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_key_value(std::string_view key, std::string_view value, std::pmr::memory_resource* resource)
-        : redis_key_value(key, value, resolved_pmr_resource_tag{},
-              pmr_resource_or_default(resource)) {}
-
-    redis_key_value(std::string_view key, std::string_view value, resolved_pmr_resource_tag,
-        std::pmr::memory_resource* resource)
-        : key_(key.data(), key.size(), resource),
-          value_(value.data(), value.size(), resource) {}
+    redis_key_value(std::pmr::string&& key, std::pmr::string&& value) noexcept
+        : key_(std::move(key)),
+          value_(std::move(value)) {}
 
     std::pmr::string key_;
     std::pmr::string value_;
@@ -296,13 +292,8 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_scored_value(std::string_view value, double score, std::pmr::memory_resource* resource)
-        : redis_scored_value(value, score, resolved_pmr_resource_tag{},
-              pmr_resource_or_default(resource)) {}
-
-    redis_scored_value(std::string_view value, double score, resolved_pmr_resource_tag,
-        std::pmr::memory_resource* resource)
-        : value_(value.data(), value.size(), resource),
+    redis_scored_value(std::pmr::string&& value, double score) noexcept
+        : value_(std::move(value)),
           score_(score) {}
 
     std::pmr::string value_;
@@ -430,9 +421,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_stream_entry(std::string_view id, std::pmr::memory_resource* resource)
-        : id_(id.data(), id.size(), resource),
-          fields_(resource) {}
+    explicit redis_stream_entry(std::pmr::string&& id) noexcept
+        : id_(std::move(id)),
+          fields_(id_.get_allocator().resource()) {}
 
     std::pmr::string id_;
     std::pmr::vector<redis_key_value> fields_;
@@ -463,9 +454,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_stream_read_result(std::string_view stream, std::pmr::memory_resource* resource)
-        : stream_(stream.data(), stream.size(), resource),
-          entries_(resource) {}
+    explicit redis_stream_read_result(std::pmr::string&& stream) noexcept
+        : stream_(std::move(stream)),
+          entries_(stream_.get_allocator().resource()) {}
 
     std::pmr::string stream_;
     std::pmr::vector<redis_stream_entry> entries_;
