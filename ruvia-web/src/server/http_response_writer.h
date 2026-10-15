@@ -5,6 +5,10 @@
 #include <system_error>
 #include <type_traits>
 
+#if defined(__linux__)
+#include <sys/ioctl.h>
+#endif
+
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
@@ -48,7 +52,23 @@ private:
 // write on the asynchronous path.
 inline void enable_plain_tcp_sync_write(asio::ip::tcp::socket& socket) noexcept {
     std::error_code ignored;
+#if defined(__linux__)
+    // This socket is freshly accepted TCP, not an external descriptor. The
+    // public command sets Asio's user mode as well as the kernel flag, without
+    // the assigned-descriptor F_GETFL/F_SETFL round trip.
+    struct non_blocking_command final {
+        int enabled_{1};
+        [[nodiscard]] int name() const noexcept {
+            return FIONBIO;
+        }
+        [[nodiscard]] int* data() noexcept {
+            return &enabled_;
+        }
+    } command;
+    socket.io_control(command, ignored);
+#else
     socket.non_blocking(true, ignored);
+#endif
 }
 
 // Try one non-blocking plain TCP write before suspending. Returns true when
