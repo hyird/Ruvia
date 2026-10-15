@@ -223,11 +223,11 @@ public:
 
 private:
     friend http_request_admission admit_http_request(const http_request_admission_input& input,
-        const http_request_admission_policy& policy, context_services services);
+        const http_request_admission_policy& policy, const context_services& services);
 
-    http_request_admission(http_response_tail tail, context_services services) noexcept
+    http_request_admission(http_response_tail tail, const context_services& services) noexcept
         : tail_(tail),
-          services_(std::move(services)) {}
+          services_(services) {}
 
     http_response_tail tail_;
     context_services services_;
@@ -241,7 +241,9 @@ private:
 
 // Runs the admission policy once for one request. `services` are the
 // connection's request services (stop token, interim output, trailers, ...).
+// Admission borrows the input only during this synchronous call and owns its
+// request-local service view; binding it never changes the connection's view.
 [[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, context_services services);
+    const http_request_admission_policy& policy, const context_services& services);
 
 }  // namespace ruvia::detail

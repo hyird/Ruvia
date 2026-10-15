@@ -68,7 +68,7 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, context_services services) {
+    const http_request_admission_policy& policy, const context_services& services) {
     const auto& request = input.request_;
     // Negotiate against every coding. A document root or context::static_file
     // may serve an indexed precompressed sidecar even when this worker has no
@@ -82,12 +82,13 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Keyed on the client, not the hop: behind a trusted proxy every request
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.
-    services = services.with_conn_info(services.resolve_conn_info(request));
-    const auto client_address = services.get_conn_info().client().address();
+    const auto connection = services.resolve_conn_info(request);
+    const auto client_address = connection.client().address();
 
     const auto* resolved = input.resolution_.resolved();
     http_request_admission admission(
-        http_response_tail(request, coding_policy, client_address, input.start_), std::move(services));
+        http_response_tail(request, coding_policy, client_address, input.start_), services);
+    admission.services_.bind_conn_info(connection);
     admission.resolved_ = resolved;
     admission.coding_availability_ = policy.coding_availability_;
     const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;

@@ -152,16 +152,14 @@ public:
         return request_services_.body_source_;
     }
 
-    [[nodiscard]] context_services with_streaming_request_body(body_reader& value) const noexcept {
-        auto services = *this;
-        services.request_services_.body_source_ = context_request_body_source::streaming(value);
-        return services;
+    // Bind on a request-local copy: chaining value-producing overlays copies
+    // the worker and connection views again for each request-body capability.
+    void bind_streaming_request_body(body_reader& value) noexcept {
+        request_services_.body_source_ = context_request_body_source::streaming(value);
     }
 
-    [[nodiscard]] context_services with_lazy_request_body(request_body_loader& value) const noexcept {
-        auto services = *this;
-        services.request_services_.body_source_ = context_request_body_source::lazy(value);
-        return services;
+    void bind_lazy_request_body(request_body_loader& value) noexcept {
+        request_services_.body_source_ = context_request_body_source::lazy(value);
     }
 
     [[nodiscard]] const http_request_trailers* request_trailers() const noexcept {
@@ -169,12 +167,10 @@ public:
     }
 
     // Bound by whichever layer owns the request body, alongside its source.
-    [[nodiscard]] context_services with_request_trailers(const http_request_trailers& trailers) const noexcept {
-        auto services = *this;
-        services.request_services_.trailers_ = &trailers;
-        return services;
+    void bind_request_trailers(const http_request_trailers& trailers) noexcept {
+        request_services_.trailers_ = &trailers;
     }
-    context_services with_request_trailers(http_request_trailers&&) const = delete;
+    void bind_request_trailers(http_request_trailers&&) = delete;
 
     [[nodiscard]] http_interim_response_output* interim_output() const noexcept {
         return request_services_.interim_output_;
@@ -235,14 +231,12 @@ public:
     // the peer is a configured trusted proxy, in which case its forwarding
     // headers name the client. Resolved per request rather than per connection:
     // each keep-alive request may carry different forwarding headers. Admission
-    // resolves it once and binds the result with with_conn_info, so every
+    // resolves it once and binds the result with bind_conn_info, so every
     // context created for the request reads get_conn_info().
     [[nodiscard]] conn_info resolve_conn_info(const http_request& request) const noexcept;
 
-    [[nodiscard]] context_services with_conn_info(const conn_info& resolved) const noexcept {
-        auto services = *this;
-        services.connection_services_.info_ = resolved;
-        return services;
+    void bind_conn_info(const conn_info& resolved) noexcept {
+        connection_services_.info_ = resolved;
     }
 
     // Views borrow connection-owned storage and remain valid for every context
