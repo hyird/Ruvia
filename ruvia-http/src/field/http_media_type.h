@@ -37,51 +37,25 @@ struct http_media_type_parts final {
     std::string_view subtype_;
 };
 
-// Compare media-type parameter values after removing quoted-string syntax and
-// decoding quoted-pairs.  A token and its quoted equivalent therefore compare
-// equal (for example, utf-8 and "utf-8") without allocating temporary strings.
-// Parameter values are otherwise case-sensitive; individual media-type
-// registrations define any value-specific case folding.
+// Both values have already passed parameter syntax validation. Compare their
+// decoded bytes without materializing quoted strings.
 [[nodiscard]] inline bool http_media_parameter_value_equals(
     std::string_view left, std::string_view right, bool ascii_case_insensitive = false) noexcept {
-    // Token values are read verbatim; quoted values decode through the shared
-    // quoted-string cursor, which must close exactly at the end of the value.
+    if (left.front() != '"' && right.front() != '"') {
+        return ascii_case_insensitive ? http_ascii_equals_ignore_case(left, right) : left == right;
+    }
     struct cursor final {
         std::string_view value_;
         http_quoted_string_cursor quoted_cursor_;
         std::size_t position_{0};
-        bool quoted_{false};
-        bool valid_{true};
 
-        explicit cursor(std::string_view input) noexcept
-            : value_(http_trim_ows(input)),
-              quoted_cursor_(value_) {
-            if (value_.empty()) {
-                valid_ = false;
-                return;
-            }
-            if (value_.front() == '"') {
-                quoted_ = true;
-                return;
-            }
-            for (const auto ch : value_) {
-                if (!is_http_token_char(static_cast<unsigned char>(ch))) {
-                    valid_ = false;
-                    return;
-                }
-            }
-        }
+        explicit cursor(std::string_view value) noexcept
+            : value_(value),
+              quoted_cursor_(value) {}
 
         [[nodiscard]] bool next(unsigned char& out) noexcept {
-            if (!valid_) {
-                return false;
-            }
-            if (quoted_) {
-                if (quoted_cursor_.next(out)) {
-                    return true;
-                }
-                valid_ = quoted_cursor_.closed() && quoted_cursor_.consumed() == value_.size();
-                return false;
+            if (value_.front() == '"') {
+                return quoted_cursor_.next(out);
             }
             if (position_ == value_.size()) {
                 return false;
@@ -90,20 +64,13 @@ struct http_media_type_parts final {
             return true;
         }
     };
-
     cursor lhs(left);
     cursor rhs(right);
-    if (!lhs.valid_ || !rhs.valid_) {
-        return false;
-    }
     while (true) {
         unsigned char lhs_char = 0;
         unsigned char rhs_char = 0;
         const bool has_left = lhs.next(lhs_char);
         const bool has_right = rhs.next(rhs_char);
-        if (!lhs.valid_ || !rhs.valid_) {
-            return false;
-        }
         if (has_left != has_right) {
             return false;
         }
@@ -120,66 +87,65 @@ struct http_media_type_parts final {
     }
 }
 
-template <typename visitor_type>
-[[nodiscard]] inline bool http_visit_media_type_parameters(
-    std::string_view value, bool skip_quality_parameter, visitor_type&& visitor) noexcept {
-    if (!http_accept_parameters_have_strict_equals(value)) {
-        return false;
-    }
-    // Registered media types forbid duplicate parameter names. Keep a small,
-    // fixed view table so validation stays allocation-free and bounded even for
-    // hostile field values; an implausibly parameter-heavy item is invalidated.
-    std::array<std::string_view, 64> names{};
-    std::size_t name_count = 0;
-    return http_all_parameters(value, [&](std::string_view part) noexcept {
-        if (part.empty()) {
-            return true;
-        }
-        const auto equals = part.find('=');
-        if (equals == std::string_view::npos) {
-            return false;
-        }
-        const auto name = http_trim_ows(part.substr(0, equals));
-        const auto parameter_value = http_trim_ows(part.substr(equals + 1));
-        if (!http_media_token(name)) {
-            return false;
-        }
-        for (std::size_t index = 0; index < name_count; ++index) {
-            if (http_ascii_equals_ignore_case(names[index], name)) {
-                return false;
-            }
-        }
-        if (name_count == names.size()) {
-            return false;
-        }
-        names[name_count++] = name;
-        if (skip_quality_parameter && http_ascii_equals_ignore_case(name, "q")) {
-            // RFC 9110 removed the old accept-ext grammar. q is the weight
-            // wherever it appears, but media-range parameters after it still
-            // participate in matching, so skip q itself and keep scanning.
-            return true;
-        }
-        // Comparing a value with itself performs syntax validation as well.
-        return http_media_parameter_value_equals(parameter_value, parameter_value) &&
-               visitor(name, parameter_value);
-    });
-}
+// Scoped views of a validated parameter list. Accept matching reuses the offered
+// parameters instead of rescanning its field for every range parameter.
+struct http_media_type_parameters final {
+    struct parameter final {
+        std::string_view name_;
+        std::string_view value_;
+    };
+    std::array<parameter, 64> values_{};
+    std::size_t size_{0};
 
-// The complete media type is already validated, with unique parameter names.
-[[nodiscard]] inline bool http_offered_media_type_has_parameter(std::string_view offered,
-    std::string_view expected_name, std::string_view expected_value) noexcept {
-    bool found = false;
-    http_visit_semicolon_parameters_quoted_field(offered,
-        [expected_name, expected_value, &found](
-            std::string_view name, std::string_view value) noexcept {
-            if (!http_ascii_equals_ignore_case(name, expected_name)) {
+    // A quality output selects Accept semantics: q is parsed as a weight,
+    // including an invalid weight's zero quality, rather than a media parameter.
+    [[nodiscard]] bool parse(std::string_view value, int* quality = nullptr) noexcept {
+        size_ = 0;
+        if (quality != nullptr) {
+            *quality = 1000;
+        }
+        return http_all_parameters(value, [&](std::string_view part) noexcept {
+            if (part.empty()) {
                 return true;
             }
-            found = http_media_parameter_value_equals(value, expected_value, http_ascii_equals_ignore_case(name, "charset"));
-            return false;
+            const auto equals = part.find('=');
+            if (equals == std::string_view::npos) {
+                return false;
+            }
+            const auto name = part.substr(0, equals);
+            const auto parameter_value = part.substr(equals + 1);
+            if (!http_media_token(name) || parameter_value.empty() || parameter_value != http_trim_ows(parameter_value)) {
+                return false;
+            }
+            for (std::size_t i = 0; i < size_; ++i) {
+                if (http_ascii_equals_ignore_case(values_[i].name_, name)) {
+                    return false;
+                }
+            }
+            if (size_ == values_.size()) {
+                return false;
+            }
+            if (quality != nullptr && http_ascii_equals_ignore_case(name, "q")) {
+                const auto parsed = http_parse_quality_value(parameter_value);
+                *quality = parsed < 0 ? 0 : parsed;
+            } else if (!http_media_token(parameter_value) && !http_is_quoted_string(parameter_value)) {
+                return false;
+            }
+            values_[size_++] = {name, parameter_value};
+            return true;
         });
-    return found;
-}
+    }
+
+    [[nodiscard]] bool contains(std::string_view name, std::string_view value) const noexcept {
+        for (std::size_t i = 0; i < size_; ++i) {
+            if (http_ascii_equals_ignore_case(values_[i].name_, name)) {
+                return http_media_parameter_value_equals(values_[i].value_, value,
+                    http_ascii_equals_ignore_case(name, "charset"));
+            }
+        }
+        return false;
+    }
+};
 
 [[nodiscard]] inline bool http_parse_media_type_parts(
     std::string_view value, bool allow_wildcard, http_media_type_parts& parts) noexcept {
@@ -206,18 +172,18 @@ template <typename visitor_type>
 template <http_temporary_owning_char_string value_type>
 bool http_parse_media_type_parts(value_type&&, bool, http_media_type_parts&) = delete;
 
-[[nodiscard]] inline bool http_parse_media_type(std::string_view value, http_media_type_parts& parts) noexcept {
-    return http_parse_media_type_parts(value, false, parts) &&
-           http_visit_media_type_parameters(
-               value, false, [](std::string_view, std::string_view) noexcept { return true; });
+[[nodiscard]] inline bool http_parse_media_type(std::string_view value, http_media_type_parts& parts,
+    http_media_type_parameters& parameters) noexcept {
+    return http_parse_media_type_parts(value, false, parts) && parameters.parse(value);
 }
 
 template <http_temporary_owning_char_string value_type>
-bool http_parse_media_type(value_type&&, http_media_type_parts&) = delete;
+bool http_parse_media_type(value_type&&, http_media_type_parts&, http_media_type_parameters&) = delete;
 
 [[nodiscard]] inline bool is_valid_http_content_type_field_value(std::string_view value) noexcept {
     http_media_type_parts parts;
-    return http_parse_media_type(value, parts);
+    http_media_type_parameters parameters;
+    return http_parse_media_type(value, parts, parameters);
 }
 
 template <http_temporary_owning_char_string value_type>

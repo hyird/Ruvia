@@ -66,50 +66,6 @@ namespace ruvia::detail {
     return parsed_value < 0 ? 0 : parsed_value;
 }
 
-[[nodiscard]] inline bool http_accept_parameters_have_strict_equals(std::string_view value) noexcept {
-    return http_all_parameters(value, [](std::string_view part) noexcept {
-        // RFC 9110 section 5.6.6 permits an omitted parameter after ';'.
-        if (part.empty()) {
-            return true;
-        }
-        const auto equals = part.find('=');
-        if (equals == std::string_view::npos) {
-            return false;
-        }
-        const auto raw_name = part.substr(0, equals);
-        const auto raw_value = part.substr(equals + 1);
-        return !raw_name.empty() && !raw_value.empty() && raw_name == http_trim_ows(raw_name) &&
-               raw_value == http_trim_ows(raw_value);
-    });
-}
-
-[[nodiscard]] inline int http_quality_parameter(std::string_view value) noexcept {
-    // Media-range parameters can contain quoted-string values. Reuse the shared
-    // quote-aware scanner so an embedded ';' is not a parameter separator. Skip
-    // the leading media type and reject duplicate weights.
-    if (!http_accept_parameters_have_strict_equals(value)) {
-        return 0;
-    }
-    int quality = 1000;
-    bool quality_seen = false;
-    bool valid = true;
-    http_visit_semicolon_parameters_quoted_field(
-        value, [&quality, &quality_seen, &valid](
-                   std::string_view name, std::string_view parameter) noexcept {
-            if (http_ascii_equals_ignore_case(name, "q")) {
-                if (quality_seen) {
-                    valid = false;
-                    return false;
-                }
-                quality_seen = true;
-                const auto parsed_value = http_parse_quality_value(parameter);
-                quality = parsed_value < 0 ? 0 : parsed_value;
-            }
-            return true;
-        });
-    return valid ? quality : 0;
-}
-
 [[nodiscard]] inline std::string_view http_header_token_before_parameters(
     std::string_view value) noexcept {
     const auto semicolon = value.find(';');

@@ -668,6 +668,55 @@ RUVIA_TEST(db_postgresql_declares_float8_for_doubles_and_leaves_other_parameters
         RUVIA_CHECK((statements[0].parameter_types_ == std::vector<std::uint32_t>{0, 701, 0, 0}));
         RUVIA_CHECK(statements[1].sql_ == "SELECT \"json_build_object\"($1::text, $2::int8) FROM \"records\"");
         RUVIA_CHECK((statements[1].parameter_types_ == std::vector<std::uint32_t>{0, 0}));
+        RUVIA_CHECK((statements[0].parameter_values_ ==
+                     std::vector<std::optional<std::string>>{"5", "5", "true", "text"}));
+        RUVIA_CHECK((statements[1].parameter_values_ ==
+                     std::vector<std::optional<std::string>>{"k", "5"}));
+    }
+}
+
+RUVIA_TEST(db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_values) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
+        {{.rows_ = {"first"}}, {.rows_ = {"second"}}});
+    auto& io = test::new_test_io_context();
+    auto attachment = attach_event_loop(io);
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.handle();
+        auto operation = [&] {
+            const std::array<char, 4> unterminated{'a', 'b', 'c', '!'};
+            const std::string long_value(4096, 'x');
+            const std::array params{db_value{std::string_view(unterminated.data(), 3)}, db_value{long_value},
+                db_value{std::string_view{}}, db_value{nullptr}, db_value{false}, db_value{-7},
+                db_value{std::uint64_t{18446744073709551615ULL}}, db_value{1.5}};
+            return handle.query("SELECT $1, $2, $3, $4, $5, $6, $7, $8", params);
+        }();
+        (void)co_await std::move(operation);
+        // A compiled value is checked by the driver before it reaches the wire.
+        const std::string invalid_text("a\0b", 3);
+        db_query invalid;
+        invalid.select(invalid.value(std::string_view(invalid_text))).from("records");
+        bool rejected = false;
+        try {
+            (void)co_await handle.query(invalid);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        // Validation failure keeps the connection reusable, and this query
+        // must not borrow the previous operation's parameter storage.
+        const std::array params{db_value{"next"}, db_value{9}};
+        (void)co_await handle.query("SELECT $1, $2", params);
+    });
+    const auto statements = peer.postgres_parses();
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{2});
+    if (statements.size() == 2) {
+        RUVIA_CHECK((statements[0].parameter_values_ ==
+                     std::vector<std::optional<std::string>>{"abc", std::string(4096, 'x'), "", std::nullopt,
+                         "false", "-7", "18446744073709551615", "1.5"}));
+        RUVIA_CHECK((statements[1].parameter_values_ == std::vector<std::optional<std::string>>{"next", "9"}));
     }
 }
 

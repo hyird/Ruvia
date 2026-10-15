@@ -250,3 +250,32 @@ RUVIA_TEST(http_accept_match_media_empty_slots_preserve_specificity_across_field
         RUVIA_CHECK_EQ(repeated.quality(), 800);
     }
 }
+
+RUVIA_TEST(http_accept_match_keeps_quality_and_parameter_validation_consistent) {
+    constexpr std::string_view offered = R"(text/plain;profile="a;b=c";charset=UTF-8)";
+    struct media_case final {
+        std::string_view field_;
+        int quality_;
+    };
+    constexpr media_case cases[] = {
+        {R"(text/plain;q=0.2;profile="a;b=c";charset=utf-8)", 200},
+        {R"(text/plain;charset="utf-8";profile="a;b=c";q=0.3)", 300},
+        {R"(text/plain;profile="a;b=c";q=0)", 0},
+        {R"(text/plain;q=invalid;profile="a;b=c")", 0},
+        {R"(text/plain;profile="a;b=c";q="0.5")", 0},
+        {R"(text/plain;q=;profile="a;b=c")", 800},
+        {R"(text/plain;q=0.5;Q=0.4;profile="a;b=c")", 800},
+        {R"(text/plain;profile="a;b=c"suffix;q=0.5)", 800},
+        {R"(text/plain;profile=a/b;q=0.5)", 800},
+        {R"(text/plain;profile="a;b=c";charset =utf-8;q=0.5)", 800},
+        {R"(text/plain;profile="a;b=c";charset= utf-8;q=0.5)", 800},
+    };
+    for (const auto& item : cases) {
+        for (const bool specific_first : {false, true}) {
+            ruvia::http_accept_match match;
+            match.update_media_type(specific_first ? item.field_ : "text/*;q=0.8", offered);
+            match.update_media_type(specific_first ? "text/*;q=0.8" : item.field_, offered);
+            RUVIA_CHECK_EQ(match.quality(), item.quality_);
+        }
+    }
+}

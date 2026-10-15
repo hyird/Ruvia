@@ -60,53 +60,57 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
 postgresql_params::postgresql_params(std::pmr::memory_resource* resource)
     : encoded_(pmr_resource_or_default(resource)),
       values_(pmr_resource_or_default(resource)),
-      lengths_(pmr_resource_or_default(resource)),
       types_(pmr_resource_or_default(resource)) {}
 
 postgresql_params encode_postgresql_params(
     std::span<const db_value> params, std::pmr::memory_resource* resource) {
     auto* resolved = pmr_resource_or_default(resource);
     postgresql_params output(resolved);
-    output.encoded_.reserve(params.size());
     output.values_.reserve(params.size());
-    output.lengths_.reserve(params.size());
     output.types_.reserve(params.size());
 
     for (const auto& param : params) {
-        output.encoded_.emplace_back();
-        auto& value = output.encoded_.back();
-        output.types_.push_back(
-            db_value_access::type(param) == db_value_type::double_value ? postgresql_float8_oid : 0U);
-        switch (db_value_access::type(param)) {
+        const auto type = db_value_access::type(param);
+        output.types_.push_back(type == db_value_type::double_value ? postgresql_float8_oid : 0U);
+        const char* text = nullptr;
+        switch (type) {
             case db_value_type::null:
-                output.values_.push_back(nullptr);
-                output.lengths_.push_back(0);
-                continue;
-            case db_value_type::string:
-                if ((db_value_access::text(param).find('\0') != std::string_view::npos)) {
-                    throw std::invalid_argument(
-                        "PostgreSQL string parameter must not contain NUL bytes");
+                break;
+            case db_value_type::string: {
+                const auto& value = db_value_access::owned_text(param);
+                if (value.find('\0') != std::string_view::npos) {
+                    throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
                 }
-                value.assign(db_value_access::text(param));
+                if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                    throw std::length_error("PostgreSQL parameter is too large");
+                }
+                text = value.c_str();
+                break;
+            }
+            case db_value_type::bool_value:
+                text = db_value_access::get_bool_value(param) ? "true" : "false";
                 break;
             case db_value_type::signed_value:
-                append_db_number(value, db_value_access::signed_value(param));
-                break;
             case db_value_type::unsigned_value:
-                append_db_number(value, db_value_access::unsigned_value(param));
+            case db_value_type::double_value: {
+                // Reserve before publishing the first number's c_str: vector
+                // growth would invalidate pointers into short string storage.
+                if (output.encoded_.empty()) {
+                    output.encoded_.reserve(params.size());
+                }
+                auto& value = output.encoded_.emplace_back();
+                if (type == db_value_type::signed_value) {
+                    append_db_number(value, db_value_access::signed_value(param));
+                } else if (type == db_value_type::unsigned_value) {
+                    append_db_number(value, db_value_access::unsigned_value(param));
+                } else {
+                    append_db_number(value, db_value_access::get_double_value(param));
+                }
+                text = value.c_str();
                 break;
-            case db_value_type::double_value:
-                append_db_number(value, db_value_access::get_double_value(param));
-                break;
-            case db_value_type::bool_value:
-                value.assign(db_value_access::get_bool_value(param) ? "true" : "false");
-                break;
+            }
         }
-        if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-            throw std::length_error("PostgreSQL parameter is too large");
-        }
-        output.values_.push_back(value.c_str());
-        output.lengths_.push_back(static_cast<int>(value.size()));
+        output.values_.push_back(text);
     }
     return output;
 }

@@ -111,6 +111,40 @@ RUVIA_TEST(context_request_query_accessors_agree_on_decoded_values) {
     });
 }
 
+RUVIA_TEST(context_request_query_views_survive_multivalue_lookups) {
+    auto request = make_request("/?z=first&%61=one+two&z=last&a=three&empty=&=unnamed");
+    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        const auto scalar = context_value.req().query("a");
+        const auto& fields = context_value.req().query_fields();
+        const auto decoded = fields[1].value();
+        const auto z = context_value.req().queries("z");
+        const auto a = context_value.req().queries("a");
+        RUVIA_CHECK(context_value.req().queries("missing").empty());
+        const auto empty = context_value.req().queries("empty");
+        const auto unnamed = context_value.req().queries("");
+        RUVIA_CHECK_EQ(scalar.value_or("missing"), "three");
+        RUVIA_CHECK_EQ(decoded, "one two");
+        RUVIA_CHECK_EQ(fields.size(), std::size_t{6});
+        RUVIA_CHECK_EQ(fields[0].name(), "z");
+        RUVIA_CHECK_EQ(fields[1].name(), "a");
+        RUVIA_CHECK_EQ(z.size(), std::size_t{2});
+        RUVIA_CHECK_EQ(a.size(), std::size_t{2});
+        if (z.size() == 2 && a.size() == 2) {
+            RUVIA_CHECK_EQ(z[0], "first");
+            RUVIA_CHECK_EQ(z[1], "last");
+            RUVIA_CHECK_EQ(a[0], "one two");
+            RUVIA_CHECK_EQ(a[1], "three");
+        }
+        RUVIA_CHECK_EQ(empty.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(unnamed.size(), std::size_t{1});
+        if (!empty.empty() && !unnamed.empty()) {
+            RUVIA_CHECK(empty.front().empty());
+            RUVIA_CHECK_EQ(unnamed.front(), "unnamed");
+        }
+        co_return;
+    });
+}
+
 RUVIA_TEST(context_request_query_reads_unencoded_fields) {
     auto request = make_request("/?tag=x&page=2");
 

@@ -58,6 +58,11 @@ RUVIA_TEST(db_pool_opens_the_configured_number_of_connections) {
         auto& io = ruvia::test::new_test_io_context();
         auto attachment = ruvia::attach_event_loop(io);
         ruvia::db_client client(attachment.loop(), config);
+        // Retained configuration owns its values independently of the caller.
+        config.host_ = "invalid host";
+        config.port_ = 0;
+        config.pool_size_per_worker_ = 0;
+        config.connect_timeout_ = std::chrono::milliseconds::zero();
         const auto connected = [](ruvia::db_client& value) -> ruvia::task<void> {
             auto operation = value.handle().query("SELECT 1");
             (void)operation;

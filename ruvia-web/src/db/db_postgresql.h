@@ -28,11 +28,13 @@ struct postgresql_params final {
 
     std::pmr::vector<std::pmr::string> encoded_;
     std::pmr::vector<const char*> values_;
-    std::pmr::vector<int> lengths_;
     // libpq's Oid is unsigned int; 0 leaves the type to the server.
     std::pmr::vector<unsigned int> types_;
 };
 
+// Borrows owned string parameters from the prepared statement. The caller must
+// keep params alive and unchanged through PQsendQueryParams; numeric encodings
+// are owned by the returned object. No text-format lengths array is needed.
 [[nodiscard]] postgresql_params encode_postgresql_params(
     std::span<const db_value> params, std::pmr::memory_resource* resource);
 

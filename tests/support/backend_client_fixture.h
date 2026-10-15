@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <exception>
 #include <future>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -79,6 +81,7 @@ public:
     struct postgres_parse final {
         std::string sql_;
         std::vector<std::uint32_t> parameter_types_;
+        std::vector<std::optional<std::string>> parameter_values_;
     };
 
     explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
@@ -262,6 +265,7 @@ private:
     }
 
     asio::awaitable<bool> postgres_statement(asio::ip::tcp::socket& socket) {
+        std::optional<std::size_t> statement;
         for (;;) {
             std::array<unsigned char, 5> header{};
             co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
@@ -273,6 +277,12 @@ private:
             co_await asio::async_read(socket, asio::buffer(body), asio::use_awaitable);
             if (header[0] == 'P') {
                 record_postgres_parse(body);
+                statement = postgres_parses_.size() - 1;
+            } else if (header[0] == 'B') {
+                if (!statement) {
+                    throw std::runtime_error("PostgreSQL Bind without Parse");
+                }
+                record_postgres_bind(*statement, body);
             }
             if (header[0] == 'X') {
                 co_return false;
@@ -310,6 +320,50 @@ private:
             parsed.parameter_types_.push_back(integer(body.data() + offset));
         }
         postgres_parses_.push_back(std::move(parsed));
+    }
+
+    // Bind follows Parse in the unnamed extended-query exchange used here.
+    void record_postgres_bind(std::size_t statement, const std::vector<unsigned char>& body) {
+        const std::string_view bytes(reinterpret_cast<const char*>(body.data()), body.size());
+        std::size_t offset = 0;
+        for (int i = 0; i < 2; ++i) {
+            const auto end = bytes.find('\0', offset);
+            if (end == std::string_view::npos) {
+                throw std::runtime_error("unterminated PostgreSQL Bind name");
+            }
+            offset = end + 1;
+        }
+        const auto read_short = [&]() {
+            if (body.size() - offset < 2) {
+                throw std::runtime_error("truncated PostgreSQL Bind count");
+            }
+            const auto value = (std::size_t{body[offset]} << 8) | body[offset + 1];
+            offset += 2;
+            return value;
+        };
+        const auto formats = read_short();
+        if (formats > (body.size() - offset) / 2) {
+            throw std::runtime_error("truncated PostgreSQL Bind formats");
+        }
+        offset += formats * 2;
+        const auto count = read_short();
+        auto& values = postgres_parses_[statement].parameter_values_;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (body.size() - offset < 4) {
+                throw std::runtime_error("truncated PostgreSQL Bind length");
+            }
+            const auto length = integer(body.data() + offset);
+            offset += 4;
+            if (length == std::numeric_limits<std::uint32_t>::max()) {
+                values.emplace_back(std::nullopt);
+            } else {
+                if (length > body.size() - offset) {
+                    throw std::runtime_error("truncated PostgreSQL Bind value");
+                }
+                values.emplace_back(bytes.substr(offset, length));
+                offset += length;
+            }
+        }
     }
 
     static void postgres_result(std::string& response, const postgres_reply& reply) {

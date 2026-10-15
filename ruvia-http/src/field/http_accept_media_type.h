@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
@@ -9,25 +10,9 @@
 
 namespace ruvia::detail {
 
-// The offered media type is fully validated before matching begins.
-[[nodiscard]] inline int http_media_range_matching_parameter_count(
-    std::string_view range, std::string_view offered) noexcept {
-    int parameter_count = 0;
-    if (!http_visit_media_type_parameters(range, true,
-            [offered, &parameter_count](std::string_view name, std::string_view value) noexcept {
-                if (!http_offered_media_type_has_parameter(offered, name, value)) {
-                    return false;
-                }
-                ++parameter_count;
-                return true;
-            })) {
-        return -1;
-    }
-    return parameter_count;
-}
-
 [[nodiscard]] inline int http_media_range_match_specificity(std::string_view range,
-    std::string_view offered, const http_media_type_parts& offered_parts) noexcept {
+    const http_media_type_parts& offered_parts, const http_media_type_parameters& offered_parameters,
+    int& quality) noexcept {
     http_media_type_parts range_parts;
     if (!http_parse_media_type_parts(range, true, range_parts)) {
         return -1;
@@ -38,11 +23,22 @@ namespace ruvia::detail {
     if (range_parts.subtype_ != "*" && !http_ascii_equals_ignore_case(range_parts.subtype_, offered_parts.subtype_)) {
         return -1;
     }
-    const auto type_specificity = range_parts.type_ == "*" ? 0 : (range_parts.subtype_ == "*" ? 1 : 2);
-    const auto parameter_count = http_media_range_matching_parameter_count(range, offered);
-    if (parameter_count < 0) {
+    http_media_type_parameters parameters;
+    if (!parameters.parse(range, &quality)) {
         return -1;
     }
+    int parameter_count = 0;
+    for (std::size_t i = 0; i < parameters.size_; ++i) {
+        const auto& parameter = parameters.values_[i];
+        if (http_ascii_equals_ignore_case(parameter.name_, "q")) {
+            continue;
+        }
+        if (!offered_parameters.contains(parameter.name_, parameter.value_)) {
+            return -1;
+        }
+        ++parameter_count;
+    }
+    const auto type_specificity = range_parts.type_ == "*" ? 0 : (range_parts.subtype_ == "*" ? 1 : 2);
     return (type_specificity << 16) | parameter_count;
 }
 
@@ -50,14 +46,15 @@ namespace ruvia::detail {
 inline void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered,
     int& best_specificity, int& best_quality) noexcept {
     http_media_type_parts offered_parts;
-    if (!http_parse_media_type(offered, offered_parts)) {
+    http_media_type_parameters offered_parameters;
+    if (!http_parse_media_type(offered, offered_parts, offered_parameters)) {
         return;
     }
     http_visit_comma_separated_quoted(accept,
-        [offered, offered_parts, &best_specificity, &best_quality](std::string_view item) noexcept {
-            const auto specificity = http_media_range_match_specificity(item, offered, offered_parts);
+        [offered_parts, &offered_parameters, &best_specificity, &best_quality](std::string_view item) noexcept {
+            int quality = 1000;
+            const auto specificity = http_media_range_match_specificity(item, offered_parts, offered_parameters, quality);
             if (specificity >= 0) {
-                const auto quality = http_quality_parameter(item);
                 if (specificity > best_specificity || (specificity == best_specificity && quality > best_quality)) {
                     best_specificity = specificity;
                     best_quality = quality;
