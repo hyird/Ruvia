@@ -175,13 +175,10 @@ private:
     task<void> write_request(std::size_t slot, const ruvia::operation_timeout& timeout);
     task<redis_value> read_reply(std::size_t slot, const ruvia::operation_timeout& timeout,
         std::pmr::memory_resource* resource);
-    template <typename arg_source_type>
-    task<redis_value> execute_with_timeout_impl(arg_source_type args, operation_options options,
+    template <typename result_type, typename command_source_type>
+    task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
         std::optional<operation_timeout> deadline);
-    template <typename command_source_type>
-    task<std::pmr::vector<redis_value>> execute_pipeline_impl(
-        command_source_type commands, operation_options options, std::pmr::memory_resource* resource);
 
     asio::io_context& io_context_;
     const redis_config_storage& config_;

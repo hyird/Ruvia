@@ -840,6 +840,59 @@ RUVIA_TEST(redis_client_expire_at_preserves_the_requested_deadline) {
     RUVIA_CHECK_EQ(command, (std::vector<std::string>{"PEXPIREAT", "session", "2000000000002"}));
 }
 
+ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client,
+    ruvia::operation_options options, ruvia::redis_error::code_type expected,
+    ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    std::exception_ptr failure;
+    try {
+        auto pipeline = client.with_options(std::move(options)).pipeline();
+        pipeline.command("STALL");
+        bool rejected = false;
+        try {
+            (void)co_await std::move(pipeline).exec();
+        } catch (const ruvia::redis_error& error) {
+            rejected = error.code() == expected;
+        }
+        RUVIA_CHECK(rejected);
+        // The failed pipeline must return its only slot and retire the partial
+        // exchange before a fresh command establishes a new connection.
+        co_await client.handle().ping();
+        auto next = client.handle().pipeline();
+        next.command("PING");
+        const auto replies = co_await std::move(next).exec();
+        RUVIA_CHECK_EQ(replies.size(), std::size_t{1});
+        if (!replies.empty()) {
+            RUVIA_CHECK_EQ(replies[0].string(), std::string_view("PONG"));
+        }
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await client.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+RUVIA_TEST(redis_pipeline_timeout_and_cancellation_release_the_slot_for_reconnect) {
+    for (const bool cancel : {false, true}) {
+        redis_peer peer;
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), peer.config());
+        ruvia::stop_source stop;
+        pool.start();
+        auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client,
+            {.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(100), .stop_token_ = stop.token()},
+            cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout, ruvia_ctx));
+        peer.wait_for_blocked_command();
+        if (cancel) {
+            stop.request_stop();
+        }
+        pending.get();
+        pool.join();
+    }
+}
+
 RUVIA_TEST(redis_client_loop_stop_cancels_and_joins_pending_commands) {
     redis_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});

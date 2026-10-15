@@ -1,7 +1,9 @@
+#include <array>
 #include <exception>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/core/async.h"
@@ -58,58 +60,41 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout) {
-    return execute_with_timeout_impl(std::move(args), std::move(options), reply_timeout, resource, std::nullopt);
+    return execute_commands<redis_value>(std::move(args), std::move(options), reply_timeout, resource, std::nullopt);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
     std::pmr::memory_resource* resource, operation_options options, operation_timeout deadline) {
-    return execute_with_timeout_impl(args, std::move(options), std::nullopt, resource, deadline);
+    return execute_commands<redis_value>(args, std::move(options), std::nullopt, resource, deadline);
 }
 
-template <typename arg_source_type>
-task<redis_value> redis_pool::execute_with_timeout_impl(arg_source_type args, operation_options options,
+// Own one lease, cancellation registration and failure cleanup for both a
+// single command and a pipeline. The source remains in this coroutine frame;
+// borrowed sources are retained by their enclosing caller until completion.
+template <typename result_type, typename command_source_type>
+task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
     std::optional<operation_timeout> deadline) {
+    constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
+    const auto commands = [&] {
+        if constexpr (single_reply) {
+            return std::array{redis_command_args_view{redis_arg_span(source)}};
+        } else {
+            return source;
+        }
+    }();
+    auto* const resolved = pmr_resource_or_default(resource);
+    result_type result(resolved);
+    if constexpr (!single_reply) {
+        result.reserve(commands.size());
+    }
+    if (commands.empty()) {
+        co_return result;
+    }
+
     // Ordinary commands start their budget here; an ORM retry retains the
     // deadline established when its enclosing operation started.
     const operation_timeout operation_timeout_value = deadline ? *deadline : operation_timeout(options.timeout_);
-    const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
-    const slot_pool_type::lease_guard lease(slots_, slot);
-    slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
-    auto& connection = *connections_[slot];
-    try {
-        co_await connect(slot, &operation_timeout_value);
-        slots_.throw_if_aborted(slot);
-
-        connection.write_buffer_.clear();
-        const auto arg_span = redis_arg_span(args);
-        connection.write_buffer_.reserve(resp_command_serialized_size(arg_span));
-        append_resp_command(connection.write_buffer_, arg_span);
-        const auto deadline_value =
-            operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
-        co_await write_request(slot, deadline_value);
-
-        auto reply = co_await read_reply(slot, deadline_value, resource);
-        slots_.throw_if_aborted(slot);
-        co_return reply;
-    } catch (...) {
-        cancellation.finish();
-        close(slot);
-        throw;
-    }
-}
-
-template <typename command_source_type>
-task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
-    command_source_type commands, operation_options options, std::pmr::memory_resource* resource) {
-    const auto resolved = pmr_resource_or_default(resource);
-    std::pmr::vector<redis_value> replies(resolved);
-    replies.reserve(commands.size());
-    if (commands.empty()) {
-        co_return replies;
-    }
-
-    const ruvia::operation_timeout operation_timeout_value(options.timeout_);
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
@@ -124,7 +109,7 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
             const std::span<const std::pmr::string> args = command.args_;
             const auto command_bytes = resp_command_serialized_size(args);
             if (command_bytes > std::numeric_limits<std::size_t>::max() - serialized_bytes) {
-                throw std::length_error("redis RESP pipeline is too large");
+                throw std::length_error("redis RESP request is too large");
             }
             serialized_bytes += command_bytes;
         }
@@ -134,15 +119,18 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
             append_resp_command(connection.write_buffer_, args);
         }
 
-        const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_);
+        const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
         co_await write_request(slot, deadline_value);
-
-        while (replies.size() < commands.size()) {
-            replies.emplace_back(co_await read_reply(slot, deadline_value, resolved));
+        if constexpr (single_reply) {
+            result = co_await read_reply(slot, deadline_value, resolved);
             slots_.throw_if_aborted(slot);
+        } else {
+            while (result.size() < commands.size()) {
+                result.emplace_back(co_await read_reply(slot, deadline_value, resolved));
+                slots_.throw_if_aborted(slot);
+            }
         }
-
-        co_return replies;
+        co_return result;
     } catch (...) {
         cancellation.finish();
         close(slot);
@@ -153,13 +141,13 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline_impl(
 task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
     std::span<const redis_owned_command> commands, operation_options options,
     std::pmr::memory_resource* resource) {
-    return execute_pipeline_impl(commands, std::move(options), resource);
+    return execute_commands<std::pmr::vector<redis_value>>(commands, std::move(options), std::nullopt, resource, std::nullopt);
 }
 
 task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
     std::span<const redis_command_args_view> commands, operation_options options,
     std::pmr::memory_resource* resource) {
-    return execute_pipeline_impl(commands, std::move(options), resource);
+    return execute_commands<std::pmr::vector<redis_value>>(commands, std::move(options), std::nullopt, resource, std::nullopt);
 }
 
 }  // namespace ruvia::detail
