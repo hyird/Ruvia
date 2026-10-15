@@ -11,9 +11,11 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/timer.h"
@@ -286,6 +288,55 @@ void reset_socket_state() {
 }  // namespace lifecycle_test
 
 using namespace lifecycle_test;
+
+RUVIA_TEST(app_restarts_after_idle_connections_and_pending_accepts) {
+    install_hooks();
+    auto& app = ruvia::app();
+    asio::io_context io;
+    const auto endpoint = reserve_endpoint(io);
+    for (unsigned cycle = 0; cycle < 3; ++cycle) {
+        app.server({.worker_count_ = 2, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms, .max_connections_per_worker_ = 64});
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+        app_run run(app);
+        RUVIA_CHECK(state().started_.try_acquire_for(3s));
+        std::vector<asio::ip::tcp::socket> idle;
+        if (cycle != 0) {
+            // Connecting without sending data must not hold up later accepts.
+            for (unsigned i = 0; i < 16; ++i) {
+                idle.emplace_back(io);
+                idle.back().connect(endpoint);
+            }
+            for (unsigned i = 0; i < 24; ++i) {
+                asio::ip::tcp::socket aborted(io);
+                aborted.connect(endpoint);
+                aborted.set_option(asio::socket_base::linger(true, 0));
+                aborted.close();
+            }
+            std::vector<asio::ip::tcp::socket> requests;
+            for (unsigned i = 0; i < 24; ++i) {
+                requests.emplace_back(io);
+                requests.back().connect(endpoint);
+                send(requests.back(), "GET /fast HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            }
+            for (auto& socket : requests) {
+                std::string response;
+                RUVIA_CHECK(read_to_end(socket, response));
+                RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+                RUVIA_CHECK(response.ends_with("fast"));
+            }
+        }
+        // Cycle zero stops with no client; later cycles also retire connected
+        // peers that never sent a request. Rebinding the port exercises reuse.
+        app.stop();
+        run.join();
+        RUVIA_CHECK(run.failure() == nullptr);
+        for (auto& socket : idle) {
+            std::string response;
+            RUVIA_CHECK(read_to_end(socket, response));
+            RUVIA_CHECK(response.empty());
+        }
+    }
+}
 
 // A stop while a request is in flight closes admission and idle connections at
 // once, lets the request finish with Connection: close, and only then retires

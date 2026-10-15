@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -9,6 +10,10 @@
 
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
+
+#if defined(_WIN32)
+#include <mswsock.h>
+#endif
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
@@ -20,8 +25,9 @@
 namespace ruvia::detail {
 
 // The ingress owner hands native TCP sockets off once for worker adoption.
-// Linux accepts before reactor registration; other backends detach Asio's
-// accepted socket. Both use the same bounded worker hand-off and capacity gate.
+// Linux and Windows accept before the new socket's first reactor/IOCP
+// registration; other backends detach Asio's accepted socket. All use the same
+// bounded worker hand-off and capacity gate.
 // Target objects must outlive this owner and its joined thread. Core owns the
 // lifecycle; serving starts acceptance and stopping closes every listener.
 // close_admission() closes the listeners earlier, while the runtime still runs.
@@ -65,6 +71,12 @@ private:
         asio::ip::tcp::acceptor socket_;
         asio::ip::tcp::endpoint endpoint_;
         asio::steady_timer retry_;
+#if defined(_WIN32)
+        LPFN_ACCEPTEX accept_function_{};
+        // One accept is pending per listener. Its buffer remains alive until
+        // listener closure cancels the operation and the ingress runtime joins.
+        std::array<std::byte, (sizeof(sockaddr_storage) + 16) * 2> accept_addresses_{};
+#endif
     };
     using listener_ptr = std::unique_ptr<listener, pmr_object_deleter<listener>>;
     void begin_accept(std::size_t index) noexcept;
