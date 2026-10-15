@@ -164,6 +164,10 @@ public:
     // Output borrows available without transfer coding and scratch otherwise;
     // trailers borrow available. Consume views before changing either storage
     // or making the next call. Erase exactly consumed_bytes() from available.
+    // After finish_input(), decode() continues with the same EOF state: it can
+    // drain buffered input/output, but missing body bytes are an incomplete_body
+    // failure rather than a request for more input. Terminal results replay
+    // without consuming any following-message bytes.
     [[nodiscard]] result_type decode(std::string_view available, std::span<char> scratch);
     // EOF is monotonic. Supply any remaining buffered bytes; later calls may
     // drain decoder output but can never request more network input.

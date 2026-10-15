@@ -224,17 +224,39 @@ task<void> http1_client_exchange::run(
     } catch (...) {
         receive_failure = std::current_exception();
     }
-    upload->output_.stop();
-    if (receive_failure || !upload->output_.ended_) {
+    if (receive_failure) {
+        upload->output_.stop();
         connection_.close();
+    } else {
+        // Response framing can finish before the request content. Publish that
+        // boundary independently, but keep the connection leased until the
+        // writer finishes the request or is explicitly stopped.
+        state_value.complete_ = true;
+        state_value.data_signal_.notify();
+    }
+    worker_timer_registration upload_completion_timer;
+    if (!upload->output_.ended_ && !upload->output_.stopped_) {
+        if (const auto remaining = timeout.remaining()) {
+            (void)pool_.worker().schedule_timer(upload_completion_timer, worker_timer_deadline_after(*remaining),
+                [this](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        connection_.cancel(client_abort_reason::timeout);
+                    }
+                });
+        }
     }
     co_await writers.join();
+    upload_completion_timer.cancel();
+    if (!upload->output_.ended_) {
+        connection_.close();
+    }
     if (writer_failure) {
         std::rethrow_exception(writer_failure);
     }
     if (receive_failure) {
         std::rethrow_exception(receive_failure);
     }
+    connection_.throw_if_aborted();
 }
 
 task<void> http1_client_exchange::receive(const http_client_request_storage& request, const operation_timeout& timeout,
@@ -380,7 +402,8 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
 
 void http1_client_exchange::publish_final_head(const http_client_request_storage& request,
     http_client_response_state& state_value, const http1_parsed_client_response_head& head) {
-    if (state_value.upload_ && !state_value.upload_->output_.ended_) {
+    if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
+        head.plan().request_content_signal() == http_client_request_content_signal::exchange_complete) {
         state_value.upload_->output_.stop();
     }
     state_value.status_ = head.head().status();

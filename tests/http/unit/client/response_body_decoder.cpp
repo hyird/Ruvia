@@ -675,3 +675,74 @@ RUVIA_TEST(http1_response_body_decoder_requires_nonempty_scratch) {
     }
     RUVIA_CHECK(rejected);
 }
+
+RUVIA_TEST(response_body_decode_continues_draining_after_framing_eof) {
+    const std::string plain(128, 'a');
+    for (const std::string_view framing : {std::string_view("fixed"), std::string_view("chunked"),
+             std::string_view("gzip"), std::string_view("deflate"),
+             std::string_view("gzip, chunked"), std::string_view("deflate, chunked")}) {
+        const bool fixed = framing == "fixed";
+        const bool chunk_framed = framing.ends_with("chunked");
+        const bool compressed = framing != "fixed" && framing != "chunked";
+        std::string header = "HTTP/1.1 200 OK\r\n";
+        header += fixed ? "Content-Length: 128" : "Transfer-Encoding: " + std::string(framing);
+        const auto head = http_client_response_test::parse_head("GET", header);
+        ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
+        std::string pending = compressed
+                                  ? (framing.starts_with("gzip") ? gzip_compress(plain) : zlib_deflate_compress(plain))
+                                  : plain;
+        if (chunk_framed) {
+            pending = chunked(pending);
+        }
+        if (fixed || chunk_framed) {
+            pending.append("NEXT");
+        }
+        std::array<char, 1> scratch{};
+        std::string decoded;
+        auto result = decoder.finish_input(pending, scratch);
+        bool complete = false;
+        for (std::size_t step = 0; step < plain.size() * 2 + 16; ++step) {
+            RUVIA_CHECK(result.need_input() == nullptr);
+            RUVIA_CHECK(result.protocol_failure() == nullptr);
+            RUVIA_CHECK(result.decoder_failure() == nullptr);
+            if (const auto* output = result.output()) {
+                decoded.append(output->bytes());
+            }
+            pending.erase(0, result.consumed_bytes());
+            if (result.complete() != nullptr) {
+                complete = true;
+                break;
+            }
+            if (result.protocol_failure() != nullptr || result.decoder_failure() != nullptr) {
+                break;
+            }
+            result = decoder.decode(pending, scratch);
+        }
+        RUVIA_CHECK(complete);
+        RUVIA_CHECK_EQ(decoded, plain);
+        RUVIA_CHECK_EQ(pending, fixed || chunk_framed ? "NEXT" : "");
+        if (complete) {
+            const auto replay = decoder.decode("NEXT", scratch);
+            RUVIA_CHECK(replay.complete() != nullptr);
+            RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+        }
+    }
+}
+
+RUVIA_TEST(response_body_decode_preserves_incomplete_eof_after_output) {
+    const auto head = http_client_response_test::parse_head(
+        "GET", "HTTP/1.1 200 OK\r\nContent-Length: 2");
+    ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
+    std::array<char, 1> scratch{};
+    const auto output = decoder.finish_input("a", scratch);
+    RUVIA_CHECK(output.output() != nullptr);
+    RUVIA_CHECK_EQ(output.consumed_bytes(), std::size_t{1});
+    const auto failure = decoder.decode({}, scratch);
+    RUVIA_CHECK(failure.protocol_failure() != nullptr);
+    if (const auto* error = failure.protocol_failure()) {
+        RUVIA_CHECK(error->error() == ruvia::http1_client_response_body_error::incomplete_body);
+    }
+    const auto replay = decoder.finish_input("NEXT", scratch);
+    RUVIA_CHECK(replay.protocol_failure() != nullptr);
+    RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+}

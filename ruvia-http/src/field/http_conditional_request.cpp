@@ -13,12 +13,35 @@
 namespace ruvia {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
-    return http_conditional_headers{
+    http_conditional_headers result{
         detail::request_known_header(request, detail::request_header_kind::if_unmodified_since),
         detail::request_known_header(request, detail::request_header_kind::if_modified_since),
         detail::request_known_header(request, detail::request_header_kind::range),
         detail::request_known_header(request, detail::request_header_kind::if_range),
         detail::request_has_known_header(request, detail::request_header_kind::if_range)};
+    if (result.if_unmodified_since_.empty() && result.if_modified_since_.empty()) {
+        return result;
+    }
+    // Multiple date field lines are not one HTTP-date. Do not let the
+    // last-field cache turn them into an actionable 304 or 412 condition.
+    bool saw_unmodified_since = false;
+    bool saw_modified_since = false;
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto kind = detail::http_request_access::header_kind(request, i);
+        if (kind == static_cast<std::uint8_t>(detail::request_header_kind::if_unmodified_since)) {
+            if (saw_unmodified_since) {
+                result.if_unmodified_since_ = {};
+            }
+            saw_unmodified_since = true;
+        } else if (kind == static_cast<std::uint8_t>(detail::request_header_kind::if_modified_since)) {
+            if (saw_modified_since) {
+                result.if_modified_since_ = {};
+            }
+            saw_modified_since = true;
+        }
+    }
+    return result;
 }
 
 void http_etag_field_condition::update(

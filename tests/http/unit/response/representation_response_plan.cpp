@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/http/http_representation_response_plan.h"
@@ -292,6 +293,37 @@ RUVIA_TEST(representation_response_plan_uses_last_modified_only_when_present_and
     const auto tag_only_plan = ruvia::plan_http_representation_response(tag_only,
         {.length_ = 10, .etag_ = representation.etag_}, range_options);
     RUVIA_CHECK(tag_only_plan.partial() != nullptr);
+}
+
+RUVIA_TEST(representation_response_plan_ignores_repeated_date_conditions) {
+    for (const auto field : {
+             http_header_view{"If-Modified-Since", "Sun, 06 Nov 1994 08:49:38 GMT"},
+             http_header_view{"If-Unmodified-Since", "Sun, 06 Nov 1994 08:49:36 GMT"}}) {
+        for (const std::string_view method : {"GET", "HEAD", "POST"}) {
+            for (const auto first_value : {std::string_view{}, field.value()}) {
+                auto req = request(method);
+                add(req, field.name(), first_value);
+                add(req, field.name(), field.value());
+                const auto semantic = ruvia::plan_http_representation_response(req, representation);
+                RUVIA_CHECK(semantic.full() != nullptr);
+                RUVIA_CHECK_EQ(semantic.status(), ruvia::http_status::ok);
+
+                std::string wire(method);
+                wire.append(" / HTTP/1.1\r\nHost: example.test\r\n");
+                wire.append(field.name()).append(": ").append(first_value).append("\r\n");
+                wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
+                ruvia::http1_server_request_parse_state parsed;
+                ruvia::http1_server_request_parser{}.parse_head(
+                    wire, parsed, 0, std::pmr::get_default_resource());
+                RUVIA_CHECK(parsed.head_ready() != nullptr);
+                if (parsed.head_ready() != nullptr) {
+                    const auto plan = ruvia::plan_http_representation_response(parsed.request_, representation);
+                    RUVIA_CHECK(plan.full() != nullptr);
+                    RUVIA_CHECK_EQ(plan.status(), ruvia::http_status::ok);
+                }
+            }
+        }
+    }
 }
 
 RUVIA_TEST(representation_response_plan_checks_existing_representation_wildcards_and_method_roles) {

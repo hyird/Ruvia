@@ -142,8 +142,9 @@ private:
 
 static_assert(std::is_nothrow_move_constructible_v<http_transfer_encoding_value>);
 
-// Field lines form one ordered list. Unknown but syntactically valid codings
-// are remembered while later items/fields are still checked for malformed syntax.
+// Field lines form one ordered recipient-side list. RFC 9110 section 5.6.1.2
+// requires ignoring empty members, including on repeated field lines. Unknown
+// codings are remembered while later items are still checked for malformed syntax.
 class http_transfer_encoding_state final {
 public:
     [[nodiscard]] http_transfer_encoding_parse_status parse_field(std::string_view field_value) {
@@ -159,12 +160,12 @@ public:
             }
         }
         bool unsupported = unsupported_;
-        bool saw_item = false;
         bool malformed = false;
         http_visit_comma_separated_quoted_field_items(field_value,
-            [&next_codings, &final_chunked, &unsupported, &saw_item, &malformed](
-                std::string_view item) {
-                saw_item = true;
+            [&next_codings, &final_chunked, &unsupported, &malformed](std::string_view item) {
+                if (item.empty()) {
+                    return true;
+                }
                 std::string_view coding;
                 bool has_parameters = false;
                 if (final_chunked || !http_parse_transfer_coding_syntax(item, coding, has_parameters)) {
@@ -197,7 +198,7 @@ public:
                 unsupported = true;
                 return true;
             });
-        if (malformed || !saw_item) {
+        if (malformed) {
             return http_transfer_encoding_parse_status::malformed;
         }
         auto next_value = final_chunked ? http_transfer_encoding_value::make_final_chunked(std::move(next_codings))

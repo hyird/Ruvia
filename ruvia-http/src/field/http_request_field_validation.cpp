@@ -148,6 +148,14 @@ request_field_status validate_request_field(request_header_kind kind, std::strin
     if (!is_valid_value(kind, value, role)) {
         return request_field_status::invalid;
     }
+    // Invalid date conditions, including repeated field lines, are ignored
+    // rather than rejecting the request (RFC 9110 sections 13.1.3 and 13.1.4).
+    // Senders still cannot generate these singleton fields more than once.
+    if (role == http_field_list_role::recipient &&
+        (kind == request_header_kind::if_modified_since ||
+            kind == request_header_kind::if_unmodified_since)) {
+        return request_field_status::ok;
+    }
     if (const auto bit = once_only_bit(kind); bit != 0) {
         if ((state.seen_ & bit) != 0) {
             return request_field_status::invalid;

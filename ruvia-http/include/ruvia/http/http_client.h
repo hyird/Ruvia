@@ -107,7 +107,8 @@ private:
 // distinct: the latter asks an HTTP/1 writer to emit Content-Length: 0, while
 // the former sends no content framing field. Only the active bytes alternative
 // exposes a value. The referenced bytes must remain alive and unchanged until
-// the external runtime finishes sending them.
+// the external runtime finishes sending them. Owning-string temporaries are
+// rejected; literals, string_view values, and owning-string lvalues are accepted.
 class http_client_request_content_view final {
 public:
     [[nodiscard]] static constexpr http_client_request_content_view none() noexcept {
@@ -120,11 +121,11 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes_value(
+    static http_client_request_content_view bytes(
         std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes_value(
+    static http_client_request_content_view bytes(
         const std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
     [[nodiscard]] constexpr const http_client_request_without_content* without_content()

@@ -75,10 +75,7 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
     if (terminal_) {
         return replay_terminal();
     }
-    if (eof_) {
-        return fail(http1_client_response_body_error::incomplete_body);
-    }
-    return step(available, scratch, false);
+    return step(available, scratch, eof_);
 }
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::finish_input(

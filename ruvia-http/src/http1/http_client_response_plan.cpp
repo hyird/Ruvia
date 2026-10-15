@@ -119,7 +119,10 @@ namespace {
     // whose framing the request head already committed. The server may keep
     // reading it (RFC 9110 section 10.1.1), so the next request on this
     // connection would be consumed as that content.
-    if (http1_client_exchange_state_access::close_policy(exchange_state) ==
+    // A rejected CONNECT is not a reusable HTTP exchange: RFC 9931 section 8
+    // requires the proxy to close it before interpreting any following request.
+    if (http1_client_exchange_state_access::method(exchange_state) == http_known_method::connect ||
+        http1_client_exchange_state_access::close_policy(exchange_state) ==
             http1_close_policy::close_after_response ||
         request_content_phase == http1_client_request_content_phase::awaiting_continue) {
         return http1_close_policy::close_after_response;

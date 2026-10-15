@@ -211,8 +211,8 @@ private:
             response.header_stable_view("Connection", "Upgrade");
         }
     }
-    // A failed CONNECT never becomes a tunnel; bytes the client already sent
-    // for the tunnel must not be parsed as the next request (RFC 9110 9.3.6).
+    // A failed CONNECT never becomes a tunnel. RFC 9931 section 8 requires
+    // closing instead of interpreting optimistic tunnel data as more requests.
     if (response_options.close() || (plan.tunnel_request() && !response.status().is_successful())) {
         plan = plan.require_close();
     }

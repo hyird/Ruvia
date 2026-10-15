@@ -557,6 +557,41 @@ RUVIA_TEST(http_client_successful_connect_transitions_to_tunnel) {
     RUVIA_CHECK(lowercase.plan().close_delimited() != nullptr);
 }
 
+RUVIA_TEST(http_client_rejected_connect_never_reuses_the_proxy_connection) {
+    for (const std::string_view response : {
+             "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0",
+             "HTTP/1.1 403 Forbidden\r\nContent-Length: 3",
+             "HTTP/1.0 407 Proxy Authentication Required\r\nConnection: keep-alive\r\nContent-Length: 0",
+         }) {
+        const auto rejected = parse_head("CONNECT", response);
+        RUVIA_CHECK(require_known_length(rejected.plan()).persistence() ==
+                    http1_close_policy::close_after_response);
+    }
+
+    const auto chunked = parse_head("CONNECT",
+        "HTTP/1.1 502 Bad Gateway\r\nTransfer-Encoding: chunked");
+    RUVIA_CHECK(require_chunked(chunked.plan()).persistence() ==
+                http1_close_policy::close_after_response);
+    const auto without_content = parse_head("CONNECT", "HTTP/1.1 304 Not Modified");
+    RUVIA_CHECK(require_without_content(without_content.plan()).persistence() ==
+                http1_close_policy::close_after_response);
+
+    // Persistence belongs to the rejected CONNECT, not to these otherwise
+    // reusable response fields or the normal non-CONNECT framing alternative.
+    const auto ordinary = parse_head("GET",
+        "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0");
+    RUVIA_CHECK(require_known_length(ordinary.plan()).persistence() ==
+                http1_close_policy::allow_reuse);
+    for (const std::string_view response : {
+             "HTTP/1.1 200 Connection Established",
+             "HTTP/1.1 205 Reset Content",
+             "HTTP/1.1 299 Tunnel Established",
+         }) {
+        const auto tunnel = parse_head("CONNECT", response);
+        RUVIA_CHECK(tunnel.plan().connect_tunnel() != nullptr);
+    }
+}
+
 RUVIA_TEST(http1_client_exchange_state_owns_every_long_lived_response_fact) {
     std::optional<ruvia::http1_client_exchange_state> head_exchange;
     std::array<char, 512> head_wire{};

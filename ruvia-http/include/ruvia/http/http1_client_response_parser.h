@@ -247,6 +247,10 @@ public:
     }
     const http1_client_protocol_upgrade* protocol_upgrade() const&& = delete;
 
+    // Only exchange_complete cancels pending request content. Receiving an early
+    // final response without that signal leaves the external writer responsible
+    // for finishing the request before the connection can be reused (RFC 9110
+    // section 7.5), even though this response-head parser is already terminal.
     [[nodiscard]] constexpr std::optional<http_client_request_content_signal> request_content_signal()
         const noexcept {
         return request_content_signal_;
@@ -455,6 +459,8 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // switch. These recipient rules do not relax HTTP/1 sender requirements. A 1xx, HEAD,
 // 204 or 304 response ends at the first empty line regardless of framing fields
 // (RFC 9112 section 6.3); a successful CONNECT begins its tunnel there.
+// A rejected CONNECT retains ordinary response framing but always closes after
+// that response, in line with RFC 9931 section 8; it never returns to a pool.
 // HEAD/304 Content-Length representation metadata still requires valid,
 // consistent lengths; ignored 1xx/204/CONNECT framing values are not interpreted.
 class http1_client_response_parser final {
@@ -472,6 +478,9 @@ public:
     http1_client_response_parser(http1_client_response_parser&&) = delete;
     http1_client_response_parser& operator=(http1_client_response_parser&&) = delete;
 
+    // Reports request-content completion while response heads are still pending.
+    // exchange_terminal refers to response-head parsing, not an instruction to
+    // stop the external request writer; follow the plan's content signal.
     [[nodiscard]] http1_client_request_content_completion_status complete_request_content() noexcept;
 
     // After need_more, append to the same logical prefix; after a parsed head,

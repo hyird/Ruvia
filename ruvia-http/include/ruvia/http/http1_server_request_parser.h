@@ -137,6 +137,9 @@ public:
     // not a recipient rejection rule; supplied field values remain validated.
     // TRACE and CONNECT accept Content-Length: 0, but reject nonzero or
     // unknown-length content. Framing still follows RFC 9112 section 6.3.
+    // Recipient Transfer-Encoding lists ignore empty members but still require
+    // terminal chunked framing. Repeated date conditions are accepted and
+    // ignored during conditional evaluation, not treated as framing errors.
     void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
         std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
 

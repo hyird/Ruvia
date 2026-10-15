@@ -734,6 +734,34 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
 }
 
+RUVIA_TEST(http1_parse_transfer_encoding_ignores_empty_members_without_losing_framing) {
+    for (const std::string_view fields : {
+             "Transfer-Encoding: , , chunked, ,\r\n",
+             "Transfer-Encoding: ,\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding:\r\n"}) {
+        std::string wire = "POST / HTTP/1.1\r\nHost: x\r\n";
+        wire.append(fields);
+        wire.append("\r\n5\r\nhello\r\n0\r\n\r\n");
+        const auto message_bytes = wire.size();
+        wire.append("GET /next HTTP/1.1\r\nHost: x\r\n\r\n");
+        const auto parsed = parse_http1_request_message(wire);
+        RUVIA_CHECK(parsed.complete());
+        if (parsed.complete()) {
+            RUVIA_CHECK_EQ(parsed.body_, std::string("hello"));
+            RUVIA_CHECK_EQ(*parsed.message_bytes_, message_bytes);
+            RUVIA_CHECK(parsed.state_.body_plan_.chunked() != nullptr);
+        }
+    }
+    const auto unframed = parse_http1_request_message(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,\r\n\r\n");
+    RUVIA_CHECK(is_failure(unframed.state_, http_parse_error::invalid_transfer_encoding));
+    RUVIA_CHECK(unframed.state_.connection_plan_.disposition() == http1_close_policy::close_after_response);
+
+    const auto conflict = parse_http1_request_message(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(is_failure(conflict.state_, http_parse_error::invalid_transfer_encoding));
+    RUVIA_CHECK(conflict.state_.connection_plan_.disposition() == http1_close_policy::close_after_response);
+}
+
 RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
     // A connection keeps its parse state across requests while each request
     // head is parsed from storage that dies with that request.

@@ -323,6 +323,50 @@ RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
     RUVIA_CHECK(repeated_chunked.transfer_codings().values_[1] == ruvia::http_transfer_coding::deflate);
 }
 
+RUVIA_TEST(http_client_transfer_encoding_ignores_empty_recipient_list_items) {
+    for (const std::string_view fields : {
+             "Transfer-Encoding: , chunked",
+             "Transfer-Encoding: chunked,",
+             "Transfer-Encoding: , , chunked, ,",
+             "Transfer-Encoding: gzip, , chunked",
+             "Transfer-Encoding: \r\nTransfer-Encoding: chunked",
+             "Transfer-Encoding: chunked\r\nTransfer-Encoding: , ,",
+             "Transfer-Encoding: ,\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: \r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: ,",
+         }) {
+        const std::string head = "HTTP/1.1 200 OK\r\n" + std::string(fields) + "\r\n\r\n";
+        const std::string wire = head + "0\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n";
+        const auto result = parse_wire("GET", wire);
+        const auto* parsed = result.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            continue;
+        }
+        const auto& chunked = require_chunked(parsed->plan());
+        RUVIA_CHECK(chunked.persistence() == http1_close_policy::allow_reuse);
+        const bool gzip = fields.find("gzip") != std::string_view::npos;
+        RUVIA_CHECK_EQ(chunked.transfer_codings().values_.size(), gzip ? std::size_t{1} : std::size_t{0});
+        if (gzip && !chunked.transfer_codings().empty()) {
+            RUVIA_CHECK(chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+        }
+        RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
+        RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes()),
+            "0\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n");
+    }
+
+    const auto non_chunked = parse_head("GET",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: , gzip, ,\r\nTransfer-Encoding: ");
+    const auto& close_delimited = require_close_delimited(non_chunked.plan());
+    RUVIA_CHECK_EQ(close_delimited.transfer_codings().values_.size(), std::size_t{1});
+    RUVIA_CHECK(close_delimited.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+
+    // Empty items do not make the field absent or relax framing conflicts.
+    const auto empty = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , ,");
+    RUVIA_CHECK(require_close_delimited(empty.plan()).transfer_codings().empty());
+    RUVIA_CHECK(parse_failure_error("GET",
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: , ,\r\nContent-Length: 0") ==
+                http1_client_response_parse_error::content_length_and_transfer_encoding);
+}
+
 RUVIA_TEST(http_client_non_chunked_transfer_coding_is_close_delimited) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
     const auto& close_delimited = require_close_delimited(head.plan());
@@ -330,7 +374,6 @@ RUVIA_TEST(http_client_non_chunked_transfer_coding_is_close_delimited) {
 }
 
 RUVIA_TEST(http_client_rejects_invalid_or_unsupported_transfer_coding) {
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , chunked"));
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip"));
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked;foo=bar"));
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress, chunked"));

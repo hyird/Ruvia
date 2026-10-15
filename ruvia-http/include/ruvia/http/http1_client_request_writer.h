@@ -313,6 +313,8 @@ public:
 
     // RFC 9298 HTTP/1.1 GET Upgrade. Capsule-Protocol is validated; Upgrade and
     // Connection are driver-owned, and Host remains owned by the writer.
+    // RFC 9931 section 6.3 forbids sending UDP payload before the server's
+    // successful protocol-upgrade response in HTTP/1.x.
     [[nodiscard]] http1_client_request_prepare_result prepare_connect_udp(const http_origin_view& origin,
         borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const;
 
@@ -320,6 +322,9 @@ public:
         const http1_client_request_head_view& request, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
 
+    // When forwarding untrusted TCP payload, RFC 9931 section 8 requires the
+    // driver to wait for the successful tunnel plan before sending that payload,
+    // unless close_after_response makes the request emit Connection: close.
     [[nodiscard]] http1_client_request_prepare_result prepare_connect(const http_origin_view& tunnel_origin,
         std::span<const http_header_view> headers, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
