@@ -62,7 +62,8 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
             } else if (input->quic_) {
                 native.emplace(std::move(input->bytes_));
             } else {
-                state_value.input_ = std::move(input->bytes_);
+                state_value.owned_input_ = std::move(input->bytes_);
+                state_value.input_ = state_value.owned_input_;
                 state_value.offset_ = 0;
             }
         }

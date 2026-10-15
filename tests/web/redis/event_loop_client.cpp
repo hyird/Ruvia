@@ -911,7 +911,7 @@ RUVIA_TEST(redis_client_loop_stop_cancels_and_joins_pending_commands) {
     RUVIA_CHECK(cancelled);
 }
 
-RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
+RUVIA_TEST(redis_client_close_and_shutdown_waiters_join_pending_commands) {
     redis_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), peer.config());
@@ -919,12 +919,16 @@ RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
     auto pending = pool.loop(0).start(blocked_command(client));
     peer.wait_for_blocked_command();
     client.close();
+    auto closing = pool.loop(0).start(client.shutdown());
+    auto also_closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {
         pending.get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
+    closing.get();
+    also_closing.get();
     pool.loop(0).start(client.shutdown()).get();
     pool.stop();
     pool.join();

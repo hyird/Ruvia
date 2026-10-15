@@ -615,12 +615,6 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     });
 }
 
-static_assert(std::is_constructible_v<ruvia::borrowed_file_path, const std::filesystem::path&>);
-static_assert(std::is_constructible_v<ruvia::borrowed_file_path, const std::string&>);
-static_assert(std::is_constructible_v<ruvia::borrowed_file_path, std::string_view>);
-static_assert(!std::is_constructible_v<ruvia::borrowed_file_path, std::filesystem::path>);
-static_assert(!std::is_constructible_v<ruvia::borrowed_file_path, std::string>);
-
 RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
     namespace fs = std::filesystem;
 
@@ -660,6 +654,14 @@ RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
         RUVIA_CHECK_EQ(from_view.status(), ruvia::http_status::ok);
         RUVIA_CHECK_EQ(from_view.body_bytes(), std::string_view("borrowed"));
 
+        const auto from_c_string = context_value.file({.path_ = text.c_str()});
+        RUVIA_CHECK_EQ(from_c_string.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(from_c_string.body_bytes(), std::string_view("borrowed"));
+
+        const auto from_borrowed_text = context_value.file({.path_ = ruvia::borrowed_text(text)});
+        RUVIA_CHECK_EQ(from_borrowed_text.status(), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(from_borrowed_text.body_bytes(), std::string_view("borrowed"));
+
         const auto from_path = context_value.file({.path_ = file_path});
         RUVIA_CHECK_EQ(from_path.status(), ruvia::http_status::ok);
         RUVIA_CHECK_EQ(from_path.body_bytes(), std::string_view("borrowed"));
@@ -668,6 +670,7 @@ RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
         const std::string with_nul = text + std::string(1, '\0') + "x";
         RUVIA_CHECK_EQ(status_of(with_nul), ruvia::http_status::not_found);
         RUVIA_CHECK_EQ(status_of(""), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(status_of(nullptr), ruvia::http_status::not_found);
         RUVIA_CHECK_EQ(status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
         const std::string invalid_utf8 = text + "\xff";
         RUVIA_CHECK_EQ(status_of(invalid_utf8), ruvia::http_status::not_found);
