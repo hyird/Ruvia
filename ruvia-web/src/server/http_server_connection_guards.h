@@ -37,11 +37,12 @@ public:
         if (count_ == nullptr) {
             return;
         }
-        // The session has finished its I/O and any protocol-level graceful
-        // shutdown. close() also cancels outstanding Asio operations; repeating
-        // cancel/shutdown here only redoes work at this terminal ownership edge.
-        std::error_code ignored;
-        socket_.close(ignored);
+        // Session bodies may close their socket before deferred frame retirement.
+        // Keep the count until retirement, and close cold tasks or early exits here.
+        if (socket_.is_open()) {
+            std::error_code ignored;
+            socket_.close(ignored);
+        }
         count_->release();
     }
 

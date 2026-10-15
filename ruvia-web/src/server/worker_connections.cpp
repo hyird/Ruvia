@@ -341,12 +341,14 @@ task<void> worker_connections::run_session(
         resolve_remote_endpoint(socket, remote_address, remote_port);
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
+        std::error_code ignored;
         if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
             // Closing after the final response satisfies RFC 9112 §9.3 without
             // reading the remaining request body. No peer FIN is awaited.
-            std::error_code ignored;
             socket.shutdown(tcp_socket_type::shutdown_send, ignored);
         }
+        // Do not keep the descriptor alive until deferred coroutine-frame retirement.
+        socket.close(ignored);
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
