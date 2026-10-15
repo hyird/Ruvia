@@ -157,7 +157,7 @@ RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication
     }
 }
 
-RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
+RUVIA_TEST(db_client_shutdown_waiters_join_pending_authentication) {
     ruvia::test::backend_startup_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
@@ -166,8 +166,14 @@ RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
     auto first = loop.start(client.connect());
     peer.wait_for_startup();
     auto closing = loop.start(client.shutdown());
+    auto also_closing = loop.start(client.shutdown());
     first.wait();
     closing.wait();
+    also_closing.wait();
+    auto ready = loop.start(can_create_operation(client));
+    ready.wait();
+    auto closed_again = loop.start(client.shutdown());
+    closed_again.wait();
     pool.join();
     bool cancelled = false;
     try {
@@ -179,5 +185,8 @@ RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
         cancelled = true;
     }
     closing.get();
+    also_closing.get();
+    closed_again.get();
     RUVIA_CHECK(cancelled);
+    RUVIA_CHECK(!ready.get());
 }

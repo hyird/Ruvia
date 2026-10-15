@@ -17,6 +17,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
@@ -42,6 +43,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/web/http_capsule_stream.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_response.h"
 #include "ruvia/web/http_client_tunnel.h"
@@ -2328,4 +2330,76 @@ RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) 
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http_capsule_client_retains_payloads_across_reads_and_rejects_truncated_frames) {
+    for (const bool truncated : {false, true}) {
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        asio::ip::tcp::acceptor acceptor(io, {asio::ip::tcp::v4(), 0});
+        ruvia::worker_signal peer_done(worker.handle_);
+        std::exception_ptr peer_failure;
+        std::string first_payload(128 * 1024 + 17, 'a');
+        first_payload[4095] = '\0';
+        first_payload[8192] = '\xff';
+        const std::string second_payload(4096, 'b');
+        std::string wire = "HTTP/1.1 200 Connection Established\r\n\r\n";
+        const auto append_capsule = [&](std::uint64_t type, std::string_view payload) {
+            std::array<char, 16> header;
+            const auto encoded = ruvia::encode_http_capsule_header(header, type, payload.size());
+            wire.append(header.data(), std::get<std::size_t>(encoded));
+            wire.append(payload);
+        };
+        append_capsule(17, first_payload);
+        append_capsule(18, second_payload);
+        if (truncated) {
+            wire.pop_back();
+        } else {
+            append_capsule(19, {});
+        }
+        const auto serve = [&]() -> asio::awaitable<void> {
+            auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+            asio::streambuf head;
+            co_await asio::async_read_until(socket, head, "\r\n\r\n", asio::use_awaitable);
+            co_await asio::async_write(socket, asio::buffer(wire), asio::use_awaitable);
+            socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+        };
+        asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+            peer_failure = failure;
+            peer_done.notify();
+        });
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(acceptor.local_endpoint().port()));
+        auto operation = [&]() -> ruvia::task<void> {
+            auto result = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
+            if (result.tunnel() == nullptr) {
+                throw std::runtime_error("expected an accepted tunnel");
+            }
+            std::optional<ruvia::http_capsule> retained;
+            {
+                auto stream = std::move(*result.tunnel()).capsules();
+                retained = co_await stream.read();
+                RUVIA_CHECK(retained && retained->type() == 17 && retained->payload() == first_payload);
+                bool rejected = false;
+                try {
+                    auto second = co_await stream.read();
+                    RUVIA_CHECK(second && second->type() == 18 && second->payload() == second_payload);
+                    auto empty = co_await stream.read();
+                    RUVIA_CHECK(empty && empty->type() == 19 && empty->payload().empty());
+                    RUVIA_CHECK(!(co_await stream.read()));
+                    co_await stream.finish();
+                } catch (const std::runtime_error&) {
+                    rejected = true;
+                }
+                RUVIA_CHECK_EQ(rejected, truncated);
+            }
+            RUVIA_CHECK(retained && retained->payload() == first_payload);
+            retained.reset();
+            co_await client.shutdown();
+            co_await peer_done.wait();
+            if (peer_failure) {
+                std::rethrow_exception(peer_failure);
+            }
+        };
+        run_operation(worker, io, operation);
+    }
 }

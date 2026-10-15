@@ -12,6 +12,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/bytes.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -34,7 +35,7 @@ public:
           server_(&tunnel),
           decoder_(config),
           config_(config),
-          input_(resource_),
+          server_input_(resource_),
           payload_(resource_) {}
     http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config)
         : worker_(tunnel.response_.state_->memory_domain().worker()),
@@ -43,7 +44,7 @@ public:
           client_(std::move(tunnel)),
           decoder_(config),
           config_(config),
-          input_(resource_),
+          server_input_(resource_),
           payload_(resource_) {}
     void require() const {
         if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
@@ -140,20 +141,24 @@ public:
         return result_value.capsule_complete_;
     }
     [[nodiscard]] task<bool> read_input() {
-        input_.clear();
+        input_ = {};
+        server_input_.clear();
         offset_ = 0;
         if (server_) {
             auto chunk = co_await server_->read();
             if (!chunk) {
                 co_return false;
             }
-            input_ = std::move(*chunk);
+            server_input_ = std::move(*chunk);
+            input_ = server_input_;
         } else {
             auto chunk = co_await client_->read();
             if (!chunk) {
                 co_return false;
             }
-            input_.assign(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+            // The owned tunnel keeps this view valid until the next read.
+            // Consume it completely before read_input() advances the source.
+            input_ = as_chars(*chunk);
         }
         co_return true;
     }
@@ -176,7 +181,8 @@ public:
     std::optional<http_client_tunnel> client_;
     http_capsule_decoder decoder_;
     http_capsule_config config_;
-    std::pmr::string input_;
+    std::pmr::string server_input_;
+    std::string_view input_;
     std::size_t offset_{};
     std::pmr::string payload_;
     std::uint64_t type_{};

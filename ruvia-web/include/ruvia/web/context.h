@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -24,8 +25,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_request.h"
@@ -122,26 +123,20 @@ class borrowed_file_path final {
 public:
     constexpr borrowed_file_path() noexcept = default;
 
-    constexpr borrowed_file_path(std::string_view utf8) noexcept
-        : text_(utf8) {}
-
-    constexpr borrowed_file_path(const char* utf8) noexcept
-        : text_(detail::http_borrowed_c_string_view(utf8)) {}
-
-    template <typename traits_type, typename allocator_type>
-    constexpr borrowed_file_path(const std::basic_string<char, traits_type, allocator_type>& utf8) noexcept
-        : text_(utf8) {}
+    template <typename text_type>
+        requires std::constructible_from<borrowed_text, text_type&&>
+    constexpr borrowed_file_path(text_type&& utf8) noexcept(std::is_nothrow_constructible_v<borrowed_text, text_type&&>)
+        : text_(std::forward<text_type>(utf8)) {}
 
     borrowed_file_path(const std::filesystem::path& path) noexcept
         : native_(path.native()) {}
 
-    template <detail::http_temporary_owning_char_string string>
-    borrowed_file_path(string&&) = delete;
     borrowed_file_path(std::filesystem::path&&) = delete;
+    borrowed_file_path(const std::filesystem::path&&) = delete;
 
     // The UTF-8 text form; empty when a std::filesystem::path is borrowed.
     [[nodiscard]] constexpr std::string_view text() const noexcept {
-        return text_;
+        return text_.view();
     }
 
     // A borrowed std::filesystem::path's NUL-terminated native string; empty
@@ -151,7 +146,7 @@ public:
     }
 
 private:
-    std::string_view text_{};
+    borrowed_text text_{};
     http_native_path_view_type native_{};
 };
 
