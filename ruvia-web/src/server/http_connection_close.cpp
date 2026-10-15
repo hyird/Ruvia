@@ -56,9 +56,44 @@ private:
     bool armed_{false};
 };
 
-// RFC 9112 §9.6: half-close, then discard input until the peer closes, the
-// byte budget is spent, or the bounds close the socket.
-task<void> drain_after_response(asio::ip::tcp::socket& socket) {
+// RFC 8446 §6.1: send close_notify once without waiting for the peer's.
+// Recording the peer's alert as received lets SSL_shutdown complete as soon as
+// this side's alert is flushed; anything the peer still sends is drained as
+// raw bytes by the staged close.
+task<bool> send_tls_close_notify(asio::ssl::stream<asio::ip::tcp::socket&>& stream) {
+    SSL* const ssl = stream.native_handle();
+    const int state = SSL_get_shutdown(ssl);
+    if ((state & SSL_SENT_SHUTDOWN) != 0) {
+        co_return true;
+    }
+    SSL_set_shutdown(ssl, state | SSL_RECEIVED_SHUTDOWN);
+    const auto completion = co_await async_asio([&stream](auto handler) {
+        stream.async_shutdown(std::move(handler));
+    });
+    co_return !completion.error_code();
+}
+
+// One frame owns the close bounds through TLS notification and input drain.
+// The public entry points only select the transport; they do not await another
+// close coroutine just to keep the same bounds alive.
+task<void> close_transport_gracefully(asio::ip::tcp::socket& socket, connection_scanner& scanner,
+    const worker_handle& worker_value, asio::ssl::stream<asio::ip::tcp::socket&>* tls_stream,
+    http_connection_close mode) {
+    const graceful_close_bounds bounds(socket, scanner, worker_value);
+    if (!bounds.armed()) {
+        co_return;
+    }
+    if (tls_stream != nullptr) {
+        if (!co_await send_tls_close_notify(*tls_stream)) {
+            co_return;
+        }
+        if (mode != http_connection_close::after_response) {
+            co_return;
+        }
+    }
+
+    // RFC 9112 §9.6: half-close, then discard input until the peer closes,
+    // the byte budget is spent, or the bounds close the socket.
     std::error_code error;
     socket.shutdown(asio::ip::tcp::socket::shutdown_send, error);
     if (error) {
@@ -77,47 +112,17 @@ task<void> drain_after_response(asio::ip::tcp::socket& socket) {
     }
 }
 
-// RFC 8446 §6.1: send close_notify once without waiting for the peer's.
-// Recording the peer's alert as received lets SSL_shutdown complete as soon as
-// this side's alert is flushed; anything the peer still sends is drained as
-// raw bytes by the staged close.
-task<bool> send_tls_close_notify(asio::ssl::stream<asio::ip::tcp::socket&>& stream) {
-    SSL* const ssl = stream.native_handle();
-    const int state = SSL_get_shutdown(ssl);
-    if ((state & SSL_SENT_SHUTDOWN) != 0) {
-        co_return true;
-    }
-    SSL_set_shutdown(ssl, state | SSL_RECEIVED_SHUTDOWN);
-    const auto completion = co_await async_asio([&stream](auto handler) {
-        stream.async_shutdown(std::move(handler));
-    });
-    co_return !completion.error_code();
-}
-
 }  // namespace
 
 task<void> close_http_connection_gracefully(
     asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_handle& worker_value) {
-    const graceful_close_bounds bounds(socket, scanner, worker_value);
-    if (!bounds.armed()) {
-        co_return;
-    }
-    co_await drain_after_response(socket);
+    return close_transport_gracefully(
+        socket, scanner, worker_value, nullptr, http_connection_close::after_response);
 }
 
 task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
     connection_scanner& scanner, const worker_handle& worker_value, http_connection_close mode) {
-    auto& socket = stream.next_layer();
-    const graceful_close_bounds bounds(socket, scanner, worker_value);
-    if (!bounds.armed()) {
-        co_return;
-    }
-    if (!co_await send_tls_close_notify(stream)) {
-        co_return;
-    }
-    if (mode == http_connection_close::after_response) {
-        co_await drain_after_response(socket);
-    }
+    return close_transport_gracefully(stream.next_layer(), scanner, worker_value, &stream, mode);
 }
 
 }  // namespace ruvia::detail

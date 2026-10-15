@@ -32,9 +32,11 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(&d.inbound_buffer_pool_),
             body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_,
             *d.base_route_services_.interim_output());
+        auto services = d.base_route_services_;
+        services.bind_streaming_request_body(body_reader->facade());
+        services.bind_request_trailers(body_reader->reader().trailers());
         d.response_ = co_await d.routes_.dispatch_buffered_response(d.parsed_.request_, route_resolution_value,
-            d.request_memory_, document_root_binding::none(),
-            d.base_route_services_.with_streaming_request_body(body_reader->facade()).with_request_trailers(body_reader->reader().trailers()),
+            d.request_memory_, document_root_binding::none(), services,
             static_file_selection_mode::identity_only);
     } catch (...) {
         exception = std::current_exception();
@@ -43,7 +45,8 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
     if (exception != nullptr) {
         auto exception_services = d.base_route_services_;
         if (body_reader) {
-            exception_services = exception_services.with_streaming_request_body(body_reader->facade()).with_request_trailers(body_reader->reader().trailers());
+            exception_services.bind_streaming_request_body(body_reader->facade());
+            exception_services.bind_request_trailers(body_reader->reader().trailers());
         }
         co_return co_await complete_failed_http_route(d.scanner_entry_, exception, d.parsed_,
             d.routes_, d.request_memory_, exception_services, d.response_);

@@ -31,6 +31,8 @@ enum class http_connection_close : std::uint8_t {
 // worker stop closes the socket at once. The caller closes the socket after
 // completion and must not start a graceful close once the worker is stopping.
 // Plain TCP has no close alert, so only an after_response close reaches it.
+// The returned task borrows the transport, scanner and worker until completion;
+// one close operation owns the bounds through notification and input drain.
 [[nodiscard]] task<void> close_http_connection_gracefully(asio::ip::tcp::socket& socket,
     connection_scanner& scanner, const worker_handle& worker_value);
 [[nodiscard]] task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,

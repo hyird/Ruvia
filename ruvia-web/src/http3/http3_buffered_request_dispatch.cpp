@@ -106,7 +106,7 @@ task<http3_buffered_request_dispatch::prepare_status_type> http3_buffered_reques
                 })
                 .with_early_data_info({received_early_data_, upstream_declared_early_data}));
         if (const auto* trailers = session_.request_trailers(stream_id_)) {
-            *request_services_ = request_services_->with_request_trailers(*trailers);
+            request_services_->bind_request_trailers(*trailers);
         }
         if (session_.streaming_request(stream_id_)) {
             request_body_reader_.emplace(request_reader{*this});
@@ -206,7 +206,7 @@ task<http3_buffered_request_dispatch::run_status_type> http3_buffered_request_di
     const auto& services = admission.services();
     auto dispatch_services = services;
     if (request_body_reader_) {
-        dispatch_services = dispatch_services.with_streaming_request_body(request_body_reader_->facade());
+        dispatch_services.bind_streaming_request_body(request_body_reader_->facade());
     }
     const auto* resolved = admission.resolved();
 

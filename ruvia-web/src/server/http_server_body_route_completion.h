@@ -34,8 +34,11 @@ struct http_lazy_buffered_body_route_state final {
             scanner_entry, interim_output);
     }
 
-    [[nodiscard]] context_services with_loader(context_services services) noexcept {
-        return services.with_lazy_request_body(body_->facade()).with_request_trailers(body_->loader().trailers());
+    [[nodiscard]] context_services with_loader(const context_services& base_services) noexcept {
+        auto services = base_services;
+        services.bind_lazy_request_body(body_->facade());
+        services.bind_request_trailers(body_->loader().trailers());
+        return services;
     }
 
     [[nodiscard]] const lazy_buffered_body<stream_type>& body() const noexcept {

@@ -1,10 +1,9 @@
 #pragma once
 
+#include <system_error>
 #include <utility>
 
 #include <asio/ip/tcp.hpp>
-
-#include "ruvia/core/socket.h"
 
 #include "server/connection_drain.h"
 #include "server/http_connection_state.h"
@@ -38,7 +37,11 @@ public:
         if (count_ == nullptr) {
             return;
         }
-        ruvia::close_socket(socket_);
+        // The session has finished its I/O and any protocol-level graceful
+        // shutdown. close() also cancels outstanding Asio operations; repeating
+        // cancel/shutdown here only redoes work at this terminal ownership edge.
+        std::error_code ignored;
+        socket_.close(ignored);
         count_->release();
     }
 

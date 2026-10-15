@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +13,10 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
 #include <asio/steady_timer.hpp>
+
+#if defined(_WIN32)
+#include <mswsock.h>
+#endif
 
 #include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
@@ -30,8 +35,11 @@ namespace ruvia::detail {
 
 class http3_datagram_channel;
 
-// The ingress owner. TCP sockets are detached once and adopted by their worker;
-// UDP packets are forwarded by CID without accessing worker connection state.
+// The ingress owner hands native TCP sockets off once for worker adoption.
+// Linux and Windows accept before the new socket's first reactor/IOCP
+// registration; other backends detach Asio's accepted socket. All use the same
+// bounded worker hand-off and capacity gate. UDP packets are forwarded by CID
+// without accessing worker connection state.
 // Target objects must outlive this owner and its joined thread. Only endpoint
 // values and the QUIC listener selection are retained from configuration.
 // Core owns the lifecycle: startup stages QUIC channels into the (unlaunched)
@@ -83,6 +91,12 @@ private:
         asio::ip::tcp::endpoint endpoint_;
         asio::steady_timer retry_;
         std::optional<http3_capacity> quic_;
+#if defined(_WIN32)
+        LPFN_ACCEPTEX accept_function_{};
+        // One accept is pending per listener. Its buffer remains alive until
+        // listener closure cancels the operation and the ingress runtime joins.
+        std::array<std::byte, (sizeof(sockaddr_storage) + 16) * 2> accept_addresses_{};
+#endif
     };
     using listener_ptr = std::unique_ptr<listener, pmr_object_deleter<listener>>;
     using channel_ptr = std::unique_ptr<http3_datagram_channel,
@@ -94,7 +108,8 @@ private:
     [[nodiscard]] bool quic_retired() noexcept;
     static void datagram_ready(void*, http3_acceptor_datagram_endpoint::notification_kind) noexcept;
     void begin_accept(std::size_t index) noexcept;
-    void accepted(std::size_t index, const asio::error_code&, asio::ip::tcp::socket) noexcept;
+    void accept_failed(std::size_t index, const asio::error_code& error) noexcept;
+    [[nodiscard]] bool hand_off(std::size_t index, native_accepted_socket_ticket ticket) noexcept;
     void schedule_retry(std::size_t index) noexcept;
     void close_listeners() noexcept;
     void stop_on_owner() noexcept;

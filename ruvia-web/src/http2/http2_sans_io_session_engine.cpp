@@ -344,6 +344,13 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     });
     const auto& resolution = selected_route->resolution();
     const auto expectation_plan = request_head->expectation_plan(http_unsupported_expectation_policy::reject);
+    auto admission_services = base_services.with_request_channels({
+        .interim_output_ = &interim_output,
+        .connection_advertisements_ = &advertisements,
+        .push_output_ = &push_output,
+        .priority_update_ = &stream_runtime->priority_update(),
+    });
+    admission_services.bind_request_trailers(stream_runtime->trailers());
     auto admission = admit_http_request(
         {
             .request_ = request,
@@ -353,15 +360,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
             .expectation_ = &expectation_plan,
             .start_ = request_start,
         },
-        admission_policy_,
-        base_services
-            .with_request_channels({
-                .interim_output_ = &interim_output,
-                .connection_advertisements_ = &advertisements,
-                .push_output_ = &push_output,
-                .priority_update_ = &stream_runtime->priority_update(),
-            })
-            .with_request_trailers(stream_runtime->trailers()));
+        admission_policy_, admission_services);
     const auto& request_services = admission.services();
     const auto* resolved = admission.resolved();
 
@@ -371,7 +370,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     }
     auto dispatch_services = request_services;
     if (body_reader_storage) {
-        dispatch_services = dispatch_services.with_streaming_request_body(body_reader_storage->facade());
+        dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
     }
 
     switch (admission.endpoint()) {
