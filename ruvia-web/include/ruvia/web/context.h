@@ -234,28 +234,18 @@ public:
     // The callable executes on the blocking pool and must own everything it
     // touches. Completion resumes on this worker; timeout or shutdown stops
     // the wait without joining a still-running foreign callable.
+    // Rejection and callable exceptions are retained in blocking_result. Inspect
+    // status() for load shedding or use std::move(result).value() to throw.
+    // A disabled pool is a configuration error and throws before submission.
     template <typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(callable_type callable) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
         return capabilities_.run_blocking(std::move(callable));
     }
 
     template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
         return capabilities_.run_blocking(timeout, std::move(callable));
-    }
-
-    // Pool rejection is returned as a status; exceptions from the callable
-    // still propagate. A disabled pool is a configuration error and throws.
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(callable_type callable) const {
-        return capabilities_.try_run_blocking(std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return capabilities_.try_run_blocking(timeout, std::move(callable));
     }
 
     // Observes worker shutdown and, for a subrequest, explicit cancellation.

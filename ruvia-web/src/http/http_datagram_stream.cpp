@@ -15,14 +15,14 @@ http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream)
         throw std::logic_error("HTTP Datagram stream is empty");
     }
 }
-http_datagram_stream http_tunnel::datagrams(http_datagram_config config) & {
-    return http_datagram_stream(capsules(config.capsules_));
+http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
+    return http_datagram_stream(capsules(config));
 }
-http_datagram_stream http_client_tunnel::datagrams(http_datagram_config config) && {
+http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
     if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->config_.datagrams_ || !response_.state_->tunnel_->accepted_) {
         throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
     }
-    return http_datagram_stream(std::move(*this).capsules(config.capsules_));
+    return http_datagram_stream(std::move(*this).capsules(config));
 }
 scoped_operation<std::optional<http_datagram>> http_datagram_stream::read() & {
     if (!stream_.state_) {

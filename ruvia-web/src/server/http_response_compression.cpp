@@ -181,7 +181,7 @@ task<http_response_compression_status> compress_response_offloaded(http_content_
     try {
         std::pmr::string plain(response.body_bytes(), process_resource());
         auto result_value =
-            co_await try_run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() mutable {
+            co_await run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() mutable {
                 return encode_buffered_body(coding, std::move(plain));
             });
         if (result_value.failed()) {

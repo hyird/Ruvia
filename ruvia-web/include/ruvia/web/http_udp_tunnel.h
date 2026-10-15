@@ -37,11 +37,11 @@ private:
 // read and send/finish lanes when moved.
 // Operations occupy their lane when started; unstarted operations may coexist.
 // send() owns its payload before returning.
+// Server handlers wrap the negotiated route's http_tunnel::datagrams() result;
+// clients use the checked http_client_tunnel::udp() ownership transfer.
 class http_udp_tunnel final {
 public:
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept
-        : stream_(std::move(stream)) {}
-    explicit http_udp_tunnel(http_capsule_stream stream)
         : stream_(std::move(stream)) {}
     http_udp_tunnel(const http_udp_tunnel&) = delete;
     http_udp_tunnel& operator=(const http_udp_tunnel&) = delete;

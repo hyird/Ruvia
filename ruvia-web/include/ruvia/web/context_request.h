@@ -60,33 +60,6 @@ struct signed_cookie_lookup_options final {
 // not this by-value facade. Model validation belongs to route middleware.
 class context_request final {
 public:
-    class request_blob_type final {
-    public:
-        [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
-            return bytes_;
-        }
-        [[nodiscard]] std::string_view text() const noexcept {
-            return bytes_.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(bytes_.data()), bytes_.size());
-        }
-        [[nodiscard]] std::string_view content_type() const noexcept {
-            return content_type_;
-        }
-        [[nodiscard]] std::size_t size() const noexcept {
-            return bytes_.size();
-        }
-        [[nodiscard]] bool empty() const noexcept {
-            return bytes_.empty();
-        }
-
-    private:
-        friend class context_request;
-        constexpr request_blob_type(std::span<const std::byte> bytes_value, std::string_view content_type_value) noexcept
-            : bytes_(bytes_value),
-              content_type_(content_type_value) {}
-        std::span<const std::byte> bytes_;
-        std::string_view content_type_;
-    };
-
     [[nodiscard]] std::string_view method() const noexcept;
     [[nodiscard]] http_known_method known_method() const noexcept;
     [[nodiscard]] std::string_view path() const noexcept;
@@ -134,9 +107,9 @@ public:
     [[nodiscard]] const request_name_value_list& param_fields() const;
     [[nodiscard]] std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const;
 
+    // Buffered views borrow context storage; read the media type with header("Content-Type").
     [[nodiscard]] scoped_operation<std::string_view> text() const;
     [[nodiscard]] scoped_operation<std::span<const std::byte>> bytes() const;
-    [[nodiscard]] scoped_operation<request_blob_type> blob() const;
     scoped_operation<void> discard_body() const;
 
     // Typed optional parsing without field-rule validation. Only a media-type
@@ -167,7 +140,6 @@ private:
 
     [[nodiscard]] const detail::request_bindings& request_bindings() const noexcept;
     [[nodiscard]] static task<std::span<const std::byte>> bytes_task(const context* context);
-    [[nodiscard]] static task<request_blob_type> blob_task(const context* context);
     template <typename t_type>
     [[nodiscard]] static task<std::optional<t_type>> json_if_model_task(const context* context_value);
     template <typename t_type>

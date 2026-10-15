@@ -7,9 +7,6 @@
 
 #include "ruvia/web/http_capsule_stream.h"
 namespace ruvia {
-struct http_datagram_config final {
-    http_capsule_config capsules_{};
-};
 // Owned opaque HTTP Datagram payload, valid across later reads and client
 // shutdown. Destroy results on their worker before the worker retires.
 class http_datagram final {
@@ -34,12 +31,13 @@ private:
     std::size_t offset_{};
 };
 // RFC 9297 channel using reliable DATAGRAM capsules over a negotiated tunnel.
+// Create through http_tunnel::datagrams() or http_client_tunnel::datagrams();
+// arbitrary Capsule Protocol streams cannot be promoted to this channel.
 // Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
 // Operations occupy separate read and send/finish lanes when started; unstarted
 // operations may coexist. send() owns its payload before returning.
 class http_datagram_stream final {
 public:
-    explicit http_datagram_stream(http_capsule_stream&& stream);
     http_datagram_stream(const http_datagram_stream&) = delete;
     http_datagram_stream& operator=(const http_datagram_stream&) = delete;
     http_datagram_stream(http_datagram_stream&&) noexcept = default;
@@ -60,7 +58,10 @@ public:
     void abort() && = delete;
 
 private:
+    friend class http_tunnel;
+    friend class http_client_tunnel;
     friend class http_udp_tunnel;
+    explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp);
     [[nodiscard]] scoped_operation<void> send_payload(std::string_view payload, bool udp);
     http_capsule_stream stream_;

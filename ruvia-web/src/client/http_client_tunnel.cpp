@@ -98,7 +98,7 @@ void http_client_tunnel::abort() & noexcept {
         }
     }
 }
-http_udp_tunnel http_client_tunnel::udp(http_datagram_config config) && {
+http_udp_tunnel http_client_tunnel::udp(http_capsule_config config) && {
     if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
         throw std::logic_error("UDP tunnel requires an accepted CONNECT-UDP handshake");
     }

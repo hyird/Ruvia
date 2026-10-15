@@ -133,16 +133,6 @@ scoped_operation<std::span<const std::byte>> context_request::bytes() const {
     return ::ruvia::make_scoped_operation(context_->operation_scope_, bytes_task(context_));
 }
 
-task<context_request::request_blob_type> context_request::blob_task(const context* context_value) {
-    auto bytes_value = co_await bytes_task(context_value);
-    co_return request_blob_type(
-        bytes_value, context_value->request_header("Content-Type").value_or(std::string_view{}));
-}
-
-scoped_operation<context_request::request_blob_type> context_request::blob() const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, blob_task(context_));
-}
-
 scoped_operation<void> context_request::discard_body() const {
     return ::ruvia::make_scoped_operation(context_->operation_scope_, context_->request_discard_body());
 }

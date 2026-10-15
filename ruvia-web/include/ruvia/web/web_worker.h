@@ -55,26 +55,20 @@ public:
         return capabilities_.worker_state<state_type>();
     }
 
+    // The callable owns its inputs and must not borrow worker state. Completion
+    // resumes here; worker shutdown and timeout end the wait, not the callable.
+    // Rejection and callable exceptions are retained in blocking_result; inspect
+    // status() or use std::move(result).value() to throw. The worker stop token
+    // is bound automatically. A disabled pool is a configuration error.
     template <typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(callable_type callable) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
         return capabilities_.run_blocking(std::move(callable));
     }
 
     template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
         return capabilities_.run_blocking(timeout, std::move(callable));
-    }
-
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(callable_type callable) const {
-        return capabilities_.try_run_blocking(std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return capabilities_.try_run_blocking(timeout, std::move(callable));
     }
 
 #ifdef RUVIA_ENABLE_DATABASE

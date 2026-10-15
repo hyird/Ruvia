@@ -289,7 +289,7 @@ private:
 
 namespace detail {
 
-// Every caller is in try_run_blocking_until(): rejections never carry the
+// Every caller is in run_blocking_until(): rejections never carry the
 // completed status, and a completed payload always holds a value or an error.
 struct blocking_result_access final {
     template <typename t_type>
@@ -305,7 +305,7 @@ struct blocking_result_access final {
 };
 
 template <typename fn_type>
-[[nodiscard]] auto try_run_blocking_until(blocking_pool& pool, worker_handle worker_value,
+[[nodiscard]] auto run_blocking_until(blocking_pool& pool, worker_handle worker_value,
     std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
@@ -388,21 +388,11 @@ template <typename fn_type>
     co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
 }
 
-template <typename t_type>
-[[nodiscard]] task<t_type> unwrap_blocking_result(task<blocking_result<t_type>> operation) {
-    auto result_value = co_await std::move(operation);
-    if constexpr (std::is_void_v<t_type>) {
-        std::move(result_value).value();
-        co_return;
-    } else {
-        co_return std::move(result_value).value();
-    }
-}
-
 }  // namespace detail
 
-// Tries to run `fn` on `pool` and resumes the caller on `worker` with a typed
-// status. The callable's own exception is retained in the result.
+// Runs `fn` on `pool` and resumes the caller on `worker` with a typed result.
+// Queue pressure, shutdown, cancellation and timeout remain inspectable statuses;
+// the callable's own exception is retained in the result.
 //
 // The returned task must be awaited on `worker` -- that is the thread the
 // coroutine resumes on and the only thread the result is touched from;
@@ -416,15 +406,15 @@ template <typename t_type>
 // into an exception and to rethrow the callable's own exception; value() is
 // rvalue-only because it consumes the result.
 template <typename fn_type>
-[[nodiscard]] auto try_run_blocking(blocking_pool& pool, worker_handle worker_value, fn_type fn)
+[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
-    return detail::try_run_blocking_until(pool, std::move(worker_value), std::nullopt, {}, std::move(fn));
+    return detail::run_blocking_until(pool, std::move(worker_value), std::nullopt, {}, std::move(fn));
 }
 
 template <typename fn_type>
-[[nodiscard]] auto try_run_blocking(blocking_pool& pool, worker_handle worker_value, stop_token stop_token_value,
+[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value, stop_token stop_token_value,
     fn_type fn) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
-    return detail::try_run_blocking_until(
+    return detail::run_blocking_until(
         pool, std::move(worker_value), std::nullopt, std::move(stop_token_value), std::move(fn));
 }
 
@@ -434,58 +424,22 @@ template <typename fn_type>
 // wedged dependency from pinning a request -- its connection, its arena, its
 // leases -- indefinitely.
 template <typename rep_type, typename period_type, typename fn_type>
-[[nodiscard]] auto try_run_blocking(
+[[nodiscard]] auto run_blocking(
     blocking_pool& pool, worker_handle worker_value, std::chrono::duration<rep_type, period_type> timeout, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     // duration_cast can overflow for a valid user duration such as hours::max(),
     // turning a long deadline into an immediate timeout. Use the same saturating
     // conversion as worker timers so all bounded waits share one interpretation.
-    return detail::try_run_blocking_until(pool, std::move(worker_value),
+    return detail::run_blocking_until(pool, std::move(worker_value),
         ::ruvia::worker_timer_saturating_duration_cast(timeout), {}, std::move(fn));
 }
 
 template <typename rep_type, typename period_type, typename fn_type>
-[[nodiscard]] auto try_run_blocking(blocking_pool& pool, worker_handle worker_value,
+[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value,
     std::chrono::duration<rep_type, period_type> timeout, stop_token stop_token_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
-    return detail::try_run_blocking_until(pool, std::move(worker_value),
+    return detail::run_blocking_until(pool, std::move(worker_value),
         ::ruvia::worker_timer_saturating_duration_cast(timeout), std::move(stop_token_value), std::move(fn));
-}
-
-// The throwing form has the same name and semantics in core and web: callable
-// exceptions are rethrown and a rejected operation throws
-// blocking_operation_rejected.
-template <typename fn_type>
-[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value, fn_type fn)
-    -> task<std::invoke_result_t<fn_type&>> {
-    using result_type = std::invoke_result_t<fn_type&>;
-    return detail::unwrap_blocking_result<result_type>(
-        try_run_blocking(pool, std::move(worker_value), std::move(fn)));
-}
-
-template <typename fn_type>
-[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value, stop_token stop_token_value, fn_type fn)
-    -> task<std::invoke_result_t<fn_type&>> {
-    using result_type = std::invoke_result_t<fn_type&>;
-    return detail::unwrap_blocking_result<result_type>(
-        try_run_blocking(pool, std::move(worker_value), std::move(stop_token_value), std::move(fn)));
-}
-
-template <typename rep_type, typename period_type, typename fn_type>
-[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value,
-    std::chrono::duration<rep_type, period_type> timeout, fn_type fn) -> task<std::invoke_result_t<fn_type&>> {
-    using result_type = std::invoke_result_t<fn_type&>;
-    return detail::unwrap_blocking_result<result_type>(
-        try_run_blocking(pool, std::move(worker_value), timeout, std::move(fn)));
-}
-
-template <typename rep_type, typename period_type, typename fn_type>
-[[nodiscard]] auto run_blocking(blocking_pool& pool, worker_handle worker_value,
-    std::chrono::duration<rep_type, period_type> timeout, stop_token stop_token_value, fn_type fn)
-    -> task<std::invoke_result_t<fn_type&>> {
-    using result_type = std::invoke_result_t<fn_type&>;
-    return detail::unwrap_blocking_result<result_type>(
-        try_run_blocking(pool, std::move(worker_value), timeout, std::move(stop_token_value), std::move(fn)));
 }
 
 }  // namespace ruvia

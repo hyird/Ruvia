@@ -10,7 +10,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_hex.h"
 
@@ -126,36 +125,6 @@ template <typename visitor_type>
     return output;
 }
 
-// Compare a percent-encoded component to its decoded value without allocating.
-// Percent mode treats '+' literally; form mode converts it to a space. Malformed
-// percent escapes never compare equal.
-[[nodiscard]] inline bool url_component_equals(
-    std::string_view encoded, std::string_view decoded, url_decode_mode mode) noexcept {
-    if (encoded.size() < decoded.size()) {
-        return false;
-    }
-
-    std::size_t out = 0;
-    for (std::size_t i = 0; i < encoded.size(); ++i) {
-        char c = encoded[i];
-        if (mode == url_decode_mode::form && c == '+') {
-            c = ' ';
-        } else if (c == '%') {
-            const auto byte = http_try_decode_percent_byte(encoded, i);
-            if (!byte) {
-                return false;
-            }
-            c = static_cast<char>(*byte);
-            i += 2;
-        }
-        if (out >= decoded.size() || decoded[out] != c) {
-            return false;
-        }
-        ++out;
-    }
-    return out == decoded.size();
-}
-
 // Compare two percent-encoded components by their decoded bytes without
 // allocating, so differently escaped spellings of one value compare equal.
 // Percent mode treats '+' literally; form mode converts it to a space.
@@ -189,10 +158,10 @@ template <typename visitor_type>
     return left_index == left.size() && right_index == right.size();
 }
 
-// Visit raw, borrowed name/value views for each non-empty pair. A bool-returning
-// visitor returning false stops iteration and makes this return false; a void
-// visitor always traverses all pairs. Pair traversal does not validate percent
-// escapes. The input storage must remain alive while each view is used.
+// Visit raw, borrowed name/value views for each non-empty pair, preserving repeated
+// names in input order. A bool-returning visitor returning false stops iteration
+// and makes this return false; a void visitor always traverses all pairs. Pair
+// traversal does not validate percent escapes. Input storage must outlive each view.
 template <typename visitor_type>
 [[nodiscard]] bool visit_url_encoded_pairs(std::string_view input, visitor_type&& visitor) {
     auto& visitor_ref = visitor;
@@ -219,23 +188,5 @@ template <typename visitor_type>
     }
     return true;
 }
-
-// Returns the raw (still percent-encoded) borrowed value of the LAST pair whose
-// name matches decoded_name. Later duplicates override earlier ones. The value
-// must be decoded separately before use; input storage must outlive the view.
-[[nodiscard]] inline std::optional<std::string_view> find_url_encoded_value(
-    std::string_view input, std::string_view decoded_name, url_decode_mode mode) {
-    std::optional<std::string_view> result;
-    (void)visit_url_encoded_pairs(input, [&](std::string_view name, std::string_view value) {
-        if (url_component_equals(name, decoded_name, mode)) {
-            result = value;
-        }
-        return true;
-    });
-    return result;
-}
-
-template <detail::http_temporary_owning_char_string input_type>
-std::optional<std::string_view> find_url_encoded_value(input_type&&, std::string_view, url_decode_mode) = delete;
 
 }  // namespace ruvia

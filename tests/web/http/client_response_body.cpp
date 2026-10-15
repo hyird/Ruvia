@@ -46,6 +46,7 @@
 #include "ruvia/web/http_client_response.h"
 #include "ruvia/web/http_client_tunnel.h"
 #include "ruvia/web/http_client_types.h"
+#include "ruvia/web/http_udp_tunnel.h"
 #include "ruvia/web/model.h"
 
 #include "test_harness.h"
@@ -1534,6 +1535,21 @@ RUVIA_TEST(http_client_tunnel_claims_output_when_started_and_retires_after_abort
             if (tunnel == nullptr) {
                 co_return;
             }
+            unsigned datagram_adapters_rejected = 0;
+            try {
+                auto datagrams = std::move(*tunnel).datagrams();
+                static_cast<void>(datagrams);
+            } catch (const std::logic_error&) {
+                ++datagram_adapters_rejected;
+            }
+            try {
+                auto udp = std::move(*tunnel).udp();
+                static_cast<void>(udp);
+            } catch (const std::logic_error&) {
+                ++datagram_adapters_rejected;
+            }
+            RUVIA_CHECK_EQ(datagram_adapters_rejected, 2U);
+            RUVIA_CHECK(tunnel->status() == ruvia::http_status::ok);
             std::string input = "abc";
             auto first = tunnel->write(input);
             auto second = tunnel->write("def");

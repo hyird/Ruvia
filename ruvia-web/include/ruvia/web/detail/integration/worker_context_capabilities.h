@@ -53,25 +53,14 @@ public:
     }
 
     template <typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(callable_type callable) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
         return ruvia::run_blocking(require_blocking_pool(), worker_, stop_token_, std::move(callable));
     }
 
     template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<std::invoke_result_t<callable_type&>> run_blocking(
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
         return ruvia::run_blocking(require_blocking_pool(), worker_, timeout, stop_token_, std::move(callable));
-    }
-
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(callable_type callable) const {
-        return ruvia::try_run_blocking(require_blocking_pool(), worker_, stop_token_, std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> try_run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return ruvia::try_run_blocking(require_blocking_pool(), worker_, timeout, stop_token_, std::move(callable));
     }
 
 private:

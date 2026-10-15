@@ -29,6 +29,7 @@ struct udp_tunnel_observation {
     std::atomic<bool> eof_{};
     std::atomic<bool> read_overlap_rejected_{};
     std::atomic<bool> write_overlap_rejected_{};
+    std::atomic<bool> capsule_bound_rejected_{};
     std::atomic<bool> failed_{};
     std::atomic<bool> dynamic_invoked_{};
 };
@@ -50,19 +51,26 @@ class udp_tunnel_routes final {
 
     ruvia::task<void> dynamic(ruvia::context& c) {
         c.worker_state<std::shared_ptr<udp_tunnel_observation>>()->dynamic_invoked_ = true;
-        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        ruvia::http_udp_tunnel tunnel(c.tunnel().datagrams());
         co_await tunnel.finish();
     }
 
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
-        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        ruvia::http_capsule_config config{.max_capsule_length_ = 13};
+        ruvia::http_udp_tunnel original(c.tunnel().datagrams(config));
         try {
-            auto first_read = tunnel.read();
-            auto last_read = tunnel.read();
-            auto first_write = tunnel.send("ready");
-            auto last_write = tunnel.send("second-ready");
-            auto finish = tunnel.finish();
+            try {
+                co_await original.send(std::string(13, 'x'));
+            } catch (const std::length_error&) {
+                observation.capsule_bound_rejected_ = true;
+            }
+            auto first_read = original.read();
+            auto last_read = original.read();
+            auto first_write = original.send("ready");
+            auto last_write = original.send("second-ready");
+            auto finish = original.finish();
+            auto tunnel = std::move(original);
             {
                 auto discarded = tunnel.send("discarded");
                 static_cast<void>(discarded);
@@ -106,7 +114,7 @@ class udp_tunnel_routes final {
 
     ruvia::task<void> delayed(ruvia::context& c) {
         co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(30));
-        ruvia::http_udp_tunnel tunnel(c.tunnel().capsules());
+        ruvia::http_udp_tunnel tunnel(c.tunnel().datagrams());
         co_await tunnel.finish();
     }
 
@@ -126,6 +134,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
     observation->eof_ = false;
     observation->read_overlap_rejected_ = false;
     observation->write_overlap_rejected_ = false;
+    observation->capsule_bound_rejected_ = false;
     observation->failed_ = false;
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
@@ -142,7 +151,15 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(result.tunnel()->status() == ruvia::http_status::switching_protocols);
             RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
             RUVIA_CHECK(!result.tunnel()->header("content-length"));
-            auto tunnel = std::move(*result.tunnel()).udp();
+            ruvia::http_capsule_config capsule_config{.max_capsule_length_ = 13};
+            ruvia::http_udp_tunnel tunnel(std::move(*result.tunnel()).datagrams(capsule_config));
+            bool capsule_bound_rejected = false;
+            try {
+                co_await tunnel.send(std::string(13, 'x'));
+            } catch (const std::length_error&) {
+                capsule_bound_rejected = true;
+            }
+            RUVIA_CHECK(capsule_bound_rejected);
             bool oversized = false;
             try {
                 co_await tunnel.send(std::string(65528, 'x'));
@@ -185,6 +202,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(ended_write_rejected);
             co_await reader.join();
             RUVIA_CHECK(observation->eof_);
+            RUVIA_CHECK(observation->capsule_bound_rejected_);
             RUVIA_CHECK(observation->read_overlap_rejected_);
             RUVIA_CHECK(observation->write_overlap_rejected_);
             RUVIA_CHECK(!observation->failed_);
@@ -193,6 +211,17 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             auto next_sibling_body = co_await next_sibling.body().read_all();
             RUVIA_CHECK(std::string_view(
                             reinterpret_cast<const char*>(next_sibling_body.bytes().data()), next_sibling_body.size()) == "sibling");
+            {
+                auto udp_result = co_await client.handle().open_udp_tunnel(
+                    {.target_ = "/.well-known/masque/udp/cancel.test/53/"});
+                RUVIA_CHECK(udp_result.tunnel() != nullptr);
+                if (!udp_result.tunnel()) {
+                    throw std::runtime_error("missing CONNECT-UDP tunnel");
+                }
+                auto udp = std::move(*udp_result.tunnel()).udp(capsule_config);
+                RUVIA_CHECK(!(co_await udp.read()));
+                co_await udp.finish();
+            }
             ruvia::stop_source cancel;
             auto pending = client.with_options({.stop_token_ = cancel.token()}).open_udp_tunnel({.target_ = "/.well-known/masque/udp/cancel.test/53/"});
             cancel.request_stop();

@@ -58,8 +58,11 @@ public:
     [[nodiscard]] scoped_operation<void> finish() &;
     scoped_operation<void> finish() && = delete;
     void abort() noexcept;
-    [[nodiscard]] http_datagram_stream datagrams(http_datagram_config config = {}) &;
-    http_datagram_stream datagrams(http_datagram_config = {}) && = delete;
+    // Borrow the established route tunnel for HTTP Datagrams. The route protocol
+    // owns negotiation; use only in its negotiated datagram handler, exclusively
+    // with this tunnel. Capsule Protocol limits apply to encoded datagrams.
+    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
+    http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
     [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &;
     http_capsule_stream capsules(http_capsule_config = {}) && = delete;
 

@@ -103,17 +103,6 @@ RUVIA_TEST(url_validate_encoding) {
     RUVIA_CHECK(validate_url_encoding(""));
 }
 
-RUVIA_TEST(url_component_equals) {
-    using m_type = ruvia::url_decode_mode;
-    using ruvia::url_component_equals;
-    RUVIA_CHECK(url_component_equals("%41bc", "Abc", m_type::percent));
-    RUVIA_CHECK(url_component_equals("a+b", "a b", m_type::form));
-    RUVIA_CHECK(!url_component_equals("a+b", "a b", m_type::percent));  // '+' literal
-    RUVIA_CHECK(!url_component_equals("abc", "abcd", m_type::percent));
-    RUVIA_CHECK(!url_component_equals("abcd", "abc", m_type::percent));
-    RUVIA_CHECK(!url_component_equals("%2", "x", m_type::percent));  // truncated escape
-}
-
 RUVIA_TEST(url_components_equivalent) {
     using m_type = ruvia::url_decode_mode;
     using ruvia::url_components_equivalent;
@@ -129,19 +118,6 @@ RUVIA_TEST(url_components_equivalent) {
     RUVIA_CHECK(!url_components_equivalent("%zz", "%zz", m_type::percent));  // malformed escape
 }
 
-RUVIA_TEST(url_find_pair_value) {
-    using m_type = ruvia::url_decode_mode;
-    using ruvia::find_url_encoded_value;
-    const std::string_view q = "a=1&b=two&flag&c=%41";
-    RUVIA_CHECK_EQ(find_url_encoded_value(q, "a", m_type::percent).value_or("?"), std::string_view("1"));
-    RUVIA_CHECK_EQ(find_url_encoded_value(q, "b", m_type::percent).value_or("?"), std::string_view("two"));
-    RUVIA_CHECK_EQ(find_url_encoded_value(q, "c", m_type::percent).value_or("?"), std::string_view("%41"));
-    // key present with no '=' yields empty value, not missing
-    RUVIA_CHECK(find_url_encoded_value(q, "flag", m_type::percent).has_value());
-    RUVIA_CHECK_EQ(find_url_encoded_value(q, "flag", m_type::percent).value(), std::string_view(""));
-    RUVIA_CHECK(!find_url_encoded_value(q, "missing", m_type::percent).has_value());
-}
-
 RUVIA_TEST(url_visit_pairs_count) {
     std::vector<std::pair<std::string, std::string>> pairs;
     (void)ruvia::visit_url_encoded_pairs(
@@ -153,13 +129,6 @@ RUVIA_TEST(url_visit_pairs_count) {
         RUVIA_CHECK_EQ(pairs[0].first, std::string("x"));
         RUVIA_CHECK_EQ(pairs[2].second, std::string("3"));
     }
-}
-
-RUVIA_TEST(url_find_pair_value_uses_last_duplicate) {
-    const auto value = ruvia::find_url_encoded_value("item=first&%69tem=last", "item",
-        ruvia::url_decode_mode::percent);
-    RUVIA_CHECK(value.has_value());
-    RUVIA_CHECK_EQ(*value, std::string_view("last"));
 }
 
 RUVIA_TEST(url_visit_pairs_stops_early) {

@@ -97,7 +97,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         read_ahead(state_, bytes, completes_range);
         co_return !state_.error_;
     }
-    auto result = co_await try_run_blocking(*io_.pool_, io_.worker_, io_.stop_,
+    auto result = co_await run_blocking(*io_.pool_, io_.worker_, io_.stop_,
         [state = std::move(state_), bytes, completes_range]() mutable {
             read_ahead(state, bytes, completes_range);
             return std::move(state);

@@ -49,6 +49,8 @@ private:
     }
 
     ruvia::task<void> udp(ruvia::context& c) {
+        // This protocol route has already negotiated CONNECT-UDP. Capsule
+        // limits can be passed directly to datagrams(http_capsule_config).
         ruvia::http_udp_tunnel stream(c.tunnel().datagrams());
         while (auto packet = co_await stream.read()) {
             // The adapter handles context ID 0 and ignores unknown contexts.
@@ -99,6 +101,8 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
                 auto body = co_await opened.response()->body().read_all();
                 throw std::runtime_error("CONNECT-UDP rejected: " + std::string(characters(body.bytes())));
             }
+            // Checked conversion rejects ordinary CONNECT without consuming its
+            // owner; both udp() and datagrams() accept http_capsule_config.
             auto stream = std::move(*opened.tunnel()).udp();
             co_await stream.send("udp payload");
             auto reply = co_await stream.read();

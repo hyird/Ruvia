@@ -151,7 +151,6 @@ public:
     RUVIA_GET("/res-assigned-prepared", assigned_prepared_response);
     RUVIA_POST("/multipart", buffered_multipart);
     RUVIA_POST("/bytes", bytes_body);
-    RUVIA_POST("/blob", blob_body);
     RUVIA_POST("/json-object", json_message, ruvia::json_body<surface_json_message>);
     RUVIA_POST("/json-raw", json_message, ruvia::json_body<surface_json_message>);
     RUVIA_POST("/discard", discard);
@@ -357,23 +356,8 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("bytes bytes=");
         append_unsigned(body, bytes_value.size());
-        body.push_back('\n');
-        co_return c.text(std::move(body));
-    }
-
-    ruvia::task<ruvia::http_response> blob_body(ruvia::context& c) {
-        const auto blob = co_await c.req().blob();
-        const auto bytes_value = blob.bytes();
-        const auto text = blob.text();
-        std::pmr::string body(c.allocator<char>());
-        body.append("blob bytes=");
-        append_unsigned(body, blob.size());
-        body.append("\nbytes=");
-        append_unsigned(body, bytes_value.size());
-        body.append("\ntext bytes=");
-        append_unsigned(body, text.size());
         body.append("\ncontent-type=");
-        body.append(blob.content_type());
+        body.append(c.req().header("Content-Type").value_or(std::string_view{}));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
