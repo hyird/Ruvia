@@ -525,6 +525,30 @@ RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
     }
 }
 
+RUVIA_TEST(redis_repository_search_consumes_expired_documents_without_truncation) {
+    const std::string reply = "*3\r\n:1\r\n$7\r\nusers:1\r\n$-1\r\n";
+    redis_command_server server({reply, reply, reply});
+    auto& io_context = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io_context);
+    {
+        ruvia::redis_client client(worker.loop(), server_config(server));
+        exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+            const auto repository =
+                connected.handle().get_repository<test_redis_user>(test_redis_repository_config);
+            // A returned null document occupies the complete search page even
+            // though the expired entity is omitted from the decoded rows.
+            const auto rows = co_await repository.find();
+            RUVIA_CHECK(rows.empty());
+            const auto first = co_await repository.find_one({});
+            RUVIA_CHECK(!first.has_value());
+            const auto [counted_rows, count] = co_await repository.find_and_count();
+            RUVIA_CHECK(counted_rows.empty());
+            RUVIA_CHECK_EQ(count, std::uint64_t{1});
+        });
+    }
+    RUVIA_CHECK_EQ(server.commands().size(), std::size_t{3});
+}
+
 RUVIA_TEST(redis_repository_pre_cancelled_operations_report_cancellation) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);

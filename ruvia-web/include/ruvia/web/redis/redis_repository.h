@@ -61,14 +61,14 @@ public:
         redis_write_options options = {}) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
-        return write("update", *id, changes, options);
+        return write("update", id, changes, options);
     }
 
     [[nodiscard]] scoped_operation<entity_rows<entity_type>> find(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
-        detail::redis_map_many<entity_type> mapper{std::pmr::string(mapping().prefix_, memory),
+        detail::redis_map_many<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)},
             options.take_.has_value() ? std::nullopt : std::optional<std::uint64_t>(options.skip_.value_or(0U))};
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
@@ -91,7 +91,7 @@ public:
         }
         const auto take = options.take_.has_value() ? (std::min)(*options.take_, std::uint64_t{1}) : std::uint64_t{1};
         auto args = detail::compile_redis_find(mapping(), options, memory, false, take);
-        detail::redis_map_first<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
+        detail::redis_map_first<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)}};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
 
@@ -129,7 +129,7 @@ public:
         const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
-        return delete_by_id(*id, memory);
+        return delete_by_id(id, memory);
     }
 
     [[nodiscard]] scoped_operation<redis_write_result> remove(const entity_type& entity) const {
@@ -141,14 +141,14 @@ public:
         const redis_predicate& predicate, std::chrono::seconds ttl) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
-        const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
+        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.expire(key, ttl);
     }
 
     [[nodiscard]] scoped_operation<redis_ttl> ttl(const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
-        const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
+        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.pttl(key);
     }
 
@@ -201,14 +201,14 @@ private:
         repository.mapping_.reset();
     }
 
-    [[nodiscard]] std::optional<std::pmr::string> require_primary_key(
+    [[nodiscard]] std::pmr::string require_primary_key(
         const redis_predicate& predicate, std::pmr::memory_resource* memory) const {
         auto result_value = detail::redis_primary_key(mapping(), predicate, memory);
         if (!result_value) {
             throw std::invalid_argument(
                 "Redis repository operation requires an exact primary-key predicate");
         }
-        return result_value;
+        return std::move(*result_value);
     }
 
     [[nodiscard]] scoped_operation<redis_write_result> delete_by_id(

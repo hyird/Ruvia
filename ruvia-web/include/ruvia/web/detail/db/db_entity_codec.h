@@ -215,11 +215,6 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
     entity.template set<c_type::name>(std::move(value));
 }
 
-template <typename e_type, typename c_type>
-void decode_entity_column(e_type& entity, const db_row& row, std::pmr::memory_resource* resource) {
-    decode_entity_field<e_type, c_type>(entity, row[c_type::name.view()], resource);
-}
-
 template <typename e_type>
 class db_entity_row_decoder final {
     using columns_type = typename e_type::columns_type;

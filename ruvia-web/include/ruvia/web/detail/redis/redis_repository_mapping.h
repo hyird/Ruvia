@@ -104,15 +104,14 @@ struct redis_map_search final {
 
 template <typename entity_type>
 struct redis_map_many final {
-    std::pmr::string prefix_;
+    redis_map_search<entity_type> search_;
     // Set when the caller left `take_` unset: the reply must then hold every
     // match after this skip, or find() would silently truncate.
     std::optional<std::uint64_t> unpaged_skip_;
     entity_rows<entity_type> operator()(
         redis_value&& reply, std::pmr::memory_resource* resource) const {
         const auto documents = redis_orm_array(reply).size() / 2;
-        auto [rows, count] = redis_map_search<entity_type>{std::pmr::string(prefix_, resource)}(
-            std::move(reply), resource);
+        auto [rows, count] = search_(std::move(reply), resource);
         if (unpaged_skip_.has_value() && count > *unpaged_skip_ && count - *unpaged_skip_ > documents) {
             throw redis_error(redis_error::code_type::command_error,
                 "redis find() matched more entities than one default page; set take_ to page the results");
@@ -123,10 +122,9 @@ struct redis_map_many final {
 
 template <typename entity_type>
 struct redis_map_first final {
-    std::pmr::string prefix_;
+    redis_map_search<entity_type> search_;
     std::optional<entity_type> operator()(redis_value&& reply, std::pmr::memory_resource* resource) const {
-        auto result_value = redis_map_search<entity_type>{std::pmr::string(prefix_, resource)}(
-            std::move(reply), resource);
+        auto result_value = search_(std::move(reply), resource);
         if (result_value.first.empty()) {
             return std::nullopt;
         }

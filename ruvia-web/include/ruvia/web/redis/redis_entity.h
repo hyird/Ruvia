@@ -57,11 +57,6 @@ public:
         return column_storage::template index<name>();
     }
     template <fixed_string name>
-    static consteval std::string_view column_name() {
-        (void)column_index<name>();
-        return name.view();
-    }
-    template <fixed_string name>
     static redis_field_reference<redis_entity, name> field() {
         return {};
     }
@@ -94,10 +89,6 @@ public:
         template <::ruvia::fixed_string field_name>                                                 \
         static consteval std::size_t column_index() {                                               \
             return storage_type::template column_index<field_name>();                               \
-        }                                                                                           \
-        template <::ruvia::fixed_string field_name>                                                 \
-        static consteval std::string_view column_name() {                                           \
-            return storage_type::template column_name<field_name>();                                \
         }                                                                                           \
         template <::ruvia::fixed_string field_name>                                                 \
         static ::ruvia::redis_field_reference<name, field_name> field() {                           \

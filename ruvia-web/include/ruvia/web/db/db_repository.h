@@ -137,15 +137,6 @@ struct db_map_projection final {
             selected_columns_[index] = selected.empty() || std::ranges::find(selected, c_type::name.view()) != selected.end();
         });
     }
-    e_type decode(const db_row& row, std::pmr::memory_resource* resource) const {
-        e_type result(resource);
-        for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
-            if (selected_columns_[index]) {
-                decode_entity_column<e_type, c_type>(result, row, resource);
-            }
-        });
-        return result;
-    }
     entity_rows<e_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
         auto result_value = db_result_access::make_entity_rows<e_type>(resource, rows.size());
         db_entity_row_decoder<e_type> decoder(selected_columns_);
@@ -155,7 +146,6 @@ struct db_map_projection final {
         return result_value;
     }
 
-private:
     std::array<bool, std::tuple_size_v<typename e_type::columns_type>> selected_columns_{};
 };
 template <typename e_type>
@@ -165,7 +155,8 @@ struct db_map_one_projection final {
         if (rows.empty()) {
             return std::nullopt;
         }
-        return mapper_.decode(rows.front(), resource);
+        db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_);
+        return decoder.decode(rows.front(), resource);
     }
 };
 // Selects (or returns) the named fields and yields their owned result names.

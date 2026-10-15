@@ -144,9 +144,6 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
     auto& state_value = *response.state_;
     state_value.tunnel_.emplace(state_value.memory_domain().worker(), state_value.resource_, config);
     state_value.tunnel_->udp_ = owned_request.udp_tunnel();
-    if (state_value.tunnel_->udp_) {
-        state_value.tunnel_->config_.datagrams_ = true;
-    }
     spawn_request(std::move(owned_request), std::move(options), state_value);
     co_await state_value.await_head("CONNECT handshake failed");
     if (state_value.tunnel_->accepted_) {

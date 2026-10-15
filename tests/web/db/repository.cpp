@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -97,6 +98,53 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "label", .rows_ = {"Ada"}},
+            {.column_ = "label", .rows_ = {"Grace", "Linus"}},
+            {.column_ = "label", .rows_ = {}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().get_repository<entity_type>();
+        auto one_operation = [&] {
+            auto builder = repository.create_query_builder("i");
+            db_query expressions;
+            builder.select({{"label", expressions.column("name", "i")}});
+            return builder.get_one<item_summary>();
+        }();
+        const auto one = co_await std::move(one_operation);
+        RUVIA_CHECK(one.has_value());
+        if (one) {
+            RUVIA_CHECK_EQ(one->get<"label">(), "Ada");
+            RUVIA_CHECK(!one->is_set<"id">());
+            RUVIA_CHECK(!one->is_set<"rank">());
+        }
+        auto many_operation = [&] {
+            auto builder = repository.create_query_builder("i");
+            db_query expressions;
+            builder.select({{"label", expressions.column("name", "i")}});
+            return builder.get_many<item_summary>();
+        }();
+        const auto many = co_await std::move(many_operation);
+        RUVIA_CHECK_EQ(many.size(), std::size_t{2});
+        if (many.size() == 2) {
+            RUVIA_CHECK_EQ(many[0].get<"label">(), "Grace");
+            RUVIA_CHECK_EQ(many[1].get<"label">(), "Linus");
+            for (const auto& row : many) {
+                RUVIA_CHECK(!row.is_set<"id">());
+                RUVIA_CHECK(!row.is_set<"rank">());
+            }
+        }
+        auto builder = repository.create_query_builder("i");
+        db_query expressions;
+        builder.select({{"label", expressions.column("name", "i")}});
+        const auto empty = co_await builder.get_one<item_summary>();
+        RUVIA_CHECK(!empty.has_value());
+    });
+}
+
 RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_source) {
     repository_runtime runtime;
     test::counting_memory_resource source;

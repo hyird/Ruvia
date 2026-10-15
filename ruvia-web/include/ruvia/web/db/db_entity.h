@@ -393,11 +393,6 @@ public:
         return index<name>();
     }
     template <fixed_string name>
-    static consteval std::string_view column_name() {
-        (void)index<name>();
-        return name.view();
-    }
-    template <fixed_string name>
     static db_field_reference<db_entity, name> column();
     explicit db_entity(std::pmr::memory_resource* resource = nullptr)
         : columns_(resource),
@@ -531,10 +526,6 @@ concept sql_projection = requires(const projection& value) {
         template <::ruvia::fixed_string field_name>                                         \
         static consteval std::size_t column_index() {                                       \
             return storage_type::template column_index<field_name>();                       \
-        }                                                                                   \
-        template <::ruvia::fixed_string field_name>                                         \
-        static consteval std::string_view column_name() {                                   \
-            return storage_type::template column_name<field_name>();                        \
         }                                                                                   \
         template <::ruvia::fixed_string field_name>                                         \
         static ::ruvia::db_field_reference<name, field_name> column() {                     \

@@ -425,7 +425,7 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
-    if (config.datagrams_ || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
+    if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
         !is_valid_http_connect_authority(head.authority_)) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }

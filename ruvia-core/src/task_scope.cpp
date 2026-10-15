@@ -62,7 +62,6 @@ void task_scope::spawn(task<void> task_value) & {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
     ++active_;
-    lifecycle_.template emplace<task_scope_open_type>();
 
     node_value->task_.handle_.promise().control_.set_completion(node_value, &task_scope::child_complete);
     node_value->task_.start();

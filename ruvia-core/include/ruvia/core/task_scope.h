@@ -62,7 +62,6 @@ public:
 private:
     struct node_type;
 
-    struct task_scope_empty_type final {};
     struct task_scope_open_type final {};
     class task_scope_joining_type final {
     public:
@@ -105,8 +104,7 @@ private:
     void finish(node_type* node) noexcept;
     void rethrow_failure();
 
-    using lifecycle_type = std::variant<task_scope_empty_type, task_scope_open_type,
-        task_scope_joining_type, task_scope_joined_type>;
+    using lifecycle_type = std::variant<task_scope_open_type, task_scope_joining_type, task_scope_joined_type>;
     using outcome_type = std::variant<task_scope_success_type, task_scope_failure_type>;
 
     const worker_handle& worker_;

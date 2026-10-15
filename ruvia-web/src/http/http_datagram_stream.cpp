@@ -19,7 +19,7 @@ http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
     return http_datagram_stream(capsules(config));
 }
 http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
-    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->config_.datagrams_ || !response_.state_->tunnel_->accepted_) {
+    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
         throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
     }
     return http_datagram_stream(std::move(*this).capsules(config));
