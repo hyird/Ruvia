@@ -301,15 +301,15 @@ bool tls_keep_alive_serves_decrypted_and_later_requests(
     return end == asio::error::eof && count_occurrences(received, "HTTP/1.1 404 ") == 3;
 }
 
-// RFC 9112 §9.6: a response sent before the request content was read (413)
-// is followed by a staged close, so the client can finish sending and still
-// read the complete response instead of a connection reset.
-bool rejected_upload_reads_complete_response(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+// Reject an oversized Expect request before its body is sent. The client must
+// receive the final status, not 100 Continue, and the unread body precludes reuse.
+bool rejected_expect_upload_closes_without_body(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ip::tcp::socket socket(io);
     asio::error_code error;
     socket.connect(endpoint, error);
-    const std::string body(std::size_t{1024} * 1024, 'x');
-    const auto request = "POST /limited HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    constexpr std::string_view request =
+        "POST /limited HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Length: 1048576\r\nExpect: 100-continue\r\n\r\n";
     if (!error) {
         asio::write(socket, asio::buffer(request), error);
     }
@@ -319,7 +319,7 @@ bool rejected_upload_reads_complete_response(asio::io_context& io, const asio::i
     std::string response;
     const auto end = read_to_end(socket, response);
     return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
-           end == asio::error::eof;
+           response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
 }
 
 // A TLS peer that drops TCP without close_notify ends the server websocket
@@ -545,6 +545,14 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         }
         if (outcome == startup_outcome::serve) {
             RUVIA_CHECK(read_response(socket).find("initialized") != std::string::npos);
+            // The peer deliberately keeps its send side open. Completing a
+            // final response must release server capacity without waiting for FIN.
+            const auto close_deadline = std::chrono::steady_clock::now() + 1s;
+            while (app.http_stats().active_connections_ != 0 &&
+                   std::chrono::steady_clock::now() < close_deadline) {
+                std::this_thread::sleep_for(1ms);
+            }
+            RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
             RUVIA_CHECK(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
             RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
@@ -574,7 +582,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             RUVIA_CHECK(resume_tls_session(io, tls_endpoint));
             RUVIA_CHECK(tls_close_sends_close_notify(io, tls_endpoint));
             RUVIA_CHECK(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
-            RUVIA_CHECK(rejected_upload_reads_complete_response(io, endpoint));
+            RUVIA_CHECK(rejected_expect_upload_closes_without_body(io, endpoint));
             RUVIA_CHECK(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
             app.stop();
         }

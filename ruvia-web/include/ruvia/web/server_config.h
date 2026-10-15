@@ -46,6 +46,10 @@ enum class process_signal_handler_policy : std::uint8_t {
 // this aggregate atomically, validates it as one unit, and publishes the same
 // normalized values to every worker. Optional fields disable only the policy
 // they name; optional application capabilities remain separate config-or-null calls.
+// A final response that closes HTTP/1 is followed by send-side shutdown (TLS:
+// close_notify) and TCP close, without draining peer input. Unread or late peer
+// data can therefore cause a reset that prevents receipt of the final response
+// (RFC 9112 §9.6); the server does not wait for the peer's FIN.
 struct server_config final {
     // Business workers; one server network thread is additional.
     std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};

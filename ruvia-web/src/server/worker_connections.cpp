@@ -208,7 +208,10 @@ task<void> worker_connections::run_session(
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
         if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
-            co_await close_http_connection_gracefully(socket, scanner_, worker_);
+            // Closing after the final response satisfies RFC 9112 §9.3 without
+            // reading the remaining request body. No peer FIN is awaited.
+            std::error_code ignored;
+            socket.shutdown(tcp_socket_type::shutdown_send, ignored);
         }
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
@@ -255,7 +258,7 @@ task<void> worker_connections::run_tls_session(
         // A worker stop keeps the immediate close; scanner close_all reaches a
         // graceful close that is already running.
         if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
-            co_await close_http_connection_gracefully(tls_stream, scanner_, worker_, close_mode);
+            co_await close_http_connection_gracefully(tls_stream, scanner_, worker_);
         }
         ruvia::close_socket(socket);
     } catch (...) {

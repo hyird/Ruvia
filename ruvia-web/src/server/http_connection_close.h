@@ -17,25 +17,19 @@ enum class http_connection_close : std::uint8_t {
     // Failure, timeout, worker stop, or a vanished peer: close immediately.
     abort,
     // The peer ended its input cleanly (FIN or TLS close_notify). TLS answers
-    // with its own close_notify (RFC 8446 §6.1); no input remains to drain.
+    // with its own close_notify (RFC 9846 §6.1).
     peer_finished,
-    // The server closes after a complete final response. RFC 9112 §9.6 staged
-    // close: TLS close_notify, half-close, then drain unread input so a reset
-    // cannot destroy the response the peer has not read yet.
+    // The final response is complete. Plain TCP half-closes its send side,
+    // TLS sends close_notify, and the owner closes without draining peer input.
     after_response,
 };
 
-// Worker-owned graceful close of a non-aborted session. The whole close is
-// bounded by a fixed lingering deadline and the connection write timeout,
-// drains at most a fixed byte budget, and registers with the worker scanner so
-// worker stop closes the socket at once. The caller closes the socket after
-// completion and must not start a graceful close once the worker is stopping.
-// Plain TCP has no close alert, so only an after_response close reaches it.
-// The returned task borrows the transport, scanner and worker until completion;
-// one close operation owns the bounds through notification and input drain.
-[[nodiscard]] task<void> close_http_connection_gracefully(asio::ip::tcp::socket& socket,
-    connection_scanner& scanner, const worker_handle& worker_value);
+// Flush TLS close_notify for a non-aborted session without waiting for the
+// peer's alert or draining input. A fixed deadline, write timeout and worker
+// scanner bound the attempt. The caller closes TCP after completion and must
+// not start this operation once the worker is stopping.
+// The returned task borrows the stream, scanner and worker until completion.
 [[nodiscard]] task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
-    connection_scanner& scanner, const worker_handle& worker_value, http_connection_close mode);
+    connection_scanner& scanner, const worker_handle& worker_value);
 
 }  // namespace ruvia::detail
