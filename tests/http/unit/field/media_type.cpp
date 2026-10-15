@@ -30,7 +30,9 @@ RUVIA_TEST(http_content_type_allows_empty_parameter_slots) {
              "text/plain;;",
              "text/plain; \t; charset=utf-8; ;",
              R"(text/plain;;note="a;b";;charset="utf-8";)",
-             R"(text/plain;;note="";)"}) {
+             R"(text/plain;;note="";)",
+             "text/plain;q=invalid",
+             R"(text/plain;q="0.5")"}) {
         RUVIA_CHECK(ruvia::is_valid_http_content_type_field_value(field));
     }
 }
@@ -43,7 +45,9 @@ RUVIA_TEST(http_content_type_empty_slots_do_not_relax_nonempty_parameter_syntax)
              "text/plain;;charset =utf-8;",
              "text/plain;;charset= utf-8;",
              "text/plain;;charset=utf-8;;CHARSET=utf-8;",
-             "text/plain;;note=\"unterminated;"}) {
+             "text/plain;;note=\"unterminated;",
+             R"(text/plain;note="closed"suffix)",
+             "text/plain;note=a/b"}) {
         RUVIA_CHECK(!ruvia::is_valid_http_content_type_field_value(field));
     }
 }

@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -27,7 +28,6 @@
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
 #include "http/request_body_loader.h"
-#include "http/request_field_parsing.h"
 #include "http/request_query_values.h"
 #include "http/static_path_normalization.h"
 #include "http/unsupported_request_content_coding.h"
@@ -78,6 +78,24 @@ namespace detail {
 
 }  // namespace detail
 
+namespace {
+
+// Storage capacity is fixed by ensure_request_query before any view escapes.
+[[nodiscard]] std::optional<std::string_view> borrow_or_decode_query_component(
+    std::pmr::vector<std::pmr::string>& storage, std::string_view input) {
+    if (!has_url_encoding(input, url_decode_mode::form)) {
+        return input;
+    }
+    auto decoded = decode_url_component(input,
+        {.mode_ = url_decode_mode::form, .resource_ = storage.get_allocator().resource()});
+    if (!decoded) {
+        return std::nullopt;
+    }
+    return storage.emplace_back(std::move(*decoded));
+}
+
+}  // namespace
+
 const request_name_value_list& context::request_headers() const {
     auto& cache = request_storage().headers_;
     if (!cache) {
@@ -116,9 +134,9 @@ void context::ensure_request_query() const {
     const bool completed = visit_url_encoded_pairs(request_.query_string(),
         [&storage, &query, &valid](std::string_view key, std::string_view value) {
             const auto name =
-                detail::borrow_or_decode(storage, key, url_decode_mode::form);
+                borrow_or_decode_query_component(storage, key);
             const auto decoded_value =
-                detail::borrow_or_decode(storage, value, url_decode_mode::form);
+                borrow_or_decode_query_component(storage, value);
             if (!name || !decoded_value) {
                 valid = false;
                 return false;
@@ -132,43 +150,7 @@ void context::ensure_request_query() const {
         detail::throw_invalid_query();
     }
 
-    struct query_build final {
-        std::size_t first_index_;
-        std::size_t begin_;
-        std::size_t end_;
-    };
-
-    const auto order = detail::sorted_field_order(query, arena());
-    std::pmr::vector<query_build> builds(arena());
-    builds.reserve(order.size());
-    for (std::size_t offset = 0; offset < order.size();) {
-        const auto begin = offset;
-        const auto first_index = order[offset];
-        const auto name = query[first_index].name();
-        do {
-            ++offset;
-        } while (offset < order.size() && query[order[offset]].name() == name);
-        builds.push_back(query_build{.first_index_ = first_index, .begin_ = begin, .end_ = offset});
-    }
-    std::ranges::sort(builds, [](const query_build& left, const query_build& right) noexcept {
-        return left.first_index_ < right.first_index_;
-    });
-
-    detail::request_query_values groups{arena()};
-    groups.reserve(builds.size());
-    for (const auto& build : builds) {
-        // A duplicated query name resolves to its LAST value, matching every other
-        // duplicate-resolution path: context::request_query(name), http_request::query,
-        // and request_name_value_list::get() all take the last occurrence. Keep the
-        // public field list duplicate-preserving so model binding can still reject
-        // ambiguity; this grouped index only backs request_queries(name).
-        auto& group = groups.append(query[build.first_index_].name());
-        for (std::size_t i = build.begin_; i < build.end_; ++i) {
-            group.add(query[order[i]].value());
-        }
-    }
-
-    cache.emplace(std::move(storage), std::move(query), std::move(groups));
+    cache.emplace(std::move(storage), std::move(query));
 }
 
 const request_name_value_list& context::request_query() const {

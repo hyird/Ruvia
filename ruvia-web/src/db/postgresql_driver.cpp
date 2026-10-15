@@ -257,10 +257,9 @@ task<void> send_query(postgresql_pool& pool, std::size_t index, std::string_view
     auto* connection = pool.slot(index).connection_;
     auto encoded = encode_postgresql_params(params, pool.resource());
     const auto* values = encoded.values_.empty() ? nullptr : encoded.values_.data();
-    const auto* lengths = encoded.lengths_.empty() ? nullptr : encoded.lengths_.data();
     const auto* types = encoded.types_.empty() ? nullptr : encoded.types_.data();
     if (PQsendQueryParams(
-            connection, sql.data(), static_cast<int>(params.size()), types, values, lengths, nullptr, 0) == 0) {
+            connection, sql.data(), static_cast<int>(params.size()), types, values, nullptr, nullptr, 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
     }
     if (single_row && PQsetSingleRowMode(connection) == 0) {

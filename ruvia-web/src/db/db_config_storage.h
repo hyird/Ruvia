@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -66,38 +67,37 @@ struct db_config_storage final {
 private:
     struct validated_config_tag_type final {};
 
-    db_config_storage(validated_config_tag_type, const db_config& source_value, std::pmr::memory_resource* resource)
-        : driver_(source_value.driver_),
-          host_(source_value.host_, resource),
-          port_(source_value.port_.value_or(default_db_port(source_value.driver_))),
-          username_(source_value.username_, resource),
-          password_(source_value.password_, resource),
-          tls_(source_value.tls_, client_tls_files::keep_paths, resource),
-          database_(source_value.database_, resource),
-          pool_size_per_worker_(source_value.pool_size_per_worker_),
-          connect_timeout_(source_value.connect_timeout_),
-          read_timeout_(source_value.read_timeout_),
-          write_timeout_(source_value.write_timeout_),
-          query_timeout_(source_value.query_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_) {
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config& source) noexcept {
+        return source.port_.value_or(default_db_port(source.driver_));
+    }
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config_storage& source) noexcept {
+        return source.port_;
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config& source, std::pmr::memory_resource* resource) {
+        return {source.tls_, client_tls_files::keep_paths, resource};
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config_storage& source, std::pmr::memory_resource* resource) {
+        return {source.tls_, resource};
     }
 
-    db_config_storage(
-        validated_config_tag_type, const db_config_storage& source_value, std::pmr::memory_resource* resource)
+    template <typename source_type>
+        requires(std::same_as<source_type, db_config> || std::same_as<source_type, db_config_storage>)
+    db_config_storage(validated_config_tag_type, const source_type& source_value, std::pmr::memory_resource* resource)
         : driver_(source_value.driver_),
           host_(source_value.host_, resource),
-          port_(source_value.port_),
+          port_(resolved_port(source_value)),
           username_(source_value.username_, resource),
           password_(source_value.password_, resource),
-          tls_(source_value.tls_, resource),
+          tls_(tls_storage(source_value, resource)),
           database_(source_value.database_, resource),
           pool_size_per_worker_(source_value.pool_size_per_worker_),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),
           write_timeout_(source_value.write_timeout_),
           query_timeout_(source_value.query_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_) {
-    }
+          acquire_timeout_(source_value.acquire_timeout_) {}
 };
 
 #ifdef RUVIA_ENABLE_REDIS

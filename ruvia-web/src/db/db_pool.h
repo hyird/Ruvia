@@ -66,7 +66,8 @@ class db_pool;
 
 // The driver hooks. Statement hooks run on a connected, leased slot under a
 // deadline already constrained by the query timeout. `sql` views are
-// NUL-terminated. Hooks throw on failure. A statement_failed db_error or a
+// NUL-terminated, and string parameters own their NUL-terminated storage for
+// the entire hook call. Hooks throw on failure. A statement_failed db_error or a
 // std::invalid_argument promises that the command has been drained and the
 // connection is idle -- a hook that cannot get there closes the slot before
 // throwing -- so the pool keeps the connection; any other failure closes it.
