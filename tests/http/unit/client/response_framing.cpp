@@ -781,9 +781,15 @@ RUVIA_TEST(http_client_unframed_body_response_is_close_delimited) {
     RUVIA_CHECK(head.plan().close_delimited() != nullptr);
 }
 
-RUVIA_TEST(http_client_http10_transfer_encoding_is_faulty_framing) {
+RUVIA_TEST(http_client_http10_transfer_encoding_is_faulty_framing_only_with_content) {
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked"));
-    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip"));
+    // RFC 9112 section 6.3 rule 1: HEAD, 204 and 304 responses end at the
+    // header section regardless of framing fields, so the HTTP/1.0 version
+    // check does not apply to them.
+    const auto head = parse_head("HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip");
+    RUVIA_CHECK(head.plan().without_content() != nullptr);
+    const auto not_modified = parse_head("GET", "HTTP/1.0 304 Not Modified\r\nTransfer-Encoding: chunked");
+    RUVIA_CHECK(not_modified.plan().without_content() != nullptr);
 }
 
 RUVIA_TEST(http_client_head_method_is_case_sensitive) {

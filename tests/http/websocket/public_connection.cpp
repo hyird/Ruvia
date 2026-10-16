@@ -236,11 +236,16 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
             RUVIA_CHECK_EQ(allocation_failed, reject_window);
             if (reject_window) {
                 RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::inactive);
+                // The transport has not ended yet: the plan and abort() must
+                // still direct the driver to end it, exactly as after EOF.
                 RUVIA_CHECK(connection.output_plan().bytes().empty());
+                RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
                 RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::inactive);
                 RUVIA_CHECK(connection.submit_frame(websocket_opcode::text, "after-failure") == websocket_frame_submit_status::not_open);
                 const auto terminal = connection.next_event();
                 RUVIA_CHECK(terminal && terminal->kind() == websocket_event_kind::transport_end);
+                RUVIA_CHECK(connection.abort() == websocket_abort_disposition::abort_transport);
+                RUVIA_CHECK(connection.abort() == websocket_abort_disposition::no_transport_action);
             }
         }
         RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
@@ -1100,4 +1105,23 @@ RUVIA_TEST(ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_str
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
     }
+}
+
+RUVIA_TEST(ws_public_receiver_accepts_non_minimal_payload_length_forms) {
+    // RFC 6455 section 5.2 makes the minimal length form a sender obligation;
+    // the longer forms still delimit the frame exactly, so a receiver reads
+    // them instead of failing the connection.
+    const std::string sixteen_bit("\x81\xfe\x00\x05\x00\x00\x00\x00hello", 15);
+    const std::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 21);
+    const std::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 12);
+    for (const auto& wire : {sixteen_bit, sixty_four_bit}) {
+        websocket_connection server;
+        RUVIA_CHECK(server.feed(wire) == websocket_feed_status::accepted);
+        const auto event = server.next_event();
+        RUVIA_CHECK(event && event->message() && event->message()->payload() == "hello");
+    }
+    websocket_connection server;
+    RUVIA_CHECK(server.feed(control_sixteen_bit) == websocket_feed_status::accepted);
+    const auto event = server.next_event();
+    RUVIA_CHECK(event && event->ping() && event->ping()->payload() == "hi");
 }

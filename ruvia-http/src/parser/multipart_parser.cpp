@@ -362,7 +362,7 @@ multipart_poll_result multipart_parser::read_body_chunk() {
     for (;;) {
         const auto buffer = buffer_view();
         const auto delimiter =
-            detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(),
+            detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(), next_chunk_is_first_,
                 delimiter_scan_offset_, delimiter_padding_offset_);
         const auto* part_delimiter = delimiter.part();
         const auto* close_delimiter = delimiter.close();

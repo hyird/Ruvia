@@ -612,7 +612,7 @@ RUVIA_TEST(http1_parse_te_without_connection_option_is_ignored) {
 }
 
 RUVIA_TEST(http1_parse_te_ignores_empty_received_list_members) {
-    for (const auto value : {",trailers", "trailers,", ", trailers,,", ",,", ",gzip;q=0.5,,trailers,"}) {
+    for (const auto value : {",trailers", "trailers,", ", trailers,,", ",,", ",gzip;q=0.5,,trailers,", ",chunked,"}) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
         wire.append(value);
         wire.append("\r\n\r\n");
@@ -620,7 +620,7 @@ RUVIA_TEST(http1_parse_te_ignores_empty_received_list_members) {
         RUVIA_CHECK(result_value.complete());
         RUVIA_CHECK_EQ(result_value.state_.request_.header("TE").value_or("missing"), std::string_view(value));
     }
-    for (const auto value : {",chunked,", ",trailers;q=0.5,", ",gzip;q=2,"}) {
+    for (const auto value : {",trailers;q=0.5,", ",gzip;q=2,"}) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
         wire.append(value);
         wire.append("\r\n\r\n");
@@ -628,12 +628,15 @@ RUVIA_TEST(http1_parse_te_ignores_empty_received_list_members) {
     }
 }
 
-RUVIA_TEST(http1_parse_invalid_te_field_rejected) {
+RUVIA_TEST(http1_parse_te_chunked_is_a_sender_rule_only) {
+    // RFC 9112 section 7.4 forbids the client from listing chunked; the
+    // recipient still accepts the request because chunked is always acceptable.
     const auto result_value = parse_http1_request_message(
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Connection: TE\r\n"
         "TE: chunked\r\n\r\n");
-    RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
+    RUVIA_CHECK(result_value.complete());
+    RUVIA_CHECK_EQ(result_value.state_.request_.header("TE").value_or("missing"), std::string_view("chunked"));
 }
 
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
