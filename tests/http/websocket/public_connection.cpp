@@ -1111,9 +1111,9 @@ RUVIA_TEST(ws_public_receiver_accepts_non_minimal_payload_length_forms) {
     // RFC 6455 section 5.2 makes the minimal length form a sender obligation;
     // the longer forms still delimit the frame exactly, so a receiver reads
     // them instead of failing the connection.
-    const std::string sixteen_bit("\x81\xfe\x00\x05\x00\x00\x00\x00hello", 15);
-    const std::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 21);
-    const std::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 12);
+    const std::string sixteen_bit("\x81\xfe\x00\x05\x00\x00\x00\x00hello", 13);
+    const std::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 19);
+    const std::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 10);
     for (const auto& wire : {sixteen_bit, sixty_four_bit}) {
         websocket_connection server;
         RUVIA_CHECK(server.feed(wire) == websocket_feed_status::accepted);

@@ -27,6 +27,47 @@ constexpr std::pmr::pool_options bounded_pool_options{.largest_required_pool_blo
 constexpr std::pmr::pool_options worker_pool_options{
     .largest_required_pool_block = detail::worker_block_cache::small_block_bytes};
 
+// libstdc++'s pool resources (the static libstdc++ of GCC 13 that Linux builds
+// link) choose a block pool by byte count alone, so allocate(17, 16) is served
+// from the 24-byte pool and every other block is only 8-aligned. A request
+// aligned above the pointer size is rounded up to its alignment first: with
+// one block size per request the chosen pool's block size is then a multiple
+// of the alignment, and libstdc++ aligns each chunk to at least its block
+// size. Alignments above std::max_align_t bypass the pools entirely.
+template <typename pool_type>
+class aligned_pool_resource final : public pool_type {
+public:
+    using pool_type::pool_type;
+
+private:
+    [[nodiscard]] static constexpr bool pooled_alignment(std::size_t alignment) noexcept {
+        return alignment <= alignof(std::max_align_t);
+    }
+
+    [[nodiscard]] static constexpr std::size_t pool_bytes(std::size_t bytes_value, std::size_t alignment) noexcept {
+        if (alignment <= alignof(void*)) {
+            return bytes_value;
+        }
+        const auto rounded = (bytes_value + alignment - 1) & ~(alignment - 1);
+        return rounded < bytes_value ? bytes_value : rounded;
+    }
+
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (!pooled_alignment(alignment)) {
+            return this->upstream_resource()->allocate(bytes_value, alignment);
+        }
+        return pool_type::do_allocate(pool_bytes(bytes_value, alignment), alignment);
+    }
+
+    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
+        if (!pooled_alignment(alignment)) {
+            this->upstream_resource()->deallocate(block, bytes_value, alignment);
+            return;
+        }
+        pool_type::do_deallocate(block, pool_bytes(bytes_value, alignment), alignment);
+    }
+};
+
 }  // namespace
 
 std::pmr::memory_resource* process_resource() noexcept {
@@ -42,8 +83,8 @@ std::pmr::memory_resource* process_resource() noexcept {
     // teardown before those detached threads necessarily finish.
     // Bind the upstream explicitly: first use may occur while an embedding
     // application has temporarily replaced the global PMR default resource.
-    static auto* const resource =
-        new std::pmr::synchronized_pool_resource(bounded_pool_options, std::pmr::new_delete_resource());
+    static auto* const resource = new aligned_pool_resource<std::pmr::synchronized_pool_resource>(
+        bounded_pool_options, std::pmr::new_delete_resource());
     return resource;
 }
 
@@ -178,7 +219,7 @@ public:
           pool_(worker_pool_options, &blocks_) {}
 
     detail::worker_block_cache blocks_;
-    std::pmr::unsynchronized_pool_resource pool_;
+    aligned_pool_resource<std::pmr::unsynchronized_pool_resource> pool_;
 };
 
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {
