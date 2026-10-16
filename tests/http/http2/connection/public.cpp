@@ -508,6 +508,35 @@ RUVIA_TEST(http2_public_server_request_view_hides_stream_storage) {
     RUVIA_CHECK(handshake.accepted() == nullptr);
 }
 
+// RFC 9113 section 8.2.3: cookie crumbs are joined with "; ". A crumb with an
+// empty value is not a cookie-pair and must not leave a leading or trailing
+// separator in the joined field value.
+RUVIA_TEST(http2_public_server_request_joins_cookie_crumbs_without_empty_members) {
+    std::pmr::monotonic_buffer_resource resource;
+    for (const auto crumbs : {std::array<std::string_view, 3>{"", "a=b", "c=d"}, std::array<std::string_view, 3>{"a=b", "", "c=d"},
+             std::array<std::string_view, 3>{"a=b", "c=d", ""}}) {
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        (void)server.consume_output(server.pending_output().size());
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/");
+        for (const auto crumb : crumbs) {
+            ruvia::hpack_encoder::encode_header(block, "cookie", crumb);
+        }
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto request = ruvia::make_http2_server_request(server, 1, &resource, {});
+        RUVIA_CHECK((request.index() == 0));
+        if (request.index() == 0) {
+            RUVIA_CHECK(std::get<0>(request).header("cookie") == std::string_view("a=b; c=d"));
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

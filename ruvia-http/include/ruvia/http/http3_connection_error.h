@@ -23,6 +23,7 @@ enum class http3_connection_error_code : std::uint64_t {
     missing_settings = 0x10a,
     request_rejected = 0x10b,
     request_cancelled = 0x10c,
+    request_incomplete = 0x10d,
     message_error = 0x10e,
     qpack_decompression_failed = 0x200,
     qpack_encoder_stream_error = 0x201,

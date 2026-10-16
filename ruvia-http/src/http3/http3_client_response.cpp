@@ -114,7 +114,13 @@ struct http3_client_response::impl_type final {
             return;
         }
         if (frame.kind_ == http3_stream_frame_event_kind::data) {
-            if (!self.final_headers_ || self.trailers_) {
+            if (self.trailers_) {
+                // RFC 9114 section 4.1: DATA after the trailing HEADERS frame
+                // is an invalid frame sequence, a connection error.
+                self.result_ = connection_error(http3_connection_error_code::frame_unexpected);
+                return;
+            }
+            if (!self.final_headers_) {
                 self.result_ = stream_error(http3_connection_error_code::message_error);
                 return;
             }
@@ -150,7 +156,13 @@ struct http3_client_response::impl_type final {
         }
 
         if (self.final_headers_) {
-            if (self.trailers_ || self.tunnel_) {
+            if (self.trailers_) {
+                // RFC 9114 section 4.1: HEADERS after the trailing HEADERS
+                // frame is an invalid frame sequence, a connection error.
+                self.result_ = connection_error(http3_connection_error_code::frame_unexpected);
+                return;
+            }
+            if (self.tunnel_) {
                 self.result_ = stream_error(http3_connection_error_code::message_error);
                 return;
             }
@@ -337,6 +349,13 @@ http3_client_response_result http3_client_response::feed(std::span<const char> b
         self.result_.consumed_bytes_ = self.frames_.consumed_bytes();
         if (frame_status == http3_stream_frame_status::paused) {
             self.result_.status_ = http3_client_response_status::qpack_blocked;
+            return self.result_;
+        }
+        if (frame_status == http3_stream_frame_status::incomplete) {
+            // FIN before any HEADERS: the response is incomplete, which is a
+            // stream-scoped failure like an end before the final headers.
+            self.terminal_ = true;
+            self.result_ = stream_error(http3_connection_error_code::message_error);
             return self.result_;
         }
         // A framing failure later in this input can have connection scope even

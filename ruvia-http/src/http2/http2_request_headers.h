@@ -113,6 +113,12 @@ struct http2_header_decode_context final {
 
 [[nodiscard]] inline bool http2_append_cookie_header_value(
     http2_stream_state& stream, std::string_view value) {
+    // RFC 9113 section 8.2.3 joins cookie-pairs with "; ". An empty crumb is
+    // not a cookie-pair (RFC 6265 section 4.2.1) and would leave a leading or
+    // trailing separator in the joined value, so it contributes nothing.
+    if (value.empty()) {
+        return true;
+    }
     if (!stream.append_request_cookie_header_value(value, stream.has_cookie())) {
         return false;
     }

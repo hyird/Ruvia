@@ -78,7 +78,12 @@ void http3_control_stream::consume(http3_stream_frame_event event) {
         }
         auto decoded = decode_http3_settings(settings_payload_, resource_);
         if ((decoded.index() != 0)) {
-            error_ = http3_control_stream_status::settings_error;
+            // RFC 9114 section 7.1: a payload that ends inside an identified
+            // field is a framing error; section 7.2.4.1 reserves
+            // H3_SETTINGS_ERROR for forbidden, duplicate and invalid settings.
+            error_ = std::get<1>(decoded) == http3_settings_error::need_more_data
+                         ? http3_control_stream_status::frame_error
+                         : http3_control_stream_status::settings_error;
             return;
         }
         settings_ = std::move(std::get<0>(decoded));
@@ -182,6 +187,9 @@ http3_control_stream_status http3_control_stream::feed(std::span<const char> inp
         case http3_stream_frame_status::message_end:
             return http3_control_stream_status::need_more_data;
         case http3_stream_frame_status::closed_critical_stream:
+        case http3_stream_frame_status::incomplete:
+            // A control stream never reports incomplete: its FIN is already a
+            // closed critical stream before the HEADERS check.
             error_ = http3_control_stream_status::closed_critical_stream;
             break;
         case http3_stream_frame_status::missing_settings:

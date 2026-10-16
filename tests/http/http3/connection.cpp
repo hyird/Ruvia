@@ -281,6 +281,29 @@ RUVIA_TEST(http3_connection_trace_rejects_nonempty_content) {
     }
 }
 
+// RFC 9114 section 4.1: a request stream that ends before any HEADERS frame
+// is an incomplete request, aborted with H3_REQUEST_INCOMPLETE on that stream;
+// it is not an invalid frame sequence and leaves the connection usable.
+RUVIA_TEST(http3_connection_request_ending_before_headers_is_a_stream_error) {
+    constexpr std::array<char, 2> grease_frame{0x21, 0x00};
+    for (const bool grease : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::http3_connection connection(ruvia::http3_peer_role::server, &resource);
+        captured_events captured;
+        const auto incomplete = connection.feed(0,
+            grease ? std::span<const char>(grease_frame) : std::span<const char>{}, true, false, capture, &captured);
+        RUVIA_CHECK(incomplete.status_ == ruvia::http3_connection_status::stream_error);
+        RUVIA_CHECK(incomplete.scope_ == ruvia::http3_connection_error_scope::stream);
+        RUVIA_CHECK(incomplete.code_ == ruvia::http3_connection_error_code::request_incomplete);
+        RUVIA_CHECK(captured.methods_.empty());
+        RUVIA_CHECK_EQ(connection.active_request_count(), 0U);
+
+        const auto next = request_wire(&resource, "GET", "/next", "ok");
+        RUVIA_CHECK(connection.feed(4, next, true, false, capture, &captured).status_ ==
+                    ruvia::http3_connection_status::message_end);
+    }
+}
+
 RUVIA_TEST(http3_connection_trace_accepts_bodyless_stream_endings) {
     for (const bool empty_data : {false, true}) {
         std::pmr::unsynchronized_pool_resource resource;

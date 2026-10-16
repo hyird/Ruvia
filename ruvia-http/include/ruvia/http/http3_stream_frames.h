@@ -21,6 +21,10 @@ enum class http3_stream_frame_status : std::uint8_t {
     need_more_data,
     paused,
     message_end,
+    // FIN before any HEADERS frame on a request or response stream: the
+    // message is incomplete (RFC 9114 section 4.1), a stream-scoped condition
+    // rather than an invalid frame sequence.
+    incomplete,
     frame_unexpected,
     push_promise,
     missing_settings,

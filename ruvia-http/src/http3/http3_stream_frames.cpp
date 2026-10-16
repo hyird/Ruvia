@@ -20,6 +20,7 @@ std::optional<http3_connection_error_code> http3_connection_error_code_for_strea
         case http3_stream_frame_status::need_more_data:
         case http3_stream_frame_status::paused:
         case http3_stream_frame_status::message_end:
+        case http3_stream_frame_status::incomplete:
             return std::nullopt;
         case http3_stream_frame_status::frame_unexpected:
         case http3_stream_frame_status::push_promise:
@@ -265,7 +266,7 @@ http3_stream_frame_status http3_stream_frames::feed(std::span<const char> input,
         }
         if (!headers_seen_) {
             phase_ = phase_type::failed;
-            return http3_stream_frame_status::frame_unexpected;
+            return http3_stream_frame_status::incomplete;
         }
         phase_ = phase_type::ended;
         return http3_stream_frame_status::message_end;

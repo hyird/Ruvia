@@ -291,6 +291,28 @@ RUVIA_TEST(http3_client_response_validates_all_trailers_before_callback) {
     }
 }
 
+// RFC 9114 section 4.1: a HEADERS or DATA frame after the trailing HEADERS
+// frame is an invalid frame sequence and a connection error, not a malformed
+// message confined to the stream.
+RUVIA_TEST(http3_client_response_rejects_frames_after_trailers_as_connection_error) {
+    std::pmr::monotonic_buffer_resource memory;
+    const std::array<char, 3> head{0, 0, static_cast<char>(0xd9)};
+    const std::array<ruvia::http3_field_section_field_view, 1> fields_value{{{"x-one", "1", false}}};
+    const auto encoded = field_section(fields_value);
+    const std::array<char, 1> body{'x'};
+    for (const auto& late : {frame(0, body), frame(1, encoded)}) {
+        auto wire = frame(1, head);
+        const auto trailer_frame = frame(1, encoded);
+        wire.insert(wire.end(), trailer_frame.begin(), trailer_frame.end());
+        wire.insert(wire.end(), late.begin(), late.end());
+        client_response_events events;
+        ruvia::http3_client_response response(0, ruvia::http_known_method::get, &memory);
+        const auto result_value = response.feed(wire, false, false, collect, &events);
+        RUVIA_CHECK(result_value.status_ == ruvia::http3_client_response_status::connection_error);
+        RUVIA_CHECK(result_value.code_ == ruvia::http3_connection_error_code::frame_unexpected);
+    }
+}
+
 RUVIA_TEST(http3_client_response_trailer_limits_apply_with_shared_qpack) {
     enum class encoding_mode { literal,
         shared_literal,

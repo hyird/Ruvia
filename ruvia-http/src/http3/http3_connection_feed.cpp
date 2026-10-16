@@ -559,6 +559,13 @@ http3_connection_result http3_connection::feed(std::uint64_t stream_id, std::spa
             impl.failed_ = impl_type::connection_error(*code);
             return impl.failed_;
         }
+        if (status == http3_stream_frame_status::incomplete) {
+            // RFC 9114 section 4.1: a request stream that ends before enough
+            // of the message arrived is aborted with H3_REQUEST_INCOMPLETE; the
+            // connection and its other requests continue.
+            impl.requests_.erase(found);
+            return impl_type::stream_error(http3_connection_error_code::request_incomplete);
+        }
         if (request.callback_result_.scope_ != http3_connection_error_scope::none) {
             const auto result_value = request.callback_result_;
             if (result_value.scope_ == http3_connection_error_scope::connection) {

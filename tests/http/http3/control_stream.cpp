@@ -65,6 +65,12 @@ RUVIA_TEST(http3_control_stream_rejects_invalid_goaway_settings_and_max_push_id_
     http3_control_stream duplicate(http3_control_role::server, &resource);
     constexpr std::array<char, 6> duplicate_settings{0x4, 0x4, 0x1, 0x0, 0x1, 0x0};
     RUVIA_CHECK(duplicate.feed(duplicate_settings, false) == http3_control_stream_status::settings_error);
+
+    // RFC 9114 section 7.1: a SETTINGS payload that ends inside a setting
+    // (identifier without value) is a framing error, not a settings error.
+    http3_control_stream truncated(http3_control_role::server, &resource);
+    constexpr std::array<char, 3> truncated_settings{0x4, 0x1, 0x6};
+    RUVIA_CHECK(truncated.feed(truncated_settings, false) == http3_control_stream_status::frame_error);
 }
 
 RUVIA_TEST(http3_control_stream_requires_settings_and_reports_critical_fin) {
