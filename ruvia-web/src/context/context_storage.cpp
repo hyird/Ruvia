@@ -8,13 +8,13 @@
 namespace ruvia {
 
 context::context(
-    request_memory& memory, const http_request& request, detail::context_services services)
+    request_memory& memory, const http_request& request, const detail::context_services& services)
     : context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
 
 context::context(request_memory& memory, const http_request& request,
     std::string_view route_path, const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope,
-    detail::context_services services)
+    const detail::context_services& services)
     : memory_(memory),
       request_(request),
       conn_info_(services.get_conn_info()),

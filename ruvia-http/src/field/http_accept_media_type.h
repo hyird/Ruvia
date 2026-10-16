@@ -30,10 +30,10 @@ namespace ruvia::detail {
     int parameter_count = 0;
     for (std::size_t i = 0; i < parameters.size_; ++i) {
         const auto& parameter = parameters.values_[i];
-        if (http_ascii_equals_ignore_case(parameter.name_, "q")) {
+        if (http_ascii_equals_ignore_case(parameter.name(), "q")) {
             continue;
         }
-        if (!offered_parameters.contains(parameter.name_, parameter.value_)) {
+        if (!offered_parameters.contains(parameter.name(), parameter.value())) {
             return -1;
         }
         ++parameter_count;

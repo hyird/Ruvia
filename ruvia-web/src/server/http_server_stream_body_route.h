@@ -35,9 +35,9 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         auto services = d.base_route_services_;
         services.bind_streaming_request_body(body_reader->facade());
         services.bind_request_trailers(body_reader->reader().trailers());
-        d.response_ = co_await d.routes_.dispatch_buffered_response(d.parsed_.request_, route_resolution_value,
+        co_await d.routes_.dispatch_buffered_response(d.parsed_.request_, route_resolution_value,
             d.request_memory_, document_root_binding::none(), services,
-            static_file_selection_mode::identity_only);
+            static_file_selection_mode::identity_only, d.response_);
     } catch (...) {
         exception = std::current_exception();
     }

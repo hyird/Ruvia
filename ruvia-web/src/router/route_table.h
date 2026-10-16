@@ -92,9 +92,11 @@ public:
     // and wire framing remain the HTTP/1 driver's responsibility. Pass
     // document_root_binding::none() when no root is configured, or the
     // worker's document_root_binding::configured(generation) lease otherwise.
-    task<http_response> dispatch_buffered_response(const http_request& request,
+    // The caller owns response and keeps it alive until dispatch completes;
+    // successful completion assigns the selected final response directly.
+    task<void> dispatch_buffered_response(const http_request& request,
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-        context_services services, static_file_selection_mode static_file_mode) const;
+        context_services services, static_file_selection_mode static_file_mode, http_response& response) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
         http_error_info error, context_services services) const;
     task<http_response> handle_exception(const http_request& request, request_memory& memory,

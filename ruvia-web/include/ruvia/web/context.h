@@ -167,12 +167,12 @@ private:
     friend detail::request_binding_handle<t_type> detail::bind_validated_json_model(
         context& context_value, const t_type& model, std::string_view raw_json);
 
-    context(request_memory& memory, const http_request& request, detail::context_services services);
+    context(request_memory& memory, const http_request& request, const detail::context_services& services);
 
     context(request_memory& memory, const http_request& request, std::string_view route_path,
         const std::string_view* param_names, const std::string_view* param_values,
         std::size_t param_count, std::uintptr_t route_rate_limit_scope,
-        detail::context_services services);
+        const detail::context_services& services);
 
     [[nodiscard]] http_response static_file(const static_root& root, static_file_response_options options,
         detail::static_file_selection_mode mode) const;

@@ -310,9 +310,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
 
                 const auto* resolved = admission->resolved();
                 if (resolved == nullptr) {
-                    response = co_await routes_value.dispatch_buffered_response(parsed_value.request_,
+                    co_await routes_value.dispatch_buffered_response(parsed_value.request_,
                         route_resolution_value, request_memory_value, options_.document_root_.binding(),
-                        admission->services(), admission->static_file_mode());
+                        admission->services(), admission->static_file_mode(), response);
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
                     // file, 404, 405, or OPTIONS response.
@@ -408,9 +408,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         break;
                     }
 
-                    response = co_await routes_value.dispatch_buffered_response(parsed_value.request_,
+                    co_await routes_value.dispatch_buffered_response(parsed_value.request_,
                         route_resolution_value, request_memory_value, options_.document_root_.binding(),
-                        body_state.with_loader(admission->services()), admission->static_file_mode());
+                        body_state.with_loader(admission->services()), admission->static_file_mode(), response);
 
                     request_completion.emplace(complete_successful_http_body_route(scanner_entry,
                         response, parsed_value.connection_plan_, request_sequence, body_state.consumption(),

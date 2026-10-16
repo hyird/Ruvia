@@ -123,12 +123,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         },
         policy, services().for_subrequest(stop));
     const auto* rejection = admission.rejection();
-    auto response = rejection != nullptr
-                        ? co_await detail::respond_http_request_rejection(
-                              routes, request, memory, *rejection, admission.services())
-                        : co_await routes.dispatch_buffered_response(request, resolution, memory,
-                              detail::document_root_binding::none(), admission.services(),
-                              detail::static_file_selection_mode::identity_only);
+    http_response response({.resource_ = memory.resource()});
+    if (rejection != nullptr) {
+        response = co_await detail::respond_http_request_rejection(
+            routes, request, memory, *rejection, admission.services());
+    } else {
+        co_await routes.dispatch_buffered_response(request, resolution, memory,
+            detail::document_root_binding::none(), admission.services(),
+            detail::static_file_selection_mode::identity_only, response);
+    }
     if (response.file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
     }

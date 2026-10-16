@@ -19,14 +19,14 @@ class context_tunnel_binding;
 
 struct context_access final {
     [[nodiscard]] static context make(
-        request_memory& memory, const http_request& request, context_services services) {
+        request_memory& memory, const http_request& request, const context_services& services) {
         return context(memory, request, services);
     }
 
     [[nodiscard]] static context make(request_memory& memory, const http_request& request,
         std::string_view route_path, const std::string_view* param_names,
         const std::string_view* param_values, std::size_t param_count,
-        std::uintptr_t route_rate_limit_scope, context_services services) {
+        std::uintptr_t route_rate_limit_scope, const context_services& services) {
         return context(memory, request, route_path, param_names, param_values, param_count,
             route_rate_limit_scope, services);
     }

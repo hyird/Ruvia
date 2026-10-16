@@ -28,9 +28,11 @@ struct request_field_cache final {
 
 // One arena object owns every request-local context value that is not a
 // borrowed pointer: lazy caches, response/session machines, and typed bindings.
+// Synchronous construction borrows the input view, then retains exactly one
+// services value here before returning; no reference to the input survives.
 class context_request_storage final {
 public:
-    context_request_storage(context_services service_view, std::pmr::memory_resource* resource)
+    context_request_storage(const context_services& service_view, std::pmr::memory_resource* resource)
         : services_(service_view),
           response_state_(resource),
           session_state_(resource) {}

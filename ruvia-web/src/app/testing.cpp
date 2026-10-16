@@ -204,16 +204,15 @@ test_response test_app::request(const test_request& request) {
         }
         const auto& request_services = admission ? admission->services() : services;
 
-        auto respond = [&]() -> task<http_response> {
-            if (rejection) {
-                co_return co_await detail::respond_http_request_rejection(
-                    routes_value, parsed_value, request_memory_value, *rejection, request_services);
-            }
-            co_return co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
+        http_response response({.resource_ = request_memory_value.resource()});
+        if (rejection) {
+            response = co_await detail::respond_http_request_rejection(
+                routes_value, parsed_value, request_memory_value, *rejection, request_services);
+        } else {
+            co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
                 request_memory_value, detail::document_root_binding::none(), request_services,
-                admission->static_file_mode());
-        };
-        auto response = co_await respond();
+                admission->static_file_mode(), response);
+        }
 
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,

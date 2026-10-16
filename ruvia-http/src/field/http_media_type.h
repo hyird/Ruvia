@@ -91,10 +91,22 @@ struct http_media_type_parts final {
 // parameters instead of rescanning its field for every range parameter.
 struct http_media_type_parameters final {
     struct parameter final {
-        std::string_view name_;
-        std::string_view value_;
+        const char* name_data_;
+        std::size_t name_size_;
+        const char* value_data_;
+        std::size_t value_size_;
+
+        [[nodiscard]] std::string_view name() const noexcept {
+            return {name_data_, name_size_};
+        }
+
+        [[nodiscard]] std::string_view value() const noexcept {
+            return {value_data_, value_size_};
+        }
     };
-    std::array<parameter, 64> values_{};
+    // Only [0, size_) is initialized and read. Plain pointer/length slots avoid
+    // default-constructing 128 string_views even for a value with no parameters.
+    std::array<parameter, 64> values_;
     std::size_t size_{0};
 
     // A quality output selects Accept semantics: q is parsed as a weight,
@@ -118,7 +130,7 @@ struct http_media_type_parameters final {
                 return false;
             }
             for (std::size_t i = 0; i < size_; ++i) {
-                if (http_ascii_equals_ignore_case(values_[i].name_, name)) {
+                if (http_ascii_equals_ignore_case(values_[i].name(), name)) {
                     return false;
                 }
             }
@@ -131,15 +143,15 @@ struct http_media_type_parameters final {
             } else if (!http_media_token(parameter_value) && !http_is_quoted_string(parameter_value)) {
                 return false;
             }
-            values_[size_++] = {name, parameter_value};
+            values_[size_++] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};
             return true;
         });
     }
 
     [[nodiscard]] bool contains(std::string_view name, std::string_view value) const noexcept {
         for (std::size_t i = 0; i < size_; ++i) {
-            if (http_ascii_equals_ignore_case(values_[i].name_, name)) {
-                return http_media_parameter_value_equals(values_[i].value_, value,
+            if (http_ascii_equals_ignore_case(values_[i].name(), name)) {
+                return http_media_parameter_value_equals(values_[i].value(), value,
                     http_ascii_equals_ignore_case(name, "charset"));
             }
         }

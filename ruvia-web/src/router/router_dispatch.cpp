@@ -95,9 +95,9 @@ task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const h
     return dispatch_stream_route(request, resolved, memory, handler, services);
 }
 
-task<http_response> detail::route_table::dispatch_buffered_response(const http_request& request,
+task<void> detail::route_table::dispatch_buffered_response(const http_request& request,
     const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-    context_services services, static_file_selection_mode static_file_mode) const {
+    context_services services, static_file_selection_mode static_file_mode, http_response& response) const {
     std::exception_ptr dispatch_exception;
     try {
         const auto* resolved = resolution.resolved();
@@ -164,33 +164,37 @@ task<http_response> detail::route_table::dispatch_buffered_response(const http_r
                 auto terminal = [&unmatched_response](context&) -> task<http_response> {
                     co_return std::move(*unmatched_response);
                 };
-                co_return co_await run_unmatched_chain(
+                response = co_await run_unmatched_chain(
                     context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+                co_return;
             }
 
             if (error) {
-                auto response = co_await handle_error(request, memory, *error, services);
+                response = co_await handle_error(request, memory, *error, services);
                 if (allowed_methods != 0 || !extension_methods.empty()) {
                     response.allow_methods(allowed_methods, extension_methods);
                 }
-                co_return std::move(response);
+                co_return;
             }
 
-            co_return co_await handle_not_found(request, memory, services);
+            response = co_await handle_not_found(request, memory, services);
+            co_return;
         }
 
         auto context_value = make_route_context(memory, request, *resolved, services.with_routes(*this));
         std::exception_ptr exception;
         try {
-            co_return co_await invoke_route(*resolved, context_value);
+            response = co_await invoke_route(*resolved, context_value);
+            co_return;
         } catch (...) {
             exception = std::current_exception();
         }
-        co_return co_await finalize_failure(context_value, exception);
+        response = co_await finalize_failure(context_value, exception);
+        co_return;
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
-    co_return co_await handle_exception(request, memory, dispatch_exception, services);
+    response = co_await handle_exception(request, memory, dispatch_exception, services);
 }
 
 }  // namespace ruvia
