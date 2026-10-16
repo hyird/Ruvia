@@ -590,6 +590,55 @@ RUVIA_TEST(http2_public_send_window_observation_ends_with_protocol_closure) {
     RUVIA_CHECK(!server.send_window_state(1));
 }
 
+// RFC 9113 section 5.1 (closed): WINDOW_UPDATE frames received on a closed
+// stream are ignored, including a zero increment, both while the stream is
+// still retained by its owner and after it has been released.
+RUVIA_TEST(http2_public_window_update_on_closed_stream_is_ignored) {
+    for (const bool released : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        (void)server.consume_output(server.pending_output().size());
+        const auto request_wire = server_request_wire(&resource, {}, "GET");
+        RUVIA_CHECK(server.feed(request_wire) == ruvia::http2_feed_result::accepted);
+        auto request = server.next_event();
+        auto* head = request ? request->request_head() : nullptr;
+        RUVIA_CHECK(head != nullptr);
+        if (head == nullptr) {
+            return;
+        }
+        (void)server.next_event();
+        ruvia::http_response response({.resource_ = &resource});
+        RUVIA_CHECK(server.submit_buffered_response(1, response) == ruvia::http2_submit_status::accepted);
+        if (released) {
+            RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+        }
+        (void)server.consume_output(server.pending_output().size());
+
+        std::pmr::string wire(&resource);
+        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\x00\x00\x00\x00", 4));
+        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\x00\x00\x01\x00", 4));
+        // A later request proves the connection stayed usable.
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/next");
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3, block);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        RUVIA_CHECK(!server.connection_error().has_value());
+        RUVIA_CHECK(server.pending_output().empty());
+        auto next = server.next_event();
+        RUVIA_CHECK(next && next->request_head() && next->request_head()->stream_id() == 3);
+        if (!released) {
+            RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+        }
+        if (next && next->request_head()) {
+            (void)server.next_event();
+            RUVIA_CHECK(server.release(std::move(*next->request_head())) == ruvia::http2_server_request_release_status::released);
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_send_window_observation_excludes_reset_streams_with_credit) {
     for (const bool peer_reset : {false, true}) {
         std::pmr::unsynchronized_pool_resource resource;

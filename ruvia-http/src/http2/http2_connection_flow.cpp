@@ -182,13 +182,9 @@ bool http2_connection::process_window_update(
     }
     auto* stream = streams_.find(header_value.stream_id_);
     if (stream != nullptr && http2_stream_is_closed(*stream)) {
-        // RFC 9113 section 6.9 permits a valid WINDOW_UPDATE on a closed
-        // stream. A zero increment remains a stream PROTOCOL_ERROR, but no
-        // RST_STREAM can legally be emitted after protocol closure.
-        if (increment == 0) {
-            append_goaway(http2_error_code::protocol_error, "zero WINDOW_UPDATE on closed stream");
-            return false;
-        }
+        // RFC 9113 section 5.1 (closed): WINDOW_UPDATE received in this state
+        // MUST be ignored, whatever its increment; the section 6.9 zero-increment
+        // stream error applies to a stream that still exists.
         return true;
     }
     if (stream == nullptr) {
@@ -196,13 +192,7 @@ bool http2_connection::process_window_update(
             append_goaway(http2_error_code::protocol_error, "WINDOW_UPDATE on idle stream");
             return false;
         }
-        if (increment == 0) {
-            // A skipped/released identifier is closed, not idle. Promote the
-            // mandatory stream error because RST_STREAM is forbidden there.
-            append_goaway(
-                http2_error_code::protocol_error, "zero WINDOW_UPDATE on released closed stream");
-            return false;
-        }
+        // A skipped/released identifier is closed, not idle: ignored as above.
         return true;
     }
     const auto reset_stream_for_window_update_error = [&](http2_error_code error) {
