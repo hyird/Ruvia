@@ -40,6 +40,8 @@ public:
 class document_root_routes final {
     RUVIA_ROUTES_BEGIN(document_root_routes)
     RUVIA_GET("/private/*", private_file, document_root_guard);
+    // Makes PROPFIND a method this server knows, for the 405-vs-501 split.
+    RUVIA_METHOD("PROPFIND", "/dav", private_file);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> private_file(ruvia::context& c) {
@@ -131,5 +133,9 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
     RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
     RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
     RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
+    // A registered extension token is known here, so the file answers 405 too.
+    const auto propfind = exchange(io, server.endpoint(), "/public.txt", "PROPFIND");
+    RUVIA_CHECK(has_status(propfind, "405"));
+    RUVIA_CHECK(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
     server.finish();
 }

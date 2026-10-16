@@ -3,38 +3,12 @@
 
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/util/fnv1a.h"
 
+#include "router/path_segments.h"
 #include "router/route_table.h"
 
 namespace ruvia {
-namespace {
-
-// "." or "..", in any percent-encoded spelling (RFC 3986 6.2.2.2).
-[[nodiscard]] bool is_dot_segment(std::string_view segment) noexcept {
-    // The longest spelling is "%2E%2E"; the size check keeps ordinary segments cheap.
-    return !segment.empty() && segment.size() <= 6 &&
-           (url_components_equivalent(segment, ".", url_decode_mode::percent) ||
-               url_components_equivalent(segment, "..", url_decode_mode::percent));
-}
-
-[[nodiscard]] bool has_dot_segment(std::string_view path) noexcept {
-    std::size_t cursor = 0;
-    for (;;) {
-        const auto slash = path.find('/', cursor);
-        const auto end = slash == std::string_view::npos ? path.size() : slash;
-        if (is_dot_segment(path.substr(cursor, end - cursor))) {
-            return true;
-        }
-        if (slash == std::string_view::npos) {
-            return false;
-        }
-        cursor = slash + 1;
-    }
-}
-
-}  // namespace
 
 detail::route_handler_type detail::resolved_route::handler() const noexcept {
     return callback_access::make<task<http_response>(context&)>(

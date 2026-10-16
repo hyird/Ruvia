@@ -51,14 +51,14 @@ struct document_root_fallback final {
     detail::static_file_selection_mode static_file_mode) {
     const auto* const root = document_root.root();
     const auto method = request.known_method();
-    if (root == nullptr || method == http_known_method::unknown) {
-        return {};
-    }
-
-    // resolve() rejects every target that is not an origin path naming a
-    // resource, so a probed path here is origin-form and dot-segment free.
+    // Only an origin-form path names a document-root resource: a CONNECT
+    // authority or "OPTIONS *" reaches here unrouted as well and must not be
+    // probed as a file name. resolve() has already rejected dot segments.
     // static_file takes a decoded file path: decode it here, once, so a name
     // holding an encoded octet ("%20", UTF-8) resolves (RFC 3986 2.1, 6.2.2.2).
+    if (root == nullptr || !request.path().starts_with('/')) {
+        return {};
+    }
     auto relative = request.path();
     relative.remove_prefix(1);
     std::optional<std::pmr::string> decoded;
@@ -162,15 +162,6 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 // not known here at all, so it stays 501 whatever the path holds.
                 error = http_error_info({.status_ = ruvia::http_status::not_implemented,
                     .message_ = "method not implemented"});
-            } else if (request.known_method() == http_known_method::unknown) {
-                if (const auto* method_not_allowed = resolution.method_not_allowed()) {
-                    error = http_error_info({.status_ = ruvia::http_status::method_not_allowed,
-                        .message_ = "method not allowed"});
-                    allowed_methods = method_not_allowed->allowed_methods();
-                    extension_methods = extension_methods_for(request.path(), extension_method_buffer);
-                }
-                // Otherwise the method is known here but this path has nothing:
-                // an ordinary 404, which the fallback below produces.
             } else if (request.known_method() == http_known_method::options &&
                        request.path() == "*") {
                 // RFC 9110 9.3.7: OPTIONS * asks about the server in general.
@@ -179,8 +170,10 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 unmatched_response.emplace(http_response({.resource_ = memory.resource()}));
                 unmatched_response->status(ruvia::http_status::no_content);
             } else if (resolution.method_not_allowed() != nullptr || fallback.resource_exists_) {
-                // Allow names what the routes register for this path plus what
-                // the document-root file supports when one exists.
+                // The method is known here (registered as an extension token
+                // or built in) but this resource -- a routed path or a
+                // document-root file -- does not support it. Allow names what
+                // the routes register for this path plus what the file supports.
                 const auto* method_not_allowed = resolution.method_not_allowed();
                 if (method_not_allowed != nullptr) {
                     extension_methods = extension_methods_for(request.path(), extension_method_buffer);
