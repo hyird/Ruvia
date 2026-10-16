@@ -458,6 +458,11 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     const auto max_response_bytes = pool_.config().max_response_bytes_;
     const bool secure = connection.transport_.secure();
     auto& stream = connection.transport_.stream();
+    // Everything that can throw after the TLS writer starts runs inside the
+    // receive try below, so the started writer is always joined before `tls`
+    // is destroyed; the scope and timer slots are allocated first.
+    task_scope writers(pool_.worker(), {.resource_ = pool_.resource()});
+    worker_timer_registration lifetime_timer;
     std::optional<tls_tunnel_output> tls;
     if (secure) {
         tls.emplace(*stream.native_handle(), stream.next_layer(), pool_.worker(), *pool_.resource());
@@ -470,11 +475,6 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             connection.close();
         }
     };
-    worker_timer_registration lifetime_timer;
-    if (const auto remaining = timeout.remaining()) {
-        (void)pool_.worker().schedule_timer(lifetime_timer, worker_timer_deadline_after(*remaining), expire);
-    }
-    task_scope writers(pool_.worker(), {.resource_ = pool_.resource()});
     std::exception_ptr writer_failure;
     const auto send = [&]() -> task<void> {
         try {
@@ -518,9 +518,12 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             output.stop();
         }
     };
-    writers.spawn(send());
     std::exception_ptr receive_failure;
     try {
+        if (const auto remaining = timeout.remaining()) {
+            (void)pool_.worker().schedule_timer(lifetime_timer, worker_timer_deadline_after(*remaining), expire);
+        }
+        writers.spawn(send());
         auto& read_buffer = connection.read_buffer_;
         constexpr std::size_t read_chunk_bytes = 4096;
         for (;;) {
