@@ -75,8 +75,12 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     if (http_ascii_equals_ignore_case(coding, "trailers")) {
         return !has_parameters;
     }
+    // RFC 9112 section 7.4: a client MUST NOT list chunked in TE. That binds
+    // the sender; a recipient treats the member as the always-acceptable
+    // chunked coding and does not reject the request.
     if (http_ascii_equals_ignore_case(coding, "chunked")) {
-        return false;
+        return mode == http_te_field_validation_mode::recipient &&
+               http_te_parameters_are_valid(item, mode, true);
     }
     if (mode == http_te_field_validation_mode::client_capability &&
         !http_is_client_supported_te_transfer_coding(coding)) {

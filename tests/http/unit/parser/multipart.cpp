@@ -661,6 +661,74 @@ RUVIA_TEST(multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters
     }
 }
 
+RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
+    // RFC 2046 section 5.1.1: body-part = MIME-part-headers [CRLF *OCTET]. The
+    // CRLF after the header block may be the one that starts the next delimiter,
+    // and a body line cannot begin with the dash-boundary, so "--b" at the body
+    // start is a delimiter rather than content that swallows the next part.
+    constexpr std::string_view body =
+        "--b\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n"
+        "--b \t\r\nContent-Disposition: form-data; name=\"c\"\r\n\r\nv\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"d\"\r\n\r\n--bx\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"e\"\r\n\r\n--b--";
+
+    const auto expected = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("b")});
+    RUVIA_CHECK(expected.failure() == nullptr);
+    if (expected.body() != nullptr) {
+        const auto& parts = expected.body()->parts();
+        RUVIA_CHECK_EQ(parts.size(), std::size_t{4});
+        if (parts.size() == 4) {
+            RUVIA_CHECK_EQ(parts[0].name(), std::string_view("a"));
+            RUVIA_CHECK_EQ(parts[0].body(), std::string_view(""));
+            RUVIA_CHECK_EQ(parts[1].name(), std::string_view("c"));
+            RUVIA_CHECK_EQ(parts[1].body(), std::string_view("v"));
+            RUVIA_CHECK_EQ(parts[2].name(), std::string_view("d"));
+            RUVIA_CHECK_EQ(parts[2].body(), std::string_view("--bx"));
+            RUVIA_CHECK_EQ(parts[3].name(), std::string_view("e"));
+            RUVIA_CHECK_EQ(parts[3].body(), std::string_view(""));
+        }
+    }
+
+    for (const std::size_t step : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{7}}) {
+        ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("b")});
+        std::string received;
+        std::size_t ended = 0;
+        bool done = false;
+        const auto drain = [&]() {
+            for (;;) {
+                const auto result_value = parser.poll();
+                RUVIA_CHECK(result_value.failure() == nullptr);
+                if (const auto* part = result_value.part()) {
+                    if (part->phase() == ruvia::multipart_chunk_phase::first ||
+                        part->phase() == ruvia::multipart_chunk_phase::complete) {
+                        received += '[';
+                        received += part->name();
+                        received += ':';
+                    }
+                    received += part->body();
+                    if (part->phase() == ruvia::multipart_chunk_phase::complete ||
+                        part->phase() == ruvia::multipart_chunk_phase::last) {
+                        received += ']';
+                        ++ended;
+                    }
+                } else {
+                    done = result_value.done() != nullptr;
+                    return;
+                }
+            }
+        };
+        for (std::size_t offset = 0; offset < body.size(); offset += step) {
+            parser.feed(body.substr(offset, step));
+            drain();
+        }
+        parser.finish_input();
+        drain();
+        RUVIA_CHECK(done);
+        RUVIA_CHECK_EQ(ended, std::size_t{4});
+        RUVIA_CHECK_EQ(std::string_view(received), std::string_view("[a:][c:v][d:--bx][e:]"));
+    }
+}
+
 RUVIA_TEST(multipart_preamble_limit_is_independent_of_input_chunking) {
     constexpr std::size_t preamble_limit = 64 * 1024;
     constexpr std::string_view expected_body = "value\r\n--abx\r\n--abcX\r\nstill data";

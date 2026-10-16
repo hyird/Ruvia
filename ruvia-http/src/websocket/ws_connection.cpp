@@ -259,7 +259,7 @@ websocket_frame_submit_status ws_connection::submit_frame(
             try {
                 deflate_->discard_compression();
             } catch (...) {
-                close_phase_ = close_phase_type::closed;
+                close_phase_ = close_phase_type::transport_end_ready;
                 throw;
             }
         }
@@ -308,8 +308,11 @@ std::optional<websocket_event> ws_connection::poll() & {
     } catch (...) {
         // Frame reading unmasks in place and advances the input cursor. If any
         // later assembler/deflate/output operation fails, retrying that frame is
-        // no longer well-defined; make the terminal transport decision explicit.
-        close_phase_ = close_phase_type::closed;
+        // no longer well-defined. The transport has not ended yet, so the plan
+        // and abort() must still tell the driver to end it, as after EOF.
+        if (close_phase_ != close_phase_type::closed) {
+            close_phase_ = close_phase_type::transport_end_ready;
+        }
         throw;
     }
 }

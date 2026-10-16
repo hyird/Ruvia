@@ -55,10 +55,13 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     scan.leading_bytes_ = std::min(scan.leading_bytes_, header_search_offset);
     scan.request_line_end_ = scan.request_line_end_ <= header_search_offset ? scan.request_line_end_ : 0;
 
-    // Incomplete input allocates no descriptor storage.
+    // Incomplete input allocates no descriptor storage. The scan state is
+    // published first so an allocation failure while binding descriptors
+    // below cannot leave an earlier head_ready result beside the new request.
     state_value.body_plan_ = http1_request_body_plan(http_request_expectations{});
     state_value.connection_plan_ = http1_request_connection_plan::http11_close();
     state_value.response_coding_qualities_ = {};
+    state_value.progress_ = scan;
     http_request_access::reset(state_value.request_);
 
     const auto fail = [&state_value](http_parse_error error) noexcept {

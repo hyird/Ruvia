@@ -138,18 +138,15 @@ private:
     if (!frame_start.has_value()) {
         return websocket_frame_read_result::make_failure(websocket_protocol_failure::protocol_error);
     }
+    // RFC 6455 section 5.2 obliges the sender to use the minimal length form;
+    // the frame stays unambiguous either way, so a receiver does not reject a
+    // longer form (sender MUST, not recipient rule).
     if (length == 126) {
         if (available < header_size + 2) {
             return websocket_frame_read_result::make_need_input();
         }
         length = read_websocket_uint16(buffer.data() + header_size);
         header_size += 2;
-        // RFC 6455 §5.2: the minimal number of length bytes MUST be used, so a
-        // value <126 may not use the 16-bit form (e.g. 126,0,124 for a 124-byte
-        // payload). A conformant peer never emits this; reject the non-minimal frame.
-        if (length < 126) {
-            return websocket_frame_read_result::make_failure(websocket_protocol_failure::protocol_error);
-        }
     } else if (length == 127) {
         if (available < header_size + 8) {
             return websocket_frame_read_result::make_need_input();
@@ -161,11 +158,6 @@ private:
         }
         length = std::get<0>(decoded_length);
         header_size += 8;
-        // RFC 6455 §5.2 minimal-length rule: a value fitting the 16-bit form may
-        // not use the 64-bit form.
-        if (length <= 0xFFFFU) {
-            return websocket_frame_read_result::make_failure(websocket_protocol_failure::protocol_error);
-        }
     }
 
     if (is_invalid_websocket_control_frame(*frame_start, length)) {

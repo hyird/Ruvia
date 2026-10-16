@@ -11,7 +11,9 @@
 namespace ruvia {
 
 // Allocation-free validated RFC 6455 subprotocol list, suitable for server
-// route configuration and parsing offered protocol lists.
+// route configuration and parsing offered protocol lists. Capacity is a product
+// limit of max_http_header_fields distinct protocols across all list elements;
+// a handshake offering more is rejected as invalid rather than truncated.
 class websocket_subprotocol_set final {
 public:
     [[nodiscard]] bool append(std::string_view protocol) noexcept {

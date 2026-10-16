@@ -23,7 +23,7 @@ class http_multipart_delimiter_result;
     std::string_view input, const multipart_boundary& boundary, bool input_finished,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
 [[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
+    std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
 
 class http_multipart_delimiter_no_match final {
@@ -123,7 +123,7 @@ private:
     friend http_multipart_delimiter_result http_find_initial_multipart_delimiter(
         std::string_view, const multipart_boundary&, bool, std::size_t&, std::size_t&) noexcept;
     friend http_multipart_delimiter_result http_find_multipart_body_delimiter(
-        std::string_view, const multipart_boundary&, bool, std::size_t&, std::size_t&) noexcept;
+        std::string_view, const multipart_boundary&, bool, bool, std::size_t&, std::size_t&) noexcept;
 
     using value_type = std::variant<http_multipart_delimiter_no_match, http_multipart_delimiter_need_input,
         http_multipart_part_delimiter, http_multipart_close_delimiter>;
@@ -271,9 +271,20 @@ private:
     return http_multipart_delimiter_result::make_no_match();
 }
 
+// RFC 2046 section 5.1.1: body-part = MIME-part-headers [CRLF *OCTET], so a part
+// may end right after its header block and the next delimiter's CRLF is the one
+// that closed the headers. Body lines cannot start with the dash-boundary, so at
+// the body start a delimiter line at offset 0 is a delimiter, not content.
 [[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
+    std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
+    if (at_body_start && search_cursor == 0 && !input.empty() && input.front() == '-') {
+        auto match = http_match_multipart_delimiter_line(input, boundary, input_finished, padding_cursor);
+        if (match.no_match() == nullptr) {
+            return match;
+        }
+        padding_cursor = 0;
+    }
     for (auto prefix = input.find("\r\n--", search_cursor); prefix != std::string_view::npos;
         prefix = input.find("\r\n--", prefix + 1)) {
         auto match = http_match_multipart_delimiter_line(

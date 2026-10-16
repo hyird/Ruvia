@@ -99,6 +99,8 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
             state_.emplace<active>();
         }
 
+        const auto window_bytes =
+            std::min<std::size_t>(input.size() - consumed, (std::numeric_limits<uInt>::max)());
         const auto step = inflate_step(input.substr(consumed), output_buffer.subspan(produced));
         consumed += step.consumed_;
         received_input_ = received_input_ || step.consumed_ != 0;
@@ -141,6 +143,12 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
             return output(consumed, std::string_view(output_buffer.data(), produced));
         }
         if (consumed != input.size()) {
+            // zlib sees at most one uInt window per step; a window that was
+            // consumed without output (RFC 1952 FNAME/FCOMMENT bytes) is not
+            // corrupt, the remaining input needs another step.
+            if (step.consumed_ == window_bytes) {
+                continue;
+            }
             return fail(consumed, http_transfer_coding_decode_error::invalid_content);
         }
         return need_input(consumed);
