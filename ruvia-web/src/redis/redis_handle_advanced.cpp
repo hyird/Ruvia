@@ -162,7 +162,7 @@ scoped_operation<std::optional<redis_key_value>> redis_handle::blpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
-    return scoped(execute_redis_blocking_pop(*blocking_pool_,
+    return scoped(execute_redis_blocking_pop(blocking_pool(),
         detail::redis_blocking_pop_args("BLPOP", keys, wait, resource_), operation_options_, reply_timeout,
         resource_));
 }
@@ -171,7 +171,7 @@ scoped_operation<std::optional<redis_key_value>> redis_handle::brpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
-    return scoped(execute_redis_blocking_pop(*blocking_pool_,
+    return scoped(execute_redis_blocking_pop(blocking_pool(),
         detail::redis_blocking_pop_args("BRPOP", keys, wait, resource_), operation_options_, reply_timeout,
         resource_));
 }
@@ -181,10 +181,10 @@ scoped_operation<std::optional<redis_x_read_group_result>> redis_handle::xread_g
     redis_x_read_group_options options) const {
     registration_.require_active();
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options, resource_);
-    auto* selected_pool = pool_;
+    auto* selected_pool = &pool();
     std::optional<std::chrono::milliseconds> reply_timeout;
     if (options.block_.has_value()) {
-        selected_pool = blocking_pool_;
+        selected_pool = &blocking_pool();
         reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);
     }
     return scoped(execute_redis_x_read_group(
@@ -193,12 +193,26 @@ scoped_operation<std::optional<redis_x_read_group_result>> redis_handle::xread_g
 
 redis_pipeline redis_handle::pipeline() const {
     registration_.require_active();
-    return redis_pipeline(*pool_, operation_options_, resource_, registration_.scope());
+    return redis_pipeline(pool(), operation_options_, resource_, registration_.scope());
 }
 
 redis_transaction redis_handle::transaction() const {
     registration_.require_active();
-    return redis_transaction(*pool_, operation_options_, resource_, registration_.scope());
+    return redis_transaction(pool(), operation_options_, resource_, registration_.scope());
+}
+
+scoped_operation<std::int64_t> redis_handle::publish(std::string_view channel, std::string_view payload) const {
+    registration_.require_active();
+    return scoped(detail::redis_integer_command(
+        executor(), detail::own_redis_args({"PUBLISH", channel, payload}, resource_), resource_));
+}
+
+redis_subscription redis_handle::subscription() const {
+    registration_.require_active();
+    if (!operation_options_.stop_token_.stoppable() && !operation_options_.timeout_.has_value()) {
+        throw std::invalid_argument("redis subscription requires a stop_token or finite operation timeout");
+    }
+    return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_);
 }
 
 }  // namespace ruvia

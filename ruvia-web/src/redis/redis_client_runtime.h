@@ -12,6 +12,7 @@
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_config_storage.h"
+#include "redis/redis_subscription_connection.h"
 
 namespace asio {
 class io_context;
@@ -19,8 +20,11 @@ class io_context;
 
 namespace ruvia::detail {
 
+class redis_pool;
+
 // The single backend owner used by standalone clients and application registrations.
-// Both pools borrow this stable owner's normalized configuration, TLS context and worker.
+// Both pools and the Pub/Sub connections borrow this stable owner's normalized
+// configuration, TLS context and worker.
 class redis_client_runtime final {
 public:
     redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
@@ -34,17 +38,35 @@ public:
 
     [[nodiscard]] task<void> connect();
     void close_now() noexcept;
-    [[nodiscard]] redis_handle handle(::ruvia::operation_scope& scope) const;
-    [[nodiscard]] redis_handle handle(::ruvia::operation_scope& scope, operation_options options) const;
+    [[nodiscard]] redis_handle handle(::ruvia::operation_scope& scope);
+    [[nodiscard]] redis_handle handle(::ruvia::operation_scope& scope, operation_options options);
+
+    [[nodiscard]] const worker_handle& worker() const noexcept {
+        return worker_;
+    }
+    [[nodiscard]] const redis_config_storage& config() const noexcept {
+        return config_;
+    }
+    [[nodiscard]] redis_pool& general() const noexcept {
+        return *general_;
+    }
+    [[nodiscard]] redis_pool& blocking() const noexcept {
+        return *blocking_;
+    }
+    [[nodiscard]] redis_subscription_set& subscriptions() noexcept {
+        return subscriptions_;
+    }
 
 private:
     redis_config_storage config_;
     std::pmr::memory_resource* resource_;
+    worker_handle worker_;
     // One client TLS context per alias, borrowed by every connection of both
-    // pools; configured only when TLS is enabled.
+    // pools and every subscription; configured only when TLS is enabled.
     asio::ssl::context tls_context_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> general_;
     std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> blocking_;
+    redis_subscription_set subscriptions_;
 };
 
 }  // namespace ruvia::detail

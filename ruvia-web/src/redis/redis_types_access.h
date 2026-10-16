@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/redis/redis_subscription.h"
 #include "ruvia/web/redis/redis_types.h"
 
 namespace ruvia::detail {
@@ -108,6 +109,11 @@ struct redis_types_access final {
     [[nodiscard]] static constexpr redis_ttl ttl(redis_ttl_state state_value,
         std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
         return redis_ttl(state_value, remaining);
+    }
+
+    [[nodiscard]] static redis_pubsub_event pubsub_event(redis_pubsub_event_kind kind, std::string_view channel,
+        std::string_view pattern, std::string_view payload, std::int64_t subscription_count) noexcept {
+        return redis_pubsub_event(kind, channel, pattern, payload, subscription_count);
     }
 
     [[nodiscard]] static redis_value null_value(std::pmr::memory_resource* resource) {

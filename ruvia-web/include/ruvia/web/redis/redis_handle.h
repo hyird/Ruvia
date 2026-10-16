@@ -19,12 +19,14 @@
 #include "ruvia/web/detail/redis/redis_mapped_command.h"
 #include "ruvia/web/redis/redis_pipeline.h"
 #include "ruvia/web/redis/redis_repository_types.h"
+#include "ruvia/web/redis/redis_subscription.h"
 #include "ruvia/web/redis/redis_transaction.h"
 
 namespace ruvia {
 
 namespace detail {
 class redis_client_runtime;
+class redis_pool;
 struct redis_orm_script;
 }  // namespace detail
 
@@ -251,6 +253,13 @@ public:
     [[nodiscard]] redis_pipeline pipeline() const;
     [[nodiscard]] redis_transaction transaction() const;
 
+    // Delivers to a channel on the ordinary pool; returns the receiver count.
+    scoped_operation<std::int64_t> publish(std::string_view channel, std::string_view payload) const;
+    // A dedicated Pub/Sub connection bound to this handle's scope, stop token
+    // and operation timeout. Like an infinite blocking wait, it requires a
+    // stoppable token or a finite timeout (std::invalid_argument otherwise).
+    [[nodiscard]] redis_subscription subscription() const;
+
     // Validates `config` against the entity schema: the prefix must be
     // non-empty without NUL bytes, and each index column must be a unique,
     // identifier-named entity column whose type fits the index kind.
@@ -302,11 +311,10 @@ private:
             script_owned(script, std::move(args)), resource_, std::move(mapper)));
     }
 
-    redis_handle(detail::redis_pool& general_pool, detail::redis_pool& blocking_pool_value,
-        std::pmr::memory_resource* resource, operation_scope& operation_scope) noexcept;
-    redis_handle(detail::redis_pool& general_pool, detail::redis_pool& blocking_pool_value,
-        std::pmr::memory_resource* resource, operation_scope& operation_scope,
-        operation_options options) noexcept;
+    redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
+        operation_scope& operation_scope) noexcept;
+    redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
+        operation_scope& operation_scope, operation_options options) noexcept;
 
     template <typename t_type>
     [[nodiscard]] scoped_operation<t_type> scoped(ruvia::task<t_type> task_value) const {
@@ -316,8 +324,9 @@ private:
     static void expire_capability(void* target) noexcept;
     [[nodiscard]] detail::redis_command_executor executor() const;
     [[nodiscard]] detail::redis_command_executor executor(detail::redis_pool& pool) const;
-    detail::redis_pool* pool_;
-    detail::redis_pool* blocking_pool_;
+    [[nodiscard]] detail::redis_pool& pool() const noexcept;
+    [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
+    detail::redis_client_runtime* runtime_;
     std::pmr::memory_resource* resource_;
     operation_options operation_options_;
     scoped_capability_registration registration_;

@@ -194,4 +194,41 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
     return result_value;
 }
 
+// RESP2 subscribed-mode pushes are arrays led by their kind: confirmations
+// carry the name (nil when UNSUBSCRIBE finds nothing to leave) and the
+// remaining subscription count; messages carry the channel and payload, with
+// the matched pattern first for a pattern subscription.
+redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
+    constexpr std::string_view malformed = "unexpected redis pub/sub push";
+    const auto items = redis_value_array(value);
+    if (items.size() < 3 || items.size() > 4) {
+        throw redis_error(redis_error::code_type::protocol_error, malformed);
+    }
+    const auto kind = redis_value_string(items[0]);
+    const auto optional_name = [&](const redis_value& item) {
+        return item.null() ? std::string_view{} : redis_value_string(item);
+    };
+    if (items.size() == 3) {
+        if (kind == "message") {
+            return redis_types_access::pubsub_event(redis_pubsub_event_kind::message,
+                redis_value_string(items[1]), {}, redis_value_string(items[2]), 0);
+        }
+        const bool pattern = kind == "psubscribe" || kind == "punsubscribe";
+        const bool subscribed = kind == "subscribe" || kind == "psubscribe";
+        if (!subscribed && kind != "unsubscribe" && kind != "punsubscribe") {
+            throw redis_error(redis_error::code_type::protocol_error, malformed);
+        }
+        const auto name = optional_name(items[1]);
+        return redis_types_access::pubsub_event(
+            subscribed ? redis_pubsub_event_kind::subscribed : redis_pubsub_event_kind::unsubscribed,
+            pattern ? std::string_view{} : name, pattern ? name : std::string_view{}, {},
+            redis_value_integer(items[2]));
+    }
+    if (kind != "pmessage") {
+        throw redis_error(redis_error::code_type::protocol_error, malformed);
+    }
+    return redis_types_access::pubsub_event(redis_pubsub_event_kind::message, redis_value_string(items[2]),
+        redis_value_string(items[1]), redis_value_string(items[3]), 0);
+}
+
 }  // namespace ruvia::detail

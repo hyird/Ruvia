@@ -43,7 +43,6 @@ public:
 
 #else
 
-#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -60,30 +59,15 @@ public:
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 
-#include "client/client_tcp_transport.h"
 #include "integration/slot_pool.h"
 #include "redis/redis_client_runtime.h"
-
-struct redisReader;
+#include "redis/redis_connection.h"
 
 namespace ruvia::detail {
-
-struct redis_reader_deleter {
-    void operator()(redisReader* reader) const noexcept;
-};
-
-class redis_reply_builder;
 
 struct redis_command_args_view final {
     std::span<const std::pmr::string> args_;
 };
-
-inline constexpr std::size_t redis_read_buffer_bytes = 8192;
-// Serialized request storage a pooled connection keeps after a write: this
-// much, or four times the request it just sent when larger. A steady stream
-// of similar-sized commands reuses one allocation while a single oversized
-// request is not pinned for the connection's lifetime.
-inline constexpr std::size_t redis_retained_write_buffer_bytes = std::size_t{64} * 1024;
 
 class redis_pool final {
 public:
@@ -127,8 +111,6 @@ public:
         std::pmr::memory_resource* resource);
 
 private:
-    friend class ::ruvia::redis_handle;
-
     // Every deadline belongs to a connection's transport; the slot pool only
     // leases slots and routes cancellation.
     struct slot_policy final {
@@ -141,48 +123,14 @@ private:
         static void cancel_slot(redis_pool& pool, std::size_t slot) noexcept;
     };
     using slot_pool_type = slot_pool<slot_policy>;
+    using connection_owner_type = std::unique_ptr<redis_connection, pmr_object_deleter<redis_connection>>;
 
-    // One pooled Redis connection: the shared outbound transport plus the
-    // RESP request and reply buffers. Address-stable: the transport's pending
-    // I/O and timers and the reader's object functions borrow it.
-    struct connection_type final {
-        connection_type(redis_pool& pool, client_tcp_endpoint endpoint);
-        ~connection_type();
-
-        connection_type(const connection_type&) = delete;
-        connection_type& operator=(const connection_type&) = delete;
-
-        client_tcp_transport transport_;
-        std::pmr::string write_buffer_;
-        std::array<char, redis_read_buffer_bytes> read_buffer_;
-        // Created on first connect; the reader's object functions address the
-        // builder, so it outlives every reader.
-        std::unique_ptr<redis_reply_builder, pmr_object_deleter<redis_reply_builder>> reply_builder_;
-        std::unique_ptr<redisReader, redis_reader_deleter> reader_;
-        std::size_t reply_bytes_{0};
-        bool connected_{false};
-    };
-    using connection_owner_type = std::unique_ptr<connection_type, pmr_object_deleter<connection_type>>;
-
-    void close(std::size_t slot) noexcept;
-    // Cancellation/shutdown: records the reason so a resolve completing after
-    // this point starts no connect or handshake, then closes the connection.
-    void abort(std::size_t slot, client_abort_reason reason) noexcept;
-    void ensure_reader(connection_type& connection);
-    task<void> connect(std::size_t slot, const ruvia::operation_timeout* operation_timeout = nullptr);
-    task<void> authenticate(std::size_t slot, const ruvia::operation_timeout& connect_timeout);
-    // Sends and then releases the connection's serialized request.
-    task<void> write_request(std::size_t slot, const ruvia::operation_timeout& timeout);
-    task<redis_value> read_reply(std::size_t slot, const ruvia::operation_timeout& timeout,
-        std::pmr::memory_resource* resource);
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
         std::optional<operation_timeout> deadline);
 
-    asio::io_context& io_context_;
     const redis_config_storage& config_;
-    asio::ssl::context& tls_context_;
     std::optional<std::chrono::milliseconds> command_timeout_;
     std::pmr::memory_resource* resource_;
     client_wire_counters wire_counters_;

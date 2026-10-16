@@ -189,4 +189,9 @@
         registration_.require_active();                                                      \
         batch_.zcard(key);                                                                   \
         return *this;                                                                        \
+    }                                                                                        \
+    owner_type& publish(std::string_view channel, std::string_view payload) {                \
+        registration_.require_active();                                                      \
+        batch_.publish(channel, payload);                                                    \
+        return *this;                                                                        \
     }

@@ -8,6 +8,8 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/web/redis/redis_subscription.h"
+
 #include "redis/redis_registry.h"
 
 namespace ruvia::detail {
@@ -108,5 +110,7 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     const redis_x_read_group_options& options, std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
     redis_value&& value, std::pmr::memory_resource* resource);
+// A pushed reply of a subscribed connection. Views borrow `value`.
+[[nodiscard]] redis_pubsub_event parse_redis_pubsub_event(const redis_value& value);
 
 }  // namespace ruvia::detail

@@ -54,7 +54,7 @@ void redis_pool::slot_policy::throw_aborted(const redis_pool&, pool_slot_abort_r
 }
 
 void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) noexcept {
-    pool.abort(slot, client_abort_reason::cancelled);
+    pool.connections_[slot]->abort(client_abort_reason::cancelled);
 }
 
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
@@ -100,10 +100,11 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
     auto& connection = *connections_[slot];
     try {
-        co_await connect(slot, &operation_timeout_value);
+        co_await connection.connect(&operation_timeout_value, command_timeout_);
         slots_.throw_if_aborted(slot);
 
-        connection.write_buffer_.clear();
+        auto& write_buffer = connection.write_buffer();
+        write_buffer.clear();
         std::size_t serialized_bytes = 0;
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args_;
@@ -113,27 +114,27 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
             }
             serialized_bytes += command_bytes;
         }
-        connection.write_buffer_.reserve(serialized_bytes);
+        write_buffer.reserve(serialized_bytes);
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args_;
-            append_resp_command(connection.write_buffer_, args);
+            append_resp_command(write_buffer, args);
         }
 
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
-        co_await write_request(slot, deadline_value);
+        co_await connection.write_request(deadline_value);
         if constexpr (single_reply) {
-            result = co_await read_reply(slot, deadline_value, resolved);
+            result = co_await connection.read_reply(deadline_value, resolved);
             slots_.throw_if_aborted(slot);
         } else {
             while (result.size() < commands.size()) {
-                result.emplace_back(co_await read_reply(slot, deadline_value, resolved));
+                result.emplace_back(co_await connection.read_reply(deadline_value, resolved));
                 slots_.throw_if_aborted(slot);
             }
         }
         co_return result;
     } catch (...) {
         cancellation.finish();
-        close(slot);
+        connection.close();
         throw;
     }
 }

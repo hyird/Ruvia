@@ -194,6 +194,10 @@ public:
         return trusted("ZCARD", key);
     }
 
+    redis_command_batch& publish(std::string_view channel, std::string_view payload) {
+        return trusted("PUBLISH", channel, payload);
+    }
+
 private:
     redis_command_batch& append_owned(redis_owned_command command);
 

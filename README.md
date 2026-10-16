@@ -81,6 +81,12 @@ for each database alias on each worker, or for one standalone `db_client`.
 See [database.cpp](examples/web/database.cpp) for configuration and usage;
 database migrations use a dedicated connection.
 
+Redis uses `redis_config::pool_size_per_worker_` ordinary connections plus a
+lazily connected blocking pool per alias and worker. Pub/Sub does not share
+them: every `redis_handle::subscription()` opens one dedicated connection that
+lives until it is aborted, cancelled or shut down. See
+[redis_pubsub.cpp](examples/web/redis_pubsub.cpp).
+
 ## License
 
 [MIT License](LICENSE).
