@@ -60,6 +60,16 @@ struct context_access final {
         return context_value.response_storage();
     }
 
+    // The metadata overlay of a final response, or nullptr before one exists.
+    // Header changes staged after a response became final must land here as
+    // well as on the response itself, so a replacement built afterwards (an
+    // outer middleware's respond(), an error handler) still carries them; see
+    // context_response_state::update_metadata.
+    [[nodiscard]] static http_response* final_response_metadata(context& context_value) noexcept {
+        auto* final_state = context_value.response_state().final();
+        return final_state == nullptr ? nullptr : &final_state->metadata();
+    }
+
     [[nodiscard]] static bool has_response_header(
         const context& context_value, std::string_view name) noexcept {
         return context_value.response_state().active_response().header(name).has_value();

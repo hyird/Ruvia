@@ -65,6 +65,7 @@ task<void> detail::session_access::commit(context& context_value) {
 #include <array>
 #include <chrono>
 #include <memory_resource>
+#include <optional>
 
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_number_format.h"
@@ -140,17 +141,36 @@ task<void> session_middleware::commit(context& c) const {
 
     const auto connection = c.conn();
     const bool secure = connection.scheme() == http_scheme::https;
+    // Once a final response exists, the cookie must also enter its metadata
+    // overlay: an outer middleware's respond() or an error after next() builds
+    // its replacement from that overlay alone, and Redis has already changed.
+    // Both blocks are staged before Redis is touched; publication after
+    // successful storage is an allocation-free move of complete header state.
+    auto& response = detail::context_access::response_storage(c);
+    auto* const overlay = detail::context_access::final_response_metadata(c);
+    auto staged = response.headers().clone(1);
+    std::optional<http_response_headers> staged_overlay;
+    if (overlay != nullptr) {
+        staged_overlay.emplace(overlay->headers().clone(1));
+    }
+    const auto publish = [&]() noexcept {
+        response.commit_headers(std::move(staged));
+        if (overlay != nullptr) {
+            overlay->commit_headers(std::move(*staged_overlay));
+        }
+    };
     if (const auto* cleared = state_value.cleared()) {
-        auto& response = detail::context_access::response_storage(c);
-        auto staged = response.headers().clone(1);
         detail::append_expired_session_cookie_header(staged, c.pool(), config_.cookie_name_, secure);
+        if (staged_overlay) {
+            detail::append_expired_session_cookie_header(*staged_overlay, c.pool(), config_.cookie_name_, secure);
+        }
         if (cleared->old_id_.has_value()) {
             std::pmr::string key(c.pool());
             key.append(config_.key_prefix_);
             key.append(cleared->old_id_->data(), cleared->old_id_->size());
             (void)(co_await c.redis(config_.redis_alias_).del(key));
         }
-        response.commit_headers(std::move(staged));
+        publish();
         co_return;
     }
 
@@ -173,11 +193,10 @@ task<void> session_middleware::commit(context& c) const {
     }
     const auto new_id = token->value();
 
-    // Allocate and validate the cookie before changing Redis. Publication after
-    // successful storage is an allocation-free move of the complete header state.
-    auto& response = detail::context_access::response_storage(c);
-    auto staged = response.headers().clone(1);
     detail::append_session_cookie_header(staged, c.pool(), config_.cookie_name_, new_id, secure);
+    if (staged_overlay) {
+        detail::append_session_cookie_header(*staged_overlay, c.pool(), config_.cookie_name_, new_id, secure);
+    }
 
     std::pmr::string key(c.pool());
     key.append(config_.key_prefix_).append(new_id);
@@ -209,7 +228,7 @@ task<void> session_middleware::commit(context& c) const {
             .code_ = "session_conflict",
             .message_ = "session expired or was revoked; retry with a new session"});
     }
-    response.commit_headers(std::move(staged));
+    publish();
 }
 
 }  // namespace ruvia
