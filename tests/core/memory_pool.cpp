@@ -12,8 +12,10 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/process_resource.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 
@@ -297,6 +299,32 @@ RUVIA_TEST(worker_memory_passes_over_aligned_large_blocks_through) {
     }
     RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
     RUVIA_CHECK(upstream.matched_returns_);
+}
+
+// Small pooled blocks honor every requested alignment, including the ones
+// libstdc++'s pool resources serve from a block size that is not a multiple
+// of the alignment (allocate(17, 16) from 24-byte blocks).
+RUVIA_TEST(worker_memory_and_process_resource_align_small_blocks) {
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker_value(upstream);
+        for (auto* const resource : {worker_value.resource(), ruvia::process_resource()}) {
+            std::vector<std::pair<void*, std::pair<std::size_t, std::size_t>>> live;
+            for (const std::size_t alignment : {std::size_t{8}, std::size_t{16}, std::size_t{32}, std::size_t{64}}) {
+                for (std::size_t bytes_value = 1; bytes_value <= 300; ++bytes_value) {
+                    for (unsigned repeat = 0; repeat < 3; ++repeat) {
+                        auto* const block = resource->allocate(bytes_value, alignment);
+                        RUVIA_CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
+                        live.emplace_back(block, std::pair{bytes_value, alignment});
+                    }
+                }
+            }
+            for (const auto& [block, shape] : live) {
+                resource->deallocate(block, shape.first, shape.second);
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
 }
 
 RUVIA_TEST(worker_memory_validates_retained_block_bytes) {

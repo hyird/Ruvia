@@ -784,6 +784,9 @@ RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
     parser.parse_head("GET / HTTP/1.1\r\nHost: x\r\n\r\n", state, 0, &next_resource);
     RUVIA_CHECK(state.head_ready() != nullptr);
     RUVIA_CHECK(state.body_plan_.chunked() == nullptr);
+    // The descriptor block borrows next_resource, which dies before state.
+    state.request_.reset();
+    RUVIA_CHECK_EQ(next_resource.live_allocations(), std::size_t{0});
 }
 
 RUVIA_TEST(http1_parse_unsupported_version_rejected) {
