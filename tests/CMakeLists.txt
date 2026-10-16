@@ -136,6 +136,7 @@ if(RUVIA_BUILD_WEB)
         web/http3/client_connection_ipv6.cpp)
     ruvia_add_web_standalone_test(ruvia_http3_client_early_data_push_tests 60
         web/http3/client_early_data_push.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         web/http1/connect.cpp
         web/http1/websocket.cpp

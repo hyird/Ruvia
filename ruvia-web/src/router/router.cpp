@@ -8,6 +8,7 @@
 #include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
+#include "router/path_segments.h"
 #include "router/router_impl.h"
 
 namespace ruvia {
@@ -125,7 +126,8 @@ void detail::router_impl::validate_route_target(
             if (path != "*" && !is_valid_http_connect_authority(path)) {
                 throw std::invalid_argument("CONNECT route requires host:port authority or *");
             }
-        } else if ((path.find('?') != std::string_view::npos) || !is_valid_http_origin_form_target(path)) {
+        } else if ((path.find('?') != std::string_view::npos) || !is_valid_http_origin_form_target(path) ||
+                   has_dot_segment(path)) {
             throw std::invalid_argument("upgrade-protocol tunnel route requires an origin-form path");
         }
         return;
@@ -142,6 +144,11 @@ void detail::router_impl::validate_route_target(
     }
     if ((path.find('?') != std::string_view::npos) || !ruvia::is_valid_http_origin_form_target(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
+    }
+    // resolve() rejects every request carrying a dot segment before lookup,
+    // so such a pattern would register a handler nothing can reach.
+    if (has_dot_segment(path)) {
+        throw std::invalid_argument("route path must not contain dot segments");
     }
 }
 
